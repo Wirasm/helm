@@ -93,6 +93,9 @@ struct KildView: View {
                 }
             }
             .padding(.vertical, 4)
+            .contextMenu {
+                Button("Copy Room ID") { Pasteboard.copy(room.id) }
+            }
         }
         .listStyle(.inset)
     }

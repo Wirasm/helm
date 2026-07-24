@@ -14,6 +14,7 @@ struct RoomDetailView: View {
     @State private var draft = ""
     @State private var sending = false
     @State private var postError: String?
+    @State private var copiedRoomID = false
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -36,6 +37,7 @@ struct RoomDetailView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(room.name).font(.title3.bold())
+                roomIDBadge
                 if let state = room.state, state != "running" {
                     Text(state)
                         .font(.caption.monospaced())
@@ -48,7 +50,15 @@ struct RoomDetailView: View {
             HStack(spacing: 6) {
                 ForEach(room.participants, id: \.name) { p in
                     HStack(spacing: 3) {
-                        Text("@\(p.name)").font(.caption.monospaced().bold())
+                        // Same accent as the participant's log rows — the chips
+                        // double as the color legend.
+                        Text("@\(p.name)")
+                            .font(.caption.monospaced().bold())
+                            .foregroundStyle(
+                                SenderStyle.isHuman(p.name)
+                                    ? Color.accentColor
+                                    : SenderStyle.accent(for: p.name)
+                            )
                         if let model = p.model {
                             Text(model)
                                 .font(.caption.monospaced())
@@ -62,6 +72,29 @@ struct RoomDetailView: View {
             }
         }
         .padding(10)
+    }
+
+    /// Short room id, click-to-copy (copies the FULL id). The brief "copied"
+    /// swap is per-room state — the view is re-identified per room by the owner.
+    private var roomIDBadge: some View {
+        Button {
+            Pasteboard.copy(room.id)
+            copiedRoomID = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                copiedRoomID = false
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(copiedRoomID ? "copied" : String(room.id.prefix(8)))
+                    .font(.caption.monospaced())
+                Image(systemName: copiedRoomID ? "checkmark" : "doc.on.doc")
+                    .font(.caption2)
+            }
+            .foregroundStyle(copiedRoomID ? AnyShapeStyle(Color.green) : AnyShapeStyle(.secondary))
+        }
+        .buttonStyle(.plain)
+        .help("Copy room id: \(room.id)")
     }
 
     // MARK: pinned open decisions
@@ -103,7 +136,9 @@ struct RoomDetailView: View {
     private var log: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // Rows carry their own bubble padding now — keep the stack tight
+                // so the log stays an operator console, not a chat app.
+                LazyVStack(alignment: .leading, spacing: 6) {
                     ForEach(room.log) { message in
                         logRow(message)
                             .id(message.id)
@@ -117,24 +152,111 @@ struct RoomDetailView: View {
         }
     }
 
+    /// Three visual tiers, so the log reads without parsing header lines:
+    /// human posts (accent bubble, trailing), agent posts (neutral bubble, leading,
+    /// sender-colored name + edge bar, tinted when addressed to the human), and
+    /// system/implicit noise (no bubble, quieter than everything else).
+    @ViewBuilder
     private func logRow(_ message: EngineClient.Message) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        if message.isMuted {
+            mutedRow(message)
+        } else if SenderStyle.isHuman(message.from) {
+            humanRow(message)
+        } else {
+            agentRow(message)
+        }
+    }
+
+    /// The human's own posts: chat-style, trailing-aligned, accent-tinted.
+    private func humanRow(_ message: EngineClient.Message) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(message.from)
+                    .font(.caption.monospaced().bold())
+                    .foregroundStyle(Color.accentColor)
+                if !message.to.isEmpty {
+                    Text("→ " + recipients(of: message))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                timestamp(message)
+            }
+            Text(message.text)
+                .font(.callout)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    /// Agent posts: leading-aligned, neutral bubble, the sender's stable accent on
+    /// the name and a leading edge bar. Posts addressed to the human (reports) get
+    /// the bubble tinted in the sender's accent — a notch louder than agent↔agent.
+    private func agentRow(_ message: EngineClient.Message) -> some View {
+        let accent = SenderStyle.accent(for: message.from)
+        let toHuman = message.to.contains(where: SenderStyle.isHuman)
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(message.from)
+                    .font(.caption.monospaced().bold())
+                    .foregroundStyle(accent)
+                if !message.to.isEmpty {
+                    Text("→ " + recipients(of: message))
+                        .font(.caption.monospaced())
+                        .fontWeight(toHuman ? .semibold : .regular)
+                        .foregroundStyle(toHuman ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                }
+                timestamp(message)
+            }
+            Text(message.text)
+                .font(.callout)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            toHuman ? AnyShapeStyle(accent.opacity(0.10)) : AnyShapeStyle(.quinary),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(accent)
+                .frame(width: 3)
+                .padding(.vertical, 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Engine notices + auto-posted turn replies: no bubble, quieter than any post.
+    private func mutedRow(_ message: EngineClient.Message) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
                 Text(message.to.isEmpty
                     ? message.from
-                    : "\(message.from) → \(message.to.map { "@\($0)" }.joined(separator: ", "))")
-                    .font(.caption.monospaced().bold())
-                    .foregroundStyle(message.isMuted ? .tertiary : .secondary)
-                Text(message.date.formatted(date: .omitted, time: .shortened))
-                    .font(.caption2)
+                    : "\(message.from) → \(recipients(of: message))")
+                    .font(.caption2.monospaced())
                     .foregroundStyle(.tertiary)
+                timestamp(message)
             }
             Text(message.text)
-                .font(message.isMuted ? .callout.italic() : .callout)
-                .foregroundStyle(message.isMuted ? .secondary : .primary)
+                .font(.caption.italic())
+                .foregroundStyle(.tertiary)
                 .textSelection(.enabled)
         }
-        .opacity(message.isMuted ? 0.65 : 1)
+        .padding(.leading, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func recipients(of message: EngineClient.Message) -> String {
+        message.to.map { "@\($0)" }.joined(separator: ", ")
+    }
+
+    private func timestamp(_ message: EngineClient.Message) -> some View {
+        Text(message.date.formatted(date: .omitted, time: .shortened))
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
     }
 
     private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool) {
