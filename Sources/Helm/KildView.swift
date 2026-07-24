@@ -19,7 +19,7 @@ struct KildView: View {
     @State private var rooms: [EngineClient.LiveRoom] = []
     @State private var archived: [EngineClient.ArchivedRoom] = []
     @State private var error: String?
-    @State private var selection: String?
+    @State private var selection: String? = LaunchOptions.roomId
     @State private var tab: RoomsTab = .live
 
     // Project filter. `selectedProject == nil` = all projects. `projectWorktreeNames`

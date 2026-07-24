@@ -11,7 +11,7 @@ enum MainView {
 }
 
 struct RootView: View {
-    @State private var current: MainView = .terminal
+    @State private var current: MainView = LaunchOptions.initialView == "kild" ? .kild : .terminal
 
     var body: some View {
         ZStack {
@@ -57,6 +57,11 @@ struct TerminalWorkspace: View {
             if artifact.isOpen {
                 ArtifactPane(model: artifact)
                     .frame(minWidth: 300, idealWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .onAppear {
+            if let path = LaunchOptions.artifactPath {
+                artifact.open(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
             }
         }
         // ⌘N — new terminal (HelmApp's key monitor posts these; see HelmApp.swift).
