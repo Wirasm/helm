@@ -1,28 +1,47 @@
 import SwiftUI
 
-/// Spike-grade kild view: engine health + live rooms with open-decision badges.
-/// Polling for now; the real view subscribes to the engine WS. Layout follows the
-/// seed plan (kild/docs/ui-plan.md): attention first — open decisions outrank all.
+/// The kild observe/steer surface: engine health + live rooms (master) and the room
+/// detail with a steering composer (detail). Polling for now; a later slice owns WS.
+/// Attention-first, per the seed plan: open decisions outrank everything.
 struct KildView: View {
     private let engine = EngineClient()
     @State private var health: EngineClient.Health?
     @State private var rooms: [EngineClient.LiveRoom] = []
     @State private var error: String?
+    @State private var selection: String?
 
     private let refresh = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
-            if let error {
-                ContentUnavailableView(
-                    "Engine unreachable",
-                    systemImage: "bolt.slash",
-                    description: Text(error)
-                )
+        NavigationSplitView {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                Divider()
+                if let error {
+                    ContentUnavailableView(
+                        "Engine unreachable",
+                        systemImage: "bolt.slash",
+                        description: Text(error)
+                    )
+                } else {
+                    roomList
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 260, ideal: 320)
+        } detail: {
+            if let room = rooms.first(where: { $0.id == selection }) {
+                RoomDetailView(room: room, engine: engine) {
+                    await load()
+                }
+                // Stable identity per room: composer draft survives the 5s refresh,
+                // resets when another room is selected.
+                .id(room.id)
             } else {
-                roomList
+                ContentUnavailableView(
+                    "No room selected",
+                    systemImage: "rectangle.on.rectangle.angled",
+                    description: Text("Select a live room to watch its log and steer.")
+                )
             }
         }
         .task { await load() }
@@ -38,7 +57,7 @@ struct KildView: View {
                 .font(.callout.monospaced())
                 .foregroundStyle(.secondary)
             Spacer()
-            Text("\(rooms.count) live rooms")
+            Text("\(rooms.count) live")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -50,15 +69,10 @@ struct KildView: View {
         let sorted = rooms.sorted {
             ($0.openDecisions.isEmpty ? 1 : 0, $0.name) < ($1.openDecisions.isEmpty ? 1 : 0, $1.name)
         }
-        return List(sorted) { room in
+        return List(sorted, selection: $selection) { room in
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(room.name).font(.headline)
-                    Text(room.participants.map { p in
-                        p.model.map { "\(p.name):\($0)" } ?? p.name
-                    }.joined(separator: ", "))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
                     Spacer()
                     if !room.openDecisions.isEmpty {
                         Label("\(room.openDecisions.count)", systemImage: "exclamationmark.triangle.fill")
@@ -66,11 +80,11 @@ struct KildView: View {
                             .help(room.openDecisions.map { "\($0.key): \($0.summary)" }.joined(separator: "\n"))
                     }
                 }
-                ForEach(room.openDecisions, id: \.key) { decision in
-                    Text("needs-decision[\(decision.key)]: \(decision.summary)")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                }
+                Text(room.participants.map { p in
+                    p.model.map { "\(p.name):\($0)" } ?? p.name
+                }.joined(separator: ", "))
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
                 if let last = room.lastPost {
                     Text("\(last.from) → \(last.to.joined(separator: ",")): \(last.text)")
                         .font(.callout)
