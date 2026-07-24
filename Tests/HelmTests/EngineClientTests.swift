@@ -89,6 +89,13 @@ final class EngineClientTests: XCTestCase {
                   { "name": "worker", "agent": "implementor", "model": "sol-4" },
                   { "name": "reviewer" }
                 ],
+                "worktree": "fix-2247",
+                "git": {
+                  "path": "/Users/dev/.config/kild/worktrees/fix-2247",
+                  "branch": "kild/fix-2247", "base": "main", "ahead": 1, "behind": 0,
+                  "dirty": false, "uncommittedFiles": 0, "changedFiles": ["a.swift"],
+                  "conflictsWithBase": false
+                },
                 "log": [
                   { "id": "m1", "roomId": "room-1", "from": "human", "to": ["worker"],
                     "text": "kick off", "ts": 1753300000000 },
@@ -128,6 +135,162 @@ final class EngineClientTests: XCTestCase {
 
         // lastPost skips system notices but keeps implicit agent replies.
         XCTAssertEqual(room.lastPost?.id, "m3")
+
+        // Workstream identity: worktree name + the effective git dir (the filter key).
+        XCTAssertEqual(room.worktree, "fix-2247")
+        XCTAssertEqual(room.git?.path, "/Users/dev/.config/kild/worktrees/fix-2247")
+    }
+
+    // MARK: project attribution (the room→project filter key)
+
+    func testBelongsToProjectMatchesGitPathAndWorktreeName() throws {
+        func room(git: String?, worktree: String?) throws -> EngineClient.LiveRoom {
+            let json = """
+            { "id": "r", "name": "r", "participants": [], "log": []
+              \(worktree.map { #", "worktree": "\#($0)""# } ?? "")
+              \(git.map { #", "git": {"path": "\#($0)"}"# } ?? "") }
+            """
+            return try JSONDecoder().decode(EngineClient.LiveRoom.self, from: Data(json.utf8))
+        }
+
+        // cwd rooms: git.path prefix-matches the project path — exact dir, child,
+        // but never a sibling sharing the prefix string.
+        XCTAssertTrue(try room(git: "/p/kild", worktree: nil)
+            .belongsToProject(at: "/p/kild", worktreeNames: []))
+        XCTAssertTrue(try room(git: "/p/kild/sub", worktree: nil)
+            .belongsToProject(at: "/p/kild/", worktreeNames: []))
+        XCTAssertFalse(try room(git: "/p/kild-ui", worktree: nil)
+            .belongsToProject(at: "/p/kild", worktreeNames: []))
+
+        // worktree rooms live under $KILD_HOME, not the project — they match via the
+        // project's worktree names (from /api/worktrees), never the path.
+        XCTAssertTrue(try room(git: "/home/.config/kild/worktrees/fix", worktree: "fix")
+            .belongsToProject(at: "/p/kild", worktreeNames: ["fix"]))
+        XCTAssertFalse(try room(git: "/home/.config/kild/worktrees/fix", worktree: "fix")
+            .belongsToProject(at: "/p/kild", worktreeNames: ["other"]))
+
+        // archived rooms carry no git at all — only the worktree-name test can match.
+        XCTAssertTrue(try room(git: nil, worktree: "fix")
+            .belongsToProject(at: "/p/kild", worktreeNames: ["fix"]))
+        XCTAssertFalse(try room(git: nil, worktree: nil)
+            .belongsToProject(at: "/p/kild", worktreeNames: ["fix"]))
+    }
+
+    // MARK: archive decoding
+
+    func testArchivedRoomsDecodingWithResolutionsAndResumeHandles() async throws {
+        // Mirror of the engine's ArchivedRoom snapshot: live shape minus git/totals,
+        // decisions carrying their resolutions, participants their pi resume handles.
+        StubURLProtocol.respond(
+            status: 200,
+            json: """
+            [
+              {
+                "id": "room-9",
+                "name": "ship-auth",
+                "state": "closed",
+                "worktree": "ship-auth",
+                "participants": [
+                  { "name": "lead", "agent": "orchestrator", "model": "sol-4",
+                    "piSessionId": "abc",
+                    "piSessionFile": "/Users/dev/.pi/sessions/abc.jsonl" },
+                  { "name": "scout" }
+                ],
+                "log": [
+                  { "id": "m1", "roomId": "room-9", "from": "lead", "to": ["human"],
+                    "text": "resolved[api-shape]: REST it is", "ts": 1753300005000 }
+                ],
+                "decisions": [
+                  { "key": "api-shape", "summary": "REST or WS?", "openedBy": "lead",
+                    "openedAt": 1753300002000, "resolvedAt": 1753300005000,
+                    "resolvedBy": "human", "note": "REST it is" }
+                ]
+              }
+            ]
+            """
+        )
+
+        let archive = try await client.archivedRooms()
+        XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/rooms/archive")
+
+        let room = try XCTUnwrap(archive.first)
+        XCTAssertEqual(room.state, "closed")
+        XCTAssertNil(room.git)
+        XCTAssertTrue(room.openDecisions.isEmpty)
+
+        let decision = try XCTUnwrap(room.decisions?.first)
+        XCTAssertEqual(decision.resolvedBy, "human")
+        XCTAssertEqual(decision.note, "REST it is")
+
+        // The durable terminal-resume handle → the copyable command.
+        XCTAssertEqual(
+            room.participants[0].resumeCommand,
+            "pi --session /Users/dev/.pi/sessions/abc.jsonl"
+        )
+        XCTAssertNil(room.participants[1].resumeCommand)
+    }
+
+    // MARK: projects
+
+    func testProjectsDecoding() async throws {
+        StubURLProtocol.respond(
+            status: 200,
+            json: #"[{"name":"kild","path":"/Users/dev/kild"},{"name":"helm","path":"/Users/dev/helm"}]"#
+        )
+        let projects = try await client.projects()
+        XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/projects")
+        XCTAssertEqual(projects.map(\.name), ["kild", "helm"])
+        XCTAssertEqual(projects[0].path, "/Users/dev/kild")
+    }
+
+    func testAddProjectEncodesBodyAndDecodesReply() async throws {
+        StubURLProtocol.respond(status: 200, json: #"{"name":"kild","path":"/Users/dev/kild"}"#)
+
+        let project = try await client.addProject(name: "kild", path: "~/kild")
+
+        // The engine resolves `~/` and echoes the registered project back.
+        XCTAssertEqual(project, EngineClient.Project(name: "kild", path: "/Users/dev/kild"))
+        let request = try XCTUnwrap(StubURLProtocol.lastRequest)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/api/projects")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+
+        let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
+        let payload = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        XCTAssertEqual(payload["name"] as? String, "kild")
+        XCTAssertEqual(payload["path"] as? String, "~/kild")
+        XCTAssertEqual(payload.count, 2)
+    }
+
+    func testAddProjectSurfacesEngineRejectionText() async {
+        // Verbatim engine rejections: duplicate name / not a directory, both 400 {error}.
+        StubURLProtocol.respond(status: 400, json: #"{"error":"duplicate project name: kild"}"#)
+
+        do {
+            try await client.addProject(name: "kild", path: "/Users/dev/kild")
+            XCTFail("expected the engine rejection to throw")
+        } catch let failure as EngineClient.Failure {
+            XCTAssertEqual(failure, .engine("duplicate project name: kild"))
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
+    }
+
+    // MARK: worktrees (the project→worktree-room link)
+
+    func testWorktreesDecodingAndQueryEncoding() async throws {
+        StubURLProtocol.respond(
+            status: 200,
+            json: #"[{"branch":"kild/fix-2247","path":"/Users/dev/.config/kild/worktrees/fix-2247","name":"fix-2247"}]"#
+        )
+        let trees = try await client.worktrees(project: "kild")
+        let url = try XCTUnwrap(StubURLProtocol.lastRequest?.url)
+        XCTAssertEqual(url.path, "/api/worktrees")
+        XCTAssertEqual(url.query, "project=kild")
+        XCTAssertEqual(trees.first?.name, "fix-2247")
+        XCTAssertEqual(trees.first?.branch, "kild/fix-2247")
     }
 
     func testHealthDecoding() async throws {
