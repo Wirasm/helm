@@ -8,7 +8,7 @@ import XCTest
 final class GhosttySmokeTests: XCTestCase {
     @MainActor
     func testGhosttyInitAndConfigLoad() {
-        let controller = GhosttyTerminal.makeController()
+        let controller = TerminalSession.makeController()
         XCTAssertNil(
             controller.lastConfigurationIssue,
             "ghostty rejected helm's config: \(controller.lastConfigurationIssue ?? "")"
