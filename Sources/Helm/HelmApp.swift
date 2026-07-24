@@ -4,11 +4,15 @@ import SwiftUI
 @main
 struct HelmApp: App {
     init() {
-        // Running as a bare SPM executable (`swift run helm`) — without this the process
-        // stays a background app and the window never fronts. Removed once helm becomes
-        // a real .app bundle.
-        NSApplication.shared.setActivationPolicy(.regular)
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        // Running as a bare SPM executable (`swift run helm`) the process has no
+        // Info.plist, so AppKit treats it as a background app and the window never
+        // fronts — force it regular and activate. Inside the real .app bundle
+        // (`make app`) Bundle.main has an identifier, Launch Services handles
+        // activation natively, and forcing it here would steal focus — skip it.
+        if Bundle.main.bundleIdentifier == nil {
+            NSApplication.shared.setActivationPolicy(.regular)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
         // ⌘T must work while the ghostty view is first responder, but the terminal
         // claims command-key equivalents before the menu sees them (standalone ghostty
         // binds ⌘T to new-tab; embedded, it swallows it). A local monitor runs before
