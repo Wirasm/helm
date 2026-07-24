@@ -4,9 +4,15 @@ import SwiftUI
 /// chronologically, and a composer that posts into the room as the human. Watch +
 /// steer only — every action here is an existing operator REST action; helm adds no
 /// logic (resolving a decision is just a `resolved[key]: …` post the engine folds).
+///
+/// Archived rooms reuse this view with `readOnly`: the composer becomes an archived
+/// banner, the decision ledger shows resolutions, and each participant chip offers
+/// its pi resume command (safe only for dead sessions — never `--session` a live one).
 struct RoomDetailView: View {
     let room: EngineClient.LiveRoom
     let engine: EngineClient
+    /// Archived (closed/halted) room: no composer, no resolve — watch only.
+    var readOnly = false
     /// Called after a successful post so the owner refreshes the room from the engine
     /// (read path is polling for now; this just shortens the echo).
     var onPosted: () async -> Void
@@ -21,14 +27,24 @@ struct RoomDetailView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if !room.openDecisions.isEmpty {
+            if !shownDecisions.isEmpty {
                 decisionsPinned
                 Divider()
             }
             log
             Divider()
-            composer
+            if readOnly {
+                archivedBanner
+            } else {
+                composer
+            }
         }
+    }
+
+    /// Live: only what needs the human now. Archived: the full ledger — what was
+    /// asked AND how it was resolved is the point of reading history.
+    private var shownDecisions: [EngineClient.Decision] {
+        readOnly ? (room.decisions ?? []) : room.openDecisions
     }
 
     // MARK: header — room name + participants with models
@@ -68,6 +84,18 @@ struct RoomDetailView: View {
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
                     .background(.quaternary, in: Capsule())
+                    .contextMenu {
+                        // Resume only for archived rooms — the session is dead, so
+                        // `pi --session` has one writer. (Live would need --fork.)
+                        if readOnly, let resume = p.resumeCommand {
+                            Button("Copy resume command") { Pasteboard.copy(resume) }
+                        }
+                    }
+                    .help(
+                        readOnly && p.resumeCommand != nil
+                            ? "Right-click to copy: \(p.resumeCommand!)"
+                            : ""
+                    )
                 }
             }
         }
@@ -101,34 +129,51 @@ struct RoomDetailView: View {
 
     private var decisionsPinned: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(room.openDecisions, id: \.key) { decision in
+            ForEach(shownDecisions, id: \.key) { decision in
+                let resolved = decision.resolvedAt != nil
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                    Image(systemName: resolved ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(resolved ? AnyShapeStyle(.green) : AnyShapeStyle(.orange))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(decision.key)
                             .font(.headline.monospaced())
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(resolved ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
                         Text(decision.summary)
                             .font(.body)
                             .textSelection(.enabled)
-                        Text("opened by \(decision.openedBy)")
+                        if resolved, let note = decision.note {
+                            Text(note)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                        Text(attribution(of: decision, resolved: resolved))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Resolve…") {
-                        // Pre-fill only — the human completes the note and sends.
-                        // The resolution is just a post; the engine owns the ledger.
-                        draft = "resolved[\(decision.key)]: "
-                        composerFocused = true
+                    if !readOnly {
+                        Button("Resolve…") {
+                            // Pre-fill only — the human completes the note and sends.
+                            // The resolution is just a post; the engine owns the ledger.
+                            draft = "resolved[\(decision.key)]: "
+                            composerFocused = true
+                        }
                     }
                 }
             }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.orange.opacity(0.08))
+        // Orange only while something is actually open (an archived ledger may be
+        // fully resolved — no alarm color for settled history).
+        .background(.orange.opacity(room.openDecisions.isEmpty ? 0 : 0.08))
+    }
+
+    private func attribution(of decision: EngineClient.Decision, resolved: Bool) -> String {
+        guard resolved else { return "opened by \(decision.openedBy)" }
+        let resolver = decision.resolvedBy.map { " by \($0)" } ?? ""
+        return "opened by \(decision.openedBy) · resolved\(resolver)"
     }
 
     // MARK: log — chronological, system/implicit muted
@@ -266,6 +311,19 @@ struct RoomDetailView: View {
         } else {
             proxy.scrollTo(last.id, anchor: .bottom)
         }
+    }
+
+    // MARK: archived banner — shown in place of the composer for read-only rooms
+
+    private var archivedBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "archivebox")
+            Text("\(room.state ?? "closed") — archived · read-only")
+                .font(.callout)
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .padding(10)
     }
 
     // MARK: composer — post into the room as the human
