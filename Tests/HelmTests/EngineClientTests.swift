@@ -144,10 +144,11 @@ final class EngineClientTests: XCTestCase {
     // MARK: project attribution (the room→project filter key)
 
     func testBelongsToProjectMatchesGitPathAndWorktreeName() throws {
-        func room(git: String?, worktree: String?) throws -> EngineClient.LiveRoom {
+        func room(git: String?, worktree: String?, cwd: String? = nil) throws -> EngineClient.LiveRoom {
             let json = """
             { "id": "r", "name": "r", "participants": [], "log": []
               \(worktree.map { #", "worktree": "\#($0)""# } ?? "")
+              \(cwd.map { #", "cwd": "\#($0)""# } ?? "")
               \(git.map { #", "git": {"path": "\#($0)"}"# } ?? "") }
             """
             return try JSONDecoder().decode(EngineClient.LiveRoom.self, from: Data(json.utf8))
@@ -174,6 +175,37 @@ final class EngineClientTests: XCTestCase {
             .belongsToProject(at: "/p/kild", worktreeNames: ["fix"]))
         XCTAssertFalse(try room(git: nil, worktree: nil)
             .belongsToProject(at: "/p/kild", worktreeNames: ["fix"]))
+
+        // archived rooms with a persisted cwd (kild #669): the cwd attributes them
+        // directly — no live worktree needed; sibling-prefix paths still don't match.
+        XCTAssertTrue(try room(git: nil, worktree: nil, cwd: "/p/kild")
+            .belongsToProject(at: "/p/kild", worktreeNames: []))
+        XCTAssertTrue(try room(git: nil, worktree: nil, cwd: "/p/kild/sub")
+            .belongsToProject(at: "/p/kild", worktreeNames: []))
+        XCTAssertFalse(try room(git: nil, worktree: nil, cwd: "/p/kild-ui")
+            .belongsToProject(at: "/p/kild", worktreeNames: []))
+
+        // live rooms prefer the effective git dir; cwd only steps in without git.
+        XCTAssertTrue(try room(git: "/p/kild/sub", worktree: nil, cwd: "/elsewhere")
+            .belongsToProject(at: "/p/kild", worktreeNames: []))
+    }
+
+    // MARK: archived display state (never "running" for history)
+
+    func testArchivedDisplayStateNeverShowsRunning() throws {
+        func room(state: String?) throws -> EngineClient.ArchivedRoom {
+            let json = """
+            { "id": "r", "name": "r", "participants": [], "log": []
+              \(state.map { #", "state": "\#($0)""# } ?? "") }
+            """
+            return try JSONDecoder().decode(EngineClient.ArchivedRoom.self, from: Data(json.utf8))
+        }
+
+        // A snapshot frozen at "running" was interrupted by an engine restart.
+        XCTAssertEqual(try room(state: "running").archivedDisplayState, "interrupted")
+        XCTAssertEqual(try room(state: "closed").archivedDisplayState, "closed")
+        XCTAssertEqual(try room(state: nil).archivedDisplayState, "closed")
+        XCTAssertEqual(try room(state: "halted").archivedDisplayState, "halted")
     }
 
     // MARK: archive decoding
@@ -190,6 +222,7 @@ final class EngineClientTests: XCTestCase {
                 "name": "ship-auth",
                 "state": "closed",
                 "worktree": "ship-auth",
+                "cwd": "/Users/dev/projects/auth",
                 "participants": [
                   { "name": "lead", "agent": "orchestrator", "model": "sol-4",
                     "piSessionId": "abc",
@@ -216,6 +249,8 @@ final class EngineClientTests: XCTestCase {
         let room = try XCTUnwrap(archive.first)
         XCTAssertEqual(room.state, "closed")
         XCTAssertNil(room.git)
+        // The persisted cwd (kild #669) — the archive's project-attribution key.
+        XCTAssertEqual(room.cwd, "/Users/dev/projects/auth")
         XCTAssertTrue(room.openDecisions.isEmpty)
 
         let decision = try XCTUnwrap(room.decisions?.first)
