@@ -1,0 +1,207 @@
+import AppKit
+import SwiftUI
+
+// MARK: - Model
+
+/// State for the read-only artifact pane: which file is open, its rendered
+/// content, and the watcher that re-renders on external change (plans get
+/// rewritten by agents while you read them).
+///
+/// Read-only on purpose — no editing, no commenting. Those are later slices,
+/// designed against real dogfooding (see docs/ui-plan.md).
+@MainActor
+final class ArtifactPaneModel: ObservableObject {
+    struct Document {
+        let url: URL
+        var content: AttributedString
+    }
+
+    @Published private(set) var document: Document?
+
+    private var watcher: FileWatcher?
+
+    /// Files beyond this are almost certainly not artifacts; refuse instead of
+    /// beachballing the pane on a stray binary or log.
+    private static let maxBytes = 5_000_000
+
+    var isOpen: Bool { document != nil }
+
+    /// ⌘O / the strip's document button. Starts in ~/.prp when it exists — the
+    /// intelligence layer's artifact home — else the home directory.
+    func presentOpenPanel() {
+        let panel = NSOpenPanel()
+        // Any file is choosable: .md renders formatted, other text renders
+        // monospaced, and non-text is refused politely at load time.
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let prp = home.appendingPathComponent(".prp")
+        panel.directoryURL =
+            FileManager.default.fileExists(atPath: prp.path) ? prp : home
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        open(url)
+    }
+
+    func open(_ url: URL) {
+        document = Document(url: url, content: Self.load(url))
+        // Re-render on every external change. Watcher lifetime == document
+        // lifetime; opening another file replaces it.
+        watcher = FileWatcher(url: url) { [weak self] in
+            self?.reload()
+        }
+    }
+
+    func close() {
+        watcher = nil
+        document = nil
+    }
+
+    func revealInFinder() {
+        guard let url = document?.url else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func reload() {
+        guard let url = document?.url else { return }
+        document = Document(url: url, content: Self.load(url))
+    }
+
+    private static func load(_ url: URL) -> AttributedString {
+        guard let data = try? Data(contentsOf: url) else {
+            return notice("Could not read \(url.path)")
+        }
+        guard data.count <= maxBytes else {
+            return notice("File too large to display (\(data.count / 1_000_000) MB)")
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            return notice("Not a UTF-8 text file")
+        }
+        return ArtifactRenderer.render(text, from: url)
+    }
+
+    private static func notice(_ message: String) -> AttributedString {
+        var text = AttributedString(message)
+        text.foregroundColor = .secondary
+        return text
+    }
+}
+
+// MARK: - File watcher
+
+/// DispatchSource-based watcher for a single file. Editors and agents replace
+/// files atomically (write-to-temp + rename), which fires `.rename`/`.delete`
+/// on the OLD inode and silently orphans the file descriptor — so on those
+/// events the watcher re-opens the path (briefly retrying while the writer
+/// finishes) and keeps watching the NEW inode.
+@MainActor
+final class FileWatcher {
+    private let url: URL
+    private let onChange: @MainActor () -> Void
+    private var source: DispatchSourceFileSystemObject?
+
+    init(url: URL, onChange: @escaping @MainActor () -> Void) {
+        self.url = url
+        self.onChange = onChange
+        watch()
+    }
+
+    private func watch() {
+        let fd = open(url.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .extend, .rename, .delete],
+            queue: .main
+        )
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            let event = source.data
+            if event.contains(.rename) || event.contains(.delete) {
+                // Old inode gone (atomic save). Rearm on the path, then render.
+                self.source?.cancel()
+                self.source = nil
+                self.rearm(attemptsLeft: 5)
+            } else {
+                self.onChange()
+            }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        self.source = source
+    }
+
+    /// The replacement file may not exist for a moment mid-rename; retry a few
+    /// times before giving up (the pane then just keeps its last render).
+    private func rearm(attemptsLeft: Int) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            watch()
+            onChange()
+            return
+        }
+        guard attemptsLeft > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.rearm(attemptsLeft: attemptsLeft - 1)
+        }
+    }
+
+    deinit {
+        source?.cancel()
+    }
+}
+
+// MARK: - View
+
+/// The read-only artifact half of the terminal workspace split: a header
+/// (filename · reveal-in-Finder · close) over the rendered file.
+struct ArtifactPane: View {
+    @ObservedObject var model: ArtifactPaneModel
+
+    var body: some View {
+        if let document = model.document {
+            VStack(spacing: 0) {
+                header(for: document)
+                Divider()
+                ScrollView {
+                    Text(document.content)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+        }
+    }
+
+    private func header(for document: ArtifactPaneModel.Document) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "doc.text")
+                .foregroundStyle(.secondary)
+            Text(document.url.lastPathComponent)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(document.url.path)
+            Spacer()
+            Button {
+                model.revealInFinder()
+            } label: {
+                Image(systemName: "magnifyingglass.circle")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Reveal in Finder")
+            Button {
+                model.close()
+            } label: {
+                Image(systemName: "xmark.circle")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Close artifact")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+}

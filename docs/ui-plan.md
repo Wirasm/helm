@@ -317,3 +317,18 @@ while keeping the IA/slices/canvas thinking as the seed plan:
    markdown, OS triggers/hotkeys/TTS. The engine REST/WS API is the ONLY contract.
    The Tauri/Svelte cockpit + in-flight slice 1 are parked, not merged; this doc is the
    salvage and seeds the new repo's plan.
+
+---
+
+## Addendum 2026-07-24 (4) — terminal workspace lands; review UI deliberately deferred
+
+- **Review surface**: engine git-facts endpoints exist (#668); the review UI is
+  DELIBERATELY deferred until designed against real dogfooding — do not build it
+  speculatively.
+- **The terminal-workspace model supersedes the drawer idea**: the main view is a
+  terminal WORKSPACE — N terminal tabs (each an independent login shell, ptys owned
+  app-level by `TerminalManager` so they survive any view churn) plus an optional
+  read-only artifact split beside them ("driver in the terminal, plan beside it":
+  ⌘O opens a file, .md renders formatted, re-renders on external change). The kild
+  view is unchanged. Shortcuts: ⌘T face toggle, ⌘N new terminal, ⌘1–⌘9 select tab,
+  ⌘O open artifact.
