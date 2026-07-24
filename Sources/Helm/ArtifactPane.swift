@@ -194,21 +194,28 @@ struct ArtifactPane: View {
         case .web:
             HTMLArtifactView(url: document.url, generation: document.generation)
         case let .segments(segments):
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                        switch segment {
-                        case let .text(text):
-                            Text(text)
-                                .textSelection(.enabled)
+            // GeometryReader supplies the pane height: islands cap themselves
+            // at ~70% of it and scroll internally beyond that.
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                            switch segment {
+                            case let .text(text):
+                                Text(text)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            case let .mermaid(diagram):
+                                MermaidIsland(
+                                    diagram: diagram,
+                                    maxHeight: max(geometry.size.height * 0.7, 120)
+                                )
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                        case let .mermaid(diagram):
-                            MermaidIsland(diagram: diagram)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                         }
                     }
+                    .padding(16)
                 }
-                .padding(16)
             }
         }
     }

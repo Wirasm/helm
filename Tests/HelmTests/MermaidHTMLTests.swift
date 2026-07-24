@@ -47,6 +47,41 @@ final class MermaidHTMLTests: XCTestCase {
         XCTAssertTrue(page.contains("ResizeObserver"), "must re-post on reflow")
     }
 
+    func testIslandPageRendersNaturalSizeByDefault() {
+        let page = MermaidHTML.islandPage(diagram: "graph TD", theme: .light)
+        // Natural size across diagram families — fitting is CSS's job, never
+        // mermaid's built-in scale-to-container.
+        XCTAssertTrue(page.contains("flowchart: { useMaxWidth: false }"))
+        XCTAssertTrue(page.contains("sequence: { useMaxWidth: false }"))
+        XCTAssertTrue(page.contains("<body class=\"natural\">"))
+        // Wider-than-pane diagrams scroll horizontally inside the island.
+        XCTAssertTrue(page.contains("#wrap { overflow-x: auto;"))
+    }
+
+    func testIslandPageFitModeScalesTheSVGViaCSS() {
+        let page = MermaidHTML.islandPage(
+            diagram: "graph TD", theme: .light, sizing: .fitWidth
+        )
+        XCTAssertTrue(page.contains("<body class=\"fit\">"))
+        XCTAssertTrue(
+            page.contains("body.fit pre.mermaid svg { max-width: 100%; height: auto; }"),
+            "fit mode must scale via CSS, keeping aspect ratio"
+        )
+        // The mermaid config stays natural in both modes.
+        XCTAssertTrue(page.contains("useMaxWidth: false"))
+    }
+
+    func testIslandPageMeasuresTheRenderedSVGNotTheDocument() {
+        let page = MermaidHTML.islandPage(diagram: "graph TD", theme: .light)
+        // Height comes from the SVG's real box after mermaid.run resolves —
+        // documentElement.scrollHeight is only the no-SVG fallback.
+        XCTAssertTrue(page.contains("getBoundingClientRect"))
+        XCTAssertTrue(page.contains("mermaid.run().then(settle, settle)"))
+        // Reflows re-measure via observers on the SVG/container, not body.
+        XCTAssertTrue(page.contains("observer.observe(svg)"))
+        XCTAssertFalse(page.contains("observe(document.body)"))
+    }
+
     func testHTMLArtifactInitScriptCarriesThemeAndTargetsMermaidBlocks() {
         let script = MermaidHTML.htmlArtifactInitScript(theme: .dark)
         XCTAssertTrue(script.contains("theme: \"dark\""))

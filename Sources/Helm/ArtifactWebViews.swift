@@ -10,29 +10,80 @@ import WebKit
 
 // MARK: - Mermaid island (inline diagram in the markdown flow)
 
-/// One rendered diagram, inline between markdown blocks. Transparent, scaled
-/// to the pane width, and exactly as tall as the rendered diagram: the page
-/// posts its content height after render (and on reflow) and the island's
-/// frame follows.
+/// One rendered diagram, inline between markdown blocks. Transparent, natural
+/// size by default (scrolling horizontally when wider than the pane), and as
+/// tall as the rendered SVG: the page posts the SVG's measured height after
+/// render (and on reflow) and the island's frame follows, capped by the pane
+/// (`maxHeight`) with internal vertical scroll beyond.
+///
+/// A tiny right-aligned header offers a fit-width ⇄ natural-size toggle and an
+/// expand button that opens the diagram in a large zoomable sheet.
 struct MermaidIsland: View {
     let diagram: String
+    /// Cap from the pane (~70% of its height); `.infinity` when unhosted.
+    var maxHeight: CGFloat = .infinity
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var height: CGFloat = 40
+    @State private var fitWidth = false
+    @State private var expanded = false
+    @State private var expandedSize = CGSize(width: 1000, height: 700)
+
+    private var theme: MermaidTheme { colorScheme == .dark ? .dark : .light }
 
     var body: some View {
-        MermaidWebView(
-            diagram: diagram,
-            theme: colorScheme == .dark ? .dark : .light,
-            height: $height
-        )
-        .frame(height: height)
+        VStack(alignment: .trailing, spacing: 2) {
+            controls
+            MermaidWebView(
+                diagram: diagram,
+                theme: theme,
+                sizing: fitWidth ? .fitWidth : .natural,
+                height: $height
+            )
+            .frame(height: min(height, maxHeight))
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .sheet(isPresented: $expanded) {
+            MermaidExpandedSheet(diagram: diagram, theme: theme, size: expandedSize)
+        }
+    }
+
+    /// The island's header row: fit-width toggle + expand, kept visually quiet
+    /// so the diagram stays the subject.
+    private var controls: some View {
+        HStack(spacing: 10) {
+            Button {
+                fitWidth.toggle()
+            } label: {
+                Image(systemName: fitWidth
+                    ? "arrow.up.left.and.arrow.down.right"
+                    : "arrow.down.right.and.arrow.up.left")
+            }
+            .help(fitWidth ? "Natural size" : "Fit to pane width")
+            Button {
+                // Size the sheet off the window as it is right now (min 80%).
+                if let frame = NSApp.keyWindow?.frame {
+                    expandedSize = CGSize(
+                        width: max(frame.width * 0.8, 640),
+                        height: max(frame.height * 0.8, 480)
+                    )
+                }
+                expanded = true
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .help("Open large view")
+        }
+        .font(.system(size: 10))
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
     }
 }
 
 private struct MermaidWebView: NSViewRepresentable {
     let diagram: String
     let theme: MermaidTheme
+    let sizing: MermaidSizing
     @Binding var height: CGFloat
 
     func makeCoordinator() -> ArtifactWebCoordinator {
@@ -41,15 +92,7 @@ private struct MermaidWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        if let mermaidJS = MermaidHTML.vendoredScript() {
-            configuration.userContentController.addUserScript(
-                WKUserScript(
-                    source: mermaidJS,
-                    injectionTime: .atDocumentStart,
-                    forMainFrameOnly: true
-                )
-            )
-        }
+        configuration.userContentController.addMermaidUserScript()
         configuration.userContentController.add(
             context.coordinator, name: MermaidHTML.sizeHandlerName
         )
@@ -74,15 +117,102 @@ private struct MermaidWebView: NSViewRepresentable {
             .removeScriptMessageHandler(forName: MermaidHTML.sizeHandlerName)
     }
 
-    /// Loads only when the (diagram, theme) pair actually changed — file-watch
-    /// re-renders and appearance flips reload; mere SwiftUI churn does not.
+    /// Loads only when the (diagram, theme, sizing) triple actually changed —
+    /// file-watch re-renders, appearance flips, and fit-width toggles reload;
+    /// mere SwiftUI churn does not.
+    private func load(_ webView: WKWebView, coordinator: ArtifactWebCoordinator) {
+        let key = "\(theme.rawValue)\u{0}\(sizing.rawValue)\u{0}\(diagram)"
+        guard coordinator.loadedKey != key else { return }
+        coordinator.loadedKey = key
+        webView.loadHTMLString(
+            MermaidHTML.islandPage(diagram: diagram, theme: theme, sizing: sizing),
+            baseURL: nil
+        )
+    }
+}
+
+// MARK: - Expanded diagram sheet
+
+/// The expand button's target: the same diagram at natural size in a large
+/// sheet (≥80% of the window when it opened), scrollable both ways and
+/// pinch-zoomable via WKWebView magnification.
+private struct MermaidExpandedSheet: View {
+    let diagram: String
+    let theme: MermaidTheme
+    let size: CGSize
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Diagram")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            Divider()
+            MermaidZoomView(diagram: diagram, theme: theme)
+        }
+        .frame(minWidth: size.width, minHeight: size.height)
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+}
+
+/// The sheet's web view: natural-size island page, magnification enabled
+/// (pinch/⌘-scroll zoom), scrolling handled by the page + web view.
+private struct MermaidZoomView: NSViewRepresentable {
+    let diagram: String
+    let theme: MermaidTheme
+
+    func makeCoordinator() -> ArtifactWebCoordinator {
+        // No size handler: the sheet is a fixed viewport, not a sized island.
+        // (The page's post guard no-ops when the handler isn't registered.)
+        ArtifactWebCoordinator(onHeight: nil)
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addMermaidUserScript()
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.allowsMagnification = true
+        webView.setValue(false, forKey: "drawsBackground")
+        load(webView, coordinator: context.coordinator)
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        load(webView, coordinator: context.coordinator)
+    }
+
     private func load(_ webView: WKWebView, coordinator: ArtifactWebCoordinator) {
         let key = "\(theme.rawValue)\u{0}\(diagram)"
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
         webView.loadHTMLString(
-            MermaidHTML.islandPage(diagram: diagram, theme: theme),
+            MermaidHTML.islandPage(diagram: diagram, theme: theme, sizing: .natural),
             baseURL: nil
+        )
+    }
+}
+
+extension WKUserContentController {
+    /// Injects the vendored mermaid.js at document start (shared by every
+    /// mermaid-rendering web view in this file).
+    fileprivate func addMermaidUserScript() {
+        guard let mermaidJS = MermaidHTML.vendoredScript() else { return }
+        addUserScript(
+            WKUserScript(
+                source: mermaidJS,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
         )
     }
 }
