@@ -5,12 +5,15 @@ the user's shell, surviving the ⌘T view toggle without losing the session. Thi
 quality bar of the whole app (the terminal is the main view), so it's proven FIRST —
 before helm gets a GitHub repo or any more features.
 
-**Exit criteria**
-1. `TerminalPane` renders a GhosttyKit surface running `$SHELL`; typing works; a TUI
-   (run `pi` in it) renders correctly.
-2. ⌘T to the kild view and back: the shell session is intact (pty owned outside the
-   view lifecycle).
-3. Window resize reflows the terminal correctly.
+**Exit criteria — ALL VERIFIED by the human, 2026-07-24**
+1. ✅ `TerminalPane` renders a GhosttyKit surface running `$SHELL`; typing works; TUIs
+   render correctly.
+2. ✅ ⌘T to the kild view and back: session intact. (Fix required: ghostty's view
+   swallows ⌘-key equivalents — an app-level NSEvent local monitor now owns ⌘T.)
+3. ✅ Window resize reflows the terminal correctly.
+4. ✅ Shell exit flips the pane to the fallback instead of a dead surface.
+
+The spike is COMPLETE. Pinned: libghostty-spm 1.3.1 (revision b0930320).
 
 **Non-goals for the spike**: tabs/splits, config UI, selection/clipboard polish,
 app bundling/entitlements (that's the XcodeGen graduation, after).

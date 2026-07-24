@@ -4,6 +4,11 @@ import PackageDescription
 let package = Package(
     name: "helm",
     platforms: [.macOS(.v14)],
+    products: [
+        // Explicit lowercase product so `swift run helm` works (the target is `Helm`,
+        // and SPM would otherwise auto-name the product after it, case-sensitively).
+        .executable(name: "helm", targets: ["Helm"])
+    ],
     dependencies: [
         // Pinned EXACT on purpose: libghostty's embedding API is pre-1.0 and
         // changes between releases. Bump deliberately, re-reading the wrapper's

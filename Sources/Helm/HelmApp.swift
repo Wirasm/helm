@@ -9,6 +9,18 @@ struct HelmApp: App {
         // a real .app bundle.
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
+        // ⌘T must work while the ghostty view is first responder, but the terminal
+        // claims command-key equivalents before the menu sees them (standalone ghostty
+        // binds ⌘T to new-tab; embedded, it swallows it). A local monitor runs before
+        // any view's key handling, so the toggle always wins.
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+               event.charactersIgnoringModifiers == "t" {
+                NotificationCenter.default.post(name: .helmToggleView, object: nil)
+                return nil
+            }
+            return event
+        }
     }
 
     var body: some Scene {
