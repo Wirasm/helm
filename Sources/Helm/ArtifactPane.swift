@@ -223,6 +223,16 @@ struct ArtifactPane: View {
                                 Text(text)
                                     .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                            case let .markdown(markdown):
+                                // Document typography with a capped measure:
+                                // the text column stops at a comfortable line
+                                // length and centers when the pane is wider.
+                                MarkdownText(text: markdown, theme: .document)
+                                    .frame(
+                                        maxWidth: MarkdownTheme.document.measure ?? .infinity,
+                                        alignment: .leading
+                                    )
+                                    .frame(maxWidth: .infinity, alignment: .center)
                             case let .mermaid(diagram):
                                 MermaidIsland(
                                     diagram: diagram,

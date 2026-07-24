@@ -295,7 +295,8 @@ struct RoomDetailView: View {
                 timestamp(message)
             }
             Text(message.text)
-                .font(.caption.italic())
+                // Compact but legible — muted is a tier, not unreadably small.
+                .font(.system(size: 12).italic())
                 .foregroundStyle(.tertiary)
                 .textSelection(.enabled)
         }
