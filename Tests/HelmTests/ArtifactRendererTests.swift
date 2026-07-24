@@ -82,6 +82,45 @@ final class ArtifactRendererTests: XCTestCase {
         XCTAssertEqual(String(rendered.characters), "1. first\n2. second")
     }
 
+    // MARK: Segment routing
+
+    func testMarkdownWithMermaidRendersInterleavedSegments() {
+        let raw = "**Caption**\n\n```mermaid\ngraph TD; A-->B\n```\n\nAfter."
+        let segments = ArtifactRenderer.renderSegments(raw, from: mdURL)
+
+        XCTAssertEqual(segments.count, 3)
+        guard case let .text(before) = segments[0],
+              case let .mermaid(diagram) = segments[1],
+              case let .text(after) = segments[2]
+        else {
+            return XCTFail("expected text/mermaid/text, got \(segments)")
+        }
+        XCTAssertEqual(String(before.characters), "Caption")
+        XCTAssertEqual(diagram, "graph TD; A-->B")
+        XCTAssertEqual(String(after.characters), "After.")
+    }
+
+    func testNonMarkdownStaysASingleMonospacedTextSegment() {
+        // A mermaid fence in a .log file is just text — no islands.
+        let raw = "```mermaid\ngraph TD; A-->B\n```"
+        let segments = ArtifactRenderer.renderSegments(raw, from: logURL)
+
+        XCTAssertEqual(segments.count, 1)
+        guard case let .text(text) = segments[0] else {
+            return XCTFail("expected a single text segment, got \(segments)")
+        }
+        XCTAssertEqual(String(text.characters), raw)
+        for run in text.runs {
+            XCTAssertEqual(run.font, ArtifactRenderer.monoFont)
+        }
+    }
+
+    func testHTMLExtensionsDetected() {
+        XCTAssertTrue(ArtifactRenderer.isHTML(URL(fileURLWithPath: "/a/page.html")))
+        XCTAssertTrue(ArtifactRenderer.isHTML(URL(fileURLWithPath: "/a/PAGE.HTM")))
+        XCTAssertFalse(ArtifactRenderer.isHTML(URL(fileURLWithPath: "/a/plan.md")))
+    }
+
     func testUnparseableContentFallsBackToPlainText() {
         // Foundation's parser accepts almost anything, so this mainly pins the
         // fallback path's contract: never throw, never drop content.
