@@ -20,7 +20,10 @@ struct KildView: View {
     @State private var archived: [EngineClient.ArchivedRoom] = []
     @State private var error: String?
     @State private var selection: String? = LaunchOptions.roomId
+    // A --room launch lands on History when the id isn't live at first load; the
+    // load() pass below corrects the tab once data arrives (testability seam).
     @State private var tab: RoomsTab = .live
+    @State private var launchRoomResolved = LaunchOptions.roomId == nil
 
     // Project filter. `selectedProject == nil` = all projects. `projectWorktreeNames`
     // is the selected project's kild worktrees (from `/api/worktrees`) — the only link
@@ -385,6 +388,10 @@ struct KildView: View {
             }
             await refreshWorktreeNames()
             error = nil
+            if !launchRoomResolved, let id = selection {
+                if archived.contains(where: { $0.id == id }) { tab = .history }
+                launchRoomResolved = true
+            }
         } catch {
             health = nil
             rooms = []
