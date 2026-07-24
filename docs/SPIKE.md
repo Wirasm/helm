@@ -33,6 +33,66 @@ GhosttyKit.xcframework artifacts now exist — official CI releases on tip, plus
    (mintlify) and Ghostty's own macOS wrapper (`macos/Sources/Ghostty/` upstream).
    Record the pinned version here when it works.
 
+## EMBED LANDED — 2026-07-24 (path 1: libghostty-spm)
+
+**Pinned**: `libghostty-spm` **exact 1.3.1** (tag of 2026-07-17; its binary target is
+`storage.1.3.1` → GhosttyKit.xcframework, checksum-locked in the package). Transitive:
+MSDisplayLink ≥ 2.1.0. Bump only deliberately: re-read the wrapper sources at the new
+tag first — the C API AND the Swift wrapper both churn.
+
+**What shipped vs hand-rolled** — far more shipped than expected. The package is not
+headers-only: its `GhosttyTerminal` product is a full Swift wrapper —
+`TerminalController` (ghostty_init / config render+load / ghostty_app_new),
+`AppTerminalView` (Metal-layer NSView with keyboard, IME/NSTextInputClient, mouse,
+selection, scroll, resize, focus, display-link ticking), delegate protocols for
+title/close/bell/pwd/OSC events, and an `.exec` backend flag that maps to
+`GHOSTTY_SURFACE_IO_BACKEND_EXEC` (real pty). We hand-rolled only the helm side
+(`Sources/Helm/GhosttyTerminal.swift`):
+
+- `GhosttyTerminal` (app-level singleton): owns the `TerminalController` and ONE
+  long-lived `AppTerminalView`; sinks title/close/lifecycle delegate events into
+  published status. The pty survives view unmount because the surface belongs to the
+  NSView's coordinator and the singleton retains the NSView forever — upstream only
+  tears a surface down on view dealloc, never on window detach
+  (`AppTerminalView+Lifecycle.swift: viewDidMoveToWindow` reuses an existing surface).
+- `GhosttyHostView` (NSViewRepresentable): mounts the shared NSView, never creates
+  one — so SwiftUI dismantle can't kill the session. Forwards nothing by hand:
+  resize/keyboard/mouse live in the wrapper's NSView. Only focus (first responder
+  follows the ⌘T toggle) and render occlusion (`setSurfaceVisible`) are ours.
+- Shell: `command` left unset on purpose → libghostty runs the passwd shell
+  (= `$SHELL`) as a **login shell**; cwd = home.
+
+**API landmines found**
+- **No terminfo in the xcframework** (headers + static lib only). Ghostty's default
+  `TERM=xterm-ghostty` breaks TUIs on machines without Ghostty.app installed. Fixed
+  with config `term = xterm-256color`. Same gap: no bundled shell-integration
+  resources, so OSC-133 prompt features (jumpToPrompt, command-finished events) are
+  inert unless the user's shell emits markers itself.
+- **Do NOT use the wrapper's `TerminalSurfaceView`/`TerminalViewState` SwiftUI path**
+  for the main pane: its representable creates the NSView per mount, so a SwiftUI
+  dismantle deallocs the view → coordinator → surface → pty dies. App-level NSView
+  ownership (above) is the survival mechanism.
+- The surface spawns lazily on first attach to a window with nonzero size; there is
+  no public "surface failed" callback — a hard init failure surfaces only as
+  `TerminalController.lastConfigurationIssue` (checked at startup) or a close event.
+- `ghostty_surface_config_s` (headers win over the mintlify docs): `backend`,
+  `command`, `working_directory`, `env_vars`/`env_var_count`, `initial_input`,
+  `wait_after_command` — the docs lag this struct.
+- Naming: our class is intentionally also called `GhosttyTerminal` (same as the
+  imported module). Fine as long as nothing needs `GhosttyTerminal.X`
+  module-qualified lookup; rename ours if that ever bites.
+
+**Exit criteria status**
+- [x] `swift build` green (hard gate)
+- [x] Non-GUI smoke: ghostty_init + config load + app create in `Tests/HelmTests`
+      (`swift test`) — no window needed
+- [ ] HUMAN: pane shows a live shell; typing works; `pi` (TUI) renders correctly
+- [ ] HUMAN: ⌘T to kild view and back — session intact (run `sleep 99`, toggle,
+      confirm it's still running; also quit-and-reopen is expected to LOSE the
+      session, that's fine)
+- [ ] HUMAN: window resize reflows the terminal (no smearing, grid follows)
+- [ ] HUMAN: shell exit (⌃D) flips the pane to the "shell exited" fallback
+
 ## Known risks (why this is a spike)
 
 - **libghostty API churn** — the remaining real risk: upstream says the embedding API

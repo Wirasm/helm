@@ -15,8 +15,9 @@ struct RootView: View {
     var body: some View {
         ZStack {
             // Both stay mounted; visibility toggles. This is load-bearing: the terminal's
-            // pty and the kild view's WS connection must not die on toggle.
-            TerminalPane()
+            // pty and the kild view's WS connection must not die on toggle. (The pty
+            // would survive a full unmount too — GhosttyTerminal owns it app-level.)
+            TerminalPane(isActive: current == .terminal)
                 .opacity(current == .terminal ? 1 : 0)
                 .allowsHitTesting(current == .terminal)
             KildView()
@@ -29,23 +30,44 @@ struct RootView: View {
     }
 }
 
-/// Placeholder until GhosttyKit is built and embedded (scripts/build-ghosttykit.sh).
-/// The spike's exit criterion: this pane hosts a real libghostty surface running the
-/// user's shell, and survives the ⌘T toggle without losing the session.
+/// The real terminal: a GhosttyKit surface running the user's login shell, owned
+/// app-level by `GhosttyTerminal.shared` so the pty outlives any view churn.
+/// The old placeholder remains as the fallback, rendered only when ghostty init
+/// failed (showing the error) or the shell exited.
 struct TerminalPane: View {
+    /// Whether this pane is RootView's frontmost face (drives focus + occlusion).
+    var isActive: Bool
+
+    @ObservedObject private var terminal = GhosttyTerminal.shared
+
     var body: some View {
+        Group {
+            switch terminal.status {
+            case .starting, .running:
+                GhosttyHostView(view: terminal.hostView, isActive: isActive)
+            case let .failed(message):
+                fallback(title: "ghostty init failed", detail: message)
+            case .exited:
+                fallback(title: "shell exited", detail: "Restart helm to start a new session.")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    private func fallback(title: String, detail: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "terminal")
                 .font(.system(size: 44))
                 .foregroundStyle(.secondary)
-            Text("libghostty lands here")
+            Text(title)
                 .font(.title3)
-            Text("scripts/build-ghosttykit.sh · docs/SPIKE.md\n⌘T toggles to the kild view")
+            Text(detail)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .textSelection(.enabled)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+        .padding()
     }
 }
