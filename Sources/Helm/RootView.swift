@@ -41,13 +41,14 @@ struct TerminalWorkspace: View {
 
     @ObservedObject private var manager = TerminalManager.shared
     @StateObject private var artifact = ArtifactPaneModel()
+    /// The artifact browser popover (anchored to the strip's artifact button);
+    /// state lives here so the ⌘O notification can toggle it.
+    @State private var showBrowser = false
 
     var body: some View {
         HSplitView {
             VStack(spacing: 0) {
-                TerminalStrip(manager: manager) {
-                    artifact.presentOpenPanel()
-                }
+                TerminalStrip(manager: manager, artifact: artifact, showBrowser: $showBrowser)
                 Divider()
                 SessionPane(session: manager.selected, isActive: isActive)
             }
@@ -74,9 +75,10 @@ struct TerminalWorkspace: View {
                 manager.select(index: index)
             }
         }
-        // ⌘O — open an artifact file beside the terminal.
+        // ⌘O — the artifact browser popover (its "Browse…" rows reach the old
+        // NSOpenPanel).
         .onReceive(NotificationCenter.default.publisher(for: .helmOpenArtifact)) { _ in
-            artifact.presentOpenPanel()
+            showBrowser.toggle()
         }
     }
 }

@@ -2,12 +2,16 @@ import SwiftUI
 
 /// Tab strip across the top of the terminal face: one tab per shell session
 /// (title from the terminal's title delegate, "shell N" until one arrives),
-/// a + button (⌘N), and the artifact-open button (⌘O) on the trailing edge.
+/// a + button (⌘N), and the artifact-browser button (⌘O) on the trailing edge.
 /// Selecting a tab swaps which session's NSView is mounted below — the other
 /// ptys keep running unmounted.
 struct TerminalStrip: View {
     @ObservedObject var manager: TerminalManager
-    let onOpenArtifact: () -> Void
+    /// The artifact pane the browser opens files into (also owns Recents).
+    @ObservedObject var artifact: ArtifactPaneModel
+    /// Owned by TerminalWorkspace so ⌘O can toggle the popover from outside;
+    /// the popover itself anchors to the strip's artifact button.
+    @Binding var showBrowser: Bool
 
     // Same storage the View ▸ Appearance menu uses; HelmApp observes the key
     // and applies the override, so picking here re-themes the whole app.
@@ -44,12 +48,19 @@ struct TerminalStrip: View {
             Divider()
                 .frame(height: 14)
 
-            Button(action: onOpenArtifact) {
+            Button {
+                showBrowser.toggle()
+            } label: {
                 Image(systemName: "doc.text")
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("Open artifact (⌘O)")
+            .popover(isPresented: $showBrowser, arrowEdge: .bottom) {
+                ArtifactBrowser(model: artifact) {
+                    showBrowser = false
+                }
+            }
 
             // Subtle appearance affordance (mirrors View ▸ Appearance).
             Menu {
