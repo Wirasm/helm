@@ -8,6 +8,15 @@ enum MermaidTheme: String {
     case dark
 }
 
+/// How an island page sizes its rendered SVG. Natural is the default: the
+/// diagram renders at the size mermaid laid it out, and the island scrolls
+/// horizontally when the pane is narrower. Fit-width scales the SVG down to
+/// the pane via CSS (never up) — a per-island, user-toggled mode.
+enum MermaidSizing: String {
+    case natural
+    case fitWidth = "fit"
+}
+
 /// Pure HTML/JS generation for the artifact pane's WKWebViews — the island
 /// page that renders one diagram, and the user scripts injected into .html
 /// artifacts. No WebKit imports: fully exercisable from `swift test`.
@@ -24,47 +33,84 @@ enum MermaidHTML {
     /// carries only the diagram source and the init + sizing script.
     ///
     /// - Transparent background: the island sits inline in the native pane.
-    /// - The rendered SVG scales to the pane width (mermaid's `useMaxWidth`
-    ///   emits width:100% + a max-width cap; the cap never overflows us).
-    /// - Height: after render — and on every reflow, via ResizeObserver — the
-    ///   page posts `document.documentElement.scrollHeight` to the native
-    ///   side, which sizes the island's frame to fit the diagram exactly.
-    static func islandPage(diagram: String, theme: MermaidTheme) -> String {
+    /// - Natural size: `useMaxWidth: false` across diagram types, so mermaid
+    ///   emits the SVG at its laid-out size and node text stays readable; the
+    ///   `#wrap` container scrolls horizontally when the pane is narrower.
+    ///   Fit-width mode instead scales the SVG down via CSS (`max-width`).
+    /// - Height: after `mermaid.run()` resolves, the page measures the
+    ///   rendered SVG's actual bounding box (`getBoundingClientRect`) — not
+    ///   `scrollHeight`, which lies before layout settles — and posts it to
+    ///   the native side; a ResizeObserver on the SVG and its container
+    ///   re-posts on every reflow.
+    static func islandPage(
+        diagram: String,
+        theme: MermaidTheme,
+        sizing: MermaidSizing = .natural
+    ) -> String {
         """
         <!DOCTYPE html>
         <html>
         <head>
         <meta charset="utf-8">
         <style>
-          html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
-          pre.mermaid { margin: 0; }
-          pre.mermaid svg { max-width: 100%; }
+          html, body { margin: 0; padding: 0; background: transparent; overflow-x: hidden; }
+          #wrap { overflow-x: auto; overflow-y: hidden; }
+          pre.mermaid { margin: 0; line-height: 0; }
+          pre.mermaid svg { display: block; }
+          body.fit #wrap { overflow-x: hidden; }
+          body.fit pre.mermaid svg { max-width: 100%; height: auto; }
         </style>
         </head>
-        <body>
-        <pre class="mermaid">\(escaped(diagram))</pre>
+        <body class="\(sizing.rawValue)">
+        <div id="wrap"><pre class="mermaid">\(escaped(diagram))</pre></div>
         <script>
         (function () {
-          var post = function () {
+          var post = function (height) {
             if (window.webkit && window.webkit.messageHandlers.\(sizeHandlerName)) {
-              window.webkit.messageHandlers.\(sizeHandlerName)
-                .postMessage(document.documentElement.scrollHeight);
+              window.webkit.messageHandlers.\(sizeHandlerName).postMessage(height);
             }
           };
-          if (!window.mermaid) { post(); return; }
+          var wrap = document.getElementById("wrap");
+          var measure = function () {
+            var svg = wrap ? wrap.querySelector("svg") : null;
+            if (!svg) { post(document.documentElement.scrollHeight); return; }
+            // The SVG's real box plus the container's chrome (a horizontal
+            // scrollbar, when classic scrollbars take up space).
+            var box = svg.getBoundingClientRect().height;
+            var chrome = wrap.offsetHeight - wrap.clientHeight;
+            post(Math.ceil(box + Math.max(chrome, 0)));
+          };
+          if (!window.mermaid) { post(document.documentElement.scrollHeight); return; }
           mermaid.initialize({
             startOnLoad: false,
             securityLevel: "strict",
-            theme: "\(theme.rawValue)"
+            theme: "\(theme.rawValue)",
+            \(useMaxWidthOverrides)
           });
-          mermaid.run().then(post, post);
-          new ResizeObserver(post).observe(document.body);
+          var settle = function () {
+            var svg = wrap ? wrap.querySelector("svg") : null;
+            var observer = new ResizeObserver(measure);
+            if (svg) { observer.observe(svg); }
+            if (wrap) { observer.observe(wrap); }
+            requestAnimationFrame(measure);
+          };
+          mermaid.run().then(settle, settle);
         })();
         </script>
         </body>
         </html>
         """
     }
+
+    /// `useMaxWidth: false` for every diagram family mermaid 11 scales by
+    /// default — natural size is the island's baseline; fitting is CSS's job.
+    private static let useMaxWidthOverrides = [
+        "flowchart", "sequence", "gantt", "journey", "timeline", "class",
+        "state", "er", "pie", "quadrantChart", "xyChart", "requirement",
+        "mindmap", "gitGraph", "c4", "sankey", "block", "packet", "architecture",
+    ]
+    .map { "\($0): { useMaxWidth: false }" }
+    .joined(separator: ",\n    ")
 
     /// Injected into .html artifacts (at document end, after the vendored
     /// mermaid.js at document start) so `<pre class="mermaid">` blocks render —
