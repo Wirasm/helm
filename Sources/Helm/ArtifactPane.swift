@@ -35,11 +35,23 @@ final class ArtifactPaneModel: ObservableObject {
     /// beachballing the pane on a stray binary or log.
     private static let maxBytes = 5_000_000
 
+    /// Recently opened artifacts, persisted as a JSON array of paths so the
+    /// browser popover's Recents section survives relaunch. Codec + cap +
+    /// pruning live in ArtifactRecents (pure, tested).
+    @AppStorage("artifactRecentPaths") private var recentPathsJSON = "[]"
+
     var isOpen: Bool { document != nil }
 
-    /// ⌘O / the strip's document button. Starts in ~/.prp when it exists — the
+    /// Recents for display: most-recent-first, missing files skipped (they get
+    /// moved/deleted out from under us; stale rows would open to an error).
+    var recentArtifactPaths: [String] {
+        ArtifactRecents.pruned(ArtifactRecents.decode(recentPathsJSON))
+    }
+
+    /// The browser's "Browse…" rows and the pre-browser ⌘O behavior. Starts at
+    /// `directory` when given (a store root), else ~/.prp when it exists — the
     /// intelligence layer's artifact home — else the home directory.
-    func presentOpenPanel() {
+    func presentOpenPanel(startingAt directory: URL? = nil) {
         let panel = NSOpenPanel()
         // Any file is choosable: .md renders formatted, other text renders
         // monospaced, and non-text is refused politely at load time.
@@ -48,7 +60,7 @@ final class ArtifactPaneModel: ObservableObject {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let prp = home.appendingPathComponent(".prp")
         panel.directoryURL =
-            FileManager.default.fileExists(atPath: prp.path) ? prp : home
+            directory ?? (FileManager.default.fileExists(atPath: prp.path) ? prp : home)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         open(url)
     }
@@ -59,6 +71,12 @@ final class ArtifactPaneModel: ObservableObject {
         // lifetime; opening another file replaces it.
         watcher = FileWatcher(url: url) { [weak self] in
             self?.reload()
+        }
+        // Successful open → remember it for the browser's Recents section.
+        if FileManager.default.fileExists(atPath: url.path) {
+            recentPathsJSON = ArtifactRecents.encode(
+                ArtifactRecents.adding(url.path, to: ArtifactRecents.decode(recentPathsJSON))
+            )
         }
     }
 
