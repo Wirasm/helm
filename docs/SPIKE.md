@@ -49,9 +49,23 @@ GhosttyKit.xcframework artifacts now exist — official CI releases on tip, plus
 Links: mitchellh.com/writing/libghostty-is-coming · github.com/Lakr233/libghostty-spm ·
 mintlify.wiki/ghostty-org/ghostty/api/overview · github.com/Uzaaft/awesome-libghostty
 
-## Fallback
+## Fallbacks — two layers (survey 2026-07-24)
 
-If libghostty fights for more than a day of effort: SwiftTerm (pure-Swift terminal
-view, easy embed, weaker rendering) as a stopgap `TerminalPane` behind the same
-interface, and revisit libghostty when its embedding API stabilizes. The pane's
-interface (spawn shell, feed input, resize, survive toggle) stays identical either way.
+Full landscape assessed: libghostty, alacritty_terminal (the Zed path), SwiftTerm,
+xterm.js-in-WKWebView, termwiz, rio/sugarloaf, libvterm. Ranking for a Swift host:
+
+- **Tactical** (libghostty embed fights the one-day timebox): **SwiftTerm** behind the
+  same `TerminalPane` interface — pure Swift, ships in La Terminal/Secure ShellFish/
+  CodeEdit, weakest rendering but a working pane in hours. Keeps helm moving.
+- **Strategic** (libghostty API churn becomes intolerable over months): the **Zed
+  path** — `alacritty_terminal` as the engine (PTY + VTE + grid, the most
+  battle-tested embeddable core) with our own Swift/Metal renderer, mirroring Zed's
+  three layers (engine / view / element). Rust FFI + hand-built rendering: the most
+  durable independence, the biggest build. Not a quick swap; a deliberate rebuild.
+- Rejected for a Swift host: termwiz (self-described "wild sweeping changes", no PTY),
+  rio/sugarloaf (built for Rust/web hosts), libvterm (dated surface, renderer+PTY on
+  us), xterm.js island (WKWebView input quirks, violates the native decision) — kept
+  only as an emergency stopgap.
+
+The `TerminalPane` interface (spawn shell, feed input, resize, survive toggle) is the
+seam that keeps all of these swappable.
