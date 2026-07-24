@@ -11,9 +11,20 @@ import SwiftUI
 /// designed against real dogfooding (see docs/ui-plan.md).
 @MainActor
 final class ArtifactPaneModel: ObservableObject {
+    /// What the pane shows for the open file: interleaved native-text/mermaid
+    /// segments (markdown and plain text), or a full-pane web view (.html —
+    /// the escape hatch; the view loads `Document.url` itself).
+    enum Content {
+        case segments([ArtifactRenderer.RenderedSegment])
+        case web
+    }
+
     struct Document {
         let url: URL
-        var content: AttributedString
+        var content: Content
+        /// Bumped on every external-change reload so the web views re-render
+        /// (mermaid islands re-run the diagram, .html pages reload).
+        var generation = 0
     }
 
     @Published private(set) var document: Document?
@@ -62,11 +73,20 @@ final class ArtifactPaneModel: ObservableObject {
     }
 
     private func reload() {
-        guard let url = document?.url else { return }
-        document = Document(url: url, content: Self.load(url))
+        guard let previous = document else { return }
+        document = Document(
+            url: previous.url,
+            content: Self.load(previous.url),
+            generation: previous.generation + 1
+        )
     }
 
-    private static func load(_ url: URL) -> AttributedString {
+    private static func load(_ url: URL) -> Content {
+        // .html renders in a full-pane WKWebView from its own URL — no text
+        // pipeline (and no UTF-8/size gate; WebKit streams the file itself).
+        if ArtifactRenderer.isHTML(url) {
+            return .web
+        }
         guard let data = try? Data(contentsOf: url) else {
             return notice("Could not read \(url.path)")
         }
@@ -76,13 +96,13 @@ final class ArtifactPaneModel: ObservableObject {
         guard let text = String(data: data, encoding: .utf8) else {
             return notice("Not a UTF-8 text file")
         }
-        return ArtifactRenderer.render(text, from: url)
+        return .segments(ArtifactRenderer.renderSegments(text, from: url))
     }
 
-    private static func notice(_ message: String) -> AttributedString {
+    private static func notice(_ message: String) -> Content {
         var text = AttributedString(message)
         text.foregroundColor = .secondary
-        return text
+        return .segments([.text(text)])
     }
 }
 
@@ -162,14 +182,34 @@ struct ArtifactPane: View {
             VStack(spacing: 0) {
                 header(for: document)
                 Divider()
-                ScrollView {
-                    Text(document.content)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                }
+                content(for: document)
             }
             .background(Color(nsColor: .textBackgroundColor))
+        }
+    }
+
+    @ViewBuilder
+    private func content(for document: ArtifactPaneModel.Document) -> some View {
+        switch document.content {
+        case .web:
+            HTMLArtifactView(url: document.url, generation: document.generation)
+        case let .segments(segments):
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                        switch segment {
+                        case let .text(text):
+                            Text(text)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        case let .mermaid(diagram):
+                            MermaidIsland(diagram: diagram)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .padding(16)
+            }
         }
     }
 

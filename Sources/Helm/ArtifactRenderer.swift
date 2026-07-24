@@ -31,8 +31,36 @@ enum ArtifactRenderer {
         ["md", "markdown", "mdown"].contains(url.pathExtension.lowercased())
     }
 
+    /// Extensions rendered in a full-pane WKWebView instead of native text
+    /// (the artifact pane's escape hatch — see ArtifactWebViews.swift).
+    static func isHTML(_ url: URL) -> Bool {
+        ["html", "htm"].contains(url.pathExtension.lowercased())
+    }
+
     static func render(_ raw: String, from url: URL) -> AttributedString {
         isMarkdown(url) ? renderMarkdown(raw) : renderPlainText(raw)
+    }
+
+    // MARK: Segments (markdown interleaved with mermaid islands)
+
+    /// One displayable chunk of an artifact: native text, or a mermaid diagram
+    /// rendered by an inline web island.
+    enum RenderedSegment {
+        case text(AttributedString)
+        case mermaid(String)
+    }
+
+    /// The pane's real entry point: markdown files split at ```mermaid fences
+    /// into interleaved text/diagram segments; everything else stays a single
+    /// text segment — non-mermaid files render exactly as before.
+    static func renderSegments(_ raw: String, from url: URL) -> [RenderedSegment] {
+        guard isMarkdown(url) else { return [.text(renderPlainText(raw))] }
+        return ArtifactSegment.split(raw).map { segment in
+            switch segment {
+            case let .markdown(markdown): .text(renderMarkdown(markdown))
+            case let .mermaid(source): .mermaid(source)
+            }
+        }
     }
 
     /// Non-markdown text files: verbatim, monospaced.

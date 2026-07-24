@@ -24,7 +24,14 @@ let package = Package(
             dependencies: [
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),
             ],
-            path: "Sources/Helm"
+            path: "Sources/Helm",
+            resources: [
+                // Vendored mermaid renderer, pinned — version + source URL +
+                // sha256 in docs/VENDORED.md. The artifact pane is offline by
+                // rule: diagrams render from this file, never from a CDN.
+                // Keep in lockstep with project.yml's resources phase.
+                .copy("Resources/mermaid.min.js"),
+            ]
         ),
         // Non-GUI smoke: ghostty_init + config load + app create, no window.
         .testTarget(

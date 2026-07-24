@@ -25,7 +25,15 @@ targets:
     type: application
     platform: macOS
     sources:
-      - Sources/Helm
+      # Swift sources, minus Resources/ — which re-enters below as an explicit
+      # resources build phase. MUST stay in lockstep with Package.swift's
+      # `resources:` (vendored mermaid.min.js — see docs/VENDORED.md), same as
+      # the libghostty pin above.
+      - path: Sources/Helm
+        excludes:
+          - Resources/**
+      - path: Sources/Helm/Resources
+        buildPhase: resources
     dependencies:
       - package: libghostty-spm
         product: GhosttyTerminal
