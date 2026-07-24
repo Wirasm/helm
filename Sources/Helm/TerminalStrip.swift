@@ -9,6 +9,11 @@ struct TerminalStrip: View {
     @ObservedObject var manager: TerminalManager
     let onOpenArtifact: () -> Void
 
+    // Same storage the View ▸ Appearance menu uses; HelmApp observes the key
+    // and applies the override, so picking here re-themes the whole app.
+    @AppStorage(HelmApp.appearanceKey)
+    private var appearanceRaw = AppearanceOverride.system.rawValue
+
     var body: some View {
         HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -45,6 +50,23 @@ struct TerminalStrip: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("Open artifact (⌘O)")
+
+            // Subtle appearance affordance (mirrors View ▸ Appearance).
+            Menu {
+                Picker("Appearance", selection: $appearanceRaw) {
+                    ForEach(AppearanceOverride.allCases) { option in
+                        Text(option.label).tag(option.rawValue)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Image(systemName: "circle.lefthalf.filled")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+            .help("Appearance")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)

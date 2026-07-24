@@ -1,8 +1,54 @@
 import AppKit
 import SwiftUI
 
+/// App-level appearance override: System follows macOS, Light/Dark pin the
+/// app. Applied via `NSApp.appearance` (nil = System), which every window —
+/// and the `colorScheme` environment the mermaid islands re-theme on —
+/// inherits. Persisted under `HelmApp.appearanceKey`; the View ▸ Appearance
+/// menu and the terminal strip's affordance share that storage.
+enum AppearanceOverride: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    /// The NSAppearance name to force, or nil to follow the system.
+    var appearanceName: NSAppearance.Name? {
+        switch self {
+        case .system: nil
+        case .light: .aqua
+        case .dark: .darkAqua
+        }
+    }
+
+    @MainActor
+    func apply() {
+        NSApp.appearance = appearanceName.flatMap { NSAppearance(named: $0) }
+    }
+}
+
 @main
 struct HelmApp: App {
+    /// The one @AppStorage key for the appearance override (raw
+    /// `AppearanceOverride` value; unknown values fall back to system).
+    static let appearanceKey = "helmAppearance"
+
+    @AppStorage(HelmApp.appearanceKey)
+    private var appearanceRaw = AppearanceOverride.system.rawValue
+
+    private var appearance: AppearanceOverride {
+        AppearanceOverride(rawValue: appearanceRaw) ?? .system
+    }
+
     init() {
         // Running as a bare SPM executable (`swift run helm`) the process has no
         // Info.plist, so AppKit treats it as a background app and the window never
@@ -52,8 +98,23 @@ struct HelmApp: App {
         WindowGroup("helm") {
             RootView()
                 .frame(minWidth: 900, minHeight: 600)
+                // The override is applied at the AppKit level so it also
+                // reaches sheets and any future windows; re-applied whenever
+                // the stored value changes (menu or strip affordance).
+                .onAppear { appearance.apply() }
+                .onChange(of: appearanceRaw) { appearance.apply() }
         }
         .commands {
+            // View ▸ Appearance — the discoverable, menu-bar home of the
+            // override (the terminal strip carries the in-window affordance).
+            CommandGroup(after: .sidebar) {
+                Picker("Appearance", selection: $appearanceRaw) {
+                    ForEach(AppearanceOverride.allCases) { option in
+                        Text(option.label).tag(option.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
             CommandGroup(after: .toolbar) {
                 // Menu mirrors of the monitor's shortcuts (the monitor consumes the
                 // keystrokes first; these exist for discoverability and mouse use).
