@@ -111,18 +111,23 @@ enum PostMarkdown {
     }
 }
 
-/// Renders one post's text as lightweight markdown: block structure from
-/// `PostMarkdown.blocks`, inline bold/italic/code per block via AttributedString.
-/// Body text is `.body`-sized and primary — long agent reports must be
-/// comfortably readable, not caption-sized secondary ink.
+/// Renders markdown text as blocks: structure from `PostMarkdown.blocks`,
+/// inline bold/italic/code per block via AttributedString, every font and
+/// spacing decision from a `MarkdownTheme` profile. Body text is primary ink —
+/// long agent reports and documents must be comfortably readable.
 struct MarkdownText: View {
     let text: String
+    var theme: MarkdownTheme = .chat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            let blocks = PostMarkdown.blocks(from: text)
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+        let blocks = PostMarkdown.blocks(from: text)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 blockView(block)
+                    .padding(
+                        .top,
+                        theme.spacing(above: block, after: index > 0 ? blocks[index - 1] : nil)
+                    )
             }
         }
         .textSelection(.enabled)
@@ -132,43 +137,50 @@ struct MarkdownText: View {
     private func blockView(_ block: PostMarkdown.Block) -> some View {
         switch block {
         case let .heading(level, text):
-            inline(text)
-                .font(headingFont(level))
-                .padding(.top, 2)
+            if level == 1, theme.ruleBelowH1 {
+                VStack(alignment: .leading, spacing: 6) {
+                    inline(text)
+                        .font(theme.headingFont(level: level))
+                    Divider()
+                }
+            } else {
+                inline(text)
+                    .font(theme.headingFont(level: level))
+            }
         case let .paragraph(text):
             inline(text)
-                .font(.body)
-                .lineSpacing(2.5)
+                .font(theme.bodyFont)
+                .lineSpacing(theme.lineSpacing)
         case let .listItem(marker, text):
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+            // Fixed marker column → wrapped lines hang cleanly under the text,
+            // not under the bullet.
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Text(marker)
-                    .font(.body)
+                    .font(theme.bodyFont)
                     .foregroundStyle(.secondary)
+                    .frame(minWidth: theme.listMarkerWidth, alignment: .leading)
                 inline(text)
-                    .font(.body)
-                    .lineSpacing(2.5)
+                    .font(theme.bodyFont)
+                    .lineSpacing(theme.lineSpacing)
             }
         case let .code(_, code):
             ScrollView(.horizontal) {
                 Text(code)
-                    .font(.callout.monospaced())
-                    .padding(8)
+                    .font(theme.codeBlockFont)
+                    .lineSpacing(2)
+                    .padding(theme.codeBlockInset)
             }
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            .background(
+                .quaternary,
+                in: RoundedRectangle(cornerRadius: theme.codeBlockCornerRadius)
+            )
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private func headingFont(_ level: Int) -> Font {
-        switch level {
-        case 1: .title3.weight(.semibold)
-        case 2: .headline
-        default: .body.weight(.semibold)
-        }
-    }
-
     /// Inline markdown (bold, italic, `code`) for one block's text; inline code gets
-    /// monospaced + a subtle fill. Parse failure falls back to the literal text.
+    /// the theme's mono font + a subtle fill. Parse failure falls back to the
+    /// literal text.
     private func inline(_ source: String) -> Text {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .inlineOnlyPreservingWhitespace
@@ -180,7 +192,7 @@ struct MarkdownText: View {
             run.inlinePresentationIntent?.contains(.code) == true ? run.range : nil
         }
         for range in codeRanges {
-            attributed[range].font = .body.monospaced()
+            attributed[range].font = theme.inlineCodeFont
             attributed[range].backgroundColor = Color(nsColor: .quaternarySystemFill)
         }
         return Text(attributed)
