@@ -54,12 +54,15 @@ struct RoomDetailView: View {
             HStack(spacing: 8) {
                 Text(room.name).font(.title3.bold())
                 roomIDBadge
-                if let state = room.state, state != "running" {
-                    Text(state)
-                        .font(.caption.monospaced())
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.quaternary, in: Capsule())
+                // Live: badge only for anomalous states (running is the norm).
+                // Archived: the DISPLAY state — a snapshot frozen at "running"
+                // was interrupted; plain closed history carries no badge at all.
+                if readOnly {
+                    if room.archivedDisplayState != "closed" {
+                        stateBadge(room.archivedDisplayState)
+                    }
+                } else if let state = room.state, state != "running" {
+                    stateBadge(state)
                 }
                 Spacer()
             }
@@ -100,6 +103,15 @@ struct RoomDetailView: View {
             }
         }
         .padding(10)
+    }
+
+    private func stateBadge(_ state: String) -> some View {
+        Text(state)
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.quaternary, in: Capsule())
     }
 
     /// Short room id, click-to-copy (copies the FULL id). The brief "copied"
@@ -212,9 +224,10 @@ struct RoomDetailView: View {
         }
     }
 
-    /// The human's own posts: chat-style, trailing-aligned, accent-tinted.
+    /// The human's own posts: chat-style, trailing header, accent-tinted. The
+    /// bubble spans the full width — long steering posts need the room.
     private func humanRow(_ message: EngineClient.Message) -> some View {
-        VStack(alignment: .trailing, spacing: 2) {
+        VStack(alignment: .trailing, spacing: 3) {
             HStack(spacing: 6) {
                 Text(message.from)
                     .font(.caption.monospaced().bold())
@@ -226,14 +239,12 @@ struct RoomDetailView: View {
                 }
                 timestamp(message)
             }
-            Text(message.text)
-                .font(.callout)
-                .textSelection(.enabled)
+            MarkdownText(text: message.text)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .trailing)
+        .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
     }
 
     /// Agent posts: leading-aligned, neutral bubble, the sender's stable accent on
@@ -242,7 +253,7 @@ struct RoomDetailView: View {
     private func agentRow(_ message: EngineClient.Message) -> some View {
         let accent = SenderStyle.accent(for: message.from)
         let toHuman = message.to.contains(where: SenderStyle.isHuman)
-        return VStack(alignment: .leading, spacing: 2) {
+        return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(message.from)
                     .font(.caption.monospaced().bold())
@@ -255,12 +266,11 @@ struct RoomDetailView: View {
                 }
                 timestamp(message)
             }
-            Text(message.text)
-                .font(.callout)
-                .textSelection(.enabled)
+            MarkdownText(text: message.text)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             toHuman ? AnyShapeStyle(accent.opacity(0.10)) : AnyShapeStyle(.quinary),
             in: RoundedRectangle(cornerRadius: 8)
@@ -271,7 +281,6 @@ struct RoomDetailView: View {
                 .frame(width: 3)
                 .padding(.vertical, 4)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Engine notices + auto-posted turn replies: no bubble, quieter than any post.
@@ -318,7 +327,7 @@ struct RoomDetailView: View {
     private var archivedBanner: some View {
         HStack(spacing: 6) {
             Image(systemName: "archivebox")
-            Text("\(room.state ?? "closed") — archived · read-only")
+            Text("\(room.archivedDisplayState) — archived · read-only")
                 .font(.callout)
         }
         .foregroundStyle(.secondary)

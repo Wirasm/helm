@@ -97,6 +97,9 @@ struct EngineClient: Sendable {
         let id: String
         let name: String
         let state: String?
+        /// The room's working directory. Serves the archive's project attribution
+        /// (kild #669): archived rooms persist no git state, but do keep their cwd.
+        let cwd: String?
         /// Shared worktree name (`kild/<worktree>` branch), when the room has one.
         let worktree: String?
         let participants: [Participant]
@@ -113,23 +116,37 @@ struct EngineClient: Sendable {
             log.last { $0.system != true }
         }
 
+        /// State to DISPLAY for an archived room — never the raw snapshot state.
+        /// An engine restart archives still-"running" rooms with that state frozen
+        /// in the snapshot; for history it means the room was interrupted, never
+        /// that it is running.
+        var archivedDisplayState: String {
+            switch state {
+            case nil, "closed": "closed"
+            case "running": "interrupted"
+            case let .some(other): other
+            }
+        }
+
         /// Does this room's workstream live under `projectPath`? True when the
-        /// effective dir (`git.path`: cwd, or the shared worktree dir) is inside the
-        /// project, or when the room's worktree name is one of the project's kild
-        /// worktrees (`worktreeNames`, from `/api/worktrees` — worktree dirs live
-        /// under `$KILD_HOME`, so the path test alone cannot attribute them).
-        /// Archived rooms carry no git, so only the worktree-name test can match —
-        /// and only while the worktree still exists (the engine prunes merged ones).
+        /// effective dir is inside the project, or when the room's worktree name is
+        /// one of the project's kild worktrees (`worktreeNames`, from
+        /// `/api/worktrees` — worktree dirs live under `$KILD_HOME`, so the path
+        /// test alone cannot attribute them). The effective dir is `git.path` for
+        /// live rooms; archived rooms carry no git, so their persisted `cwd`
+        /// (kild #669) takes over, with the worktree-name test as the fallback for
+        /// older archives without one.
         func belongsToProject(at projectPath: String, worktreeNames: Set<String>) -> Bool {
             if let worktree, worktreeNames.contains(worktree) { return true }
-            guard let path = git?.path else { return false }
+            guard let path = git?.path ?? cwd else { return false }
             let root = projectPath.hasSuffix("/") ? String(projectPath.dropLast()) : projectPath
             return path == root || path.hasPrefix(root + "/")
         }
     }
 
     /// `/api/rooms/archive` serves the same shape as a live room minus `git`/`totals`
-    /// (see the engine's `ArchivedRoom` vs `LiveRoomStatus`), so one struct decodes both.
+    /// but plus a persisted `cwd` (see the engine's `ArchivedRoom` vs
+    /// `LiveRoomStatus`), so one struct decodes both.
     typealias ArchivedRoom = LiveRoom
 
     func health() async throws -> Health {

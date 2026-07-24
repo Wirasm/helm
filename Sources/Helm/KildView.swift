@@ -42,20 +42,25 @@ struct KildView: View {
 
     var body: some View {
         NavigationSplitView {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                Divider()
-                if let error {
-                    ContentUnavailableView(
-                        "Engine unreachable",
-                        systemImage: "bolt.slash",
-                        description: Text(error)
-                    )
-                } else {
-                    projectsSection
+            // Engine header + Projects stay PINNED at the top; only the rooms list
+            // below the Live/History tabs scrolls. The projects section scrolls
+            // internally when very tall, capped at ~40% of the sidebar height.
+            GeometryReader { geo in
+                VStack(alignment: .leading, spacing: 0) {
+                    header
                     Divider()
-                    tabPicker
-                    roomList
+                    if let error {
+                        ContentUnavailableView(
+                            "Engine unreachable",
+                            systemImage: "bolt.slash",
+                            description: Text(error)
+                        )
+                    } else {
+                        projectsSection(maxHeight: max(120, geo.size.height * 0.4))
+                        Divider()
+                        tabPicker
+                        roomList
+                    }
                 }
             }
             .navigationSplitViewColumnWidth(min: 260, ideal: 320)
@@ -97,13 +102,15 @@ struct KildView: View {
 
     // MARK: projects — collapsible filter section
 
-    private var projectsSection: some View {
+    /// Pinned when expanded; the rows scroll internally only once they outgrow
+    /// `maxHeight` (ViewThatFits picks the plain stack while it still fits).
+    private func projectsSection(maxHeight: CGFloat) -> some View {
         DisclosureGroup(isExpanded: $projectsExpanded) {
-            VStack(alignment: .leading, spacing: 1) {
-                projectRow(nil)
-                ForEach(projects) { projectRow($0) }
-                addProjectRow
+            ViewThatFits(in: .vertical) {
+                projectRows
+                ScrollView { projectRows }
             }
+            .frame(maxHeight: maxHeight)
             .padding(.top, 4)
         } label: {
             Text("Projects")
@@ -112,6 +119,14 @@ struct KildView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+    }
+
+    private var projectRows: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            projectRow(nil)
+            ForEach(projects) { projectRow($0) }
+            addProjectRow
+        }
     }
 
     /// One selectable filter row; `nil` is the "All projects" default.
@@ -130,7 +145,7 @@ struct KildView: View {
                 if let project {
                     Text(abbreviate(project.path))
                         .font(.caption.monospaced())
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.head)
                 }
@@ -298,12 +313,12 @@ struct KildView: View {
                 )
             } description: {
                 if let selectedProject {
-                    // Honest about the filter's limits: archived rooms carry no cwd,
-                    // so only ones with a still-existing kild worktree can be
-                    // attributed to a project.
+                    // Honest about the filter's limits: older archives persisted no
+                    // cwd, so only their still-existing kild worktree can attribute
+                    // them to a project.
                     Text(
                         tab == .history
-                            ? "None attributable to \(selectedProject.name). Archived rooms without a live worktree only appear under All projects."
+                            ? "None attributable to \(selectedProject.name). Archived rooms without a saved cwd or live worktree only appear under All projects."
                             : "No live rooms in \(selectedProject.name)."
                     )
                 }
@@ -319,10 +334,14 @@ struct KildView: View {
     private func roomRow(_ room: EngineClient.LiveRoom) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(room.name).font(.headline)
-                if tab == .history, let state = room.state {
-                    Text(state)
+                Text(room.name).font(.body.weight(.semibold))
+                // Display state only — a snapshot frozen at "running" means the
+                // engine restarted under the room: interrupted. Plain closed
+                // history is the norm and carries no badge.
+                if tab == .history, room.archivedDisplayState != "closed" {
+                    Text(room.archivedDisplayState)
                         .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(.quaternary, in: Capsule())
