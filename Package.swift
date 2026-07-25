@@ -26,11 +26,13 @@ let package = Package(
             ],
             path: "Sources/Helm",
             resources: [
-                // Vendored mermaid renderer, pinned — version + source URL +
-                // sha256 in docs/VENDORED.md. The artifact pane is offline by
-                // rule: diagrams render from this file, never from a CDN.
-                // Keep in lockstep with project.yml's resources phase.
+                // Vendored renderers, pinned — version + source URL + sha256
+                // in docs/VENDORED.md. The artifact pane is offline by rule:
+                // markdown converts and diagrams render from these files,
+                // never from a CDN. Keep in lockstep with project.yml's
+                // resources phase.
                 .copy("Resources/mermaid.min.js"),
+                .copy("Resources/marked.min.js"),
             ]
         ),
         // Non-GUI smoke: ghostty_init + config load + app create, no window.
