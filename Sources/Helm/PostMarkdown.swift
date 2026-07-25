@@ -137,16 +137,8 @@ struct MarkdownText: View {
     private func blockView(_ block: PostMarkdown.Block) -> some View {
         switch block {
         case let .heading(level, text):
-            if level == 1, theme.ruleBelowH1 {
-                VStack(alignment: .leading, spacing: 6) {
-                    inline(text)
-                        .font(theme.headingFont(level: level))
-                    Divider()
-                }
-            } else {
-                inline(text)
-                    .font(theme.headingFont(level: level))
-            }
+            inline(text)
+                .font(theme.headingFont(level: level))
         case let .paragraph(text):
             inline(text)
                 .font(theme.bodyFont)
