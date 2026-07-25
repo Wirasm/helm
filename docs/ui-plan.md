@@ -332,3 +332,20 @@ while keeping the IA/slices/canvas thinking as the seed plan:
   ⌘O opens a file, .md renders formatted, re-renders on external change). The kild
   view is unchanged. Shortcuts: ⌘T face toggle, ⌘N new terminal, ⌘1–⌘9 select tab,
   ⌘O open artifact.
+
+---
+
+## Addendum 2026-07-25 — simplification round + parked layout rethink
+
+Owner direction after living with the artifact viewer: SIMPLIFy. One webview renders
+md+mermaid per document (no islands, no per-diagram sizing/toggles/sheets — vendored
+marked + mermaid, whole-document zoom via webview magnification); "doesn't fit" is a
+window-size concern. Browser = select project → flat artifact list + Browse (no
+recents/filter/ages). Fence scanning exists only for chat bubbles.
+
+PARKED for after cleanup (do not build yet): the layout rethink — "terminal without
+its own toggle view: terminal + toggleable side artifact viewer + some sort of
+observer view for running agents and rooms." Also parked: the room-agent CHECKLIST
+primitive (deliberate design session first — prototype as prompt-level convention in
+real rooms before any engine mechanism) and the resolve inversion (human answers,
+engine writes the receipt post; the prefilled-syntax composer is rejected).
