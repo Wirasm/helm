@@ -3,44 +3,40 @@ import SwiftUI
 
 // MARK: - Store discovery (pure, testable)
 
-/// One artifact file inside a project store, with everything the browser row
-/// needs precomputed (relative subpath for display, mtime for sorting/age).
+/// One artifact file inside a project store: its URL and the store-relative
+/// subpath the browser row displays (e.g. "plans/foo.diagrams.md").
 struct ArtifactFile: Equatable {
     let url: URL
-    /// Path relative to the store root, e.g. "plans/foo.diagrams.md".
     let relativePath: String
     let modified: Date
 }
 
 /// One per-project artifact store (`~/.prp/<key>/`), identified by its
-/// `project.json`. Files are pre-sorted newest-first and capped.
-struct ArtifactStore: Equatable {
+/// `project.json`.
+struct ArtifactStore: Equatable, Identifiable {
     /// Directory name under the artifact root.
     let key: String
     /// Display name from project.json's "name", falling back to the key.
     let name: String
     let root: URL
-    /// Newest-first, capped at `ArtifactStoreDiscovery.fileCap`.
-    let files: [ArtifactFile]
-    /// True when the cap truncated the listing (more files on disk).
-    let hasMore: Bool
+
+    var id: String { key }
 }
 
 /// Walks the artifact root (`~/.prp` in production, a fixture directory in
-/// tests) and builds the store listing. The filesystem IS the artifact API —
-/// no engine calls, just a cheap capped directory walk on every popover open.
+/// tests). The filesystem IS the artifact API — no engine calls, just a cheap
+/// directory walk on every popover open.
 enum ArtifactStoreDiscovery {
-    /// Rows shown per store before the "Browse folder…" escape hatch.
-    static let fileCap = 15
-    /// Directory levels walked below a store root (plans/a/b/x.md is depth 3).
-    static let maxDepth = 3
+    /// Directory levels walked below a store root — stores keep artifacts one
+    /// subdirectory deep (plans/, reviews/, …); the listing stays flat.
+    static let maxDepth = 2
 
     static var defaultRoot: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".prp")
     }
 
     /// Stores under `root` (subdirectories containing project.json), sorted by
-    /// most recent artifact activity. Missing/unreadable directories yield [].
+    /// name. Missing/unreadable directories yield [].
     static func discoverStores(under root: URL) -> [ArtifactStore] {
         let fm = FileManager.default
         guard
@@ -52,32 +48,30 @@ enum ArtifactStoreDiscovery {
         else { return [] }
 
         var stores: [ArtifactStore] = []
-        for dir in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+        for dir in entries {
             guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
             else { continue }
             let projectJSON = dir.appendingPathComponent("project.json")
             guard fm.fileExists(atPath: projectJSON.path) else { continue }
-
-            var files: [ArtifactFile] = []
-            collectFiles(in: dir, storeRoot: dir, depth: 1, into: &files)
-            files.sort { $0.modified > $1.modified }
-
             stores.append(
                 ArtifactStore(
                     key: dir.lastPathComponent,
                     name: displayName(from: projectJSON) ?? dir.lastPathComponent,
-                    root: dir,
-                    files: Array(files.prefix(fileCap)),
-                    hasMore: files.count > fileCap
+                    root: dir
                 )
             )
         }
-        // Most recently active project first; empty stores sink to the bottom.
-        stores.sort {
-            ($0.files.first?.modified ?? .distantPast)
-                > ($1.files.first?.modified ?? .distantPast)
+        return stores.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
-        return stores
+    }
+
+    /// The store's artifacts as a flat list, newest first, with store-relative
+    /// display names.
+    static func artifactFiles(in root: URL) -> [ArtifactFile] {
+        var files: [ArtifactFile] = []
+        collectFiles(in: root, storeRoot: root, depth: 1, into: &files)
+        return files.sorted { $0.modified > $1.modified }
     }
 
     /// "name" from a store's project.json ({"path": ..., "name": ...}).
@@ -96,7 +90,7 @@ enum ArtifactStoreDiscovery {
     static func isArtifactFile(_ url: URL) -> Bool {
         let name = url.lastPathComponent
         guard !name.hasPrefix("."), name != "project.json" else { return false }
-        return ArtifactRenderer.isMarkdown(url) || ArtifactRenderer.isHTML(url)
+        return ArtifactHTML.isMarkdown(url) || ArtifactHTML.isHTML(url)
     }
 
     private static func collectFiles(
@@ -134,267 +128,95 @@ enum ArtifactStoreDiscovery {
     }
 }
 
-// MARK: - Recents (pure codec, testable)
-
-/// Encode/decode + maintenance for the recently-opened artifact list that
-/// ArtifactPaneModel persists as JSON in @AppStorage. Pure functions so the
-/// codec, dedupe/cap, and missing-file pruning are unit-testable.
-enum ArtifactRecents {
-    static let cap = 8
-
-    static func decode(_ json: String) -> [String] {
-        guard
-            let data = json.data(using: .utf8),
-            let paths = try? JSONDecoder().decode([String].self, from: data)
-        else { return [] }
-        return paths
-    }
-
-    static func encode(_ paths: [String]) -> String {
-        guard
-            let data = try? JSONEncoder().encode(paths),
-            let json = String(data: data, encoding: .utf8)
-        else { return "[]" }
-        return json
-    }
-
-    /// Most-recent-first: `path` moves to the front, duplicates collapse, and
-    /// the list is capped.
-    static func adding(_ path: String, to paths: [String]) -> [String] {
-        var result = paths.filter { $0 != path }
-        result.insert(path, at: 0)
-        return Array(result.prefix(cap))
-    }
-
-    /// Drops entries whose file no longer exists (artifacts get moved and
-    /// deleted out from under us; stale rows would open to an error notice).
-    static func pruned(
-        _ paths: [String],
-        exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
-    ) -> [String] {
-        paths.filter(exists)
-    }
-}
-
-// MARK: - Filter matching (pure, testable)
-
-/// Fuzzy-ish matching for the browser's filter field: case-insensitive, every
-/// whitespace-separated token must appear somewhere in the candidate path —
-/// so "plan diagrams" finds plans/foo.diagrams.md.
-enum ArtifactFilter {
-    static func matches(query: String, candidate: String) -> Bool {
-        let tokens = query.lowercased().split(whereSeparator: \.isWhitespace)
-        guard !tokens.isEmpty else { return true }
-        let haystack = candidate.lowercased()
-        return tokens.allSatisfy { haystack.contains($0) }
-    }
-}
-
-// MARK: - Relative age (pure, testable)
-
-/// Compact relative mtime for browser rows: "now", "5m ago", "2h ago",
-/// "3d ago", then an absolute "Jun 2" beyond a week.
-enum ArtifactAge {
-    static func label(for date: Date, now: Date = Date()) -> String {
-        let seconds = now.timeIntervalSince(date)
-        if seconds < 60 { return "now" }
-        if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
-        if seconds < 86_400 { return "\(Int(seconds / 3600))h ago" }
-        if seconds < 7 * 86_400 { return "\(Int(seconds / 86_400))d ago" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
-        return formatter.string(from: date)
-    }
-}
-
 // MARK: - View
 
-/// The artifact browser popover: filter field over Recents and one section per
-/// project store, with "Browse…" escape hatches into the old NSOpenPanel.
-/// Anchored to the strip's artifact button; ⌘O opens this instead of the
-/// panel. The listing refreshes on every open (cheap capped walk).
+/// The artifact browser popover: pick a project, see its artifacts flat and
+/// newest-first, click one to open it. One "Browse…" escape hatch into the
+/// NSOpenPanel for anything outside the stores. Anchored to the strip's
+/// artifact button; ⌘O opens this. The listing refreshes on every open.
 struct ArtifactBrowser: View {
     @ObservedObject var model: ArtifactPaneModel
     let onDismiss: () -> Void
     /// Overridable so previews/tests could point elsewhere; production uses ~/.prp.
     var root: URL = ArtifactStoreDiscovery.defaultRoot
 
-    @State private var query = ""
+    /// Last-selected project key, remembered across popover opens and relaunch.
+    @AppStorage("artifactBrowserStore") private var selectedKey = ""
     @State private var stores: [ArtifactStore] = []
-    @State private var recents: [URL] = []
-    @FocusState private var filterFocused: Bool
+    @State private var files: [ArtifactFile] = []
 
     var body: some View {
         VStack(spacing: 0) {
-            TextField("Filter artifacts", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12))
-                .focused($filterFocused)
-                .onSubmit(openTopMatch)
+            if stores.isEmpty {
+                emptyState
+            } else {
+                Picker("Project", selection: $selectedKey) {
+                    ForEach(stores) { store in
+                        Text(store.name).tag(store.key)
+                    }
+                }
+                .labelsHidden()
                 .padding(10)
 
-            Divider()
+                Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    if stores.isEmpty, filteredRecents.isEmpty {
-                        emptyState
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(files, id: \.url) { file in
+                            fileRow(file)
+                        }
+                        if files.isEmpty {
+                            Text("No artifacts in this project yet.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .padding(8)
+                        }
                     }
-                    recentsSection
-                    storeSections
-                    browseAllRow
+                    .padding(8)
                 }
-                .padding(8)
+                .frame(maxHeight: 420)
             }
-            .frame(maxHeight: 420)
+
+            Divider()
+            browseRow
         }
         .frame(width: 380)
-        .onAppear {
-            stores = ArtifactStoreDiscovery.discoverStores(under: root)
-            recents = model.recentArtifactPaths.map { URL(fileURLWithPath: $0) }
-            filterFocused = true
+        .onAppear(perform: refresh)
+        .onChange(of: selectedKey) { _, _ in refreshFiles() }
+    }
+
+    private var selectedStore: ArtifactStore? {
+        stores.first { $0.key == selectedKey }
+    }
+
+    private func refresh() {
+        stores = ArtifactStoreDiscovery.discoverStores(under: root)
+        if selectedStore == nil {
+            selectedKey = stores.first?.key ?? ""
         }
+        refreshFiles()
     }
 
-    // MARK: Filtering
-
-    private var filteredRecents: [URL] {
-        recents.filter { ArtifactFilter.matches(query: query, candidate: $0.lastPathComponent) }
+    private func refreshFiles() {
+        files = selectedStore.map { ArtifactStoreDiscovery.artifactFiles(in: $0.root) } ?? []
     }
 
-    private func filteredFiles(of store: ArtifactStore) -> [ArtifactFile] {
-        store.files.filter { ArtifactFilter.matches(query: query, candidate: $0.relativePath) }
-    }
+    // MARK: Rows
 
-    /// Return in the filter field opens the first visible row: recents first,
-    /// then the stores in listed order.
-    private var topMatch: URL? {
-        if let recent = filteredRecents.first { return recent }
-        for store in stores {
-            if let file = filteredFiles(of: store).first { return file.url }
-        }
-        return nil
-    }
-
-    private func openTopMatch() {
-        guard let url = topMatch else { return }
-        open(url)
-    }
-
-    private func open(_ url: URL) {
-        model.open(url)
-        onDismiss()
-    }
-
-    // MARK: Sections
-
-    @ViewBuilder
-    private var recentsSection: some View {
-        let matches = filteredRecents
-        if !matches.isEmpty {
-            sectionHeader("Recents")
-            ForEach(matches, id: \.self) { url in
-                row(
-                    title: url.lastPathComponent,
-                    subtitle: abbreviatedParent(of: url),
-                    icon: "clock"
-                ) {
-                    open(url)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var storeSections: some View {
-        ForEach(stores, id: \.key) { store in
-            let matches = filteredFiles(of: store)
-            if !matches.isEmpty || query.isEmpty {
-                sectionHeader(store.name)
-                ForEach(matches, id: \.url) { file in
-                    row(
-                        title: file.relativePath,
-                        subtitle: ArtifactAge.label(for: file.modified),
-                        icon: "doc.text"
-                    ) {
-                        open(file.url)
-                    }
-                }
-                if store.hasMore || matches.isEmpty || query.isEmpty {
-                    browseRow(title: "Browse folder…", directory: store.root)
-                }
-            }
-        }
-    }
-
-    private var browseAllRow: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Divider()
-                .padding(.vertical, 4)
-            browseRow(title: "Browse files…", directory: nil)
-        }
-    }
-
-    private var emptyState: some View {
-        Text("No artifact stores found — agents write artifacts to ~/.prp/<project>/ (plans, research, reviews) and they show up here.")
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-    }
-
-    // MARK: Row building blocks
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .textCase(.uppercase)
-            .padding(.horizontal, 8)
-            .padding(.top, 8)
-            .padding(.bottom, 2)
-    }
-
-    private func row(
-        title: String, subtitle: String, icon: String, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
+    private func fileRow(_ file: ArtifactFile) -> some View {
+        Button {
+            model.open(file.url)
+            onDismiss()
+        } label: {
             HStack(spacing: 6) {
-                Image(systemName: icon)
+                Image(systemName: "doc.text")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .frame(width: 14)
-                Text(title)
+                Text(file.relativePath)
                     .font(.system(size: 12))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Spacer(minLength: 8)
-                Text(subtitle)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(BrowserRowButtonStyle())
-    }
-
-    private func browseRow(title: String, directory: URL?) -> some View {
-        Button {
-            onDismiss()
-            model.presentOpenPanel(startingAt: directory)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "folder")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14)
-                Text(title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 8)
@@ -404,12 +226,34 @@ struct ArtifactBrowser: View {
         .buttonStyle(BrowserRowButtonStyle())
     }
 
-    private func abbreviatedParent(of url: URL) -> String {
-        let parent = url.deletingLastPathComponent().path
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return parent.hasPrefix(home)
-            ? "~" + parent.dropFirst(home.count)
-            : parent
+    private var browseRow: some View {
+        Button {
+            onDismiss()
+            model.presentOpenPanel(startingAt: selectedStore?.root)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14)
+                Text("Browse…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(BrowserRowButtonStyle())
+    }
+
+    private var emptyState: some View {
+        Text("No artifact stores found — agents write artifacts to ~/.prp/<project>/ (plans, research, reviews) and they show up here.")
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
     }
 }
 

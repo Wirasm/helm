@@ -3,27 +3,29 @@ import SwiftUI
 
 // MARK: - Model
 
-/// State for the read-only artifact pane: which file is open, its rendered
-/// content, and the watcher that re-renders on external change (plans get
-/// rewritten by agents while you read them).
+/// State for the read-only artifact pane: which file is open, its content, and
+/// the watcher that reloads on external change (plans get rewritten by agents
+/// while you read them).
 ///
 /// Read-only on purpose — no editing, no commenting. Those are later slices,
 /// designed against real dogfooding (see docs/ui-plan.md).
 @MainActor
 final class ArtifactPaneModel: ObservableObject {
-    /// What the pane shows for the open file: interleaved native-text/mermaid
-    /// segments (markdown and plain text), or a full-pane web view (.html —
-    /// the escape hatch; the view loads `Document.url` itself).
+    /// What the pane shows for the open file: a markdown document (rendered as
+    /// one webview — marked + mermaid), a full-pane web view (.html — the
+    /// escape hatch; the view loads `Document.url` itself), or plain
+    /// monospaced text (everything else, plus load-failure notices).
     enum Content {
-        case segments([ArtifactRenderer.RenderedSegment])
+        case markdown(String)
         case web
+        case plainText(String)
+        case notice(String)
     }
 
     struct Document {
         let url: URL
         var content: Content
-        /// Bumped on every external-change reload so the web views re-render
-        /// (mermaid islands re-run the diagram, .html pages reload).
+        /// Bumped on every external-change reload so the web views reload.
         var generation = 0
     }
 
@@ -35,20 +37,9 @@ final class ArtifactPaneModel: ObservableObject {
     /// beachballing the pane on a stray binary or log.
     private static let maxBytes = 5_000_000
 
-    /// Recently opened artifacts, persisted as a JSON array of paths so the
-    /// browser popover's Recents section survives relaunch. Codec + cap +
-    /// pruning live in ArtifactRecents (pure, tested).
-    @AppStorage("artifactRecentPaths") private var recentPathsJSON = "[]"
-
     var isOpen: Bool { document != nil }
 
-    /// Recents for display: most-recent-first, missing files skipped (they get
-    /// moved/deleted out from under us; stale rows would open to an error).
-    var recentArtifactPaths: [String] {
-        ArtifactRecents.pruned(ArtifactRecents.decode(recentPathsJSON))
-    }
-
-    /// The browser's "Browse…" rows and the pre-browser ⌘O behavior. Starts at
+    /// The browser's "Browse…" row and the pre-browser ⌘O behavior. Starts at
     /// `directory` when given (a store root), else ~/.prp when it exists — the
     /// intelligence layer's artifact home — else the home directory.
     func presentOpenPanel(startingAt directory: URL? = nil) {
@@ -67,16 +58,10 @@ final class ArtifactPaneModel: ObservableObject {
 
     func open(_ url: URL) {
         document = Document(url: url, content: Self.load(url))
-        // Re-render on every external change. Watcher lifetime == document
+        // Reload on every external change. Watcher lifetime == document
         // lifetime; opening another file replaces it.
         watcher = FileWatcher(url: url) { [weak self] in
             self?.reload()
-        }
-        // Successful open → remember it for the browser's Recents section.
-        if FileManager.default.fileExists(atPath: url.path) {
-            recentPathsJSON = ArtifactRecents.encode(
-                ArtifactRecents.adding(url.path, to: ArtifactRecents.decode(recentPathsJSON))
-            )
         }
     }
 
@@ -102,25 +87,19 @@ final class ArtifactPaneModel: ObservableObject {
     private static func load(_ url: URL) -> Content {
         // .html renders in a full-pane WKWebView from its own URL — no text
         // pipeline (and no UTF-8/size gate; WebKit streams the file itself).
-        if ArtifactRenderer.isHTML(url) {
+        if ArtifactHTML.isHTML(url) {
             return .web
         }
         guard let data = try? Data(contentsOf: url) else {
-            return notice("Could not read \(url.path)")
+            return .notice("Could not read \(url.path)")
         }
         guard data.count <= maxBytes else {
-            return notice("File too large to display (\(data.count / 1_000_000) MB)")
+            return .notice("File too large to display (\(data.count / 1_000_000) MB)")
         }
         guard let text = String(data: data, encoding: .utf8) else {
-            return notice("Not a UTF-8 text file")
+            return .notice("Not a UTF-8 text file")
         }
-        return .segments(ArtifactRenderer.renderSegments(text, from: url))
-    }
-
-    private static func notice(_ message: String) -> Content {
-        var text = AttributedString(message)
-        text.foregroundColor = .secondary
-        return .segments([.text(text)])
+        return ArtifactHTML.isMarkdown(url) ? .markdown(text) : .plainText(text)
     }
 }
 
@@ -209,42 +188,23 @@ struct ArtifactPane: View {
     @ViewBuilder
     private func content(for document: ArtifactPaneModel.Document) -> some View {
         switch document.content {
+        case let .markdown(markdown):
+            MarkdownArtifactView(markdown: markdown, generation: document.generation)
         case .web:
             HTMLArtifactView(url: document.url, generation: document.generation)
-        case let .segments(segments):
-            // GeometryReader supplies the pane height: islands cap themselves
-            // at ~70% of it and scroll internally beyond that.
-            GeometryReader { geometry in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                            switch segment {
-                            case let .text(text):
-                                Text(text)
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            case let .markdown(markdown):
-                                // Document typography with a capped measure:
-                                // the text column stops at a comfortable line
-                                // length and centers when the pane is wider.
-                                MarkdownText(text: markdown, theme: .document)
-                                    .frame(
-                                        maxWidth: MarkdownTheme.document.measure ?? .infinity,
-                                        alignment: .leading
-                                    )
-                                    .frame(maxWidth: .infinity, alignment: .center)
-                            case let .mermaid(diagram):
-                                MermaidIsland(
-                                    diagram: diagram,
-                                    maxHeight: max(geometry.size.height * 0.7, 120)
-                                )
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                    }
+        case let .plainText(text):
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
-                }
             }
+        case let .notice(message):
+            Text(message)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(16)
         }
     }
 

@@ -27,8 +27,8 @@ targets:
     sources:
       # Swift sources, minus Resources/ — which re-enters below as an explicit
       # resources build phase. MUST stay in lockstep with Package.swift's
-      # `resources:` (vendored mermaid.min.js — see docs/VENDORED.md), same as
-      # the libghostty pin above.
+      # `resources:` (vendored marked.min.js + mermaid.min.js — see
+      # docs/VENDORED.md), same as the libghostty pin above.
       - path: Sources/Helm
         excludes:
           - Resources/**

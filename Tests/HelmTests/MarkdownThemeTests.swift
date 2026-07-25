@@ -2,9 +2,9 @@ import SwiftUI
 import XCTest
 @testable import Helm
 
-/// The shared typographic system behind both markdown surfaces — chat posts
-/// and artifact-pane documents. Pure value checks: fonts per block type and
-/// the paragraph-spacing rules, per profile. No views, no GUI.
+/// The typographic system behind the room log's markdown. Pure value checks:
+/// fonts per block type and the paragraph-spacing rules. No views, no GUI.
+/// (The artifact pane's document scale is CSS now — see ArtifactHTMLTests.)
 final class MarkdownThemeTests: XCTestCase {
     // MARK: Chat scale
 
@@ -20,47 +20,14 @@ final class MarkdownThemeTests: XCTestCase {
         XCTAssertEqual(theme.blockSpacing, 8)
         XCTAssertEqual(theme.headingSpaceAbove, 10)
         XCTAssertEqual(theme.listItemSpacing, 4)
-        XCTAssertNil(theme.measure, "chat bubbles size themselves — no measure cap")
-        XCTAssertFalse(theme.ruleBelowH1)
-    }
-
-    // MARK: Document scale
-
-    func testDocumentTypeScale() {
-        let theme = MarkdownTheme.document
-        XCTAssertEqual(theme.bodyFont, .system(size: 15))
-        XCTAssertEqual(theme.headingFont(level: 1), .system(size: 24, weight: .bold))
-        XCTAssertEqual(theme.headingFont(level: 2), .system(size: 19, weight: .semibold))
-        XCTAssertEqual(theme.headingFont(level: 3), .system(size: 16, weight: .semibold))
-        XCTAssertEqual(theme.inlineCodeFont, .system(size: 14, design: .monospaced))
-        XCTAssertEqual(theme.codeBlockFont, .system(size: 13.5, design: .monospaced))
-        XCTAssertEqual(theme.lineSpacing, 5)
-        XCTAssertEqual(theme.blockSpacing, 10)
-        XCTAssertEqual(theme.headingSpaceAbove, 14)
-        XCTAssertEqual(theme.measure, 760, "long-line reading needs a capped measure")
-        XCTAssertTrue(theme.ruleBelowH1)
-    }
-
-    func testDocumentScaleIsLargerThanChat() {
-        // The pane is a reading surface; its whole scale sits above chat's.
-        XCTAssertGreaterThan(MarkdownTheme.document.bodySize, MarkdownTheme.chat.bodySize)
-        XCTAssertGreaterThan(
-            MarkdownTheme.document.headingSizes[0],
-            MarkdownTheme.chat.headingSizes[0]
-        )
-        XCTAssertGreaterThan(
-            MarkdownTheme.document.codeBlockSize,
-            MarkdownTheme.chat.codeBlockSize
-        )
     }
 
     // MARK: Heading level clamping
 
     func testDeepHeadingLevelsReuseTheSmallestHeadingFont() {
-        for theme in [MarkdownTheme.chat, MarkdownTheme.document] {
-            XCTAssertEqual(theme.headingFont(level: 4), theme.headingFont(level: 3))
-            XCTAssertEqual(theme.headingFont(level: 6), theme.headingFont(level: 3))
-        }
+        let theme = MarkdownTheme.chat
+        XCTAssertEqual(theme.headingFont(level: 4), theme.headingFont(level: 3))
+        XCTAssertEqual(theme.headingFont(level: 6), theme.headingFont(level: 3))
     }
 
     // MARK: Font per block type
@@ -88,12 +55,11 @@ final class MarkdownThemeTests: XCTestCase {
     }
 
     func testHeadingsGetTheirOwnSpaceAbove() {
-        for theme in [MarkdownTheme.chat, MarkdownTheme.document] {
-            XCTAssertEqual(
-                theme.spacing(above: .heading(level: 2, text: "t"), after: .paragraph("p")),
-                theme.headingSpaceAbove
-            )
-        }
+        let theme = MarkdownTheme.chat
+        XCTAssertEqual(
+            theme.spacing(above: .heading(level: 2, text: "t"), after: .paragraph("p")),
+            theme.headingSpaceAbove
+        )
     }
 
     func testConsecutiveListItemsAreTighterThanParagraphs() {
@@ -106,7 +72,7 @@ final class MarkdownThemeTests: XCTestCase {
     }
 
     func testParagraphsAndCodeBlocksUseParagraphSpacing() {
-        let theme = MarkdownTheme.document
+        let theme = MarkdownTheme.chat
         XCTAssertEqual(
             theme.spacing(above: .paragraph("b"), after: .paragraph("a")),
             theme.blockSpacing

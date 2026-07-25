@@ -56,8 +56,10 @@ struct TerminalWorkspace: View {
             .layoutPriority(1)
 
             if artifact.isOpen {
+                // Reading surface first: a generous default share of the split
+                // so documents open at a comfortable width.
                 ArtifactPane(model: artifact)
-                    .frame(minWidth: 300, idealWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 360, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear {
