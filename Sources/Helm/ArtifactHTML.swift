@@ -116,7 +116,12 @@ enum ArtifactHTML {
         pre { background: color-mix(in srgb, CanvasText 6%, transparent);
               border-radius: 6px; padding: 12px; overflow-x: auto; margin: 10px 0; }
         pre code { font-size: 13.5px; background: none; padding: 0; }
-        pre.mermaid { background: none; padding: 0; line-height: 0; }
+        /* Diagrams break OUT of the 760px text measure to the full pane width, and
+           the natural-size SVG scales down to fit it — so widening the window shows
+           the whole diagram; zoom covers the rest. Prose keeps the measure. */
+        pre.mermaid { background: none; padding: 0; line-height: 0;
+                      width: calc(100vw - 32px); margin-left: calc(50% - 50vw + 16px); }
+        pre.mermaid svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
         blockquote { border-left: 3px solid color-mix(in srgb, CanvasText 20%, transparent);
                      padding-left: 12px; color: color-mix(in srgb, CanvasText 65%, Canvas); }
         table { border-collapse: collapse; display: block; overflow-x: auto; }
