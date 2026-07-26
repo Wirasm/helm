@@ -15,7 +15,7 @@ final class EngineClientTests: XCTestCase {
         StubURLProtocol.reset()
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [StubURLProtocol.self]
-        client = EngineClient(session: URLSession(configuration: config))
+        client = EngineClient(urlSession: URLSession(configuration: config))
     }
 
     // MARK: steering POST
@@ -86,7 +86,7 @@ final class EngineClientTests: XCTestCase {
                 "name": "fix-2247",
                 "state": "running",
                 "participants": [
-                  { "name": "worker", "agent": "implementor", "model": "sol-4" },
+                  { "name": "worker", "persona": "implementor", "model": "sol-4" },
                   { "name": "reviewer" }
                 ],
                 "worktree": "fix-2247",
@@ -123,7 +123,10 @@ final class EngineClientTests: XCTestCase {
         let room = try XCTUnwrap(rooms.first)
         XCTAssertEqual(room.id, "room-1")
         XCTAssertEqual(room.participants.map(\.name), ["worker", "reviewer"])
+        // The wire says `persona` (vocabulary wave — no `agent` alias).
+        XCTAssertEqual(room.participants[0].persona, "implementor")
         XCTAssertEqual(room.participants[0].model, "sol-4")
+        XCTAssertNil(room.participants[1].persona)
         XCTAssertNil(room.participants[1].model)
 
         // Only unresolved decisions count as open.
@@ -136,7 +139,7 @@ final class EngineClientTests: XCTestCase {
         // lastPost skips system notices but keeps implicit agent replies.
         XCTAssertEqual(room.lastPost?.id, "m3")
 
-        // Workstream identity: worktree name + the effective git dir (the filter key).
+        // Room identity: worktree name + the effective git dir (the filter key).
         XCTAssertEqual(room.worktree, "fix-2247")
         XCTAssertEqual(room.git?.path, "/Users/dev/.config/kild/worktrees/fix-2247")
     }
@@ -190,7 +193,7 @@ final class EngineClientTests: XCTestCase {
             .belongsToProject(at: "/p/kild", worktreeNames: []))
     }
 
-    // MARK: archived display state (never "running" for history)
+    // MARK: archived display state (never "running" in the archive)
 
     func testArchivedDisplayStateNeverShowsRunning() throws {
         func room(state: String?) throws -> EngineClient.ArchivedRoom {
@@ -224,7 +227,7 @@ final class EngineClientTests: XCTestCase {
                 "worktree": "ship-auth",
                 "cwd": "/Users/dev/projects/auth",
                 "participants": [
-                  { "name": "lead", "agent": "orchestrator", "model": "sol-4",
+                  { "name": "lead", "persona": "orchestrator", "model": "sol-4",
                     "piSessionId": "abc",
                     "piSessionFile": "/Users/dev/.pi/sessions/abc.jsonl" },
                   { "name": "scout" }
@@ -324,7 +327,8 @@ final class EngineClientTests: XCTestCase {
         let url = try XCTUnwrap(StubURLProtocol.lastRequest?.url)
         XCTAssertEqual(url.path, "/api/worktrees")
         XCTAssertEqual(url.query, "project=kild")
-        XCTAssertEqual(trees.first?.name, "fix-2247")
+        // Wire field `name` decodes into the unified `worktree` handle.
+        XCTAssertEqual(trees.first?.worktree, "fix-2247")
         XCTAssertEqual(trees.first?.branch, "kild/fix-2247")
     }
 

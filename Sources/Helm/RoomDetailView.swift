@@ -42,7 +42,7 @@ struct RoomDetailView: View {
     }
 
     /// Live: only what needs the human now. Archived: the full ledger — what was
-    /// asked AND how it was resolved is the point of reading history.
+    /// asked AND how it was resolved is the point of reading the archive.
     private var shownDecisions: [EngineClient.Decision] {
         readOnly ? (room.decisions ?? []) : room.openDecisions
     }
@@ -56,7 +56,7 @@ struct RoomDetailView: View {
                 roomIDBadge
                 // Live: badge only for anomalous states (running is the norm).
                 // Archived: the DISPLAY state — a snapshot frozen at "running"
-                // was interrupted; plain closed history carries no badge at all.
+                // was interrupted; a plain closed room carries no badge at all.
                 if readOnly {
                     if room.archivedDisplayState != "closed" {
                         stateBadge(room.archivedDisplayState)
@@ -178,7 +178,7 @@ struct RoomDetailView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         // Orange only while something is actually open (an archived ledger may be
-        // fully resolved — no alarm color for settled history).
+        // fully resolved — no alarm color for a settled ledger).
         .background(.orange.opacity(room.openDecisions.isEmpty ? 0 : 0.08))
     }
 

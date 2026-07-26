@@ -6,7 +6,8 @@ import Foundation
 struct EngineClient: Sendable {
     var baseURL = URL(string: "http://127.0.0.1:4517")!
     /// Injectable for tests (URLProtocol stubs); defaults to the shared session.
-    var session: URLSession = .shared
+    /// Named `urlSession` — "session" alone belongs to kild/pi sessions.
+    var urlSession: URLSession = .shared
 
     /// Engine-domain failures, kept separate from transport errors so the UI can
     /// surface the engine's own rejection text (e.g. "no such participant: @x …").
@@ -37,17 +38,25 @@ struct EngineClient: Sendable {
     }
 
     /// A kild-managed git worktree of one project's repo (`GET /api/worktrees?project=`).
-    /// `name` is the room-facing worktree handle (the `kild/<name>` branch minus prefix)
-    /// — the engine-truth link from a room's `worktree` field back to its project.
+    /// `worktree` is the room-facing worktree handle (the `kild/<worktree>` branch minus
+    /// prefix) — the same value as `LiveRoom.worktree`, so helm uses one name for it on
+    /// both types. The `/api/worktrees` wire still calls it `name` (kild rename pending);
+    /// the CodingKeys mapping keeps the vocabulary unified client-side.
     struct Worktree: Decodable {
         let branch: String
         let path: String
-        let name: String?
+        let worktree: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case branch
+            case path
+            case worktree = "name"
+        }
     }
 
     struct Participant: Decodable {
         let name: String
-        let agent: String?
+        let persona: String?
         let model: String?
         /// Durable pi resume handle (`pi --session <file>`) — set once the session
         /// reported it; survives into the archive.
@@ -85,8 +94,8 @@ struct EngineClient: Sendable {
         var date: Date { Date(timeIntervalSince1970: ts / 1000) }
     }
 
-    /// The slice of the engine's `WorkstreamGitStatus` helm consumes: `path` is the
-    /// effective workstream dir — the room's cwd, or its shared worktree dir (under
+    /// The slice of the engine's per-room git status helm consumes: `path` is the
+    /// effective room dir — the room's cwd, or its shared worktree dir (under
     /// `$KILD_HOME/worktrees`) when one is set. It is the project-filter key for live
     /// rooms; the remaining git fields stay undecoded until a view renders them.
     struct GitStatus: Decodable {
@@ -118,7 +127,7 @@ struct EngineClient: Sendable {
 
         /// State to DISPLAY for an archived room — never the raw snapshot state.
         /// An engine restart archives still-"running" rooms with that state frozen
-        /// in the snapshot; for history it means the room was interrupted, never
+        /// in the snapshot; in the archive it means the room was interrupted, never
         /// that it is running.
         var archivedDisplayState: String {
             switch state {
@@ -128,7 +137,7 @@ struct EngineClient: Sendable {
             }
         }
 
-        /// Does this room's workstream live under `projectPath`? True when the
+        /// Does this room's work live under `projectPath`? True when the
         /// effective dir is inside the project, or when the room's worktree name is
         /// one of the project's kild worktrees (`worktreeNames`, from
         /// `/api/worktrees` — worktree dirs live under `$KILD_HOME`, so the path
@@ -157,7 +166,7 @@ struct EngineClient: Sendable {
         try await get("/api/rooms/live")
     }
 
-    /// Past rooms recovered from disk — read-only history (state closed/halted).
+    /// Past rooms recovered from disk — the read-only archive (state closed/halted).
     func archivedRooms() async throws -> [ArchivedRoom] {
         try await get("/api/rooms/archive")
     }
@@ -184,7 +193,7 @@ struct EngineClient: Sendable {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(Body(name: name, path: path))
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await urlSession.data(for: request)
         return try decode(data, response)
     }
 
@@ -200,7 +209,7 @@ struct EngineClient: Sendable {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(Body(text: text))
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await urlSession.data(for: request)
         let reply: Reply = try decode(data, response)
         return reply.message ?? "posted"
     }
@@ -210,7 +219,7 @@ struct EngineClient: Sendable {
     private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
         var url = baseURL.appending(path: path)
         if !query.isEmpty { url.append(queryItems: query) }
-        let (data, response) = try await session.data(from: url)
+        let (data, response) = try await urlSession.data(from: url)
         return try decode(data, response)
     }
 
