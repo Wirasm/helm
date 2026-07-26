@@ -13,7 +13,7 @@ import SwiftUI
 /// existing surface. Only deallocating the view kills the pty. `TerminalManager`
 /// retains every session (and each session its view) for as long as the tab
 /// exists, so the shell survives any SwiftUI unmount/remount — tab switches,
-/// the ⌘T face toggle, artifact-pane resizes, all of it.
+/// dock open/close, sidebar and artifact resizes, all of it.
 ///
 /// Why one controller PER session instead of one shared controller with N
 /// surfaces: the C API would allow the latter (Ghostty.app itself is one
@@ -356,6 +356,19 @@ final class TerminalManager: ObservableObject {
         sessions.count > 1
     }
 
+    /// Whether the selected terminal's view is (or contains) the key window's
+    /// first responder — the focus gate for terminal-only shortcuts (⌘↑/⌘↓
+    /// prompt jump). Needed since the one-surface re-layout: the terminal is
+    /// always frontmost now, so "the terminal face is active" no longer
+    /// implies the terminal has keyboard focus.
+    var selectedTerminalHasFocus: Bool {
+        let view = selected.hostView
+        guard let window = view.window, window.isKeyWindow,
+              let responder = window.firstResponder as? NSView
+        else { return false }
+        return responder === view || responder.isDescendant(of: view)
+    }
+
     /// ⌘N / the strip's + button: a fresh login shell, appended and selected.
     func newTerminal() {
         let session = TerminalSession(ordinal: nextOrdinal)
@@ -407,24 +420,27 @@ final class TerminalManager: ObservableObject {
 /// can never swap its NSView instance in place).
 struct GhosttyHostView: NSViewRepresentable {
     let view: TerminalView
-    /// Whether this pane is visible and should own focus. Drives first responder
-    /// and render occlusion; the pty runs regardless.
-    let isActive: Bool
 
     func makeNSView(context _: Context) -> TerminalView {
         view
     }
 
     func updateNSView(_ view: TerminalView, context _: Context) {
-        view.setSurfaceVisible(isActive)
-        // Focus follows visibility. Deferred: during a SwiftUI update the view
-        // may not be in a window yet, and makeFirstResponder mid-update is unsafe.
-        DispatchQueue.main.async { [isActive] in
+        // Always visible: the terminal is the frame's permanent center now
+        // (the old kild face that occluded it is gone).
+        view.setSurfaceVisible(true)
+        // Focus, deferred: during a SwiftUI update the view may not be in a
+        // window yet, and makeFirstResponder mid-update is unsafe. The claim
+        // is deliberately NON-stealing — only when nothing else holds focus
+        // (responder == window). updateNSView re-runs on every poll-driven
+        // re-render, and grabbing focus each tick would make the sidebar and
+        // the dock composer untypable. AppKit hands the first responder back
+        // to the window when a focused view unmounts (tab switch, dock
+        // close), so the terminal reclaims focus exactly then.
+        DispatchQueue.main.async {
             guard let window = view.window else { return }
-            if isActive {
-                if window.firstResponder !== view { window.makeFirstResponder(view) }
-            } else if window.firstResponder === view {
-                window.makeFirstResponder(nil)
+            if window.firstResponder === window {
+                window.makeFirstResponder(view)
             }
         }
     }
