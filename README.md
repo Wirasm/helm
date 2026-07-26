@@ -1,10 +1,11 @@
 # helm
 
-The native macOS cockpit for the sild stack: a libghostty terminal as the main view
-(your operator — pi/claude/codex — runs here), toggling into the kild view (rooms,
-decisions, artifacts). The kild engine's REST/WS API is the ONLY backend contract;
-artifacts are read from the filesystem (`~/.prp/<key>/`). helm knows both prp and
-kild — they never know helm or each other.
+The native macOS cockpit for the sild stack: a libghostty terminal as the permanent
+center (your operator — pi/claude/codex — runs here), the observe/steer sidebar of
+rooms on the left, and a shared right dock for the selected room's detail or an open
+artifact. The kild engine's REST/WS API is the ONLY backend contract; artifacts are
+read from the filesystem (`~/.prp/<key>/`). helm knows both prp and kild — they
+never know helm or each other.
 
 Status: **libghostty spike** — see `docs/SPIKE.md`.
 
@@ -16,7 +17,7 @@ Status: **libghostty spike** — see `docs/SPIKE.md`.
 - `make build` / `make test` / `make clean` — SPM build, tests, and cleanup.
 
 Both paths build the same sources against the same pinned libghostty-spm (exact
-1.3.1 in `Package.swift` AND `project.yml` — keep them in lockstep). The kild view
+1.3.1 in `Package.swift` AND `project.yml` — keep them in lockstep). The sidebar
 needs the kild engine on localhost:4517; the terminal pane is a real GhosttyKit
 surface via libghostty-spm — no toolchain needed, SPM fetches the prebuilt
 xcframework.
