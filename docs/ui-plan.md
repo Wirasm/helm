@@ -349,3 +349,14 @@ observer view for running agents and rooms." Also parked: the room-agent CHECKLI
 primitive (deliberate design session first — prototype as prompt-level convention in
 real rooms before any engine mechanism) and the resolve inversion (human answers,
 engine writes the receipt post; the prefilled-syntax composer is rejected).
+
+---
+
+## Addendum 2026-07-26 — slice 1a SHIPPED: the terminal-centered frame
+
+The ⌘T two-faces model is dead; helm is one permanent surface. Left: the
+observe/steer sidebar (engine header, projects, Live/History rooms). Center: the
+terminal workspace, always visible, min 480pt. Right: ONE shared dock — a selected
+room's detail wins it, else the open artifact, else it collapses; Esc deselects.
+Sticky dock width via @AppStorage (idealWidth restore; HSplitView won't persist).
+⌘T freed (reserved), ⌘J reserved for terminal-maximize; the Resolve-prefill died.

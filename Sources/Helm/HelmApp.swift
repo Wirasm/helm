@@ -67,17 +67,20 @@ struct HelmApp: App {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             // ⌘↑/⌘↓ — jump between shell prompts (matched on keyCode: arrows
-            // carry function-key code points, not typable characters).
-            if flags == .command {
-                switch event.keyCode {
-                case 126: // up
-                    NotificationCenter.default.post(name: .helmJumpToPrompt, object: -1)
+            // carry function-key code points, not typable characters). Consumed
+            // only while the terminal itself holds keyboard focus: the frame
+            // now keeps sidebar + dock text fields alongside the always-visible
+            // terminal, and ⌘↑/↓ must keep its text-navigation meaning there.
+            // (The monitor runs on the main thread; assumeIsolated is safe.)
+            if flags == .command, event.keyCode == 126 || event.keyCode == 125 {
+                let terminalFocused = MainActor.assumeIsolated {
+                    TerminalManager.shared.selectedTerminalHasFocus
+                }
+                if terminalFocused {
+                    NotificationCenter.default.post(
+                        name: .helmJumpToPrompt, object: event.keyCode == 126 ? -1 : 1
+                    )
                     return nil
-                case 125: // down
-                    NotificationCenter.default.post(name: .helmJumpToPrompt, object: 1)
-                    return nil
-                default:
-                    break
                 }
             }
             guard let key = event.charactersIgnoringModifiers else { return event }
@@ -107,10 +110,13 @@ struct HelmApp: App {
                     name: .helmAdjustFontSize, object: FontSizeStep.reset.rawValue
                 )
                 return nil
-            // ⌘T — toggle the two faces (terminal workspace ⇄ kild view).
-            case "t":
-                NotificationCenter.default.post(name: .helmToggleView, object: nil)
-                return nil
+            // ⌘T is deliberately UNBOUND — it was the two-faces toggle, freed
+            // when the one-surface re-layout killed that model (slice 1a).
+            // Reserved: rebind it only with intent, muscle memory lives here.
+            //
+            // ⌘J is also reserved, not bound: the future terminal-maximize
+            // ("driver mode" in the concept — the terminal swells full-frame).
+            //
             // ⌘N — new terminal tab (a fresh login shell).
             case "n":
                 NotificationCenter.default.post(name: .helmNewTerminal, object: nil)
@@ -156,7 +162,6 @@ struct HelmApp: App {
             CommandGroup(after: .toolbar) {
                 // Menu mirrors of the monitor's shortcuts (the monitor consumes the
                 // keystrokes first; these exist for discoverability and mouse use).
-                ToggleViewCommand()
                 Button("New Terminal") {
                     NotificationCenter.default.post(name: .helmNewTerminal, object: nil)
                 }
@@ -201,19 +206,7 @@ struct HelmApp: App {
     }
 }
 
-/// The main-view toggle, exposed as a menu command so ⌘T works app-wide.
-struct ToggleViewCommand: View {
-    var body: some View {
-        Button("Toggle Terminal / Kild View") {
-            NotificationCenter.default.post(name: .helmToggleView, object: nil)
-        }
-        .keyboardShortcut("t", modifiers: .command)
-    }
-}
-
 extension Notification.Name {
-    /// ⌘T — swap RootView's frontmost face (terminal workspace ⇄ kild view).
-    static let helmToggleView = Notification.Name("helmToggleView")
     /// ⌘N — TerminalManager appends and selects a fresh login shell.
     static let helmNewTerminal = Notification.Name("helmNewTerminal")
     /// ⌘1–⌘9 — object is the 0-based tab index to select.

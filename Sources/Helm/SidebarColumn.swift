@@ -1,38 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// The kild observe/steer surface: engine health + live rooms (master) and the room
-/// detail with a steering composer (detail). Polling for now; a later slice owns WS.
-/// Attention-first, per the seed plan: open decisions outrank everything.
+/// The observe/steer column of the frame: engine health header, a collapsible
+/// Projects section (filter, not navigation), and the Live/History room list.
+/// Pure rendering over `KildStore` — RootView owns the store, the 5s poll, and
+/// the dock that hosts the selected room's detail.
 ///
-/// The sidebar stacks a collapsible Projects section (filter, not navigation) over a
-/// Live/History room list. History serves the archive (`/api/rooms/archive`) into the
-/// same detail view, read-only.
-struct KildView: View {
-    private enum RoomsTab {
-        case live
-        case history
-    }
-
-    private let engine = EngineClient()
-    @State private var health: EngineClient.Health?
-    @State private var rooms: [EngineClient.LiveRoom] = []
-    @State private var archived: [EngineClient.ArchivedRoom] = []
-    @State private var error: String?
-    @State private var selection: String? = LaunchOptions.roomId
-    // A --room launch lands on History when the id isn't live at first load; the
-    // load() pass below corrects the tab once data arrives (testability seam).
-    @State private var tab: RoomsTab = .live
-    @State private var launchRoomResolved = LaunchOptions.roomId == nil
-
-    // Project filter. `selectedProject == nil` = all projects. `projectWorktreeNames`
-    // is the selected project's kild worktrees (from `/api/worktrees`) — the only link
-    // from a worktree-room back to its project, since worktree dirs live under
-    // `$KILD_HOME`, not under the project path.
-    @State private var projects: [EngineClient.Project] = []
-    @State private var selectedProject: EngineClient.Project?
-    @State private var projectWorktreeNames: Set<String> = []
-    @State private var projectsExpanded = true
+/// The header + Projects stay PINNED at the top; only the rooms list below the
+/// Live/History tabs scrolls. The projects section scrolls internally when very
+/// tall, capped at ~40% of the column height.
+struct SidebarColumn: View {
+    @ObservedObject var store: KildStore
 
     // "Add project…" inline form.
     @State private var addingProject = false
@@ -41,62 +19,39 @@ struct KildView: View {
     @State private var addProjectError: String?
     @State private var addingProjectInFlight = false
 
-    private let refresh = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
-
     var body: some View {
-        NavigationSplitView {
-            // Engine header + Projects stay PINNED at the top; only the rooms list
-            // below the Live/History tabs scrolls. The projects section scrolls
-            // internally when very tall, capped at ~40% of the sidebar height.
-            GeometryReader { geo in
-                VStack(alignment: .leading, spacing: 0) {
-                    header
+        GeometryReader { geo in
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                Divider()
+                if let error = store.error {
+                    ContentUnavailableView(
+                        "Engine unreachable",
+                        systemImage: "bolt.slash",
+                        description: Text(error)
+                    )
+                } else {
+                    projectsSection(maxHeight: max(120, geo.size.height * 0.4))
                     Divider()
-                    if let error {
-                        ContentUnavailableView(
-                            "Engine unreachable",
-                            systemImage: "bolt.slash",
-                            description: Text(error)
-                        )
-                    } else {
-                        projectsSection(maxHeight: max(120, geo.size.height * 0.4))
-                        Divider()
-                        tabPicker
-                        roomList
-                    }
+                    tabPicker
+                    roomList
                 }
-            }
-            .navigationSplitViewColumnWidth(min: 260, ideal: 320)
-        } detail: {
-            if let room = shownRooms.first(where: { $0.id == selection }) {
-                RoomDetailView(room: room, engine: engine, readOnly: tab == .history) {
-                    await load()
-                }
-                // Stable identity per room: composer draft survives the 5s refresh,
-                // resets when another room is selected.
-                .id(room.id)
-            } else {
-                ContentUnavailableView(
-                    "No room selected",
-                    systemImage: "rectangle.on.rectangle.angled",
-                    description: Text("Select a room to watch its log\(tab == .live ? " and steer" : "").")
-                )
             }
         }
-        .task { await load() }
-        .onReceive(refresh) { _ in Task { await load() } }
     }
 
     private var header: some View {
         HStack {
             Circle()
-                .fill(health != nil ? Color.green : Color.red)
+                .fill(store.health != nil ? Color.green : Color.red)
                 .frame(width: 9, height: 9)
-            Text(health != nil ? "kild engine · boot \(health!.bootId.prefix(8))" : "engine down")
+            Text(store.health != nil
+                ? "kild engine · boot \(store.health!.bootId.prefix(8))"
+                : "engine down")
                 .font(.callout.monospaced())
                 .foregroundStyle(.secondary)
             Spacer()
-            Text("\(rooms.count) live")
+            Text("\(store.rooms.count) live")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -104,6 +59,8 @@ struct KildView: View {
     }
 
     // MARK: projects — collapsible filter section
+
+    @State private var projectsExpanded = true
 
     /// Pinned when expanded; the rows scroll internally only once they outgrow
     /// `maxHeight` (ViewThatFits picks the plain stack while it still fits).
@@ -127,16 +84,16 @@ struct KildView: View {
     private var projectRows: some View {
         VStack(alignment: .leading, spacing: 1) {
             projectRow(nil)
-            ForEach(projects) { projectRow($0) }
+            ForEach(store.projects) { projectRow($0) }
             addProjectRow
         }
     }
 
     /// One selectable filter row; `nil` is the "All projects" default.
     private func projectRow(_ project: EngineClient.Project?) -> some View {
-        let isSelected = selectedProject == project
+        let isSelected = store.selectedProject == project
         return Button {
-            select(project)
+            store.select(project)
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: project == nil ? "square.grid.2x2" : "folder")
@@ -243,8 +200,8 @@ struct KildView: View {
         addProjectError = nil
         Task {
             do {
-                try await engine.addProject(name: name, path: newProjectPath)
-                projects = try await engine.projects()
+                try await store.engine.addProject(name: name, path: newProjectPath)
+                store.projects = try await store.engine.projects()
                 resetAddProject()
             } catch let failure as EngineClient.Failure {
                 addProjectError = failure.errorDescription
@@ -262,27 +219,12 @@ struct KildView: View {
         addProjectError = nil
     }
 
-    private func select(_ project: EngineClient.Project?) {
-        selectedProject = project
-        projectWorktreeNames = []
-        guard project != nil else { return }
-        Task { await refreshWorktreeNames() }
-    }
-
-    /// The selected project's kild worktree names — fetched best-effort (a project
-    /// that isn't a git repo legitimately 400s; that only disables worktree matching).
-    private func refreshWorktreeNames() async {
-        guard let selectedProject else { return }
-        let trees = (try? await engine.worktrees(project: selectedProject.name)) ?? []
-        projectWorktreeNames = Set(trees.compactMap(\.worktree))
-    }
-
     // MARK: room list — Live / History, filtered by the selected project
 
     private var tabPicker: some View {
-        Picker("Rooms", selection: $tab) {
-            Text("Live (\(rooms.count))").tag(RoomsTab.live)
-            Text("History (\(archived.count))").tag(RoomsTab.history)
+        Picker("Rooms", selection: $store.tab) {
+            Text("Live (\(store.rooms.count))").tag(KildStore.RoomsTab.live)
+            Text("History (\(store.archived.count))").tag(KildStore.RoomsTab.history)
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -290,47 +232,34 @@ struct KildView: View {
         .padding(.vertical, 6)
     }
 
-    /// The current tab's rooms under the project filter. Live rooms sort
-    /// attention-first (open decisions on top); the archive sorts newest-activity first.
-    private var shownRooms: [EngineClient.LiveRoom] {
-        let source = tab == .live ? rooms : archived
-        let filtered = selectedProject.map { project in
-            source.filter {
-                $0.belongsToProject(at: project.path, worktreeNames: projectWorktreeNames)
-            }
-        } ?? source
-        return tab == .live
-            ? filtered.sorted {
-                ($0.openDecisions.isEmpty ? 1 : 0, $0.name) < ($1.openDecisions.isEmpty ? 1 : 0, $1.name)
-            }
-            : filtered.sorted { ($0.log.last?.ts ?? 0) > ($1.log.last?.ts ?? 0) }
-    }
-
     @ViewBuilder
     private var roomList: some View {
-        if shownRooms.isEmpty {
+        if store.shownRooms.isEmpty {
             ContentUnavailableView {
                 Label(
-                    tab == .live ? "No live rooms" : "No archived rooms",
-                    systemImage: tab == .live ? "rectangle.on.rectangle.angled" : "archivebox"
+                    store.tab == .live ? "No live rooms" : "No archived rooms",
+                    systemImage: store.tab == .live ? "rectangle.on.rectangle.angled" : "archivebox"
                 )
             } description: {
-                if let selectedProject {
+                if let selectedProject = store.selectedProject {
                     // Honest about the filter's limits: older archives persisted no
                     // cwd, so only their still-existing kild worktree can attribute
                     // them to a project.
                     Text(
-                        tab == .history
+                        store.tab == .history
                             ? "None attributable to \(selectedProject.name). Archived rooms without a saved cwd or live worktree only appear under All projects."
                             : "No live rooms in \(selectedProject.name)."
                     )
                 }
             }
         } else {
-            List(shownRooms, selection: $selection) { room in
+            List(store.shownRooms, selection: $store.selection) { room in
                 roomRow(room)
             }
             .listStyle(.inset)
+            // Esc while the list has focus deselects the room; the dock then
+            // falls back to the artifact (if open) or closes.
+            .onExitCommand { store.selection = nil }
         }
     }
 
@@ -341,7 +270,7 @@ struct KildView: View {
                 // Display state only — a snapshot frozen at "running" means the
                 // engine restarted under the room: interrupted. A plain closed
                 // room is the archive's norm and carries no badge.
-                if tab == .history, room.archivedDisplayState != "closed" {
+                if store.tab == .history, room.archivedDisplayState != "closed" {
                     Text(room.archivedDisplayState)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
@@ -371,33 +300,6 @@ struct KildView: View {
         .padding(.vertical, 4)
         .contextMenu {
             Button("Copy Room ID") { Pasteboard.copy(room.id) }
-        }
-    }
-
-    private func load() async {
-        do {
-            health = try await engine.health()
-            rooms = try await engine.liveRooms()
-            archived = try await engine.archivedRooms()
-            projects = try await engine.projects()
-            if let current = selectedProject, !projects.contains(current) {
-                // The registered project vanished (edited out-of-band) — fall back
-                // to All rather than filtering on a ghost.
-                selectedProject = nil
-                projectWorktreeNames = []
-            }
-            await refreshWorktreeNames()
-            error = nil
-            if !launchRoomResolved, let id = selection {
-                if archived.contains(where: { $0.id == id }) { tab = .history }
-                launchRoomResolved = true
-            }
-        } catch {
-            health = nil
-            rooms = []
-            archived = []
-            projects = []
-            self.error = "Start it: cd sild/kild/engine && bun run serve"
         }
     }
 }

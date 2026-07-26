@@ -1,71 +1,108 @@
 import SwiftUI
 
-/// The two faces of helm. The terminal workspace is the MAIN view — the operator
-/// (pi/claude/codex) lives there and steers kild via its own skill/extension,
-/// with an optional read-only artifact beside it. The kild view is the
-/// observe/steer surface. Every pty must survive this toggle (the shells live
-/// app-level in TerminalManager, outside the view lifecycle — see docs/SPIKE.md).
-enum MainView {
-    case terminal
-    case kild
-}
-
+/// helm's one permanent surface — the ⌘T two-faces model is gone. Three panes:
+///
+/// - LEFT: the observe/steer column (engine health, projects, Live/History
+///   rooms) — `SidebarColumn` over the shared `KildStore`.
+/// - CENTER: the terminal workspace, always visible, never swapped or hidden —
+///   the operator (pi/claude/codex) lives here and steers kild via its own
+///   skill/extension. Never below 480pt of comfort.
+/// - RIGHT: ONE shared dock. A selected room wins it (RoomDetailView); with no
+///   selection it shows the open artifact; with neither it collapses away.
+///   Esc (or deselecting) hands the dock back to the artifact, then closes it.
+///
+/// The ptys survive any of this churn — the shells live app-level in
+/// TerminalManager, outside the view lifecycle (see docs/SPIKE.md).
 struct RootView: View {
-    @State private var current: MainView = LaunchOptions.initialView == "kild" ? .kild : .terminal
-
-    var body: some View {
-        ZStack {
-            // Both stay mounted; visibility toggles. This is load-bearing: the
-            // terminals' ptys and the kild view's WS connection must not die on
-            // toggle. (The ptys would survive a full unmount too — TerminalManager
-            // owns them app-level.)
-            TerminalWorkspace(isActive: current == .terminal)
-                .opacity(current == .terminal ? 1 : 0)
-                .allowsHitTesting(current == .terminal)
-            KildView()
-                .opacity(current == .kild ? 1 : 0)
-                .allowsHitTesting(current == .kild)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .helmToggleView)) { _ in
-            current = current == .terminal ? .kild : .terminal
-        }
-    }
-}
-
-/// The terminal face: tab strip over the selected terminal, with an optional
-/// read-only artifact pane split off to the right ("operator in the terminal,
-/// plan beside it"). The artifact pane is hidden until a file is opened.
-struct TerminalWorkspace: View {
-    /// Whether this face is RootView's frontmost (drives focus + occlusion).
-    var isActive: Bool
-
-    @ObservedObject private var manager = TerminalManager.shared
+    @StateObject private var store = KildStore()
     @StateObject private var artifact = ArtifactPaneModel()
     /// The artifact browser popover (anchored to the strip's artifact button);
     /// state lives here so the ⌘O notification can toggle it.
     @State private var showBrowser = false
 
+    /// Sticky dock width. HSplitView has no divider persistence of its own, so
+    /// helm does it: a GeometryReader observes the dock's live width into
+    /// @AppStorage, and every (re)insertion restores it via `idealWidth` —
+    /// chosen over a custom splitter, which would be far more code for the same
+    /// behavior (HSplitView honors idealWidth whenever a pane appears).
+    @AppStorage("helmDockWidth") private var dockWidth = 560.0
+
+    /// The ONE engine poller — app level, shared by sidebar and dock alike.
+    private let refresh = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+
     var body: some View {
         HSplitView {
-            VStack(spacing: 0) {
-                TerminalStrip(manager: manager, artifact: artifact, showBrowser: $showBrowser)
-                Divider()
-                SessionPane(session: manager.selected, isActive: isActive)
-            }
-            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-            .layoutPriority(1)
-
-            if artifact.isOpen {
-                // Reading surface first: a generous default share of the split
-                // so documents open at a comfortable width.
-                ArtifactPane(model: artifact)
-                    .frame(minWidth: 360, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
+            SidebarColumn(store: store)
+                .frame(minWidth: 260, idealWidth: 300, maxWidth: 420, maxHeight: .infinity)
+            TerminalWorkspace(artifact: artifact, showBrowser: $showBrowser)
+                .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
+            if let room = store.selectedRoom {
+                dockPane {
+                    RoomDetailView(
+                        room: room,
+                        engine: store.engine,
+                        readOnly: store.tab == .history
+                    ) {
+                        await store.load()
+                    }
+                    // Stable identity per room: composer draft survives the 5s
+                    // refresh, resets when another room is selected.
+                    .id(room.id)
+                }
+            } else if artifact.isOpen {
+                dockPane { ArtifactPane(model: artifact) }
             }
         }
+        .task { await store.load() }
+        .onReceive(refresh) { _ in Task { await store.load() } }
         .onAppear {
+            // --artifact opens the dock's artifact even when --room wins the
+            // dock: the room shows in front, the artifact waits behind it.
             if let path = LaunchOptions.artifactPath {
                 artifact.open(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
             }
+        }
+    }
+
+    /// Shared chrome for the dock's two tenants: the sticky width and
+    /// Esc-to-deselect. Esc lands here only while focus is inside the dock —
+    /// the terminal rightly consumes its own Esc (TUIs live there), and the
+    /// sidebar list carries its own onExitCommand. The artifact itself closes
+    /// only via its ✕, never via Esc.
+    private func dockPane(@ViewBuilder content: () -> some View) -> some View {
+        content()
+            .frame(minWidth: 360, idealWidth: dockWidth, maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.onChange(of: geo.size.width) { _, width in
+                        dockWidth = width
+                    }
+                }
+            )
+            .onExitCommand { store.selection = nil }
+    }
+}
+
+/// The center pane: tab strip over the selected terminal — the frame's
+/// permanent tenant. (The artifact split that used to hang off this view now
+/// lives in RootView's dock.)
+struct TerminalWorkspace: View {
+    @ObservedObject private var manager = TerminalManager.shared
+    /// The dock's artifact model — the strip's browser popover opens files into it.
+    @ObservedObject var artifact: ArtifactPaneModel
+    @Binding var showBrowser: Bool
+
+    init(artifact: ArtifactPaneModel, showBrowser: Binding<Bool>) {
+        self.artifact = artifact
+        _showBrowser = showBrowser
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TerminalStrip(manager: manager, artifact: artifact, showBrowser: $showBrowser)
+            Divider()
+            SessionPane(session: manager.selected)
         }
         // ⌘N — new terminal (HelmApp's key monitor posts these; see HelmApp.swift).
         .onReceive(NotificationCenter.default.publisher(for: .helmNewTerminal)) { _ in
@@ -82,20 +119,22 @@ struct TerminalWorkspace: View {
         .onReceive(NotificationCenter.default.publisher(for: .helmOpenArtifact)) { _ in
             showBrowser.toggle()
         }
-        // ⌘+/⌘-/⌘0 — font zoom on the selected terminal. Gated on isActive so
-        // the keys are inert while the kild face is frontmost (both faces stay
-        // mounted, so this receiver is always live).
+        // ⌘+/⌘-/⌘0 — font zoom on the selected terminal. Ungated: the terminal
+        // is always frontmost now (the old gate only silenced these while the
+        // kild face covered the workspace).
         .onReceive(NotificationCenter.default.publisher(for: .helmAdjustFontSize)) { note in
-            guard isActive,
-                  let raw = note.object as? Int,
+            guard let raw = note.object as? Int,
                   let step = FontSizeStep(rawValue: raw)
             else { return }
             manager.selected.adjustFontSize(step)
         }
-        // ⌘↑/⌘↓ — jump between shell prompts on the selected terminal (same
-        // isActive gating as the font keys).
+        // ⌘↑/⌘↓ — jump between shell prompts, gated on REAL terminal focus
+        // (first responder), not mere visibility: the sidebar and dock hold
+        // text fields where ⌘↑/↓ must keep its text-navigation meaning. The
+        // key monitor applies the same gate before consuming the keystroke;
+        // this guard covers the menu-item path.
         .onReceive(NotificationCenter.default.publisher(for: .helmJumpToPrompt)) { note in
-            guard isActive, let offset = note.object as? Int else { return }
+            guard manager.selectedTerminalHasFocus, let offset = note.object as? Int else { return }
             manager.selected.jumpToPrompt(by: offset)
         }
     }
@@ -105,7 +144,6 @@ struct TerminalWorkspace: View {
 /// exited). Observes the session so status flips re-render just this pane.
 private struct SessionPane: View {
     @ObservedObject var session: TerminalSession
-    var isActive: Bool
 
     var body: some View {
         Group {
@@ -115,7 +153,7 @@ private struct SessionPane: View {
                 // dismantles it (unmounting the old NSView) and mounts the new
                 // session's view — never creating or destroying the views
                 // themselves, so every pty survives.
-                GhosttyHostView(view: session.hostView, isActive: isActive)
+                GhosttyHostView(view: session.hostView)
                     .id(session.id)
             case let .failed(message):
                 fallback(title: "ghostty init failed", detail: message)
