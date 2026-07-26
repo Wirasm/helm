@@ -274,7 +274,7 @@ struct KildView: View {
     private func refreshWorktreeNames() async {
         guard let selectedProject else { return }
         let trees = (try? await engine.worktrees(project: selectedProject.name)) ?? []
-        projectWorktreeNames = Set(trees.compactMap(\.name))
+        projectWorktreeNames = Set(trees.compactMap(\.worktree))
     }
 
     // MARK: room list — Live / History, filtered by the selected project
@@ -291,7 +291,7 @@ struct KildView: View {
     }
 
     /// The current tab's rooms under the project filter. Live rooms sort
-    /// attention-first (open decisions on top); history sorts newest-activity first.
+    /// attention-first (open decisions on top); the archive sorts newest-activity first.
     private var shownRooms: [EngineClient.LiveRoom] {
         let source = tab == .live ? rooms : archived
         let filtered = selectedProject.map { project in
@@ -339,8 +339,8 @@ struct KildView: View {
             HStack {
                 Text(room.name).font(.body.weight(.semibold))
                 // Display state only — a snapshot frozen at "running" means the
-                // engine restarted under the room: interrupted. Plain closed
-                // history is the norm and carries no badge.
+                // engine restarted under the room: interrupted. A plain closed
+                // room is the archive's norm and carries no badge.
                 if tab == .history, room.archivedDisplayState != "closed" {
                     Text(room.archivedDisplayState)
                         .font(.caption.monospaced())
