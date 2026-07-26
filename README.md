@@ -1,7 +1,7 @@
 # helm
 
 The native macOS cockpit for the sild stack: a libghostty terminal as the main view
-(your driver — pi/claude/codex — runs here), toggling into the kild view (rooms,
+(your operator — pi/claude/codex — runs here), toggling into the kild view (rooms,
 decisions, artifacts). The kild engine's REST/WS API is the ONLY backend contract;
 artifacts are read from the filesystem (`~/.prp/<key>/`). helm knows both prp and
 kild — they never know helm or each other.

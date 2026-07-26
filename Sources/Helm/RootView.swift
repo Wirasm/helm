@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The two faces of helm. The terminal workspace is the MAIN view — the driver
-/// (pi/claude/codex) lives there and drives kild via its own skill/extension,
+/// The two faces of helm. The terminal workspace is the MAIN view — the operator
+/// (pi/claude/codex) lives there and steers kild via its own skill/extension,
 /// with an optional read-only artifact beside it. The kild view is the
 /// observe/steer surface. Every pty must survive this toggle (the shells live
 /// app-level in TerminalManager, outside the view lifecycle — see docs/SPIKE.md).
@@ -33,7 +33,7 @@ struct RootView: View {
 }
 
 /// The terminal face: tab strip over the selected terminal, with an optional
-/// read-only artifact pane split off to the right ("driver in the terminal,
+/// read-only artifact pane split off to the right ("operator in the terminal,
 /// plan beside it"). The artifact pane is hidden until a file is opened.
 struct TerminalWorkspace: View {
     /// Whether this face is RootView's frontmost (drives focus + occlusion).

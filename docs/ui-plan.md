@@ -18,9 +18,9 @@ This is a context handover, not a spec. Build minimal, expect churn — we're ex
 >
 > idk just ideas
 
-That sketch is the north star. It's conversation-first, and it makes the **main agent
-session** (a resident fleet driver) a first-class surface — you talk to it up top, and the
-rooms it opens appear below as workstreams you can arrow into.
+That sketch is the north star. It's conversation-first, and it makes the **operator
+session** (what the sketch calls the "main agent session") a first-class surface — you talk
+to it up top, and the rooms it opens appear below so you can arrow into them.
 
 ---
 
@@ -36,8 +36,8 @@ assumes no one watches the roster`):
 
 What this means for the UI: **the cockpit is the "someone happens to be watching" surface.**
 It must never be load-bearing for correctness (the engine already delivers signals to
-agent-operators). But when a human *is* watching, the cockpit's job is to make the fleet
-legible at a glance — which is exactly the Fog-lifting the engine can't do for a human.
+agent-operators). But when a human *is* watching, the cockpit's job is to make all the
+rooms legible at a glance — which is exactly the Fog-lifting the engine can't do for a human.
 
 ---
 
@@ -49,7 +49,7 @@ A working room-centric cockpit exists:
   50/50 split; participant chips; on-the-fly invite.
 - **Composer**, **Topbar** (focused agent's name, model, branch chip, ctx%/tokens/cost).
 - Modals for new project / new room.
-- Live WS reconcile with the engine; archived-room history.
+- Live WS reconcile with the engine; archived-room browsing.
 
 The transport and reconcile logic are decent. The information architecture and the data it
 surfaces are the weak parts.
@@ -64,9 +64,9 @@ surfaces are the weak parts.
    `@human`, a blocker, a report-and-idle "done, waiting." With report-and-idle as the
    lifecycle, "finished, waiting for you" is now the most important state and the UI can't
    express it (just a running/stopped dot).
-3. **No fleet tier / no "main session."** Detached fleet drivers and plain sessions are
-   invisible (nothing consumes `/api/sessions`). The "main agent session at the top" concept
-   from the sketch doesn't exist yet.
+3. **No operator tier / no "main session."** Detached operator sessions and plain sessions
+   are invisible (nothing consumes `/api/sessions`). The "main agent session at the top"
+   concept from the sketch doesn't exist yet.
 4. **Zero keyboard navigation.** The up/down-arrow-into-each-session idea — not there.
 5. **Hardcoded, stale model list** in the spawn modal (`claude-sonnet-4-6`, `gpt-5.5`…),
    disconnected from the config **model catalog** the fleet actually uses.
@@ -78,7 +78,7 @@ surfaces are the weak parts.
 - **Sidebar IA**: projects, rooms, worktrees as three flat lists in one column. Rooms are
   the core object but read like anonymous log lines (`@agent` / "3 agents" + project name) —
   no goal/title, no last-activity, no needs-attention. Worktrees as a sibling section is
-  redundant (a worktree is a workstream's *property*).
+  redundant (a worktree is a room's *property*).
 - **One-click ✕ close on every room row, no confirm.** We just established closing is
   destructive and human-explicit — the UI makes it the easiest misclick in the app.
 - **The 50/50 room/participant split** buries what you care about (what the *room* decided)
@@ -93,9 +93,9 @@ surfaces are the weak parts.
 
 ```
 ┌──────────┬─────────────────────────────────────────────────────┐
-│ projects │  MAIN SESSION (the fleet driver — persistent chat)  │  ← top strip
+│ projects │  MAIN SESSION (the operator — persistent chat)      │  ← top strip
 │  (thin)  ├──────────────────┬──────────────────────────────────┤
-│          │ workstreams tree │   selected session's view        │
+│          │ rooms tree       │   selected session's view        │
 │  archon  │ ▸ fix-2247   ⚠   │   (room log, or an agent's        │
 │  kild    │   ├ agent  sol ● │    transcript; composer at bottom)│
 │  sasha   │   ├ analyst terra│                                  │
@@ -107,17 +107,17 @@ surfaces are the weak parts.
 ```
 
 - **Projects** — thin far-left rail (names/icons only).
-- **Workstreams tree** — rooms under the active project, each expandable to its **sessions
+- **Rooms tree** — rooms under the active project, each expandable to its **sessions
   (participants)** with model + running/idle/**needs-attention** dot. **↑/↓ walks every
   session across rooms; →/← expands/collapses.** The engine already streams every
   participant's transcript — the UI just needs focus-follows-selection.
-- **Main agent session on top** — a resident **fleet-driver session** (sol, holding the
-  fleet room-control tools). The engine already supports spawning exactly that
+- **Operator session on top** — a resident **operator session** (sol, holding the
+  room-control tools). The engine already supports spawning exactly that
   (`POST /api/sessions {fleet:true}`). The top strip is your standing chat with it; rooms it
-  opens appear in the tree below. This unifies "human drives" and "agent drives" into one
+  opens appear in the tree below. This unifies "human operates" and "agent operates" into one
   surface — the VISION.md sentence, made real, and consistent with Deliver-Signals (the
-  driver is an agent; the human just watches/steers it).
-- **Right rail** — the observability payoff per selected workstream: git/collision/cost/
+  operator is an agent; the human just watches/steers it).
+- **Right rail** — the observability payoff per selected room: git/collision/cost/
   spawn-tree.
 - **Attention model** — rooms sort needs-you-first (lead→@human / blocker / idle-finished),
   with a badge. Close moves behind a confirm, away from the row.
@@ -129,13 +129,13 @@ surfaces are the weak parts.
 1. **Observability into the UI** — types + right rail + roster models + idle state. Data is
    already on `/api/rooms/live`; pure rendering; immediate payoff. *(Slice 1 — partly done,
    see In flight.)*
-2. **Sidebar → workstreams tree + keyboard nav** — the ↑/↓ session walker; restructures the
-   IA around workstreams. *(Slice 2.)*
+2. **Sidebar → rooms tree + keyboard nav** — the ↑/↓ session walker; restructures the
+   IA around rooms. *(Slice 2.)*
 3. **Attention states + safe close** — needs-you badges, idle-finished first-class,
    confirm-to-close.
 4. **Model catalog into the spawn modal** — kill the hardcoded list; serve the config
    catalog (a tiny engine endpoint, or reuse what the pi extension reads).
-5. **Main driver session strip** — the resident sol chat. Biggest new concept, most
+5. **Operator session strip** — the resident sol chat. Biggest new concept, most
    valuable; do it after 1–2 have reshaped the frame.
 
 Do 1 + 2 first: they're independent of any design debate and fix the worst of it.
@@ -153,7 +153,7 @@ A partial **Slice 1** is sitting uncommitted in the working tree (`git status` s
   changed-file overlap); `mergeLiveLog` folds in `git` + resolved model; `reconcileRooms`
   fills models; a `selectSession(roomId, participant)` handler (the tree/keyboard target).
 
-**Not yet wired:** the Sidebar workstreams *tree*, the keyboard nav, and the right rail that
+**Not yet wired:** the Sidebar rooms *tree*, the keyboard nav, and the right rail that
 renders the git/collision data. So the data model is ~ready but nothing new is shown yet —
 `app/` won't cleanly build as a finished feature until Slice 1's rendering + Slice 2 land.
 It's uncommitted, so it blocks nothing.
@@ -162,8 +162,8 @@ It's uncommitted, so it blocks nothing.
 
 ## Open questions (decide before Slice 5)
 
-- **Main driver session**: auto-spawn with the cockpit, or explicit "start driver"? Per
-  project or one global driver? What model (sol by default)?
+- **Operator session**: auto-spawn with the cockpit, or explicit "start operator"? Per
+  project or one global operator? What model (sol by default)?
 - **Attention priority**: what exactly ranks a room "needs you" — only `→@human` posts, or
   also idle-finished, collisions, conflicts-with-base?
 - **Does the cockpit ever *drive*, or only *watch + steer*?** Deliver-Signals says the
@@ -210,7 +210,7 @@ the terminal is the escape hatch.
 
 ### Memory as a project surface (later, cheap)
 
-Per project: `.kild/LOG.md` is a ready-made workstream history browser (one entry per
+Per project: `.kild/LOG.md` is a ready-made room-archive browser (one entry per
 closed room: goal, outcome, decisions, resume handles) and `.kild/MEMORY.md` /
 `direction.md` are the project's brain. A read-only "memory" tab on the project view
 renders all three. Engine-side it may deserve a tiny `GET /api/projects/:name/memory`
@@ -218,7 +218,7 @@ rather than the Tauri shell reading files directly.
 
 ### Open questions — recommendations
 
-- **Main driver**: explicit "start driver" (auto-spawn = surprise token spend), one per
+- **Operator**: explicit "start operator" (auto-spawn = surprise token spend), one per
   project, model from the config catalog (first entry as default) — never hardcoded.
 - **Attention priority**: the structural ranking above; open decisions outrank everything.
 - **Drive vs watch**: watch + steer. Every UI action is an operator action that already
@@ -232,24 +232,24 @@ rather than the Tauri shell reading files directly.
 Source: Archon feedback session 2026-07-23 (Rasmus/Matt/John). Two decisions supersede
 parts of the plan above; the gems justify a new slice.
 
-### Decision: the main view is a TERMINAL, not a driver strip (supersedes slice 5)
+### Decision: the main view is a TERMINAL, not an operator strip (supersedes slice 5)
 
-The "main agent session strip" (engine-spawned resident fleet driver) is dead. Instead:
+The "main agent session strip" (engine-spawned resident operator) is dead. Instead:
 an embedded real terminal (xterm.js + Tauri pty) where you open pi / Claude Code / codex
 — whichever harness has credits — and that harness drives kild via its existing
 skill/extension/CLI. The rest of the cockpit is the view + control into kild itself.
 Toggle terminal view ⇄ kild view.
 
-Why: the driver rotates by inference economics (Claude Code → Opus+kild → pi someday);
-a bespoke driver chat would freeze one harness into the UI. This kills slice 5's open
+Why: the operator rotates by inference economics (Claude Code → Opus+kild → pi someday);
+a bespoke operator chat would freeze one harness into the UI. This kills slice 5's open
 questions (auto-spawn? which model? per project?) entirely.
 
 Rules that keep it clean:
 - **Host the terminal, never scrape or inject.** The pty is opaque to the UI; everything
-  the driver does materializes through the engine (rooms/posts/WS), which is what the
-  kild view renders. Handing context to the driver = explicit copy-to-clipboard, never
+  the operator does materializes through the engine (rooms/posts/WS), which is what the
+  kild view renders. Handing context to the operator = explicit copy-to-clipboard, never
   send-keys. (Inverting firstmate: hosting is safe, scraping was the tax.)
-- The pty lives outside the webview lifecycle — view toggles never kill the driver.
+- The pty lives outside the webview lifecycle — view toggles never kill the operator.
 
 ### Decision: the plan/review canvas is backend-agnostic via the filesystem
 
@@ -285,7 +285,7 @@ must not grow per-backend adapters. Contract:
 
 ### Revised build order
 
-1–2. Observability rendering + workstreams tree/keyboard nav (in flight, unchanged).
+1–2. Observability rendering + rooms tree/keyboard nav (in flight, unchanged).
 3. Attention + safe close (now engine-backed: open decisions, close refusal).
 T. Embedded terminal + view toggle (replaces old slice 5).
 C. Artifact canvas v1: file-based markdown render, select-to-comment, batch feedback
@@ -328,7 +328,7 @@ while keeping the IA/slices/canvas thinking as the seed plan:
 - **The terminal-workspace model supersedes the drawer idea**: the main view is a
   terminal WORKSPACE — N terminal tabs (each an independent login shell, ptys owned
   app-level by `TerminalManager` so they survive any view churn) plus an optional
-  read-only artifact split beside them ("driver in the terminal, plan beside it":
+  read-only artifact split beside them ("operator in the terminal, plan beside it":
   ⌘O opens a file, .md renders formatted, re-renders on external change). The kild
   view is unchanged. Shortcuts: ⌘T face toggle, ⌘N new terminal, ⌘1–⌘9 select tab,
   ⌘O open artifact.
