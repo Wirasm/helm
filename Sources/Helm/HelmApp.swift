@@ -66,6 +66,20 @@ struct HelmApp: App {
         // always win; consumed keys (return nil) never reach the pty.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            // ⌘↑/⌘↓ — jump between shell prompts (matched on keyCode: arrows
+            // carry function-key code points, not typable characters).
+            if flags == .command {
+                switch event.keyCode {
+                case 126: // up
+                    NotificationCenter.default.post(name: .helmJumpToPrompt, object: -1)
+                    return nil
+                case 125: // down
+                    NotificationCenter.default.post(name: .helmJumpToPrompt, object: 1)
+                    return nil
+                default:
+                    break
+                }
+            }
             guard let key = event.charactersIgnoringModifiers else { return event }
             // ⌘⇧= is how ⌘+ is actually typed (charactersIgnoringModifiers
             // keeps shift applied); everything else requires bare ⌘.
@@ -170,6 +184,18 @@ struct HelmApp: App {
                     )
                 }
                 .keyboardShortcut("0", modifiers: .command)
+                Divider()
+                // ⌘↑/⌘↓ — scroll between shell-integration prompt marks
+                // (OSC 133). In an agent session each turn leaves a mark, so
+                // this is effectively jump-between-turns.
+                Button("Jump to Previous Prompt") {
+                    NotificationCenter.default.post(name: .helmJumpToPrompt, object: -1)
+                }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+                Button("Jump to Next Prompt") {
+                    NotificationCenter.default.post(name: .helmJumpToPrompt, object: 1)
+                }
+                .keyboardShortcut(.downArrow, modifiers: .command)
             }
         }
     }
@@ -197,4 +223,7 @@ extension Notification.Name {
     /// ⌘+/⌘-/⌘0 — object is a `FontSizeStep` raw value; the terminal
     /// workspace applies it to the selected terminal.
     static let helmAdjustFontSize = Notification.Name("helmAdjustFontSize")
+    /// ⌘↑/⌘↓ — object is the prompt offset (-1 previous, +1 next); the
+    /// terminal workspace forwards it to the selected terminal's surface.
+    static let helmJumpToPrompt = Notification.Name("helmJumpToPrompt")
 }

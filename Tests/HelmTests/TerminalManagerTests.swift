@@ -104,6 +104,44 @@ final class TerminalManagerTests: XCTestCase {
         )
     }
 
+    func testCommandFinishInInactiveTabMarksAndSelectionAcknowledges() {
+        let manager = TerminalManager()
+        let first = manager.sessions[0]
+        manager.newTerminal() // selection moves to the new tab
+
+        first.terminalDidFinishCommand(exitCode: 1, durationNanos: 2_000_000_000)
+        XCTAssertEqual(
+            first.activity.outcome,
+            .failure(exitCode: 1, durationNanos: 2_000_000_000),
+            "a command finishing in an inactive tab must mark it"
+        )
+
+        manager.select(first)
+        XCTAssertNil(first.activity.outcome, "selecting the tab acknowledges the mark")
+    }
+
+    func testCommandFinishInSelectedTabIsNotMarked() {
+        let manager = TerminalManager()
+
+        manager.selected.terminalDidFinishCommand(exitCode: 0, durationNanos: 1)
+
+        XCTAssertNil(manager.selected.activity.outcome, "active-tab finishes need no chrome")
+    }
+
+    func testProgressReportSurvivesSelection() {
+        let manager = TerminalManager()
+        let first = manager.sessions[0]
+        manager.newTerminal()
+
+        first.terminalDidReportProgress(state: .set, percent: 30)
+        manager.select(first)
+
+        XCTAssertEqual(
+            first.activity.progress, .percent(30),
+            "progress is a hint, not attention — selection must not clear it"
+        )
+    }
+
     func testSelectByIndexIgnoresOutOfRange() {
         let manager = TerminalManager()
         manager.newTerminal()
