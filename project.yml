@@ -33,6 +33,16 @@ targets:
         excludes:
           - Resources/**
       - path: Sources/Helm/Resources
+        excludes:
+          - ghostty/**
+        buildPhase: resources
+      # The vendored ghostty shell-integration tree (docs/VENDORED.md) as a
+      # FOLDER reference: xcodegen's per-file resources phase would flatten
+      # the hierarchy (and drop zsh's hidden .zshenv); a folder reference
+      # copies `ghostty/` into Resources verbatim, matching SPM's
+      # `.copy("Resources/ghostty")`.
+      - path: Sources/Helm/Resources/ghostty
+        type: folder
         buildPhase: resources
     dependencies:
       - package: libghostty-spm
