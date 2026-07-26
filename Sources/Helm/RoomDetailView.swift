@@ -21,7 +21,6 @@ struct RoomDetailView: View {
     @State private var sending = false
     @State private var postError: String?
     @State private var copiedRoomID = false
-    @FocusState private var composerFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -164,14 +163,10 @@ struct RoomDetailView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if !readOnly {
-                        Button("Resolve…") {
-                            // Pre-fill only — the human completes the note and sends.
-                            // The resolution is just a post; the engine owns the ledger.
-                            draft = "resolved[\(decision.key)]: "
-                            composerFocused = true
-                        }
-                    }
+                    // No resolve affordance here on purpose — the answer
+                    // primitive is parked (see docs/ui-plan.md 2026-07-25).
+                    // Resolving stays a plain `resolved[key]: …` post in the
+                    // composer; the engine owns the ledger.
                 }
             }
         }
@@ -350,7 +345,6 @@ struct RoomDetailView: View {
                 TextField("Post to the room as human — @name to address", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
-                    .focused($composerFocused)
                     .onSubmit(send)
                     .disabled(sending)
                 Button(action: send) {
