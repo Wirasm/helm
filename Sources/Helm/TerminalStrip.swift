@@ -101,6 +101,13 @@ private struct TerminalTab: View {
                 Image(systemName: "poweroff")
                     .font(.system(size: 8))
                     .foregroundStyle(.tertiary)
+            } else if session.hasBell, !isSelected {
+                // Bell from an inactive tab (BEL — e.g. an agent asking for
+                // attention). Cleared when the tab is selected.
+                Circle()
+                    .fill(.orange)
+                    .frame(width: 5, height: 5)
+                    .accessibilityLabel("Bell")
             }
             Text(session.displayTitle)
                 .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))

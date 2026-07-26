@@ -65,10 +65,34 @@ struct HelmApp: App {
         // them). A local monitor runs before any view's key handling, so these
         // always win; consumed keys (return nil) never reach the pty.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-                  let key = event.charactersIgnoringModifiers
-            else { return event }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard let key = event.charactersIgnoringModifiers else { return event }
+            // ⌘⇧= is how ⌘+ is actually typed (charactersIgnoringModifiers
+            // keeps shift applied); everything else requires bare ⌘.
+            if flags == [.command, .shift], key == "+" {
+                NotificationCenter.default.post(
+                    name: .helmAdjustFontSize, object: FontSizeStep.increase.rawValue
+                )
+                return nil
+            }
+            guard flags == .command else { return event }
             switch key {
+            // ⌘+/⌘-/⌘0 — per-terminal font zoom on the selected terminal.
+            case "=", "+":
+                NotificationCenter.default.post(
+                    name: .helmAdjustFontSize, object: FontSizeStep.increase.rawValue
+                )
+                return nil
+            case "-":
+                NotificationCenter.default.post(
+                    name: .helmAdjustFontSize, object: FontSizeStep.decrease.rawValue
+                )
+                return nil
+            case "0":
+                NotificationCenter.default.post(
+                    name: .helmAdjustFontSize, object: FontSizeStep.reset.rawValue
+                )
+                return nil
             // ⌘T — toggle the two faces (terminal workspace ⇄ kild view).
             case "t":
                 NotificationCenter.default.post(name: .helmToggleView, object: nil)
@@ -127,6 +151,25 @@ struct HelmApp: App {
                     NotificationCenter.default.post(name: .helmOpenArtifact, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: .command)
+                Divider()
+                Button("Increase Font Size") {
+                    NotificationCenter.default.post(
+                        name: .helmAdjustFontSize, object: FontSizeStep.increase.rawValue
+                    )
+                }
+                .keyboardShortcut("+", modifiers: .command)
+                Button("Decrease Font Size") {
+                    NotificationCenter.default.post(
+                        name: .helmAdjustFontSize, object: FontSizeStep.decrease.rawValue
+                    )
+                }
+                .keyboardShortcut("-", modifiers: .command)
+                Button("Reset Font Size") {
+                    NotificationCenter.default.post(
+                        name: .helmAdjustFontSize, object: FontSizeStep.reset.rawValue
+                    )
+                }
+                .keyboardShortcut("0", modifiers: .command)
             }
         }
     }
@@ -151,4 +194,7 @@ extension Notification.Name {
     static let helmSelectTerminal = Notification.Name("helmSelectTerminal")
     /// ⌘O — the artifact pane presents its open panel.
     static let helmOpenArtifact = Notification.Name("helmOpenArtifact")
+    /// ⌘+/⌘-/⌘0 — object is a `FontSizeStep` raw value; the terminal
+    /// workspace applies it to the selected terminal.
+    static let helmAdjustFontSize = Notification.Name("helmAdjustFontSize")
 }

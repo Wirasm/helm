@@ -49,6 +49,12 @@ final class TerminalSession: ObservableObject, Identifiable {
     @Published private(set) var status: Status = .starting
     /// Terminal title (OSC 0/2 from the shell).
     @Published private(set) var title: String = ""
+    /// An inactive tab's shell rang the bell (BEL) — the tab strip shows a dot
+    /// until the tab is selected. Bells on the visible tab are not marked.
+    @Published private(set) var hasBell = false
+
+    /// Set by TerminalManager so bell events can check the live selection.
+    weak var manager: TerminalManager?
 
     /// Tab-strip label: the shell-reported title, or "shell N" until one arrives.
     var displayTitle: String {
@@ -85,26 +91,142 @@ final class TerminalSession: ObservableObject, Identifiable {
 
     /// Ghostty config for helm. Factored out so the non-GUI smoke test can
     /// exercise ghostty_init + config load + app create without a window.
+    ///
+    /// Precedence (full story in GhosttyConfig.swift): the user's own Ghostty
+    /// config is the base when one exists and validates, helm's required
+    /// overrides land after it; otherwise helm's defaults apply.
     static func makeController() -> TerminalController {
-        TerminalController { builder in
-            // The prebuilt xcframework ships headers + static lib only — no
-            // terminfo. Ghostty's default TERM=xterm-ghostty breaks TUIs on
-            // machines without Ghostty.app's terminfo installed, so pin the
-            // universally available entry.
-            builder.withCustom("term", "xterm-256color")
+        GhosttyResources.installIfAvailable()
+        return makeController(userConfig: validatedUserConfig)
+    }
+
+    static func makeController(userConfig: String?) -> TerminalController {
+        if let userConfig {
+            // User config as the base; only the required overrides after it.
+            // Theme stays empty so the user's colors (incl. `theme =
+            // light:…,dark:…`, which ghostty itself re-resolves on
+            // setColorScheme) are never stomped by helm's.
+            return TerminalController(
+                configSource: .generated(userConfig),
+                theme: TerminalTheme(),
+                terminalConfiguration: requiredOverrides
+            )
         }
+        return TerminalController(
+            configSource: .generated(defaultConfiguration.rendered),
+            theme: defaultTheme,
+            terminalConfiguration: requiredOverrides
+        )
+    }
+
+    /// Overrides helm applies AFTER any base config (ghostty's last-value-wins
+    /// rule). `term`: the embedded xcframework ships no terminfo, so ghostty's
+    /// default TERM=xterm-ghostty breaks TUIs on machines without Ghostty.app's
+    /// terminfo installed (and over ssh regardless) — pin the universal entry.
+    static let requiredOverrides = TerminalConfiguration { builder in
+        builder.withCustom("term", "xterm-256color")
+    }
+
+    /// Helm's own defaults, used only when the user has no Ghostty config:
+    /// 13pt mono with a taller cell for breathing room, modest padding, and
+    /// scrollback sized for agent transcripts (bytes, allocated lazily by
+    /// ghostty). Font family is left unset on purpose — libghostty falls back
+    /// to its embedded JetBrains Mono, which beats anything named blindly.
+    static let defaultConfiguration = TerminalConfiguration { builder in
+        builder.withFontSize(13)
+        builder.withFontThicken(true)
+        builder.withCursorStyle(.block)
+        builder.withCursorStyleBlink(true)
+        builder.withCustom("adjust-cell-height", "15%")
+        builder.withWindowPaddingX(8)
+        builder.withWindowPaddingY(4)
+        builder.withCustom("scrollback-limit", "104857600") // 100 MiB
+    }
+
+    /// Light/dark colors following helm's appearance override — the wrapper's
+    /// NSView observes effectiveAppearance and re-resolves the theme itself,
+    /// so NSApp.appearance changes re-theme live terminals with no helm code.
+    static let defaultTheme = TerminalTheme(
+        light: TerminalConfiguration { builder in
+            builder.withBackground("#ffffff")
+            builder.withForeground("#1f2328")
+            // Raw string, not withMinimumContrast: the wrapper renders Double
+            // values via a locale-sensitive formatter, which produces "1,2"
+            // under comma-decimal locales — a hard ghostty config error.
+            builder.withCustom("minimum-contrast", "1.2")
+        },
+        dark: TerminalConfiguration { builder in
+            builder.withBackground("#22262c")
+            builder.withForeground("#e8eaed")
+        }
+    )
+
+    /// The user's Ghostty config, loaded and validated once per process.
+    /// Validation matters because the wrapper hard-rejects any config with
+    /// diagnostics (e.g. `theme = <name>` with no resources dir to resolve
+    /// it) — a rejected config is dropped whole, with a logged warning and
+    /// helm defaults instead: a terminal that opens beats a faithfully
+    /// broken one.
+    static let validatedUserConfig: String? = {
+        guard let contents = GhosttyUserConfig.load() else { return nil }
+        guard validateUserConfig(contents) else {
+            NSLog("helm: user ghostty config rejected by ghostty — using helm defaults instead")
+            return nil
+        }
+        return contents
+    }()
+
+    /// Probe-loads a config through a throwaway controller. Empty theme +
+    /// empty overrides make the probe strict: any diagnostic stays visible in
+    /// `lastConfigurationIssue` instead of being cleared by a later
+    /// successful re-render (which the wrapper does whenever overrides or a
+    /// theme are layered on).
+    static func validateUserConfig(_ contents: String) -> Bool {
+        let probe = TerminalController(
+            configSource: .generated(contents),
+            theme: TerminalTheme(),
+            terminalConfiguration: TerminalConfiguration()
+        )
+        return probe.lastConfigurationIssue == nil
     }
 
     var configIssue: String? {
         controller.lastConfigurationIssue
     }
+
+    /// ⌘+/⌘-/⌘0 on the selected terminal. Uses ghostty's own binding actions
+    /// (`increase_font_size:1`, …) on the live surface — a true runtime
+    /// change: the grid reflows in place, no config reload, the pty is
+    /// untouched. Per-surface, so each tab keeps its own zoom. No-op until
+    /// the surface exists (before first attach / after exit).
+    func adjustFontSize(_ step: FontSizeStep) {
+        switch step {
+        case .increase: hostView.performBindingAction("increase_font_size:1")
+        case .decrease: hostView.performBindingAction("decrease_font_size:1")
+        case .reset: hostView.performBindingAction("reset_font_size")
+        }
+    }
+
+    /// Called by the manager when this session becomes selected.
+    func clearBell() {
+        if hasBell { hasBell = false }
+    }
+}
+
+/// Direction of a per-terminal font zoom (⌘+ / ⌘- / ⌘0). The notification
+/// carries the raw value, mirroring how ⌘1–⌘9 carry the tab index.
+enum FontSizeStep: Int {
+    case decrease = -1
+    case reset = 0
+    case increase = 1
 }
 
 // The wrapper reports surface events through fine-grained delegate protocols;
 // we sink the ones helm needs into published state.
 extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     TerminalSurfaceCloseDelegate,
-    TerminalSurfaceTitleDelegate
+    TerminalSurfaceTitleDelegate,
+    TerminalSurfaceBellDelegate
 {
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
         if status == .starting { status = .running }
@@ -121,6 +243,13 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
 
     func terminalDidChangeTitle(_ title: String) {
         self.title = title
+    }
+
+    func terminalDidRingBell() {
+        // Only inactive tabs get marked — a bell on the tab the user is
+        // looking at needs no indicator (and would linger stale otherwise).
+        guard manager?.selectedID != id else { return }
+        hasBell = true
     }
 }
 
@@ -152,6 +281,7 @@ final class TerminalManager: ObservableObject {
         nextOrdinal += 1
         sessions = [first]
         selectedID = first.id
+        first.manager = self
     }
 
     var selected: TerminalSession {
@@ -169,19 +299,27 @@ final class TerminalManager: ObservableObject {
     func newTerminal() {
         let session = TerminalSession(ordinal: nextOrdinal)
         nextOrdinal += 1
+        session.manager = self
         sessions.append(session)
-        selectedID = session.id
+        setSelected(session)
     }
 
     func select(_ session: TerminalSession) {
         guard sessions.contains(where: { $0.id == session.id }) else { return }
-        selectedID = session.id
+        setSelected(session)
     }
 
     /// ⌘1–⌘9: select by 0-based tab position; out-of-range is a no-op.
     func select(index: Int) {
         guard sessions.indices.contains(index) else { return }
-        selectedID = sessions[index].id
+        setSelected(sessions[index])
+    }
+
+    /// Selection always clears the incoming tab's bell mark — looking at a
+    /// terminal acknowledges its bell.
+    private func setSelected(_ session: TerminalSession) {
+        selectedID = session.id
+        session.clearBell()
     }
 
     /// Closes the tab AND its shell: removing the session drops the last strong
@@ -193,7 +331,7 @@ final class TerminalManager: ObservableObject {
         else { return }
         sessions.remove(at: index)
         if selectedID == session.id {
-            selectedID = sessions[min(index, sessions.count - 1)].id
+            setSelected(sessions[min(index, sessions.count - 1)])
         }
     }
 }

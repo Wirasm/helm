@@ -70,7 +70,9 @@ title/close/bell/pwd/OSC events, and an `.exec` backend flag that maps to
   `TERM=xterm-ghostty` breaks TUIs on machines without Ghostty.app installed. Fixed
   with config `term = xterm-256color`. Same gap: no bundled shell-integration
   resources, so OSC-133 prompt features (jumpToPrompt, command-finished events) are
-  inert unless the user's shell emits markers itself.
+  inert unless the user's shell emits markers itself. (Softened later: when
+  Ghostty.app is installed, helm points GHOSTTY_RESOURCES_DIR at its resources —
+  shell-integration scripts and named themes light up; see GhosttyConfig.swift.)
 - **Do NOT use the wrapper's `TerminalSurfaceView`/`TerminalViewState` SwiftUI path**
   for the main pane: its representable creates the NSView per mount, so a SwiftUI
   dismantle deallocs the view → coordinator → surface → pty dies. App-level NSView

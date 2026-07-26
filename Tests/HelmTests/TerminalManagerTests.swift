@@ -81,6 +81,29 @@ final class TerminalManagerTests: XCTestCase {
         XCTAssertEqual(manager.selectedID, second.id)
     }
 
+    func testBellOnInactiveTabMarksAndSelectionClears() {
+        let manager = TerminalManager()
+        let first = manager.sessions[0]
+        manager.newTerminal() // selection moves to the new tab
+
+        first.terminalDidRingBell()
+        XCTAssertTrue(first.hasBell, "bell on an inactive tab must mark it")
+
+        manager.select(first)
+        XCTAssertFalse(first.hasBell, "selecting the tab acknowledges the bell")
+    }
+
+    func testBellOnSelectedTabIsNotMarked() {
+        let manager = TerminalManager()
+
+        manager.selected.terminalDidRingBell()
+
+        XCTAssertFalse(
+            manager.selected.hasBell,
+            "the visible tab needs no indicator (and it would linger stale)"
+        )
+    }
+
     func testSelectByIndexIgnoresOutOfRange() {
         let manager = TerminalManager()
         manager.newTerminal()
