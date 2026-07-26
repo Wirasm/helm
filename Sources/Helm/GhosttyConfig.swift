@@ -21,17 +21,40 @@ import GhosttyTerminal
 // dropped WHOLE with a logged warning and helm falls back to its defaults —
 // a terminal that opens always beats a faithfully-broken one.
 
-/// Points the embedded libghostty at a Ghostty.app resources directory when
-/// one is installed. The xcframework is headers + static lib only; the
-/// resources dir is what provides shell-integration scripts (OSC 133 prompt
-/// marks → jump-to-prompt, command-finished events) and named themes, so
-/// borrowing an installed Ghostty.app's copy lights those up for free.
+/// Points the embedded libghostty at a resources directory providing the
+/// shell-integration scripts (OSC 133 prompt marks → ⌘↑/⌘↓ jump-to-prompt,
+/// command-finished events, OSC 7 pwd) — the xcframework itself is headers +
+/// static lib only. Helm BUNDLES the script tree, vendored from the ghostty
+/// source at the exact commit the embed was built from (docs/VENDORED.md), so
+/// integration works with nothing installed; an installed Ghostty.app's copy
+/// is only the fallback (it additionally provides named themes, which the
+/// bundle deliberately does not carry).
 @MainActor
 enum GhosttyResources {
     private static var installAttempted = false
 
-    /// Candidate resources directories, in order. A directory qualifies only
-    /// if it actually contains the shell-integration payload.
+    /// The vendored `ghostty/` resources dir inside helm's own bundle —
+    /// first choice. Qualifies only if the shell-integration payload made it
+    /// into the build (both manifests must carry it; see docs/VENDORED.md).
+    static func bundledPath() -> String? {
+        // SPM builds (swift run/test) resolve resources via Bundle.module;
+        // the XcodeGen .app carries them in the main bundle.
+        #if SWIFT_PACKAGE
+        let bundle = Bundle.module
+        #else
+        let bundle = Bundle.main
+        #endif
+        guard let resources = bundle.resourceURL else { return nil }
+        let path = resources.appendingPathComponent("ghostty", isDirectory: true).path
+        guard FileManager.default.fileExists(atPath: path + "/shell-integration") else {
+            return nil
+        }
+        return path
+    }
+
+    /// Fallback candidates: an installed Ghostty.app's resources, in order.
+    /// A directory qualifies only if it actually contains the
+    /// shell-integration payload.
     static func candidatePaths(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String] {
         [
             "/Applications/Ghostty.app/Contents/Resources/ghostty",
@@ -40,14 +63,18 @@ enum GhosttyResources {
     }
 
     /// Sets GHOSTTY_RESOURCES_DIR (respecting an existing value) before the
-    /// first ghostty controller is created. Safe to call repeatedly; only the
-    /// first call does work. Version skew between an installed Ghostty.app's
-    /// scripts and the pinned embed is accepted — the shell-integration
-    /// protocol (OSC 133/7) is stable across releases.
+    /// first ghostty controller is created: bundled copy first, Ghostty.app
+    /// borrow as fallback. Safe to call repeatedly; only the first call does
+    /// work. Version skew on the fallback path is accepted — the
+    /// shell-integration protocol (OSC 133/7) is stable across releases.
     static func installIfAvailable() {
         guard !installAttempted else { return }
         installAttempted = true
         guard getenv("GHOSTTY_RESOURCES_DIR") == nil else { return }
+        if let bundled = bundledPath() {
+            setenv("GHOSTTY_RESOURCES_DIR", bundled, 1)
+            return
+        }
         for path in candidatePaths()
             where FileManager.default.fileExists(atPath: path + "/shell-integration")
         {

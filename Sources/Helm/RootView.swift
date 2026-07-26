@@ -92,6 +92,12 @@ struct TerminalWorkspace: View {
             else { return }
             manager.selected.adjustFontSize(step)
         }
+        // ⌘↑/⌘↓ — jump between shell prompts on the selected terminal (same
+        // isActive gating as the font keys).
+        .onReceive(NotificationCenter.default.publisher(for: .helmJumpToPrompt)) { note in
+            guard isActive, let offset = note.object as? Int else { return }
+            manager.selected.jumpToPrompt(by: offset)
+        }
     }
 }
 

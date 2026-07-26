@@ -33,6 +33,12 @@ let package = Package(
                 // resources phase.
                 .copy("Resources/mermaid.min.js"),
                 .copy("Resources/marked.min.js"),
+                // Ghostty shell-integration script tree (bash/zsh/fish/…),
+                // vendored at the embed's exact source commit — provenance in
+                // docs/VENDORED.md. Copied as a directory so the hierarchy
+                // (and zsh's hidden .zshenv) survives; GhosttyResources points
+                // GHOSTTY_RESOURCES_DIR at the bundled `ghostty/` dir.
+                .copy("Resources/ghostty"),
             ]
         ),
         // Non-GUI smoke: ghostty_init + config load + app create, no window.

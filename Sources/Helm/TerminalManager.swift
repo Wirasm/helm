@@ -52,6 +52,11 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// An inactive tab's shell rang the bell (BEL) — the tab strip shows a dot
     /// until the tab is selected. Bells on the visible tab are not marked.
     @Published private(set) var hasBell = false
+    /// Command-activity chrome: live OSC 9;4 progress plus the
+    /// finished-command tick/mark for inactive tabs (rules and formatting in
+    /// TerminalCapabilities.swift). The strip renders it; selection
+    /// acknowledges the outcome mark, bell keeps display precedence.
+    @Published private(set) var activity = TerminalActivity()
 
     /// Set by TerminalManager so bell events can check the live selection.
     weak var manager: TerminalManager?
@@ -207,9 +212,19 @@ final class TerminalSession: ObservableObject, Identifiable {
         }
     }
 
-    /// Called by the manager when this session becomes selected.
-    func clearBell() {
+    /// ⌘↑/⌘↓ — ghostty's `jump_to_prompt` scroll on the live surface
+    /// (negative = older prompts). Only moves where shell integration has
+    /// left OSC 133 prompt marks; in agent sessions each turn's prompt is a
+    /// mark, so this is jump-between-turns. No-op without a surface.
+    func jumpToPrompt(by offset: Int) {
+        hostView.jumpToPrompt(by: Int16(clamping: offset))
+    }
+
+    /// Called by the manager when this session becomes selected: looking at
+    /// a terminal acknowledges its bell and its finished-command mark.
+    func acknowledgeAttention() {
         if hasBell { hasBell = false }
+        if activity.outcome != nil { activity.acknowledge() }
     }
 }
 
@@ -226,7 +241,12 @@ enum FontSizeStep: Int {
 extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     TerminalSurfaceCloseDelegate,
     TerminalSurfaceTitleDelegate,
-    TerminalSurfaceBellDelegate
+    TerminalSurfaceBellDelegate,
+    TerminalSurfaceOpenURLDelegate,
+    TerminalSurfaceHoverLinkDelegate,
+    TerminalSurfaceProgressReportDelegate,
+    TerminalSurfaceCommandFinishedDelegate,
+    TerminalSurfaceDesktopNotificationDelegate
 {
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
         if status == .starting { status = .running }
@@ -250,6 +270,47 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
         // looking at needs no indicator (and would linger stale otherwise).
         guard manager?.selectedID != id else { return }
         hasBell = true
+    }
+
+    /// ⌘-click on a link in the grid. The allowlist (TerminalURLPolicy) is
+    /// the whole security story: terminal content is untrusted, so anything
+    /// but http/https/file/mailto is dropped silently.
+    func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
+        guard let validated = TerminalURLPolicy.validated(url) else { return }
+        NSWorkspace.shared.open(validated)
+    }
+
+    /// Hover feedback for ⌘-clickable links: ghostty renders the underline
+    /// itself; helm adds the destination as the view's tooltip so the user
+    /// can see where a ⌘-click would go. nil = hover ended.
+    func terminalDidUpdateHoverLink(_ url: String?) {
+        hostView.toolTip = url
+    }
+
+    func terminalDidReportProgress(state: TerminalProgressState, percent: Int?) {
+        activity.reportProgress(state: state, percent: percent)
+    }
+
+    func terminalDidFinishCommand(exitCode: Int?, durationNanos: UInt64) {
+        activity.finishCommand(
+            exitCode: exitCode,
+            durationNanos: durationNanos,
+            isSelected: manager?.selectedID == id
+        )
+    }
+
+    /// OSC 9 / OSC 777 desktop notification. Delivered only when helm is in
+    /// the background or the tab is unselected; title is the tab's, body is
+    /// the message (OSC 9 carries only a body — fall back to the sequence's
+    /// title so neither form delivers an empty banner).
+    func terminalDidRequestDesktopNotification(title: String, body: String) {
+        guard TerminalNotificationGate.shouldDeliver(
+            appIsActive: NSApp.isActive,
+            tabIsSelected: manager?.selectedID == id
+        ) else { return }
+        let message = body.isEmpty ? title : body
+        guard !message.isEmpty else { return }
+        TerminalNotifier.shared.deliver(title: displayTitle, body: message)
     }
 }
 
@@ -315,11 +376,11 @@ final class TerminalManager: ObservableObject {
         setSelected(sessions[index])
     }
 
-    /// Selection always clears the incoming tab's bell mark — looking at a
-    /// terminal acknowledges its bell.
+    /// Selection always clears the incoming tab's bell and finished-command
+    /// marks — looking at a terminal acknowledges its attention state.
     private func setSelected(_ session: TerminalSession) {
         selectedID = session.id
-        session.clearBell()
+        session.acknowledgeAttention()
     }
 
     /// Closes the tab AND its shell: removing the session drops the last strong

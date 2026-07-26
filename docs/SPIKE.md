@@ -70,9 +70,11 @@ title/close/bell/pwd/OSC events, and an `.exec` backend flag that maps to
   `TERM=xterm-ghostty` breaks TUIs on machines without Ghostty.app installed. Fixed
   with config `term = xterm-256color`. Same gap: no bundled shell-integration
   resources, so OSC-133 prompt features (jumpToPrompt, command-finished events) are
-  inert unless the user's shell emits markers itself. (Softened later: when
-  Ghostty.app is installed, helm points GHOSTTY_RESOURCES_DIR at its resources —
-  shell-integration scripts and named themes light up; see GhosttyConfig.swift.)
+  inert unless the user's shell emits markers itself. (Closed later: helm now
+  VENDORS ghostty's shell-integration script tree at the embed's exact source
+  commit — docs/VENDORED.md — and points GHOSTTY_RESOURCES_DIR at the bundled
+  copy first; an installed Ghostty.app's resources are only the fallback, which
+  additionally provides named themes. See GhosttyConfig.swift.)
 - **Do NOT use the wrapper's `TerminalSurfaceView`/`TerminalViewState` SwiftUI path**
   for the main pane: its representable creates the NSView per mount, so a SwiftUI
   dismantle deallocs the view → coordinator → surface → pty dies. App-level NSView
@@ -134,3 +136,27 @@ xterm.js-in-WKWebView, termwiz, rio/sugarloaf, libvterm. Ranking for a Swift hos
 
 The `TerminalPane` interface (spawn shell, feed input, resize, survive toggle) is the
 seam that keeps all of these swappable.
+
+## Kitty graphics verification (harness only — no feature code)
+
+Whether the embedded libghostty renders the kitty graphics protocol (APC `ESC _ G …`)
+inside helm is unverified — ghostty proper supports it, but the answer for the
+embed's render path has to come from a human looking at a helm terminal. The check
+is `tools/kitty-icat-test.sh`: a self-contained script (embedded base64 PNG, no
+dependencies) that emits a 32x32 four-color square via a single
+`ESC _ G f=100,a=T ; <base64> ESC \` transmit-and-display sequence.
+
+Run it inside a helm terminal:
+
+```sh
+sh tools/kitty-icat-test.sh
+```
+
+- **Colored square between the marker lines** → kitty graphics work in the embed;
+  tools like `kitty +kitten icat`, `timg -pk`, and agent image output are viable.
+- **Nothing between the markers** → the surface consumed the APC but did not render
+  it: protocol parsed, graphics not implemented/enabled in the embed's renderer.
+- **Raw base64 garbage on screen** → the APC was not consumed at all.
+
+Record the observed outcome here when a human runs it. Same square in Ghostty.app
+or kitty makes a good positive control.
