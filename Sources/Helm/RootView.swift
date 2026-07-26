@@ -82,6 +82,16 @@ struct TerminalWorkspace: View {
         .onReceive(NotificationCenter.default.publisher(for: .helmOpenArtifact)) { _ in
             showBrowser.toggle()
         }
+        // ⌘+/⌘-/⌘0 — font zoom on the selected terminal. Gated on isActive so
+        // the keys are inert while the kild face is frontmost (both faces stay
+        // mounted, so this receiver is always live).
+        .onReceive(NotificationCenter.default.publisher(for: .helmAdjustFontSize)) { note in
+            guard isActive,
+                  let raw = note.object as? Int,
+                  let step = FontSizeStep(rawValue: raw)
+            else { return }
+            manager.selected.adjustFontSize(step)
+        }
     }
 }
 
