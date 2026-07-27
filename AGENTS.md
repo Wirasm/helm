@@ -11,8 +11,9 @@ know helm.
 - **The terminal is the center of attention** — never hidden, never swapped, never below
   comfort width. Esc is never intercepted globally (TUIs own it).
 - **ptys outlive everything**: TerminalManager owns sessions + NSViews app-level; views
-  are mounted, never recreated. One TerminalController per terminal (see the
-  TerminalManager header for why).
+  are mounted, never recreated. ONE shared TerminalController — one `ghostty_app_t` —
+  owned by TerminalManager, with a surface per terminal (see the TerminalManager
+  header; it depends on the vendored wakeup patch in `docs/VENDORED.md`).
 - **EngineClient is the single API surface** — no view fetches directly.
 - **Attention is a state of existing elements, never an added element**: chips change
   color, rows gain an edge, one indicator slot per tab with fixed precedence. No badges,

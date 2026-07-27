@@ -13,7 +13,18 @@ let package = Package(
         // Pinned EXACT on purpose: libghostty's embedding API is pre-1.0 and
         // changes between releases. Bump deliberately, re-reading the wrapper's
         // sources at the new tag — see docs/SPIKE.md.
-        .package(url: "https://github.com/Lakr233/libghostty-spm.git", exact: "1.3.1"),
+        //
+        // Currently a LOCAL PATH, not the upstream tag: helm runs ONE
+        // TerminalController with N surfaces, and upstream 1.3.1 cannot — its
+        // wakeup handlers are single slots that a second surface overwrites
+        // and any surface's teardown clears for everyone (TerminalManager's
+        // header has the full story). `scripts/patch-libghostty.sh` clones
+        // upstream at 1.3.1 into vendor/ (gitignored) and applies
+        // Patches/libghostty-spm-multi-surface-wakeup.patch; the pin is still
+        // exact, it is just expressed as tag + patch. docs/VENDORED.md records
+        // the retirement condition — go back to `exact:` the moment the patch
+        // is upstream, or to a fork URL + revision if it is not.
+        .package(path: "vendor/libghostty-spm"),
         // Hot reload for UI work — see docs/VENDORED.md. Both are DEBUG-only in
         // effect: InjectionNext compiles to nothing in release, Inject's
         // modifiers become no-ops. Kept permanently configured (upstream's own

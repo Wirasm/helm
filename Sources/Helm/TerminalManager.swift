@@ -4,8 +4,9 @@ import SwiftUI
 
 // MARK: - TerminalSession
 
-/// One terminal session: its own ghostty runtime (`TerminalController`) plus the
-/// single long-lived `AppTerminalView` whose coordinator owns the surface + pty.
+/// One terminal session: a surface on the manager's shared ghostty runtime,
+/// plus the single long-lived `AppTerminalView` whose coordinator owns that
+/// surface + its pty.
 ///
 /// Lifecycle contract (the load-bearing part, see docs/SPIKE.md): the surface is
 /// owned by the NSView's coordinator and is NOT destroyed on window detach —
@@ -15,18 +16,27 @@ import SwiftUI
 /// exists, so the shell survives any SwiftUI unmount/remount — tab switches,
 /// dock open/close, sidebar and artifact resizes, all of it.
 ///
-/// Why one controller PER session instead of one shared controller with N
-/// surfaces: the C API would allow the latter (Ghostty.app itself is one
-/// ghostty_app_t with many surfaces, and the wrapper's `createSurface` retains
-/// a bridge per surface), but the Swift wrapper is not safe for it — each
-/// view's `TerminalSurfaceCoordinator` claims `controller.onWakeup` /
-/// `shouldProcessWakeup` as SINGLE slots on (re)build and nils them on
-/// teardown (`TerminalSurfaceCoordinator.swift`: `rebuildIfReady` /
-/// `tearDownSurface`). Shared, the last-built surface would steal app wakeups
-/// and closing any tab would stall ticking for the survivors; the slots are
-/// `internal`, so we can't re-own them. One controller ↔ one view is the
-/// wrapper's tested pattern (its own test suite spins up multiple controllers
-/// per process; `ghostty_init` is once-guarded internally).
+/// Why the controller is INJECTED, never built here: one `TerminalController`
+/// is one `ghostty_app_t`, and Ghostty.app itself runs a single app runtime
+/// with many surfaces. Every tab carrying its own runtime made cost scale with
+/// tab count for nothing, so `TerminalManager` creates exactly one controller
+/// and hands the same instance to every session. Setting `view.controller`
+/// then makes the view's coordinator create a surface on the SHARED app.
+///
+/// This only became safe with the vendored wrapper's wakeup patch
+/// (Patches/libghostty-spm-multi-surface-wakeup.patch, docs/VENDORED.md).
+/// Upstream 1.3.1 held `onWakeup` / `shouldProcessWakeup` as single slots that
+/// each coordinator claimed on (re)build and nil'd on teardown, so a second
+/// surface stole app wakeups from the first and closing any tab stalled every
+/// survivor — both defects reproduced in the fork's test suite before the fix.
+/// The patch turns those slots into a registry keyed on callback-bridge
+/// identity: each coordinator subscribes on build, drops only its own entry on
+/// teardown, and `handleWakeup` ticks the app once and fans out. Do NOT revert
+/// to one controller per session without also reverting that pin.
+///
+/// One side effect worth knowing: `ghostty_app_tick` is app-wide, so any
+/// single attached surface now drives the runtime for every surface on it,
+/// including the ones SwiftUI has unmounted.
 @MainActor
 final class TerminalSession: ObservableObject, Identifiable {
     enum Status: Equatable {
@@ -71,11 +81,13 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// SwiftUI own its lifetime.
     let hostView: TerminalView
 
-    private let controller: TerminalController
+    /// The manager's shared ghostty runtime. Internal rather than private so
+    /// tests can assert every session holds the same instance.
+    let controller: TerminalController
 
-    init(ordinal: Int) {
+    init(ordinal: Int, controller: TerminalController) {
         self.ordinal = ordinal
-        controller = Self.makeController()
+        self.controller = controller
 
         let view = TerminalView(frame: .zero)
         view.controller = controller
@@ -89,6 +101,11 @@ final class TerminalSession: ObservableObject, Identifiable {
         hostView = view
 
         view.delegate = self
+        // A config failure is global now, not per-tab: the controller is
+        // shared, so every session reports the same issue and every pane shows
+        // the same placeholder. That is correct — the config IS the app's —
+        // but it means one bad key fails all tabs at once, not just the next
+        // one opened.
         if let issue = controller.lastConfigurationIssue {
             status = .failed(issue)
         }
@@ -392,6 +409,10 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
 /// - Sessions (and their NSViews + ptys) live exactly as long as their tab:
 ///   dropping the last reference here deallocs the view → coordinator →
 ///   surface, which is what actually kills the shell.
+/// - Every session shares this manager's ONE `TerminalController` — one
+///   `ghostty_app_t` for the whole app, N surfaces on it (see the
+///   TerminalSession header). It is owned here rather than globally so tests
+///   can build isolated managers without leaking runtime state between them.
 @MainActor
 final class TerminalManager: ObservableObject {
     static let shared = TerminalManager()
@@ -399,12 +420,16 @@ final class TerminalManager: ObservableObject {
     @Published private(set) var sessions: [TerminalSession]
     @Published private(set) var selectedID: TerminalSession.ID
 
+    /// The single ghostty runtime every session's surface is created on.
+    let controller: TerminalController
+
     private var nextOrdinal = 1
 
     /// Internal (not private) so tests can build isolated managers; the app
     /// itself only ever uses `.shared`.
     init() {
-        let first = TerminalSession(ordinal: nextOrdinal)
+        controller = TerminalSession.makeController()
+        let first = TerminalSession(ordinal: nextOrdinal, controller: controller)
         nextOrdinal += 1
         sessions = [first]
         selectedID = first.id
@@ -437,7 +462,7 @@ final class TerminalManager: ObservableObject {
 
     /// ⌘N / the strip's + button: a fresh login shell, appended and selected.
     func newTerminal() {
-        let session = TerminalSession(ordinal: nextOrdinal)
+        let session = TerminalSession(ordinal: nextOrdinal, controller: controller)
         nextOrdinal += 1
         session.manager = self
         sessions.append(session)
