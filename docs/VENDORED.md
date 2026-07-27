@@ -92,3 +92,46 @@ To bump: this tree moves ONLY together with the libghostty-spm pin. When the
 pin changes, read the new xcframework's embedded version string for the build
 commit, re-fetch `src/shell-integration/` at that commit, and update the
 commit + hashes here.
+
+## InjectionNext 2.0.1 + Inject 1.6.0 — hot reload (SPM, DEBUG only)
+
+Not vendored files but pinned SPM dependencies, recorded here for the same
+reason: both are exact pins wired into BOTH manifests, and both patch the
+running process, so a bump is a deliberate act.
+
+Together they let a recompiled Swift file be swapped into a LIVE helm without
+relaunching. That matters more here than in a normal app: helm owns its ptys
+in-process, so every relaunch kills whatever agent was running in the terminal.
+Injection touches only helm's own recompiled Swift — libghostty's binary
+xcframework, the Metal renderer and the shells beneath it are never swapped, so
+the terminals survive a UI edit.
+
+- **InjectionNext**: <https://github.com/johnno1962/InjectionNext>, exact 2.0.1
+  — loads the injection bundle and connects to the InjectionNext watcher. Its
+  code compiles to nothing in a release build. Supersedes InjectionIII and
+  HotReloading (both retired upstream).
+- **Inject**: <https://github.com/krzysztofzablocki/Inject>, exact 1.6.0 — the
+  SwiftUI half: `@ObserveInjection` + `.enableInjection()` force a redraw when
+  a swap lands. Release builds compile these to no-ops.
+- **Licenses**: MIT (InjectionNext, © John Holdsworth; Inject, © Krzysztof
+  Zabłocki).
+
+Wired in three places, keep them in lockstep:
+
+1. `Package.swift` — the two `.package(exact:)` pins, both products on the Helm
+   target, and `linkerSettings: [.unsafeFlags(["-Xlinker", "-interposable"],
+   .when(platforms: [.macOS], configuration: .debug))]`.
+2. `project.yml` — the same two pins under `packages:`, the same two products
+   under `dependencies:`, and `configs.Debug.OTHER_LDFLAGS` carrying the same
+   two flags. Release must NOT carry them.
+3. The views that opt in: `RootView`, `SidebarColumn`, `RoomDetailView`,
+   `ArtifactPane`, `TerminalStrip` each hold `@ObserveInjection private var
+   inject` and end their body with `.enableInjection()`. A view without those
+   two lines still compiles and runs — it just won't redraw on a swap.
+
+Interposing is what makes it work: the Debug linker emits indirect stubs that
+injection repoints. Without the flag, calls are direct and a swap does nothing.
+
+To use: run the InjectionNext watcher against this directory, then edit and save
+a file in `Sources/Helm/`. To bump: change the version in BOTH manifests
+together and re-run `xcodegen generate`.

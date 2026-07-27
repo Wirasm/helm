@@ -1,6 +1,6 @@
 import AppKit
+import Inject
 import SwiftUI
-
 /// The observe/steer column of the frame: engine health header, a collapsible
 /// Projects section (filter, not navigation), and the Live/History room list.
 /// Pure rendering over `KildStore` — RootView owns the store, the 5s poll, and
@@ -10,6 +10,10 @@ import SwiftUI
 /// Live/History tabs scrolls. The projects section scrolls internally when very
 /// tall, capped at ~40% of the column height.
 struct SidebarColumn: View {
+    /// Hot reload: `.enableInjection()` below redraws this view when
+    /// InjectionNext swaps a recompiled build of it into the running app.
+    /// Both are no-ops in release (docs/VENDORED.md).
+    @ObserveInjection private var inject
     @ObservedObject var store: KildStore
 
     // "Add project…" inline form.
@@ -38,6 +42,7 @@ struct SidebarColumn: View {
                 }
             }
         }
+        .enableInjection()
     }
 
     private var header: some View {

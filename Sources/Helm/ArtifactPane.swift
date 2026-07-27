@@ -1,6 +1,6 @@
 import AppKit
+import Inject
 import SwiftUI
-
 // MARK: - Model
 
 /// State for the read-only artifact pane: which file is open, its content, and
@@ -172,6 +172,10 @@ final class FileWatcher {
 /// The read-only artifact half of the terminal workspace split: a header
 /// (filename · reveal-in-Finder · close) over the rendered file.
 struct ArtifactPane: View {
+    /// Hot reload: `.enableInjection()` below redraws this view when
+    /// InjectionNext swaps a recompiled build of it into the running app.
+    /// Both are no-ops in release (docs/VENDORED.md).
+    @ObserveInjection private var inject
     @ObservedObject var model: ArtifactPaneModel
 
     var body: some View {
@@ -182,6 +186,9 @@ struct ArtifactPane: View {
                 content(for: document)
             }
             .background(Color(nsColor: .textBackgroundColor))
+            // Inside the `if`: the body is a bare ViewBuilder conditional with
+            // no else, so there is no single view to hang this on outside it.
+            .enableInjection()
         }
     }
 

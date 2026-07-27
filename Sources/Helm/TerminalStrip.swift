@@ -1,11 +1,15 @@
+import Inject
 import SwiftUI
-
 /// Tab strip across the top of the terminal face: one tab per shell session
 /// (title from the terminal's title delegate, "shell N" until one arrives),
 /// a + button (⌘N), and the artifact-browser button (⌘O) on the trailing edge.
 /// Selecting a tab swaps which session's NSView is mounted below — the other
 /// ptys keep running unmounted.
 struct TerminalStrip: View {
+    /// Hot reload: `.enableInjection()` below redraws this view when
+    /// InjectionNext swaps a recompiled build of it into the running app.
+    /// Both are no-ops in release (docs/VENDORED.md).
+    @ObserveInjection private var inject
     @ObservedObject var manager: TerminalManager
     /// The artifact pane the browser opens files into (also owns Recents).
     @ObservedObject var artifact: ArtifactPaneModel
@@ -82,6 +86,7 @@ struct TerminalStrip: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(.bar)
+        .enableInjection()
     }
 }
 
