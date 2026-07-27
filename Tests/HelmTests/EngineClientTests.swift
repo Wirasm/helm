@@ -86,8 +86,9 @@ final class EngineClientTests: XCTestCase {
                 "name": "fix-2247",
                 "state": "running",
                 "participants": [
-                  { "name": "worker", "persona": "implementor", "model": "sol-4" },
-                  { "name": "reviewer" }
+                  { "name": "worker", "persona": "implementor", "model": "sol-4",
+                    "idle": false, "posted": true },
+                  { "name": "reviewer", "kind": "attached", "idle": true }
                 ],
                 "worktree": "fix-2247",
                 "git": {
@@ -126,8 +127,12 @@ final class EngineClientTests: XCTestCase {
         // The wire says `persona` (vocabulary wave — no `agent` alias).
         XCTAssertEqual(room.participants[0].persona, "implementor")
         XCTAssertEqual(room.participants[0].model, "sol-4")
+        XCTAssertEqual(room.participants[0].idle, false)
+        XCTAssertEqual(room.participants[0].posted, true)
         XCTAssertNil(room.participants[1].persona)
         XCTAssertNil(room.participants[1].model)
+        XCTAssertEqual(room.participants[1].kind, "attached")
+        XCTAssertEqual(room.participants[1].idle, true)
 
         // Only unresolved decisions count as open.
         XCTAssertEqual(room.openDecisions.map(\.key), ["api-shape"])
@@ -142,6 +147,15 @@ final class EngineClientTests: XCTestCase {
         // Room identity: worktree name + the effective git dir (the filter key).
         XCTAssertEqual(room.worktree, "fix-2247")
         XCTAssertEqual(room.git?.path, "/Users/dev/.config/kild/worktrees/fix-2247")
+        XCTAssertEqual(room.git?.branch, "kild/fix-2247")
+        XCTAssertEqual(room.git?.base, "main")
+        XCTAssertEqual(room.git?.ahead, 1)
+        XCTAssertEqual(room.git?.behind, 0)
+        XCTAssertEqual(room.git?.dirty, false)
+        XCTAssertEqual(room.git?.uncommittedFiles, 0)
+        XCTAssertEqual(room.git?.changedFiles, ["a.swift"])
+        XCTAssertEqual(room.git?.conflictsWithBase, false)
+        XCTAssertNil(room.git?.error)
     }
 
     // MARK: project attribution (the room→project filter key)

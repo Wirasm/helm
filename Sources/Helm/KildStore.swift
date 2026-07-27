@@ -12,6 +12,11 @@ final class KildStore: ObservableObject {
         case history
     }
 
+    struct RoomCollision: Equatable {
+        let room: String
+        let files: [String]
+    }
+
     let engine: EngineClient
     /// Where the open-workspace list is persisted — injectable so tests never touch
     /// the operator's real defaults.
@@ -29,6 +34,9 @@ final class KildStore: ObservableObject {
     /// Local archive search. The engine already delivered the archive, so filtering
     /// names, participants, decisions and posts is immediate and needs no extra poll.
     @Published var historyQuery = ""
+    /// Participant disclosure state follows the active workspace and is persisted in
+    /// its existing context, so switching away and back restores the observed shape.
+    @Published var expandedRooms: Set<String> = []
     @Published private(set) var contexts: [String: WorkspaceContext]
     // A --room launch lands on History when the id isn't live at first load; the
     // load() pass below corrects the tab once data arrives (testability seam).
@@ -81,6 +89,28 @@ final class KildStore: ObservableObject {
         return searched.sorted { ($0.log.last?.ts ?? 0) > ($1.log.last?.ts ?? 0) }
     }
 
+    /// Other live rooms that changed the same committed-vs-base files. This mirrors
+    /// kild's operator collision semantics, but is computed here because the REST live
+    /// status carries `changedFiles`, not the operator-only `collidesWith` projection.
+    func collisions(for roomID: String) -> [RoomCollision] {
+        guard let room = rooms.first(where: { $0.id == roomID }),
+              room.git?.error == nil,
+              let changedFiles = room.git?.changedFiles
+        else { return [] }
+        let files = Set(changedFiles)
+        guard !files.isEmpty else { return [] }
+
+        return rooms.compactMap { other in
+            guard other.id != room.id,
+                  other.git?.error == nil,
+                  let otherFiles = other.git?.changedFiles
+            else { return nil }
+            let shared = files.intersection(otherFiles).sorted()
+            return shared.isEmpty ? nil : RoomCollision(room: other.name, files: shared)
+        }
+        .sorted { $0.room.localizedCaseInsensitiveCompare($1.room) == .orderedAscending }
+    }
+
     /// The dock's room tenant: the selection resolved against the SHOWN list, so
     /// a room hidden by the workspace filter yields the dock back to the artifact.
     var selectedRoom: EngineClient.LiveRoom? {
@@ -122,6 +152,7 @@ final class KildStore: ObservableObject {
         context.selectedRoomID = selection
         context.roomsTab = tab
         context.historyQuery = historyQuery
+        context.expandedRooms = expandedRooms
         context.openArtifactPath = artifact.document?.url.path
         contexts[workspace.path] = context
         WorkspaceContextStore.save(contexts, to: defaults)
@@ -132,6 +163,7 @@ final class KildStore: ObservableObject {
         selection = context.selectedRoomID
         tab = context.roomsTab
         historyQuery = context.historyQuery
+        expandedRooms = context.expandedRooms
     }
 
     func composerDraft(for roomID: String) -> String {
