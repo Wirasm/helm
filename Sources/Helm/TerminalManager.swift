@@ -97,55 +97,79 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// Ghostty config for helm. Factored out so the non-GUI smoke test can
     /// exercise ghostty_init + config load + app create without a window.
     ///
-    /// Precedence (full story in GhosttyConfig.swift): the user's own Ghostty
-    /// config is the base when one exists and validates, helm's required
-    /// overrides land after it; otherwise helm's defaults apply.
+    /// Precedence (full story in GhosttyConfig.swift): helm's defaults are the
+    /// BASE, the user's own Ghostty config layers on top of them, and helm's
+    /// session overrides land last. Having a Ghostty config therefore changes
+    /// only the keys it actually mentions — it no longer discards helm's tuning
+    /// wholesale, which is how a one-line keybind file used to cost a user the
+    /// cell height, padding and scrollback.
     static func makeController() -> TerminalController {
         GhosttyResources.installIfAvailable()
         return makeController(userConfig: validatedUserConfig)
     }
 
     static func makeController(userConfig: String?) -> TerminalController {
-        if let userConfig {
-            // User config as the base; only the required overrides after it.
-            // Theme stays empty so the user's colors (incl. `theme =
-            // light:…,dark:…`, which ghostty itself re-resolves on
-            // setColorScheme) are never stomped by helm's.
+        guard let userConfig else {
             return TerminalController(
-                configSource: .generated(userConfig),
-                theme: TerminalTheme(),
-                terminalConfiguration: requiredOverrides
+                configSource: .generated(defaultConfiguration.rendered),
+                theme: defaultTheme,
+                terminalConfiguration: sessionOverrides
             )
         }
+        // Helm's defaults first, the user's config after them: ghostty's
+        // last-value-wins rule makes every key they set win, and leaves the
+        // rest of helm's tuning standing.
+        //
+        // Theme stays empty whenever a user config exists, so their colors
+        // (incl. `theme = light:…,dark:…`, which ghostty re-resolves on
+        // setColorScheme) are never stomped by helm's — the theme is applied
+        // through a separate channel that would otherwise always win.
         return TerminalController(
-            configSource: .generated(defaultConfiguration.rendered),
-            theme: defaultTheme,
-            terminalConfiguration: requiredOverrides
+            configSource: .generated(defaultConfiguration.rendered + "\n" + userConfig),
+            theme: TerminalTheme(),
+            terminalConfiguration: sessionOverrides
         )
     }
 
-    /// Overrides helm applies AFTER any base config (ghostty's last-value-wins
-    /// rule). `term`: the embedded xcframework ships no terminfo, so ghostty's
-    /// default TERM=xterm-ghostty breaks TUIs on machines without Ghostty.app's
-    /// terminfo installed (and over ssh regardless) — pin the universal entry.
-    static let requiredOverrides = TerminalConfiguration { builder in
-        builder.withCustom("term", "xterm-256color")
+    /// What helm applies AFTER any base config (ghostty's last-value-wins
+    /// rule) — the two things helm must win, plus the one thing the human set
+    /// inside helm:
+    ///
+    /// - `term`: the embedded xcframework ships no terminfo, so ghostty's
+    ///   default TERM=xterm-ghostty breaks TUIs on machines without
+    ///   Ghostty.app's terminfo installed (and over ssh regardless).
+    /// - `scrollback-limit`: not taste but a job requirement — an agent
+    ///   transcript outruns a general-purpose terminal's default in minutes,
+    ///   and a Ghostty config tuned for shell work has no reason to know that.
+    /// - `font-size`: only once ⌘+/⌘- has been used. A size chosen inside helm
+    ///   is a more direct statement of intent than a config written months ago,
+    ///   so it outranks even the user config.
+    static var sessionOverrides: TerminalConfiguration {
+        let chosenFontSize = persistedFontSize
+        return TerminalConfiguration { builder in
+            builder.withCustom("term", "xterm-256color")
+            builder.withCustom("scrollback-limit", "104857600") // 100 MiB
+            if let chosenFontSize { builder.withFontSize(chosenFontSize) }
+        }
     }
 
-    /// Helm's own defaults, used only when the user has no Ghostty config:
-    /// 13pt mono with a taller cell for breathing room, modest padding, and
-    /// scrollback sized for agent transcripts (bytes, allocated lazily by
-    /// ghostty). Font family is left unset on purpose — libghostty falls back
-    /// to its embedded JetBrains Mono, which beats anything named blindly.
+    /// Helm's baseline font size — the size helm's first ⌘+ steps up from when
+    /// the user's config declares none of its own.
+    static let baseFontSize: Float = 13
+
+    /// Helm's own defaults: the BASE every terminal starts from, whether or not
+    /// the user has a Ghostty config. A taller cell for breathing room (agent
+    /// output is read, not just watched scroll past), modest padding. Font
+    /// family is left unset on purpose — libghostty falls back to its embedded
+    /// JetBrains Mono, which beats anything named blindly.
     static let defaultConfiguration = TerminalConfiguration { builder in
-        builder.withFontSize(13)
+        builder.withFontSize(baseFontSize)
         builder.withFontThicken(true)
         builder.withCursorStyle(.block)
         builder.withCursorStyleBlink(true)
         builder.withCustom("adjust-cell-height", "15%")
         builder.withWindowPaddingX(8)
         builder.withWindowPaddingY(4)
-        builder.withCustom("scrollback-limit", "104857600") // 100 MiB
     }
 
     /// Light/dark colors following helm's appearance override — the wrapper's
@@ -199,16 +223,58 @@ final class TerminalSession: ObservableObject, Identifiable {
         controller.lastConfigurationIssue
     }
 
-    /// ⌘+/⌘-/⌘0 on the selected terminal. Uses ghostty's own binding actions
-    /// (`increase_font_size:1`, …) on the live surface — a true runtime
-    /// change: the grid reflows in place, no config reload, the pty is
-    /// untouched. Per-surface, so each tab keeps its own zoom. No-op until
-    /// the surface exists (before first attach / after exit).
+    // MARK: - Font size
+
+    private static let fontSizeDefaultsKey = "helmTerminalFontSize"
+
+    /// The size the human picked with ⌘+/⌘-, or nil while they never have.
+    /// Persisting it is the whole point: ghostty's zoom actions live on the
+    /// surface, so without this every new tab and every relaunch silently
+    /// dropped back to the config's size.
+    static var persistedFontSize: Float? {
+        get {
+            guard UserDefaults.standard.object(forKey: fontSizeDefaultsKey) != nil else {
+                return nil
+            }
+            return Float(UserDefaults.standard.double(forKey: fontSizeDefaultsKey))
+        }
+        set {
+            guard let newValue else {
+                return UserDefaults.standard.removeObject(forKey: fontSizeDefaultsKey)
+            }
+            UserDefaults.standard.set(Double(newValue), forKey: fontSizeDefaultsKey)
+        }
+    }
+
+    /// The size a terminal opens at today: the human's choice, else whatever
+    /// their own config declares, else helm's baseline. Stepping from the
+    /// user's declared size matters — otherwise the first ⌘+ would jump from
+    /// their 16pt down to helm's 14.
+    static var effectiveFontSize: Float {
+        persistedFontSize ?? declaredUserFontSize ?? baseFontSize
+    }
+
+    /// `font-size` as declared by the user's own validated config, if at all.
+    static let declaredUserFontSize: Float? = validatedUserConfig
+        .flatMap(GhosttyUserConfig.declaredFontSize)
+
+    /// ⌘+/⌘-/⌘0 on the selected terminal. Two effects: ghostty's own binding
+    /// action reflows THIS surface in place (no config reload, pty untouched),
+    /// and the resulting size is persisted so every terminal opened afterwards
+    /// starts there. Already-open tabs keep the size they were created at —
+    /// ⌘0 clears the preference, and returns this surface to its own baseline.
+    /// No-op on the surface until it exists (before first attach / after exit).
     func adjustFontSize(_ step: FontSizeStep) {
         switch step {
-        case .increase: hostView.performBindingAction("increase_font_size:1")
-        case .decrease: hostView.performBindingAction("decrease_font_size:1")
-        case .reset: hostView.performBindingAction("reset_font_size")
+        case .increase:
+            Self.persistedFontSize = min(Self.effectiveFontSize + 1, 72)
+            hostView.performBindingAction("increase_font_size:1")
+        case .decrease:
+            Self.persistedFontSize = max(Self.effectiveFontSize - 1, 4)
+            hostView.performBindingAction("decrease_font_size:1")
+        case .reset:
+            Self.persistedFontSize = nil
+            hostView.performBindingAction("reset_font_size")
         }
     }
 
