@@ -92,6 +92,12 @@ struct HelmApp: App {
                 )
                 return nil
             }
+            // ⌘⇧O — open a folder as a workspace (⌘O is the artifact browser).
+            // Shift keeps the letter uppercase in charactersIgnoringModifiers.
+            if flags == [.command, .shift], key.lowercased() == "o" {
+                NotificationCenter.default.post(name: .helmOpenWorkspace, object: nil)
+                return nil
+            }
             guard flags == .command else { return event }
             switch key {
             // ⌘+/⌘-/⌘0 — per-terminal font zoom on the selected terminal.
@@ -170,6 +176,10 @@ struct HelmApp: App {
                     NotificationCenter.default.post(name: .helmOpenArtifact, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: .command)
+                Button("Open Workspace…") {
+                    NotificationCenter.default.post(name: .helmOpenWorkspace, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
                 Divider()
                 Button("Increase Font Size") {
                     NotificationCenter.default.post(
@@ -213,6 +223,9 @@ extension Notification.Name {
     static let helmSelectTerminal = Notification.Name("helmSelectTerminal")
     /// ⌘O — the artifact pane presents its open panel.
     static let helmOpenArtifact = Notification.Name("helmOpenArtifact")
+    /// ⌘⇧O — the sidebar presents the folder picker; the chosen folder becomes an
+    /// open workspace. No payload: the panel runs at the receiver.
+    static let helmOpenWorkspace = Notification.Name("helmOpenWorkspace")
     /// ⌘+/⌘-/⌘0 — object is a `FontSizeStep` raw value; the terminal
     /// workspace applies it to the selected terminal.
     static let helmAdjustFontSize = Notification.Name("helmAdjustFontSize")

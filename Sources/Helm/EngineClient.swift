@@ -1,8 +1,13 @@
 import Foundation
 
 /// Thin typed client for the kild engine's REST surface — the ONLY backend contract
-/// helm has. Reads (health, live rooms, archived rooms, projects, worktrees) plus
-/// steering actions: posting into a room and registering a project.
+/// helm has. Reads (health, live rooms, archived rooms, worktrees) plus one steering
+/// action: posting into a room.
+///
+/// The project REGISTRY is deliberately absent. helm's operating context is a
+/// `Workspace` — a folder it simply has open — and every endpoint it needs accepts an
+/// absolute `path` instead of a registered name. kild's registry still exists for the
+/// CLI and for agents (`kild project add`); helm just no longer presents it.
 struct EngineClient: Sendable {
     var baseURL = URL(string: "http://127.0.0.1:4517")!
     /// Injectable for tests (URLProtocol stubs); defaults to the shared session.
@@ -30,14 +35,7 @@ struct EngineClient: Sendable {
         let bootId: String
     }
 
-    /// A registered project — a directory agents work in (`~/.config/kild/projects.json`).
-    struct Project: Decodable, Identifiable, Hashable {
-        let name: String
-        let path: String
-        var id: String { name }
-    }
-
-    /// A kild-managed git worktree of one project's repo (`GET /api/worktrees?project=`).
+    /// A kild-managed git worktree of one project's repo (`GET /api/worktrees`).
     /// `worktree` is the room-facing worktree handle (the `kild/<worktree>` branch minus
     /// prefix) — the same value as `LiveRoom.worktree`, so helm uses one name for it on
     /// both types. The `/api/worktrees` wire still calls it `name` (kild rename pending);
@@ -171,30 +169,21 @@ struct EngineClient: Sendable {
         try await get("/api/rooms/archive")
     }
 
-    func projects() async throws -> [Project] {
-        try await get("/api/projects")
-    }
-
-    /// The project's kild worktrees — accepts a registered name or a raw path.
+    /// The kild worktrees of a REGISTERED project, by name. `/api/worktrees` takes an
+    /// explicit reference — `project` (a registry name) or `path` (an absolute dir),
+    /// never both and never neither (`resolveProjectRef`, engine `server.ts`). A raw
+    /// path passed here 404s as `unknown project: …`; use `worktrees(path:)` for a
+    /// folder helm merely has open.
     func worktrees(project: String) async throws -> [Worktree] {
         try await get("/api/worktrees", query: [URLQueryItem(name: "project", value: project)])
     }
 
-    /// Register a project directory with the engine. The engine validates (existing
-    /// directory, unique name) and rejects with its own `{error}` text, surfaced as
-    /// `Failure.engine` for inline display.
-    @discardableResult
-    func addProject(name: String, path: String) async throws -> Project {
-        struct Body: Encodable {
-            let name: String
-            let path: String
-        }
-        var request = URLRequest(url: baseURL.appending(path: "/api/projects"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(Body(name: name, path: path))
-        let (data, response) = try await urlSession.data(for: request)
-        return try decode(data, response)
+    /// The kild worktrees of an unregistered directory — the workspace path. The
+    /// engine 400s a relative path, and 400s a dir that is not a git repo at all;
+    /// both are legitimate for an arbitrary open folder, so callers treat a throw as
+    /// "no worktree matching available" rather than an error to surface.
+    func worktrees(path: String) async throws -> [Worktree] {
+        try await get("/api/worktrees", query: [URLQueryItem(name: "path", value: path)])
     }
 
     /// Post into a room as the human operator (no `from`/`sessionId` → the engine

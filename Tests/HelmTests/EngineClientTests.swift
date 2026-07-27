@@ -268,61 +268,13 @@ final class EngineClientTests: XCTestCase {
         XCTAssertNil(room.participants[1].resumeCommand)
     }
 
-    // MARK: projects
+    // MARK: worktrees (the workspace→worktree-room link)
 
-    func testProjectsDecoding() async throws {
-        StubURLProtocol.respond(
-            status: 200,
-            json: #"[{"name":"kild","path":"/Users/dev/kild"},{"name":"helm","path":"/Users/dev/helm"}]"#
-        )
-        let projects = try await client.projects()
-        XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/projects")
-        XCTAssertEqual(projects.map(\.name), ["kild", "helm"])
-        XCTAssertEqual(projects[0].path, "/Users/dev/kild")
-    }
-
-    func testAddProjectEncodesBodyAndDecodesReply() async throws {
-        StubURLProtocol.respond(status: 200, json: #"{"name":"kild","path":"/Users/dev/kild"}"#)
-
-        let project = try await client.addProject(name: "kild", path: "~/kild")
-
-        // The engine resolves `~/` and echoes the registered project back.
-        XCTAssertEqual(project, EngineClient.Project(name: "kild", path: "/Users/dev/kild"))
-        let request = try XCTUnwrap(StubURLProtocol.lastRequest)
-        XCTAssertEqual(request.httpMethod, "POST")
-        XCTAssertEqual(request.url?.path, "/api/projects")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-
-        let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
-        let payload = try XCTUnwrap(
-            try JSONSerialization.jsonObject(with: body) as? [String: Any]
-        )
-        XCTAssertEqual(payload["name"] as? String, "kild")
-        XCTAssertEqual(payload["path"] as? String, "~/kild")
-        XCTAssertEqual(payload.count, 2)
-    }
-
-    func testAddProjectSurfacesEngineRejectionText() async {
-        // Verbatim engine rejections: duplicate name / not a directory, both 400 {error}.
-        StubURLProtocol.respond(status: 400, json: #"{"error":"duplicate project name: kild"}"#)
-
-        do {
-            try await client.addProject(name: "kild", path: "/Users/dev/kild")
-            XCTFail("expected the engine rejection to throw")
-        } catch let failure as EngineClient.Failure {
-            XCTAssertEqual(failure, .engine("duplicate project name: kild"))
-        } catch {
-            XCTFail("unexpected error type: \(error)")
-        }
-    }
-
-    // MARK: worktrees (the project→worktree-room link)
+    private static let worktreesJSON =
+        #"[{"branch":"kild/fix-2247","path":"/Users/dev/.config/kild/worktrees/fix-2247","name":"fix-2247"}]"#
 
     func testWorktreesDecodingAndQueryEncoding() async throws {
-        StubURLProtocol.respond(
-            status: 200,
-            json: #"[{"branch":"kild/fix-2247","path":"/Users/dev/.config/kild/worktrees/fix-2247","name":"fix-2247"}]"#
-        )
+        StubURLProtocol.respond(status: 200, json: Self.worktreesJSON)
         let trees = try await client.worktrees(project: "kild")
         let url = try XCTUnwrap(StubURLProtocol.lastRequest?.url)
         XCTAssertEqual(url.path, "/api/worktrees")
@@ -330,6 +282,32 @@ final class EngineClientTests: XCTestCase {
         // Wire field `name` decodes into the unified `worktree` handle.
         XCTAssertEqual(trees.first?.worktree, "fix-2247")
         XCTAssertEqual(trees.first?.branch, "kild/fix-2247")
+    }
+
+    /// A workspace is an unregistered folder, so its worktrees are fetched under the
+    /// engine's OTHER reference key. `project=<a path>` would 404 — exactly one of
+    /// the two keys is sent, never both.
+    func testWorktreesByPathSendsPathQueryNotProject() async throws {
+        StubURLProtocol.respond(status: 200, json: Self.worktreesJSON)
+        let trees = try await client.worktrees(path: "/Users/dev/kild")
+        let url = try XCTUnwrap(StubURLProtocol.lastRequest?.url)
+        XCTAssertEqual(url.path, "/api/worktrees")
+        XCTAssertEqual(url.query, "path=/Users/dev/kild")
+        XCTAssertEqual(trees.first?.worktree, "fix-2247")
+    }
+
+    /// A folder that is no git repo legitimately 400s; the client surfaces the
+    /// engine's text and KildStore swallows it into "no worktree names".
+    func testWorktreesByPathSurfacesEngineRejection() async {
+        StubURLProtocol.respond(status: 400, json: #"{"error":"not a git repository"}"#)
+        do {
+            _ = try await client.worktrees(path: "/tmp/plain-folder")
+            XCTFail("expected the engine rejection to throw")
+        } catch let failure as EngineClient.Failure {
+            XCTAssertEqual(failure, .engine("not a git repository"))
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
     }
 
     func testHealthDecoding() async throws {
@@ -342,9 +320,11 @@ final class EngineClientTests: XCTestCase {
 
 // MARK: - URLProtocol stub
 
-/// Serves one canned response and captures the request (including its body, which
-/// URLSession delivers as a stream, not `httpBody`). XCTest runs methods serially,
-/// so lock-guarded statics are sufficient.
+/// Serves canned responses and captures the request (including its body, which
+/// URLSession delivers as a stream, not `httpBody`). A single catch-all response is
+/// enough for one-call tests; per-path responses let a multi-call flow like
+/// `KildStore.load()` be driven end to end. XCTest runs methods serially, so
+/// lock-guarded statics are sufficient.
 final class StubURLProtocol: URLProtocol {
     private struct Canned {
         let status: Int
@@ -353,6 +333,7 @@ final class StubURLProtocol: URLProtocol {
 
     private static let lock = NSLock()
     private nonisolated(unsafe) static var canned: Canned?
+    private nonisolated(unsafe) static var cannedByPath: [String: Canned] = [:]
     private nonisolated(unsafe) static var _lastRequest: URLRequest?
     private nonisolated(unsafe) static var _lastRequestBody: Data?
 
@@ -362,10 +343,18 @@ final class StubURLProtocol: URLProtocol {
         canned = Canned(status: status, body: Data(json.utf8))
     }
 
+    /// A response for one endpoint, taking precedence over the catch-all.
+    static func respond(path: String, status: Int, json: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        cannedByPath[path] = Canned(status: status, body: Data(json.utf8))
+    }
+
     static func reset() {
         lock.lock()
         defer { lock.unlock() }
         canned = nil
+        cannedByPath = [:]
         _lastRequest = nil
         _lastRequestBody = nil
     }
@@ -405,7 +394,7 @@ final class StubURLProtocol: URLProtocol {
         Self.lock.lock()
         Self._lastRequest = request
         Self._lastRequestBody = body
-        let canned = Self.canned
+        let canned = request.url.flatMap { Self.cannedByPath[$0.path] } ?? Self.canned
         Self.lock.unlock()
 
         guard let canned else {
