@@ -1,5 +1,5 @@
+import Inject
 import SwiftUI
-
 /// A live room, watched and steered: open decisions pinned on top, the full room log
 /// chronologically, and a composer that posts into the room as the human. Watch +
 /// steer only — every action here is an existing operator REST action; helm adds no
@@ -9,6 +9,10 @@ import SwiftUI
 /// banner, the decision ledger shows resolutions, and each participant chip offers
 /// its pi resume command (safe only for dead sessions — never `--session` a live one).
 struct RoomDetailView: View {
+    /// Hot reload: `.enableInjection()` below redraws this view when
+    /// InjectionNext swaps a recompiled build of it into the running app.
+    /// Both are no-ops in release (docs/VENDORED.md).
+    @ObserveInjection private var inject
     let room: EngineClient.LiveRoom
     let engine: EngineClient
     /// Archived (closed/halted) room: no composer, no resolve — watch only.
@@ -38,6 +42,7 @@ struct RoomDetailView: View {
                 composer
             }
         }
+        .enableInjection()
     }
 
     /// Live: only what needs the human now. Archived: the full ledger — what was

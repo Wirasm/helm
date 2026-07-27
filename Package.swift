@@ -14,6 +14,18 @@ let package = Package(
         // changes between releases. Bump deliberately, re-reading the wrapper's
         // sources at the new tag — see docs/SPIKE.md.
         .package(url: "https://github.com/Lakr233/libghostty-spm.git", exact: "1.3.1"),
+        // Hot reload for UI work — see docs/VENDORED.md. Both are DEBUG-only in
+        // effect: InjectionNext compiles to nothing in release, Inject's
+        // modifiers become no-ops. Kept permanently configured (upstream's own
+        // advice) so iterating never needs a manifest edit.
+        //
+        // Why this matters more for helm than for a normal app: a relaunch
+        // kills every pty, so a UI tweak costs whatever agent was running in
+        // the terminal. Injection patches the LIVE process — only helm's own
+        // recompiled Swift is swapped, libghostty's binary framework and the
+        // shells under it are never touched.
+        .package(url: "https://github.com/johnno1962/InjectionNext.git", exact: "2.0.1"),
+        .package(url: "https://github.com/krzysztofzablocki/Inject.git", exact: "1.6.0"),
     ],
     targets: [
         // The spike runs as a plain SPM executable (`swift run helm`) for fast iteration.
@@ -23,6 +35,8 @@ let package = Package(
             name: "Helm",
             dependencies: [
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+                .product(name: "InjectionNext", package: "InjectionNext"),
+                .product(name: "Inject", package: "Inject"),
             ],
             path: "Sources/Helm",
             resources: [
@@ -39,6 +53,15 @@ let package = Package(
                 // (and zsh's hidden .zshenv) survives; GhosttyResources points
                 // GHOSTTY_RESOURCES_DIR at the bundled `ghostty/` dir.
                 .copy("Resources/ghostty"),
+            ],
+            // What makes Swift methods swappable at runtime: the linker emits
+            // indirect stubs injection can repoint. Debug only — release keeps
+            // direct calls. Mirrored in project.yml's Debug OTHER_LDFLAGS.
+            linkerSettings: [
+                .unsafeFlags(
+                    ["-Xlinker", "-interposable"],
+                    .when(platforms: [.macOS], configuration: .debug)
+                )
             ]
         ),
         // Non-GUI smoke: ghostty_init + config load + app create, no window.

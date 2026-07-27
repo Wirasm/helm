@@ -1,5 +1,5 @@
+import Inject
 import SwiftUI
-
 /// helm's one permanent surface — the ⌘T two-faces model is gone. Three panes:
 ///
 /// - LEFT: the observe/steer column (engine health, projects, Live/History
@@ -14,6 +14,10 @@ import SwiftUI
 /// The ptys survive any of this churn — the shells live app-level in
 /// TerminalManager, outside the view lifecycle (see docs/SPIKE.md).
 struct RootView: View {
+    /// Hot reload: `.enableInjection()` below redraws this view when
+    /// InjectionNext swaps a recompiled build of it into the running app.
+    /// Both are no-ops in release (docs/VENDORED.md).
+    @ObserveInjection private var inject
     @StateObject private var store = KildStore()
     @StateObject private var artifact = ArtifactPaneModel()
     /// The artifact browser popover (anchored to the strip's artifact button);
@@ -63,6 +67,7 @@ struct RootView: View {
                 artifact.open(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
             }
         }
+        .enableInjection()
     }
 
     /// Shared chrome for the dock's two tenants: the sticky width and
