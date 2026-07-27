@@ -84,6 +84,26 @@ struct HelmApp: App {
                 }
             }
             guard let key = event.charactersIgnoringModifiers else { return event }
+            // Mission Control's bindings when the operator hands them over. Do
+            // not steal legacy Ctrl+2…8 control codes from a focused terminal.
+            if flags == .control, let index = Int(key), (1...9).contains(index) {
+                let terminalFocused = MainActor.assumeIsolated { TerminalManager.shared.selectedTerminalHasFocus }
+                guard !terminalFocused else { return event }
+                NotificationCenter.default.post(name: .helmSelectWorkspace, object: index - 1)
+                return nil
+            }
+            if flags == .control, event.keyCode == 123 || event.keyCode == 124 {
+                let terminalFocused = MainActor.assumeIsolated { TerminalManager.shared.selectedTerminalHasFocus }
+                guard !terminalFocused else { return event }
+                NotificationCenter.default.post(name: .helmCycleWorkspace, object: event.keyCode == 123 ? -1 : 1)
+                return nil
+            }
+            // Always available fallback before Mission Control shortcuts are
+            // released in System Settings → Keyboard → Shortcuts.
+            if flags == [.command, .option], let index = Int(key), (1...9).contains(index) {
+                NotificationCenter.default.post(name: .helmSelectWorkspace, object: index - 1)
+                return nil
+            }
             // ⌘⇧= is how ⌘+ is actually typed (charactersIgnoringModifiers
             // keeps shift applied); everything else requires bare ⌘.
             if flags == [.command, .shift], key == "+" {
@@ -232,4 +252,8 @@ extension Notification.Name {
     /// ⌘↑/⌘↓ — object is the prompt offset (-1 previous, +1 next); the
     /// terminal workspace forwards it to the selected terminal's surface.
     static let helmJumpToPrompt = Notification.Name("helmJumpToPrompt")
+    /// ⌃1–⌃9 / ⌘⌥1–⌘⌥9 — object is the 0-based workspace index.
+    static let helmSelectWorkspace = Notification.Name("helmSelectWorkspace")
+    /// ⌃←/⌃→ — object is -1 / +1.
+    static let helmCycleWorkspace = Notification.Name("helmCycleWorkspace")
 }

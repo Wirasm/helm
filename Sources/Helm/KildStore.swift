@@ -7,7 +7,7 @@ import Foundation
 /// owns WS. Attention-first, per the seed plan: open decisions outrank everything.
 @MainActor
 final class KildStore: ObservableObject {
-    enum RoomsTab {
+    enum RoomsTab: String, Codable, Equatable {
         case live
         case history
     }
@@ -26,6 +26,7 @@ final class KildStore: ObservableObject {
     /// (a selected room wins the dock over any open artifact).
     @Published var selection: String? = LaunchOptions.roomId
     @Published var tab: RoomsTab = .live
+    @Published private(set) var contexts: [String: WorkspaceContext]
     // A --room launch lands on History when the id isn't live at first load; the
     // load() pass below corrects the tab once data arrives (testability seam).
     private var launchRoomResolved = LaunchOptions.roomId == nil
@@ -46,8 +47,14 @@ final class KildStore: ObservableObject {
     init(engine: EngineClient = EngineClient(), defaults: UserDefaults = .standard) {
         self.engine = engine
         self.defaults = defaults
-        workspaces = WorkspacePersistence.load(from: defaults)
-        selectedWorkspace = WorkspacePersistence.loadSelection(from: defaults, in: workspaces)
+        let restoredWorkspaces = WorkspacePersistence.load(from: defaults)
+        let restoredContexts = WorkspaceContextStore.load(from: defaults)
+        workspaces = restoredWorkspaces
+        selectedWorkspace = WorkspacePersistence.loadSelection(from: defaults, in: restoredWorkspaces)
+        contexts = restoredContexts
+        if let selectedWorkspace {
+            applyContext(for: selectedWorkspace)
+        }
     }
 
     /// The current tab's rooms under the workspace filter. Live rooms sort
@@ -89,7 +96,53 @@ final class KildStore: ObservableObject {
     func close(_ workspace: Workspace) {
         workspaces.removeAll { $0 == workspace }
         WorkspacePersistence.save(workspaces, to: defaults)
+        contexts[workspace.path] = nil
+        WorkspaceContextStore.save(contexts, to: defaults)
         if selectedWorkspace == workspace { select(nil) }
+    }
+
+    /// Saves the current workspace's UI state before changing the room filter.
+    /// TerminalManager retains the resources themselves; only their IDs and
+    /// selection are context state.
+    func saveContext(terminalManager: TerminalManager, artifact: ArtifactPaneModel) {
+        guard let workspace = selectedWorkspace else { return }
+        var context = contexts[workspace.path] ?? WorkspaceContext()
+        let workspaceSessions = terminalManager.sessions(for: workspace.path)
+        context.terminalSessionIDs = workspaceSessions.map(\.id)
+        context.selectedTerminalID = terminalManager.selected?.workspacePath == workspace.path
+            ? terminalManager.selectedID : nil
+        context.selectedRoomID = selection
+        context.roomsTab = tab
+        context.openArtifactPath = artifact.document?.url.path
+        contexts[workspace.path] = context
+        WorkspaceContextStore.save(contexts, to: defaults)
+    }
+
+    func applyContext(for workspace: Workspace) {
+        let context = contexts[workspace.path] ?? WorkspaceContext()
+        selection = context.selectedRoomID
+        tab = context.roomsTab
+    }
+
+    func composerDraft(for roomID: String) -> String {
+        guard let workspace = selectedWorkspace else { return "" }
+        return contexts[workspace.path]?.composerDrafts[roomID] ?? ""
+    }
+
+    func setComposerDraft(_ draft: String, for roomID: String) {
+        guard let workspace = selectedWorkspace else { return }
+        var context = contexts[workspace.path] ?? WorkspaceContext()
+        if draft.isEmpty { context.composerDrafts[roomID] = nil } else { context.composerDrafts[roomID] = draft }
+        contexts[workspace.path] = context
+        WorkspaceContextStore.save(contexts, to: defaults)
+    }
+
+    func cacheBranch(_ branch: String?, for workspace: Workspace) {
+        var context = contexts[workspace.path] ?? WorkspaceContext()
+        context.branch = branch
+        context.branchResolved = true
+        contexts[workspace.path] = context
+        WorkspaceContextStore.save(contexts, to: defaults)
     }
 
     func select(_ workspace: Workspace?) {
@@ -97,7 +150,8 @@ final class KildStore: ObservableObject {
         workspaceWorktreeNames = []
         selectedWorkspaceRoot = nil
         WorkspacePersistence.saveSelection(workspace, to: defaults)
-        guard workspace != nil else { return }
+        guard let workspace else { return }
+        applyContext(for: workspace)
         Task { await refreshWorkspaceContext() }
     }
 
@@ -109,14 +163,15 @@ final class KildStore: ObservableObject {
         // Best-effort: a folder that isn't a git repo legitimately 400s, and that
         // only disables worktree matching.
         let trees = (try? await engine.worktrees(path: selectedWorkspace.path)) ?? []
+        guard self.selectedWorkspace == selectedWorkspace else { return }
         workspaceWorktreeNames = Set(trees.compactMap(\.worktree))
         guard selectedWorkspaceRoot == nil else { return }
         // git subprocess — off the main thread, once per selection, never per
         // render (the browser then matches stores against the root purely).
         let path = selectedWorkspace.path
-        selectedWorkspaceRoot = await Task.detached {
-            WorkspaceStore.repositoryRoot(for: path)
-        }.value
+        let root = await Task.detached { WorkspaceStore.repositoryRoot(for: path) }.value
+        guard self.selectedWorkspace == selectedWorkspace else { return }
+        selectedWorkspaceRoot = root
     }
 
     func load() async {

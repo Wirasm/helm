@@ -55,6 +55,9 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// 1-based creation ordinal, monotonically assigned by the manager —
     /// the "shell N" fallback title when the shell hasn't set one.
     let ordinal: Int
+    /// The workspace that groups this session in the frame. The manager remains
+    /// the owner of every session and the one shared ghostty controller.
+    let workspacePath: String
 
     @Published private(set) var status: Status = .starting
     /// Terminal title (OSC 0/2 from the shell).
@@ -85,8 +88,9 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// tests can assert every session holds the same instance.
     let controller: TerminalController
 
-    init(ordinal: Int, controller: TerminalController) {
+    init(ordinal: Int, workspacePath: String, controller: TerminalController) {
         self.ordinal = ordinal
+        self.workspacePath = workspacePath
         self.controller = controller
 
         let view = TerminalView(frame: .zero)
@@ -96,7 +100,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         // login shell — exactly the default-terminal behavior we want.
         view.configuration = TerminalSurfaceOptions(
             backend: .exec,
-            workingDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+            workingDirectory: workspacePath
         )
         hostView = view
 
@@ -417,8 +421,11 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
 final class TerminalManager: ObservableObject {
     static let shared = TerminalManager()
 
-    @Published private(set) var sessions: [TerminalSession]
-    @Published private(set) var selectedID: TerminalSession.ID
+    /// Flat app-level ownership of every workspace's sessions. Switching a
+    /// workspace only changes which subset is mounted; it never releases one.
+    @Published private(set) var sessions: [TerminalSession] = []
+    @Published private(set) var selectedID: TerminalSession.ID?
+    @Published private(set) var activeWorkspacePath: String?
 
     /// The single ghostty runtime every session's surface is created on.
     let controller: TerminalController
@@ -429,22 +436,52 @@ final class TerminalManager: ObservableObject {
     /// itself only ever uses `.shared`.
     init() {
         controller = TerminalSession.makeController()
-        let first = TerminalSession(ordinal: nextOrdinal, controller: controller)
-        nextOrdinal += 1
-        sessions = [first]
-        selectedID = first.id
-        first.manager = self
+        // No pty is created until a workspace is first visited. This bounds
+        // startup cost to the active context rather than all remembered folders.
     }
 
-    var selected: TerminalSession {
-        // `sessions` is never empty (see invariants), so the fallback only
-        // covers a transient mid-update read.
-        sessions.first { $0.id == selectedID } ?? sessions[0]
+    func sessions(for workspacePath: String) -> [TerminalSession] {
+        sessions.filter { $0.workspacePath == workspacePath }
     }
 
-    /// The last terminal cannot be closed — the tab strip disables its ✕.
+    /// Makes a workspace active and lazily gives it its first shell. Existing
+    /// sessions are merely parked (their retained NSViews and ptys survive).
+    func activate(workspacePath: String, selectedID preferredID: UUID? = nil) {
+        activeWorkspacePath = workspacePath
+        let workspaceSessions = sessions(for: workspacePath)
+        if workspaceSessions.isEmpty {
+            newTerminal(in: workspacePath)
+        } else if let preferredID, workspaceSessions.contains(where: { $0.id == preferredID }),
+                  let preferred = workspaceSessions.first(where: { $0.id == preferredID }) {
+            setSelected(preferred)
+        } else if let selectedID, workspaceSessions.contains(where: { $0.id == selectedID }) {
+            // Keep this workspace's selection when returning to it.
+        } else if let first = workspaceSessions.first {
+            setSelected(first)
+        }
+    }
+
+    func deactivate() {
+        activeWorkspacePath = nil
+        selectedID = nil
+    }
+
+    /// Closing a workspace is an explicit tab teardown, unlike switching: drop
+    /// every session it owns so their retained NSViews release their ptys.
+    func closeWorkspace(_ workspacePath: String) {
+        sessions.removeAll { $0.workspacePath == workspacePath }
+        if activeWorkspacePath == workspacePath { deactivate() }
+    }
+
+    var selected: TerminalSession? {
+        guard let selectedID else { return nil }
+        return sessions.first { $0.id == selectedID }
+    }
+
+    /// The last terminal in the active workspace cannot be closed.
     var canClose: Bool {
-        sessions.count > 1
+        guard let activeWorkspacePath else { return false }
+        return sessions(for: activeWorkspacePath).count > 1
     }
 
     /// Whether the selected terminal's view is (or contains) the key window's
@@ -453,6 +490,7 @@ final class TerminalManager: ObservableObject {
     /// always frontmost now, so "the terminal face is active" no longer
     /// implies the terminal has keyboard focus.
     var selectedTerminalHasFocus: Bool {
+        guard let selected else { return false }
         let view = selected.hostView
         guard let window = view.window, window.isKeyWindow,
               let responder = window.firstResponder as? NSView
@@ -460,24 +498,33 @@ final class TerminalManager: ObservableObject {
         return responder === view || responder.isDescendant(of: view)
     }
 
-    /// ⌘N / the strip's + button: a fresh login shell, appended and selected.
+    /// ⌘N / the strip's + button: a fresh login shell in the active workspace.
     func newTerminal() {
-        let session = TerminalSession(ordinal: nextOrdinal, controller: controller)
+        guard let activeWorkspacePath else { return }
+        newTerminal(in: activeWorkspacePath)
+    }
+
+    func newTerminal(in workspacePath: String) {
+        let session = TerminalSession(ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller)
         nextOrdinal += 1
         session.manager = self
         sessions.append(session)
+        activeWorkspacePath = workspacePath
         setSelected(session)
     }
 
     func select(_ session: TerminalSession) {
-        guard sessions.contains(where: { $0.id == session.id }) else { return }
+        guard session.workspacePath == activeWorkspacePath,
+              sessions.contains(where: { $0.id == session.id }) else { return }
         setSelected(session)
     }
 
     /// ⌘1–⌘9: select by 0-based tab position; out-of-range is a no-op.
     func select(index: Int) {
-        guard sessions.indices.contains(index) else { return }
-        setSelected(sessions[index])
+        guard let activeWorkspacePath else { return }
+        let workspaceSessions = sessions(for: activeWorkspacePath)
+        guard workspaceSessions.indices.contains(index) else { return }
+        setSelected(workspaceSessions[index])
     }
 
     /// Selection always clears the incoming tab's bell and finished-command
@@ -491,12 +538,16 @@ final class TerminalManager: ObservableObject {
     /// reference (once SwiftUI unmounts the view), deallocating view →
     /// coordinator → surface → pty. Refuses on the last remaining terminal.
     func close(_ session: TerminalSession) {
-        guard canClose,
+        guard session.workspacePath == activeWorkspacePath,
+              canClose,
               let index = sessions.firstIndex(where: { $0.id == session.id })
         else { return }
+        let workspaceSessions = sessions(for: session.workspacePath)
+        let workspaceIndex = workspaceSessions.firstIndex(where: { $0.id == session.id }) ?? 0
         sessions.remove(at: index)
         if selectedID == session.id {
-            setSelected(sessions[min(index, sessions.count - 1)])
+            let survivors = sessions(for: session.workspacePath)
+            setSelected(survivors[min(workspaceIndex, survivors.count - 1)])
         }
     }
 }

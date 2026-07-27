@@ -117,6 +117,36 @@ final class KildStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedWorkspace?.name, "fix")
     }
 
+    func testSelectingWorkspacesRestoresTheirRoomSelectionAndTab() {
+        let first = Workspace(path: "/p/first")
+        let second = Workspace(path: "/p/second")
+        WorkspaceContextStore.save([
+            first.path: WorkspaceContext(selectedRoomID: "first-room", roomsTab: .live),
+            second.path: WorkspaceContext(selectedRoomID: "second-room", roomsTab: .history)
+        ], to: defaults)
+        let store = makeStore()
+
+        store.open(first)
+        XCTAssertEqual(store.selection, "first-room", "first workspace applies its saved room")
+        XCTAssertEqual(store.tab, .live, "first workspace applies its saved tab")
+        store.open(second)
+        XCTAssertEqual(store.selection, "second-room", "second workspace does not inherit the first room")
+        XCTAssertEqual(store.tab, .history, "second workspace restores history")
+        store.select(first)
+        XCTAssertEqual(store.selection, "first-room", "returning restores the first selection")
+    }
+
+    func testClosingAWorkspaceEvictsItsContext() {
+        let workspace = Workspace(path: "/p/kild")
+        WorkspaceContextStore.save([workspace.path: WorkspaceContext(selectedRoomID: "room")], to: defaults)
+        let store = makeStore()
+        store.open(workspace)
+        store.close(workspace)
+
+        XCTAssertNil(store.contexts[workspace.path], "closing a workspace must not retain stale UI state")
+        XCTAssertNil(makeStore().contexts[workspace.path], "eviction persists across relaunch")
+    }
+
     func testClosingTheSelectedWorkspaceFallsBackToAll() {
         let store = makeStore()
         store.open(Workspace(path: "/p/kild"))
