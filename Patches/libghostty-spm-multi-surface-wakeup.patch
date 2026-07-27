@@ -1,0 +1,290 @@
+From f2322bc4f0da962e476595e112db9b2a4c504865 Mon Sep 17 00:00:00 2001
+From: Rasmus Widing <rasmus.widing@gmail.com>
+Date: Mon, 27 Jul 2026 12:30:48 +0300
+Subject: [PATCH] fix(controller): fan wakeups out to every surface on the app
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+wakeup is app-level in ghostty — wakeup_cb's userdata is the controller,
+not a surface — but a TerminalController can own N surfaces. onWakeup and
+shouldProcessWakeup were single slots, so a second surface's rebuildIfReady
+overwrote the first's handlers and either surface's tearDownSurface nil'd
+them for everyone. Multiple surfaces per app, which ghostty.h supports and
+retain/remove/retainedBridgeCount already anticipate, was unreachable.
+
+Replace the two slots with a registry keyed on TerminalCallbackBridge
+identity, the same key surface lifetime already uses. rebuildIfReady
+subscribes, tearDownSurface unsubscribes only its own entry, and
+handleWakeup ticks once (ghostty_app_tick is app-wide) then fans out to
+every subscriber that wants the frame. The fan-out iterates a snapshot so a
+handler may unsubscribe re-entrantly.
+
+Behaviour with zero or one surface is unchanged.
+---
+ .../Controller/TerminalController.swift       |  58 ++++++++-
+ .../Surface/TerminalSurfaceCoordinator.swift  |  22 ++--
+ .../TerminalLifecycleTests.swift              | 120 +++++++++++++++++-
+ 3 files changed, 184 insertions(+), 16 deletions(-)
+
+diff --git a/Sources/GhosttyTerminal/Controller/TerminalController.swift b/Sources/GhosttyTerminal/Controller/TerminalController.swift
+index 8079ab0..a6e6c37 100644
+--- a/Sources/GhosttyTerminal/Controller/TerminalController.swift
++++ b/Sources/GhosttyTerminal/Controller/TerminalController.swift
+@@ -56,8 +56,22 @@ public final class TerminalController {
+     var renderedConfigContents: String = TerminalController.defaultRenderedConfig
+ 
+     public internal(set) var lastConfigurationIssue: String?
+-    var onWakeup: (() -> Void)?
+-    var shouldProcessWakeup: (() -> Bool)?
++
++    /// One surface's interest in app wakeups.
++    struct WakeupSubscriber {
++        let onWakeup: () -> Void
++        let shouldProcess: () -> Bool
++    }
++
++    /// Wakeup subscribers keyed by their `TerminalCallbackBridge`, the same
++    /// identity `retain`/`remove` key surface lifetime on.
++    ///
++    /// Wakeup is app-level in ghostty — `wakeup_cb`'s userdata is the
++    /// controller, not a surface — but one controller can own N surfaces, so
++    /// the wakeup has to fan out. A single slot would be claimed by whichever
++    /// surface was built last, and cleared for everyone by whichever surface
++    /// was torn down first.
++    var wakeupSubscribers: [ObjectIdentifier: WakeupSubscriber] = [:]
+ 
+     // MARK: - Config Resolution State
+ 
+@@ -287,14 +301,50 @@ public final class TerminalController {
+         ghostty_app_tick(app)
+     }
+ 
++    // MARK: - Wakeup
++
++    /// Registers a surface's wakeup handlers, replacing any earlier
++    /// registration made under the same bridge.
++    func subscribeWakeup(
++        _ bridge: TerminalCallbackBridge,
++        onWakeup: @escaping () -> Void,
++        shouldProcess: @escaping () -> Bool
++    ) {
++        wakeupSubscribers[ObjectIdentifier(bridge)] = WakeupSubscriber(
++            onWakeup: onWakeup,
++            shouldProcess: shouldProcess
++        )
++    }
++
++    /// Drops one surface's registration, leaving every other surface on this
++    /// controller subscribed.
++    func unsubscribeWakeup(_ bridge: TerminalCallbackBridge) {
++        wakeupSubscribers.removeValue(forKey: ObjectIdentifier(bridge))
++    }
++
+     func handleWakeup() {
+-        guard shouldProcessWakeup?() ?? true else {
++        // Snapshot before iterating: a handler may tear its surface down and
++        // unsubscribe re-entrantly, and mutating the dictionary mid-iteration
++        // would trap.
++        let subscribers = Array(wakeupSubscribers.values)
++        guard !subscribers.isEmpty else {
++            // No surface yet — keep the app runtime ticking regardless.
++            tick()
++            return
++        }
++
++        let active = subscribers.filter { $0.shouldProcess() }
++        guard !active.isEmpty else {
+             TerminalDebugLog.log(.lifecycle, "wakeup suspended")
+             return
+         }
+ 
++        // `ghostty_app_tick` is app-wide, so one tick serves every surface on
++        // this controller — including any that are currently suspended.
+         tick()
+-        onWakeup?()
++        for subscriber in active {
++            subscriber.onWakeup()
++        }
+     }
+ 
+     private static func initializeRuntimeIfNeeded() {
+diff --git a/Sources/GhosttyTerminal/Surface/TerminalSurfaceCoordinator.swift b/Sources/GhosttyTerminal/Surface/TerminalSurfaceCoordinator.swift
+index 1fb2cce..b4354e1 100644
+--- a/Sources/GhosttyTerminal/Surface/TerminalSurfaceCoordinator.swift
++++ b/Sources/GhosttyTerminal/Surface/TerminalSurfaceCoordinator.swift
+@@ -135,12 +135,17 @@ final class TerminalSurfaceCoordinator {
+         let newSurface = TerminalSurface(rawSurface)
+         surface = newSurface
+         newSurface.setOcclusion(effectiveSurfaceVisible)
+-        controller.shouldProcessWakeup = { [weak self] in
+-            self?.canRenderFrame == true
+-        }
+-        controller.onWakeup = { [weak self] in
+-            self?.requestImmediateTick()
+-        }
++        // Subscribe rather than claim: the controller may already be driving
++        // other surfaces, and each of them keeps its own registration.
++        controller.subscribeWakeup(
++            bridge,
++            onWakeup: { [weak self] in
++                self?.requestImmediateTick()
++            },
++            shouldProcess: { [weak self] in
++                self?.canRenderFrame == true
++            }
++        )
+         TerminalDebugLog.log(.lifecycle, "surface rebuild succeeded")
+         (delegate as? any TerminalSurfaceLifecycleDelegate)?
+             .terminalDidAttachSurface(newSurface)
+@@ -314,8 +319,9 @@ final class TerminalSurfaceCoordinator {
+         if let session = configuration.inMemorySession {
+             session.clearSurface(ifMatches: surface?.rawValue)
+         }
+-        controller?.onWakeup = nil
+-        controller?.shouldProcessWakeup = nil
++        // Only this surface's registration goes; it pairs with the
++        // `controller?.remove(bridge)` below, both keyed on the same bridge.
++        controller?.unsubscribeWakeup(bridge)
+         bridge.rawSurface = nil
+         let hadSurface = surface != nil
+         surface?.setFocus(false)
+diff --git a/Tests/GhosttyKitTest/TerminalLifecycleTests.swift b/Tests/GhosttyKitTest/TerminalLifecycleTests.swift
+index 57692fa..abad92e 100644
+--- a/Tests/GhosttyKitTest/TerminalLifecycleTests.swift
++++ b/Tests/GhosttyKitTest/TerminalLifecycleTests.swift
+@@ -58,18 +58,130 @@ struct TerminalLifecycleTests {
+     @Test
+     func `suspended wakeup does not schedule render`() {
+         let controller = TerminalController()
++        let coordinator = TerminalSurfaceCoordinator()
+         var wakeups = 0
+ 
+-        controller.shouldProcessWakeup = { false }
+-        controller.onWakeup = {
+-            wakeups += 1
+-        }
++        controller.subscribeWakeup(
++            coordinator.bridge,
++            onWakeup: { wakeups += 1 },
++            shouldProcess: { false }
++        )
+ 
+         controller.handleWakeup()
+ 
+         #expect(wakeups == 0)
+     }
+ 
++    @Test
++    func `every surface on one controller receives the wakeup`() {
++        let controller = TerminalController()
++        let first = TerminalSurfaceCoordinator()
++        let second = TerminalSurfaceCoordinator()
++        var firstWakeups = 0
++        var secondWakeups = 0
++
++        controller.subscribeWakeup(
++            first.bridge,
++            onWakeup: { firstWakeups += 1 },
++            shouldProcess: { true }
++        )
++        controller.subscribeWakeup(
++            second.bridge,
++            onWakeup: { secondWakeups += 1 },
++            shouldProcess: { true }
++        )
++
++        controller.handleWakeup()
++
++        #expect(firstWakeups == 1, "a second surface must not steal the first's wakeup")
++        #expect(secondWakeups == 1)
++    }
++
++    @Test
++    func `one surface tearing down leaves the others receiving wakeups`() {
++        let controller = TerminalController()
++        let survivor = TerminalSurfaceCoordinator()
++        let closing = TerminalSurfaceCoordinator()
++        var survivorWakeups = 0
++        var closingWakeups = 0
++
++        survivor.isAttached = { false }
++        closing.isAttached = { false }
++        survivor.controller = controller
++        closing.controller = controller
++
++        controller.subscribeWakeup(
++            survivor.bridge,
++            onWakeup: { survivorWakeups += 1 },
++            shouldProcess: { true }
++        )
++        controller.subscribeWakeup(
++            closing.bridge,
++            onWakeup: { closingWakeups += 1 },
++            shouldProcess: { true }
++        )
++
++        closing.freeSurface()
++        controller.handleWakeup()
++
++        #expect(survivorWakeups == 1, "closing one surface must not stop the rest")
++        #expect(closingWakeups == 0, "the closed surface must be gone from the fan-out")
++    }
++
++    @Test
++    func `a suspended surface does not block an active one`() {
++        let controller = TerminalController()
++        let background = TerminalSurfaceCoordinator()
++        let foreground = TerminalSurfaceCoordinator()
++        var backgroundWakeups = 0
++        var foregroundWakeups = 0
++
++        controller.subscribeWakeup(
++            background.bridge,
++            onWakeup: { backgroundWakeups += 1 },
++            shouldProcess: { false }
++        )
++        controller.subscribeWakeup(
++            foreground.bridge,
++            onWakeup: { foregroundWakeups += 1 },
++            shouldProcess: { true }
++        )
++
++        controller.handleWakeup()
++
++        #expect(backgroundWakeups == 0)
++        #expect(foregroundWakeups == 1)
++    }
++
++    @Test
++    func `unsubscribing during the fan out does not trap`() {
++        let controller = TerminalController()
++        let first = TerminalSurfaceCoordinator()
++        let second = TerminalSurfaceCoordinator()
++        var wakeups = 0
++
++        controller.subscribeWakeup(
++            first.bridge,
++            onWakeup: {
++                wakeups += 1
++                // A wakeup handler that tears its own surface down mutates
++                // the registry mid-fan-out.
++                controller.unsubscribeWakeup(second.bridge)
++            },
++            shouldProcess: { true }
++        )
++        controller.subscribeWakeup(
++            second.bridge,
++            onWakeup: { wakeups += 1 },
++            shouldProcess: { true }
++        )
++
++        controller.handleWakeup()
++        controller.handleWakeup()
++
++        #expect(wakeups == 3, "both fired once, then only the survivor")
++    }
++
+     @Test
+     func `application active state controls immediate ticks`() async {
+         let coordinator = TerminalSurfaceCoordinator()

@@ -16,9 +16,12 @@ options:
 packages:
   # MUST match Package.swift precisely: libghostty's embedding API is pre-1.0
   # and churns between releases, so the pin is EXACT — see docs/SPIKE.md.
+  # Currently the local patched checkout rather than the upstream tag (one
+  # shared controller with N surfaces needs a wakeup fix upstream 1.3.1 lacks).
+  # Run scripts/patch-libghostty.sh to materialize it; docs/VENDORED.md records
+  # the patch and its retirement condition.
   libghostty-spm:
-    url: https://github.com/Lakr233/libghostty-spm.git
-    exactVersion: 1.3.1
+    path: vendor/libghostty-spm
   # Hot reload — MUST match Package.swift exactly, same as the pin above.
   # Effectively DEBUG-only: InjectionNext compiles to nothing in release and
   # Inject's modifiers become no-ops, so the .app ships unaffected.

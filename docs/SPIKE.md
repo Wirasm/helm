@@ -160,3 +160,26 @@ sh tools/kitty-icat-test.sh
 
 Record the observed outcome here when a human runs it. Same square in Ghostty.app
 or kitty makes a good positive control.
+
+## Pin change 2026-07-27 — tag 1.3.1 + a local patch, for one app runtime
+
+The pin is still exact 1.3.1 (`b0930320`), but it is now expressed as **tag plus
+patch** rather than `exact:`. Both manifests point at `vendor/libghostty-spm`, a
+gitignored checkout produced by `scripts/patch-libghostty.sh`; the patch itself
+is committed at `Patches/libghostty-spm-multi-surface-wakeup.patch`. Full
+provenance, the diffstat, and the retirement condition are in docs/VENDORED.md.
+
+Why: one `TerminalController` is one `ghostty_app_t`, and helm was creating one
+per tab, so a full libghostty runtime was allocated per terminal. Ghostty.app and
+cmux both run a single runtime with N surfaces. The wrapper structurally supports
+that everywhere — `retainedBridges` is an array, per-surface delegate routing
+demultiplexes on `ghostty_surface_userdata` — except in two `internal`
+single-valued closures, `TerminalController.onWakeup` and `.shouldProcessWakeup`.
+A second surface's `rebuildIfReady` overwrote the first's handlers, and either
+surface's `tearDownSurface` nil'd them for everyone. Both were reproduced as
+failing tests against the unpatched tag first, then fixed by keying the handlers
+on `TerminalCallbackBridge` identity and fanning the wakeup out.
+
+The binary target is untouched: the xcframework URL and checksum are still
+upstream's, so the shell-integration tree pinned above still cannot skew from
+the binary. This is a Swift-source patch only.

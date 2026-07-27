@@ -93,6 +93,66 @@ pin changes, read the new xcframework's embedded version string for the build
 commit, re-fetch `src/shell-integration/` at that commit, and update the
 commit + hashes here.
 
+## libghostty-spm 1.3.1 + helm patch — `vendor/libghostty-spm` (LOCAL, TEMPORARY)
+
+Not a vendored file and no longer a plain SPM pin: helm currently builds against
+a LOCAL checkout of libghostty-spm at tag `1.3.1` with one patch applied. Both
+manifests point at `vendor/libghostty-spm` (gitignored); `scripts/patch-libghostty.sh`
+clones and patches it.
+
+- **Base**: <https://github.com/Lakr233/libghostty-spm.git>, tag `1.3.1`,
+  revision `b0930320739324886590e865d571eb5dd7073912` — the same exact pin
+  docs/SPIKE.md records. The patch does not touch the binary target, so the
+  `GhosttyKit.xcframework.zip` URL and checksum are upstream's, unchanged.
+- **Patch**: `Patches/libghostty-spm-multi-surface-wakeup.patch` (a `git
+  format-patch` output; apply with `git am`). 3 files, +184/−16, of which 120
+  lines are tests.
+- **License**: MIT (libghostty-spm, © Lakr233).
+
+**What it fixes.** `TerminalController.onWakeup` / `.shouldProcessWakeup` were
+single-valued closures. A `TerminalSurfaceCoordinator` claimed both on
+`rebuildIfReady` and nil'd both on `tearDownSurface`, so a controller could only
+ever drive ONE surface: a second surface stole the first's wakeups, and closing
+any surface stopped ticking for every survivor. Both defects were reproduced
+against the unpatched tag before the fix was written. The patch replaces the two
+slots with a registry keyed on `TerminalCallbackBridge` identity — the same key
+`retain`/`remove`/`retainedBridgeCount` already use — so each coordinator
+subscribes on build, drops only its own entry on teardown, and `handleWakeup`
+ticks the app once (`ghostty_app_tick` is app-wide) and fans out to every
+subscriber that wants the frame. Behaviour with zero or one surface is unchanged.
+
+**Why helm needs it.** One `TerminalController` is one `ghostty_app_t`. Without
+the patch every terminal tab carried a full libghostty runtime; with it, helm
+runs one runtime with N surfaces the way Ghostty.app does. `TerminalManager`'s
+header documents the ownership model that depends on this.
+
+**Where the pin lives now.** A local path dependency is not recorded in
+`Package.resolved` — SPM dropped the libghostty-spm entry when the manifests
+stopped naming a URL. The exact revision therefore lives HERE and in
+`scripts/patch-libghostty.sh` (`tag=1.3.1`), and nowhere else. Retiring the
+local pin puts it back into `Package.resolved` where the rest of the deps are.
+
+**RETIREMENT CONDITION** — this local pin is temporary. In order of preference:
+
+1. Upstream merges the patch → drop `vendor/`, `Patches/` and
+   `scripts/patch-libghostty.sh`, and return BOTH manifests to
+   `exact: "<new tag>"`.
+2. Upstream declines or goes quiet → push `helm/multi-surface-wakeup` to a fork
+   and pin both manifests to the fork URL + an exact `revision:` (never a
+   branch). Record the fork URL and PR link here.
+
+Until one of those happens the branch does not build from a clean clone without
+running `scripts/patch-libghostty.sh` first. Verify the patch with:
+
+```sh
+scripts/patch-libghostty.sh
+(cd vendor/libghostty-spm && swift test --filter TerminalLifecycle)
+```
+
+Four tests in `TerminalThemeConfigurationTests` fail in that suite both with and
+without the patch — a pre-existing upstream/environment failure at tag 1.3.1,
+not something this patch introduced.
+
 ## InjectionNext 2.0.1 + Inject 1.6.0 — hot reload (SPM, DEBUG only)
 
 Not vendored files but pinned SPM dependencies, recorded here for the same

@@ -142,6 +142,49 @@ final class TerminalManagerTests: XCTestCase {
         )
     }
 
+    func testEverySessionSharesTheManagersController() {
+        let manager = TerminalManager()
+        manager.newTerminal()
+        manager.newTerminal()
+
+        XCTAssertEqual(manager.sessions.count, 3)
+        for session in manager.sessions {
+            XCTAssertTrue(
+                session.controller === manager.controller,
+                "one ghostty_app_t for the app — a session must never build its own"
+            )
+        }
+    }
+
+    func testClosingATabLeavesTheOthersOnTheSharedController() {
+        let manager = TerminalManager()
+        manager.newTerminal()
+        manager.newTerminal()
+        let survivors = [manager.sessions[0], manager.sessions[2]]
+
+        manager.close(manager.sessions[1])
+
+        XCTAssertEqual(manager.sessions.map(\.id), survivors.map(\.id))
+        for session in manager.sessions {
+            XCTAssertTrue(
+                session.controller === manager.controller,
+                "closing one tab must not detach the survivors from the shared runtime"
+            )
+            manager.select(session)
+            XCTAssertEqual(manager.selectedID, session.id, "survivors stay selectable")
+        }
+    }
+
+    func testManagersAreIsolatedFromEachOther() {
+        let first = TerminalManager()
+        let second = TerminalManager()
+
+        XCTAssertFalse(
+            first.controller === second.controller,
+            "the controller is manager-owned, not global — tests must not share runtime state"
+        )
+    }
+
     func testSelectByIndexIgnoresOutOfRange() {
         let manager = TerminalManager()
         manager.newTerminal()
