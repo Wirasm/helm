@@ -2,12 +2,12 @@ import AppKit
 import Inject
 import SwiftUI
 /// The observe/steer column of the frame: engine health header, a collapsible
-/// Projects section (filter, not navigation), and the Live/History room list.
+/// Workspaces section (filter, not navigation), and the Live/History room list.
 /// Pure rendering over `KildStore` — RootView owns the store, the 5s poll, and
 /// the dock that hosts the selected room's detail.
 ///
-/// The header + Projects stay PINNED at the top; only the rooms list below the
-/// Live/History tabs scrolls. The projects section scrolls internally when very
+/// The header + Workspaces stay PINNED at the top; only the rooms list below the
+/// Live/History tabs scrolls. The workspaces section scrolls internally when very
 /// tall, capped at ~40% of the column height.
 struct SidebarColumn: View {
     /// Hot reload: `.enableInjection()` below redraws this view when
@@ -15,13 +15,6 @@ struct SidebarColumn: View {
     /// Both are no-ops in release (docs/VENDORED.md).
     @ObserveInjection private var inject
     @ObservedObject var store: KildStore
-
-    // "Add project…" inline form.
-    @State private var addingProject = false
-    @State private var newProjectName = ""
-    @State private var newProjectPath = ""
-    @State private var addProjectError: String?
-    @State private var addingProjectInFlight = false
 
     var body: some View {
         GeometryReader { geo in
@@ -35,12 +28,17 @@ struct SidebarColumn: View {
                         description: Text(error)
                     )
                 } else {
-                    projectsSection(maxHeight: max(120, geo.size.height * 0.4))
+                    workspacesSection(maxHeight: max(120, geo.size.height * 0.4))
                     Divider()
                     tabPicker
                     roomList
                 }
             }
+        }
+        // ⌘⇧O — the menu/key monitor's "Open Workspace…"; the panel runs here
+        // because this is the only view that owns the workspace list.
+        .onReceive(NotificationCenter.default.publisher(for: .helmOpenWorkspace)) { _ in
+            openWorkspace()
         }
         .enableInjection()
     }
@@ -63,22 +61,22 @@ struct SidebarColumn: View {
         .padding(10)
     }
 
-    // MARK: projects — collapsible filter section
+    // MARK: workspaces — collapsible filter section
 
-    @State private var projectsExpanded = true
+    @State private var workspacesExpanded = true
 
     /// Pinned when expanded; the rows scroll internally only once they outgrow
     /// `maxHeight` (ViewThatFits picks the plain stack while it still fits).
-    private func projectsSection(maxHeight: CGFloat) -> some View {
-        DisclosureGroup(isExpanded: $projectsExpanded) {
+    private func workspacesSection(maxHeight: CGFloat) -> some View {
+        DisclosureGroup(isExpanded: $workspacesExpanded) {
             ViewThatFits(in: .vertical) {
-                projectRows
-                ScrollView { projectRows }
+                workspaceRows
+                ScrollView { workspaceRows }
             }
             .frame(maxHeight: maxHeight)
             .padding(.top, 4)
         } label: {
-            Text("Projects")
+            Text("Workspaces")
                 .font(.caption.bold())
                 .foregroundStyle(.secondary)
         }
@@ -86,29 +84,38 @@ struct SidebarColumn: View {
         .padding(.vertical, 8)
     }
 
-    private var projectRows: some View {
+    private var workspaceRows: some View {
         VStack(alignment: .leading, spacing: 1) {
-            projectRow(nil)
-            ForEach(store.projects) { projectRow($0) }
-            addProjectRow
+            workspaceRow(nil)
+            ForEach(store.workspaces) { workspace in
+                workspaceRow(workspace)
+                    .contextMenu {
+                        // List removal only. Nothing was registered, so nothing is
+                        // unregistered — the folder is untouched.
+                        Button("Close Workspace") { store.close(workspace) }
+                        Button("Copy Path") { Pasteboard.copy(workspace.path) }
+                    }
+            }
+            openWorkspaceRow
         }
     }
 
-    /// One selectable filter row; `nil` is the "All projects" default.
-    private func projectRow(_ project: EngineClient.Project?) -> some View {
-        let isSelected = store.selectedProject == project
+    /// One selectable filter row; `nil` is the "All" default. A workspace is a
+    /// folder, so two checkouts of one repo are two ordinary rows here.
+    private func workspaceRow(_ workspace: Workspace?) -> some View {
+        let isSelected = store.selectedWorkspace == workspace
         return Button {
-            store.select(project)
+            store.select(workspace)
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: project == nil ? "square.grid.2x2" : "folder")
+                Image(systemName: workspace == nil ? "square.grid.2x2" : "folder")
                     .font(.caption)
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                Text(project?.name ?? "All projects")
+                Text(workspace?.name ?? "All")
                     .font(.callout)
                     .fontWeight(isSelected ? .semibold : .regular)
-                if let project {
-                    Text(abbreviate(project.path))
+                if let workspace {
+                    Text(abbreviate(workspace.path))
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -124,107 +131,42 @@ struct SidebarColumn: View {
             )
         }
         .buttonStyle(.plain)
-        .help(project?.path ?? "Show rooms from every project")
+        .help(workspace?.path ?? "Show rooms from every workspace")
     }
 
-    /// `~`-abbreviated project path, e.g. `~/Projects/mine/sild/kild`.
+    /// `~`-abbreviated folder path, e.g. `~/Projects/mine/sild/kild`.
     private func abbreviate(_ path: String) -> String {
         (path as NSString).abbreviatingWithTildeInPath
     }
 
-    // MARK: add project — inline form, engine errors surfaced verbatim
+    // MARK: open workspace — a folder picker, no registration, no error state
 
-    @ViewBuilder
-    private var addProjectRow: some View {
-        if addingProject {
-            VStack(alignment: .leading, spacing: 6) {
-                TextField("Project name", text: $newProjectName)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(submitAddProject)
-                HStack(spacing: 6) {
-                    Button("Choose folder…", action: pickProjectFolder)
-                    Text(newProjectPath.isEmpty ? "no folder chosen" : abbreviate(newProjectPath))
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-                if let addProjectError {
-                    // The engine's own rejection text (duplicate name, not a
-                    // directory) — shown verbatim, inline.
-                    Label(addProjectError, systemImage: "xmark.octagon.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                }
-                HStack {
-                    Button("Add", action: submitAddProject)
-                        .disabled(
-                            addingProjectInFlight
-                                || newProjectName.trimmingCharacters(in: .whitespaces).isEmpty
-                                || newProjectPath.isEmpty
-                        )
-                    Button("Cancel", action: resetAddProject)
-                        .disabled(addingProjectInFlight)
-                }
-                .controlSize(.small)
-            }
-            .padding(6)
-            .background(.quinary, in: RoundedRectangle(cornerRadius: 5))
-        } else {
-            Button {
-                addingProject = true
-            } label: {
-                Label("Add project…", systemImage: "plus")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-            }
-            .buttonStyle(.plain)
+    private var openWorkspaceRow: some View {
+        Button(action: openWorkspace) {
+            Label("Open Workspace…", systemImage: "plus")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
         }
+        .buttonStyle(.plain)
+        .help("Open a folder as a workspace (⌘⇧O)")
     }
 
-    private func pickProjectFolder() {
+    /// Choosing the folder IS opening it — there is no name to invent and no engine
+    /// round-trip that could fail, so this has no error path to surface.
+    private func openWorkspace() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"
+        panel.prompt = "Open"
+        panel.message = "Choose a folder to work in"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        newProjectPath = url.path
-        if newProjectName.trimmingCharacters(in: .whitespaces).isEmpty {
-            newProjectName = url.lastPathComponent
-        }
+        store.open(Workspace(url: url))
     }
 
-    private func submitAddProject() {
-        let name = newProjectName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty, !newProjectPath.isEmpty, !addingProjectInFlight else { return }
-        addingProjectInFlight = true
-        addProjectError = nil
-        Task {
-            do {
-                try await store.engine.addProject(name: name, path: newProjectPath)
-                store.projects = try await store.engine.projects()
-                resetAddProject()
-            } catch let failure as EngineClient.Failure {
-                addProjectError = failure.errorDescription
-            } catch {
-                addProjectError = error.localizedDescription
-            }
-            addingProjectInFlight = false
-        }
-    }
-
-    private func resetAddProject() {
-        addingProject = false
-        newProjectName = ""
-        newProjectPath = ""
-        addProjectError = nil
-    }
-
-    // MARK: room list — Live / History, filtered by the selected project
+    // MARK: room list — Live / History, filtered by the selected workspace
 
     private var tabPicker: some View {
         Picker("Rooms", selection: $store.tab) {
@@ -246,14 +188,14 @@ struct SidebarColumn: View {
                     systemImage: store.tab == .live ? "rectangle.on.rectangle.angled" : "archivebox"
                 )
             } description: {
-                if let selectedProject = store.selectedProject {
+                if let selectedWorkspace = store.selectedWorkspace {
                     // Honest about the filter's limits: older archives persisted no
                     // cwd, so only their still-existing kild worktree can attribute
-                    // them to a project.
+                    // them to a workspace.
                     Text(
                         store.tab == .history
-                            ? "None attributable to \(selectedProject.name). Archived rooms without a saved cwd or live worktree only appear under All projects."
-                            : "No live rooms in \(selectedProject.name)."
+                            ? "None attributable to \(selectedWorkspace.name). Archived rooms without a saved cwd or live worktree only appear under All."
+                            : "No live rooms in \(selectedWorkspace.name)."
                     )
                 }
             }

@@ -16,6 +16,9 @@ struct TerminalStrip: View {
     /// Owned by TerminalWorkspace so ⌘O can toggle the popover from outside;
     /// the popover itself anchors to the strip's artifact button.
     @Binding var showBrowser: Bool
+    /// The open workspace's repo root, passed straight through to the browser so it
+    /// preselects that workspace's `~/.prp` store.
+    var workspaceRoot: String?
 
     // Same storage the View ▸ Appearance menu uses; HelmApp observes the key
     // and applies the override, so picking here re-themes the whole app.
@@ -61,7 +64,7 @@ struct TerminalStrip: View {
             .foregroundStyle(.secondary)
             .help("Open artifact (⌘O)")
             .popover(isPresented: $showBrowser, arrowEdge: .bottom) {
-                ArtifactBrowser(model: artifact) {
+                ArtifactBrowser(model: artifact, workspaceRoot: workspaceRoot) {
                     showBrowser = false
                 }
             }

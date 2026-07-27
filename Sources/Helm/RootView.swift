@@ -2,7 +2,7 @@ import Inject
 import SwiftUI
 /// helm's one permanent surface — the ⌘T two-faces model is gone. Three panes:
 ///
-/// - LEFT: the observe/steer column (engine health, projects, Live/History
+/// - LEFT: the observe/steer column (engine health, workspaces, Live/History
 ///   rooms) — `SidebarColumn` over the shared `KildStore`.
 /// - CENTER: the terminal workspace, always visible, never swapped or hidden —
 ///   the operator (pi/claude/codex) lives here and steers kild via its own
@@ -38,7 +38,11 @@ struct RootView: View {
         HSplitView {
             SidebarColumn(store: store)
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 420, maxHeight: .infinity)
-            TerminalWorkspace(artifact: artifact, showBrowser: $showBrowser)
+            TerminalWorkspace(
+                artifact: artifact,
+                showBrowser: $showBrowser,
+                workspaceRoot: store.selectedWorkspaceRoot
+            )
                 .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
             if let room = store.selectedRoom {
@@ -97,15 +101,23 @@ struct TerminalWorkspace: View {
     /// The dock's artifact model — the strip's browser popover opens files into it.
     @ObservedObject var artifact: ArtifactPaneModel
     @Binding var showBrowser: Bool
+    /// Passed through to the strip's artifact browser — see `ArtifactBrowser`.
+    let workspaceRoot: String?
 
-    init(artifact: ArtifactPaneModel, showBrowser: Binding<Bool>) {
+    init(artifact: ArtifactPaneModel, showBrowser: Binding<Bool>, workspaceRoot: String?) {
         self.artifact = artifact
         _showBrowser = showBrowser
+        self.workspaceRoot = workspaceRoot
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            TerminalStrip(manager: manager, artifact: artifact, showBrowser: $showBrowser)
+            TerminalStrip(
+                manager: manager,
+                artifact: artifact,
+                showBrowser: $showBrowser,
+                workspaceRoot: workspaceRoot
+            )
             Divider()
             SessionPane(session: manager.selected)
         }

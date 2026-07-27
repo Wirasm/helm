@@ -556,3 +556,61 @@ contexts, not the rendering.
 
 **Slice 2 — the operator tenant**, whenever the terminal stops being enough: a third
 dock tenant, explicit start, helm's first WS client.
+
+## Addendum 2026-07-27 (3) — a context is a FOLDER, not a registry entry (IA half of Move 1)
+
+Shipped on `refactor/workspace-as-folder`. Move 1 said projects belong in a top bar; this
+lands the half underneath it — **what a context IS** — and leaves the bar itself to the ADE
+frame slice.
+
+### The change
+
+A **workspace** replaces the project as helm's operating context: a folder you open, with
+no registration step and no name to invent. `⌘⇧O` (or the sidebar's "Open Workspace…")
+runs an `NSOpenPanel`; the chosen folder is open. Closing one removes it from the list and
+nothing else. The list and the current selection persist under `helmWorkspaces` /
+`helmSelectedWorkspace`.
+
+Room filtering is byte-for-byte what it was: `LiveRoom.belongsToProject(at:worktreeNames:)`
+is untouched, only its caller's source of the path changed. The whole IA change is one
+substitution — `selectedProject.path` → `selectedWorkspace.path`.
+
+### Why the registry had to go
+
+`POST /api/projects` bought helm exactly one thing: `GET /api/worktrees?project=<name>`.
+That endpoint has accepted `?path=` since the 2026-07-26 `resolveProjectRef` split — helm
+simply never used it (`EngineClient.worktrees`'s doc comment claimed it did; it lied, and a
+raw path under `project=` 404s). Against that single benefit stood three costs:
+
+- A unique-`name` registry cannot express **two checkouts of one repo**, while AGENTS.md
+  mandates worktree-per-branch everywhere. A worktree could never be a first-class context.
+- `removeProject` exists in the engine but is wired to **no route**, so a project added
+  through helm's form could never be removed through helm.
+- The form itself: a name field, a folder picker, an engine round-trip, and an inline error
+  state — ~90 lines to reach a filter.
+
+Workspaces make all three moot rather than fixing them. kild's registry is untouched and
+still real — the CLI and agents use it; **registration now happens via `kild project add`**,
+never from helm.
+
+### The one piece of new logic: folder → `~/.prp` store
+
+`WorkspaceStore` resolves an open folder to its artifact store, which is what lets the
+artifact browser preselect the right project instead of the last-used one. It prefers
+MATCHING an existing store's `project.json` `"path"` (parsed since day one and discarded
+until now) over recomputing prp's key — no algorithm to drift from a definition that lives
+in another repo. The derived key stays as the fallback, ported from prp exactly and pinned
+by both a golden value (`helm-3ec376fc`) and differential tests that run prp's own shell
+pipeline over real git repos.
+
+**A worktree resolves to its main checkout's store.** That is `--git-common-dir`, and it is
+correct: plans and reviews belong to the project, not to the directory holding the branch.
+Two workspaces on one repo, one store.
+
+### What this does NOT do
+
+Not the ADE frame: no project top bar, no `⌃1–9`, no per-workspace terminal lists or saved
+UI state — those need `shared-ghostty-app-runtime` to land first. "All" survives as a row,
+because pre-kild-#669 archives (no `cwd`, no live worktree) are visible only there.
+`⌘⇧O` is taken for Open Workspace, which collides with one line of rev 3's keyboard table
+that assigned it to "close artifact" — reconcile when the frame lands.

@@ -74,6 +74,48 @@ final class ArtifactBrowserTests: XCTestCase {
         XCTAssertTrue(ArtifactStoreDiscovery.discoverStores(under: missing).isEmpty)
     }
 
+    /// project.json's "path" is read alongside "name" — the field that links an open
+    /// workspace folder to its store, parsed and discarded until now.
+    func testDiscoveryReadsTheProjectPathAlongsideTheName() throws {
+        try makeStore("proj-a", name: "Alpha")
+        let bare = fixtureRoot.appendingPathComponent("proj-bare")
+        try FileManager.default.createDirectory(at: bare, withIntermediateDirectories: true)
+        try "{}".write(
+            to: bare.appendingPathComponent("project.json"), atomically: true, encoding: .utf8
+        )
+
+        let stores = ArtifactStoreDiscovery.discoverStores(under: fixtureRoot)
+
+        XCTAssertEqual(stores.first { $0.key == "proj-a" }?.projectPath, "/Users/x/proj-a")
+        // A registration without "path" is not a crash and not an empty string.
+        XCTAssertNil(stores.first { $0.key == "proj-bare" }?.projectPath)
+    }
+
+    // MARK: Workspace → store auto-selection
+
+    /// The browser's default: the open workspace's store, matched on project.json's
+    /// "path". Two workspaces on one repo (checkout + worktree) both resolve here,
+    /// because both report the SAME repo root.
+    func testWorkspaceRootSelectsItsOwnStore() throws {
+        try makeStore("kild-aaaaaaaa", name: "kild")
+        try makeStore("helm-bbbbbbbb", name: "helm")
+        let stores = ArtifactStoreDiscovery.discoverStores(under: fixtureRoot)
+
+        XCTAssertEqual(
+            WorkspaceStore.store(forRoot: "/Users/x/helm-bbbbbbbb", in: stores)?.key,
+            "helm-bbbbbbbb"
+        )
+    }
+
+    /// No store for this folder yet → nil, so the picker keeps its last-used value
+    /// rather than jumping to an unrelated project.
+    func testWorkspaceRootWithoutAStoreFallsBack() throws {
+        try makeStore("kild-aaaaaaaa", name: "kild")
+        let stores = ArtifactStoreDiscovery.discoverStores(under: fixtureRoot)
+
+        XCTAssertNil(WorkspaceStore.store(forRoot: "/Users/x/brand-new", in: stores))
+    }
+
     // MARK: File listing
 
     func testFileListingIsFlatWithRelativeNamesSortedByMtime() throws {

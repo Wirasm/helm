@@ -18,6 +18,9 @@ struct ArtifactStore: Equatable, Identifiable {
     let key: String
     /// Display name from project.json's "name", falling back to the key.
     let name: String
+    /// The repo root from project.json's "path" — the link from an open workspace
+    /// folder back to its store (`WorkspaceStore`). nil when the file omits it.
+    let projectPath: String?
     let root: URL
 
     var id: String { key }
@@ -53,10 +56,12 @@ enum ArtifactStoreDiscovery {
             else { continue }
             let projectJSON = dir.appendingPathComponent("project.json")
             guard fm.fileExists(atPath: projectJSON.path) else { continue }
+            let registered = registration(from: projectJSON)
             stores.append(
                 ArtifactStore(
                     key: dir.lastPathComponent,
-                    name: displayName(from: projectJSON) ?? dir.lastPathComponent,
+                    name: registered.name ?? dir.lastPathComponent,
+                    projectPath: registered.path,
                     root: dir
                 )
             )
@@ -74,15 +79,19 @@ enum ArtifactStoreDiscovery {
         return files.sorted { $0.modified > $1.modified }
     }
 
-    /// "name" from a store's project.json ({"path": ..., "name": ...}).
-    static func displayName(from projectJSON: URL) -> String? {
+    /// A store's registration — `{"path": ..., "name": ...}`, written by prp. One
+    /// parse for both fields: "name" titles the picker row, "path" is what a
+    /// workspace folder is matched against.
+    static func registration(from projectJSON: URL) -> (path: String?, name: String?) {
         guard
             let data = try? Data(contentsOf: projectJSON),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let name = object["name"] as? String,
-            !name.isEmpty
-        else { return nil }
-        return name
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (nil, nil) }
+        func nonEmpty(_ key: String) -> String? {
+            guard let value = object[key] as? String, !value.isEmpty else { return nil }
+            return value
+        }
+        return (nonEmpty("path"), nonEmpty("name"))
     }
 
     /// True for files the browser lists: .md/.html artifacts, never dotfiles
@@ -136,11 +145,16 @@ enum ArtifactStoreDiscovery {
 /// artifact button; ⌘O opens this. The listing refreshes on every open.
 struct ArtifactBrowser: View {
     @ObservedObject var model: ArtifactPaneModel
+    /// The open workspace's repo root (`KildStore.selectedWorkspaceRoot`), which
+    /// preselects ITS store instead of whatever was picked last. A plain value, not
+    /// the whole KildStore — the browser stays a pure view over the filesystem.
+    var workspaceRoot: String?
     let onDismiss: () -> Void
     /// Overridable so previews/tests could point elsewhere; production uses ~/.prp.
     var root: URL = ArtifactStoreDiscovery.defaultRoot
 
-    /// Last-selected project key, remembered across popover opens and relaunch.
+    /// Last-picked store key — the fallback when no workspace is open, or when the
+    /// open one has no store yet. Remembered across popover opens and relaunch.
     @AppStorage("artifactBrowserStore") private var selectedKey = ""
     @State private var stores: [ArtifactStore] = []
     @State private var files: [ArtifactFile] = []
@@ -189,9 +203,14 @@ struct ArtifactBrowser: View {
         stores.first { $0.key == selectedKey }
     }
 
+    /// The open workspace's store wins the picker on every open — that is the point
+    /// of the wiring: the right store preselected instead of the last-used one. The
+    /// Picker itself stays live, so browsing another project is one click away.
     private func refresh() {
         stores = ArtifactStoreDiscovery.discoverStores(under: root)
-        if selectedStore == nil {
+        if let workspaceStore = workspaceRoot.flatMap({ WorkspaceStore.store(forRoot: $0, in: stores) }) {
+            selectedKey = workspaceStore.key
+        } else if selectedStore == nil {
             selectedKey = stores.first?.key ?? ""
         }
         refreshFiles()
