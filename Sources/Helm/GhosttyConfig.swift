@@ -4,22 +4,29 @@ import GhosttyTerminal
 // Helm's ghostty config story, in one place.
 //
 // Effective config precedence (later wins — ghostty's "last value" rule):
-//   1. The user's own Ghostty config, when one exists — loaded verbatim as the
-//      base so helm terminals feel like the user's Ghostty (font, colors,
-//      keybinds, everything). macOS Ghostty load order is mirrored:
+//   1. Helm's own defaults — ALWAYS the base, config or no config: mono with a
+//      taller cell for breathing room and modest padding, plus the light/dark
+//      theme following helm's appearance override (see
+//      `TerminalSession.defaultConfiguration`).
+//   2. The user's own Ghostty config, layered on top, so helm terminals feel
+//      like their Ghostty (font, colors, keybinds) — but only for the keys they
+//      actually set. macOS Ghostty load order is mirrored:
 //      $XDG_CONFIG_HOME/ghostty/config first, then
 //      ~/Library/Application Support/com.mitchellh.ghostty/config (which
 //      therefore wins where both set a key).
-//   2. Helm's required overrides — applied AFTER the user config. Today that is
-//      only `term = xterm-256color`: the embedded xcframework ships no
-//      terminfo, so ghostty's default TERM breaks TUIs (docs/SPIKE.md).
-//   3. No user config → helm's own defaults instead (13pt mono with breathing
-//      room, large scrollback, light/dark theme following helm's appearance
-//      override — see `TerminalSession.makeController`).
+//   3. Helm's session overrides — applied last, the things helm must win:
+//      `term = xterm-256color` (the embedded xcframework ships no terminfo, so
+//      ghostty's default TERM breaks TUIs — docs/SPIKE.md), `scrollback-limit`
+//      (a job requirement for agent transcripts, not a preference), and the
+//      font size the human chose with ⌘+/⌘- if they ever have.
+//
+// Tier 1 used to be an EITHER/OR with tier 2 — any user config at all, even a
+// single keybind line, discarded every one of helm's defaults. Layering them is
+// what makes "I have a Ghostty config" cost only the keys it mentions.
 //
 // A user config that ghostty rejects (unknown key, missing theme, …) is
-// dropped WHOLE with a logged warning and helm falls back to its defaults —
-// a terminal that opens always beats a faithfully-broken one.
+// dropped WHOLE with a logged warning; helm's defaults still stand, since they
+// are the base rather than the fallback.
 
 /// Points the embedded libghostty at a resources directory providing the
 /// shell-integration scripts (OSC 133 prompt marks → ⌘↑/⌘↓ jump-to-prompt,
@@ -109,6 +116,26 @@ enum GhosttyUserConfig {
         }
         guard !contents.isEmpty else { return nil }
         return contents.map(sanitize).joined(separator: "\n")
+    }
+
+    /// The `font-size` the user's config declares, if any — the size helm's
+    /// first ⌘+ steps up FROM, so zooming starts at what they are actually
+    /// looking at rather than at helm's baseline. Last value wins, mirroring
+    /// ghostty; comments and other keys are ignored.
+    static func declaredFontSize(in contents: String) -> Float? {
+        contents
+            .components(separatedBy: .newlines)
+            .compactMap { line -> Float? in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.hasPrefix("#"), let eq = trimmed.firstIndex(of: "=") else {
+                    return nil
+                }
+                guard trimmed[..<eq].trimmingCharacters(in: .whitespaces) == "font-size" else {
+                    return nil
+                }
+                return Float(trimmed[trimmed.index(after: eq)...].trimmingCharacters(in: .whitespaces))
+            }
+            .last
     }
 
     /// Drops `config-file` include lines: helm re-renders the config into a
