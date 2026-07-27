@@ -360,3 +360,199 @@ terminal workspace, always visible, min 480pt. Right: ONE shared dock — a sele
 room's detail wins it, else the open artifact, else it collapses; Esc deselects.
 Sticky dock width via @AppStorage (idealWidth restore; HSplitView won't persist).
 ⌘T freed (reserved), ⌘J reserved for terminal-maximize; the Resolve-prefill died.
+
+---
+
+## Addendum 2026-07-27 — concept rev 2: slice 1a's successor, and four corrections
+
+A high-fidelity concept now exists for what comes after slice 1a (artifact
+`4efa3d35-a936-4953-913a-bcdc7c208489`). Its shape: **the project becomes the
+operating context** (switch it and terminals, operator, rooms and artifacts all
+swap); an **operator chat** takes the center as home; the **terminal becomes a
+strip** with ⌘J to full height; **rooms unfold to their participants** and ↑/↓/→/←
+walks them. The context bar carries fleet truth at home and git truth inside a room.
+
+Rev 1 of that concept was drawn before the naming audit and guessed at engine state.
+Four corrections, each checked against code rather than remembered — this is the record.
+
+### 1. Vocabulary — the mock now speaks the glossary
+
+Rev 1 said workstream / main agent / driver / fleet bar throughout. `GLOSSARY.md`
+(2026-07-26) retires all of them and names helm UI copy explicitly. Renamed in the
+concept and in its own CSS class names: room, operator, context bar, participants
+(never bare "session"). `History` survives as helm's tab label — the glossary
+sanctions that one spelling — but the rooms behind it are *archived* everywhere else.
+Residual, flagged not fixed: the CLI's `kild agent ls` / `--agent` in the persona
+sense, already parked by the glossary for "when next touching the CLI".
+
+### 2. The operator chat is a REVERSAL, and now carries its argument
+
+Addendum 2026-07-24 (2) killed this exact surface on purpose: *"a bespoke operator
+chat would freeze one harness into the UI"* — the operator rotates by inference
+economics. Reviving it without answering that would just be forgetting. The answer,
+in three parts:
+
+- **It is not a harness, it is a view onto a kild session.** helm posts prompts and
+  renders a transcript; the model comes from the config `models` catalog, resolved
+  engine-side. helm encodes no harness, no model, no persona — rotation stays where
+  it already happens.
+- **The fear was partly right, and we accept the limit.** kild sessions are pi
+  processes. The chat hosts pi on any model; it cannot host Claude Code or codex.
+  So the terminal is not a fallback for when the chat fails — it is the permanent
+  home for every harness kild does not wrap. Two operators, one surface.
+- **It is additive, never load-bearing.** Spawn no session and helm is precisely
+  slice 1. That is Deliver-Signals holding: the engine keeps the contract, the
+  cockpit stays the courtesy surface.
+
+### 3. Slice 2 AMENDS AGENTS.md rather than violating it
+
+The boundary today reads "The terminal is the center of attention — never hidden,
+never swapped, never below comfort width." Slice 1 is compliant (terminal still the
+center's tenant); slice 2 is not. The rule changes in the same PR as the layout:
+
+> The terminal is never more than one keystroke from full height — never hidden
+> behind navigation, never swapped for another tenant, never below comfort width
+> while it holds the center. ⌘J is the guarantee.
+
+"Esc is never intercepted globally (TUIs own it)" survives untouched.
+
+### 4. The engine is already done — the missing client is helm's
+
+Rev 1 called the chat "the biggest new piece" and assumed new engine work. Wrong:
+
+- `POST /api/sessions {operator:true}` spawns it with room-control tools
+  (`KILD_OPERATOR=1`); `forkFrom` exists for frozen-context forks.
+- `POST /api/sessions/:id/prompt`, `POST /api/sessions/:id/stop`, `GET /api/sessions`,
+  `GET /api/sessions/:id/transcript` — send, teardown, list, backfill.
+- **Live streaming already exists.** Every WS connection subscribes to
+  `sessionManager` (`engine/src/server.ts:660`) and receives `{session, event}`;
+  `UiEvent` carries `text` deltas, `tool_start`/`tool_end`, `model`, `stats`, the
+  `pi_session` resume handle, `agent_end`.
+
+The real gap is helm-side and **slice 1 needs it too**: `EngineClient` has no session
+methods, and helm has **no WS client at all** — `RootView` polls `/api/rooms/live` on
+a 5s `Timer`. A 5s poll cannot render a transcript that types. So slice 2's cost is
+helm's first streaming client plus delta assembly; slice 1 collects the same benefit
+because room state stops being five seconds stale.
+
+**Verify, do not assume:** whether a room's report wakes the operator session that
+*opened* it. The delegate-nudge exists for a room lead; the opener path is asserted by
+Deliver-Signals but unconfirmed in code. If missing, that is the one engine addition
+slice 2 needs.
+
+### Build order
+
+**Slice 1 — the observer half**: project-context frame, rooms column with participant
+expansion + collisions, context bar, artifact dock, ⌘J terminal center. Terminal stays
+the center's tenant, so AGENTS.md is untouched and the whole slice is dogfoodable. Its
+one piece of real weight: **project stops being a filter and becomes the operating
+context** — per-project ptys inside TerminalManager, per-project store resolution,
+per-project selection state. Everything else is rendering over data `/api/rooms/live`
+already returns.
+
+**Slice 2 — the kild chat**, planned after a week of real use. Carries the AGENTS.md
+amendment and helm's first WS client.
+
+Also to fix in slice 1: `SidebarColumn.swift` renders open decisions as a numbered
+`⚠ n` label — a numbered pill, which both the concept ("counts live only in the
+context bar") and AGENTS.md ("attention is a state of existing elements, never an
+added element") forbid.
+
+---
+
+## Addendum 2026-07-27 (2) — concept rev 3: helm is an ADE, and the chat leaves the center
+
+Owner framing that reshapes the concept: **helm replaces one-IDE-per-desktop**. Today
+that is N macOS Spaces, one IDE each, switched with ⌃1/2/3. helm becomes the ADE —
+one window holding every project context at once. Two sentences from that session
+drove rev 3: projects should switch like Spaces, and *"mostly I will likely run my
+operator in the terminal."*
+
+### Move 1 — projects to a top bar, on Mission Control's keys
+
+A sidebar list reads as *a filter inside this world*; a top bar reads as *which world
+am I in*. The metaphor picks the position, and it frees the whole left column for
+rooms now that they unfold into participants. So: a project strip above the three
+columns, each tab carrying the same amber attention state its rooms carry.
+
+Keys mirror Mission Control rather than inventing — `⌃1–9` direct, `⌃←/→` adjacent.
+**They collide by design**: while Mission Control holds those bindings the keystrokes
+never reach any app, so they must be handed over in System Settings → Keyboard →
+Shortcuts. That trade is only right because helm subsumes the reason those desktops
+existed. Cost to accept: intercepting `⌃1–9` takes Ctrl+2…8 from the terminal, where
+they are legacy control codes (rarely pressed deliberately, but the same family of
+concern as "Esc is never intercepted globally").
+
+### Move 2 — the operator chat becomes the dock's third tenant (WITHDRAWS rev 2's Correction 3)
+
+Rev 2 argued the chat back from the dead and gave it the center. The owner's actual
+habit undoes the premise. Not a deletion — a relocation:
+
+- Select a room → dock shows room detail *(shipped in 1a)*
+- Select a participant → dock shows its transcript
+- **Select the operator → dock shows the conversation + composer**
+- Select nothing → the artifact, else the dock collapses
+- **Center is always the terminal**
+
+Left column is what you observe, dock is its detail, center is your hands. One rule,
+no exceptions. Consequences:
+
+- **The AGENTS.md amendment is withdrawn.** The terminal is never demoted, so the
+  boundary as written ("never hidden, never swapped, never below comfort width")
+  survives untouched. Rev 2's Correction 3 is dead.
+- **The chat needs no new layout** — it reuses the dock mechanism 1a already shipped.
+- **⌘J gets a real job**: fill the window (hide sidebar + dock), not "swell over the chat".
+- **The composer addresses the dock's tenant** — post to room, or message the operator.
+- **Slice 2 becomes deferrable indefinitely**: "add a tenant," not a re-layout.
+
+Recorded plainly: the 2026-07-24 (2) decision that killed the operator strip looks
+more right than rev 2 gave it credit for. Rev 2's three-part argument stays on file as
+the case for building the chat *at all* — it no longer buys the center.
+
+**Operator spawn: never auto.** Decided. An idle pi process per project is surprise
+token spend. Until you start one, the left column's top row is a dashed
+"start operator" affordance.
+
+### Move 3 — what per-project context actually costs
+
+"Everything swaps" sounds like serializing a workspace. Sorted by what each thing is,
+only one tier is state:
+
+1. **Live resources — kept running.** ptys and their ghostty NSViews, per project. A
+   build in project 1 keeps building while you are in project 2. Terminals belong to a
+   project and never move between them; a project gets its first shell lazily on first
+   visit. No auto-eviction — the ceiling is N projects × M terminals, stated not
+   engineered around.
+2. **Engine-owned — nothing to do.** Rooms, participants, git state, cost, the
+   operator session all live in kild and keep running regardless; helm holds an id and
+   a filter. The single `/api/rooms/live` poll already returns every project's rooms,
+   so cross-project attention is free to compute.
+3. **UI state — the only save/restore.** Selection, expanded rooms, Live/History tab,
+   dock tenant, open artifact, terminal tab, ⌘J, composer drafts. One struct per
+   project, ~15 fields.
+
+**Does NOT swap:** window size, sidebar/dock widths, font size, theme. Body
+preferences, not context — per-project dock width would make every switch feel like
+the window twitching.
+
+**The risk:** `TerminalManager` is a `.shared` singleton with a flat session list and
+`TerminalWorkspace` binds `manager.selected`. Per-project lists reshape that selection
+model, in the one component whose header warns about lifecycle. Mitigation: the
+mechanism already exists — tab switching dismantles the SwiftUI representable via
+`.id(session.id)` while the manager keeps owning the NSView. Parking a project is the
+same move at a coarser grain.
+
+**Known gap, deliberately unbuilt:** artifact scroll position across a switch. A
+webview per project is unbounded memory; restoring scroll costs a mermaid re-render
+and a beat of jank. Ship without it.
+
+### Build order (supersedes the rev 2 split)
+
+**Slice 1 — the ADE frame.** Project top bar + per-project contexts; observe column
+rebuilt around rooms expanding to participants, with collisions and amber attention;
+context bar; artifact dock unchanged. Terminal keeps the center, so AGENTS.md is
+untouched and every byte renders engine data that already exists. The weight is the
+contexts, not the rendering.
+
+**Slice 2 — the operator tenant**, whenever the terminal stops being enough: a third
+dock tenant, explicit start, helm's first WS client.
