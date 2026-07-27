@@ -29,7 +29,7 @@ struct TerminalStrip: View {
         HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(manager.sessions) { session in
+                    ForEach(manager.activeWorkspacePath.map(manager.sessions(for:)) ?? []) { session in
                         TerminalTab(
                             session: session,
                             isSelected: session.id == manager.selectedID,

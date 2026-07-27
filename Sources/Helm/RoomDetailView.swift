@@ -20,8 +20,9 @@ struct RoomDetailView: View {
     /// Called after a successful post so the owner refreshes the room from the engine
     /// (read path is polling for now; this just shortens the echo).
     var onPosted: () async -> Void
+    /// Workspace-owned draft: switching rooms or workspaces parks typed text.
+    @Binding var draft: String
 
-    @State private var draft = ""
     @State private var sending = false
     @State private var postError: String?
     @State private var copiedRoomID = false

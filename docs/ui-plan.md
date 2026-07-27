@@ -614,3 +614,20 @@ UI state — those need `shared-ghostty-app-runtime` to land first. "All" surviv
 because pre-kild-#669 archives (no `cwd`, no live worktree) are visible only there.
 `⌘⇧O` is taken for Open Workspace, which collides with one line of rev 3's keyboard table
 that assigned it to "close artifact" — reconcile when the frame lands.
+
+---
+
+## Addendum 2026-07-27 — ADE workspace frame
+
+Shipped the workspace frame: open folders now occupy a top context bar and each context
+keeps its terminal tab list, selected room/history tab, artifact path, expanded-room state,
+and composer drafts. `TerminalManager` remains the sole app-level owner of all session
+NSViews and exactly one shared `TerminalController` / `ghostty_app_t`; switching contexts
+only unmounts the parked view, so ptys continue running. A workspace creates its first
+terminal lazily on first visit, bounding startup work but leaving the deliberate N×M
+terminal ceiling (workspaces × tabs) as the only resource limit in this slice. Dock width
+and font size remain global body preferences.
+
+`⌃1–9` and `⌃←→` match Mission Control after the user releases those system shortcuts;
+`⌘⌥1–9` remains an always-available workspace-selection fallback. The owner must visually
+verify that a running build survives a switch; agents must not launch the GUI.
