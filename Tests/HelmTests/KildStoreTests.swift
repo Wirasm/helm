@@ -82,6 +82,47 @@ final class KildStoreTests: XCTestCase {
         XCTAssertEqual(store.shownRooms.map(\.id), ["r"])
     }
 
+    // MARK: Archive search
+
+    func testArchiveSearchFindsRoomParticipantModelDecisionAndPostText() async {
+        stubEngine(
+            rooms: "[]",
+            archive: """
+            [{ "id": "alpha", "name": "Release Train",
+               "participants": [{"name":"builder","persona":"implementor","model":"openai-codex/gpt-5.6-terra"}],
+               "log": [],
+               "decisions": [{"key":"api-shape","summary":"Choose the wire format","openedBy":"builder"}] },
+             { "id": "beta", "name": "Quiet Room", "participants": [],
+               "log": [{"id":"m1","from":"reviewer","to":["human"],"text":"The migration is complete","ts":2}] }]
+            """,
+            worktrees: "[]"
+        )
+        let store = makeStore()
+        await store.load()
+        store.tab = .history
+
+        for (query, expectedID) in [
+            ("release", "alpha"), ("BUILDER", "alpha"), ("5.6-terra", "alpha"),
+            ("wire format", "alpha"), ("migration is complete", "beta"), ("reviewer", "beta")
+        ] {
+            store.historyQuery = query
+            XCTAssertEqual(store.shownRooms.map(\.id), [expectedID], "Archive search should match \(query)")
+        }
+    }
+
+    func testArchiveSearchDoesNotFilterLiveRooms() async {
+        stubEngine(
+            rooms: "[\(room(id: "live", git: "/p/kild"))]",
+            archive: "[]",
+            worktrees: "[]"
+        )
+        let store = makeStore()
+        await store.load()
+        store.historyQuery = "does-not-match"
+
+        XCTAssertEqual(store.shownRooms.map(\.id), ["live"], "An inactive archive query must not hide live rooms")
+    }
+
     // MARK: The open list
 
     func testOpeningAWorkspaceSelectsItAndPersistsTheList() {
@@ -121,8 +162,8 @@ final class KildStoreTests: XCTestCase {
         let first = Workspace(path: "/p/first")
         let second = Workspace(path: "/p/second")
         WorkspaceContextStore.save([
-            first.path: WorkspaceContext(selectedRoomID: "first-room", roomsTab: .live),
-            second.path: WorkspaceContext(selectedRoomID: "second-room", roomsTab: .history)
+            first.path: WorkspaceContext(selectedRoomID: "first-room", roomsTab: .live, historyQuery: ""),
+            second.path: WorkspaceContext(selectedRoomID: "second-room", roomsTab: .history, historyQuery: "reviewer")
         ], to: defaults)
         let store = makeStore()
 
@@ -132,8 +173,10 @@ final class KildStoreTests: XCTestCase {
         store.open(second)
         XCTAssertEqual(store.selection, "second-room", "second workspace does not inherit the first room")
         XCTAssertEqual(store.tab, .history, "second workspace restores history")
+        XCTAssertEqual(store.historyQuery, "reviewer", "archive search belongs to the workspace context")
         store.select(first)
         XCTAssertEqual(store.selection, "first-room", "returning restores the first selection")
+        XCTAssertEqual(store.historyQuery, "", "returning restores the first workspace's archive search")
     }
 
     func testClosingAWorkspaceEvictsItsContext() {

@@ -7,6 +7,7 @@ struct WorkspaceContext: Codable, Equatable {
     var selectedTerminalID: UUID?
     var selectedRoomID: String?
     var roomsTab: KildStore.RoomsTab = .live
+    var historyQuery = ""
     var openArtifactPath: String?
     var expandedRooms: Set<String> = []
     var composerDrafts: [String: String] = [:]

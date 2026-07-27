@@ -53,6 +53,7 @@ struct RootView: View {
         .onReceive(refresh) { _ in Task { await store.load() } }
         .onChange(of: store.selection) { _, _ in persistCurrentContext() }
         .onChange(of: store.tab) { _, _ in persistCurrentContext() }
+        .onChange(of: store.historyQuery) { _, _ in persistCurrentContext() }
         .onReceive(artifact.$document) { _ in persistCurrentContext() }
         .onReceive(NotificationCenter.default.publisher(for: .helmSelectWorkspace)) { note in
             guard let index = note.object as? Int, store.workspaces.indices.contains(index) else { return }

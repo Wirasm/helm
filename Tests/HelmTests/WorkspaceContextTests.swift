@@ -16,7 +16,7 @@ final class WorkspaceContextTests: XCTestCase {
 
     func testSaveRestoreRoundTrip() {
         let id = UUID()
-        let context = WorkspaceContext(terminalSessionIDs: [id], selectedTerminalID: id, selectedRoomID: "room", roomsTab: .history, openArtifactPath: "/tmp/a.md", expandedRooms: ["room"], composerDrafts: ["room": "draft"], branch: "main")
+        let context = WorkspaceContext(terminalSessionIDs: [id], selectedTerminalID: id, selectedRoomID: "room", roomsTab: .history, historyQuery: "reviewer", openArtifactPath: "/tmp/a.md", expandedRooms: ["room"], composerDrafts: ["room": "draft"], branch: "main")
         WorkspaceContextStore.save(["/workspace": context], to: defaults)
 
         let restored = WorkspaceContextStore.load(from: defaults, validSessionIDs: [id])["/workspace"]
