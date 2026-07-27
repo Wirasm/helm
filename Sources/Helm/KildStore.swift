@@ -26,6 +26,9 @@ final class KildStore: ObservableObject {
     /// (a selected room wins the dock over any open artifact).
     @Published var selection: String? = LaunchOptions.roomId
     @Published var tab: RoomsTab = .live
+    /// Local archive search. The engine already delivered the archive, so filtering
+    /// names, participants, decisions and posts is immediate and needs no extra poll.
+    @Published var historyQuery = ""
     @Published private(set) var contexts: [String: WorkspaceContext]
     // A --room launch lands on History when the id isn't live at first load; the
     // load() pass below corrects the tab once data arrives (testability seam).
@@ -61,16 +64,21 @@ final class KildStore: ObservableObject {
     /// attention-first (open decisions on top); the archive sorts newest-activity first.
     var shownRooms: [EngineClient.LiveRoom] {
         let source = tab == .live ? rooms : archived
-        let filtered = selectedWorkspace.map { workspace in
+        let workspaceFiltered = selectedWorkspace.map { workspace in
             source.filter {
                 $0.belongsToProject(at: workspace.path, worktreeNames: workspaceWorktreeNames)
             }
         } ?? source
-        return tab == .live
-            ? filtered.sorted {
+        if tab == .live {
+            return workspaceFiltered.sorted {
                 ($0.openDecisions.isEmpty ? 1 : 0, $0.name) < ($1.openDecisions.isEmpty ? 1 : 0, $1.name)
             }
-            : filtered.sorted { ($0.log.last?.ts ?? 0) > ($1.log.last?.ts ?? 0) }
+        }
+        let query = historyQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let searched = query.isEmpty
+            ? workspaceFiltered
+            : workspaceFiltered.filter { $0.matchesArchiveSearch(query) }
+        return searched.sorted { ($0.log.last?.ts ?? 0) > ($1.log.last?.ts ?? 0) }
     }
 
     /// The dock's room tenant: the selection resolved against the SHOWN list, so
@@ -113,6 +121,7 @@ final class KildStore: ObservableObject {
             ? terminalManager.selectedID : nil
         context.selectedRoomID = selection
         context.roomsTab = tab
+        context.historyQuery = historyQuery
         context.openArtifactPath = artifact.document?.url.path
         contexts[workspace.path] = context
         WorkspaceContextStore.save(contexts, to: defaults)
@@ -122,6 +131,7 @@ final class KildStore: ObservableObject {
         let context = contexts[workspace.path] ?? WorkspaceContext()
         selection = context.selectedRoomID
         tab = context.roomsTab
+        historyQuery = context.historyQuery
     }
 
     func composerDraft(for roomID: String) -> String {
@@ -191,5 +201,24 @@ final class KildStore: ObservableObject {
             archived = []
             self.error = "Start it: cd sild/kild/engine && bun run serve"
         }
+    }
+}
+
+private extension EngineClient.LiveRoom {
+    /// Archive search is deliberately broad: the operator may remember a room,
+    /// participant, model, decision, or a phrase from the log rather than its title.
+    func matchesArchiveSearch(_ query: String) -> Bool {
+        var fields = [id, name]
+        fields.append(contentsOf: participants.flatMap { participant in
+            [participant.name, participant.persona, participant.model].compactMap { $0 }
+        })
+        fields.append(contentsOf: log.flatMap { message in
+            [message.from, message.text] + message.to
+        })
+        fields.append(contentsOf: (decisions ?? []).flatMap { decision in
+            [decision.key, decision.summary, decision.openedBy, decision.resolvedBy, decision.note]
+                .compactMap { $0 }
+        })
+        return fields.contains { $0.localizedCaseInsensitiveContains(query) }
     }
 }

@@ -57,66 +57,85 @@ struct RoomDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Text(room.name).font(.title3.bold())
+                Text(room.name)
+                    .font(.title3.bold())
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
                 roomIDBadge
-                // Live: badge only for anomalous states (running is the norm).
-                // Archived: the DISPLAY state — a snapshot frozen at "running"
-                // was interrupted; a plain closed room carries no badge at all.
+                // Only anomalous state earns text in the header. It stays plain
+                // rather than becoming an attention badge.
                 if readOnly {
                     if room.archivedDisplayState != "closed" {
-                        stateBadge(room.archivedDisplayState)
+                        stateLabel(room.archivedDisplayState)
                     }
                 } else if let state = room.state, state != "running" {
-                    stateBadge(state)
+                    stateLabel(state)
                 }
                 Spacer()
             }
-            HStack(spacing: 6) {
-                ForEach(room.participants, id: \.name) { p in
-                    HStack(spacing: 3) {
-                        // Same accent as the participant's log rows — the chips
-                        // double as the color legend.
-                        Text("@\(p.name)")
-                            .font(.caption.monospaced().bold())
-                            .foregroundStyle(
-                                SenderStyle.isHuman(p.name)
-                                    ? Color.accentColor
-                                    : SenderStyle.accent(for: p.name)
-                            )
-                        if let model = p.model {
-                            Text(model)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(.quaternary, in: Capsule())
-                    .contextMenu {
-                        // Resume only for archived rooms — the session is dead, so
-                        // `pi --session` has one writer. (Live would need --fork.)
-                        if readOnly, let resume = p.resumeCommand {
-                            Button("Copy resume command") { Pasteboard.copy(resume) }
-                        }
-                    }
-                    .help(
-                        readOnly && p.resumeCommand != nil
-                            ? "Right-click to copy: \(p.resumeCommand!)"
-                            : ""
-                    )
+            // Participants are one dense, horizontally scrollable legend. Chips never
+            // wrap internally, so a narrow user-sized dock cannot turn them into ovals;
+            // participant count affects scroll extent rather than stealing log height.
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 6) {
+                    ForEach(room.participants, id: \.name) { participantChip($0) }
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
         .padding(10)
     }
 
-    private func stateBadge(_ state: String) -> some View {
+    /// The handle stays readable while an unusually long model truncates in the
+    /// middle. The complete identity remains available as hover help.
+    private func participantChip(_ participant: EngineClient.Participant) -> some View {
+        HStack(spacing: 3) {
+            // Same accent as the participant's log rows — the chips double as
+            // the color legend without adding an attention badge.
+            Text("@\(participant.name)")
+                .font(.caption.monospaced().bold())
+                .foregroundStyle(
+                    SenderStyle.isHuman(participant.name)
+                        ? Color.accentColor
+                        : SenderStyle.accent(for: participant.name)
+                )
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
+            if let model = participant.model {
+                Text("· \(model)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .frame(maxWidth: 320)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(.quaternary, in: Capsule())
+        .contextMenu {
+            // Resume only for archived rooms — the session is dead, so
+            // `pi --session` has one writer. (Live would need --fork.)
+            if readOnly, let resume = participant.resumeCommand {
+                Button("Copy resume command") { Pasteboard.copy(resume) }
+            }
+        }
+        .help(participantHelp(participant))
+    }
+
+    private func participantHelp(_ participant: EngineClient.Participant) -> String {
+        let identity = participant.model.map { "@\(participant.name) · \($0)" } ?? "@\(participant.name)"
+        guard readOnly, let resume = participant.resumeCommand else { return identity }
+        return "\(identity)\nRight-click to copy: \(resume)"
+    }
+
+    private func stateLabel(_ state: String) -> some View {
         Text(state)
             .font(.caption.monospaced())
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.quaternary, in: Capsule())
+            .lineLimit(1)
     }
 
     /// Short room id, click-to-copy (copies the FULL id). The brief "copied"
