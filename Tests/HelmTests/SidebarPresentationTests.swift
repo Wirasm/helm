@@ -45,6 +45,18 @@ final class SidebarPresentationTests: XCTestCase {
         )
     }
 
+    func testCollisionSummaryUsesOneUniqueFileSetForCountAndHelp() {
+        let summary = SidebarPresentation.collisionSummary([
+            .init(room: "beta", files: ["shared.swift"]),
+            .init(room: "charlie", files: ["Sources/A.swift", "shared.swift"])
+        ])
+
+        XCTAssertEqual(summary.names, "beta, charlie")
+        XCTAssertEqual(summary.files, ["Sources/A.swift", "shared.swift"])
+        XCTAssertEqual(summary.count, summary.files.count)
+        XCTAssertEqual(summary.count, 2)
+    }
+
     func testModelShortnameOnlyDropsProviderPath() {
         XCTAssertEqual(
             SidebarPresentation.modelShortname("openai-codex/gpt-5.6-terra"),

@@ -15,6 +15,20 @@ enum SidebarPresentation {
         case quiet
     }
 
+    struct CollisionSummary: Equatable {
+        let names: String
+        let files: [String]
+
+        var count: Int { files.count }
+    }
+
+    static func collisionSummary(_ collisions: [KildStore.RoomCollision]) -> CollisionSummary {
+        CollisionSummary(
+            names: collisions.map(\.room).joined(separator: ", "),
+            files: Set(collisions.flatMap(\.files)).sorted()
+        )
+    }
+
     static func roomStatus(state: String?, hasOpenDecisions: Bool, live: Bool) -> RoomStatus {
         if hasOpenDecisions { return .needsYou }
         if live && state == "running" { return .working }
@@ -278,9 +292,7 @@ struct SidebarColumn: View {
         collisions: [KildStore.RoomCollision]
     ) -> some View {
         let worktree = room.worktree ?? "main checkout"
-        let collisionNames = collisions.map(\.room).joined(separator: ", ")
-        let collisionCount = Set(collisions.flatMap(\.files)).count
-        let files = Set(collisions.flatMap(\.files)).sorted()
+        let collision = SidebarPresentation.collisionSummary(collisions)
         return HStack(spacing: 5) {
             Text("⌂ \(worktree)")
                 .foregroundStyle(.secondary)
@@ -288,11 +300,11 @@ struct SidebarColumn: View {
                 .truncationMode(.tail)
                 .help(room.git?.path ?? worktree)
             if !collisions.isEmpty {
-                Text("⇢ \(collisionNames) · \(collisionCount)")
+                Text("⇢ \(collision.names) · \(collision.count)")
                     .foregroundStyle(.orange)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(files.joined(separator: "\n"))
+                    .help(collision.files.joined(separator: "\n"))
                     .layoutPriority(1)
             }
         }
