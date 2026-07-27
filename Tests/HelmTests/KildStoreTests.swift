@@ -82,6 +82,57 @@ final class KildStoreTests: XCTestCase {
         XCTAssertEqual(store.shownRooms.map(\.id), ["r"])
     }
 
+    // MARK: Collisions
+
+    func testCollisionsIntersectCommittedChangesAcrossLiveRooms() async {
+        stubEngine(
+            rooms: """
+            [{"id":"a","name":"alpha","participants":[],"log":[],
+              "git":{"path":"/p/a","changedFiles":["Sources/A.swift","shared.swift"]}},
+             {"id":"b","name":"beta","participants":[],"log":[],
+              "git":{"path":"/p/b","changedFiles":["shared.swift","Tests/B.swift"]}},
+             {"id":"c","name":"charlie","participants":[],"log":[],
+              "git":{"path":"/p/c","changedFiles":["shared.swift","shared.swift","Sources/A.swift"]}},
+             {"id":"d","name":"delta","participants":[],"log":[],
+              "git":{"path":"/p/d","changedFiles":["elsewhere.swift"]}}]
+            """,
+            archive: "[]",
+            worktrees: "[]"
+        )
+        let store = makeStore()
+        await store.load()
+
+        XCTAssertEqual(store.collisions(for: "a"), [
+            .init(room: "beta", files: ["shared.swift"]),
+            .init(room: "charlie", files: ["Sources/A.swift", "shared.swift"])
+        ])
+        XCTAssertTrue(store.collisions(for: "d").isEmpty)
+
+        // Collision scope is every live room, even when the workspace hides peers.
+        store.select(Workspace(path: "/p/a"))
+        await store.load()
+        XCTAssertEqual(store.shownRooms.map(\.id), ["a"])
+        XCTAssertEqual(store.collisions(for: "a").map(\.room), ["beta", "charlie"])
+    }
+
+    func testCollisionsIgnoreGitFailureOnEitherRoom() async {
+        stubEngine(
+            rooms: """
+            [{"id":"good","name":"good","participants":[],"log":[],
+              "git":{"path":"/p/good","changedFiles":["shared.swift"]}},
+             {"id":"failed","name":"failed","participants":[],"log":[],
+              "git":{"path":"/p/failed","changedFiles":["shared.swift"],"error":"not a repository"}}]
+            """,
+            archive: "[]",
+            worktrees: "[]"
+        )
+        let store = makeStore()
+        await store.load()
+
+        XCTAssertTrue(store.collisions(for: "good").isEmpty)
+        XCTAssertTrue(store.collisions(for: "failed").isEmpty)
+    }
+
     // MARK: Archive search
 
     func testArchiveSearchFindsRoomParticipantModelDecisionAndPostText() async {
@@ -108,6 +159,8 @@ final class KildStoreTests: XCTestCase {
             store.historyQuery = query
             XCTAssertEqual(store.shownRooms.map(\.id), [expectedID], "Archive search should match \(query)")
         }
+        store.historyQuery = ""
+        XCTAssertEqual(store.shownRooms.count, 2, "clearing search restores the archive")
     }
 
     func testArchiveSearchDoesNotFilterLiveRooms() async {
@@ -162,21 +215,29 @@ final class KildStoreTests: XCTestCase {
         let first = Workspace(path: "/p/first")
         let second = Workspace(path: "/p/second")
         WorkspaceContextStore.save([
-            first.path: WorkspaceContext(selectedRoomID: "first-room", roomsTab: .live, historyQuery: ""),
-            second.path: WorkspaceContext(selectedRoomID: "second-room", roomsTab: .history, historyQuery: "reviewer")
+            first.path: WorkspaceContext(
+                selectedRoomID: "first-room", roomsTab: .live, historyQuery: "", expandedRooms: ["first-room"]
+            ),
+            second.path: WorkspaceContext(
+                selectedRoomID: "second-room", roomsTab: .history, historyQuery: "reviewer",
+                expandedRooms: ["second-room"]
+            )
         ], to: defaults)
         let store = makeStore()
 
         store.open(first)
         XCTAssertEqual(store.selection, "first-room", "first workspace applies its saved room")
         XCTAssertEqual(store.tab, .live, "first workspace applies its saved tab")
+        XCTAssertEqual(store.expandedRooms, ["first-room"])
         store.open(second)
         XCTAssertEqual(store.selection, "second-room", "second workspace does not inherit the first room")
         XCTAssertEqual(store.tab, .history, "second workspace restores history")
         XCTAssertEqual(store.historyQuery, "reviewer", "archive search belongs to the workspace context")
+        XCTAssertEqual(store.expandedRooms, ["second-room"])
         store.select(first)
         XCTAssertEqual(store.selection, "first-room", "returning restores the first selection")
         XCTAssertEqual(store.historyQuery, "", "returning restores the first workspace's archive search")
+        XCTAssertEqual(store.expandedRooms, ["first-room"], "room expansion follows workspace context")
     }
 
     func testClosingAWorkspaceEvictsItsContext() {

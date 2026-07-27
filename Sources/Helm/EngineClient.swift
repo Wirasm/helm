@@ -54,8 +54,13 @@ struct EngineClient: Sendable {
 
     struct Participant: Decodable {
         let name: String
+        let kind: String?
         let persona: String?
         let model: String?
+        /// Whether the participant finished its turn and is waiting for input.
+        let idle: Bool?
+        /// Whether it explicitly delivered a post during this activation.
+        let posted: Bool?
         /// Durable pi resume handle (`pi --session <file>`) — set once the session
         /// reported it; survives into the archive.
         let piSessionFile: String?
@@ -92,12 +97,20 @@ struct EngineClient: Sendable {
         var date: Date { Date(timeIntervalSince1970: ts / 1000) }
     }
 
-    /// The slice of the engine's per-room git status helm consumes: `path` is the
-    /// effective room dir — the room's cwd, or its shared worktree dir (under
-    /// `$KILD_HOME/worktrees`) when one is set. It is the project-filter key for live
-    /// rooms; the remaining git fields stay undecoded until a view renders them.
+    /// Git/worktree status delivered with a live room. Fields beyond `path` remain
+    /// optional so older engines and failure-shaped payloads decode safely; when
+    /// `error` is set, the other values are defaults and must not be presented as truth.
     struct GitStatus: Decodable {
         let path: String
+        let branch: String?
+        let base: String?
+        let ahead: Int?
+        let behind: Int?
+        let dirty: Bool?
+        let uncommittedFiles: Int?
+        let changedFiles: [String]?
+        let conflictsWithBase: Bool?
+        let error: String?
     }
 
     struct LiveRoom: Decodable, Identifiable {
