@@ -9,28 +9,28 @@
 import Foundation
 
 let usage = """
-usage: swift tools/ticklog.swift <label> <tabs> [--samples N] [--interval S] [--out PATH]
+    usage: swift tools/ticklog.swift <label> <tabs> [--samples N] [--interval S] [--out PATH]
 
-  <label>       "baseline" or "after" — also picks the default output file
-  <tabs>        how many terminal tabs are open right now (you state it; the
-                script cannot see inside the app)
-  --samples N   CPU/RSS samples to average (default 10)
-  --interval S  seconds between samples (default 1.0)
-  --out PATH    CSV to append to (default tools/measurements/<label>.csv)
+      <label>       "baseline" or "after" — also picks the default output file
+      <tabs>        how many terminal tabs are open right now (you state it; the
+                    script cannot see inside the app)
+      --samples N   CPU/RSS samples to average (default 10)
+      --interval S  seconds between samples (default 1.0)
+      --out PATH    CSV to append to (default tools/measurements/<label>.csv)
 
-Owner procedure (agents must not run helm):
+    Owner procedure (agents must not run helm):
 
-  1. make app && open .build/DerivedData/Build/Products/Debug/Helm.app
-  2. Open exactly 1 tab. Let it sit idle ~10s with no shell running.
-     swift tools/ticklog.swift baseline 1
-  3. Repeat at 3 tabs and at 6 tabs.
-  4. Land the shared-controller change, rebuild, and repeat all three with
-     the label "after".
-  5. Compare: baseline should climb with tab count, after should stay flat.
-     If it does not, say so — a refactor that did not deliver is a finding.
+      1. make app && open .build/DerivedData/Build/Products/Debug/Helm.app
+      2. Open exactly 1 tab. Let it sit idle ~10s with no shell running.
+         swift tools/ticklog.swift baseline 1
+      3. Repeat at 3 tabs and at 6 tabs.
+      4. Land the shared-controller change, rebuild, and repeat all three with
+         the label "after".
+      5. Compare: baseline should climb with tab count, after should stay flat.
+         If it does not, say so — a refactor that did not deliver is a finding.
 
-Columns: iso_time,label,tabs,pid,cpu_pct_mean,cpu_pct_max,rss_mib,threads
-"""
+    Columns: iso_time,label,tabs,pid,cpu_pct_mean,cpu_pct_max,rss_mib,threads
+    """
 
 struct Sample {
     let cpu: Double
@@ -59,7 +59,7 @@ func findHelmPID() -> Int32? {
     for line in out.split(separator: "\n") {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard let space = trimmed.firstIndex(of: " ") else { continue }
-        guard let pid = Int32(trimmed[trimmed.startIndex ..< space]) else { continue }
+        guard let pid = Int32(trimmed[trimmed.startIndex..<space]) else { continue }
         let command = String(trimmed[space...]).trimmingCharacters(in: .whitespaces)
         let name = (command as NSString).lastPathComponent
         // The SPM product is lowercase "helm"; the bundle's executable is "Helm".
@@ -97,7 +97,7 @@ if args.isEmpty || args.contains("--help") || args.contains("-h") {
 func option(_ name: String) -> String? {
     guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
     let value = args[index + 1]
-    args.removeSubrange(index ... (index + 1))
+    args.removeSubrange(index...(index + 1))
     return value
 }
 
@@ -122,11 +122,13 @@ guard samples > 0, interval > 0 else {
 // MARK: - Measure
 
 guard let pid = findHelmPID() else {
-    FileHandle.standardError.write(Data("""
-    no running helm found. Start it first (make app, or swift run helm), open \
-    \(tabs) tab(s), let them go idle, then re-run.
+    FileHandle.standardError.write(
+        Data(
+            """
+            no running helm found. Start it first (make app, or swift run helm), open \
+            \(tabs) tab(s), let them go idle, then re-run.
 
-    """.utf8))
+            """.utf8))
     exit(1)
 }
 
@@ -134,7 +136,7 @@ FileHandle.standardError.write(Data("sampling pid \(pid), \(samples)×\(interval
 
 var cpus: [Double] = []
 var rss: [Double] = []
-for index in 0 ..< samples {
+for index in 0..<samples {
     if index > 0 { Thread.sleep(forTimeInterval: interval) }
     guard let reading = sample(pid: pid) else {
         FileHandle.standardError.write(Data("helm exited mid-sample\n".utf8))

@@ -12,13 +12,30 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# `tools/` is included deliberately. Those scripts are in no SwiftPM target, so
+# `swift build` never sees them — they could rot for months and no gate would say so.
+# kild hit the identical shape today: its tsconfig EXCLUDED the test files, so the code
+# whose job is noticing drift was the one thing nothing checked.
+TARGETS="Sources Tests tools"
+
 if [ "${1:-}" = "--fix" ]; then
-    swift format --in-place --recursive Sources Tests
+    swift format --in-place --recursive $TARGETS
     echo "formatted."
     exit 0
 fi
 
-findings=$(swift format lint --recursive Sources Tests 2>&1 || true)
+# Typecheck the standalone tools too. Formatting proves they parse; only the compiler
+# proves they still build against the SDK they call into.
+for script in tools/*.swift; do
+    [ -e "$script" ] || continue
+    if ! swiftc -typecheck "$script" >/dev/null 2>&1; then
+        echo "typecheck FAILED: $script"
+        swiftc -typecheck "$script" 2>&1 | head -5
+        exit 1
+    fi
+done
+
+findings=$(swift format lint --recursive $TARGETS 2>&1 || true)
 if [ -n "$findings" ]; then
     echo "$findings"
     echo
