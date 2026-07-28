@@ -9,14 +9,98 @@ struct RootView: View {
     @ObservedObject private var terminalManager = TerminalManager.shared
     @State private var showBrowser = false
     @AppStorage("helmDockWidth") private var dockWidth = 560.0
-    private let refresh = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    /// TWO cadences, not one.
+    ///
+    /// The cheap tick carries identity, agents and attention, and costs the engine nothing.
+    /// The costly tick runs a git subprocess **per kild** — 117 of them on this machine —
+    /// and also refreshes the archive. Polling the git half at 5s would put that fan-out
+    /// behind every refresh, which is exactly the cost the engine's split listing was
+    /// created to remove; re-adding it here would undo that work from the client side.
+    ///
+    /// The archive rides this tick despite not being expensive: the route is an in-memory
+    /// map read, not a fan-out. It is here because it needs *a* repeating home — fetched
+    /// once at launch it could never recover from a transient failure, and a kild stopped
+    /// while the app is open would not appear until a relaunch.
+    private let cheapTick = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    private let costlyTick = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
+
+    /// The dock's tenant, in precedence order: an agent you opened, else the selected
+    /// kild, else an open artifact. Hoisted out of `body` because the type-checker gave up
+    /// on the nested conditionals — a real constraint, not a style preference.
+    @ViewBuilder
+    private var dock: some View {
+        if let kild = store.selectedKild,
+            let handle = store.selectedAgent,
+            let agent = kild.agents.first(where: { $0.handle == handle })
+        {
+            // An agent's conversation wins over its kild's detail: you opened it
+            // deliberately, and the kild is one click back.
+            dockPane {
+                AgentConversation(
+                    kild: kild, agent: agent, lines: store.agentLines,
+                    isLoading: store.isLoadingAgent, error: store.agentLinesError,
+                    close: { store.closeAgent() },
+                    send: { text in
+                        Task { await store.send(text, to: handle, in: kild.id) }
+                    }
+                ).id(handle)
+            }
+        } else if let kild = store.selectedKild {
+            dockPane {
+                KildDock(
+                    kild: kild,
+                    collisions: store.selectedCollisions,
+                    statusError: store.cockpit.errors[.status],
+                    openCollision: { store.selection = $0 }
+                ).id(kild.id)
+            }
+        } else if artifact.isOpen {
+            dockPane { ArtifactPane(model: artifact) }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            WorkspaceBar(store: store, select: switchWorkspace, open: openWorkspace, close: closeWorkspace)
+            WorkspaceBar(
+                store: store, select: switchWorkspace, open: openWorkspace,
+                close: closeWorkspace, revealWaiting: revealFirstWaiting)
             HSplitView {
-                SidebarColumn(store: store)
-                    .frame(minWidth: 260, idealWidth: 300, maxWidth: 420, maxHeight: .infinity)
+                VStack(spacing: 0) {
+                    // Live and History are one column, not two panes. The archive answers a
+                    // different question ("what did I run?") from the observe column ("what
+                    // is happening?"), and showing both at once would put a list nobody is
+                    // waiting on beside the one thing that is asking for them.
+                    Picker("", selection: $store.tab) {
+                        Text("Live").tag(KildsTab.live)
+                        Text("History").tag(KildsTab.history)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+
+                    switch store.tab {
+                    case .live:
+                        ObserveColumn(
+                            groups: store.shownGroups,
+                            collisions: store.cockpit.collisions,
+                            selection: $store.selection,
+                            expanded: $store.expandedKilds,
+                            dispose: { kild, force in
+                                Task { await store.dispose(kild, force: force) }
+                            },
+                            openAgent: { agent, kild in
+                                Task { await store.openAgent(agent, in: kild) }
+                            },
+                            openAgentHandle: store.selectedAgent)
+                    case .history:
+                        ArchiveColumn(
+                            archived: store.shownArchive,
+                            selection: $store.selection,
+                            query: $store.historyQuery)
+                    }
+                }
+                .frame(minWidth: 260, idealWidth: 300, maxWidth: 420, maxHeight: .infinity)
                 TerminalWorkspace(
                     manager: terminalManager,
                     artifact: artifact,
@@ -25,36 +109,33 @@ struct RootView: View {
                 )
                 .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
-                if let room = store.selectedRoom {
-                    dockPane {
-                        RoomDetailView(
-                            room: room,
-                            engine: store.engine,
-                            readOnly: store.tab == .history,
-                            onPosted: { await store.load() },
-                            draft: Binding(
-                                get: { store.composerDraft(for: room.id) },
-                                set: { store.setComposerDraft($0, for: room.id) }
-                            )
-                        ).id(room.id)
-                    }
-                } else if artifact.isOpen {
-                    dockPane { ArtifactPane(model: artifact) }
-                }
+                dock
             }
         }
         .task {
-            await store.load()
+            await store.loadIdentities()
+            await store.loadStatus()
+            await store.loadArchive()
             activateSelectedWorkspace()
             if let path = LaunchOptions.artifactPath {
                 artifact.open(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
             }
         }
-        .onReceive(refresh) { _ in Task { await store.load() } }
+        .onReceive(cheapTick) { _ in Task { await store.loadIdentities() } }
+        .onReceive(costlyTick) { _ in
+            Task {
+                await store.loadStatus()
+                // The archive rides the slow tick rather than being fetched once at launch.
+                // Two reasons: a kild stopped while the app is open should appear without a
+                // relaunch, and a launch-time fetch that failed gets another chance —
+                // otherwise one transient error left the archive permanently empty.
+                await store.loadArchive()
+            }
+        }
         .onChange(of: store.selection) { _, _ in persistCurrentContext() }
         .onChange(of: store.tab) { _, _ in persistCurrentContext() }
         .onChange(of: store.historyQuery) { _, _ in persistCurrentContext() }
-        .onChange(of: store.expandedRooms) { _, _ in persistCurrentContext() }
+        .onChange(of: store.expandedKilds) { _, _ in persistCurrentContext() }
         .onReceive(artifact.$document) { _ in persistCurrentContext() }
         .onReceive(NotificationCenter.default.publisher(for: .helmSelectWorkspace)) { note in
             guard let index = note.object as? Int, store.workspaces.indices.contains(index) else { return }
@@ -97,6 +178,20 @@ struct RootView: View {
         store.saveContext(terminalManager: terminalManager, artifact: artifact)
         store.select(workspace)
         activateSelectedWorkspace()
+    }
+
+    /// Select the first kild with an agent waiting, and open its fold.
+    ///
+    /// The count is the entry point; this is the follow-through, which is the order
+    /// `escalation.md` asks for — a badge that reports a number and leaves you to hunt has
+    /// only done half the job. Switching to Live first, because a waiting agent is never in
+    /// the archive and landing on History would show an empty answer to a live question.
+    private func revealFirstWaiting() {
+        guard let first = Attention.waiting(in: store.shownGroups[.live] ?? []).first
+        else { return }
+        store.tab = .live
+        store.expandedKilds.insert(first.kild.id)
+        store.selection = first.kild.id
     }
 
     private func activateSelectedWorkspace() {

@@ -4,10 +4,10 @@ import Foundation
 /// so the screenshot harness (tools/winshot.swift) can capture any view without
 /// keystroke injection. Human usage is unaffected (no args → normal defaults).
 ///
-///   Helm.app/Contents/MacOS/Helm --room <id>
+///   Helm.app/Contents/MacOS/Helm --kild <id>
 ///   Helm.app/Contents/MacOS/Helm --artifact ~/.prp/<key>/plans/foo.diagrams.md
 ///
-/// `--room` and `--artifact` combine: the room wins the dock, the artifact
+/// `--kild` and `--artifact` combine: the kild wins the dock, the artifact
 /// loads behind it and surfaces on deselection.
 enum LaunchOptions {
     static func value(_ flag: String) -> String? {
@@ -16,13 +16,15 @@ enum LaunchOptions {
         return args[index + 1]
     }
 
-    /// DEPRECATED, kept as a parsed no-op: `--view` selected a face of the old
-    /// ⌘T two-faces model. Since the one-surface re-layout (slice 1a) both
-    /// former faces are always visible, so there is nothing to select — old
-    /// harness invocations still parse, and are ignored.
-    static var initialView: String? { value("--view") }
     /// Artifact file opened in the dock at launch.
     static var artifactPath: String? { value("--artifact") }
-    /// Room preselected in the sidebar at launch (its detail wins the dock).
-    static var roomId: String? { value("--room") }
+
+    /// Kild preselected in the sidebar at launch (its detail wins the dock).
+    ///
+    /// `--room` is **not** accepted as an alias. A room id and a kild id are not the same
+    /// identifier — the engine's archives moved and the vocabulary changed with them — so
+    /// an alias would silently preselect nothing while looking like it worked. An unknown
+    /// flag is simply ignored, which is the honest failure: nothing is selected, and that
+    /// is visible immediately.
+    static var kildId: String? { value("--kild") }
 }
