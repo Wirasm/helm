@@ -16,9 +16,31 @@ final class Cockpit: ObservableObject {
     /// The engine's boot identity. A change means everything held here is from an engine
     /// that no longer exists.
     @Published private(set) var bootId: String?
-    /// The last failure, in the engine's own words. Held rather than thrown so the UI can
-    /// show that the picture is stale instead of silently rendering old data as current.
-    @Published private(set) var lastError: String?
+    /// The last failure of each poll, in the engine's own words, kept **separately per
+    /// poll**.
+    ///
+    /// One shared slot was wrong, and silently so: each refresh cleared it on its own
+    /// success, so a healthy cheap poll erased a failing costly one. Since the cheap half
+    /// runs far more often by design, a persistently broken `/api/kilds/status` would be
+    /// un-labelled within a single tick — leaving the git column permanently blank while
+    /// the cockpit reported no error at all. That is the exact outcome this state exists to
+    /// prevent, so each source now clears only its own.
+    @Published private(set) var errors: [Poll: String] = [:]
+
+    /// The independently-failing reads. Each owns its own error slot.
+    enum Poll: Hashable, Sendable {
+        case identities
+        case status
+        case archive
+        case health
+    }
+
+    /// Any current failure, for a UI that shows one line. Prefer reading `errors` directly
+    /// where the surface can say *which* half is stale — "git is stale" is actionable in a
+    /// way that "something failed" is not.
+    var lastError: String? {
+        errors[.identities] ?? errors[.status] ?? errors[.archive] ?? errors[.health]
+    }
 
     private let api: KildAPI
 
@@ -46,9 +68,9 @@ final class Cockpit: ObservableObject {
         do {
             let fetched = try await api.kilds()
             kilds = Self.merge(identities: fetched, into: kilds)
-            lastError = nil
+            errors[.identities] = nil
         } catch {
-            lastError = error.localizedDescription
+            errors[.identities] = error.localizedDescription
         }
     }
 
@@ -57,18 +79,18 @@ final class Cockpit: ObservableObject {
         do {
             let fetched = try await api.kildsStatus()
             kilds = Self.apply(status: fetched, to: kilds)
-            lastError = nil
+            errors[.status] = nil
         } catch {
-            lastError = error.localizedDescription
+            errors[.status] = error.localizedDescription
         }
     }
 
     func refreshArchive() async {
         do {
             archive = try await api.archive().sorted(by: Self.newestFirst)
-            lastError = nil
+            errors[.archive] = nil
         } catch {
-            lastError = error.localizedDescription
+            errors[.archive] = error.localizedDescription
         }
     }
 
@@ -85,9 +107,9 @@ final class Cockpit: ObservableObject {
                 archive = []
             }
             bootId = health.bootId
-            lastError = nil
+            errors[.health] = nil
         } catch {
-            lastError = error.localizedDescription
+            errors[.health] = error.localizedDescription
         }
     }
 

@@ -30,7 +30,7 @@ final class AttentionTests: XCTestCase {
             cwd: "/repo",
             agents: agents,
             orphan: orphan,
-            git: changed.map { GitStatus(changedFiles: $0) }
+            git: changed.map { GitFixture.measured(changedFiles: $0) }
         )
     }
 

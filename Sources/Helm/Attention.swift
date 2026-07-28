@@ -84,8 +84,13 @@ extension Attention {
     static func collisions(among kilds: [Kild]) -> [Kild.ID: [Collision]] {
         let live = kilds.filter { !$0.isOrphan }
         let changed: [(kild: Kild, files: Set<String>)] = live.compactMap { kild in
-            guard let files = kild.git?.changedFiles, !files.isEmpty else { return nil }
-            return (kild: kild, files: Set(files))
+            // A failed git probe still returns a well-formed object with `changedFiles: []`.
+            // Deriving from that would read "measurement failed" as "touches nothing", and
+            // report no collision for a kild whose files are simply unknown — the most
+            // reassuring possible answer, drawn from no evidence at all.
+            guard let git = kild.git, git.isTrustworthy else { return nil }
+            guard !git.changedFiles.isEmpty else { return nil }
+            return (kild: kild, files: Set(git.changedFiles))
         }
 
         var result: [Kild.ID: [Collision]] = [:]

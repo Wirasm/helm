@@ -114,7 +114,7 @@ final class CockpitTests: XCTestCase {
             name: name,
             cwd: "/repo",
             agents: agents,
-            git: GitStatus(ahead: ahead, changedFiles: changed),
+            git: GitFixture.measured(ahead: ahead ?? 0, changedFiles: changed ?? []),
             totals: CostTotals(tokens: tokens, cost: cost),
             landedSha: landedSha,
             landed: landed

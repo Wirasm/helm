@@ -59,6 +59,20 @@ struct LandGate: Equatable {
     ) -> LandGate {
         var checks: [Check] = []
 
+        // A failed git probe is not a clean tree, and the engine cannot tell you apart from
+        // one: on failure it returns `ahead: 0, dirty: false, changedFiles: []` — safe
+        // defaults that read exactly like an up-to-date, unmodified repository. Without
+        // this check the gate would render its most reassuring face over a measurement that
+        // never happened, so the failure blocks and says so.
+        if let git = kild.git, !git.isTrustworthy {
+            checks.append(
+                Check(
+                    id: "measurement",
+                    text: "could not read git state — \(git.error ?? "unknown failure")",
+                    verdict: .fail,
+                    derived: false))
+        }
+
         // Position relative to base. "Nothing to land" is a refusal, not a no-op: it almost
         // always means the wrong kild is selected.
         let ahead = report.ahead ?? 0
@@ -88,14 +102,28 @@ struct LandGate: Equatable {
                 Check(id: "tree", text: "working tree clean", verdict: .pass, derived: false))
         }
 
-        let conflicts = report.conflictsWithBase == true
-        checks.append(
-            Check(
-                id: "merge",
-                text: conflicts
-                    ? "conflicts with \(kild.base ?? "base")" : "merges without conflict",
-                verdict: conflicts ? .fail : .pass,
-                derived: false))
+        // Three states, not two. `nil` is *undetermined* — the engine says so explicitly —
+        // and reading it as "merges cleanly" would state a guarantee it declined to make,
+        // on the one screen where an unearned reassurance costs the most. Undetermined does
+        // not block (it is not a conflict, and refusing on it would strand kilds the engine
+        // simply could not check), but it must not claim safety either.
+        switch report.conflictsWithBase {
+        case true:
+            checks.append(
+                Check(
+                    id: "merge", text: "conflicts with \(kild.base ?? "base")", verdict: .fail,
+                    derived: false))
+        case false:
+            checks.append(
+                Check(
+                    id: "merge", text: "merges without conflict", verdict: .pass,
+                    derived: false))
+        case nil:
+            checks.append(
+                Check(
+                    id: "merge", text: "merge cleanliness undetermined", verdict: .info,
+                    derived: false))
+        }
 
         // Agents still working. Landing under a running agent races its next commit.
         let running = runningAgents.filter { !$0.isStopped && !$0.isIdle }

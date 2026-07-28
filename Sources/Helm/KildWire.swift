@@ -76,24 +76,57 @@ struct Agent: Codable, Sendable, Equatable, Identifiable {
 
 // MARK: - Git
 
-/// A kild's git position, from the costly half of the listing.
+/// A kild's git position, relative to its base branch.
 ///
-/// Every field is optional because the whole object is: an orphan kild has no record to
-/// measure against, and `/api/kilds` (the cheap call) omits git entirely.
+/// **Presence of this object is what "measured" means.** The whole block is optional on a
+/// kild — the cheap listing omits it, and an orphan has no record to measure — but once
+/// present, every field below is present too. The engine's own note: *"Every field has a
+/// safe default so a probe failure still yields a well-formed object; the failure detail
+/// lands in `error`."*
+///
+/// That safety is a trap for a client that does not read `error`. A failed probe returns
+/// `ahead: 0`, `dirty: false`, `changedFiles: []` — values indistinguishable from a clean,
+/// up-to-date tree. Rendering them as facts would show a reassuring green gate built on a
+/// measurement that never happened, which is why `isTrustworthy` exists and why every
+/// consumer here checks it.
 struct GitStatus: Codable, Sendable, Equatable {
-    var path: String?
+    var path: String
+    /// Null on a detached HEAD.
     var branch: String?
-    var base: String?
-    var ahead: Int?
-    var behind: Int?
-    var dirty: Bool?
-    /// A **count**, not a list — the engine sends an integer here. Named as the wire names
-    /// it despite the plural reading like a collection.
-    var uncommittedFiles: Int?
-    /// Paths changed relative to base. The input to collision derivation: two kilds that
-    /// both touch a path are in conflict with each other, which no single kild can know.
-    var changedFiles: [String]?
+    var base: String
+    var ahead: Int
+    var behind: Int
+    var dirty: Bool
+    /// A **count**, not a list — the engine sends an integer here despite the plural.
+    var uncommittedFiles: Int
+    /// Paths changed relative to base. Always present when `git` is; the input to collision
+    /// derivation, which no single kild can perform for itself.
+    var changedFiles: [String]
+    /// Would HEAD merge into base cleanly? **`nil` means undetermined, not "yes".**
+    ///
+    /// The engine says so explicitly (`null = undetermined`), and the difference matters on
+    /// the land gate: reading absence as "merges without conflict" would state a guarantee
+    /// the engine deliberately declined to make.
     var conflictsWithBase: Bool?
+    /// Any git failure, captured rather than thrown. Its presence means the numbers above
+    /// are defaults, not measurements.
+    var error: String?
+
+    /// Whether these numbers describe the repository or merely survived a failure.
+    ///
+    /// Read this before treating any other field as a fact. Nothing here is nil-able on
+    /// failure — that is exactly the problem — so the only signal is `error`.
+    var isTrustworthy: Bool { error == nil }
+
+    /// `true` only when the engine actively determined the merge is clean.
+    ///
+    /// Deliberately optional rather than defaulting: `nil` (undetermined) and `false`
+    /// (conflicts) are both "not known to be safe", but only one of them is a conflict, and
+    /// a gate that conflates them would report a conflict that was never found.
+    var mergesCleanly: Bool? {
+        guard isTrustworthy else { return nil }
+        return conflictsWithBase.map { !$0 }
+    }
 }
 
 struct CostTotals: Codable, Sendable, Equatable {
