@@ -9,24 +9,55 @@ struct RootView: View {
     @ObservedObject private var terminalManager = TerminalManager.shared
     @State private var showBrowser = false
     @AppStorage("helmDockWidth") private var dockWidth = 560.0
-    /// TWO cadences, not one. The cheap tick carries identity, agents and attention and
-    /// costs the engine nothing; the costly tick runs a git subprocess per kild. Polling
-    /// both at 5s would put that fan-out behind every refresh, which is precisely the cost
-    /// the engine's split listing was created to remove — and re-adding it here would undo
-    /// that work from the client side.
+    /// TWO cadences, not one.
+    ///
+    /// The cheap tick carries identity, agents and attention, and costs the engine nothing.
+    /// The costly tick runs a git subprocess **per kild** — 117 of them on this machine —
+    /// and also refreshes the archive. Polling the git half at 5s would put that fan-out
+    /// behind every refresh, which is exactly the cost the engine's split listing was
+    /// created to remove; re-adding it here would undo that work from the client side.
+    ///
+    /// The archive rides this tick despite not being expensive: the route is an in-memory
+    /// map read, not a fan-out. It is here because it needs *a* repeating home — fetched
+    /// once at launch it could never recover from a transient failure, and a kild stopped
+    /// while the app is open would not appear until a relaunch.
     private let cheapTick = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     private let costlyTick = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
-            WorkspaceBar(store: store, select: switchWorkspace, open: openWorkspace, close: closeWorkspace)
+            WorkspaceBar(
+                store: store, select: switchWorkspace, open: openWorkspace,
+                close: closeWorkspace, revealWaiting: revealFirstWaiting)
             HSplitView {
-                ObserveColumn(
-                    groups: store.shownGroups,
-                    collisions: store.cockpit.collisions,
-                    selection: $store.selection,
-                    expanded: $store.expandedKilds
-                )
+                VStack(spacing: 0) {
+                    // Live and History are one column, not two panes. The archive answers a
+                    // different question ("what did I run?") from the observe column ("what
+                    // is happening?"), and showing both at once would put a list nobody is
+                    // waiting on beside the one thing that is asking for them.
+                    Picker("", selection: $store.tab) {
+                        Text("Live").tag(KildsTab.live)
+                        Text("History").tag(KildsTab.history)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+
+                    switch store.tab {
+                    case .live:
+                        ObserveColumn(
+                            groups: store.shownGroups,
+                            collisions: store.cockpit.collisions,
+                            selection: $store.selection,
+                            expanded: $store.expandedKilds)
+                    case .history:
+                        ArchiveColumn(
+                            archived: store.shownArchive,
+                            selection: $store.selection,
+                            query: $store.historyQuery)
+                    }
+                }
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 420, maxHeight: .infinity)
                 TerminalWorkspace(
                     manager: terminalManager,
@@ -116,6 +147,20 @@ struct RootView: View {
         store.saveContext(terminalManager: terminalManager, artifact: artifact)
         store.select(workspace)
         activateSelectedWorkspace()
+    }
+
+    /// Select the first kild with an agent waiting, and open its fold.
+    ///
+    /// The count is the entry point; this is the follow-through, which is the order
+    /// `escalation.md` asks for — a badge that reports a number and leaves you to hunt has
+    /// only done half the job. Switching to Live first, because a waiting agent is never in
+    /// the archive and landing on History would show an empty answer to a live question.
+    private func revealFirstWaiting() {
+        guard let first = Attention.waiting(in: store.shownGroups[.live] ?? []).first
+        else { return }
+        store.tab = .live
+        store.expandedKilds.insert(first.kild.id)
+        store.selection = first.kild.id
     }
 
     private func activateSelectedWorkspace() {
