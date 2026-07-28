@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// App-level state for the whole frame: which folder you have open, and what the engine
@@ -15,13 +16,28 @@ final class KildStore: ObservableObject {
     /// Everything the engine reports. Read it directly for kilds, attention and collisions.
     let cockpit: Cockpit
 
+    /// Forwards `Cockpit`'s change notifications into this object's.
+    ///
+    /// **Composition does not compose `ObservableObject`.** `@Published` synthesises a
+    /// publisher on the type where the property is DECLARED, so mutating `cockpit.kilds`
+    /// fires `Cockpit.objectWillChange` and nothing else. `KildStore` holds `cockpit` as a
+    /// plain `let`, and no view observes `Cockpit` directly — so without this bridge the
+    /// frame renders once with an empty engine and then freezes. Every poll would still run,
+    /// still decode, still update state correctly, and never reach the screen: a UI that is
+    /// wrong in a way no test and no log can see.
+    ///
+    /// The previous store held `rooms`/`archived` as its own `@Published` properties, so
+    /// this was free. Splitting engine state into `Cockpit` is the right shape, but it makes
+    /// the forwarding explicit work.
+    private var cancellables = Set<AnyCancellable>()
+
     /// Where the open-workspace list is persisted — injectable so tests never touch
     /// the operator's real defaults.
     private let defaults: UserDefaults
 
     /// The selected kild id — the sidebar drives it, the dock renders it (a selected kild
     /// wins the dock over any open artifact).
-    @Published var selection: String? = LaunchOptions.kildId
+    @Published var selection: String?
     @Published var tab: KildsTab = .live
     /// Local archive search. The archive listing is already in hand, so filtering names and
     /// agents is immediate and needs no extra poll.
@@ -42,11 +58,18 @@ final class KildStore: ObservableObject {
     /// of `selection` therefore fails exactly when a context exists, which is the normal
     /// case, and fails silently: the harness captures whatever kild was selected last
     /// instead of the one it named, and nothing reports a problem.
-    private let launchKild: String? = LaunchOptions.kildId
+    ///
+    /// **Injected rather than read from `LaunchOptions` here**, and that is the whole point.
+    /// Reading `ProcessInfo.arguments` directly made this permanently `nil` under
+    /// `swift test`, so every line guarding it was structurally unreachable by the suite —
+    /// including the test file written specifically to defend it, which passed while
+    /// proving only the no-flag path. A test that cannot reach its own subject is worse
+    /// than no test: it reports the branch as covered.
+    private let launchKild: String?
 
     /// A `--kild` launch lands on History when the id is not live at first load; the first
     /// load corrects the tab once data arrives (testability seam).
-    private var launchKildResolved = LaunchOptions.kildId == nil
+    private var launchKildResolved: Bool
 
     @Published private(set) var workspaces: [Workspace]
     @Published private(set) var selectedWorkspace: Workspace?
@@ -55,15 +78,25 @@ final class KildStore: ObservableObject {
     /// consumed by the artifact browser to preselect the matching `~/.prp` store.
     @Published private(set) var selectedWorkspaceRoot: String?
 
-    init(api: KildAPI = KildHTTPClient(), defaults: UserDefaults = .standard) {
+    init(
+        api: KildAPI = KildHTTPClient(),
+        defaults: UserDefaults = .standard,
+        launchKild: String? = LaunchOptions.kildId
+    ) {
         self.cockpit = Cockpit(api: api)
         self.defaults = defaults
+        self.launchKild = launchKild
+        self.launchKildResolved = launchKild == nil
+        self.selection = launchKild
         let restoredWorkspaces = WorkspacePersistence.load(from: defaults)
         let restoredContexts = WorkspaceContextStore.load(from: defaults)
         workspaces = restoredWorkspaces
         selectedWorkspace = WorkspacePersistence.loadSelection(
             from: defaults, in: restoredWorkspaces)
         contexts = restoredContexts
+        cockpit.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
         if let selectedWorkspace {
             applyContext(for: selectedWorkspace)
         }
@@ -214,7 +247,6 @@ final class KildStore: ObservableObject {
     func loadIdentities() async {
         await cockpit.checkBoot()
         await cockpit.refreshIdentities()
-        resolveLaunchSelection()
     }
 
     /// The costly tick: git and cost, one subprocess per kild. Belongs on a slower cadence.
@@ -228,13 +260,21 @@ final class KildStore: ObservableObject {
     }
 
     /// A `--kild` launch that names an archived kild should land on History rather than
-    /// showing an empty Live tab. Runs once, after data has actually arrived.
+    /// showing an empty Live tab.
+    ///
+    /// Called ONLY from `loadArchive()`, and that is the whole correctness condition. An
+    /// earlier version ran from `loadIdentities()` too and gated on
+    /// `!kilds.isEmpty || !archive.isEmpty` — treating "live kilds arrived" as proof that
+    /// data had arrived, when the question it answers needs the ARCHIVE. Identities land
+    /// first, the OR passed on a non-empty live list, the archive was still `[]`, so the
+    /// lookup found nothing — and it set `launchKildResolved = true` anyway, making the
+    /// later archive load a no-op. On any engine with at least one live kild, which is every
+    /// real one, the flip never happened.
     private func resolveLaunchSelection() {
         // Reads the FLAG, not `selection` — a restored context may have replaced the
         // selection since launch, and flipping to History for a kild the operator never
         // named is worse than not flipping at all.
         guard !launchKildResolved, let id = launchKild else { return }
-        guard !cockpit.kilds.isEmpty || !cockpit.archive.isEmpty else { return }
         if cockpit.archive.contains(where: { $0.id == id }) { tab = .history }
         launchKildResolved = true
     }

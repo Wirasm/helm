@@ -38,10 +38,17 @@ struct AgentPane: View {
             Divider()
 
             if let agent = selectedAgent {
+                // `.id(agent.handle)` on both is load-bearing, not hygiene. Without it these
+                // occupy the same structural position across an agent switch, so SwiftUI
+                // reuses the view — and `Composer`'s @State draft survives. Type a message
+                // for @alice, click @bob's tab, press enter: it goes to @bob. Deterministic
+                // misdirection of a message to the wrong agent.
                 TranscriptBody(
                     agent: agent, lines: lines, isLoading: isLoading, error: error)
+                    .id(agent.handle)
                 Divider()
                 Composer(handle: agent.handle, send: send)
+                    .id(agent.handle)
             } else {
                 // The shell tab hosts a real terminal, owned by TerminalManager. Left as a
                 // seam rather than reimplemented: that plumbing survives the rename untouched
@@ -185,7 +192,7 @@ private struct LineView: View {
 
     var body: some View {
         switch line {
-        case let .turn(role, text, toolCalls):
+        case let .turn(_, role, text, toolCalls):
             VStack(alignment: .leading, spacing: 2) {
                 if !toolCalls.isEmpty {
                     Text(toolCalls.map { "▸ \($0)" }.joined(separator: "  "))

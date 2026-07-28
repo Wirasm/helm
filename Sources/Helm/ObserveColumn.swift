@@ -34,7 +34,14 @@ struct ObserveColumn: View {
                         isExpanded: expanded.contains(kild.id),
                         toggle: { toggle(kild.id) })
                     if expanded.contains(kild.id) {
+                        // Explicitly non-selectable. `Agent.id` is a bare String, the same
+                        // type as the selection binding, so an untagged agent row can end up
+                        // participating in selection — putting a HANDLE where a kild id
+                        // belongs. `selectedKild` then matches nothing, the dock silently
+                        // vanishes, and the row keeps a selection highlight explaining none
+                        // of it.
                         ForEach(kild.agents) { AgentRow(agent: $0) }
+                            .tag(Optional<Kild.ID>.none)
                     }
                 }
             } header: {

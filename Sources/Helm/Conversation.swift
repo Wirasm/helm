@@ -25,20 +25,24 @@ enum Conversation {
     /// different kind of record.
     enum Line: Equatable, Identifiable {
         /// A turn from an owned agent's own session file.
-        case turn(role: String, text: String, toolCalls: [String])
+        case turn(index: Int, role: String, text: String, toolCalls: [String])
         /// A message the engine routed, with its attributed sender.
         case message(from: String, to: [String], text: String, seq: Int)
 
         var id: String {
             switch self {
-            case let .turn(role, text, _): "turn-\(role)-\(text.hashValue)"
+            // Positional, because a transcript entry has no wire id and its CONTENT is not
+            // unique: a tool-only turn carries `text: ""`, so two consecutive ones hash
+            // identically. `ForEach` on colliding ids silently drops rows — a transcript
+            // that quietly loses the turns that did the most work.
+            case let .turn(index, _, _, _): "turn-\(index)"
             case let .message(_, _, _, seq): "msg-\(seq)"
             }
         }
 
         var text: String {
             switch self {
-            case let .turn(_, text, _): text
+            case let .turn(_, _, text, _): text
             case let .message(_, _, text, _): text
             }
         }
@@ -64,10 +68,10 @@ enum Conversation {
     /// something. Empty turns with no tool calls are dropped; empty turns *with* tool calls
     /// are kept, because the tool call is the content.
     static func lines(from transcript: AgentTranscript) -> [Line] {
-        transcript.entries.compactMap { entry in
+        transcript.entries.enumerated().compactMap { index, entry in
             let tools = entry.toolCalls ?? []
             guard !entry.text.isEmpty || !tools.isEmpty else { return nil }
-            return .turn(role: entry.role, text: entry.text, toolCalls: tools)
+            return .turn(index: index, role: entry.role, text: entry.text, toolCalls: tools)
         }
     }
 

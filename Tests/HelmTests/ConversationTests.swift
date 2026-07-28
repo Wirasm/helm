@@ -51,7 +51,7 @@ final class ConversationTests: XCTestCase {
             total: 1)
         let lines = Conversation.lines(from: transcript)
         XCTAssertEqual(lines.count, 1)
-        guard case let .turn(_, _, tools) = lines[0] else { return XCTFail("expected a turn") }
+        guard case let .turn(_, _, _, tools) = lines[0] else { return XCTFail("expected a turn") }
         XCTAssertEqual(tools, ["send"])
     }
 
@@ -66,7 +66,7 @@ final class ConversationTests: XCTestCase {
     func testAnUnknownRoleIsCarriedThroughRatherThanRejected() {
         let transcript = AgentTranscript(
             entries: [TranscriptEntry(role: "reasoning", text: "hm")], total: 1)
-        guard case let .turn(role, _, _) = Conversation.lines(from: transcript)[0] else {
+        guard case let .turn(_, role, _, _) = Conversation.lines(from: transcript)[0] else {
             return XCTFail("expected a turn")
         }
         XCTAssertEqual(role, "reasoning")
