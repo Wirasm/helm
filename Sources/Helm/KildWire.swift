@@ -72,6 +72,22 @@ struct Agent: Codable, Sendable, Equatable, Identifiable {
     /// Callers should read this rather than unwrapping, so the absent case is handled once.
     var isIdle: Bool { idle == true }
     var isStopped: Bool { stopped == true }
+
+    /// **Waiting on a human.** The one definition, because it was previously spelled out at
+    /// six call sites — four as `isIdle && !isStopped` and one, in the land gate, as its
+    /// inverse written independently. A condition added to "waiting" would have had to be
+    /// added in four places and *removed* in a fifth, in the opposite direction.
+    ///
+    /// `idle` alone is not enough: a stopped agent's process is gone, so nobody can unblock
+    /// it, and counting it would inflate the attention badge with agents no human action
+    /// can help.
+    var isWaiting: Bool { isIdle && !isStopped }
+
+    /// **Actively working.** Not the negation of `isWaiting` — a stopped agent is neither,
+    /// which is why both are stated rather than one derived from the other. The land gate
+    /// blocks on this: landing under an agent that is still working races its next commit,
+    /// while landing under an idle or stopped one does not.
+    var isWorking: Bool { !isIdle && !isStopped }
 }
 
 // MARK: - Git

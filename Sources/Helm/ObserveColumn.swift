@@ -87,7 +87,7 @@ private struct KildRow: View {
     /// waiting agent is precisely the failure the count exists to prevent. Reading the
     /// agents directly rather than a cached flag is what guarantees it.
     private var isWaiting: Bool {
-        kild.agents.contains { $0.isIdle && !$0.isStopped }
+        kild.agents.contains { $0.isWaiting }
     }
 
     var body: some View {

@@ -81,7 +81,7 @@ private struct TabStrip: View {
                         // field's value, and justified because it marks how much is
                         // observable rather than what the agent is for.
                         italic: agent.ownership == .attached,
-                        waiting: agent.isIdle && !agent.isStopped
+                        waiting: agent.isWaiting
                     ) { selected = .agent(agent.handle) }
                 }
             }

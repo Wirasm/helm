@@ -95,7 +95,7 @@ struct LandGate: Equatable {
         }
 
         // Agents still working. Landing under one races its next commit.
-        let running = runningAgents.filter { !$0.isStopped && !$0.isIdle }
+        let running = runningAgents.filter(\.isWorking)
         if !running.isEmpty {
             checks.append(
                 Check(

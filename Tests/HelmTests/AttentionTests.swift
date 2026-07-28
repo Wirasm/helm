@@ -34,6 +34,44 @@ final class AttentionTests: XCTestCase {
         )
     }
 
+    // MARK: the decision itself
+
+    /// `waiting` and `working` are stated separately rather than one negating the other,
+    /// because they are NOT exhaustive — a stopped agent is neither.
+    ///
+    /// This was previously decided at six call sites: four spelled `isIdle && !isStopped`,
+    /// and the land gate spelled its inverse independently. A condition added to "waiting"
+    /// would have needed adding in four places and removing in a fifth, the other way
+    /// round. These assertions pin the three-state relationship so the definitions cannot
+    /// drift apart again.
+    func testWaitingAndWorkingAreDistinctAndNotExhaustive() {
+        let waiting = agent("a", idle: true)
+        let working = agent("b")
+        let stopped = agent("c", stopped: true)
+        let stoppedWhileIdle = agent("d", idle: true, stopped: true)
+
+        XCTAssertTrue(waiting.isWaiting); XCTAssertFalse(waiting.isWorking)
+        XCTAssertFalse(working.isWaiting); XCTAssertTrue(working.isWorking)
+
+        // The case that makes them non-exhaustive: over, not resting, not running.
+        XCTAssertFalse(stopped.isWaiting); XCTAssertFalse(stopped.isWorking)
+        XCTAssertFalse(stoppedWhileIdle.isWaiting)
+        XCTAssertFalse(stoppedWhileIdle.isWorking)
+    }
+
+    /// No agent may be both at once — the land gate blocks on `isWorking` while the badge
+    /// counts `isWaiting`, so an overlap would mean a kild that both demands attention and
+    /// refuses to land for the same reason.
+    func testNoAgentIsBothWaitingAndWorking() {
+        for idle in [nil, true, false] as [Bool?] {
+            for stopped in [nil, true, false] as [Bool?] {
+                let a = Agent(handle: "x", ownership: .owned, idle: idle, stopped: stopped)
+                XCTAssertFalse(
+                    a.isWaiting && a.isWorking, "idle=\(String(describing: idle)) stopped=\(String(describing: stopped))")
+            }
+        }
+    }
+
     // MARK: waiting
 
     func testAnIdleAgentIsWaitingOnYou() {

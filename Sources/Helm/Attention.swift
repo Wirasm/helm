@@ -34,7 +34,7 @@ enum Attention {
     static func waiting(in kilds: [Kild]) -> [(kild: Kild, agent: Agent)] {
         kilds.flatMap { kild in
             kild.agents
-                .filter { $0.isIdle && !$0.isStopped }
+                .filter(\.isWaiting)
                 .map { (kild: kild, agent: $0) }
         }
     }
