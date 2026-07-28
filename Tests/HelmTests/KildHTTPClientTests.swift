@@ -213,4 +213,58 @@ final class KildHTTPClientTests: XCTestCase {
             XCTAssertEqual(error as? KildAPIError, .engine("seat required"))
         }
     }
+
+    // MARK: - The two different 409s on /land
+
+    /// Captured verbatim: POST /land on an archived kild. `resolveKild` refuses before the
+    /// merge is attempted, so the body is a BARE error with none of the report's fields.
+    static let bareRefusal409 = #"""
+        {"error":"kild c8971dd5 is archived (its agents are gone) — address its tree as 'sidebar-observe'",
+         "code":"invalid_state"}
+        """#
+
+    /// A refused MERGE, by contrast, carries the whole report plus its reason.
+    static let refusedMerge409 = #"""
+        {"base":"development","branch":"kild/x","commits":[],"files":["A.swift"],
+         "collides":["A.swift"],"wouldMerge":false,"merged":false,
+         "error":"would not merge cleanly","dryRun":false}
+        """#
+
+    /// The refusal IS the report — the gate needs its commits, files and conflicts to
+    /// explain why, and `error` alone would not carry them.
+    func testARefusedMergeIsDecodedRatherThanThrown() async throws {
+        StubURLProtocol.respond(status: 409, json: Self.refusedMerge409)
+        let report = try await client.land("k-1")
+        XCTAssertFalse(report.wouldMerge)
+        XCTAssertEqual(report.collides, ["A.swift"])
+        XCTAssertEqual(report.error, "would not merge cleanly")
+    }
+
+    /// The bug a blanket `accepting: [409]` produced: this body has none of the report's
+    /// fields, so decoding threw and the engine's genuinely actionable message — which
+    /// names the tree to address instead — was replaced by an opaque decode failure that
+    /// reads as a wire bug rather than "you picked the wrong target".
+    func testABareRefusalKeepsTheEnginesMessageInsteadOfFailingToDecode() async {
+        StubURLProtocol.respond(status: 409, json: Self.bareRefusal409)
+        do {
+            _ = try await client.land("k-1")
+            XCTFail("a bare refusal must throw")
+        } catch {
+            guard case let .engine(message) = error as? KildAPIError else {
+                return XCTFail("expected the engine's message, got \(error)")
+            }
+            XCTAssertTrue(message.contains("is archived"))
+            XCTAssertTrue(
+                message.contains("sidebar-observe"),
+                "the actionable half — which tree to address instead — must survive")
+        }
+    }
+
+    /// `error` cannot be the discriminator, because a refused merge carries one too.
+    /// `wouldMerge` is the field only the full report has.
+    func testTheDiscriminatorIsNotThePresenceOfAnErrorField() async throws {
+        StubURLProtocol.respond(status: 409, json: Self.refusedMerge409)
+        let report = try await client.land("k-1")
+        XCTAssertNotNil(report.error, "the report has an error AND is still the answer")
+    }
 }

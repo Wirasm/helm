@@ -66,11 +66,17 @@ struct KildHTTPClient: KildAPI {
             body: ["to": recipients, "text": text])
     }
 
-    /// A refused land returns 409 carrying the full report, so 409 is accepted and
-    /// decoded rather than thrown: the gate needs the commits, files and conflicts to say
-    /// why, and `error` alone would not carry them.
+    /// A refused merge returns 409 carrying the full report, so that 409 is decoded rather
+    /// than thrown — the gate needs the commits, files and conflicts to explain itself, and
+    /// `error` alone would not carry them.
+    ///
+    /// `answerKey: "wouldMerge"` is what keeps that from swallowing the *other* 409 this
+    /// route emits: an unresolvable target (an archived kild, say) returns a bare
+    /// `{"error", "code"}`, which must stay an error so the engine's message survives.
     func land(_ kild: Kild.ID) async throws -> LandReport {
-        try await send("POST", path("api", "kilds", kild, "land"), accepting: [409])
+        try await send(
+            "POST", path("api", "kilds", kild, "land"), accepting: [409],
+            answerKey: "wouldMerge")
     }
 
     func delete(_ kild: Kild.ID) async throws {
@@ -136,23 +142,42 @@ struct KildHTTPClient: KildAPI {
     /// The `{"error": …}` body is checked before the status code, because it is the more
     /// useful of the two and the engine sends it on every deliberate refusal.
     ///
-    /// `accepting` names status codes whose body is still the answer rather than an error.
-    /// `POST /land` is the case that requires it: a refused land returns **409 with the
-    /// complete `LandResult`** — the refusal *is* the report, carrying the same fields as a
-    /// successful one plus the reason. Throwing it away and surfacing only the message
-    /// would discard the commits, files and conflicts the gate needs to explain itself.
-    private func perform(_ request: URLRequest, accepting: Set<Int> = []) async throws -> Data {
+    /// `answerKey` names a field that marks a non-2xx body as *the answer* rather than an
+    /// error. Present → return the body; absent → treat it as a refusal as usual.
+    ///
+    /// `POST /land` needs this, and needs it discriminated rather than blanket-accepted,
+    /// because it returns 409 from two places that look nothing alike:
+    ///
+    /// - a refused merge — the **full report**, same fields as success plus the reason;
+    /// - an unresolvable target — a **bare** `{"error", "code"}`, e.g. addressing a kild
+    ///   that has since been archived.
+    ///
+    /// Accepting every 409 fed the bare one to `LandReport`'s decoder, which threw, and the
+    /// engine's genuinely useful message — *"kild X is archived … address its tree as 'Y'"*
+    /// — was replaced by an opaque decoding error that reads as a wire bug rather than as
+    /// "you picked the wrong target". Keying on a field the full report always carries and
+    /// the bare refusal never does keeps both paths honest.
+    ///
+    /// Note the discriminator cannot be `error`: the full report carries one too, since a
+    /// refused merge has a reason.
+    private func perform(
+        _ request: URLRequest, accepting: Set<Int> = [], answerKey: String? = nil
+    ) async throws -> Data {
         let (data, response) = try await urlSession.data(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(code) || accepting.contains(code) else {
-            if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                let message = object["error"] as? String
-            {
-                throw KildAPIError.engine(message)
-            }
-            throw KildAPIError.http(code)
+        if (200..<300).contains(code) { return data }
+
+        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if accepting.contains(code) {
+            // Only when the body proves it is the answer. Otherwise fall through and let
+            // the engine's own message survive.
+            if let answerKey, object?[answerKey] != nil { return data }
+            if answerKey == nil { return data }
         }
-        return data
+        if let message = object?["error"] as? String {
+            throw KildAPIError.engine(message)
+        }
+        throw KildAPIError.http(code)
     }
 
     private func decode<T: Decodable>(_ data: Data) throws -> T {
@@ -171,10 +196,12 @@ struct KildHTTPClient: KildAPI {
 
     private func send<T: Decodable>(
         _ method: String, _ path: String, body: [String: Any]? = nil,
-        accepting: Set<Int> = []
+        accepting: Set<Int> = [], answerKey: String? = nil
     ) async throws -> T {
         try decode(
-            try await perform(try request(method, path, body: body), accepting: accepting))
+            try await perform(
+                try request(method, path, body: body), accepting: accepting,
+                answerKey: answerKey))
     }
 
     /// For writes whose body helm does not read. The request still has to complete, and a
