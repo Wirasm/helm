@@ -280,3 +280,35 @@ struct LandReport: Codable, Sendable, Equatable {
     /// Set by the route: `true` for the GET, `false` for the POST.
     var dryRun: Bool?
 }
+
+// MARK: - Transcripts
+
+/// One turn in an owned agent's transcript.
+///
+/// `GET /api/kilds/:id/agents/:handle/transcript` reads pi's session file, so this is the
+/// agent's own record of its work rather than anything kild composed.
+struct TranscriptEntry: Codable, Sendable, Equatable {
+    /// `user`, `assistant`, or `tool`. Left as the string the wire sends rather than an
+    /// enum: an unrecognised role should render as itself, not fail the whole transcript.
+    /// A new role added engine-side is a rendering question, never a decode failure.
+    let role: String
+    let text: String
+    /// Tool names this turn invoked. Present on `assistant` turns; an assistant turn that
+    /// only called tools carries an empty `text`, which is why a renderer must read both.
+    var toolCalls: [String]?
+}
+
+/// An owned agent's transcript.
+///
+/// **Only owned agents have one.** The route reads the agent's pi session file, and an
+/// attached agent has none — kild never spawned it, so there is no session to read. The
+/// engine says so plainly rather than returning an empty transcript:
+/// `{"error": "agent @x has no pi session file (yet)"}`. An empty result would imply an
+/// agent that had done nothing; the error correctly says helm is asking the wrong question.
+///
+/// For an attached agent the conversation is the routed messages in the kild log — see
+/// `Conversation.forAgent`.
+struct AgentTranscript: Codable, Sendable, Equatable {
+    let entries: [TranscriptEntry]
+    let total: Int
+}

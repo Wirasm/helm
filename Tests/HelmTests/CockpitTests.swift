@@ -67,6 +67,10 @@ final class StubKildAPI: KildAPI, @unchecked Sendable {
 
     func stop(_ kild: Kild.ID) async throws { stopped.append(kild) }
     func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
+        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
+            AgentTranscript(entries: [], total: 0)
+        }
+
     func personas() async throws -> [String] { personaList }
 }
 

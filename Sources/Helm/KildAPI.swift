@@ -76,6 +76,15 @@ protocol KildAPI: Sendable {
     /// `DELETE /api/kilds/:id/agents/:handle` — stop one agent without halting the kild.
     func stopAgent(_ handle: String, in kild: Kild.ID) async throws
 
+    /// `GET /api/kilds/:id/agents/:handle/transcript` — an OWNED agent's own turns, read
+    /// from its pi session file.
+    ///
+    /// **Only valid for owned agents.** An attached agent has no session file, and the
+    /// engine refuses rather than returning an empty transcript — correctly, since empty
+    /// would imply an agent that had done nothing. Check `Conversation.source(for:)` before
+    /// calling; an attached agent's conversation lives in the kild's message log.
+    func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript
+
     /// `GET /api/personas` — the personas available to spawn with. Opaque strings; helm
     /// lists them and never interprets them.
     func personas() async throws -> [String]

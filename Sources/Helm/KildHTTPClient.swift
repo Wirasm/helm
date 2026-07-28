@@ -50,6 +50,10 @@ struct KildHTTPClient: KildAPI {
         try await get(path("api", "personas"))
     }
 
+    func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
+        try await get(path("api", "kilds", kild, "agents", handle, "transcript"))
+    }
+
     func landDryRun(_ kild: Kild.ID) async throws -> LandReport {
         try await get(path("api", "kilds", kild, "land"))
     }
