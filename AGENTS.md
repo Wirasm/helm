@@ -19,8 +19,15 @@ know helm.
   because the behaviour it covered no longer exists, say which and why in the commit
   message. A total that went up while a file's coverage went down is not a pass.
 - Build, test and run freely. The one restriction: **never restart a running helm without
-  warning the operator first** — a live window may be hosting their session. Visual
-  verification: `make app`, then `open Helm.app --args --room <id> / --artifact <path>`,
-  capture with `swift tools/winshot.swift helm out.png` (window owner is lowercase "helm").
+  warning the operator first** — a live window may be hosting their session.
+- Visual verification: `make app`, then `open Helm.app --args --kild <id> / --artifact <path>`.
+  `swift tools/winshot.swift helm out.png` captures it — but **capture needs a Screen Recording
+  grant the agent contexts do not have and cannot give themselves**, so an unattended run
+  cannot see the UI. Ask the operator; do not report a surface as verified without it.
+  `swift tools/winshot.swift --list helm` needs no grant and reports pid, layer and bounds —
+  enough to tell a real window from a crash, a zero-sized one or an off-screen one, and
+  nothing at all about what is drawn in it. The accessibility API is **not** a way around
+  this: helm's SwiftUI content exposes no children to it, verified by walking a known-good
+  build that renders fine and getting the same empty tree.
 - `swift run helm` for iteration; `make app` for the real bundle (notifications need it).
 - Conventional commits, written as a human — no AI attribution, no Co-Authored-By.
