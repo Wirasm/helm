@@ -11,7 +11,15 @@ import Foundation
 ///
 /// Configure what a test cares about and ignore the rest. Failures are opt-in per call, so
 /// "this route is down" is one line rather than a bespoke type.
-final class FakeKildAPI: KildAPI, @unchecked Sendable {
+/// `@MainActor`, not `@unchecked Sendable`.
+///
+/// It was the latter, and that was a real data race rather than a formality: a test mutating
+/// `blocked` while a suspended request read it corrupted the Set and crashed the suite with
+/// `-[NSIndirectTaggedPointerString member:]`. `@unchecked` is a promise the author makes
+/// about isolation, and this one was false. Main-actor isolation makes it true instead of
+/// asserted — the tests are `@MainActor` already, so nothing is lost.
+@MainActor
+final class FakeKildAPI: KildAPI {
     /// Named for the poll each feeds, so a test reads as the cadence it is exercising.
     var identities: [Kild] = []
     var status: [Kild] = []
@@ -105,9 +113,35 @@ final class FakeKildAPI: KildAPI, @unchecked Sendable {
         return messageLog.filter { $0.seq > seq }
     }
 
+    /// Per-handle transcripts, so two agents can hold different content.
+    var transcripts: [String: AgentTranscript] = [:]
+
+    /// Handles whose transcript request hangs until released — the only way to exercise a
+    /// response landing out of order.
+    ///
+    /// A bounded yield loop rather than a continuation. Continuations deadlock here: two
+    /// requests for one handle overwrite each other's stored continuation and the first
+    /// never resumes, which hangs the whole suite rather than failing one test.
+    var blocked: Set<String> = []
+
+    func release(_ handle: String) { blocked.remove(handle) }
+
     func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
+        // Capture the payload BEFORE blocking. A real response's content is fixed when the
+        // server processes the request, not when the client finally reads it.
+        //
+        // Reading it after the block made the ABA regression test a false negative: the
+        // "stale" call returned whatever the test had since written, so it delivered FRESH
+        // content by construction and passed whether or not the production guard existed.
+        // A test that cannot fail is worse than no test — it reports the branch as covered.
+        let payload = transcripts[handle] ?? transcriptResult
+        var spins = 0
+        while blocked.contains(handle) && spins < 10_000 {
+            spins += 1
+            await Task.yield()
+        }
         if let failTranscript { throw failTranscript }
-        return transcriptResult
+        return payload
     }
 
     func personas() async throws -> [String] { personaList }

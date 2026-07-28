@@ -134,17 +134,20 @@ final class ObservabilityTests: XCTestCase {
 
     // MARK: - Fixtures
 
+    @MainActor
     private func oneKild(ahead: Int? = nil) -> Kild {
         Kild(
             id: "k", name: "k", cwd: "/repo", agents: [],
             git: ahead.map { GitFixture.measured(ahead: $0) })
     }
 
+    @MainActor
     private func oneArchived() -> ArchivedKild {
         ArchivedKild(id: "a", name: "a", agents: [], cwd: "/repo")
     }
 
     /// Every route down — the shape that proves an error still reaches the screen.
+    @MainActor
     private func allBroken() -> FakeKildAPI {
         let api = FakeKildAPI()
         api.failing = [.identities, .status, .archive, .health]

@@ -23,7 +23,7 @@ final class DisposalActionTests: XCTestCase {
 
         await store.dispose(kild("t"), force: false)
 
-        guard case let .removed(report) = store.lastDisposal else {
+        guard case let .removed(_, report) = store.lastDisposal else {
             return XCTFail("expected removal, got \(String(describing: store.lastDisposal))")
         }
         XCTAssertTrue(report.branchKept)
@@ -41,7 +41,8 @@ final class DisposalActionTests: XCTestCase {
         await store.dispose(kild("t"), force: false)
 
         XCTAssertEqual(
-            store.lastDisposal, .refused("refusing: 3 commits not reachable from base"))
+            store.lastDisposal,
+            .refused(kild: "t", reason: "refusing: 3 commits not reachable from base"))
     }
 
     /// The dangerous case. A timeout is NOT a refusal: the tree may be gone. Reporting it as
@@ -54,7 +55,7 @@ final class DisposalActionTests: XCTestCase {
 
         await store.dispose(kild("t"), force: false)
 
-        guard case let .unknown(message) = store.lastDisposal else {
+        guard case let .unknown(_, message) = store.lastDisposal else {
             return XCTFail("a timeout must not read as a refusal")
         }
         XCTAssertTrue(message.contains("check before retrying"))
@@ -106,5 +107,25 @@ final class DisposalActionTests: XCTestCase {
     func testAKildInTheCheckoutOffersNoDisposal() {
         let inPlace = Kild(id: "k", name: "k", cwd: "/repo", worktree: nil, agents: [])
         XCTAssertFalse(Disposal.isDisposable(inPlace))
+    }
+
+    /// Every outcome names its kild, so a slow result for one cannot be shown against
+    /// another. Only `.removed` carried an id, which meant a late refusal for A silently
+    /// overwrote a success for B with an unattributed message.
+    @MainActor
+    func testEveryOutcomeCarriesTheKildItIsAbout() async {
+        let api = FakeKildAPI(kilds: [kild("a"), kild("b")])
+        let store = KildStore(api: api, defaults: scratch(), launchKild: nil)
+
+        await store.dispose(kild("a"), force: false)
+        XCTAssertEqual(store.lastDisposal?.kild, "a")
+
+        api.failDelete = .engine("refused")
+        await store.dispose(kild("b"), force: false)
+        XCTAssertEqual(store.lastDisposal?.kild, "b", "a refusal names its kild too")
+
+        api.failDelete = .outcomeUnknown(verb: "disposal")
+        await store.dispose(kild("a"), force: false)
+        XCTAssertEqual(store.lastDisposal?.kild, "a", "and so does an unknown outcome")
     }
 }

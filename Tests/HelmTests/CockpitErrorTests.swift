@@ -85,6 +85,7 @@ final class CockpitErrorTests: XCTestCase {
 
     // MARK: - Fixtures
 
+    @MainActor
     private func broken(_ polls: Set<Cockpit.Poll>) -> FakeKildAPI {
         let api = FakeKildAPI(
             kilds: [Kild(id: "k", name: "k", cwd: "/repo", agents: [])],

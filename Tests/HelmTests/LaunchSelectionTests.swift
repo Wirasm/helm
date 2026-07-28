@@ -166,10 +166,12 @@ final class LaunchSelectionTests: XCTestCase {
 
     // MARK: - Fixtures
 
+    @MainActor
     private func archived(_ id: String) -> ArchivedKild {
         ArchivedKild(id: id, name: id, agents: [], cwd: "/repo")
     }
 
+    @MainActor
     private func live(_ id: String) -> Kild {
         Kild(id: id, name: id, cwd: "/repo", agents: [])
     }

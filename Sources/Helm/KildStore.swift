@@ -258,6 +258,10 @@ final class KildStore: ObservableObject {
     @Published private(set) var agentLinesError: String?
     @Published private(set) var isLoadingAgent = false
 
+    /// Monotonic token for agent loads — see `openAgent` for why a handle comparison is
+    /// not sufficient.
+    private var agentLoad = 0
+
     /// Open an agent's conversation.
     ///
     /// The source is decided by `ownership`, not by trying the transcript and falling back:
@@ -265,40 +269,51 @@ final class KildStore: ObservableObject {
     /// engine can only refuse. Reading `Conversation.source` first means helm never sends a
     /// request it knows will fail, and never renders a refusal as though it were an error.
     func openAgent(_ agent: Agent, in kild: Kild) async {
+        agentLoad += 1
+        let load = agentLoad
         selectedAgent = agent.handle
-        isLoadingAgent = true
+        agentLines = []
         agentLinesError = nil
-        defer { isLoadingAgent = false }
+        isLoadingAgent = true
 
-        switch Conversation.source(for: agent) {
-        case .transcript:
-            do {
+        // Only the newest load may write. Comparing the HANDLE after the await is not
+        // enough: open A, open B, open A again, and A's first request — still in flight,
+        // holding content from before B — lands to find the handle equal again and is
+        // accepted as current. The guard sees the value it expects but not the same
+        // instance of it, which a counter cannot be fooled by.
+        func isCurrent() -> Bool { load == agentLoad }
+        defer { if isCurrent() { isLoadingAgent = false } }
+
+        do {
+            let lines: [Conversation.Line]
+            switch Conversation.source(for: agent) {
+            case .transcript:
+                // Chosen by `ownership` BEFORE the request. An attached agent has no pi
+                // session, so this route can only refuse — trying it and falling back would
+                // render a correct refusal as an error.
                 let transcript = try await api.transcript(of: agent.handle, in: kild.id)
-                guard selectedAgent == agent.handle else { return }  // selection moved on
-                agentLines = Conversation.lines(from: transcript)
-            } catch {
-                guard selectedAgent == agent.handle else { return }
-                agentLines = []
-                agentLinesError = error.localizedDescription
-            }
-        case .routedMessages:
-            do {
+                lines = Conversation.lines(from: transcript)
+            case .routedMessages:
                 let log = try await api.messages(in: kild.id, since: nil)
-                guard selectedAgent == agent.handle else { return }
-                agentLines = Conversation.lines(for: agent.handle, from: log)
-            } catch {
-                guard selectedAgent == agent.handle else { return }
-                agentLines = []
-                agentLinesError = error.localizedDescription
+                lines = Conversation.lines(for: agent.handle, from: log)
             }
+            guard isCurrent() else { return }
+            agentLines = lines
+        } catch {
+            guard isCurrent() else { return }
+            agentLines = []
+            agentLinesError = error.localizedDescription
         }
     }
 
     /// Close the agent view and return the dock to the kild.
     func closeAgent() {
+        // Bump the token so a load still in flight cannot write into a closed view.
+        agentLoad += 1
         selectedAgent = nil
         agentLines = []
         agentLinesError = nil
+        isLoadingAgent = false
     }
 
     /// Send to an agent. There is no unlogged path — every instruction is in the log,
@@ -325,13 +340,28 @@ final class KildStore: ObservableObject {
     /// Held rather than thrown because all three outcomes are worth showing and only one is
     /// an error: it worked, the guard refused and said why, or it timed out and **may have
     /// happened anyway**.
+    /// **Every case names the kild it is about.**
+    ///
+    /// It did not, and that was a latent bug of the kind this branch keeps producing: only
+    /// `.removed` carried an id, so a slow refusal for kild A landing after a fast success
+    /// for kild B would overwrite B's result with an unattributed message about A. Nothing
+    /// reads this yet, which is exactly when it is cheap to fix — the moment a banner is
+    /// wired to it, it reports the wrong kild and nobody can tell.
     enum DisposalOutcome: Equatable {
-        case removed(DisposalReport)
+        case removed(kild: Kild.ID, report: DisposalReport)
         /// The guard declined. Not a failure — this is the mechanism working, and the
         /// message names what is at stake.
-        case refused(String)
+        case refused(kild: Kild.ID, reason: String)
         /// The engine did not answer in time. The tree may be gone. Never offer a retry.
-        case unknown(String)
+        case unknown(kild: Kild.ID, message: String)
+
+        /// Which kild this outcome describes, so a stale one can be discarded rather than
+        /// shown against the wrong row.
+        var kild: Kild.ID {
+            switch self {
+            case let .removed(kild, _), let .refused(kild, _), let .unknown(kild, _): kild
+            }
+        }
     }
 
     @Published var lastDisposal: DisposalOutcome?
@@ -348,20 +378,22 @@ final class KildStore: ObservableObject {
     func dispose(_ kild: Kild, force: Bool = false) async {
         do {
             let report = try await api.delete(kild.id, force: force)
-            lastDisposal = .removed(report)
+            lastDisposal = .removed(kild: kild.id, report: report)
             await loadIdentities()
         } catch let error as KildAPIError {
             switch error {
             case .outcomeUnknown:
-                lastDisposal = .unknown(error.errorDescription ?? "outcome unknown")
+                lastDisposal = .unknown(
+                    kild: kild.id, message: error.errorDescription ?? "outcome unknown")
                 // Refresh anyway: the engine may well have completed it, and the poll is
                 // the only way to find out which.
                 await loadIdentities()
             default:
-                lastDisposal = .refused(error.errorDescription ?? "refused")
+                lastDisposal = .refused(
+                    kild: kild.id, reason: error.errorDescription ?? "refused")
             }
         } catch {
-            lastDisposal = .refused(error.localizedDescription)
+            lastDisposal = .refused(kild: kild.id, reason: error.localizedDescription)
         }
     }
 
