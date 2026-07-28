@@ -267,4 +267,18 @@ final class KildHTTPClientTests: XCTestCase {
         let report = try await client.land("k-1")
         XCTAssertNotNil(report.error, "the report has an error AND is still the answer")
     }
+
+    // MARK: - Health
+
+    /// Ported from `EngineClientTests`. `/api/health` survived the restructure unchanged,
+    /// and this is the only place its payload is actually DECODED — `CockpitTests` covers
+    /// what a changed `bootId` means, but through a stub that returns a constructed value,
+    /// so it would not catch the wire drifting.
+    func testHealthDecodes() async throws {
+        StubURLProtocol.respond(status: 200, json: #"{"ok":true,"bootId":"abcd1234efgh"}"#)
+        let health = try await client.health()
+        XCTAssertTrue(health.ok)
+        XCTAssertEqual(health.bootId, "abcd1234efgh")
+        XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/health")
+    }
 }

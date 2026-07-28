@@ -9,14 +9,25 @@ struct RootView: View {
     @ObservedObject private var terminalManager = TerminalManager.shared
     @State private var showBrowser = false
     @AppStorage("helmDockWidth") private var dockWidth = 560.0
-    private let refresh = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    /// TWO cadences, not one. The cheap tick carries identity, agents and attention and
+    /// costs the engine nothing; the costly tick runs a git subprocess per kild. Polling
+    /// both at 5s would put that fan-out behind every refresh, which is precisely the cost
+    /// the engine's split listing was created to remove — and re-adding it here would undo
+    /// that work from the client side.
+    private let cheapTick = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    private let costlyTick = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
             WorkspaceBar(store: store, select: switchWorkspace, open: openWorkspace, close: closeWorkspace)
             HSplitView {
-                SidebarColumn(store: store)
-                    .frame(minWidth: 260, idealWidth: 300, maxWidth: 420, maxHeight: .infinity)
+                ObserveColumn(
+                    groups: store.shownGroups,
+                    collisions: store.cockpit.collisions,
+                    selection: $store.selection,
+                    expanded: $store.expandedKilds
+                )
+                .frame(minWidth: 260, idealWidth: 300, maxWidth: 420, maxHeight: .infinity)
                 TerminalWorkspace(
                     manager: terminalManager,
                     artifact: artifact,
@@ -25,18 +36,14 @@ struct RootView: View {
                 )
                 .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
-                if let room = store.selectedRoom {
+                if let kild = store.selectedKild {
                     dockPane {
-                        RoomDetailView(
-                            room: room,
-                            engine: store.engine,
-                            readOnly: store.tab == .history,
-                            onPosted: { await store.load() },
-                            draft: Binding(
-                                get: { store.composerDraft(for: room.id) },
-                                set: { store.setComposerDraft($0, for: room.id) }
-                            )
-                        ).id(room.id)
+                        KildDock(
+                            kild: kild,
+                            collisions: store.selectedCollisions,
+                            statusError: store.cockpit.errors[.status],
+                            openCollision: { store.selection = $0 }
+                        ).id(kild.id)
                     }
                 } else if artifact.isOpen {
                     dockPane { ArtifactPane(model: artifact) }
@@ -44,17 +51,20 @@ struct RootView: View {
             }
         }
         .task {
-            await store.load()
+            await store.loadIdentities()
+            await store.loadStatus()
+            await store.loadArchive()
             activateSelectedWorkspace()
             if let path = LaunchOptions.artifactPath {
                 artifact.open(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
             }
         }
-        .onReceive(refresh) { _ in Task { await store.load() } }
+        .onReceive(cheapTick) { _ in Task { await store.loadIdentities() } }
+        .onReceive(costlyTick) { _ in Task { await store.loadStatus() } }
         .onChange(of: store.selection) { _, _ in persistCurrentContext() }
         .onChange(of: store.tab) { _, _ in persistCurrentContext() }
         .onChange(of: store.historyQuery) { _, _ in persistCurrentContext() }
-        .onChange(of: store.expandedRooms) { _, _ in persistCurrentContext() }
+        .onChange(of: store.expandedKilds) { _, _ in persistCurrentContext() }
         .onReceive(artifact.$document) { _ in persistCurrentContext() }
         .onReceive(NotificationCenter.default.publisher(for: .helmSelectWorkspace)) { note in
             guard let index = note.object as? Int, store.workspaces.indices.contains(index) else { return }

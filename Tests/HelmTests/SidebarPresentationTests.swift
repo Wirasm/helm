@@ -2,67 +2,43 @@ import XCTest
 
 @testable import Helm
 
+/// Formatting shared by the observe column and the dock.
+///
+/// This file previously covered four behaviours of the room-era sidebar. Two survived the
+/// rename because they format facts; two were deleted with the concepts they read:
+///
+/// - `testRoomStatusPrecedence` covered `roomStatus(hasOpenDecisions:)`. Open decisions were
+///   the `needs-decision` protocol, which moved to PRP — the engine no longer reports them,
+///   so there is no precedence left to test. Attention is now `Agent.idle`, covered in
+///   `AttentionTests`.
+/// - `testParticipantLivenessPrecedence` covered
+///   `participantLiveness(kind:idle:posted:)`. `posted` was deleted outright, and `kind`
+///   became `ownership` with different semantics. `AttentionTests` and `ConversationTests`
+///   cover what replaced it.
+///
+/// Neither was removed to make a gate pass; both describe behaviour that no longer exists.
 final class SidebarPresentationTests: XCTestCase {
-    func testRoomStatusPrecedence() {
-        XCTAssertEqual(
-            SidebarPresentation.roomStatus(state: "running", hasOpenDecisions: true, live: true),
-            .needsYou
-        )
-        XCTAssertEqual(
-            SidebarPresentation.roomStatus(state: "running", hasOpenDecisions: false, live: true),
-            .working
-        )
-        XCTAssertEqual(
-            SidebarPresentation.roomStatus(state: "reported", hasOpenDecisions: false, live: true),
-            .quiet("reported")
-        )
-        XCTAssertEqual(
-            SidebarPresentation.roomStatus(state: nil, hasOpenDecisions: false, live: true),
-            .quiet("unknown")
-        )
-        XCTAssertEqual(
-            SidebarPresentation.roomStatus(state: "running", hasOpenDecisions: false, live: false),
-            .quiet("running")
-        )
-    }
 
-    func testParticipantLivenessPrecedence() {
-        XCTAssertEqual(
-            SidebarPresentation.participantLiveness(kind: "attached", idle: true, posted: true),
-            .attached
-        )
-        XCTAssertEqual(
-            SidebarPresentation.participantLiveness(kind: nil, idle: true, posted: true),
-            .idle
-        )
-        XCTAssertEqual(
-            SidebarPresentation.participantLiveness(kind: nil, idle: false, posted: true),
-            .reported
-        )
-        XCTAssertEqual(
-            SidebarPresentation.participantLiveness(kind: nil, idle: nil, posted: nil),
-            .quiet
-        )
-    }
-
+    /// Two kilds touching the same file is ONE file in conflict. Count and detail are
+    /// derived from a single set so a badge can never disagree with the list beneath it.
     func testCollisionSummaryUsesOneUniqueFileSetForCountAndHelp() {
-        let summary = SidebarPresentation.collisionSummary([
-            .init(room: "beta", files: ["shared.swift"]),
-            .init(room: "charlie", files: ["Sources/A.swift", "shared.swift"])
+        let summary = KildPresentation.collisionSummary([
+            Collision(other: "b", otherName: "beta", files: ["shared.swift"]),
+            Collision(
+                other: "c", otherName: "charlie",
+                files: ["Sources/A.swift", "shared.swift"]),
         ])
 
         XCTAssertEqual(summary.names, "beta, charlie")
         XCTAssertEqual(summary.files, ["Sources/A.swift", "shared.swift"])
         XCTAssertEqual(summary.count, summary.files.count)
-        XCTAssertEqual(summary.count, 2)
+        XCTAssertEqual(summary.count, 2, "shared.swift is one conflict, not two")
     }
 
     func testModelShortnameOnlyDropsProviderPath() {
         XCTAssertEqual(
-            SidebarPresentation.modelShortname("openai-codex/gpt-5.6-terra"),
-            "gpt-5.6-terra"
-        )
-        XCTAssertEqual(SidebarPresentation.modelShortname("sol-4"), "sol-4")
-        XCTAssertEqual(SidebarPresentation.modelShortname(nil), "default")
+            KildPresentation.modelShortname("openai-codex/gpt-5.6-terra"), "gpt-5.6-terra")
+        XCTAssertEqual(KildPresentation.modelShortname("sol-4"), "sol-4")
+        XCTAssertEqual(KildPresentation.modelShortname(nil), "default")
     }
 }

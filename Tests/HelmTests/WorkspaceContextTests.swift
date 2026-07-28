@@ -16,7 +16,7 @@ final class WorkspaceContextTests: XCTestCase {
 
     func testSaveRestoreRoundTrip() {
         let id = UUID()
-        let context = WorkspaceContext(terminalSessionIDs: [id], selectedTerminalID: id, selectedRoomID: "room", roomsTab: .history, historyQuery: "reviewer", openArtifactPath: "/tmp/a.md", expandedRooms: ["room"], composerDrafts: ["room": "draft"], branch: "main")
+        let context = WorkspaceContext(terminalSessionIDs: [id], selectedTerminalID: id, selectedKildID: "room", kildsTab: .history, historyQuery: "reviewer", openArtifactPath: "/tmp/a.md", expandedKilds: ["room"], composerDrafts: ["room": "draft"], branch: "main")
         WorkspaceContextStore.save(["/workspace": context], to: defaults)
 
         let restored = WorkspaceContextStore.load(from: defaults, validSessionIDs: [id])["/workspace"]
@@ -25,13 +25,13 @@ final class WorkspaceContextTests: XCTestCase {
 
     func testContextsAreIsolatedByWorkspacePath() {
         WorkspaceContextStore.save([
-            "/one": WorkspaceContext(selectedRoomID: "one"),
-            "/two": WorkspaceContext(selectedRoomID: "two")
+            "/one": WorkspaceContext(selectedKildID: "one"),
+            "/two": WorkspaceContext(selectedKildID: "two")
         ], to: defaults)
 
         let restored = WorkspaceContextStore.load(from: defaults)
-        XCTAssertEqual(restored["/one"]?.selectedRoomID, "one", "one workspace must retain its own context")
-        XCTAssertEqual(restored["/two"]?.selectedRoomID, "two", "a second workspace must not overwrite the first")
+        XCTAssertEqual(restored["/one"]?.selectedKildID, "one", "one workspace must retain its own context")
+        XCTAssertEqual(restored["/two"]?.selectedKildID, "two", "a second workspace must not overwrite the first")
     }
 
     func testDanglingSessionIDsAreDroppedOnLoad() {

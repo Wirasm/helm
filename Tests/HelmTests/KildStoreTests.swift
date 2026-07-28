@@ -3,19 +3,23 @@ import XCTest
 
 @testable import Helm
 
-/// The workspace filter end to end: the store loads rooms from a stubbed engine and
-/// narrows them to the open folder — the one behaviour the registry ever bought, now
-/// keyed by a path nobody had to register.
+/// The workspace filter end to end: the store loads kilds from a stubbed engine and narrows
+/// them to the open folder — the one behaviour the registry ever bought, now keyed by a path
+/// nobody had to register.
+///
+/// The store is two halves composed rather than merged, and this file tests the seam: the
+/// engine half (`cockpit`) is populated through the split polls, the workspace half is
+/// persisted locally, and `shownGroups` / `shownArchive` are where the two meet.
 @MainActor
 final class KildStoreTests: XCTestCase {
     private var defaults: UserDefaults!
     private var suiteName: String!
+    private var api: StubKildAPI!
 
     override func setUpWithError() throws {
-        StubURLProtocol.reset()
         suiteName = "helm-kildstore-tests-\(UUID().uuidString)"
         defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        stubEngine(rooms: "[]", archive: "[]", worktrees: "[]")
+        api = StubKildAPI()
     }
 
     override func tearDownWithError() throws {
@@ -24,156 +28,163 @@ final class KildStoreTests: XCTestCase {
 
     // MARK: Filtering
 
-    func testSelectingAWorkspaceFiltersRoomsAndDeselectingShowsAll() async {
-        stubEngine(
-            rooms: """
-            [\(room(id: "in", git: "/p/kild/sub")),
-             \(room(id: "sibling", git: "/p/kild-ui")),
-             \(room(id: "elsewhere", git: "/p/other"))]
-            """,
-            archive: "[]",
-            worktrees: "[]"
-        )
+    func testSelectingAWorkspaceFiltersKildsAndDeselectingShowsAll() async {
+        api.identities = [
+            kild("in", cwd: "/p/kild/sub"),
+            kild("sibling", cwd: "/p/kild-ui"),
+            kild("elsewhere", cwd: "/p/other")
+        ]
         let store = makeStore()
-        await store.load()
-        XCTAssertEqual(store.shownRooms.map(\.id).sorted(), ["elsewhere", "in", "sibling"])
+        await load(store)
+        XCTAssertEqual(shownLive(store).sorted(), ["elsewhere", "in", "sibling"])
 
         store.select(Workspace(path: "/p/kild"))
-        await store.load()
+        await load(store)
         // Sibling-prefix collision must not leak in.
-        XCTAssertEqual(store.shownRooms.map(\.id), ["in"])
+        XCTAssertEqual(shownLive(store), ["in"])
 
         store.select(nil)
-        await store.load()
-        XCTAssertEqual(store.shownRooms.count, 3)
+        await load(store)
+        XCTAssertEqual(shownLive(store).count, 3)
     }
 
-    /// Worktree rooms live under `$KILD_HOME`, never under the workspace, so they can
-    /// only be attributed by name — which is why the worktrees call survives.
-    func testWorktreeRoomsAttributeByNameFromThePathQuery() async {
-        stubEngine(
-            rooms: "[\(room(id: "wt", git: "/home/.config/kild/worktrees/fix", worktree: "fix"))]",
-            archive: "[]",
-            worktrees: #"[{"branch":"kild/fix","path":"/home/.config/kild/worktrees/fix","name":"fix"}]"#
-        )
-        let store = makeStore()
-        store.select(Workspace(path: "/p/kild"))
-        await store.load()
+    // REMOVED: testWorktreeRoomsAttributeByNameFromThePathQuery.
+    //
+    // It asserted that a worktree kild was attributed to the open folder by *name*, via the
+    // list `GET /api/worktrees?path=…` returned, and that the query carried a path rather
+    // than a registered project name. Both halves are gone: the endpoint was deleted from
+    // the engine with no successor, `KildAPI` has no method for it, and `KildStore` no
+    // longer exposes `workspaceWorktreeNames`. The behaviour it protected — a kild whose
+    // worktree lives under `$KILD_HOME` still belongs to its project folder — survives by a
+    // different mechanism (`Kild.cwd` containment) and is covered by
+    // `WorkspaceAttributionTests.testAWorktreeKildIsAttributedByCwdNotByWorktreeLocation`,
+    // with the orphan case alongside it.
 
-        XCTAssertEqual(store.workspaceWorktreeNames, ["fix"])
-        XCTAssertEqual(store.shownRooms.map(\.id), ["wt"])
-        // The engine reference is the path, never a registered name.
-        XCTAssertEqual(StubURLProtocol.lastRequest?.url?.query, "path=/p/kild")
-    }
-
-    /// A folder that is no git repo 400s on /api/worktrees. That is legitimate: it
-    /// only disables worktree matching, and must never surface as an engine error.
-    func testNonRepoWorkspaceYieldsNoWorktreeNamesAndNoError() async {
-        stubEngine(rooms: "[\(room(id: "r", git: "/p/notes"))]", archive: "[]", worktrees: nil)
-        StubURLProtocol.respond(
-            path: "/api/worktrees", status: 400, json: #"{"error":"not a git repository"}"#
-        )
+    /// The surviving half of `testNonRepoWorkspaceYieldsNoWorktreeNamesAndNoError`.
+    ///
+    /// Opening a folder that is no git repo used to 400 on `/api/worktrees`, and the store
+    /// had to swallow that without surfacing an engine error. There is no second request
+    /// any more, so the guarantee is now structural rather than defensive — worth pinning
+    /// anyway, because it is the property the deleted call kept threatening.
+    func testANonRepoWorkspaceShowsItsKildsAndReportsNoError() async {
+        api.identities = [kild("r", cwd: "/p/notes")]
         let store = makeStore()
         store.select(Workspace(path: "/p/notes"))
-        await store.load()
+        await load(store)
 
-        XCTAssertTrue(store.workspaceWorktreeNames.isEmpty)
-        XCTAssertNil(store.error)
-        XCTAssertEqual(store.shownRooms.map(\.id), ["r"])
+        XCTAssertEqual(shownLive(store), ["r"])
+        XCTAssertNil(store.cockpit.lastError, "a folder that is no repo is not an engine failure")
     }
 
     // MARK: Collisions
 
-    func testCollisionsIntersectCommittedChangesAcrossLiveRooms() async {
-        stubEngine(
-            rooms: """
-            [{"id":"a","name":"alpha","participants":[],"log":[],
-              "git":{"path":"/p/a","changedFiles":["Sources/A.swift","shared.swift"]}},
-             {"id":"b","name":"beta","participants":[],"log":[],
-              "git":{"path":"/p/b","changedFiles":["shared.swift","Tests/B.swift"]}},
-             {"id":"c","name":"charlie","participants":[],"log":[],
-              "git":{"path":"/p/c","changedFiles":["shared.swift","shared.swift","Sources/A.swift"]}},
-             {"id":"d","name":"delta","participants":[],"log":[],
-              "git":{"path":"/p/d","changedFiles":["elsewhere.swift"]}}]
-            """,
-            archive: "[]",
-            worktrees: "[]"
-        )
+    func testCollisionsIntersectChangedFilesAcrossLiveKilds() async {
+        api.identities = [
+            kild("a", name: "alpha", cwd: "/p/a"),
+            kild("b", name: "beta", cwd: "/p/b"),
+            kild("c", name: "charlie", cwd: "/p/c"),
+            kild("d", name: "delta", cwd: "/p/d")
+        ]
+        api.status = [
+            kild("a", name: "alpha", cwd: "/p/a",
+                 git: GitFixture.measured(changedFiles: ["Sources/A.swift", "shared.swift"])),
+            kild("b", name: "beta", cwd: "/p/b",
+                 git: GitFixture.measured(changedFiles: ["shared.swift", "Tests/B.swift"])),
+            kild("c", name: "charlie", cwd: "/p/c",
+                 git: GitFixture.measured(
+                    changedFiles: ["shared.swift", "shared.swift", "Sources/A.swift"])),
+            kild("d", name: "delta", cwd: "/p/d",
+                 git: GitFixture.measured(changedFiles: ["elsewhere.swift"]))
+        ]
         let store = makeStore()
-        await store.load()
+        await load(store)
 
-        XCTAssertEqual(store.collisions(for: "a"), [
-            .init(room: "beta", files: ["shared.swift"]),
-            .init(room: "charlie", files: ["Sources/A.swift", "shared.swift"])
+        XCTAssertEqual(store.cockpit.collisions["a"], [
+            Collision(other: "b", otherName: "beta", files: ["shared.swift"]),
+            Collision(other: "c", otherName: "charlie", files: ["Sources/A.swift", "shared.swift"])
         ])
-        XCTAssertTrue(store.collisions(for: "d").isEmpty)
+        XCTAssertNil(store.cockpit.collisions["d"])
 
-        // Collision scope is every live room, even when the workspace hides peers.
+        // Collision scope is every live kild, even when the workspace hides the peers.
         store.select(Workspace(path: "/p/a"))
-        await store.load()
-        XCTAssertEqual(store.shownRooms.map(\.id), ["a"])
-        XCTAssertEqual(store.collisions(for: "a").map(\.room), ["beta", "charlie"])
+        store.selection = "a"
+        await load(store)
+        XCTAssertEqual(shownLive(store), ["a"])
+        XCTAssertEqual(store.selectedCollisions.map(\.otherName), ["beta", "charlie"])
     }
 
-    func testCollisionsIgnoreGitFailureOnEitherRoom() async {
-        stubEngine(
-            rooms: """
-            [{"id":"good","name":"good","participants":[],"log":[],
-              "git":{"path":"/p/good","changedFiles":["shared.swift"]}},
-             {"id":"failed","name":"failed","participants":[],"log":[],
-              "git":{"path":"/p/failed","changedFiles":["shared.swift"],"error":"not a repository"}}]
-            """,
-            archive: "[]",
-            worktrees: "[]"
-        )
-        let store = makeStore()
-        await store.load()
+    /// A failed git probe returns `changedFiles: []` alongside its `error`, which is
+    /// indistinguishable from a clean tree unless someone reads `error`. Deriving from it
+    /// would report "no collision" — the most reassuring possible answer — from a
+    /// measurement that never happened.
+    func testCollisionsIgnoreGitFailureOnEitherKild() async {
+        // The fixture's own defaults, plus the files a real failure can still carry: the
+        // point is that `error` disqualifies the probe regardless of what else is in it.
+        var brokenProbe = GitFixture.failed("not a repository")
+        brokenProbe.changedFiles = ["shared.swift"]
 
-        XCTAssertTrue(store.collisions(for: "good").isEmpty)
-        XCTAssertTrue(store.collisions(for: "failed").isEmpty)
+        api.identities = [kild("good", cwd: "/p/good"), kild("failed", cwd: "/p/failed")]
+        api.status = [
+            kild("good", cwd: "/p/good",
+                 git: GitFixture.measured(changedFiles: ["shared.swift"])),
+            kild("failed", cwd: "/p/failed", git: brokenProbe)
+        ]
+        let store = makeStore()
+        await load(store)
+
+        XCTAssertNil(store.cockpit.collisions["good"])
+        XCTAssertNil(store.cockpit.collisions["failed"])
     }
 
     // MARK: Archive search
 
-    func testArchiveSearchFindsRoomParticipantModelDecisionAndPostText() async {
-        stubEngine(
-            rooms: "[]",
-            archive: """
-            [{ "id": "alpha", "name": "Release Train",
-               "participants": [{"name":"builder","persona":"implementor","model":"openai-codex/gpt-5.6-terra"}],
-               "log": [],
-               "decisions": [{"key":"api-shape","summary":"Choose the wire format","openedBy":"builder"}] },
-             { "id": "beta", "name": "Quiet Room", "participants": [],
-               "log": [{"id":"m1","from":"reviewer","to":["human"],"text":"The migration is complete","ts":2}] }]
-            """,
-            worktrees: "[]"
-        )
+    /// Ported from `testArchiveSearchFindsRoomParticipantModelDecisionAndPostText`.
+    ///
+    /// Two of those five no longer have anything to match against. **Decisions were deleted
+    /// as a concept** — there is no `decisions` field on the wire and no `openDecisions`
+    /// anywhere in helm. **Post text cannot be searched** because `ArchivedKild` carries no
+    /// log: shipping every stopped kild's conversation in a listing was the engine's most
+    /// expensive route and it was removed, so matching prose would mean fetching every
+    /// archived kild's messages — exactly the cost the removal bought back. See
+    /// `ArchivedKild.matchesSearch` for what the listing does carry.
+    func testArchiveSearchFindsKildNameAgentHandleAndModel() async {
+        api.archived = [
+            ArchivedKild(
+                id: "alpha", name: "Release Train",
+                agents: [
+                    Agent(handle: "builder", ownership: .owned, persona: "implementor",
+                          model: "openai-codex/gpt-5.6-terra")
+                ],
+                endedAt: 2),
+            ArchivedKild(
+                id: "beta", name: "Quiet Room",
+                agents: [Agent(handle: "reviewer", ownership: .owned)],
+                endedAt: 1)
+        ]
         let store = makeStore()
-        await store.load()
+        await load(store)
         store.tab = .history
 
         for (query, expectedID) in [
             ("release", "alpha"), ("BUILDER", "alpha"), ("5.6-terra", "alpha"),
-            ("wire format", "alpha"), ("migration is complete", "beta"), ("reviewer", "beta")
+            ("implementor", "alpha"), ("reviewer", "beta")
         ] {
             store.historyQuery = query
-            XCTAssertEqual(store.shownRooms.map(\.id), [expectedID], "Archive search should match \(query)")
+            XCTAssertEqual(
+                store.shownArchive.map(\.id), [expectedID], "Archive search should match \(query)")
         }
         store.historyQuery = ""
-        XCTAssertEqual(store.shownRooms.count, 2, "clearing search restores the archive")
+        XCTAssertEqual(store.shownArchive.count, 2, "clearing search restores the archive")
     }
 
-    func testArchiveSearchDoesNotFilterLiveRooms() async {
-        stubEngine(
-            rooms: "[\(room(id: "live", git: "/p/kild"))]",
-            archive: "[]",
-            worktrees: "[]"
-        )
+    func testArchiveSearchDoesNotFilterLiveKilds() async {
+        api.identities = [kild("live", cwd: "/p/kild")]
         let store = makeStore()
-        await store.load()
+        await load(store)
         store.historyQuery = "does-not-match"
 
-        XCTAssertEqual(store.shownRooms.map(\.id), ["live"], "An inactive archive query must not hide live rooms")
+        XCTAssertEqual(
+            shownLive(store), ["live"], "An inactive archive query must not hide live kilds")
     }
 
     // MARK: The open list
@@ -211,38 +222,39 @@ final class KildStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedWorkspace?.name, "fix")
     }
 
-    func testSelectingWorkspacesRestoresTheirRoomSelectionAndTab() {
+    func testSelectingWorkspacesRestoresTheirKildSelectionAndTab() {
         let first = Workspace(path: "/p/first")
         let second = Workspace(path: "/p/second")
         WorkspaceContextStore.save([
             first.path: WorkspaceContext(
-                selectedRoomID: "first-room", roomsTab: .live, historyQuery: "", expandedRooms: ["first-room"]
+                selectedKildID: "first-kild", kildsTab: .live, historyQuery: "",
+                expandedKilds: ["first-kild"]
             ),
             second.path: WorkspaceContext(
-                selectedRoomID: "second-room", roomsTab: .history, historyQuery: "reviewer",
-                expandedRooms: ["second-room"]
+                selectedKildID: "second-kild", kildsTab: .history, historyQuery: "reviewer",
+                expandedKilds: ["second-kild"]
             )
         ], to: defaults)
         let store = makeStore()
 
         store.open(first)
-        XCTAssertEqual(store.selection, "first-room", "first workspace applies its saved room")
+        XCTAssertEqual(store.selection, "first-kild", "first workspace applies its saved kild")
         XCTAssertEqual(store.tab, .live, "first workspace applies its saved tab")
-        XCTAssertEqual(store.expandedRooms, ["first-room"])
+        XCTAssertEqual(store.expandedKilds, ["first-kild"])
         store.open(second)
-        XCTAssertEqual(store.selection, "second-room", "second workspace does not inherit the first room")
+        XCTAssertEqual(store.selection, "second-kild", "second workspace does not inherit the first")
         XCTAssertEqual(store.tab, .history, "second workspace restores history")
         XCTAssertEqual(store.historyQuery, "reviewer", "archive search belongs to the workspace context")
-        XCTAssertEqual(store.expandedRooms, ["second-room"])
+        XCTAssertEqual(store.expandedKilds, ["second-kild"])
         store.select(first)
-        XCTAssertEqual(store.selection, "first-room", "returning restores the first selection")
+        XCTAssertEqual(store.selection, "first-kild", "returning restores the first selection")
         XCTAssertEqual(store.historyQuery, "", "returning restores the first workspace's archive search")
-        XCTAssertEqual(store.expandedRooms, ["first-room"], "room expansion follows workspace context")
+        XCTAssertEqual(store.expandedKilds, ["first-kild"], "agent disclosure follows workspace context")
     }
 
     func testClosingAWorkspaceEvictsItsContext() {
         let workspace = Workspace(path: "/p/kild")
-        WorkspaceContextStore.save([workspace.path: WorkspaceContext(selectedRoomID: "room")], to: defaults)
+        WorkspaceContextStore.save([workspace.path: WorkspaceContext(selectedKildID: "kild")], to: defaults)
         let store = makeStore()
         store.open(workspace)
         store.close(workspace)
@@ -263,40 +275,38 @@ final class KildStoreTests: XCTestCase {
     }
 
     /// A workspace whose folder was deleted on disk is still a list entry — it simply
-    /// matches no rooms. Nothing to reconcile, because nothing was registered.
-    func testWorkspaceWhoseFolderIsGoneShowsNoRoomsAndNoError() async {
-        stubEngine(rooms: "[\(room(id: "r", git: "/p/kild"))]", archive: "[]", worktrees: "[]")
+    /// matches no kilds. Nothing to reconcile, because nothing was registered.
+    func testWorkspaceWhoseFolderIsGoneShowsNoKildsAndNoError() async {
+        api.identities = [kild("r", cwd: "/p/kild")]
         let store = makeStore()
         store.select(Workspace(path: "/p/deleted-yesterday"))
-        await store.load()
+        await load(store)
 
-        XCTAssertTrue(store.shownRooms.isEmpty)
-        XCTAssertNil(store.error)
+        XCTAssertTrue(shownLive(store).isEmpty)
+        XCTAssertNil(store.cockpit.lastError)
     }
 
     // MARK: Helpers
 
     private func makeStore() -> KildStore {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [StubURLProtocol.self]
-        let engine = EngineClient(urlSession: URLSession(configuration: config))
-        return KildStore(engine: engine, defaults: defaults)
+        KildStore(api: api, defaults: defaults)
     }
 
-    private func stubEngine(rooms: String, archive: String, worktrees: String?) {
-        StubURLProtocol.respond(path: "/api/health", status: 200, json: #"{"ok":true,"bootId":"b"}"#)
-        StubURLProtocol.respond(path: "/api/rooms/live", status: 200, json: rooms)
-        StubURLProtocol.respond(path: "/api/rooms/archive", status: 200, json: archive)
-        if let worktrees {
-            StubURLProtocol.respond(path: "/api/worktrees", status: 200, json: worktrees)
-        }
+    /// One full tick of both halves of the split listing, plus the archive — the cadence
+    /// `RootView` drives, collapsed for a test that wants everything present.
+    private func load(_ store: KildStore) async {
+        await store.loadIdentities()
+        await store.loadStatus()
+        await store.loadArchive()
     }
 
-    private func room(id: String, git: String, worktree: String? = nil) -> String {
-        """
-        { "id": "\(id)", "name": "\(id)", "participants": [], "log": [],
-          "git": {"path": "\(git)"}
-          \(worktree.map { #", "worktree": "\#($0)""# } ?? "") }
-        """
+    private func shownLive(_ store: KildStore) -> [String] {
+        (store.shownGroups[.live] ?? []).map(\.id)
+    }
+
+    private func kild(
+        _ id: String, name: String? = nil, cwd: String, git: GitStatus? = nil
+    ) -> Kild {
+        Kild(id: id, name: name ?? id, cwd: cwd, agents: [], git: git)
     }
 }

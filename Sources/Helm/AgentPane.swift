@@ -201,9 +201,19 @@ private struct LineView: View {
             }
         case let .message(from, to, text, _):
             VStack(alignment: .leading, spacing: 2) {
-                Text("@\(from) → \(to.map { "@\($0)" }.joined(separator: ", "))")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                HStack(spacing: 0) {
+                    // A stable accent per handle, so a sender keeps its colour across
+                    // refreshes and launches. `human` gets the app accent instead: an
+                    // unattributed message is usually the operator's own shell, and it
+                    // should not look like just another agent.
+                    Text("@\(from)")
+                        .foregroundStyle(
+                            SenderStyle.isHuman(from)
+                                ? Color.accentColor : SenderStyle.accent(for: from))
+                    Text(" → \(to.map { "@\($0)" }.joined(separator: ", "))")
+                        .foregroundStyle(.tertiary)
+                }
+                .font(.system(size: 10, design: .monospaced))
                 Text(text).font(.system(size: 12)).textSelection(.enabled)
             }
         }
