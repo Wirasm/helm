@@ -177,7 +177,9 @@ final class KildHTTPClientTests: XCTestCase {
     func testARefusedDisposalSurfacesTheEnginesReason() async {
         StubURLProtocol.respond(
             status: 409,
-            json: #"{"error":"refusing: 3 commits not reachable from base","code":"unlanded","commits":3}"#)
+            json:
+                #"{"error":"refusing: 3 commits not reachable from base","code":"unlanded","commits":3}"#
+        )
         do {
             _ = try await client.delete("k-1", force: false)
             XCTFail("a refused disposal must throw")

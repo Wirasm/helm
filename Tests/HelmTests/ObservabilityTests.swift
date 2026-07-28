@@ -44,7 +44,10 @@ final class ObservabilityTests: XCTestCase {
     /// The exact regression: kilds arriving must notify the store.
     @MainActor
     func testKildsArrivingNotifiesTheStore() async {
-        let store = KildStore(api: FakeKildAPI(kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]), defaults: scratch(), launchKild: nil)
+        let store = KildStore(
+            api: FakeKildAPI(
+                kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]),
+            defaults: scratch(), launchKild: nil)
         let count = await notifications(from: store) { await store.loadIdentities() }
 
         XCTAssertGreaterThan(
@@ -56,7 +59,10 @@ final class ObservabilityTests: XCTestCase {
     /// The costly half too — git and cost land on `Cockpit`, not on the store.
     @MainActor
     func testStatusArrivingNotifiesTheStore() async {
-        let store = KildStore(api: FakeKildAPI(kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]), defaults: scratch(), launchKild: nil)
+        let store = KildStore(
+            api: FakeKildAPI(
+                kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]),
+            defaults: scratch(), launchKild: nil)
         await store.loadIdentities()
         let count = await notifications(from: store) { await store.loadStatus() }
         XCTAssertGreaterThan(count, 0)
@@ -64,7 +70,10 @@ final class ObservabilityTests: XCTestCase {
 
     @MainActor
     func testArchiveArrivingNotifiesTheStore() async {
-        let store = KildStore(api: FakeKildAPI(kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]), defaults: scratch(), launchKild: nil)
+        let store = KildStore(
+            api: FakeKildAPI(
+                kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]),
+            defaults: scratch(), launchKild: nil)
         let count = await notifications(from: store) { await store.loadArchive() }
         XCTAssertGreaterThan(count, 0)
     }
@@ -102,7 +111,8 @@ final class ObservabilityTests: XCTestCase {
         XCTAssertGreaterThan(count, 0, "the reset itself must reach the screen")
         XCTAssertTrue(
             store.cockpit.archive.isEmpty,
-            "an id from the previous process can collide with nothing — or with something different")
+            "an id from the previous process can collide with nothing — or with something different"
+        )
         XCTAssertEqual(store.cockpit.bootId, "boot-2")
     }
 
@@ -115,7 +125,10 @@ final class ObservabilityTests: XCTestCase {
     func testTheStoreDeallocatesDespiteHoldingItsOwnSubscription() async {
         weak var weakStore: KildStore?
         do {
-            let store = KildStore(api: FakeKildAPI(kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]), defaults: scratch(), launchKild: nil)
+            let store = KildStore(
+                api: FakeKildAPI(
+                    kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]),
+                defaults: scratch(), launchKild: nil)
             await store.loadIdentities()
             weakStore = store
             XCTAssertNotNil(weakStore)

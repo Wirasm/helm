@@ -67,7 +67,8 @@ final class AttentionTests: XCTestCase {
             for stopped in [nil, true, false] as [Bool?] {
                 let a = Agent(handle: "x", ownership: .owned, idle: idle, stopped: stopped)
                 XCTAssertFalse(
-                    a.isWaiting && a.isWorking, "idle=\(String(describing: idle)) stopped=\(String(describing: stopped))")
+                    a.isWaiting && a.isWorking,
+                    "idle=\(String(describing: idle)) stopped=\(String(describing: stopped))")
             }
         }
     }
@@ -172,8 +173,9 @@ final class AttentionTests: XCTestCase {
             kild("a", changed: ["z.swift", "a.swift", "m.swift"]),
             kild("b", changed: ["m.swift", "a.swift", "z.swift"]),
         ]
-        XCTAssertEqual(Attention.collisions(among: kilds)["a"]?.first?.files,
-                       ["a.swift", "m.swift", "z.swift"])
+        XCTAssertEqual(
+            Attention.collisions(among: kilds)["a"]?.first?.files,
+            ["a.swift", "m.swift", "z.swift"])
     }
 
     func testThreeWayCollisionReportsEachPairing() {
@@ -215,7 +217,8 @@ final class AttentionTests: XCTestCase {
             kild("alpha", agents: [agent("b")]),
             kild("bravo", agents: [agent("c")]),
         ]
-        XCTAssertEqual(Attention.grouped(kilds)[.live]?.map(\.name),
-                       ["alpha", "bravo", "charlie"])
+        XCTAssertEqual(
+            Attention.grouped(kilds)[.live]?.map(\.name),
+            ["alpha", "bravo", "charlie"])
     }
 }

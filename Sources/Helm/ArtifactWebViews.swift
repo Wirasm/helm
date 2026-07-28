@@ -45,7 +45,8 @@ private struct MarkdownArtifactWebView: NSViewRepresentable {
         for script in [ArtifactHTML.vendoredMarked(), ArtifactHTML.vendoredMermaid()] {
             guard let script else { continue }
             configuration.userContentController.addUserScript(
-                WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+                WKUserScript(
+                    source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true)
             )
         }
         let webView = WKWebView(frame: .zero, configuration: configuration)

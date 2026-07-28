@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Helm
 
 /// The artifact browser's pure part — store discovery + file listing over a
@@ -53,7 +54,7 @@ final class ArtifactBrowserTests: XCTestCase {
 
     func testDiscoveryFindsStoresWithDisplayNamesSortedByName() throws {
         try makeStore("proj-z", name: "Alpha")
-        try makeStore("proj-b", name: nil) // no "name" key → falls back to dir key
+        try makeStore("proj-b", name: nil)  // no "name" key → falls back to dir key
 
         let stores = ArtifactStoreDiscovery.discoverStores(under: fixtureRoot)
 

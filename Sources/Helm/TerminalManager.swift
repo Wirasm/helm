@@ -169,7 +169,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         let chosenFontSize = persistedFontSize
         return TerminalConfiguration { builder in
             builder.withCustom("term", "xterm-256color")
-            builder.withCustom("scrollback-limit", "104857600") // 100 MiB
+            builder.withCustom("scrollback-limit", "104857600")  // 100 MiB
             if let chosenFontSize { builder.withFontSize(chosenFontSize) }
         }
     }
@@ -276,7 +276,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     }
 
     /// `font-size` as declared by the user's own validated config, if at all.
-    static let declaredUserFontSize: Float? = validatedUserConfig
+    static let declaredUserFontSize: Float? =
+        validatedUserConfig
         .flatMap(GhosttyUserConfig.declaredFontSize)
 
     /// ⌘+/⌘-/⌘0 on the selected terminal. Two effects: ghostty's own binding
@@ -391,10 +392,12 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// the message (OSC 9 carries only a body — fall back to the sequence's
     /// title so neither form delivers an empty banner).
     func terminalDidRequestDesktopNotification(title: String, body: String) {
-        guard TerminalNotificationGate.shouldDeliver(
-            appIsActive: NSApp.isActive,
-            tabIsSelected: manager?.selectedID == id
-        ) else { return }
+        guard
+            TerminalNotificationGate.shouldDeliver(
+                appIsActive: NSApp.isActive,
+                tabIsSelected: manager?.selectedID == id
+            )
+        else { return }
         let message = body.isEmpty ? title : body
         guard !message.isEmpty else { return }
         TerminalNotifier.shared.deliver(title: displayTitle, body: message)
@@ -452,7 +455,8 @@ final class TerminalManager: ObservableObject {
         if workspaceSessions.isEmpty {
             newTerminal(in: workspacePath)
         } else if let preferredID, workspaceSessions.contains(where: { $0.id == preferredID }),
-                  let preferred = workspaceSessions.first(where: { $0.id == preferredID }) {
+            let preferred = workspaceSessions.first(where: { $0.id == preferredID })
+        {
             setSelected(preferred)
         } else if let selectedID, workspaceSessions.contains(where: { $0.id == selectedID }) {
             // Keep this workspace's selection when returning to it.
@@ -493,7 +497,7 @@ final class TerminalManager: ObservableObject {
         guard let selected else { return false }
         let view = selected.hostView
         guard let window = view.window, window.isKeyWindow,
-              let responder = window.firstResponder as? NSView
+            let responder = window.firstResponder as? NSView
         else { return false }
         return responder === view || responder.isDescendant(of: view)
     }
@@ -505,7 +509,8 @@ final class TerminalManager: ObservableObject {
     }
 
     func newTerminal(in workspacePath: String) {
-        let session = TerminalSession(ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller)
+        let session = TerminalSession(
+            ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller)
         nextOrdinal += 1
         session.manager = self
         sessions.append(session)
@@ -515,7 +520,8 @@ final class TerminalManager: ObservableObject {
 
     func select(_ session: TerminalSession) {
         guard session.workspacePath == activeWorkspacePath,
-              sessions.contains(where: { $0.id == session.id }) else { return }
+            sessions.contains(where: { $0.id == session.id })
+        else { return }
         setSelected(session)
     }
 
@@ -539,8 +545,8 @@ final class TerminalManager: ObservableObject {
     /// coordinator → surface → pty. Refuses on the last remaining terminal.
     func close(_ session: TerminalSession) {
         guard session.workspacePath == activeWorkspacePath,
-              canClose,
-              let index = sessions.firstIndex(where: { $0.id == session.id })
+            canClose,
+            let index = sessions.firstIndex(where: { $0.id == session.id })
         else { return }
         let workspaceSessions = sessions(for: session.workspacePath)
         let workspaceIndex = workspaceSessions.firstIndex(where: { $0.id == session.id }) ?? 0

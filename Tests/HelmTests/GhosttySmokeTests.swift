@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Helm
 
 /// Non-GUI smoke for the libghostty embed: ghostty_init, config render + load

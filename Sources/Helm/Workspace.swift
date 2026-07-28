@@ -77,7 +77,8 @@ enum WorkspacePersistence {
     }
 
     /// The remembered selection, but only if it is still an open workspace.
-    static func loadSelection(from defaults: UserDefaults, in workspaces: [Workspace]) -> Workspace? {
+    static func loadSelection(from defaults: UserDefaults, in workspaces: [Workspace]) -> Workspace?
+    {
         guard let path = defaults.string(forKey: selectionKey) else { return nil }
         let remembered = Workspace(path: path)
         return workspaces.contains(remembered) ? remembered : nil

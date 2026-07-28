@@ -10,7 +10,9 @@ import XCTest
 /// shape as `GitStatus`, on an irreversible action.
 final class DisposalTests: XCTestCase {
 
-    private func report(discarded: [String], error: String? = nil, forced: Bool = false)
+    private func report(
+        discarded: [String], error: String? = nil, forced: Bool = false
+    )
         -> DisposalReport
     {
         DisposalReport(

@@ -1,5 +1,6 @@
 import Inject
 import SwiftUI
+
 /// Tab strip across the top of the terminal face: one tab per shell session
 /// (title from the terminal's title delegate, "shell N" until one arrives),
 /// a + button (⌘N), and the artifact-browser button (⌘O) on the trailing edge.
@@ -29,7 +30,8 @@ struct TerminalStrip: View {
         HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(manager.activeWorkspacePath.map(manager.sessions(for:)) ?? []) { session in
+                    ForEach(manager.activeWorkspacePath.map(manager.sessions(for:)) ?? []) {
+                        session in
                         TerminalTab(
                             session: session,
                             isSelected: session.id == manager.selectedID,
@@ -119,7 +121,9 @@ private struct TerminalTab: View {
             .foregroundStyle(.secondary)
             .disabled(!canClose)
             .opacity(canClose ? 1 : 0.3)
-            .help(canClose ? "Close terminal (kills this shell)" : "The last terminal cannot be closed")
+            .help(
+                canClose
+                    ? "Close terminal (kills this shell)" : "The last terminal cannot be closed")
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 4)

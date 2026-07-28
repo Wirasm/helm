@@ -1,0 +1,13 @@
+{
+  "memory": {
+    "dir": "/Users/rasmus/.prp/helm-3ec376fc"
+  },
+  "hooks": {
+    "onClose": {
+      "agent": {
+        "model": "openai-codex/gpt-5.6-terra",
+        "prompt": "[kild memory synthesis] Kild '{{name}}' just stopped in this project.\n\nInputs:\n- Kild transcript (JSON): {{transcriptPath}}\n- Engine-written kild log: {{ledgerPath}} \u2014 this kild's factual entry is already\n  appended; do not duplicate its facts.\n- Current curated memory: MEMORY.md in the same directory (may not exist yet)\n- Product direction (human-owned, READ-ONLY): direction.md there (may not exist)\n\nTask: read the transcript, then update MEMORY.md so it stays a LEAN curated memory of\nthis project: key decisions and who made them, important human calls, durable learnings,\nand current direction. Compress and rewrite \u2014 do not append-and-grow; keep it under ~120\nlines of markdown prose (no schemas, no tables of raw facts the log already holds).\nDo not modify any other file, do not touch code, do not commit."
+      }
+    }
+  }
+}

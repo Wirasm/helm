@@ -10,7 +10,7 @@ know helm.
 
 - Layout: `Sources/Helm/` (flat), `Tests/HelmTests/`
 - Work in a git worktree on a branch, one testable piece, PR to `development`.
-- Gates: `bash scripts/patch-libghostty.sh && swift build && swift test && xcodegen generate`
+- Gates: `bash scripts/patch-libghostty.sh && swift build && swift test && make lint && xcodegen generate`
   — all green before any PR. The patch script comes first and is not optional: the
   vendored, patched libghostty is gitignored, so a fresh worktree has no dependency to
   link against. Never borrow another checkout's `vendor/` to get a green gate — that

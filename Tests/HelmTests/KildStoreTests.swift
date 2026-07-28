@@ -32,7 +32,7 @@ final class KildStoreTests: XCTestCase {
         api.identities = [
             kild("in", cwd: "/p/kild/sub"),
             kild("sibling", cwd: "/p/kild-ui"),
-            kild("elsewhere", cwd: "/p/other")
+            kild("elsewhere", cwd: "/p/other"),
         ]
         let store = makeStore()
         await load(store)
@@ -83,26 +83,33 @@ final class KildStoreTests: XCTestCase {
             kild("a", name: "alpha", cwd: "/p/a"),
             kild("b", name: "beta", cwd: "/p/b"),
             kild("c", name: "charlie", cwd: "/p/c"),
-            kild("d", name: "delta", cwd: "/p/d")
+            kild("d", name: "delta", cwd: "/p/d"),
         ]
         api.status = [
-            kild("a", name: "alpha", cwd: "/p/a",
-                 git: GitFixture.measured(changedFiles: ["Sources/A.swift", "shared.swift"])),
-            kild("b", name: "beta", cwd: "/p/b",
-                 git: GitFixture.measured(changedFiles: ["shared.swift", "Tests/B.swift"])),
-            kild("c", name: "charlie", cwd: "/p/c",
-                 git: GitFixture.measured(
+            kild(
+                "a", name: "alpha", cwd: "/p/a",
+                git: GitFixture.measured(changedFiles: ["Sources/A.swift", "shared.swift"])),
+            kild(
+                "b", name: "beta", cwd: "/p/b",
+                git: GitFixture.measured(changedFiles: ["shared.swift", "Tests/B.swift"])),
+            kild(
+                "c", name: "charlie", cwd: "/p/c",
+                git: GitFixture.measured(
                     changedFiles: ["shared.swift", "shared.swift", "Sources/A.swift"])),
-            kild("d", name: "delta", cwd: "/p/d",
-                 git: GitFixture.measured(changedFiles: ["elsewhere.swift"]))
+            kild(
+                "d", name: "delta", cwd: "/p/d",
+                git: GitFixture.measured(changedFiles: ["elsewhere.swift"])),
         ]
         let store = makeStore()
         await load(store)
 
-        XCTAssertEqual(store.cockpit.collisions["a"], [
-            Collision(other: "b", otherName: "beta", files: ["shared.swift"]),
-            Collision(other: "c", otherName: "charlie", files: ["Sources/A.swift", "shared.swift"])
-        ])
+        XCTAssertEqual(
+            store.cockpit.collisions["a"],
+            [
+                Collision(other: "b", otherName: "beta", files: ["shared.swift"]),
+                Collision(
+                    other: "c", otherName: "charlie", files: ["Sources/A.swift", "shared.swift"]),
+            ])
         XCTAssertNil(store.cockpit.collisions["d"])
 
         // Collision scope is every live kild, even when the workspace hides the peers.
@@ -125,9 +132,10 @@ final class KildStoreTests: XCTestCase {
 
         api.identities = [kild("good", cwd: "/p/good"), kild("failed", cwd: "/p/failed")]
         api.status = [
-            kild("good", cwd: "/p/good",
-                 git: GitFixture.measured(changedFiles: ["shared.swift"])),
-            kild("failed", cwd: "/p/failed", git: brokenProbe)
+            kild(
+                "good", cwd: "/p/good",
+                git: GitFixture.measured(changedFiles: ["shared.swift"])),
+            kild("failed", cwd: "/p/failed", git: brokenProbe),
         ]
         let store = makeStore()
         await load(store)
@@ -152,14 +160,15 @@ final class KildStoreTests: XCTestCase {
             ArchivedKild(
                 id: "alpha", name: "Release Train",
                 agents: [
-                    Agent(handle: "builder", ownership: .owned, persona: "implementor",
-                          model: "openai-codex/gpt-5.6-terra")
+                    Agent(
+                        handle: "builder", ownership: .owned, persona: "implementor",
+                        model: "openai-codex/gpt-5.6-terra")
                 ],
                 endedAt: 2),
             ArchivedKild(
                 id: "beta", name: "Quiet Room",
                 agents: [Agent(handle: "reviewer", ownership: .owned)],
-                endedAt: 1)
+                endedAt: 1),
         ]
         let store = makeStore()
         await load(store)
@@ -167,7 +176,7 @@ final class KildStoreTests: XCTestCase {
 
         for (query, expectedID) in [
             ("release", "alpha"), ("BUILDER", "alpha"), ("5.6-terra", "alpha"),
-            ("implementor", "alpha"), ("reviewer", "beta")
+            ("implementor", "alpha"), ("reviewer", "beta"),
         ] {
             store.historyQuery = query
             XCTAssertEqual(
@@ -225,16 +234,17 @@ final class KildStoreTests: XCTestCase {
     func testSelectingWorkspacesRestoresTheirKildSelectionAndTab() {
         let first = Workspace(path: "/p/first")
         let second = Workspace(path: "/p/second")
-        WorkspaceContextStore.save([
-            first.path: WorkspaceContext(
-                selectedKildID: "first-kild", kildsTab: .live, historyQuery: "",
-                expandedKilds: ["first-kild"]
-            ),
-            second.path: WorkspaceContext(
-                selectedKildID: "second-kild", kildsTab: .history, historyQuery: "reviewer",
-                expandedKilds: ["second-kild"]
-            )
-        ], to: defaults)
+        WorkspaceContextStore.save(
+            [
+                first.path: WorkspaceContext(
+                    selectedKildID: "first-kild", kildsTab: .live, historyQuery: "",
+                    expandedKilds: ["first-kild"]
+                ),
+                second.path: WorkspaceContext(
+                    selectedKildID: "second-kild", kildsTab: .history, historyQuery: "reviewer",
+                    expandedKilds: ["second-kild"]
+                ),
+            ], to: defaults)
         let store = makeStore()
 
         store.open(first)
@@ -242,24 +252,30 @@ final class KildStoreTests: XCTestCase {
         XCTAssertEqual(store.tab, .live, "first workspace applies its saved tab")
         XCTAssertEqual(store.expandedKilds, ["first-kild"])
         store.open(second)
-        XCTAssertEqual(store.selection, "second-kild", "second workspace does not inherit the first")
+        XCTAssertEqual(
+            store.selection, "second-kild", "second workspace does not inherit the first")
         XCTAssertEqual(store.tab, .history, "second workspace restores history")
-        XCTAssertEqual(store.historyQuery, "reviewer", "archive search belongs to the workspace context")
+        XCTAssertEqual(
+            store.historyQuery, "reviewer", "archive search belongs to the workspace context")
         XCTAssertEqual(store.expandedKilds, ["second-kild"])
         store.select(first)
         XCTAssertEqual(store.selection, "first-kild", "returning restores the first selection")
-        XCTAssertEqual(store.historyQuery, "", "returning restores the first workspace's archive search")
-        XCTAssertEqual(store.expandedKilds, ["first-kild"], "agent disclosure follows workspace context")
+        XCTAssertEqual(
+            store.historyQuery, "", "returning restores the first workspace's archive search")
+        XCTAssertEqual(
+            store.expandedKilds, ["first-kild"], "agent disclosure follows workspace context")
     }
 
     func testClosingAWorkspaceEvictsItsContext() {
         let workspace = Workspace(path: "/p/kild")
-        WorkspaceContextStore.save([workspace.path: WorkspaceContext(selectedKildID: "kild")], to: defaults)
+        WorkspaceContextStore.save(
+            [workspace.path: WorkspaceContext(selectedKildID: "kild")], to: defaults)
         let store = makeStore()
         store.open(workspace)
         store.close(workspace)
 
-        XCTAssertNil(store.contexts[workspace.path], "closing a workspace must not retain stale UI state")
+        XCTAssertNil(
+            store.contexts[workspace.path], "closing a workspace must not retain stale UI state")
         XCTAssertNil(makeStore().contexts[workspace.path], "eviction persists across relaunch")
     }
 

@@ -18,8 +18,9 @@ final class AgentConversationTests: XCTestCase {
     }
 
     private func message(_ seq: Int, from: String, to: [String], _ text: String) -> Message {
-        Message(id: "m\(seq)", kildId: "k", from: from, to: to, text: text,
-                ts: 1_785_180_000_000, seq: seq)
+        Message(
+            id: "m\(seq)", kildId: "k", from: from, to: to, text: text,
+            ts: 1_785_180_000_000, seq: seq)
     }
 
     // MARK: - Source selection

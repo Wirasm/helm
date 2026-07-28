@@ -72,8 +72,9 @@ final class CockpitTests: XCTestCase {
     /// ratio.
     func testAnIdentityRefreshKeepsTheGitAlreadyFetched() {
         let held = [
-            status("a", ahead: 3, changed: ["Sidebar.swift"], tokens: 900, cost: 1.25,
-                   landedSha: "abc123", landed: LandedSummary(commits: 2, files: 7))
+            status(
+                "a", ahead: 3, changed: ["Sidebar.swift"], tokens: 900, cost: 1.25,
+                landedSha: "abc123", landed: LandedSummary(commits: 2, files: 7))
         ]
         let merged = Cockpit.merge(identities: [identity("a")], into: held)
 
@@ -126,8 +127,9 @@ final class CockpitTests: XCTestCase {
 
     func testStatusBringsInGitAndTotals() {
         let held = [identity("a", agents: [agent("coder")])]
-        let fresh = status("a", ahead: 4, tokens: 120, cost: 0.5,
-                           landedSha: "def456", landed: LandedSummary(commits: 1, files: 3))
+        let fresh = status(
+            "a", ahead: 4, tokens: 120, cost: 0.5,
+            landedSha: "def456", landed: LandedSummary(commits: 1, files: 3))
         let applied = Cockpit.apply(status: [fresh], to: held)
 
         XCTAssertEqual(applied.first?.git?.ahead, 4)
@@ -148,8 +150,9 @@ final class CockpitTests: XCTestCase {
         let applied = Cockpit.apply(status: [stale], to: held)
 
         XCTAssertEqual(applied.first?.agents.map(\.handle), ["coder", "reviewer"])
-        XCTAssertTrue(applied.first?.agents.first?.isIdle == true,
-                      "a stale status roster must not un-idle an agent that is waiting on you")
+        XCTAssertTrue(
+            applied.first?.agents.first?.isIdle == true,
+            "a stale status roster must not un-idle an agent that is waiting on you")
         XCTAssertEqual(applied.first?.git?.ahead, 2)
     }
 
@@ -174,8 +177,9 @@ final class CockpitTests: XCTestCase {
     /// with git, which makes it look more alive than the ones that exist.
     func testStatusForAKildWeNoLongerHoldIsDropped() {
         let held = [identity("a")]
-        let applied = Cockpit.apply(status: [status("a", ahead: 1), status("ghost", ahead: 9)],
-                                    to: held)
+        let applied = Cockpit.apply(
+            status: [status("a", ahead: 1), status("ghost", ahead: 9)],
+            to: held)
 
         XCTAssertEqual(applied.map(\.id), ["a"])
     }
@@ -192,8 +196,11 @@ final class CockpitTests: XCTestCase {
     }
 
     func testStatusLeavesIdentityFieldsAlone() {
-        let held = [Kild(id: "a", name: "sidebar", cwd: "/repo", worktree: "kild/sidebar",
-                         base: "development", agents: [], orphan: false)]
+        let held = [
+            Kild(
+                id: "a", name: "sidebar", cwd: "/repo", worktree: "kild/sidebar",
+                base: "development", agents: [], orphan: false)
+        ]
         let applied = Cockpit.apply(status: [status("a", ahead: 1)], to: held)
 
         XCTAssertEqual(applied.first?.name, "sidebar")
@@ -204,9 +211,11 @@ final class CockpitTests: XCTestCase {
     // MARK: archive ordering
 
     func testArchivesSortNewestFirst() {
-        let sorted = [archived("old", endedAt: 100), archived("new", endedAt: 300),
-                      archived("mid", endedAt: 200)]
-            .sorted(by: Cockpit.newestFirst)
+        let sorted = [
+            archived("old", endedAt: 100), archived("new", endedAt: 300),
+            archived("mid", endedAt: 200),
+        ]
+        .sorted(by: Cockpit.newestFirst)
 
         XCTAssertEqual(sorted.map(\.name), ["new", "mid", "old"])
     }

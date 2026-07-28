@@ -197,9 +197,9 @@ enum ArtifactHTML {
         // SPM builds (swift run/test) resolve resources via Bundle.module;
         // the XcodeGen .app carries them in the main bundle.
         #if SWIFT_PACKAGE
-        let bundle = Bundle.module
+            let bundle = Bundle.module
         #else
-        let bundle = Bundle.main
+            let bundle = Bundle.main
         #endif
         guard let url = bundle.url(forResource: name, withExtension: "js") else {
             return nil

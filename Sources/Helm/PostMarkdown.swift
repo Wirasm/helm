@@ -37,7 +37,8 @@ enum PostMarkdown {
 
             if codeLines != nil {
                 if trimmed.hasPrefix("```") {
-                    blocks.append(.code(language: codeLanguage, code: codeLines!.joined(separator: "\n")))
+                    blocks.append(
+                        .code(language: codeLanguage, code: codeLines!.joined(separator: "\n")))
                     codeLines = nil
                     codeLanguage = nil
                 } else {

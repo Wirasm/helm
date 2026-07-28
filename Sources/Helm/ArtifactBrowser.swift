@@ -133,7 +133,8 @@ enum ArtifactStoreDiscovery {
     private static func relativePath(of url: URL, under root: URL) -> String {
         let rootPath = root.standardizedFileURL.path + "/"
         let path = url.standardizedFileURL.path
-        return path.hasPrefix(rootPath) ? String(path.dropFirst(rootPath.count)) : url.lastPathComponent
+        return path.hasPrefix(rootPath)
+            ? String(path.dropFirst(rootPath.count)) : url.lastPathComponent
     }
 }
 
@@ -208,7 +209,9 @@ struct ArtifactBrowser: View {
     /// Picker itself stays live, so browsing another project is one click away.
     private func refresh() {
         stores = ArtifactStoreDiscovery.discoverStores(under: root)
-        if let workspaceStore = workspaceRoot.flatMap({ WorkspaceStore.store(forRoot: $0, in: stores) }) {
+        if let workspaceStore = workspaceRoot.flatMap({
+            WorkspaceStore.store(forRoot: $0, in: stores)
+        }) {
             selectedKey = workspaceStore.key
         } else if selectedStore == nil {
             selectedKey = stores.first?.key ?? ""
@@ -268,11 +271,13 @@ struct ArtifactBrowser: View {
     }
 
     private var emptyState: some View {
-        Text("No artifact stores found — agents write artifacts to ~/.prp/<project>/ (plans, research, reviews) and they show up here.")
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(12)
+        Text(
+            "No artifact stores found — agents write artifacts to ~/.prp/<project>/ (plans, research, reviews) and they show up here."
+        )
+        .font(.system(size: 11))
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(12)
     }
 }
 

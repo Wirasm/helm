@@ -57,7 +57,9 @@ enum WorkspaceContextStore {
     /// means one stale workspace discards them all. That is acceptable and deliberate: the
     /// alternative is per-entry recovery, which would keep partially-migrated state around
     /// and make "did my context survive?" depend on which workspace you opened.
-    static func load(from defaults: UserDefaults, validSessionIDs: Set<UUID> = []) -> [String:
+    static func load(
+        from defaults: UserDefaults, validSessionIDs: Set<UUID> = []
+    ) -> [String:
         WorkspaceContext]
     {
         guard let raw = defaults.string(forKey: key),

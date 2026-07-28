@@ -87,15 +87,20 @@ struct HelmApp: App {
             // Mission Control's bindings when the operator hands them over. Do
             // not steal legacy Ctrl+2…8 control codes from a focused terminal.
             if flags == .control, let index = Int(key), (1...9).contains(index) {
-                let terminalFocused = MainActor.assumeIsolated { TerminalManager.shared.selectedTerminalHasFocus }
+                let terminalFocused = MainActor.assumeIsolated {
+                    TerminalManager.shared.selectedTerminalHasFocus
+                }
                 guard !terminalFocused else { return event }
                 NotificationCenter.default.post(name: .helmSelectWorkspace, object: index - 1)
                 return nil
             }
             if flags == .control, event.keyCode == 123 || event.keyCode == 124 {
-                let terminalFocused = MainActor.assumeIsolated { TerminalManager.shared.selectedTerminalHasFocus }
+                let terminalFocused = MainActor.assumeIsolated {
+                    TerminalManager.shared.selectedTerminalHasFocus
+                }
                 guard !terminalFocused else { return event }
-                NotificationCenter.default.post(name: .helmCycleWorkspace, object: event.keyCode == 123 ? -1 : 1)
+                NotificationCenter.default.post(
+                    name: .helmCycleWorkspace, object: event.keyCode == 123 ? -1 : 1)
                 return nil
             }
             // Always available fallback before Mission Control shortcuts are

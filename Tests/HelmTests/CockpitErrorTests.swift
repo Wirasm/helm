@@ -89,7 +89,11 @@ final class CockpitErrorTests: XCTestCase {
     private func broken(_ polls: Set<Cockpit.Poll>) -> FakeKildAPI {
         let api = FakeKildAPI(
             kilds: [Kild(id: "k", name: "k", cwd: "/repo", agents: [])],
-            status: [Kild(id: "k", name: "k", cwd: "/repo", agents: [], git: GitFixture.measured(ahead: 3))])
+            status: [
+                Kild(
+                    id: "k", name: "k", cwd: "/repo", agents: [], git: GitFixture.measured(ahead: 3)
+                )
+            ])
         api.failing = polls
         return api
     }

@@ -24,18 +24,25 @@ struct WorkspaceBar: View {
         HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(Array(store.workspaces.enumerated()), id: \.element.id) { index, workspace in
-                        Button { select(workspace) } label: {
+                    ForEach(Array(store.workspaces.enumerated()), id: \.element.id) {
+                        index, workspace in
+                        Button {
+                            select(workspace)
+                        } label: {
                             HStack(spacing: 5) {
                                 Text("⌃\(index + 1)").foregroundStyle(.secondary)
-                                Text(workspace.name).fontWeight(store.selectedWorkspace == workspace ? .semibold : .regular)
+                                Text(workspace.name).fontWeight(
+                                    store.selectedWorkspace == workspace ? .semibold : .regular)
                                 if let branch = store.contexts[workspace.path]?.branch {
                                     Text(branch).foregroundStyle(.secondary).lineLimit(1)
                                 }
                             }
                             .font(.system(size: 11.5))
                             .padding(.horizontal, 9).padding(.vertical, 5)
-                            .background(store.selectedWorkspace == workspace ? Color.accentColor.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                            .background(
+                                store.selectedWorkspace == workspace
+                                    ? Color.accentColor.opacity(0.16) : .clear,
+                                in: RoundedRectangle(cornerRadius: 5))
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
@@ -63,7 +70,9 @@ struct WorkspaceBar: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
         .background(.bar)
-        .onReceive(NotificationCenter.default.publisher(for: .helmOpenWorkspace)) { _ in openWorkspace() }
+        .onReceive(NotificationCenter.default.publisher(for: .helmOpenWorkspace)) { _ in
+            openWorkspace()
+        }
     }
 
     /// Kild count and spend for the open workspace.
@@ -113,7 +122,8 @@ struct WorkspaceBar: View {
             let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             guard process.terminationStatus == 0 else { return nil }
-            let value = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = String(decoding: data, as: UTF8.self).trimmingCharacters(
+                in: .whitespacesAndNewlines)
             return value.isEmpty ? nil : value
         }.value
         store.cacheBranch(branch, for: workspace)

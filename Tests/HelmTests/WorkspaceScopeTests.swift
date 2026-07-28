@@ -10,7 +10,9 @@ import XCTest
 /// The count was scoped and the spend was not.
 final class WorkspaceScopeTests: XCTestCase {
 
-    private func kild(_ name: String, cwd: String, cost: Double?, idle: Bool = false)
+    private func kild(
+        _ name: String, cwd: String, cost: Double?, idle: Bool = false
+    )
         -> Kild
     {
         Kild(

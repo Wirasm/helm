@@ -103,17 +103,17 @@ final class PostMarkdownTests: XCTestCase {
 
     func testMixedAgentReportShape() {
         let text = """
-        ## Why
+            ## Why
 
-        The `EngineClient` filter missed archived rooms.
+            The `EngineClient` filter missed archived rooms.
 
-        - decode `cwd`
-        - prefer it for archives
+            - decode `cwd`
+            - prefer it for archives
 
-        ```swift
-        let cwd: String?
-        ```
-        """
+            ```swift
+            let cwd: String?
+            ```
+            """
         XCTAssertEqual(
             PostMarkdown.blocks(from: text),
             [

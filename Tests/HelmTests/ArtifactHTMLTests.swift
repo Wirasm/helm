@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Helm
 
 /// The document page + injection script generation, exercised as pure string
@@ -46,7 +47,8 @@ final class ArtifactHTMLTests: XCTestCase {
         let page = ArtifactHTML.documentPage(markdown: "# Hello \"plan\"\nline two", theme: .light)
         XCTAssertTrue(page.contains("marked.parse(source)"))
         // The source arrives as a JS string literal, not as page markup.
-        XCTAssertTrue(page.contains("var source = " + ArtifactHTML.jsString("# Hello \"plan\"\nline two")))
+        XCTAssertTrue(
+            page.contains("var source = " + ArtifactHTML.jsString("# Hello \"plan\"\nline two")))
         // Missing-renderer fallback shows the raw text instead of a blank pane.
         XCTAssertTrue(page.contains("content.textContent = source"))
     }

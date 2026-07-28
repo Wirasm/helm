@@ -24,7 +24,9 @@ final class LaunchSelectionTests: XCTestCase {
 
     /// Persist a workspace whose saved context selects `selected`.
     @discardableResult
-    private func withSavedContext(selecting selected: String?, in defaults: UserDefaults)
+    private func withSavedContext(
+        selecting selected: String?, in defaults: UserDefaults
+    )
         -> Workspace
     {
         let workspace = Workspace(path: "/repo")
@@ -157,8 +159,6 @@ final class LaunchSelectionTests: XCTestCase {
     }
 
     // MARK: - Stubs
-
-
 
     /// An archive fetch that can be made to fail, then recover.
 

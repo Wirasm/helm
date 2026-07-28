@@ -9,7 +9,9 @@ import XCTest
 /// from whether a button looks grey.
 final class LandGateTests: XCTestCase {
 
-    private func kild(_ name: String = "sidebar", agents: [Agent] = [], git: GitStatus? = nil)
+    private func kild(
+        _ name: String = "sidebar", agents: [Agent] = [], git: GitStatus? = nil
+    )
         -> Kild
     {
         Kild(

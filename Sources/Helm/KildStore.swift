@@ -115,17 +115,19 @@ final class KildStore: ObservableObject {
     /// deleted with no successor, and `cwd` is the project directory, persisted, present
     /// even on an orphan. One less request and one less way to be wrong.
     var shownGroups: [KildGroup: [Kild]] {
-        let scoped = selectedWorkspace.map {
-            WorkspaceAttribution.kilds(in: $0.path, from: cockpit.kilds)
-        } ?? cockpit.kilds
+        let scoped =
+            selectedWorkspace.map {
+                WorkspaceAttribution.kilds(in: $0.path, from: cockpit.kilds)
+            } ?? cockpit.kilds
         return Attention.grouped(scoped)
     }
 
     /// Archived kilds under the workspace filter, newest first, matching the search.
     var shownArchive: [ArchivedKild] {
-        let scoped = selectedWorkspace.map {
-            WorkspaceAttribution.archived(in: $0.path, from: cockpit.archive)
-        } ?? cockpit.archive
+        let scoped =
+            selectedWorkspace.map {
+                WorkspaceAttribution.archived(in: $0.path, from: cockpit.archive)
+            } ?? cockpit.archive
         let query = historyQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return scoped }
         return scoped.filter { $0.matchesSearch(query) }
@@ -144,9 +146,10 @@ final class KildStore: ObservableObject {
 
     /// How many agents are waiting on you, across every kild in the open workspace.
     var waitingCount: Int {
-        let scoped = selectedWorkspace.map {
-            WorkspaceAttribution.kilds(in: $0.path, from: cockpit.kilds)
-        } ?? cockpit.kilds
+        let scoped =
+            selectedWorkspace.map {
+                WorkspaceAttribution.kilds(in: $0.path, from: cockpit.kilds)
+            } ?? cockpit.kilds
         return Attention.waitingCount(in: scoped)
     }
 
@@ -455,7 +458,8 @@ extension ArchivedKild {
     func matchesSearch(_ query: String) -> Bool {
         var fields = [id, name]
         if let worktree { fields.append(worktree) }
-        fields.append(contentsOf: agents.flatMap { [$0.handle, $0.persona, $0.model].compactMap { $0 } })
+        fields.append(
+            contentsOf: agents.flatMap { [$0.handle, $0.persona, $0.model].compactMap { $0 } })
         return fields.contains { $0.localizedCaseInsensitiveContains(query) }
     }
 }

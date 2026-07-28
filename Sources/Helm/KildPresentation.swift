@@ -15,10 +15,13 @@ enum KildPresentation {
     /// in conflict, and saying "2" would double-count the same problem. Count and detail
     /// come from one set so they can never disagree — the bug this shape prevents is a badge
     /// reading "3" above a list of two filenames.
-    static func collisionSummary(_ collisions: [Collision]) -> (
+    static func collisionSummary(
+        _ collisions: [Collision]
+    ) -> (
         names: String, files: [String], count: Int
     ) {
-        let names = collisions
+        let names =
+            collisions
             .map(\.otherName)
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
             .joined(separator: ", ")

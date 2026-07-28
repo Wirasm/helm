@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Helm
 
 /// Grouping tests use a fresh manager: every session still creates its surface
@@ -13,8 +14,10 @@ final class TerminalManagerTests: XCTestCase {
         XCTAssertTrue(manager.sessions.isEmpty, "unvisited workspaces must not allocate terminals")
 
         manager.activate(workspacePath: firstWorkspace)
-        XCTAssertEqual(manager.sessions(for: firstWorkspace).count, 1, "first visit creates one shell")
-        XCTAssertTrue(manager.sessions(for: secondWorkspace).isEmpty, "other workspaces remain lazy")
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).count, 1, "first visit creates one shell")
+        XCTAssertTrue(
+            manager.sessions(for: secondWorkspace).isEmpty, "other workspaces remain lazy")
     }
 
     func testSessionsGroupByWorkspaceAndShareOneController() {
@@ -24,10 +27,14 @@ final class TerminalManagerTests: XCTestCase {
         manager.activate(workspacePath: secondWorkspace)
         manager.newTerminal()
 
-        XCTAssertEqual(manager.sessions(for: firstWorkspace).count, 2, "first workspace owns two tabs")
-        XCTAssertEqual(manager.sessions(for: secondWorkspace).count, 2, "second workspace owns two tabs")
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).count, 2, "first workspace owns two tabs")
+        XCTAssertEqual(
+            manager.sessions(for: secondWorkspace).count, 2, "second workspace owns two tabs")
         for session in manager.sessions {
-            XCTAssertTrue(session.controller === manager.controller, "every workspace surface uses the one manager controller")
+            XCTAssertTrue(
+                session.controller === manager.controller,
+                "every workspace surface uses the one manager controller")
         }
     }
 
@@ -38,8 +45,11 @@ final class TerminalManagerTests: XCTestCase {
         manager.activate(workspacePath: secondWorkspace)
         manager.activate(workspacePath: firstWorkspace)
 
-        XCTAssertTrue(manager.sessions.contains { $0.id == parked.id }, "switching must retain the parked session")
-        XCTAssertEqual(manager.selectedID, parked.id, "returning restores the workspace terminal selection")
+        XCTAssertTrue(
+            manager.sessions.contains { $0.id == parked.id },
+            "switching must retain the parked session")
+        XCTAssertEqual(
+            manager.selectedID, parked.id, "returning restores the workspace terminal selection")
     }
 
     func testClosingWorkspaceReleasesOnlyItsSessions() {
@@ -51,9 +61,15 @@ final class TerminalManagerTests: XCTestCase {
 
         manager.closeWorkspace(firstWorkspace)
 
-        XCTAssertTrue(manager.sessions(for: firstWorkspace).isEmpty, "closing a workspace tears down its own terminal tabs")
-        XCTAssertEqual(manager.sessions(for: secondWorkspace).map(\.id), [survivor.id], "other workspace sessions remain alive")
-        XCTAssertTrue(survivor.controller === manager.controller, "teardown never replaces the shared controller")
+        XCTAssertTrue(
+            manager.sessions(for: firstWorkspace).isEmpty,
+            "closing a workspace tears down its own terminal tabs")
+        XCTAssertEqual(
+            manager.sessions(for: secondWorkspace).map(\.id), [survivor.id],
+            "other workspace sessions remain alive")
+        XCTAssertTrue(
+            survivor.controller === manager.controller,
+            "teardown never replaces the shared controller")
     }
 
     func testCloseRefusesLastTerminalInEachWorkspace() {
@@ -61,11 +77,15 @@ final class TerminalManagerTests: XCTestCase {
         manager.activate(workspacePath: firstWorkspace)
         let only = try! XCTUnwrap(manager.selected)
         manager.close(only)
-        XCTAssertEqual(manager.sessions(for: firstWorkspace).count, 1, "last terminal of a workspace cannot close")
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).count, 1,
+            "last terminal of a workspace cannot close")
 
         manager.newTerminal()
         manager.close(try! XCTUnwrap(manager.selected))
-        XCTAssertEqual(manager.sessions(for: firstWorkspace).count, 1, "closing a non-last terminal leaves its workspace alive")
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).count, 1,
+            "closing a non-last terminal leaves its workspace alive")
     }
 
     func testSelectionAndCreationStayInsideActiveWorkspace() {
@@ -76,17 +96,24 @@ final class TerminalManagerTests: XCTestCase {
         manager.activate(workspacePath: secondWorkspace)
         manager.select(index: 1)
 
-        XCTAssertEqual(manager.selectedID, manager.sessions(for: secondWorkspace)[0].id, "out-of-range selection is ignored within its workspace")
-        XCTAssertEqual(manager.sessions(for: firstWorkspace).map(\.id), firstIDs, "other workspace tabs are untouched")
+        XCTAssertEqual(
+            manager.selectedID, manager.sessions(for: secondWorkspace)[0].id,
+            "out-of-range selection is ignored within its workspace")
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).map(\.id), firstIDs,
+            "other workspace tabs are untouched")
     }
 
     func testStartsWithOneSessionThatCannotBeClosedAfterActivation() {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)
-        XCTAssertEqual(manager.sessions(for: firstWorkspace).count, 1, "a visited workspace starts with one session")
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).count, 1,
+            "a visited workspace starts with one session")
         XCTAssertFalse(manager.canClose, "the first workspace session cannot close")
         manager.close(try! XCTUnwrap(manager.selected))
-        XCTAssertEqual(manager.sessions(for: firstWorkspace).count, 1, "closing the sole session is refused")
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).count, 1, "closing the sole session is refused")
     }
 
     func testNewTerminalAppendsAndSelectsWithinWorkspace() {
@@ -104,10 +131,14 @@ final class TerminalManagerTests: XCTestCase {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)
         manager.newTerminal()
-        XCTAssertEqual(manager.sessions(for: firstWorkspace).map(\.displayTitle), ["shell 1", "shell 2"], "titles use creation ordinals")
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).map(\.displayTitle), ["shell 1", "shell 2"],
+            "titles use creation ordinals")
         manager.close(manager.sessions(for: firstWorkspace)[1])
         manager.newTerminal()
-        XCTAssertEqual(manager.sessions(for: firstWorkspace).map(\.displayTitle), ["shell 1", "shell 3"], "ordinals never reuse a closed tab number")
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).map(\.displayTitle), ["shell 1", "shell 3"],
+            "ordinals never reuse a closed tab number")
     }
 
     func testClosingSelectedMovesSelectionToNeighbor() {
@@ -119,7 +150,9 @@ final class TerminalManagerTests: XCTestCase {
         manager.close(middle)
         let sessions = manager.sessions(for: firstWorkspace)
         XCTAssertFalse(sessions.contains { $0.id == middle.id }, "closed session is removed")
-        XCTAssertEqual(manager.selectedID, sessions[1].id, "selection moves to the neighbor at the closed position")
+        XCTAssertEqual(
+            manager.selectedID, sessions[1].id,
+            "selection moves to the neighbor at the closed position")
     }
 
     func testClosingLastPositionSelectsNewLast() {
@@ -127,7 +160,9 @@ final class TerminalManagerTests: XCTestCase {
         manager.activate(workspacePath: firstWorkspace)
         manager.newTerminal()
         manager.close(try! XCTUnwrap(manager.selected))
-        XCTAssertEqual(manager.selectedID, manager.sessions(for: firstWorkspace)[0].id, "closing the final position selects the new last tab")
+        XCTAssertEqual(
+            manager.selectedID, manager.sessions(for: firstWorkspace)[0].id,
+            "closing the final position selects the new last tab")
     }
 
     func testClosingUnselectedKeepsSelection() {
@@ -137,7 +172,8 @@ final class TerminalManagerTests: XCTestCase {
         manager.newTerminal()
         let second = try! XCTUnwrap(manager.selected)
         manager.close(first)
-        XCTAssertEqual(manager.selectedID, second.id, "closing an unselected tab preserves selection")
+        XCTAssertEqual(
+            manager.selectedID, second.id, "closing an unselected tab preserves selection")
     }
 
     func testBellOnInactiveTabMarksAndSelectionClears() {
@@ -165,7 +201,9 @@ final class TerminalManagerTests: XCTestCase {
         let first = try! XCTUnwrap(manager.selected)
         manager.newTerminal()
         first.terminalDidFinishCommand(exitCode: 1, durationNanos: 2_000_000_000)
-        XCTAssertEqual(first.activity.outcome, .failure(exitCode: 1, durationNanos: 2_000_000_000), "inactive completion marks its tab")
+        XCTAssertEqual(
+            first.activity.outcome, .failure(exitCode: 1, durationNanos: 2_000_000_000),
+            "inactive completion marks its tab")
         manager.select(first)
         XCTAssertNil(first.activity.outcome, "selection acknowledges the completion mark")
     }
@@ -195,9 +233,12 @@ final class TerminalManagerTests: XCTestCase {
         let sessions = manager.sessions(for: firstWorkspace)
         let survivors = [sessions[0], sessions[2]]
         manager.close(sessions[1])
-        XCTAssertEqual(manager.sessions(for: firstWorkspace).map(\.id), survivors.map(\.id), "only requested tab closes")
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).map(\.id), survivors.map(\.id),
+            "only requested tab closes")
         for session in survivors {
-            XCTAssertTrue(session.controller === manager.controller, "survivors retain the shared runtime")
+            XCTAssertTrue(
+                session.controller === manager.controller, "survivors retain the shared runtime")
             manager.select(session)
             XCTAssertEqual(manager.selectedID, session.id, "survivors remain selectable")
         }
@@ -206,7 +247,8 @@ final class TerminalManagerTests: XCTestCase {
     func testManagersAreIsolatedFromEachOther() {
         let first = TerminalManager()
         let second = TerminalManager()
-        XCTAssertFalse(first.controller === second.controller, "test managers own isolated controllers")
+        XCTAssertFalse(
+            first.controller === second.controller, "test managers own isolated controllers")
     }
 
     func testSelectByIndexIgnoresOutOfRange() {

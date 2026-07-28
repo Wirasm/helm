@@ -72,20 +72,22 @@ final class StubURLProtocol: URLProtocol {
             client?.urlProtocol(self, didFailWithError: failure)
             return
         }
-        let body = request.httpBody ?? request.httpBodyStream.map { stream in
-            stream.open()
-            defer { stream.close() }
-            var data = Data()
-            let bufferSize = 4096
-            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-            defer { buffer.deallocate() }
-            while stream.hasBytesAvailable {
-                let read = stream.read(buffer, maxLength: bufferSize)
-                guard read > 0 else { break }
-                data.append(buffer, count: read)
+        let body =
+            request.httpBody
+            ?? request.httpBodyStream.map { stream in
+                stream.open()
+                defer { stream.close() }
+                var data = Data()
+                let bufferSize = 4096
+                let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+                defer { buffer.deallocate() }
+                while stream.hasBytesAvailable {
+                    let read = stream.read(buffer, maxLength: bufferSize)
+                    guard read > 0 else { break }
+                    data.append(buffer, count: read)
+                }
+                return data
             }
-            return data
-        }
 
         Self.lock.lock()
         Self._lastRequest = request

@@ -47,9 +47,9 @@ enum GhosttyResources {
         // SPM builds (swift run/test) resolve resources via Bundle.module;
         // the XcodeGen .app carries them in the main bundle.
         #if SWIFT_PACKAGE
-        let bundle = Bundle.module
+            let bundle = Bundle.module
         #else
-        let bundle = Bundle.main
+            let bundle = Bundle.main
         #endif
         guard let resources = bundle.resourceURL else { return nil }
         let path = resources.appendingPathComponent("ghostty", isDirectory: true).path
@@ -62,7 +62,9 @@ enum GhosttyResources {
     /// Fallback candidates: an installed Ghostty.app's resources, in order.
     /// A directory qualifies only if it actually contains the
     /// shell-integration payload.
-    static func candidatePaths(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String] {
+    static func candidatePaths(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [String] {
         [
             "/Applications/Ghostty.app/Contents/Resources/ghostty",
             home.appendingPathComponent("Applications/Ghostty.app/Contents/Resources/ghostty").path,
@@ -83,8 +85,7 @@ enum GhosttyResources {
             return
         }
         for path in candidatePaths()
-            where FileManager.default.fileExists(atPath: path + "/shell-integration")
-        {
+        where FileManager.default.fileExists(atPath: path + "/shell-integration") {
             setenv("GHOSTTY_RESOURCES_DIR", path, 1)
             return
         }
@@ -133,7 +134,8 @@ enum GhosttyUserConfig {
                 guard trimmed[..<eq].trimmingCharacters(in: .whitespaces) == "font-size" else {
                     return nil
                 }
-                return Float(trimmed[trimmed.index(after: eq)...].trimmingCharacters(in: .whitespaces))
+                return Float(
+                    trimmed[trimmed.index(after: eq)...].trimmingCharacters(in: .whitespaces))
             }
             .last
     }

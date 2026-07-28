@@ -38,7 +38,8 @@ struct ObserveColumn: View {
                         kild: kild,
                         collisions: collisions[kild.id] ?? [],
                         isExpanded: expanded.contains(kild.id),
-                        toggle: { toggle(kild.id) })
+                        toggle: { toggle(kild.id) }
+                    )
                     .contextMenu { DisposeMenu(kild: kild, dispose: dispose) }
                     if expanded.contains(kild.id) {
                         // Explicitly non-selectable. `Agent.id` is a bare String — the same

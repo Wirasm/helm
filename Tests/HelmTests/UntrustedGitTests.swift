@@ -73,7 +73,9 @@ final class UntrustedGitTests: XCTestCase {
 
     // MARK: - The land gate
 
-    private func gate(_ kild: Kild, report: LandReport, collisions: [Collision] = [])
+    private func gate(
+        _ kild: Kild, report: LandReport, collisions: [Collision] = []
+    )
         -> LandGate
     {
         LandGate.make(

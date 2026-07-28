@@ -112,7 +112,8 @@ struct KildHTTPClient: KildAPI {
     /// re-encodes an already-encoded string, turning `%20` into `%2520`.
     private func path(_ segments: String...) -> String {
         let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
-        return "/" + segments
+        return "/"
+            + segments
             .map { $0.addingPercentEncoding(withAllowedCharacters: allowed) ?? $0 }
             .joined(separator: "/")
     }
@@ -211,7 +212,9 @@ struct KildHTTPClient: KildAPI {
         }
     }
 
-    private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws
+    private func get<T: Decodable>(
+        _ path: String, query: [URLQueryItem] = []
+    ) async throws
         -> T
     {
         try decode(try await perform(try request("GET", path, query: query, body: nil)))
@@ -230,7 +233,9 @@ struct KildHTTPClient: KildAPI {
 
     /// For writes whose body helm does not read. The request still has to complete, and a
     /// refusal still has to throw — discarding the response is not the same as ignoring it.
-    private func send(_ method: String, _ path: String, body: [String: Any]? = nil)
+    private func send(
+        _ method: String, _ path: String, body: [String: Any]? = nil
+    )
         async throws
     {
         _ = try await perform(try request(method, path, body: body))

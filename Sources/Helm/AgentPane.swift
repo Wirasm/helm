@@ -44,8 +44,9 @@ struct AgentPane: View {
                 // for @alice, click @bob's tab, press enter: it goes to @bob. Deterministic
                 // misdirection of a message to the wrong agent.
                 TranscriptBody(
-                    agent: agent, lines: lines, isLoading: isLoading, error: error)
-                    .id(agent.handle)
+                    agent: agent, lines: lines, isLoading: isLoading, error: error
+                )
+                .id(agent.handle)
                 Divider()
                 Composer(handle: agent.handle, send: send)
                     .id(agent.handle)

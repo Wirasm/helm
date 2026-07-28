@@ -27,9 +27,9 @@ enum TerminalURLPolicy {
     static func validated(_ raw: String) -> URL? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
-              let url = URL(string: trimmed),
-              let scheme = url.scheme?.lowercased(),
-              allowedSchemes.contains(scheme)
+            let url = URL(string: trimmed),
+            let scheme = url.scheme?.lowercased(),
+            allowedSchemes.contains(scheme)
         else { return nil }
         return url
     }
@@ -107,7 +107,8 @@ struct TerminalActivity: Equatable {
         // The active tab's finish needs no chrome, and no exit code means
         // nothing truthful to show.
         guard !isSelected, let exitCode else { return }
-        outcome = exitCode == 0
+        outcome =
+            exitCode == 0
             ? .success(durationNanos: durationNanos)
             : .failure(exitCode: exitCode, durationNanos: durationNanos)
     }
@@ -169,7 +170,7 @@ final class TerminalNotifier: NSObject {
         guard authorizationRequested else {
             authorizationRequested = true
             center.requestAuthorization(options: [.alert]) { granted, _ in
-                guard granted else { return } // denied: degrade silently
+                guard granted else { return }  // denied: degrade silently
                 Task { @MainActor in self.add(title: title, body: body) }
             }
             return
@@ -184,9 +185,10 @@ final class TerminalNotifier: NSObject {
         content.body = body
         // nil trigger = deliver now; unauthorized adds fail silently, which
         // is exactly the degradation we want.
-        center.add(UNNotificationRequest(
-            identifier: UUID().uuidString, content: content, trigger: nil
-        ))
+        center.add(
+            UNNotificationRequest(
+                identifier: UUID().uuidString, content: content, trigger: nil
+            ))
     }
 }
 
@@ -208,7 +210,8 @@ extension TerminalNotifier: UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+        withCompletionHandler completionHandler:
+            @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner])
     }

@@ -1,6 +1,7 @@
 import AppKit
 import Inject
 import SwiftUI
+
 // MARK: - Model
 
 /// State for the read-only artifact pane: which file is open, its content, and

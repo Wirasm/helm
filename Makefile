@@ -23,6 +23,12 @@ run:
 test:
 	swift test
 
+format:
+	scripts/check-format.sh --fix
+
+lint:
+	scripts/check-format.sh
+
 clean:
 	swift package clean
 	rm -rf $(DERIVED_DATA) Helm.xcodeproj Info.plist

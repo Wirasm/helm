@@ -193,7 +193,8 @@ final class WorkspaceTests: XCTestCase {
 
         let root = WorkspaceStore.repositoryRoot(for: plain.path)
         XCTAssertEqual(root, try run("/bin/sh", ["-c", #"cd "$1" && pwd -P"#, "sh", plain.path]))
-        XCTAssertEqual(WorkspaceStore.derivedKey(forRoot: root), try canonicalStoreKey(runIn: plain.path))
+        XCTAssertEqual(
+            WorkspaceStore.derivedKey(forRoot: root), try canonicalStoreKey(runIn: plain.path))
         XCTAssertTrue(WorkspaceStore.derivedKey(forRoot: root).hasPrefix("plain-"))
     }
 
@@ -240,7 +241,8 @@ final class WorkspaceTests: XCTestCase {
     // MARK: - Helpers
 
     private func store(key: String, path: String?) -> ArtifactStore {
-        ArtifactStore(key: key, name: key, projectPath: path, root: URL(fileURLWithPath: "/dev/null"))
+        ArtifactStore(
+            key: key, name: key, projectPath: path, root: URL(fileURLWithPath: "/dev/null"))
     }
 
     private func isolatedDefaults() throws -> UserDefaults {
@@ -281,15 +283,15 @@ final class WorkspaceTests: XCTestCase {
     /// preamble. The reference implementation `WorkspaceStore` is a port of.
     private func canonicalStoreKey(runIn directory: String) throws -> String {
         let script = """
-        cd "$1" || exit 1
-        _gd="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
-        case "$_gd" in */.git) _root="${_gd%/.git}" ;; "") _root="$PWD" ;; *) _root="$_gd" ;; esac
-        _root="$(cd "$_root" && pwd -P)"
-        _name="$(basename "$_root" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
-            | sed 's/^-*//;s/-*$//')"
-        printf '%s-%s' "${_name:-project}" \
-            "$(printf %s "$_root" | git hash-object --stdin | cut -c1-8)"
-        """
+            cd "$1" || exit 1
+            _gd="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+            case "$_gd" in */.git) _root="${_gd%/.git}" ;; "") _root="$PWD" ;; *) _root="$_gd" ;; esac
+            _root="$(cd "$_root" && pwd -P)"
+            _name="$(basename "$_root" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
+                | sed 's/^-*//;s/-*$//')"
+            printf '%s-%s' "${_name:-project}" \
+                "$(printf %s "$_root" | git hash-object --stdin | cut -c1-8)"
+            """
         return try run("/bin/sh", ["-c", script, "sh", directory])
     }
 

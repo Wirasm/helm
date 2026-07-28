@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Helm
 
 /// Pure config plumbing: user-config discovery order, include sanitizing, and
@@ -50,12 +51,12 @@ final class GhosttyConfigTests: XCTestCase {
 
     func testSanitizeDropsOnlyConfigFileIncludes() {
         let contents = """
-        font-size = 14
-        config-file = extra-config
-          config-file=other
-        # a comment mentioning config-file = stays
-        theme = light:x,dark:y
-        """
+            font-size = 14
+            config-file = extra-config
+              config-file=other
+            # a comment mentioning config-file = stays
+            theme = light:x,dark:y
+            """
         XCTAssertEqual(
             GhosttyUserConfig.sanitize(contents),
             """
@@ -109,8 +110,8 @@ final class GhosttyConfigTests: XCTestCase {
 
         let rendered = controller.renderedConfig
         guard let helmDefault = rendered.range(of: "font-size = 13"),
-              let user = rendered.range(of: "font-size = 21"),
-              let override = rendered.range(of: "term = xterm-256color")
+            let user = rendered.range(of: "font-size = 21"),
+            let override = rendered.range(of: "term = xterm-256color")
         else {
             return XCTFail("expected all three tiers in: \(rendered)")
         }
@@ -142,7 +143,7 @@ final class GhosttyConfigTests: XCTestCase {
 
         let rendered = controller.renderedConfig
         guard let user = rendered.range(of: "scrollback-limit = 1000"),
-              let helm = rendered.range(of: "scrollback-limit = 104857600")
+            let helm = rendered.range(of: "scrollback-limit = 104857600")
         else {
             return XCTFail("expected both scrollback values in: \(rendered)")
         }
@@ -157,12 +158,13 @@ final class GhosttyConfigTests: XCTestCase {
         defer { TerminalSession.persistedFontSize = previous }
 
         TerminalSession.persistedFontSize = 18
-        let rendered = TerminalSession
+        let rendered =
+            TerminalSession
             .makeController(userConfig: "font-size = 21")
             .renderedConfig
 
         guard let user = rendered.range(of: "font-size = 21"),
-              let chosen = rendered.range(of: "font-size = 18")
+            let chosen = rendered.range(of: "font-size = 18")
         else {
             return XCTFail("expected both sizes in: \(rendered)")
         }

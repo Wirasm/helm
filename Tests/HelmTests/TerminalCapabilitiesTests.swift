@@ -1,5 +1,6 @@
 import GhosttyTerminal
 import XCTest
+
 @testable import Helm
 
 /// The pure capability logic (TerminalCapabilities.swift), fully headless:
@@ -165,10 +166,14 @@ final class TerminalCapabilitiesTests: XCTestCase {
 
     func testNotificationDeliversUnlessAppActiveAndTabSelected() {
         // The one silent case: the user is already looking at that terminal.
-        XCTAssertFalse(TerminalNotificationGate.shouldDeliver(appIsActive: true, tabIsSelected: true))
+        XCTAssertFalse(
+            TerminalNotificationGate.shouldDeliver(appIsActive: true, tabIsSelected: true))
 
-        XCTAssertTrue(TerminalNotificationGate.shouldDeliver(appIsActive: true, tabIsSelected: false))
-        XCTAssertTrue(TerminalNotificationGate.shouldDeliver(appIsActive: false, tabIsSelected: true))
-        XCTAssertTrue(TerminalNotificationGate.shouldDeliver(appIsActive: false, tabIsSelected: false))
+        XCTAssertTrue(
+            TerminalNotificationGate.shouldDeliver(appIsActive: true, tabIsSelected: false))
+        XCTAssertTrue(
+            TerminalNotificationGate.shouldDeliver(appIsActive: false, tabIsSelected: true))
+        XCTAssertTrue(
+            TerminalNotificationGate.shouldDeliver(appIsActive: false, tabIsSelected: false))
     }
 }
