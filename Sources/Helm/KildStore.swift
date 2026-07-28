@@ -33,6 +33,7 @@ final class KildStore: ObservableObject {
 
     /// Where the open-workspace list is persisted — injectable so tests never touch
     /// the operator's real defaults.
+    private let api: KildAPI
     private let defaults: UserDefaults
 
     /// The selected kild id — the sidebar drives it, the dock renders it (a selected kild
@@ -84,6 +85,7 @@ final class KildStore: ObservableObject {
         launchKild: String? = LaunchOptions.kildId
     ) {
         self.cockpit = Cockpit(api: api)
+        self.api = api
         self.defaults = defaults
         self.launchKild = launchKild
         self.launchKildResolved = launchKild == nil
@@ -239,6 +241,53 @@ final class KildStore: ObservableObject {
         let root = await Task.detached { WorkspaceStore.repositoryRoot(for: path) }.value
         guard self.selectedWorkspace == selectedWorkspace else { return }
         selectedWorkspaceRoot = root
+    }
+
+    // MARK: - Disposal
+
+    /// The outcome of the last disposal attempt, for the UI to report.
+    ///
+    /// Held rather than thrown because all three outcomes are worth showing and only one is
+    /// an error: it worked, the guard refused and said why, or it timed out and **may have
+    /// happened anyway**.
+    enum DisposalOutcome: Equatable {
+        case removed(DisposalReport)
+        /// The guard declined. Not a failure — this is the mechanism working, and the
+        /// message names what is at stake.
+        case refused(String)
+        /// The engine did not answer in time. The tree may be gone. Never offer a retry.
+        case unknown(String)
+    }
+
+    @Published var lastDisposal: DisposalOutcome?
+
+    /// Remove a kild's worktree, reclaiming its disk.
+    ///
+    /// `force` overrides the unlanded-commit guard and nothing else. It cannot lose
+    /// commits — the `kild/<worktree>` branch survives every path — which is why offering
+    /// it is reasonable at all.
+    ///
+    /// The kild is NOT removed from local state on success. The next poll reports what the
+    /// engine actually holds; removing it here would be helm asserting an outcome instead of
+    /// observing one, and it is exactly the drift this store exists to avoid.
+    func dispose(_ kild: Kild, force: Bool = false) async {
+        do {
+            let report = try await api.delete(kild.id, force: force)
+            lastDisposal = .removed(report)
+            await loadIdentities()
+        } catch let error as KildAPIError {
+            switch error {
+            case .outcomeUnknown:
+                lastDisposal = .unknown(error.errorDescription ?? "outcome unknown")
+                // Refresh anyway: the engine may well have completed it, and the poll is
+                // the only way to find out which.
+                await loadIdentities()
+            default:
+                lastDisposal = .refused(error.errorDescription ?? "refused")
+            }
+        } catch {
+            lastDisposal = .refused(error.localizedDescription)
+        }
     }
 
     // MARK: - Polling

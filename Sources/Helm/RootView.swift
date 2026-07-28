@@ -50,7 +50,10 @@ struct RootView: View {
                             groups: store.shownGroups,
                             collisions: store.cockpit.collisions,
                             selection: $store.selection,
-                            expanded: $store.expandedKilds)
+                            expanded: $store.expandedKilds,
+                            dispose: { kild, force in
+                                Task { await store.dispose(kild, force: force) }
+                            })
                     case .history:
                         ArchiveColumn(
                             archived: store.shownArchive,

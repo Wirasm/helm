@@ -20,6 +20,8 @@ struct ObserveColumn: View {
     @Binding var selection: Kild.ID?
     /// Which kilds have their agents disclosed. Per-kild and persisted by the caller.
     @Binding var expanded: Set<Kild.ID>
+    /// Reclaim a worktree. `force` overrides the unlanded-commit guard — never commits.
+    var dispose: (Kild, Bool) -> Void = { _, _ in }
 
     private var live: [Kild] { groups[.live] ?? [] }
     private var orphaned: [Kild] { groups[.orphaned] ?? [] }
@@ -33,6 +35,7 @@ struct ObserveColumn: View {
                         collisions: collisions[kild.id] ?? [],
                         isExpanded: expanded.contains(kild.id),
                         toggle: { toggle(kild.id) })
+                    .contextMenu { DisposeMenu(kild: kild, dispose: dispose) }
                     if expanded.contains(kild.id) {
                         // Explicitly non-selectable. `Agent.id` is a bare String — the same
                         // type as the selection binding — so an untagged agent row can end
@@ -57,7 +60,10 @@ struct ObserveColumn: View {
             // Only when there are any. An empty "abandoned" heading is furniture.
             if !orphaned.isEmpty {
                 Section {
-                    ForEach(orphaned) { OrphanRow(kild: $0) }
+                    ForEach(orphaned) { kild in
+                        OrphanRow(kild: kild)
+                            .contextMenu { DisposeMenu(kild: kild, dispose: dispose) }
+                    }
                 } header: {
                     SectionHeader(title: "no agents", count: orphaned.count)
                 }
@@ -162,6 +168,38 @@ private struct OrphanRow: View {
             Spacer(minLength: 4)
         }
         .tag(kild.id)
+    }
+}
+
+/// The reclaim gesture.
+///
+/// A context menu rather than a visible button: disposal is irreversible for the working
+/// tree, and a delete control sitting permanently beside every row invites the accident it
+/// is meant to enable. It is reachable, not prominent.
+///
+/// Two items rather than one, and the wording carries the whole safety argument. Removing a
+/// worktree **keeps its branch** — commits are never lost on any path, including force — so
+/// the honest verb is "reclaim", not "delete". An operator who believes they are deleting
+/// work will not use this, and would be wrong not to.
+private struct DisposeMenu: View {
+    let kild: Kild
+    let dispose: (Kild, Bool) -> Void
+
+    var body: some View {
+        if Disposal.isDisposable(kild) {
+            Button("Reclaim Worktree…") { dispose(kild, false) }
+            // Offered separately so forcing is a decision, not a fallback someone reaches
+            // for after a refusal they did not read. The guard refuses on unlanded commits;
+            // this says plainly that those commits survive on the branch.
+            Button("Reclaim, Discarding Unlanded Work…") { dispose(kild, true) }
+        } else {
+            // A kild running in the main checkout has no tree to reclaim. Saying so beats
+            // a disabled item with no reason, and beats offering an action that would only
+            // produce a refusal.
+            Text("Runs in the checkout — no worktree to reclaim")
+        }
+        Divider()
+        Button("Copy Name") { Pasteboard.copy(kild.worktree ?? kild.name) }
     }
 }
 
