@@ -243,6 +243,81 @@ final class KildStore: ObservableObject {
         selectedWorkspaceRoot = root
     }
 
+    // MARK: - The selected agent
+
+    /// An agent within the selected kild, when one is open.
+    ///
+    /// Separate from `selection` rather than folded into it. A kild id and an agent handle
+    /// are different identifiers for different objects, and the observe column already
+    /// proved what happens when they share one binding: a handle lands where a kild id
+    /// belongs and the dock silently empties.
+    @Published var selectedAgent: String?
+
+    /// Lines for the selected agent, from whichever source its ownership dictates.
+    @Published private(set) var agentLines: [Conversation.Line] = []
+    @Published private(set) var agentLinesError: String?
+    @Published private(set) var isLoadingAgent = false
+
+    /// Open an agent's conversation.
+    ///
+    /// The source is decided by `ownership`, not by trying the transcript and falling back:
+    /// an attached agent has no pi session, so asking for its transcript is a question the
+    /// engine can only refuse. Reading `Conversation.source` first means helm never sends a
+    /// request it knows will fail, and never renders a refusal as though it were an error.
+    func openAgent(_ agent: Agent, in kild: Kild) async {
+        selectedAgent = agent.handle
+        isLoadingAgent = true
+        agentLinesError = nil
+        defer { isLoadingAgent = false }
+
+        switch Conversation.source(for: agent) {
+        case .transcript:
+            do {
+                let transcript = try await api.transcript(of: agent.handle, in: kild.id)
+                guard selectedAgent == agent.handle else { return }  // selection moved on
+                agentLines = Conversation.lines(from: transcript)
+            } catch {
+                guard selectedAgent == agent.handle else { return }
+                agentLines = []
+                agentLinesError = error.localizedDescription
+            }
+        case .routedMessages:
+            do {
+                let log = try await api.messages(in: kild.id, since: nil)
+                guard selectedAgent == agent.handle else { return }
+                agentLines = Conversation.lines(for: agent.handle, from: log)
+            } catch {
+                guard selectedAgent == agent.handle else { return }
+                agentLines = []
+                agentLinesError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Close the agent view and return the dock to the kild.
+    func closeAgent() {
+        selectedAgent = nil
+        agentLines = []
+        agentLinesError = nil
+    }
+
+    /// Send to an agent. There is no unlogged path — every instruction is in the log,
+    /// attributed, because the engine spawns agents with pipes and there is no PTY to type
+    /// into.
+    func send(_ text: String, to handle: String, in kild: Kild.ID) async {
+        do {
+            try await api.send(to: [handle], text: text, in: kild)
+            if selectedAgent == handle, let k = selectedKild { await reopenAgent(handle, in: k) }
+        } catch {
+            agentLinesError = error.localizedDescription
+        }
+    }
+
+    private func reopenAgent(_ handle: String, in kild: Kild) async {
+        guard let agent = kild.agents.first(where: { $0.handle == handle }) else { return }
+        await openAgent(agent, in: kild)
+    }
+
     // MARK: - Disposal
 
     /// The outcome of the last disposal attempt, for the UI to report.

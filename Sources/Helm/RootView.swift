@@ -24,6 +24,41 @@ struct RootView: View {
     private let cheapTick = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     private let costlyTick = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
 
+    /// The dock's tenant, in precedence order: an agent you opened, else the selected
+    /// kild, else an open artifact. Hoisted out of `body` because the type-checker gave up
+    /// on the nested conditionals — a real constraint, not a style preference.
+    @ViewBuilder
+    private var dock: some View {
+        if let kild = store.selectedKild,
+            let handle = store.selectedAgent,
+            let agent = kild.agents.first(where: { $0.handle == handle })
+        {
+            // An agent's conversation wins over its kild's detail: you opened it
+            // deliberately, and the kild is one click back.
+            dockPane {
+                AgentConversation(
+                    kild: kild, agent: agent, lines: store.agentLines,
+                    isLoading: store.isLoadingAgent, error: store.agentLinesError,
+                    close: { store.closeAgent() },
+                    send: { text in
+                        Task { await store.send(text, to: handle, in: kild.id) }
+                    }
+                ).id(handle)
+            }
+        } else if let kild = store.selectedKild {
+            dockPane {
+                KildDock(
+                    kild: kild,
+                    collisions: store.selectedCollisions,
+                    statusError: store.cockpit.errors[.status],
+                    openCollision: { store.selection = $0 }
+                ).id(kild.id)
+            }
+        } else if artifact.isOpen {
+            dockPane { ArtifactPane(model: artifact) }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             WorkspaceBar(
@@ -53,7 +88,11 @@ struct RootView: View {
                             expanded: $store.expandedKilds,
                             dispose: { kild, force in
                                 Task { await store.dispose(kild, force: force) }
-                            })
+                            },
+                            openAgent: { agent, kild in
+                                Task { await store.openAgent(agent, in: kild) }
+                            },
+                            openAgentHandle: store.selectedAgent)
                     case .history:
                         ArchiveColumn(
                             archived: store.shownArchive,
@@ -70,18 +109,7 @@ struct RootView: View {
                 )
                 .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
-                if let kild = store.selectedKild {
-                    dockPane {
-                        KildDock(
-                            kild: kild,
-                            collisions: store.selectedCollisions,
-                            statusError: store.cockpit.errors[.status],
-                            openCollision: { store.selection = $0 }
-                        ).id(kild.id)
-                    }
-                } else if artifact.isOpen {
-                    dockPane { ArtifactPane(model: artifact) }
-                }
+                dock
             }
         }
         .task {

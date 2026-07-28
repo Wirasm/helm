@@ -22,6 +22,10 @@ struct ObserveColumn: View {
     @Binding var expanded: Set<Kild.ID>
     /// Reclaim a worktree. `force` overrides the unlanded-commit guard — never commits.
     var dispose: (Kild, Bool) -> Void = { _, _ in }
+    /// Open an agent's conversation in the dock.
+    var openAgent: (Agent, Kild) -> Void = { _, _ in }
+    /// The agent currently open, so its row can show that it is.
+    var openAgentHandle: String?
 
     private var live: [Kild] { groups[.live] ?? [] }
     private var orphaned: [Kild] { groups[.orphaned] ?? [] }
@@ -49,8 +53,12 @@ struct ObserveColumn: View {
                         // less wrong than the original, still a surprise nobody asked for.
                         // The deployment floor is macOS 14, so the API that means what we
                         // mean is available.
-                        ForEach(kild.agents) { AgentRow(agent: $0) }
-                            .selectionDisabled()
+                        ForEach(kild.agents) { agent in
+                            AgentRow(agent: agent, isOpen: agent.handle == openAgentHandle)
+                                .contentShape(Rectangle())
+                                .onTapGesture { openAgent(agent, kild) }
+                        }
+                        .selectionDisabled()
                     }
                 }
             } header: {
@@ -125,11 +133,12 @@ private struct KildRow: View {
 /// One agent inside a kild.
 private struct AgentRow: View {
     let agent: Agent
+    var isOpen = false
 
     var body: some View {
         HStack(spacing: 6) {
             Text("@\(agent.handle)")
-                .font(.system(size: 11.5))
+                .font(.system(size: 11.5, weight: isOpen ? .semibold : .regular))
                 // Italic marks an attached agent — the one place styling reads a field's
                 // value. Justified because it marks how much is *observable*, not a role:
                 // kild never spawned it and genuinely cannot see inside it.
@@ -148,6 +157,10 @@ private struct AgentRow: View {
             }
         }
         .padding(.leading, 16)
+        // Opening an agent is not List selection — that binding belongs to kilds, and
+        // sharing it is what put a handle where a kild id belonged. The row shows it is
+        // open by weight rather than by the system highlight, so the two never look alike.
+        .background(isOpen ? Color.primary.opacity(0.05) : .clear)
     }
 }
 
