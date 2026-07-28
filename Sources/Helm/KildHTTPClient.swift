@@ -76,7 +76,7 @@ struct KildHTTPClient: KildAPI {
     func land(_ kild: Kild.ID) async throws -> LandReport {
         try await send(
             "POST", path("api", "kilds", kild, "land"), accepting: [409],
-            answerKey: "wouldMerge")
+            answerKey: "wouldMerge", unknownVerb: "land")
     }
 
     @discardableResult
@@ -86,7 +86,8 @@ struct KildHTTPClient: KildAPI {
         // thing to get wrong for no gain.
         try await send(
             "DELETE", path("api", "kilds", kild),
-            query: force ? [URLQueryItem(name: "force", value: "true")] : [])
+            query: force ? [URLQueryItem(name: "force", value: "true")] : [],
+            unknownVerb: "disposal")
     }
 
     func stop(_ kild: Kild.ID) async throws {
@@ -167,9 +168,24 @@ struct KildHTTPClient: KildAPI {
     /// Note the discriminator cannot be `error`: the full report carries one too, since a
     /// refused merge has a reason.
     private func perform(
-        _ request: URLRequest, accepting: Set<Int> = [], answerKey: String? = nil
+        _ request: URLRequest, accepting: Set<Int> = [], answerKey: String? = nil,
+        unknownVerb: String? = nil
     ) async throws -> Data {
-        let (data, response) = try await urlSession.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await urlSession.data(for: request)
+        } catch {
+            // A raw URLError leaking to callers is what made a timeout indistinguishable
+            // from a refusal. `unknownVerb` is set only by mutations that cannot be safely
+            // repeated — for those, a timeout is NOT a failure: the engine may have finished
+            // the work after we stopped listening.
+            let timedOut = (error as? URLError)?.code == .timedOut
+            if timedOut, let unknownVerb {
+                throw KildAPIError.outcomeUnknown(verb: unknownVerb)
+            }
+            throw KildAPIError.unreachable(error.localizedDescription)
+        }
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         if (200..<300).contains(code) { return data }
 
@@ -203,12 +219,13 @@ struct KildHTTPClient: KildAPI {
 
     private func send<T: Decodable>(
         _ method: String, _ path: String, query: [URLQueryItem] = [],
-        body: [String: Any]? = nil, accepting: Set<Int> = [], answerKey: String? = nil
+        body: [String: Any]? = nil, accepting: Set<Int> = [], answerKey: String? = nil,
+        unknownVerb: String? = nil
     ) async throws -> T {
         try decode(
             try await perform(
                 try request(method, path, query: query, body: body), accepting: accepting,
-                answerKey: answerKey))
+                answerKey: answerKey, unknownVerb: unknownVerb))
     }
 
     /// For writes whose body helm does not read. The request still has to complete, and a

@@ -119,12 +119,41 @@ enum KildAPIError: Error, Equatable, LocalizedError {
     case http(Int)
     /// The response did not decode — almost always a wire change.
     case decoding(String)
+    /// The request never completed: engine down, socket hung, connection refused.
+    ///
+    /// For a READ this is a plain failure — nothing happened, retry freely.
+    case unreachable(String)
+    /// A MUTATION did not answer in time, and **may have succeeded anyway.**
+    ///
+    /// This is the one error that is not a failure. A client abort does not reach the
+    /// engine — nothing passes a cancellation signal server-side, and none of the git
+    /// commands it runs are cancellable — so a timed-out `land` may well have merged and a
+    /// timed-out disposal may well have removed the tree.
+    ///
+    /// Reporting it as failure invites the worst available response: retrying a merge that
+    /// already happened. The UI must say "check before retrying" and never offer a
+    /// one-click retry.
+    case outcomeUnknown(verb: String)
 
     var errorDescription: String? {
         switch self {
         case let .engine(message): message
         case let .http(code): "engine returned HTTP \(code)"
         case let .decoding(detail): "could not read the engine's response: \(detail)"
+        case let .unreachable(detail): "could not reach the engine: \(detail)"
+        case let .outcomeUnknown(verb):
+            "the \(verb) did not answer in time and may have completed — check before retrying"
+        }
+    }
+
+    /// Whether a caller may safely repeat the request.
+    ///
+    /// Reads always may. A mutation with an unknown outcome never may, which is the whole
+    /// reason that case exists as something other than a failure.
+    var isSafeToRetry: Bool {
+        switch self {
+        case .outcomeUnknown: false
+        case .engine, .http, .decoding, .unreachable: true
         }
     }
 }

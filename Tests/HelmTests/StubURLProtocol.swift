@@ -6,6 +6,17 @@ import Foundation
 /// infrastructure rather than a test, and it outlived the client it was written for: every
 /// HTTP-level assertion in the suite runs through it.
 final class StubURLProtocol: URLProtocol {
+    /// Injected transport failure, for the cases that never reach a status code —
+    /// timeouts, refused connections, dropped sockets. Distinct from a canned response
+    /// because those are exactly the paths a status-code stub cannot express.
+    nonisolated(unsafe) static var failure: Error?
+
+    /// Fail the next request at the transport layer.
+    static func fail(with error: Error) {
+        reset()
+        failure = error
+    }
+
     private struct Canned {
         let status: Int
         let body: Data
@@ -31,6 +42,7 @@ final class StubURLProtocol: URLProtocol {
     }
 
     static func reset() {
+        failure = nil
         lock.lock()
         defer { lock.unlock() }
         canned = nil
@@ -56,6 +68,10 @@ final class StubURLProtocol: URLProtocol {
     override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        if let failure = Self.failure {
+            client?.urlProtocol(self, didFailWithError: failure)
+            return
+        }
         let body = request.httpBody ?? request.httpBodyStream.map { stream in
             stream.open()
             defer { stream.close() }
