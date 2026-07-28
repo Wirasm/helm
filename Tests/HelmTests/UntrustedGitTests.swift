@@ -80,9 +80,7 @@ final class UntrustedGitTests: XCTestCase {
             kild: kild, report: report, collisions: collisions, runningAgents: kild.agents)
     }
 
-    private func landable() -> LandReport {
-        LandReport(ok: true, ahead: 3, behind: 0, dirty: false, conflictsWithBase: false)
-    }
+    private func landable() -> LandReport { LandFixture.landable() }
 
     /// The headline case. Without this the gate shows its greenest face over a repository
     /// it could not read.
@@ -114,34 +112,5 @@ final class UntrustedGitTests: XCTestCase {
     func testAKildWithNoGitBlockIsNotTreatedAsAFailure() {
         let g = gate(kild("a", git: nil), report: landable())
         XCTAssertFalse(g.checks.contains { $0.id == "measurement" })
-    }
-
-    // MARK: - Undetermined merges
-
-    /// Reading `nil` as "merges without conflict" would state a guarantee the engine
-    /// explicitly declined to make, on the one screen where an unearned reassurance is
-    /// most expensive.
-    func testAnUndeterminedMergeDoesNotClaimToBeClean() {
-        var report = landable()
-        report.conflictsWithBase = nil
-        let merge = gate(kild("a", git: GitFixture.measured()), report: report)
-            .checks.first { $0.id == "merge" }
-        XCTAssertEqual(merge?.verdict, .info)
-        XCTAssertEqual(merge?.text, "merge cleanliness undetermined")
-    }
-
-    /// It is not a conflict either. Refusing on undetermined would strand kilds the engine
-    /// simply could not check, which is the same over-strictness that made 116 worktrees
-    /// unreclaimable.
-    func testAnUndeterminedMergeDoesNotBlock() {
-        var report = landable()
-        report.conflictsWithBase = nil
-        XCTAssertTrue(gate(kild("a", git: GitFixture.measured()), report: report).canLand)
-    }
-
-    func testADeterminedConflictStillBlocks() {
-        var report = landable()
-        report.conflictsWithBase = true
-        XCTAssertFalse(gate(kild("a", git: GitFixture.measured()), report: report).canLand)
     }
 }

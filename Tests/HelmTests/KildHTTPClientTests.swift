@@ -10,6 +10,16 @@ import XCTest
 final class KildHTTPClientTests: XCTestCase {
     private var client: KildHTTPClient!
 
+    /// Captured verbatim from a running engine — NOT written to match the Swift type.
+    /// The land routes were previously stubbed from the type, which is how a `LandReport`
+    /// sharing no field names with the wire passed every test while failing 100% of real
+    /// calls.
+    static let landJSON = #"""
+        {"base":"development","branch":"development","commits":[],"files":[],
+         "collides":[],"wouldMerge":false,"merged":false,
+         "error":"the kild ran on development itself","dryRun":true}
+        """#
+
     override func setUp() {
         super.setUp()
         StubURLProtocol.reset()
@@ -120,19 +130,19 @@ final class KildHTTPClientTests: XCTestCase {
     /// Dry run and execute are different verbs on one route. The UI honours that split, so
     /// the client must not quietly turn a report into an action.
     func testDryRunIsAGetAndTouchesNothing() async throws {
-        StubURLProtocol.respond(status: 200, json: #"{"ok":true,"ahead":3,"behind":0}"#)
+        StubURLProtocol.respond(status: 200, json: Self.landJSON)
         let report = try await client.landDryRun("k-1")
         XCTAssertEqual(StubURLProtocol.lastRequest?.httpMethod, "GET")
         XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/kilds/k-1/land")
-        XCTAssertEqual(report.ahead, 3)
+        XCTAssertEqual(report.commits.count, 0)
     }
 
     func testLandingIsAPostToTheSameRoute() async throws {
-        StubURLProtocol.respond(status: 200, json: #"{"ok":true,"commits":3,"files":4}"#)
+        StubURLProtocol.respond(status: 200, json: Self.landJSON)
         let report = try await client.land("k-1")
         XCTAssertEqual(StubURLProtocol.lastRequest?.httpMethod, "POST")
         XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/kilds/k-1/land")
-        XCTAssertEqual(report.commits, 3)
+        XCTAssertEqual(report.base, "development")
     }
 
     // MARK: - Disposal

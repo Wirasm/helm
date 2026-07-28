@@ -229,21 +229,54 @@ struct Message: Codable, Sendable, Equatable, Identifiable {
 
 // MARK: - Landing
 
+/// One commit a land would carry.
+struct ReviewCommit: Codable, Sendable, Equatable, Identifiable {
+    let sha: String
+    let subject: String
+    let author: String
+    let ts: Double
+    let filesChanged: Int
+    let additions: Int
+    let deletions: Int
+
+    var id: String { sha }
+}
+
 /// The report `GET /api/kilds/:id/land` returns, and `POST` returns again after executing.
 ///
 /// The same shape for both halves is what lets the gate show its reasons before acting and
-/// then confirm with the identical fields — the dry run is a real verb, not a spinner.
+/// then confirm against identical fields — the dry run is a real verb, not a spinner.
+///
+/// **Captured from the running engine, not written from the docs.** An earlier version of
+/// this type was invented from an API sketch and shared not one field name with the wire;
+/// because `ok` was required and never sent, every single land call — dry run included —
+/// failed to decode. The GET returns 200 for landable and blocked alike, so there was no
+/// path on which it worked. The lesson is the one this file's own header states and that
+/// version ignored: mirror what the engine sends, and prove it with a captured payload.
 struct LandReport: Codable, Sendable, Equatable {
-    /// Whether the land would succeed (dry run) or did (execute).
-    var ok: Bool
-    /// The engine's own reason for refusing, when it refused.
+    /// Base branch this would land into.
+    let base: String
+    /// The branch being landed, when git could name it.
+    let branch: String?
+    /// Commits the land carries, newest first. **Empty means nothing to land** — there is
+    /// no separate ahead/behind count on this route.
+    let commits: [ReviewCommit]
+    /// Files the branch changed against base.
+    let files: [String]
+    /// Paths that conflict when merging into base — the engine's own collision preview.
+    ///
+    /// Not to be confused with helm's cross-kild derivation. This one is *this branch
+    /// against its base*; that one is *two live kilds against each other*. Both belong on
+    /// the gate, and only the second is derived.
+    let collides: [String]
+    /// Whether the merge would apply, or did.
+    let wouldMerge: Bool
+    /// True only for a merge that actually happened.
+    let merged: Bool
+    /// The merge commit — present only when `merged`.
+    var sha: String?
+    /// Why it would not or did not land, or any git failure. Never thrown.
     var error: String?
-    var ahead: Int?
-    var behind: Int?
-    var dirty: Bool?
-    var conflictsWithBase: Bool?
-    var changedFiles: [String]?
-    var commits: Int?
-    var files: Int?
-    var landedSha: String?
+    /// Set by the route: `true` for the GET, `false` for the POST.
+    var dryRun: Bool?
 }

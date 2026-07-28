@@ -14,7 +14,7 @@ final class StubKildAPI: KildAPI, @unchecked Sendable {
     var status: [Kild] = []
     var archived: [ArchivedKild] = []
     var messageLog: [Message] = []
-    var report = LandReport(ok: true)
+    var report = LandFixture.landable()
     var personaList: [String] = []
 
     // canned failures — set one and the matching call throws instead of returning

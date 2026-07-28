@@ -37,8 +37,8 @@ final class CockpitErrorTests: XCTestCase {
         }
         func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
         func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
-        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandReport(ok: true) }
-        func land(_ kild: Kild.ID) async throws -> LandReport { LandReport(ok: true) }
+        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
+        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
         func delete(_ kild: Kild.ID) async throws {}
         func stop(_ kild: Kild.ID) async throws {}
         func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}

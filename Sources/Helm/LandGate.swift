@@ -59,73 +59,42 @@ struct LandGate: Equatable {
     ) -> LandGate {
         var checks: [Check] = []
 
-        // A failed git probe is not a clean tree, and the engine cannot tell you apart from
-        // one: on failure it returns `ahead: 0, dirty: false, changedFiles: []` — safe
-        // defaults that read exactly like an up-to-date, unmodified repository. Without
-        // this check the gate would render its most reassuring face over a measurement that
-        // never happened, so the failure blocks and says so.
-        if let git = kild.git, !git.isTrustworthy {
+        // Nothing to land is a refusal, not a no-op: it almost always means the wrong kild
+        // is selected. `commits` empty is the engine's way of saying it — there is no
+        // ahead/behind on this route.
+        let count = report.commits.count
+        checks.append(
+            Check(
+                id: "position",
+                text: count == 0
+                    ? "nothing to land — no commits on \(report.branch ?? "this branch")"
+                    : "\(count) commit\(count == 1 ? "" : "s") to land into \(report.base)",
+                verdict: count == 0 ? .fail : .pass,
+                derived: false))
+
+        // The engine's own merge verdict. `wouldMerge` covers both halves: would it apply
+        // (dry run), did it apply (execute).
+        checks.append(
+            Check(
+                id: "merge",
+                text: report.wouldMerge
+                    ? "merges into \(report.base) cleanly"
+                    : "will not merge into \(report.base)",
+                verdict: report.wouldMerge ? .pass : .fail,
+                derived: false))
+
+        // The engine's collision preview — this branch against its base. NOT derived.
+        if !report.collides.isEmpty {
+            let n = report.collides.count
             checks.append(
                 Check(
-                    id: "measurement",
-                    text: "could not read git state — \(git.error ?? "unknown failure")",
+                    id: "conflicts",
+                    text: "\(n) path\(n == 1 ? "" : "s") conflict with \(report.base)",
                     verdict: .fail,
                     derived: false))
         }
 
-        // Position relative to base. "Nothing to land" is a refusal, not a no-op: it almost
-        // always means the wrong kild is selected.
-        let ahead = report.ahead ?? 0
-        let behind = report.behind ?? 0
-        checks.append(
-            Check(
-                id: "position",
-                text: ahead == 0
-                    ? "nothing to land — 0 commits ahead of \(kild.base ?? "base")"
-                    : "\(ahead) commit\(ahead == 1 ? "" : "s") ahead, \(behind) behind",
-                verdict: ahead == 0 ? .fail : .pass,
-                derived: false))
-
-        // A dirty tree is reported but does NOT block: on the machine that measured this,
-        // 27 of 27 agent worktrees were dirty from provisioning litter written before any
-        // agent ran. Blocking on dirt would refuse every real kild, which is exactly how
-        // 116 worktrees became permanently unreclaimable.
-        if report.dirty == true {
-            checks.append(
-                Check(
-                    id: "tree",
-                    text: "working tree has uncommitted changes",
-                    verdict: .info,
-                    derived: false))
-        } else {
-            checks.append(
-                Check(id: "tree", text: "working tree clean", verdict: .pass, derived: false))
-        }
-
-        // Three states, not two. `nil` is *undetermined* — the engine says so explicitly —
-        // and reading it as "merges cleanly" would state a guarantee it declined to make,
-        // on the one screen where an unearned reassurance costs the most. Undetermined does
-        // not block (it is not a conflict, and refusing on it would strand kilds the engine
-        // simply could not check), but it must not claim safety either.
-        switch report.conflictsWithBase {
-        case true:
-            checks.append(
-                Check(
-                    id: "merge", text: "conflicts with \(kild.base ?? "base")", verdict: .fail,
-                    derived: false))
-        case false:
-            checks.append(
-                Check(
-                    id: "merge", text: "merges without conflict", verdict: .pass,
-                    derived: false))
-        case nil:
-            checks.append(
-                Check(
-                    id: "merge", text: "merge cleanliness undetermined", verdict: .info,
-                    derived: false))
-        }
-
-        // Agents still working. Landing under a running agent races its next commit.
+        // Agents still working. Landing under one races its next commit.
         let running = runningAgents.filter { !$0.isStopped && !$0.isIdle }
         if !running.isEmpty {
             checks.append(
@@ -136,7 +105,21 @@ struct LandGate: Equatable {
                     derived: false))
         }
 
-        // DERIVED — the only line here helm computed rather than read.
+        // A failed git probe is not a clean tree. On failure the engine returns safe
+        // defaults that read exactly like an up-to-date, unmodified repository, so without
+        // this the gate would show its most reassuring face over a measurement that never
+        // happened.
+        if let git = kild.git, !git.isTrustworthy {
+            checks.append(
+                Check(
+                    id: "measurement",
+                    text: "could not read git state — \(git.error ?? "unknown failure")",
+                    verdict: .fail,
+                    derived: false))
+        }
+
+        // DERIVED — the cross-kild collision, which no single kild can know and no route
+        // reports. Distinct from `report.collides` above, which is this branch vs its base.
         if collisions.isEmpty {
             checks.append(
                 Check(
@@ -144,38 +127,33 @@ struct LandGate: Equatable {
                     derived: true))
         } else {
             let names = collisions.map(\.otherName).joined(separator: ", ")
-            let files = collisions.flatMap(\.files)
-            let unique = Set(files).count
+            let unique = Set(collisions.flatMap(\.files)).count
             checks.append(
                 Check(
                     id: "collisions",
-                    text:
-                        "collides with \(names) · \(unique) file\(unique == 1 ? "" : "s")",
+                    text: "collides with \(names) · \(unique) file\(unique == 1 ? "" : "s")",
                     verdict: .fail,
                     derived: true))
         }
 
-        if let files = report.files, let commits = report.commits {
+        if !report.files.isEmpty {
+            let n = report.files.count
             checks.append(
                 Check(
-                    id: "diffstat",
-                    text: "\(commits) commit\(commits == 1 ? "" : "s") · \(files) file\(files == 1 ? "" : "s")",
-                    verdict: .info,
-                    derived: false))
+                    id: "diffstat", text: "\(n) file\(n == 1 ? "" : "s") changed",
+                    verdict: .info, derived: false))
         }
 
-        // The engine's own refusal always wins. It knows things helm did not ask about, and
-        // its wording is the whole answer — re-deriving a worse version of a message we
-        // already have would be strictly less useful.
+        // The engine's own words always win. It knows things helm never asked about, and
+        // re-deriving a worse version of a message we already have is strictly less useful.
         if let error = report.error, !error.isEmpty {
-            checks.append(
-                Check(id: "engine", text: error, verdict: .fail, derived: false))
+            checks.append(Check(id: "engine", text: error, verdict: .fail, derived: false))
         }
 
         return LandGate(
             kild: kild.id,
             kildName: kild.name,
-            base: kild.base ?? "base",
+            base: report.base,
             checks: checks,
             collidesWith: collisions)
     }

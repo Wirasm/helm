@@ -207,4 +207,74 @@ final class KildWireTests: XCTestCase {
         XCTAssertEqual(message.seq, 8)
         XCTAssertEqual(message.ts, 1_785_180_000_000)
     }
+
+    // MARK: - Landing
+
+    /// `GET /api/kilds/:id/land`, captured verbatim from a running engine.
+    ///
+    /// This test exists because its absence cost a whole feature. `LandReport` was written
+    /// from an API sketch rather than a capture and shared **no field names** with the wire
+    /// — no `ok`, no `ahead`, no `conflictsWithBase`. Since `ok` was required and never
+    /// sent, every land call threw `keyNotFound`, dry run included. The route returns 200
+    /// for landable and blocked alike, so there was no path on which it worked.
+    ///
+    /// The client tests did not catch it because they stubbed JSON matching the Swift type.
+    /// A fixture written from the type keeps passing no matter what the engine does, which
+    /// is exactly what this file's header warns about — and then this type did it anyway.
+    private let landJSON = """
+        {
+          "base": "development",
+          "branch": "development",
+          "commits": [],
+          "files": [],
+          "collides": [],
+          "wouldMerge": false,
+          "merged": false,
+          "error": "the kild ran on development itself — there is no branch to land",
+          "dryRun": true
+        }
+        """
+
+    func testDecodesARealLandReport() throws {
+        let report = try decode(LandReport.self, landJSON)
+        XCTAssertEqual(report.base, "development")
+        XCTAssertFalse(report.wouldMerge)
+        XCTAssertFalse(report.merged)
+        XCTAssertEqual(report.dryRun, true)
+        XCTAssertEqual(
+            report.error, "the kild ran on development itself — there is no branch to land")
+    }
+
+    /// Empty `commits` is how "nothing to land" is expressed. There is no ahead/behind on
+    /// this route at all, which is why the gate counts commits instead.
+    func testNothingToLandIsAnEmptyCommitsArray() throws {
+        let report = try decode(LandReport.self, landJSON)
+        XCTAssertTrue(report.commits.isEmpty)
+    }
+
+    /// `collides` is the engine's own conflict preview — this branch against its base.
+    /// Distinct from helm's cross-kild derivation, and not to be labelled derived.
+    func testCollidesIsOnTheWireAndIsNotADerivation() throws {
+        let report = try decode(LandReport.self, landJSON)
+        XCTAssertEqual(report.collides, [])
+        XCTAssertNotNil(report.collides, "present and empty, not absent")
+    }
+
+    func testDecodesACommitCarriedByALand() throws {
+        let json = """
+            {
+              "base": "development", "branch": "kild/x",
+              "commits": [{
+                "sha": "abc123", "subject": "fix the thing", "author": "rasmus",
+                "ts": 1785180000000, "filesChanged": 2, "additions": 40, "deletions": 8
+              }],
+              "files": ["A.swift"], "collides": [],
+              "wouldMerge": true, "merged": false, "dryRun": true
+            }
+            """
+        let report = try decode(LandReport.self, json)
+        XCTAssertEqual(report.commits.first?.sha, "abc123")
+        XCTAssertEqual(report.commits.first?.additions, 40)
+        XCTAssertTrue(report.wouldMerge)
+    }
 }

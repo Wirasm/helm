@@ -9,10 +9,11 @@ import XCTest
 /// from whether a button looks grey.
 final class LandGateTests: XCTestCase {
 
-    private func kild(
-        _ name: String = "sidebar", base: String? = "development", agents: [Agent] = []
-    ) -> Kild {
-        Kild(id: name, name: name, cwd: "/repo", base: base, agents: agents)
+    private func kild(_ name: String = "sidebar", agents: [Agent] = [], git: GitStatus? = nil)
+        -> Kild
+    {
+        Kild(
+            id: name, name: name, cwd: "/repo", base: "development", agents: agents, git: git)
     }
 
     private func agent(_ handle: String, idle: Bool? = nil, stopped: Bool? = nil) -> Agent {
@@ -20,149 +21,133 @@ final class LandGateTests: XCTestCase {
     }
 
     private func gate(
-        _ report: LandReport,
-        collisions: [Collision] = [],
-        agents: [Agent] = []
+        _ report: LandReport, collisions: [Collision] = [], agents: [Agent] = [],
+        git: GitStatus? = nil
     ) -> LandGate {
         LandGate.make(
-            kild: kild(agents: agents), report: report, collisions: collisions,
+            kild: kild(agents: agents, git: git), report: report, collisions: collisions,
             runningAgents: agents)
-    }
-
-    private func clean() -> LandReport {
-        LandReport(ok: true, ahead: 3, behind: 0, dirty: false, conflictsWithBase: false)
     }
 
     // MARK: - Allowing
 
-    func testACleanKildAheadOfBaseCanLand() {
-        XCTAssertTrue(gate(clean()).canLand)
+    func testALandableBranchCanLand() {
+        XCTAssertTrue(gate(LandFixture.landable()).canLand)
     }
 
     func testTheHeaderNamesBothSidesOfTheMerge() {
-        let g = gate(clean())
+        let g = gate(LandFixture.landable())
         XCTAssertEqual(g.kildName, "sidebar")
-        XCTAssertEqual(g.base, "development")
+        XCTAssertEqual(g.base, "development", "the base comes from the report, not the kild")
     }
 
     // MARK: - Blocking
 
-    /// Almost always means the wrong kild is selected, so it is a refusal rather than a
-    /// no-op that silently succeeds.
+    /// `commits` empty is how the engine says "nothing to land" — there is no ahead/behind
+    /// on this route. It is a refusal rather than a no-op, because it almost always means
+    /// the wrong kild is selected.
     func testNothingToLandBlocks() {
-        var report = clean()
-        report.ahead = 0
-        let g = gate(report)
+        let g = gate(LandFixture.nothingToLand())
         XCTAssertFalse(g.canLand)
         XCTAssertTrue(g.checks.contains { $0.id == "position" && $0.blocks })
     }
 
-    func testConflictWithBaseBlocks() {
-        var report = clean()
-        report.conflictsWithBase = true
-        XCTAssertFalse(gate(report).canLand)
+    func testARefusedMergeBlocks() {
+        XCTAssertFalse(gate(LandFixture.blocked()).canLand)
+    }
+
+    /// The engine's collision preview — this branch against its base. Distinct from the
+    /// cross-kild derivation, and NOT marked derived, because the engine reported it.
+    func testEngineReportedConflictingPathsBlockAndAreNotDerived() {
+        let g = gate(LandFixture.blocked(collides: ["A.swift", "B.swift"]))
+        let check = g.checks.first { $0.id == "conflicts" }
+        XCTAssertEqual(check?.blocks, true)
+        XCTAssertEqual(check?.derived, false)
+        XCTAssertEqual(check?.text.contains("2 paths"), true)
     }
 
     /// Landing under a working agent races whatever it commits next.
     func testARunningAgentBlocks() {
-        let g = gate(clean(), agents: [agent("coder")])
+        let g = gate(LandFixture.landable(), agents: [agent("coder")])
         XCTAssertFalse(g.canLand)
         XCTAssertTrue(g.checks.contains { $0.id == "agents" && $0.blocks })
     }
 
-    /// Idle means the agent finished its turn — it is not going to commit underneath you.
     func testAnIdleAgentDoesNotBlock() {
-        XCTAssertTrue(gate(clean(), agents: [agent("coder", idle: true)]).canLand)
+        XCTAssertTrue(gate(LandFixture.landable(), agents: [agent("c", idle: true)]).canLand)
     }
 
     func testAStoppedAgentDoesNotBlock() {
-        XCTAssertTrue(gate(clean(), agents: [agent("coder", stopped: true)]).canLand)
+        XCTAssertTrue(
+            gate(LandFixture.landable(), agents: [agent("c", stopped: true)]).canLand)
     }
 
-    func testACollisionBlocks() {
+    func testACrossKildCollisionBlocks() {
         let collision = Collision(other: "other", otherName: "context-bar", files: ["A.swift"])
-        let g = gate(clean(), collisions: [collision])
-        XCTAssertFalse(g.canLand)
+        XCTAssertFalse(gate(LandFixture.landable(), collisions: [collision]).canLand)
     }
 
     /// The engine knows things helm never asked about, and its wording is the whole answer.
-    func testTheEnginesOwnRefusalBlocksAndIsShownVerbatim() {
-        var report = clean()
-        report.ok = false
-        report.error = "refusing: 3 commits not reachable from base"
-        let g = gate(report)
-        XCTAssertFalse(g.canLand)
+    func testTheEnginesOwnRefusalIsShownVerbatim() {
+        let g = gate(LandFixture.blocked(reason: "base is not checked out in the main tree"))
         XCTAssertTrue(
             g.checks.contains {
-                $0.text == "refusing: 3 commits not reachable from base" && $0.blocks
+                $0.text == "base is not checked out in the main tree" && $0.blocks
             })
     }
 
-    // MARK: - Dirt is not a blocker
-
-    /// The measured reason: 27 of 27 agent worktrees on the machine that ran this were
-    /// dirty from provisioning litter written before any agent started. A guard that
-    /// refused dirty trees would refuse every real kild — which is precisely how 116
-    /// worktrees became permanently unreclaimable.
-    func testADirtyTreeIsReportedButDoesNotBlock() {
-        var report = clean()
-        report.dirty = true
-        let g = gate(report)
-        XCTAssertTrue(g.canLand, "dirt is not authored work")
-        XCTAssertEqual(g.checks.first { $0.id == "tree" }?.verdict, .info)
+    /// A failed git probe returns safe defaults indistinguishable from a clean tree.
+    func testAFailedGitProbeBlocks() {
+        XCTAssertFalse(gate(LandFixture.landable(), git: GitFixture.failed()).canLand)
     }
 
-    // MARK: - Derivation is labelled
+    // MARK: - Two kinds of collision, told apart
 
-    /// The most reassuring line on the most consequential screen. A reader has no other way
-    /// to tell it from something the server vouched for.
-    func testTheCollisionCheckIsMarkedDerived() {
-        let check = gate(clean()).checks.first { $0.id == "collisions" }
-        XCTAssertEqual(check?.derived, true)
+    /// The gate carries both, and only one is derived. Conflating them would either credit
+    /// helm's arithmetic to the engine or dismiss the engine's finding as a guess.
+    func testTheTwoCollisionKindsAreDistinctChecks() {
+        let cross = Collision(other: "other", otherName: "context-bar", files: ["X.swift"])
+        let g = gate(LandFixture.blocked(collides: ["Y.swift"]), collisions: [cross])
+
+        let engineSide = g.checks.first { $0.id == "conflicts" }
+        let derivedSide = g.checks.first { $0.id == "collisions" }
+
+        XCTAssertEqual(engineSide?.derived, false, "this branch vs its base — engine's")
+        XCTAssertEqual(derivedSide?.derived, true, "kild vs kild — ours")
+        XCTAssertNotNil(engineSide)
+        XCTAssertNotNil(derivedSide)
     }
 
     func testEveryEngineReportedCheckIsNotMarkedDerived() {
-        let g = gate(clean())
-        for check in g.checks where check.id != "collisions" {
+        for check in gate(LandFixture.landable()).checks where check.id != "collisions" {
             XCTAssertFalse(check.derived, "\(check.id) comes from the engine, not from us")
         }
     }
 
-    func testTheCollisionCheckNamesTheOtherKildAndFileCount() {
+    func testTheCrossKildCheckNamesTheOtherKildAndFileCount() {
         let collision = Collision(
             other: "other", otherName: "context-bar", files: ["A.swift", "B.swift"])
-        let check = gate(clean(), collisions: [collision]).checks.first {
-            $0.id == "collisions"
-        }
+        let check = gate(LandFixture.landable(), collisions: [collision])
+            .checks.first { $0.id == "collisions" }
         XCTAssertEqual(check?.text.contains("context-bar"), true)
         XCTAssertEqual(check?.text.contains("2 files"), true)
     }
 
-    /// The collisions are carried through so the view can render them as links — the fix
-    /// for a collision is in the other kild, not this one.
     func testCollisionsAreCarriedForLinking() {
         let collision = Collision(other: "other-id", otherName: "context-bar", files: ["A"])
-        XCTAssertEqual(gate(clean(), collisions: [collision]).collidesWith.first?.other,
-                       "other-id")
+        XCTAssertEqual(
+            gate(LandFixture.landable(), collisions: [collision]).collidesWith.first?.other,
+            "other-id")
     }
 
     // MARK: - Wording
 
     func testSingularAndPluralCommitsBothRead() {
-        var one = clean()
-        one.ahead = 1
         XCTAssertEqual(
-            gate(one).checks.first { $0.id == "position" }?.text, "1 commit ahead, 0 behind")
+            gate(LandFixture.landable(commits: 1)).checks.first { $0.id == "position" }?.text,
+            "1 commit to land into development")
         XCTAssertEqual(
-            gate(clean()).checks.first { $0.id == "position" }?.text,
-            "3 commits ahead, 0 behind")
-    }
-
-    /// A kild whose record is gone has no recorded base; the gate must still render rather
-    /// than crash on the missing value.
-    func testAKildWithNoRecordedBaseStillRenders() {
-        let g = LandGate.make(
-            kild: kild(base: nil), report: clean(), collisions: [], runningAgents: [])
-        XCTAssertEqual(g.base, "base")
+            gate(LandFixture.landable(commits: 3)).checks.first { $0.id == "position" }?.text,
+            "3 commits to land into development")
     }
 }
