@@ -6,73 +6,6 @@ import XCTest
 /// records that it was called — which is the whole reason `KildAPI` is a protocol: the
 /// cockpit's state transitions are the part most likely to be wrong, and they are only
 /// testable if the backend can be held still.
-final class StubKildAPI: KildAPI, @unchecked Sendable {
-
-    // canned responses
-    var healthResponse = Health(ok: true, bootId: "boot-1")
-    var identities: [Kild] = []
-    var status: [Kild] = []
-    var archived: [ArchivedKild] = []
-    var messageLog: [Message] = []
-    var report = LandFixture.landable()
-    var personaList: [String] = []
-
-    // canned failures — set one and the matching call throws instead of returning
-    var healthError: Error?
-    var identitiesError: Error?
-    var statusError: Error?
-    var archiveError: Error?
-
-    // recorded calls
-    private(set) var healthCalls = 0
-    private(set) var kildsCalls = 0
-    private(set) var statusCalls = 0
-    private(set) var archiveCalls = 0
-    private(set) var sent: [(recipients: [String], text: String, kild: Kild.ID)] = []
-    private(set) var stopped: [Kild.ID] = []
-
-    func health() async throws -> Health {
-        healthCalls += 1
-        if let healthError { throw healthError }
-        return healthResponse
-    }
-
-    func kilds() async throws -> [Kild] {
-        kildsCalls += 1
-        if let identitiesError { throw identitiesError }
-        return identities
-    }
-
-    func kildsStatus() async throws -> [Kild] {
-        statusCalls += 1
-        if let statusError { throw statusError }
-        return status
-    }
-
-    func archive() async throws -> [ArchivedKild] {
-        archiveCalls += 1
-        if let archiveError { throw archiveError }
-        return archived
-    }
-
-    func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { messageLog }
-
-    func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {
-        sent.append((recipients: recipients, text: text, kild: kild))
-    }
-
-    func landDryRun(_ kild: Kild.ID) async throws -> LandReport { report }
-    func land(_ kild: Kild.ID) async throws -> LandReport { report }
-    func delete(_ kild: Kild.ID) async throws {}
-
-    func stop(_ kild: Kild.ID) async throws { stopped.append(kild) }
-    func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
-        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
-            AgentTranscript(entries: [], total: 0)
-        }
-
-    func personas() async throws -> [String] { personaList }
-}
 
 /// The cockpit's state transitions: how the two halves of the split listing fold together,
 /// what a restarted engine costs, and what survives a failed call.
@@ -129,7 +62,7 @@ final class CockpitTests: XCTestCase {
         ArchivedKild(id: name, name: name, agents: [], endedAt: endedAt)
     }
 
-    private func cockpit(_ api: StubKildAPI) -> Cockpit { Cockpit(api: api) }
+    private func cockpit(_ api: FakeKildAPI) -> Cockpit { Cockpit(api: api) }
 
     // MARK: merge — identity folded into what we hold
 
@@ -223,7 +156,7 @@ final class CockpitTests: XCTestCase {
     /// The same rule stated as the number the workspace bar shows: a costly refresh landing
     /// on top of a fresh roster must not change how many agents are asking for you.
     func testAStatusRefreshDoesNotChangeTheWaitingCount() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [identity("a", agents: [agent("coder", idle: true)])]
         api.status = [status("a", agents: [agent("coder", idle: nil)], ahead: 1)]
 
@@ -297,7 +230,7 @@ final class CockpitTests: XCTestCase {
     }
 
     func testRefreshingTheArchiveSortsIt() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.archived = [archived("old", endedAt: 1), archived("new", endedAt: 2)]
 
         let cockpit = cockpit(api)
@@ -312,7 +245,7 @@ final class CockpitTests: XCTestCase {
     /// merely stale — the ids in it describe objects from a dead process, and a reused id
     /// would point at something else entirely. Clearing is the only honest response.
     func testARestartedEngineClearsEverythingHeld() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [identity("a", agents: [agent("coder", idle: true)])]
         api.archived = [archived("done", endedAt: 1)]
 
@@ -333,7 +266,7 @@ final class CockpitTests: XCTestCase {
     }
 
     func testAnUnchangedBootIdLeavesStateAlone() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [identity("a")]
         api.archived = [archived("done", endedAt: 1)]
 
@@ -352,7 +285,7 @@ final class CockpitTests: XCTestCase {
     /// Learning the boot id for the first time is not a restart. Clearing here would throw
     /// away whatever the first refresh raced ahead and fetched.
     func testTheFirstBootIdIsRecordedWithoutClearing() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [identity("a")]
 
         let cockpit = cockpit(api)
@@ -369,7 +302,7 @@ final class CockpitTests: XCTestCase {
     /// reachable from base"* is the whole answer; re-deriving something worse from a status
     /// code would throw away the only useful part.
     func testAFailedIdentityRefreshKeepsTheKildsAndLabelsTheError() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [identity("a", agents: [agent("coder", idle: true)])]
 
         let cockpit = cockpit(api)
@@ -384,7 +317,7 @@ final class CockpitTests: XCTestCase {
     }
 
     func testAFailedStatusRefreshKeepsTheGitItAlreadyHas() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [identity("a")]
         api.status = [status("a", ahead: 5)]
 
@@ -400,7 +333,7 @@ final class CockpitTests: XCTestCase {
     }
 
     func testAFailedArchiveRefreshKeepsTheArchive() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.archived = [archived("done", endedAt: 1)]
 
         let cockpit = cockpit(api)
@@ -414,7 +347,7 @@ final class CockpitTests: XCTestCase {
     }
 
     func testAFailedHealthCheckDoesNotClearState() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [identity("a")]
 
         let cockpit = cockpit(api)
@@ -433,7 +366,7 @@ final class CockpitTests: XCTestCase {
     /// back would tell the operator their data is stale when it is current — the same lie as
     /// showing stale data as fresh, in the other direction.
     func testARecoveredRefreshClearsThePreviousError() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identitiesError = KildAPIError.engine("seat required")
 
         let cockpit = cockpit(api)
@@ -449,7 +382,7 @@ final class CockpitTests: XCTestCase {
     }
 
     func testARecoveredStatusRefreshClearsThePreviousError() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.statusError = KildAPIError.http(503)
 
         let cockpit = cockpit(api)
@@ -463,7 +396,7 @@ final class CockpitTests: XCTestCase {
     }
 
     func testARecoveredArchiveRefreshClearsThePreviousError() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.archiveError = KildAPIError.http(503)
 
         let cockpit = cockpit(api)
@@ -479,7 +412,7 @@ final class CockpitTests: XCTestCase {
     // MARK: derivations
 
     func testWaitingCountReadsEveryHeldKild() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [
             identity("a", agents: [agent("one", idle: true), agent("two")]),
             identity("b", agents: [agent("three", idle: true)]),
@@ -492,7 +425,7 @@ final class CockpitTests: XCTestCase {
     }
 
     func testCollisionsAreDerivedFromTheGitTheStatusRefreshBrought() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [identity("a"), identity("b")]
         api.status = [status("a", changed: ["Store.swift"]), status("b", changed: ["Store.swift"])]
 
@@ -507,7 +440,7 @@ final class CockpitTests: XCTestCase {
     }
 
     func testGroupsSplitOrphansFromLiveKilds() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [
             identity("live", agents: [agent("coder")]),
             identity("ghost", orphan: true),
@@ -525,7 +458,7 @@ final class CockpitTests: XCTestCase {
     /// The two halves at their real cadences: identity polls repeatedly between costly ones.
     /// Every one of those cheap polls must leave the git column standing.
     func testRepeatedCheapPollsNeverBlankTheGitColumn() async {
-        let api = StubKildAPI()
+        let api = FakeKildAPI()
         api.identities = [identity("a", agents: [agent("coder")])]
         api.status = [status("a", ahead: 3, tokens: 50, cost: 0.1)]
 

@@ -24,7 +24,7 @@ final class WorkspaceScopeTests: XCTestCase {
         let suite = "helm.scope.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
-        let store = KildStore(api: FixedAPI(kilds: kilds), defaults: defaults, launchKild: nil)
+        let store = KildStore(api: FakeKildAPI(kilds: kilds), defaults: defaults, launchKild: nil)
         if let workspace { store.open(Workspace(path: workspace)) }
         return store
     }
@@ -95,22 +95,4 @@ final class WorkspaceScopeTests: XCTestCase {
         XCTAssertEqual(store.waitingCount, 2)
     }
 
-    private struct FixedAPI: KildAPI {
-        let kilds: [Kild]
-        func health() async throws -> Health { Health(ok: true, bootId: "b") }
-        func kilds() async throws -> [Kild] { kilds }
-        func kildsStatus() async throws -> [Kild] { kilds }
-        func archive() async throws -> [ArchivedKild] { [] }
-        func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
-        func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
-        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func delete(_ kild: Kild.ID) async throws {}
-        func stop(_ kild: Kild.ID) async throws {}
-        func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
-        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
-            AgentTranscript(entries: [], total: 0)
-        }
-        func personas() async throws -> [String] { [] }
-    }
 }

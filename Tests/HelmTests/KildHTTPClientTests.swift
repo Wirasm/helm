@@ -147,11 +147,45 @@ final class KildHTTPClientTests: XCTestCase {
 
     // MARK: - Disposal
 
+    /// The engine's actual disposal response, not `{"ok":true}` — that shape was invented
+    /// and would have failed to decode against every real call, the same way LandReport did.
+    static let disposalJSON = #"""
+        {"ok":true,"id":"k-1","worktree":"triage-1343","branch":"kild/triage-1343",
+         "branchKept":true,"removed":"/worktrees/triage-1343","discarded":[],
+         "forced":false,"message":"Removed worktree 'triage-1343'. Branch kept."}
+        """#
+
     func testDeleteUsesTheDisposalVerb() async throws {
-        StubURLProtocol.respond(status: 200, json: #"{"ok":true}"#)
-        try await client.delete("k-1")
+        StubURLProtocol.respond(status: 200, json: Self.disposalJSON)
+        let report = try await client.delete("k-1", force: false)
         XCTAssertEqual(StubURLProtocol.lastRequest?.httpMethod, "DELETE")
         XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/kilds/k-1")
+        XCTAssertNil(StubURLProtocol.lastRequest?.url?.query, "force is sent only when true")
+        XCTAssertTrue(report.branchKept, "removing a tree never deletes commits")
+    }
+
+    /// `force` overrides the unlanded-commit guard, so it must be explicit on the wire —
+    /// the engine 400s on anything but "true"/"false".
+    func testForcedDisposalSaysSoInTheQuery() async throws {
+        StubURLProtocol.respond(status: 200, json: Self.disposalJSON)
+        _ = try await client.delete("k-1", force: true)
+        XCTAssertEqual(StubURLProtocol.lastRequest?.url?.query, "force=true")
+    }
+
+    /// A refusal is the guard working. The engine's reason must survive — it names how many
+    /// commits are at stake and usually what to do instead.
+    func testARefusedDisposalSurfacesTheEnginesReason() async {
+        StubURLProtocol.respond(
+            status: 409,
+            json: #"{"error":"refusing: 3 commits not reachable from base","code":"unlanded","commits":3}"#)
+        do {
+            _ = try await client.delete("k-1", force: false)
+            XCTFail("a refused disposal must throw")
+        } catch {
+            XCTAssertEqual(
+                error as? KildAPIError,
+                .engine("refusing: 3 commits not reachable from base"))
+        }
     }
 
     func testStoppingOneAgentDoesNotHaltTheKild() async throws {

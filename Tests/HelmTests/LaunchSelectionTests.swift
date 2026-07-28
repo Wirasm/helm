@@ -45,7 +45,7 @@ final class LaunchSelectionTests: XCTestCase {
         let store = defaults()
         withSavedContext(selecting: "previously-selected", in: store)
 
-        let cockpit = KildStore(api: EmptyAPI(), defaults: store, launchKild: "launched-kild")
+        let cockpit = KildStore(api: FakeKildAPI(), defaults: store, launchKild: "launched-kild")
 
         XCTAssertEqual(
             cockpit.selection, "launched-kild",
@@ -57,19 +57,19 @@ final class LaunchSelectionTests: XCTestCase {
     func testARestoredContextWinsWhenNoFlagWasGiven() {
         let store = defaults()
         withSavedContext(selecting: "previously-selected", in: store)
-        let cockpit = KildStore(api: EmptyAPI(), defaults: store, launchKild: nil)
+        let cockpit = KildStore(api: FakeKildAPI(), defaults: store, launchKild: nil)
         XCTAssertEqual(cockpit.selection, "previously-selected")
     }
 
     @MainActor
     func testWithNeitherFlagNorContextNothingIsSelected() {
-        let cockpit = KildStore(api: EmptyAPI(), defaults: defaults(), launchKild: nil)
+        let cockpit = KildStore(api: FakeKildAPI(), defaults: defaults(), launchKild: nil)
         XCTAssertNil(cockpit.selection)
     }
 
     @MainActor
     func testAnExplicitLaunchKildAppliesWithNoSavedContext() {
-        let cockpit = KildStore(api: EmptyAPI(), defaults: defaults(), launchKild: "k-1")
+        let cockpit = KildStore(api: FakeKildAPI(), defaults: defaults(), launchKild: "k-1")
         XCTAssertEqual(cockpit.selection, "k-1")
     }
 
@@ -79,7 +79,7 @@ final class LaunchSelectionTests: XCTestCase {
     @MainActor
     func testALaunchKildThatIsArchivedFlipsToHistory() async {
         let cockpit = KildStore(
-            api: ArchiveOnlyAPI(archivedID: "gone"), defaults: defaults(), launchKild: "gone")
+            api: FakeKildAPI(archive: [archived("gone")]), defaults: defaults(), launchKild: "gone")
         XCTAssertEqual(cockpit.tab, .live, "before data arrives there is nothing to decide")
 
         await cockpit.loadArchive()
@@ -96,7 +96,7 @@ final class LaunchSelectionTests: XCTestCase {
     @MainActor
     func testIdentitiesArrivingFirstDoNotConsumeTheResolution() async {
         let cockpit = KildStore(
-            api: LiveAndArchivedAPI(liveID: "live-1", archivedID: "gone"),
+            api: FakeKildAPI(kilds: [live("live-1")], archive: [archived("gone")]),
             defaults: defaults(), launchKild: "gone")
 
         await cockpit.loadIdentities()  // live kilds arrive; archive still empty
@@ -117,7 +117,7 @@ final class LaunchSelectionTests: XCTestCase {
         withSavedContext(selecting: "gone", in: store)
 
         let cockpit = KildStore(
-            api: ArchiveOnlyAPI(archivedID: "gone"), defaults: store, launchKild: nil)
+            api: FakeKildAPI(archive: [archived("gone")]), defaults: store, launchKild: nil)
         await cockpit.loadArchive()
 
         XCTAssertEqual(
@@ -134,15 +134,15 @@ final class LaunchSelectionTests: XCTestCase {
     /// the life of that launch.
     @MainActor
     func testAFailedArchiveFetchDoesNotConsumeTheResolution() async {
-        let api = FlakyArchiveAPI(archivedID: "gone")
+        let api = FakeKildAPI(archive: [archived("gone")])
         let cockpit = KildStore(api: api, defaults: defaults(), launchKild: "gone")
 
-        api.failing = true
+        api.failing = [.archive]
         await cockpit.loadArchive()
         XCTAssertEqual(cockpit.tab, .live, "nothing was learned")
         XCTAssertNotNil(cockpit.cockpit.errors[.archive])
 
-        api.failing = false
+        api.failing = []
         await cockpit.loadArchive()
         XCTAssertEqual(
             cockpit.tab, .history,
@@ -151,99 +151,26 @@ final class LaunchSelectionTests: XCTestCase {
 
     @MainActor
     func testALaunchKildThatIsLiveStaysOnTheLiveTab() async {
-        let cockpit = KildStore(api: EmptyAPI(), defaults: defaults(), launchKild: "k-1")
+        let cockpit = KildStore(api: FakeKildAPI(), defaults: defaults(), launchKild: "k-1")
         await cockpit.loadArchive()
         XCTAssertEqual(cockpit.tab, .live)
     }
 
     // MARK: - Stubs
 
-    private struct EmptyAPI: KildAPI {
-        func health() async throws -> Health { Health(ok: true, bootId: "b") }
-        func kilds() async throws -> [Kild] { [] }
-        func kildsStatus() async throws -> [Kild] { [] }
-        func archive() async throws -> [ArchivedKild] { [] }
-        func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
-        func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
-        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func delete(_ kild: Kild.ID) async throws {}
-        func stop(_ kild: Kild.ID) async throws {}
-        func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
-        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
-            AgentTranscript(entries: [], total: 0)
-        }
-        func personas() async throws -> [String] { [] }
-    }
 
-    private struct ArchiveOnlyAPI: KildAPI {
-        let archivedID: String
-        func health() async throws -> Health { Health(ok: true, bootId: "b") }
-        func kilds() async throws -> [Kild] { [] }
-        func kildsStatus() async throws -> [Kild] { [] }
-        func archive() async throws -> [ArchivedKild] {
-            [ArchivedKild(id: archivedID, name: archivedID, agents: [], cwd: "/repo")]
-        }
-        func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
-        func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
-        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func delete(_ kild: Kild.ID) async throws {}
-        func stop(_ kild: Kild.ID) async throws {}
-        func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
-        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
-            AgentTranscript(entries: [], total: 0)
-        }
-        func personas() async throws -> [String] { [] }
-    }
 
     /// An archive fetch that can be made to fail, then recover.
-    private final class FlakyArchiveAPI: KildAPI, @unchecked Sendable {
-        let archivedID: String
-        var failing = false
-        init(archivedID: String) { self.archivedID = archivedID }
-        func health() async throws -> Health { Health(ok: true, bootId: "b") }
-        func kilds() async throws -> [Kild] { [] }
-        func kildsStatus() async throws -> [Kild] { [] }
-        func archive() async throws -> [ArchivedKild] {
-            if failing { throw KildAPIError.engine("archive unavailable") }
-            return [ArchivedKild(id: archivedID, name: archivedID, agents: [], cwd: "/repo")]
-        }
-        func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
-        func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
-        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func delete(_ kild: Kild.ID) async throws {}
-        func stop(_ kild: Kild.ID) async throws {}
-        func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
-        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
-            AgentTranscript(entries: [], total: 0)
-        }
-        func personas() async throws -> [String] { [] }
-    }
 
     /// Live kilds AND an archive — the shape that exposed the premature-resolution bug.
-    private struct LiveAndArchivedAPI: KildAPI {
-        let liveID: String
-        let archivedID: String
-        func health() async throws -> Health { Health(ok: true, bootId: "b") }
-        func kilds() async throws -> [Kild] {
-            [Kild(id: liveID, name: liveID, cwd: "/repo", agents: [])]
-        }
-        func kildsStatus() async throws -> [Kild] { [] }
-        func archive() async throws -> [ArchivedKild] {
-            [ArchivedKild(id: archivedID, name: archivedID, agents: [], cwd: "/repo")]
-        }
-        func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
-        func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
-        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func delete(_ kild: Kild.ID) async throws {}
-        func stop(_ kild: Kild.ID) async throws {}
-        func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
-        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
-            AgentTranscript(entries: [], total: 0)
-        }
-        func personas() async throws -> [String] { [] }
+
+    // MARK: - Fixtures
+
+    private func archived(_ id: String) -> ArchivedKild {
+        ArchivedKild(id: id, name: id, agents: [], cwd: "/repo")
+    }
+
+    private func live(_ id: String) -> Kild {
+        Kild(id: id, name: id, cwd: "/repo", agents: [])
     }
 }

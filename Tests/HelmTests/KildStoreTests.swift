@@ -14,12 +14,12 @@ import XCTest
 final class KildStoreTests: XCTestCase {
     private var defaults: UserDefaults!
     private var suiteName: String!
-    private var api: StubKildAPI!
+    private var api: FakeKildAPI!
 
     override func setUpWithError() throws {
         suiteName = "helm-kildstore-tests-\(UUID().uuidString)"
         defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        api = StubKildAPI()
+        api = FakeKildAPI()
     }
 
     override func tearDownWithError() throws {

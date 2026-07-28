@@ -68,7 +68,15 @@ protocol KildAPI: Sendable {
     /// contact with how agents actually run: on the machine that measured this, 27 of 27
     /// agent worktrees were dirty from provisioning litter written before any agent started.
     /// A guard that refused dirty trees would have refused all of them.
-    func delete(_ kild: Kild.ID) async throws
+    ///
+    /// Returns what was removed and what went with it. **A refusal throws** — it is not a
+    /// failure but the guard working, and the thrown error carries the engine's reason.
+    ///
+    /// `force` overrides the unlanded-commit refusal and nothing else. It never risks
+    /// commits: the `kild/<worktree>` branch survives every path, so forcing discards the
+    /// working tree, not the work. Requiring it explicitly is what keeps the default safe.
+    @discardableResult
+    func delete(_ kild: Kild.ID, force: Bool) async throws -> DisposalReport
 
     /// `POST /api/kilds/:id/stop` — halt every agent. The tree survives.
     func stop(_ kild: Kild.ID) async throws

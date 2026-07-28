@@ -79,8 +79,14 @@ struct KildHTTPClient: KildAPI {
             answerKey: "wouldMerge")
     }
 
-    func delete(_ kild: Kild.ID) async throws {
-        try await send("DELETE", path("api", "kilds", kild))
+    @discardableResult
+    func delete(_ kild: Kild.ID, force: Bool = false) async throws -> DisposalReport {
+        // `force` is sent only when true. The engine validates the value strictly — it 400s
+        // on anything but "true"/"false" — so an always-present parameter would be one more
+        // thing to get wrong for no gain.
+        try await send(
+            "DELETE", path("api", "kilds", kild),
+            query: force ? [URLQueryItem(name: "force", value: "true")] : [])
     }
 
     func stop(_ kild: Kild.ID) async throws {
@@ -196,12 +202,12 @@ struct KildHTTPClient: KildAPI {
     }
 
     private func send<T: Decodable>(
-        _ method: String, _ path: String, body: [String: Any]? = nil,
-        accepting: Set<Int> = [], answerKey: String? = nil
+        _ method: String, _ path: String, query: [URLQueryItem] = [],
+        body: [String: Any]? = nil, accepting: Set<Int> = [], answerKey: String? = nil
     ) async throws -> T {
         try decode(
             try await perform(
-                try request(method, path, body: body), accepting: accepting,
+                try request(method, path, query: query, body: body), accepting: accepting,
                 answerKey: answerKey))
     }
 

@@ -44,7 +44,7 @@ final class ObservabilityTests: XCTestCase {
     /// The exact regression: kilds arriving must notify the store.
     @MainActor
     func testKildsArrivingNotifiesTheStore() async {
-        let store = KildStore(api: OneKildAPI(), defaults: scratch(), launchKild: nil)
+        let store = KildStore(api: FakeKildAPI(kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]), defaults: scratch(), launchKild: nil)
         let count = await notifications(from: store) { await store.loadIdentities() }
 
         XCTAssertGreaterThan(
@@ -56,7 +56,7 @@ final class ObservabilityTests: XCTestCase {
     /// The costly half too — git and cost land on `Cockpit`, not on the store.
     @MainActor
     func testStatusArrivingNotifiesTheStore() async {
-        let store = KildStore(api: OneKildAPI(), defaults: scratch(), launchKild: nil)
+        let store = KildStore(api: FakeKildAPI(kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]), defaults: scratch(), launchKild: nil)
         await store.loadIdentities()
         let count = await notifications(from: store) { await store.loadStatus() }
         XCTAssertGreaterThan(count, 0)
@@ -64,7 +64,7 @@ final class ObservabilityTests: XCTestCase {
 
     @MainActor
     func testArchiveArrivingNotifiesTheStore() async {
-        let store = KildStore(api: OneKildAPI(), defaults: scratch(), launchKild: nil)
+        let store = KildStore(api: FakeKildAPI(kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]), defaults: scratch(), launchKild: nil)
         let count = await notifications(from: store) { await store.loadArchive() }
         XCTAssertGreaterThan(count, 0)
     }
@@ -74,7 +74,7 @@ final class ObservabilityTests: XCTestCase {
     /// indication anything is wrong, which is the failure `errors` exists to prevent.
     @MainActor
     func testAFailingPollAlsoNotifies() async {
-        let store = KildStore(api: BrokenAPI(), defaults: scratch(), launchKild: nil)
+        let store = KildStore(api: allBroken(), defaults: scratch(), launchKild: nil)
         let count = await notifications(from: store) { await store.loadIdentities() }
 
         XCTAssertGreaterThan(count, 0, "the error must be able to reach the screen too")
@@ -90,7 +90,7 @@ final class ObservabilityTests: XCTestCase {
     /// asserting that the store fails to recover.
     @MainActor
     func testABootChangeNotifiesAndDiscardsStateFromTheDeadEngine() async {
-        let api = ReBootingAPI()
+        let api = FakeKildAPI(kilds: [oneKild()], archive: [oneArchived()])
         let store = KildStore(api: api, defaults: scratch(), launchKild: nil)
         await store.loadIdentities()
         await store.loadArchive()
@@ -115,7 +115,7 @@ final class ObservabilityTests: XCTestCase {
     func testTheStoreDeallocatesDespiteHoldingItsOwnSubscription() async {
         weak var weakStore: KildStore?
         do {
-            let store = KildStore(api: OneKildAPI(), defaults: scratch(), launchKild: nil)
+            let store = KildStore(api: FakeKildAPI(kilds: [oneKild()], status: [oneKild(ahead: 2)], archive: [oneArchived()]), defaults: scratch(), launchKild: nil)
             await store.loadIdentities()
             weakStore = store
             XCTAssertNotNil(weakStore)
@@ -132,68 +132,22 @@ final class ObservabilityTests: XCTestCase {
         return defaults
     }
 
-    private struct OneKildAPI: KildAPI {
-        func health() async throws -> Health { Health(ok: true, bootId: "boot-1") }
-        func kilds() async throws -> [Kild] {
-            [Kild(id: "k", name: "k", cwd: "/repo", agents: [])]
-        }
-        func kildsStatus() async throws -> [Kild] {
-            [Kild(id: "k", name: "k", cwd: "/repo", agents: [], git: GitFixture.measured(ahead: 2))]
-        }
-        func archive() async throws -> [ArchivedKild] {
-            [ArchivedKild(id: "a", name: "a", agents: [], cwd: "/repo")]
-        }
-        func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
-        func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
-        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func delete(_ kild: Kild.ID) async throws {}
-        func stop(_ kild: Kild.ID) async throws {}
-        func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
-        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
-            AgentTranscript(entries: [], total: 0)
-        }
-        func personas() async throws -> [String] { [] }
+    // MARK: - Fixtures
+
+    private func oneKild(ahead: Int? = nil) -> Kild {
+        Kild(
+            id: "k", name: "k", cwd: "/repo", agents: [],
+            git: ahead.map { GitFixture.measured(ahead: $0) })
     }
 
-    private struct BrokenAPI: KildAPI {
-        func health() async throws -> Health { throw KildAPIError.engine("down") }
-        func kilds() async throws -> [Kild] { throw KildAPIError.engine("down") }
-        func kildsStatus() async throws -> [Kild] { throw KildAPIError.engine("down") }
-        func archive() async throws -> [ArchivedKild] { throw KildAPIError.engine("down") }
-        func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
-        func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
-        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func delete(_ kild: Kild.ID) async throws {}
-        func stop(_ kild: Kild.ID) async throws {}
-        func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
-        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
-            AgentTranscript(entries: [], total: 0)
-        }
-        func personas() async throws -> [String] { [] }
+    private func oneArchived() -> ArchivedKild {
+        ArchivedKild(id: "a", name: "a", agents: [], cwd: "/repo")
     }
 
-    private final class ReBootingAPI: KildAPI, @unchecked Sendable {
-        var bootId = "boot-1"
-        func health() async throws -> Health { Health(ok: true, bootId: bootId) }
-        func kilds() async throws -> [Kild] {
-            [Kild(id: "k", name: "k", cwd: "/repo", agents: [])]
-        }
-        func kildsStatus() async throws -> [Kild] { [] }
-        func archive() async throws -> [ArchivedKild] {
-            [ArchivedKild(id: "a", name: "a", agents: [], cwd: "/repo")]
-        }
-        func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
-        func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
-        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func delete(_ kild: Kild.ID) async throws {}
-        func stop(_ kild: Kild.ID) async throws {}
-        func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
-        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
-            AgentTranscript(entries: [], total: 0)
-        }
-        func personas() async throws -> [String] { [] }
+    /// Every route down — the shape that proves an error still reaches the screen.
+    private func allBroken() -> FakeKildAPI {
+        let api = FakeKildAPI()
+        api.failing = [.identities, .status, .archive, .health]
+        return api
     }
 }

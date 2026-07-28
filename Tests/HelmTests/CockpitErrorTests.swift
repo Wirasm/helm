@@ -12,47 +12,12 @@ import XCTest
 final class CockpitErrorTests: XCTestCase {
 
     /// Fails whichever calls you name, succeeds at the rest.
-    private struct PartiallyBrokenAPI: KildAPI {
-        var failing: Set<Cockpit.Poll>
-
-        private func check(_ poll: Cockpit.Poll) throws {
-            if failing.contains(poll) { throw KildAPIError.engine("\(poll) is down") }
-        }
-
-        func health() async throws -> Health {
-            try check(.health)
-            return Health(ok: true, bootId: "boot-1")
-        }
-        func kilds() async throws -> [Kild] {
-            try check(.identities)
-            return [Kild(id: "k", name: "k", cwd: "/repo", agents: [])]
-        }
-        func kildsStatus() async throws -> [Kild] {
-            try check(.status)
-            return [Kild(id: "k", name: "k", cwd: "/repo", agents: [], git: GitFixture.measured(ahead: 3))]
-        }
-        func archive() async throws -> [ArchivedKild] {
-            try check(.archive)
-            return []
-        }
-        func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
-        func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
-        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
-        func delete(_ kild: Kild.ID) async throws {}
-        func stop(_ kild: Kild.ID) async throws {}
-        func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
-        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
-            AgentTranscript(entries: [], total: 0)
-        }
-        func personas() async throws -> [String] { [] }
-    }
 
     /// The exact regression: status fails, identities succeeds, and the status failure must
     /// survive. Previously the second call wiped it.
     @MainActor
     func testASuccessfulCheapPollDoesNotEraseAFailingCostlyOne() async {
-        let cockpit = Cockpit(api: PartiallyBrokenAPI(failing: [.status]))
+        let cockpit = Cockpit(api: broken([.status]))
 
         await cockpit.refreshStatus()
         XCTAssertNotNil(cockpit.errors[.status])
@@ -67,7 +32,7 @@ final class CockpitErrorTests: XCTestCase {
     /// The blank column the erased error was hiding.
     @MainActor
     func testTheStaleGitColumnIsLabelledRatherThanSilentlyEmpty() async {
-        let cockpit = Cockpit(api: PartiallyBrokenAPI(failing: [.status]))
+        let cockpit = Cockpit(api: broken([.status]))
         await cockpit.refreshIdentities()
         await cockpit.refreshStatus()
 
@@ -77,24 +42,24 @@ final class CockpitErrorTests: XCTestCase {
 
     @MainActor
     func testEachPollClearsOnlyItsOwnError() async {
-        let cockpit = Cockpit(api: PartiallyBrokenAPI(failing: [.status, .archive]))
+        let cockpit = Cockpit(api: broken([.status, .archive]))
         await cockpit.refreshStatus()
         await cockpit.refreshArchive()
         XCTAssertEqual(cockpit.errors.count, 2)
 
-        let healthy = Cockpit(api: PartiallyBrokenAPI(failing: []))
+        let healthy = Cockpit(api: broken([]))
         await healthy.refreshStatus()
         XCTAssertTrue(healthy.errors.isEmpty)
     }
 
     @MainActor
     func testARecoveredPollClearsItsOwnError() async {
-        let cockpit = Cockpit(api: PartiallyBrokenAPI(failing: [.status]))
+        let cockpit = Cockpit(api: broken([.status]))
         await cockpit.refreshStatus()
         XCTAssertNotNil(cockpit.errors[.status])
 
         // Same cockpit, engine recovers.
-        let recovered = Cockpit(api: PartiallyBrokenAPI(failing: []))
+        let recovered = Cockpit(api: broken([]))
         await recovered.refreshStatus()
         XCTAssertNil(recovered.errors[.status])
     }
@@ -103,18 +68,28 @@ final class CockpitErrorTests: XCTestCase {
     /// one thing wrong.
     @MainActor
     func testLastErrorSurfacesSomethingWhenAnyPollIsFailing() async {
-        let cockpit = Cockpit(api: PartiallyBrokenAPI(failing: [.archive]))
+        let cockpit = Cockpit(api: broken([.archive]))
         await cockpit.refreshArchive()
         XCTAssertNotNil(cockpit.lastError)
     }
 
     @MainActor
     func testLastErrorIsNilWhenEverythingIsHealthy() async {
-        let cockpit = Cockpit(api: PartiallyBrokenAPI(failing: []))
+        let cockpit = Cockpit(api: broken([]))
         await cockpit.refreshIdentities()
         await cockpit.refreshStatus()
         await cockpit.refreshArchive()
         await cockpit.checkBoot()
         XCTAssertNil(cockpit.lastError)
+    }
+
+    // MARK: - Fixtures
+
+    private func broken(_ polls: Set<Cockpit.Poll>) -> FakeKildAPI {
+        let api = FakeKildAPI(
+            kilds: [Kild(id: "k", name: "k", cwd: "/repo", agents: [])],
+            status: [Kild(id: "k", name: "k", cwd: "/repo", agents: [], git: GitFixture.measured(ahead: 3))])
+        api.failing = polls
+        return api
     }
 }
