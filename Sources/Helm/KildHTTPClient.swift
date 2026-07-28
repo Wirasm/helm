@@ -168,11 +168,12 @@ struct KildHTTPClient: KildAPI {
         if (200..<300).contains(code) { return data }
 
         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if accepting.contains(code) {
-            // Only when the body proves it is the answer. Otherwise fall through and let
-            // the engine's own message survive.
-            if let answerKey, object?[answerKey] != nil { return data }
-            if answerKey == nil { return data }
+        // Accepted only when the body PROVES it is the answer. `answerKey` is required for
+        // that proof, so there is deliberately no "accept any body at this status" path: a
+        // status code alone cannot distinguish a full report from a bare refusal, which is
+        // exactly the confusion that ate the engine's message once already.
+        if accepting.contains(code), let answerKey, object?[answerKey] != nil {
+            return data
         }
         if let message = object?["error"] as? String {
             throw KildAPIError.engine(message)

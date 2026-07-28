@@ -55,6 +55,101 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(tools, ["send"])
     }
 
+    /// The regression for the id-collision fix, which shipped unguarded.
+    ///
+    /// `Line.turn`'s id used to be `"turn-\(role)-\(text.hashValue)"`. A tool-only turn
+    /// carries `text: ""`, so two consecutive ones hashed identically — and `ForEach` on
+    /// colliding ids silently drops rows, losing exactly the turns that did the most work.
+    /// Reverting to a content-derived id must fail here.
+    func testTwoToolOnlyTurnsGetDistinctIDs() {
+        let transcript = AgentTranscript(
+            entries: [
+                TranscriptEntry(role: "assistant", text: "", toolCalls: ["send"]),
+                TranscriptEntry(role: "assistant", text: "", toolCalls: ["send"]),
+            ], total: 2)
+        let lines = Conversation.lines(from: transcript)
+
+        XCTAssertEqual(lines.count, 2, "both turns must survive")
+        XCTAssertNotEqual(
+            lines[0].id, lines[1].id,
+            "identical role and text — a content-derived id collides and ForEach eats one")
+    }
+
+    /// Every id in a rendered transcript must be unique, not just adjacent pairs.
+    func testAllLineIDsAreUniqueAcrossARealisticTranscript() {
+        let transcript = AgentTranscript(
+            entries: [
+                TranscriptEntry(role: "user", text: "go"),
+                TranscriptEntry(role: "assistant", text: "", toolCalls: ["read"]),
+                TranscriptEntry(role: "tool", text: "ok"),
+                TranscriptEntry(role: "assistant", text: "", toolCalls: ["read"]),
+                TranscriptEntry(role: "tool", text: "ok"),
+            ], total: 5)
+        let ids = Conversation.lines(from: transcript).map(\.id)
+        XCTAssertEqual(Set(ids).count, ids.count, "\(ids)")
+    }
+
+    /// Routed-message ids come from `seq`, which is unique per kild by construction.
+    func testMessageIDsAreDistinct() {
+        let log = [
+            message(1, from: "a", to: ["b"], "same text"),
+            message(2, from: "a", to: ["b"], "same text"),
+        ]
+        let ids = Conversation.lines(for: "a", from: log).map(\.id)
+        XCTAssertEqual(Set(ids).count, 2, "identical text, different seq")
+    }
+
+    /// Identity must survive the sliding window the engine actually serves.
+    ///
+    /// `GET …/transcript` returns `entries.slice(-50)` with `total` as the FULL count. Once
+    /// a session passes the window, each poll drops entries off the front — so a
+    /// window-relative index gives every surviving line a new id on every tick, `ForEach`
+    /// treats the whole transcript as replaced, and scroll position dies. This is the same
+    /// failure the positional id fixed, reachable by a different route.
+    func testIDsAreStableAsTheWindowSlides() {
+        // Poll 1: entries 10..12 of a 13-entry session.
+        let first = AgentTranscript(
+            entries: [
+                TranscriptEntry(role: "user", text: "ten"),
+                TranscriptEntry(role: "assistant", text: "eleven"),
+                TranscriptEntry(role: "user", text: "twelve"),
+            ], total: 13)
+
+        // Poll 2: one new entry appended, so the window slid forward by one.
+        // "eleven" and "twelve" survive and MUST keep the ids they had.
+        let second = AgentTranscript(
+            entries: [
+                TranscriptEntry(role: "assistant", text: "eleven"),
+                TranscriptEntry(role: "user", text: "twelve"),
+                TranscriptEntry(role: "assistant", text: "thirteen"),
+            ], total: 14)
+
+        let before = Conversation.lines(from: first).map(\.id)
+        let after = Conversation.lines(from: second).map(\.id)
+
+        XCTAssertEqual(
+            Array(before.dropFirst()), Array(after.dropLast()),
+            "surviving turns kept their identity across the slide")
+    }
+
+    /// An unwindowed transcript still numbers from zero.
+    func testAnUnwindowedTranscriptStartsAtZero() {
+        let transcript = AgentTranscript(
+            entries: [TranscriptEntry(role: "user", text: "first")], total: 1)
+        XCTAssertEqual(Conversation.lines(from: transcript).first?.id, "turn-0")
+    }
+
+    /// A `total` smaller than the window (an engine that under-reports, or a shape we have
+    /// not seen) must not produce negative ids.
+    func testAnInconsistentTotalDoesNotProduceNegativeIndices() {
+        let transcript = AgentTranscript(
+            entries: [
+                TranscriptEntry(role: "user", text: "a"),
+                TranscriptEntry(role: "user", text: "b"),
+            ], total: 0)
+        XCTAssertEqual(Conversation.lines(from: transcript).map(\.id), ["turn-0", "turn-1"])
+    }
+
     func testATrulyEmptyTurnIsDropped() {
         let transcript = AgentTranscript(
             entries: [TranscriptEntry(role: "assistant", text: "", toolCalls: [])], total: 1)

@@ -39,6 +39,18 @@ enum LandFixture {
             sha: nil, error: reason, dryRun: true)
     }
 
+    /// Nothing to land AND git could not name the branch — a detached HEAD.
+    ///
+    /// `LandResult.branch` is `string | null` and its doc says "when git could say", so a
+    /// nil is real. It combines with an empty `commits` in exactly the case the gate has to
+    /// word carefully, and no fixture produced it until this one.
+    static func detachedHead() -> LandReport {
+        LandReport(
+            base: "development", branch: nil, commits: [], files: [], collides: [],
+            wouldMerge: false, merged: false, sha: nil,
+            error: "HEAD is detached", dryRun: true)
+    }
+
     /// Nothing to land — the shape the engine returns for a kild that ran on the base
     /// branch itself. Captured verbatim from a live engine.
     static func nothingToLand() -> LandReport {

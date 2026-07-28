@@ -60,7 +60,16 @@ struct RootView: View {
             }
         }
         .onReceive(cheapTick) { _ in Task { await store.loadIdentities() } }
-        .onReceive(costlyTick) { _ in Task { await store.loadStatus() } }
+        .onReceive(costlyTick) { _ in
+            Task {
+                await store.loadStatus()
+                // The archive rides the slow tick rather than being fetched once at launch.
+                // Two reasons: a kild stopped while the app is open should appear without a
+                // relaunch, and a launch-time fetch that failed gets another chance —
+                // otherwise one transient error left the archive permanently empty.
+                await store.loadArchive()
+            }
+        }
         .onChange(of: store.selection) { _, _ in persistCurrentContext() }
         .onChange(of: store.tab) { _, _ in persistCurrentContext() }
         .onChange(of: store.historyQuery) { _, _ in persistCurrentContext() }

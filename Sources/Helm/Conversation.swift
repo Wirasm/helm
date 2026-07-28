@@ -67,11 +67,26 @@ enum Conversation {
     /// reads only `text` would silently drop the most informative turns — the ones that did
     /// something. Empty turns with no tool calls are dropped; empty turns *with* tool calls
     /// are kept, because the tool call is the content.
+    ///
+    /// **The index is absolute, not window-relative, and that is load-bearing.** The
+    /// transcript route serves a sliding TAIL — `entries.slice(-50)` by default, with `total`
+    /// reporting the full count. Once a session passes the window, every poll drops entries
+    /// off the front, so a turn that was `entries[3]` becomes `entries[2]` moments later.
+    /// Keying identity on the window position would give every surviving line a new id on
+    /// every tick: `ForEach` sees the whole transcript removed and reinserted, reflows, and
+    /// throws away scroll position — the same failure the positional id was introduced to
+    /// fix, reintroduced by windowing instead of by hash collision.
+    ///
+    /// `total - entries.count` recovers where the window starts, so an entry keeps one id
+    /// for as long as it exists.
     static func lines(from transcript: AgentTranscript) -> [Line] {
-        transcript.entries.enumerated().compactMap { index, entry in
+        let windowStart = max(0, transcript.total - transcript.entries.count)
+        return transcript.entries.enumerated().compactMap { index, entry in
             let tools = entry.toolCalls ?? []
             guard !entry.text.isEmpty || !tools.isEmpty else { return nil }
-            return .turn(index: index, role: entry.role, text: entry.text, toolCalls: tools)
+            return .turn(
+                index: windowStart + index, role: entry.role, text: entry.text,
+                toolCalls: tools)
         }
     }
 

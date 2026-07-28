@@ -34,14 +34,20 @@ struct ObserveColumn: View {
                         isExpanded: expanded.contains(kild.id),
                         toggle: { toggle(kild.id) })
                     if expanded.contains(kild.id) {
-                        // Explicitly non-selectable. `Agent.id` is a bare String, the same
-                        // type as the selection binding, so an untagged agent row can end up
-                        // participating in selection — putting a HANDLE where a kild id
-                        // belongs. `selectedKild` then matches nothing, the dock silently
-                        // vanishes, and the row keeps a selection highlight explaining none
-                        // of it.
+                        // Explicitly non-selectable. `Agent.id` is a bare String — the same
+                        // type as the selection binding — so an untagged agent row can end
+                        // up participating in selection, putting a HANDLE where a kild id
+                        // belongs: `selectedKild` matches nothing and the dock vanishes
+                        // unexplained.
+                        //
+                        // `.selectionDisabled()` rather than a `.tag()`. Tagging a ForEach
+                        // stamps EVERY row with the same tag, so clicking an agent would set
+                        // `selection = nil` and silently drop the kild you had selected —
+                        // less wrong than the original, still a surprise nobody asked for.
+                        // The deployment floor is macOS 14, so the API that means what we
+                        // mean is available.
                         ForEach(kild.agents) { AgentRow(agent: $0) }
-                            .tag(Optional<Kild.ID>.none)
+                            .selectionDisabled()
                     }
                 }
             } header: {

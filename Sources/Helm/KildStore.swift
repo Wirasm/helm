@@ -256,6 +256,14 @@ final class KildStore: ObservableObject {
 
     func loadArchive() async {
         await cockpit.refreshArchive()
+        // Resolve ONLY on a successful fetch. `refreshArchive` swallows its own failure and
+        // leaves `archive` untouched, so a failed call is indistinguishable from an empty
+        // archive — and resolving against it would consume the one-shot flag while
+        // answering nothing. That is the third time this function has been wrong in the
+        // same way: first the readiness signal was the wrong list, then there was no
+        // failure signal at all. The flag must only be spent by a call that could actually
+        // answer the question.
+        guard cockpit.errors[.archive] == nil else { return }
         resolveLaunchSelection()
     }
 

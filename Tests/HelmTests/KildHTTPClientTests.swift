@@ -281,4 +281,49 @@ final class KildHTTPClientTests: XCTestCase {
         XCTAssertEqual(health.bootId, "abcd1234efgh")
         XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/health")
     }
+
+    // MARK: - Routes that had never been called through the real client
+
+    /// `transcript` and `personas` were stubbed at the PROTOCOL level for every
+    /// Cockpit-facing test, so the code in `KildHTTPClient` that builds their URLs had
+    /// never run. A segment-order typo or a route rename would have been invisible.
+    func testTranscriptBuildsTheKildScopedAgentRoute() async throws {
+        StubURLProtocol.respond(status: 200, json: #"{"entries":[],"total":0}"#)
+        _ = try await client.transcript(of: "reviewer", in: "k-1")
+        XCTAssertEqual(
+            StubURLProtocol.lastRequest?.url?.path,
+            "/api/kilds/k-1/agents/reviewer/transcript")
+    }
+
+    /// An attached agent has no pi session, and the engine refuses rather than returning an
+    /// empty transcript. That refusal must surface as the engine's words.
+    func testTranscriptSurfacesTheRefusalForAnAgentWithNoSession() async {
+        StubURLProtocol.respond(
+            status: 404, json: #"{"error":"agent @claude has no pi session file (yet)"}"#)
+        do {
+            _ = try await client.transcript(of: "claude", in: "k-1")
+            XCTFail("must throw")
+        } catch {
+            XCTAssertEqual(
+                error as? KildAPIError,
+                .engine("agent @claude has no pi session file (yet)"))
+        }
+    }
+
+    func testPersonasReadsItsOwnRoute() async throws {
+        StubURLProtocol.respond(status: 200, json: #"["general","reviewer"]"#)
+        let personas = try await client.personas()
+        XCTAssertEqual(StubURLProtocol.lastRequest?.url?.path, "/api/personas")
+        XCTAssertEqual(personas, ["general", "reviewer"])
+    }
+
+    /// A handle is arbitrary text an agent registered with, so it needs the same
+    /// single-segment encoding as a kild id.
+    func testATranscriptHandleIsEncodedAsOneSegment() async throws {
+        StubURLProtocol.respond(status: 200, json: #"{"entries":[],"total":0}"#)
+        _ = try await client.transcript(of: "odd/handle", in: "k-1")
+        XCTAssertEqual(
+            StubURLProtocol.lastRequest?.url?.absoluteString,
+            "http://127.0.0.1:4517/api/kilds/k-1/agents/odd%2Fhandle/transcript")
+    }
 }

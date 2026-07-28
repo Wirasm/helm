@@ -142,6 +142,18 @@ final class LandGateTests: XCTestCase {
 
     // MARK: - Wording
 
+    /// The fallback wording, which no fixture had ever rendered.
+    ///
+    /// `report.branch` is genuinely nullable — a detached HEAD produces it — and it is read
+    /// only on the `commits.isEmpty` path, so reaching it needs both conditions at once.
+    /// Every fixture hardcoded a branch, so this string had never been produced.
+    func testNothingToLandOnADetachedHeadStillReadsSensibly() {
+        let g = gate(LandFixture.detachedHead())
+        let position = g.checks.first { $0.id == "position" }
+        XCTAssertEqual(position?.text, "nothing to land — no commits on this branch")
+        XCTAssertEqual(position?.blocks, true)
+    }
+
     func testSingularAndPluralCommitsBothRead() {
         XCTAssertEqual(
             gate(LandFixture.landable(commits: 1)).checks.first { $0.id == "position" }?.text,

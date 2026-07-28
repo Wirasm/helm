@@ -153,7 +153,13 @@ private struct TranscriptBody: View {
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onChange(of: lines.count) {
+            // `initial: true` because `.id(agent.handle)` makes every tab switch a first
+            // appearance. The two-parameter form defaults to `initial: false` and fires only
+            // on a subsequent change — so switching to an already-loaded transcript had
+            // nothing to fire on and landed at the TOP, which is the wrong end of a
+            // conversation. Pinning identity per agent fixed the draft leak and broke this;
+            // both are wanted.
+            .onChange(of: lines.count, initial: true) { _, _ in
                 if let last = lines.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }

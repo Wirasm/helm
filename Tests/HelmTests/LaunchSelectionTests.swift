@@ -125,6 +125,30 @@ final class LaunchSelectionTests: XCTestCase {
             "restoring a selection is not a request to change tabs")
     }
 
+    /// A FAILED archive fetch must not consume the resolution.
+    ///
+    /// `refreshArchive()` swallows its own error and leaves `archive` untouched, so a failed
+    /// call is indistinguishable from an empty archive. Resolving against it spent the
+    /// one-shot flag while answering nothing — and the archive is fetched once per tick, so
+    /// a single transient failure at launch meant `--kild <archived-id>` never flipped, for
+    /// the life of that launch.
+    @MainActor
+    func testAFailedArchiveFetchDoesNotConsumeTheResolution() async {
+        let api = FlakyArchiveAPI(archivedID: "gone")
+        let cockpit = KildStore(api: api, defaults: defaults(), launchKild: "gone")
+
+        api.failing = true
+        await cockpit.loadArchive()
+        XCTAssertEqual(cockpit.tab, .live, "nothing was learned")
+        XCTAssertNotNil(cockpit.cockpit.errors[.archive])
+
+        api.failing = false
+        await cockpit.loadArchive()
+        XCTAssertEqual(
+            cockpit.tab, .history,
+            "the retry must still be able to answer — the flag was not spent by the failure")
+    }
+
     @MainActor
     func testALaunchKildThatIsLiveStaysOnTheLiveTab() async {
         let cockpit = KildStore(api: EmptyAPI(), defaults: defaults(), launchKild: "k-1")
@@ -159,6 +183,31 @@ final class LaunchSelectionTests: XCTestCase {
         func kildsStatus() async throws -> [Kild] { [] }
         func archive() async throws -> [ArchivedKild] {
             [ArchivedKild(id: archivedID, name: archivedID, agents: [], cwd: "/repo")]
+        }
+        func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
+        func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
+        func landDryRun(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
+        func land(_ kild: Kild.ID) async throws -> LandReport { LandFixture.landable() }
+        func delete(_ kild: Kild.ID) async throws {}
+        func stop(_ kild: Kild.ID) async throws {}
+        func stopAgent(_ handle: String, in kild: Kild.ID) async throws {}
+        func transcript(of handle: String, in kild: Kild.ID) async throws -> AgentTranscript {
+            AgentTranscript(entries: [], total: 0)
+        }
+        func personas() async throws -> [String] { [] }
+    }
+
+    /// An archive fetch that can be made to fail, then recover.
+    private final class FlakyArchiveAPI: KildAPI, @unchecked Sendable {
+        let archivedID: String
+        var failing = false
+        init(archivedID: String) { self.archivedID = archivedID }
+        func health() async throws -> Health { Health(ok: true, bootId: "b") }
+        func kilds() async throws -> [Kild] { [] }
+        func kildsStatus() async throws -> [Kild] { [] }
+        func archive() async throws -> [ArchivedKild] {
+            if failing { throw KildAPIError.engine("archive unavailable") }
+            return [ArchivedKild(id: archivedID, name: archivedID, agents: [], cwd: "/repo")]
         }
         func messages(in kild: Kild.ID, since seq: Int?) async throws -> [Message] { [] }
         func send(to recipients: [String], text: String, in kild: Kild.ID) async throws {}
