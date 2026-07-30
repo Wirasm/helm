@@ -18,9 +18,8 @@ final class WorkspaceContextTests: XCTestCase {
     func testSaveRestoreRoundTrip() {
         let id = UUID()
         let context = WorkspaceContext(
-            terminalSessionIDs: [id], selectedTerminalID: id, selectedKildID: "room",
-            kildsTab: .history, historyQuery: "reviewer", openArtifactPath: "/tmp/a.md",
-            expandedKilds: ["room"], composerDrafts: ["room": "draft"], branch: "main")
+            terminalSessionIDs: [id], selectedTerminalID: id, openArtifactPath: "/tmp/a.md",
+            branch: "main", branchResolved: true)
         WorkspaceContextStore.save(["/workspace": context], to: defaults)
 
         let restored = WorkspaceContextStore.load(from: defaults, validSessionIDs: [id])[
@@ -31,15 +30,16 @@ final class WorkspaceContextTests: XCTestCase {
     func testContextsAreIsolatedByWorkspacePath() {
         WorkspaceContextStore.save(
             [
-                "/one": WorkspaceContext(selectedKildID: "one"),
-                "/two": WorkspaceContext(selectedKildID: "two"),
+                "/one": WorkspaceContext(openArtifactPath: "/one.md"),
+                "/two": WorkspaceContext(openArtifactPath: "/two.md"),
             ], to: defaults)
 
         let restored = WorkspaceContextStore.load(from: defaults)
         XCTAssertEqual(
-            restored["/one"]?.selectedKildID, "one", "one workspace must retain its own context")
+            restored["/one"]?.openArtifactPath, "/one.md",
+            "one workspace must retain its own context")
         XCTAssertEqual(
-            restored["/two"]?.selectedKildID, "two",
+            restored["/two"]?.openArtifactPath, "/two.md",
             "a second workspace must not overwrite the first")
     }
 
