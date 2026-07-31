@@ -1,10 +1,16 @@
 # AGENTS.md — helm
 
-helm is the native macOS cockpit for the sild stack: SwiftUI + GhosttyKit. One surface —
-sidebar (observe/steer rooms), terminal center, shared right dock (room detail or
-artifact). The kild engine's REST/WS API (`localhost:4517`) is the ONLY backend;
-artifacts are plain files under `~/.prp/<key>/`. helm knows prp and kild; they never
-know helm.
+helm is the native macOS surface the operator works in: SwiftUI + GhosttyKit. A terminal
+as the permanent centre, workspaces above it, a right dock for an open artifact.
+**There is no backend** — the kild layer was removed; artifacts are plain files read from
+the filesystem.
+
+**"Agent" always means a CLI agent already in use — Claude Code, pi, codex.** helm hosts
+one in a terminal it owns and renders what it writes. helm never builds, hosts or defines
+an agent of its own, and nothing here should grow one.
+
+Where this is going: `docs/direction.md`. It is an entry point, not a spec — nothing in it
+is decided.
 
 ## How to work here
 
@@ -20,7 +26,7 @@ know helm.
   message. A total that went up while a file's coverage went down is not a pass.
 - Build, test and run freely. The one restriction: **never restart a running helm without
   warning the operator first** — a live window may be hosting their session.
-- Visual verification: `make app`, then `open Helm.app --args --kild <id> / --artifact <path>`.
+- Visual verification: `make app`, then `open Helm.app --args --artifact <path>`.
   `swift tools/winshot.swift helm out.png` captures it — but **capture needs a Screen Recording
   grant the agent contexts do not have and cannot give themselves**, so an unattended run
   cannot see the UI. Ask the operator; do not report a surface as verified without it.

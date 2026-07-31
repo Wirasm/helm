@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Block-level markdown for room posts. Agent reports ARE markdown — headings,
+/// Block-level markdown. Agent output IS markdown — headings,
 /// lists, fences — but `AttributedString(markdown:)` alone either flattens blocks
 /// (full parse joins everything into one paragraph-soup string) or keeps the raw
 /// `##`/``` markers (inline-only parse). So: split the text into blocks ourselves,

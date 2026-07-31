@@ -1,25 +1,24 @@
 # helm
 
-The native macOS cockpit for the sild stack: a libghostty terminal as the permanent
-center (your operator — pi/claude/codex — runs here), the observe/steer sidebar of
-rooms on the left, and a shared right dock for the selected room's detail or an open
-artifact. The kild engine's REST/WS API is the ONLY backend contract; artifacts are
-read from the filesystem (`~/.prp/<key>/`). helm knows both prp and kild — they
-never know helm or each other.
+The native macOS surface you work in: a libghostty terminal as the permanent centre —
+your CLI agent (pi, Claude Code, codex) runs here — with workspaces above it and a right
+dock for an open artifact. Markdown and HTML are rendered from the filesystem; there is
+no backend.
 
-Status: **libghostty spike** — see `docs/SPIKE.md`.
+"Agent" always means a CLI agent you already run. helm hosts it in a terminal it owns and
+renders what it writes. It does not build or host an agent of its own.
+
+Status: **rebuilding.** The kild layer was removed — see `docs/direction.md` for where
+this is going, and `docs/SPIKE.md` for the terminal lifecycle contract that everything
+else rests on.
 
 ## Running
 
 - `swift run helm` (or `make run`) — fast SPM iteration loop; no bundle, no signing.
 - `make app` — the real Helm.app bundle via XcodeGen (`project.yml` → Helm.xcodeproj
   → xcodebuild; needs `xcodegen`). The target echoes the built .app path.
-- `make build` / `make test` / `make clean` — SPM build, tests, and cleanup.
+- `make build` / `make test` / `make lint` / `make clean`.
 
-Both paths build the same sources against the same pinned libghostty-spm (exact
-1.3.1 in `Package.swift` AND `project.yml` — keep them in lockstep). The sidebar
-needs the kild engine on localhost:4517; the terminal pane is a real GhosttyKit
-surface via libghostty-spm — no toolchain needed, SPM fetches the prebuilt
-xcframework.
-
-Seed plan: `docs/ui-plan.md` (inherited from the kild cockpit era; the three 2026-07-24 addenda are the current direction).
+Both paths build the same sources against the same pinned libghostty-spm (exact 1.3.1 in
+`Package.swift` AND `project.yml` — keep them in lockstep). The terminal is a real
+GhosttyKit surface; no toolchain needed, SPM fetches the prebuilt xcframework.

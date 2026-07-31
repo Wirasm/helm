@@ -146,9 +146,9 @@ enum ArtifactStoreDiscovery {
 /// artifact button; ⌘O opens this. The listing refreshes on every open.
 struct ArtifactBrowser: View {
     @ObservedObject var model: ArtifactPaneModel
-    /// The open workspace's repo root (`KildStore.selectedWorkspaceRoot`), which
-    /// preselects ITS store instead of whatever was picked last. A plain value, not
-    /// the whole KildStore — the browser stays a pure view over the filesystem.
+    /// The open workspace's repo root (`WorkspaceModel.selectedWorkspaceRoot`), which
+    /// preselects ITS store instead of whatever was picked last. A plain value, not the
+    /// whole model — the browser stays a pure view over the filesystem.
     var workspaceRoot: String?
     let onDismiss: () -> Void
     /// Overridable so previews/tests could point elsewhere; production uses ~/.prp.
