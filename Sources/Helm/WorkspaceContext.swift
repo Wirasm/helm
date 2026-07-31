@@ -3,27 +3,20 @@ import Foundation
 /// UI state that belongs to one open workspace. Live terminal resources remain
 /// owned by TerminalManager; UUIDs here only restore the in-process tab choice.
 ///
-/// **The room-era keys were renamed, and that discards saved state deliberately.**
-/// `selectedRoomID`, `roomsTab` and the room-keyed `composerDrafts` are persisted under
-/// `helmWorkspaceContexts`, so renaming them means a previously-saved context no longer
-/// decodes into the new shape and is dropped.
+/// **Removing the kild fields discards saved state, deliberately.** The kild selection,
+/// tab, search query, fold state and per-agent drafts persisted under
+/// `helmWorkspaceContexts`, so dropping them means a previously-saved context no longer
+/// decodes and is thrown away.
 ///
-/// That is the intended outcome rather than an oversight. The alternative is a migration
-/// that reads the old keys and maps them forward — but a room id is not a kild id, the
-/// archives moved, and every mapped selection would point at something that no longer
-/// exists. A shim would preserve the *shape* of the state while making its *contents*
-/// wrong, which is worse than starting clean: the operator loses tab selections and
-/// drafts once, visibly, instead of finding stale selections that silently resolve to
-/// nothing.
+/// That is the intended outcome. The alternative is a decoder that tolerates the old keys
+/// and ignores them — which keeps the file readable while making a promise the app can no
+/// longer keep, since nothing here can act on a kild id any more. Losing terminal tab
+/// selections once, visibly, beats carrying a shape whose contents refer to a subsystem
+/// that no longer exists.
 struct WorkspaceContext: Codable, Equatable {
     var terminalSessionIDs: [UUID] = []
     var selectedTerminalID: UUID?
-    var selectedKildID: String?
-    var kildsTab: KildsTab = .live
-    var historyQuery = ""
     var openArtifactPath: String?
-    var expandedKilds: Set<String> = []
-    var composerDrafts: [String: String] = [:]
     /// Resolved off the render path on open/switch. It is harmless to persist:
     /// git will refresh it when the workspace becomes active again.
     var branch: String?
@@ -35,14 +28,6 @@ struct WorkspaceContext: Codable, Equatable {
             self.selectedTerminalID = nil
         }
     }
-}
-
-/// Which half of the sidebar is showing.
-enum KildsTab: String, Codable, Equatable {
-    /// Kilds the engine currently holds, including orphaned worktrees.
-    case live
-    /// Stopped kilds, from `GET /api/kilds/archive`.
-    case history
 }
 
 enum WorkspaceContextStore {

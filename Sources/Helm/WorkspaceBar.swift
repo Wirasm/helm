@@ -1,72 +1,31 @@
 import AppKit
 import SwiftUI
 
-/// The window-level workspace switcher, and the one place attention is countable.
+/// The window-level workspace switcher.
 ///
-/// The workspace tabs stay deliberately quiet. What is loud is the waiting count, and it
-/// lives here for a specific reason: `docs/escalation.md` requires that helm answer *"how
-/// many agents are blocked on me right now?"* **at a glance**, and states that a list is not
-/// enough. Dots on sidebar rows are a list — they tell you where attention is once you are
-/// already looking at the sidebar, which is the failure mode that doc names. The bar is
-/// visible regardless of which kild is selected, or whether the sidebar is in view at all.
+/// Deliberately quiet. It names the open folders, marks which one is active, and shows each
+/// one's git branch when there is one — nothing that needs watching. Anything that wants
+/// attention belongs somewhere it can be acted on, not in a strip above everything else.
 struct WorkspaceBar: View {
-    @ObservedObject var store: KildStore
+    @ObservedObject var model: WorkspaceModel
     let select: (Workspace) -> Void
     let open: (Workspace) -> Void
     let close: (Workspace) -> Void
-    /// Scroll the observe column to the first waiting agent and open its fold.
-    ///
-    /// The count is the entry point and the list is the follow-through — the order the doc
-    /// asks for. Without this the badge tells you a number and leaves you to hunt.
-    var revealWaiting: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(Array(store.workspaces.enumerated()), id: \.element.id) {
+                    ForEach(Array(model.workspaces.enumerated()), id: \.element.id) {
                         index, workspace in
-                        Button {
-                            select(workspace)
-                        } label: {
-                            HStack(spacing: 5) {
-                                Text("⌃\(index + 1)").foregroundStyle(.secondary)
-                                Text(workspace.name).fontWeight(
-                                    store.selectedWorkspace == workspace ? .semibold : .regular)
-                                if let branch = store.contexts[workspace.path]?.branch {
-                                    Text(branch).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                            }
-                            .font(.system(size: 11.5))
-                            .padding(.horizontal, 9).padding(.vertical, 5)
-                            .background(
-                                store.selectedWorkspace == workspace
-                                    ? Color.accentColor.opacity(0.16) : .clear,
-                                in: RoundedRectangle(cornerRadius: 5))
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("Close Workspace") { close(workspace) }
-                            Button("Copy Path") { Pasteboard.copy(workspace.path) }
-                        }
-                        .task(id: workspace.path) { await resolveBranch(for: workspace) }
+                        tab(index: index, workspace: workspace)
                     }
                 }
             }
             Button(action: openWorkspace) { Image(systemName: "plus") }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
                 .help("Open workspace (⌘⇧O)")
-
             Spacer(minLength: 8)
-
-            // Scoped to the open workspace rather than every kild on the machine: the count
-            // has to mean "waiting on you, here", or switching workspaces would leave a
-            // number on screen that refers to somewhere you are not looking.
-            WaitingBadge(count: store.waitingCount, reveal: revealWaiting)
-
-            Text(summary)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
         .background(.bar)
@@ -75,26 +34,33 @@ struct WorkspaceBar: View {
         }
     }
 
-    /// Kild count and spend for the open workspace.
-    ///
-    /// **Both halves read the same scoped list.** Counting from `shownGroups` while summing
-    /// cost from `cockpit.kilds` would put a workspace-scoped number beside a machine-wide
-    /// one in the same sentence — "2 kilds · $47.10", where the money is from every project
-    /// you have ever run. Two facts of different scope reading as one is the kind of wrong
-    /// nobody questions, because the sentence is grammatical.
-    ///
-    /// Orphans are excluded from the count deliberately: they have no agents and no spend,
-    /// and they have their own group in the column. "4 kilds" meaning four things you are
-    /// working in is more useful than "120 kilds" meaning four plus the abandoned.
-    ///
-    /// Cost is omitted rather than shown as `$0.00` when the costly half has not arrived.
-    /// A zero would be a claim helm cannot support — "nothing spent" and "not measured" are
-    /// different facts, and on a number that only goes up the difference is the whole signal.
-    private var summary: String {
-        let live = store.shownGroups[.live] ?? []
-        let spend = live.compactMap(\.totals?.cost).reduce(0, +)
-        let label = "\(live.count) kild\(live.count == 1 ? "" : "s")"
-        return spend > 0 ? "\(label) · $\(String(format: "%.2f", spend))" : label
+    /// Hoisted out of `body` because the type-checker gave up on the nested conditionals
+    /// when this was inline — a real constraint, not a style preference.
+    @ViewBuilder
+    private func tab(index: Int, workspace: Workspace) -> some View {
+        let isSelected = model.selectedWorkspace == workspace
+        Button {
+            select(workspace)
+        } label: {
+            HStack(spacing: 5) {
+                Text("⌃\(index + 1)").foregroundStyle(.secondary)
+                Text(workspace.name).fontWeight(isSelected ? .semibold : .regular)
+                if let branch = model.contexts[workspace.path]?.branch {
+                    Text(branch).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            .font(.system(size: 11.5))
+            .padding(.horizontal, 9).padding(.vertical, 5)
+            .background(
+                isSelected ? Color.accentColor.opacity(0.16) : .clear,
+                in: RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Close Workspace") { close(workspace) }
+            Button("Copy Path") { Pasteboard.copy(workspace.path) }
+        }
+        .task(id: workspace.path) { await resolveBranch(for: workspace) }
     }
 
     private func openWorkspace() {
@@ -108,8 +74,11 @@ struct WorkspaceBar: View {
         open(Workspace(url: url))
     }
 
+    /// Asked once per workspace and cached, resolved off the render path. `branchResolved`
+    /// is set whether or not a branch came back, so a folder that is not a repository is
+    /// asked once rather than on every appearance.
     private func resolveBranch(for workspace: Workspace) async {
-        guard store.contexts[workspace.path]?.branchResolved != true else { return }
+        guard model.contexts[workspace.path]?.branchResolved != true else { return }
         let branch = await Task.detached { () -> String? in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -126,6 +95,6 @@ struct WorkspaceBar: View {
                 in: .whitespacesAndNewlines)
             return value.isEmpty ? nil : value
         }.value
-        store.cacheBranch(branch, for: workspace)
+        model.cacheBranch(branch, for: workspace)
     }
 }

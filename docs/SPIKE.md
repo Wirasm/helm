@@ -8,7 +8,7 @@ before helm gets a GitHub repo or any more features.
 **Exit criteria — ALL VERIFIED by the human, 2026-07-24**
 1. ✅ `TerminalPane` renders a GhosttyKit surface running `$SHELL`; typing works; TUIs
    render correctly.
-2. ✅ ⌘T to the kild view and back: session intact. (Fix required: ghostty's view
+2. ✅ ⌘T to another view and back: session intact. (Fix required: ghostty's view
    swallows ⌘-key equivalents — an app-level NSEvent local monitor now owns ⌘T.)
 3. ✅ Window resize reflows the terminal correctly.
 4. ✅ Shell exit flips the pane to the fallback instead of a dead surface.
@@ -94,7 +94,7 @@ title/close/bell/pwd/OSC events, and an `.exec` backend flag that maps to
 - [x] Non-GUI smoke: ghostty_init + config load + app create in `Tests/HelmTests`
       (`swift test`) — no window needed
 - [ ] HUMAN: pane shows a live shell; typing works; `pi` (TUI) renders correctly
-- [ ] HUMAN: ⌘T to kild view and back — session intact (run `sleep 99`, toggle,
+- [ ] HUMAN: ⌘T to another view and back — session intact (run `sleep 99`, toggle,
       confirm it's still running; also quit-and-reopen is expected to LOSE the
       session, that's fine)
 - [ ] HUMAN: window resize reflows the terminal (no smearing, grid follows)
