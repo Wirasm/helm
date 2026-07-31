@@ -24,12 +24,18 @@ that proves the other checkout builds.
   hosting their session.
 - **Never delete a test to make the gate green.** If its subject genuinely no longer
   exists, say which and why in the commit.
-- **You cannot see the UI.** Screen Recording is not granted to agent contexts and cannot
-  be self-granted, so `winshot` capture fails unattended, and the accessibility tree is
-  empty for SwiftUI content (verified against a known-good build). `swift
-  tools/winshot.swift --list helm` needs no grant and distinguishes a real window from a
-  crash or a zero-sized one — and says nothing about what is drawn. Never report a surface
-  as verified without the operator.
+- **You may or may not be able to see the UI — test, don't assume.** Screen Recording is a
+  TCC grant on the *invoking context*, not on agents as a category: some contexts have it,
+  none can grant it to themselves. The test is `swift tools/winshot.swift helm <out.png>`,
+  which exits nonzero when the grant is missing. `--list` needs no grant at all and
+  separates a real window from a crash, a zero-sized one or an off-screen one — but says
+  nothing about what is drawn. The accessibility tree is a dead end either way: helm's
+  centre is a Metal-layer NSView with no child elements to enumerate (verified against a
+  known-good build). A capture shows you pixels, not correctness — never report a surface
+  as verified on appearance alone without the operator.
+- **`winshot` matches owner names by substring**, so a second helm instance — a worktree
+  build, say — is indistinguishable from the operator's. Check `--list` for how many are
+  running before trusting a capture.
 - `swift run helm` to iterate, `make app` for the real bundle.
 - Conventional commits, written as a human — no AI attribution.
 

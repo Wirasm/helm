@@ -1,10 +1,13 @@
 // Inspect or capture the windows of a running app, by owner name.
 //
-//   swift winshot.swift Helm /tmp/shot.png   — capture to PNG
+//   swift winshot.swift helm /tmp/shot.png   — capture to PNG, by owner name
+//   swift winshot.swift 71347 /tmp/shot.png  — capture to PNG, by pid (exact)
 //   swift winshot.swift --list [owner]       — print geometry, no capture
 //
-// Capture needs a Screen Recording grant for the INVOKING context (one-time TCC prompt),
-// which an unattended agent generally does not have and cannot grant itself.
+// Capture needs a Screen Recording grant on the INVOKING context (one-time TCC prompt).
+// It is a per-context grant, not a property of agents as a class: some agent contexts
+// have it and some don't, and none can grant it to themselves. Run it and read the exit
+// code rather than assuming either way.
 //
 // --list needs no permission at all: CGWindowListCopyWindowInfo returns owner, pid, title,
 // layer and bounds to anyone; only reading a window's PIXELS is gated. That is enough to
@@ -50,15 +53,35 @@ if args.count >= 2, args[1] == "--list" {
 }
 
 guard args.count == 3 else {
-    fputs("usage: winshot <ownerName> <out.png> | winshot --list [owner]\n", stderr)
+    fputs("usage: winshot <ownerName|pid> <out.png> | winshot --list [owner]\n", stderr)
     exit(2)
 }
-let owner = args[1]
+let target = args[1]
 let out = args[2]
-// Height filter skips the small helper windows an app keeps alongside its real one.
-let win = windows().first { ownerName($0) == owner && (bounds($0)?.h ?? 0) > 100 }
-guard let win, let num = win[kCGWindowNumber as String] as? Int else {
-    fputs("no window for \(owner)\n", stderr)
+// A bare number is a pid. Owner names stop identifying anything the moment two instances
+// run — a worktree build and the operator's own helm both report `helm` — and capturing
+// the operator's window instead of your own is worse than capturing nothing, because it
+// looks like it worked. Anything else is the same case-insensitive substring match --list
+// uses: an app's owner name is not always its bundle name (helm reports `helm`, not
+// `Helm`), and an exact match that misses reads as "no window", the answer a crash gives
+// too. The height filter skips the small helper windows an app keeps alongside its real one.
+func tallEnough(_ w: [String: Any]) -> Bool { (bounds(w)?.h ?? 0) > 100 }
+let candidates =
+    Int(target).map { pid in
+        windows().filter { ($0[kCGWindowOwnerPID as String] as? Int) == pid && tallEnough($0) }
+    }
+    ?? windows().filter {
+        ownerName($0).lowercased().contains(target.lowercased()) && tallEnough($0)
+    }
+if candidates.count > 1 {
+    fputs("ambiguous: \(candidates.count) windows match \(target) — pass a pid instead\n", stderr)
+    for w in candidates {
+        fputs("  pid \(w[kCGWindowOwnerPID as String] as? Int ?? 0)  \(ownerName(w))\n", stderr)
+    }
+    exit(3)
+}
+guard let win = candidates.first, let num = win[kCGWindowNumber as String] as? Int else {
+    fputs("no window for \(target)\n", stderr)
     exit(1)
 }
 let task = Process()
