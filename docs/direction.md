@@ -76,13 +76,26 @@ helm renders and routes; it does not decide.
 
 Not decisions — things that are true today and shape what is cheap.
 
-- helm hosts its terminals via GhosttyKit and owns the surface and its pty. The vendored
-  API exposes `ghostty_surface_text` and `ghostty_surface_write_buffer` (write into a
-  session), `ghostty_surface_read_text` (read what is rendered), `ghostty_surface_tty_name`
-  and `ghostty_surface_foreground_pid`. So writing into a hosted terminal is a function
-  call, not an injection hack.
+- helm hosts its terminals via GhosttyKit and owns the surface and its pty. **Reading** is a
+  function call — `ghostty_surface_read_text` (what is rendered), `ghostty_surface_tty_name`,
+  `ghostty_surface_foreground_pid`. **Writing is not.** Measured 2026-07-31
+  (`~/.prp/helm-3ec376fc/reports/nice-view-spike-client.md`):
+  - `ghostty_surface_write_buffer` paints the emulator screen and the pty **never sees it**.
+    It is the host-managed backend's *output* path, used only by `InMemoryTerminalSession`.
+    Against the `.exec` backend it fails by looking like it worked. An earlier version of
+    this file called it "write into a session" — that was wrong.
+  - `ghostty_surface_text` — the wrapper's only public write API — lands printable text but
+    silently sanitizes control bytes: ESC arrives as a space, CR is dropped.
+  - `ghostty_surface_binding_action("text:…")` delivers raw bytes byte-exact, and is the only
+    route that works. It is module-internal, so writing into a hosted terminal **starts by
+    extending the vendored wrapper patch**, not by calling an API helm already has.
 - Claude Code and pi both write full session transcripts to disk, so a chat view is a
-  renderer over files rather than an integration.
+  renderer over files rather than an integration — but the grain is coarse. Measured
+  2026-07-31 (`~/.prp/helm-3ec376fc/reports/nice-view-spike-reader.md`): Claude Code writes
+  one **content block** per record, written whole when the block ends; pi writes one record
+  per **model response**. There is no intra-block state on disk, so a typewriter-style live
+  view is impossible from files — and a turn's first record lands a median 8.8s after the
+  request. Neither format redacts secrets.
 - helm already has working markdown and HTML rendering (`ArtifactPane`, `ArtifactHTML`,
   `ArtifactWebViews`, `PostMarkdown`, `MarkdownTheme`, `ArtifactBrowser`) and the terminal
   stack (`TerminalManager`, `TerminalStrip`, `TerminalCapabilities`, `GhosttyConfig`).
