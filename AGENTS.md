@@ -32,3 +32,13 @@ that proves the other checkout builds.
   as verified without the operator.
 - `swift run helm` to iterate, `make app` for the real bundle.
 - Conventional commits, written as a human — no AI attribution.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub issues on `Wirasm/helm`, via `gh`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context; vocabulary is canonical in `../GLOSSARY.md`. See `docs/agents/domain.md`.
