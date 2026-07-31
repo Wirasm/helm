@@ -96,6 +96,13 @@ Not decisions — things that are true today and shape what is cheap.
   per **model response**. There is no intra-block state on disk, so a typewriter-style live
   view is impossible from files — and a turn's first record lands a median 8.8s after the
   request. Neither format redacts secrets.
+- **A from-disk view cannot show the operator the question they are being asked.** An agent
+  blocked on an interactive prompt writes *nothing*. Captured live: the agent thought,
+  produced 1,962 characters of prose and raised a question — none of it reached disk until
+  the operator answered **2m35s later**, then all four records flushed at once. Whatever the
+  chat view turns out to be, it cannot be *only* a file renderer: the moments that most
+  demand attention are exactly the moments the file is silent. Reading the rendered surface
+  (`ghostty_surface_read_text`) is the only source that has them.
 - helm already has working markdown and HTML rendering (`ArtifactPane`, `ArtifactHTML`,
   `ArtifactWebViews`, `PostMarkdown`, `MarkdownTheme`, `ArtifactBrowser`) and the terminal
   stack (`TerminalManager`, `TerminalStrip`, `TerminalCapabilities`, `GhosttyConfig`).
