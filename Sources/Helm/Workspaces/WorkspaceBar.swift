@@ -6,8 +6,15 @@ import SwiftUI
 /// Deliberately quiet. It names the open folders, marks which one is active, and shows each
 /// one's git branch when there is one — nothing that needs watching. Anything that wants
 /// attention belongs somewhere it can be acted on, not in a strip above everything else.
+///
+/// The board's dot is the one exception, and it earns it by being the only thing here you
+/// cannot learn without leaving: whether a workspace you are *not* looking at has an agent
+/// waiting on you. It is still state on an existing element, never anything that pops.
 struct WorkspaceBar: View {
     @ObservedObject var model: WorkspaceModel
+    /// The board's marks, owned by the Board slice and observed the way `RootView` observes
+    /// `TerminalManager`. The bar renders a dot; it does not learn what a registry is.
+    @ObservedObject private var board = BoardModel.shared
     let select: (Workspace) -> Void
     let open: (Workspace) -> Void
     let close: (Workspace) -> Void
@@ -29,6 +36,7 @@ struct WorkspaceBar: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
         .background(.bar)
+        .task { await board.poll() }
         .onReceive(NotificationCenter.default.publisher(for: .helmOpenWorkspace)) { _ in
             openWorkspace()
         }
@@ -44,6 +52,7 @@ struct WorkspaceBar: View {
         } label: {
             HStack(spacing: 5) {
                 Text("⌃\(index + 1)").foregroundStyle(.secondary)
+                AgentDot(presence: board.presence[workspace.path])
                 Text(workspace.name).fontWeight(isSelected ? .semibold : .regular)
                 if let branch = model.contexts[workspace.path]?.branch {
                     Text(branch).foregroundStyle(.secondary).lineLimit(1)
