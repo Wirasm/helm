@@ -10,7 +10,7 @@ import SwiftUI
 /// while you read them).
 ///
 /// Read-only on purpose — no editing, no commenting. Those are later slices,
-/// designed against real dogfooding (see docs/ui-plan.md).
+/// designed against real dogfooding.
 @MainActor
 final class ArtifactPaneModel: ObservableObject {
     /// What the pane shows for the open file: a markdown document (rendered as
@@ -112,7 +112,7 @@ final class ArtifactPaneModel: ObservableObject {
     private static func load(_ url: URL) -> Content {
         // .html renders in a full-pane WKWebView from its own URL — no text
         // pipeline (and no UTF-8/size gate; WebKit streams the file itself).
-        if ArtifactHTML.isHTML(url) {
+        if RenderableFile.isHTML(url) {
             return .web
         }
         guard let data = try? Data(contentsOf: url) else {
@@ -124,7 +124,7 @@ final class ArtifactPaneModel: ObservableObject {
         guard let text = String(data: data, encoding: .utf8) else {
             return .notice("Not a UTF-8 text file")
         }
-        return ArtifactHTML.isMarkdown(url) ? .markdown(text) : .plainText(text)
+        return RenderableFile.isMarkdown(url) ? .markdown(text) : .plainText(text)
     }
 }
 

@@ -385,8 +385,7 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// handle them.
     func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
         guard let validated = TerminalURLPolicy.validated(url) else { return }
-        if validated.isFileURL, ArtifactHTML.isMarkdown(validated) || ArtifactHTML.isHTML(validated)
-        {
+        if validated.isFileURL, RenderableFile.isRenderable(validated) {
             NotificationCenter.default.post(name: .helmOpenArtifactFile, object: validated)
             return
         }

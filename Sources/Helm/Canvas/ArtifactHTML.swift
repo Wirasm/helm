@@ -18,19 +18,6 @@ enum ArtifactTheme: String {
 /// the vendored marked + mermaid (see docs/VENDORED.md) plus the inline init
 /// script — no external references, no network fetches, ever.
 enum ArtifactHTML {
-    // MARK: File-kind routing
-
-    /// Extensions rendered as a formatted markdown document.
-    static func isMarkdown(_ url: URL) -> Bool {
-        ["md", "markdown", "mdown"].contains(url.pathExtension.lowercased())
-    }
-
-    /// Extensions rendered in a full-pane WKWebView from their own URL
-    /// (the artifact pane's escape hatch).
-    static func isHTML(_ url: URL) -> Bool {
-        ["html", "htm"].contains(url.pathExtension.lowercased())
-    }
-
     // MARK: Document page
 
     /// Full HTML document for one markdown artifact. The vendored marked.js +

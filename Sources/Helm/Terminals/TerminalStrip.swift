@@ -21,11 +21,6 @@ struct TerminalStrip: View {
     /// preselects that workspace's `~/.prp` store.
     var workspaceRoot: String?
 
-    // Same storage the View ▸ Appearance menu uses; HelmApp observes the key
-    // and applies the override, so picking here re-themes the whole app.
-    @AppStorage(HelmApp.appearanceKey)
-    private var appearanceRaw = AppearanceOverride.system.rawValue
-
     var body: some View {
         HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -71,22 +66,8 @@ struct TerminalStrip: View {
                 }
             }
 
-            // Subtle appearance affordance (mirrors View ▸ Appearance).
-            Menu {
-                Picker("Appearance", selection: $appearanceRaw) {
-                    ForEach(AppearanceOverride.allCases) { option in
-                        Text(option.label).tag(option.rawValue)
-                    }
-                }
-                .pickerStyle(.inline)
-            } label: {
-                Image(systemName: "circle.lefthalf.filled")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .foregroundStyle(.secondary)
-            .help("Appearance")
+            // Mirrors View ▸ Appearance; the control itself belongs to App.
+            AppearanceMenu()
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -138,7 +119,14 @@ private struct TerminalTab: View {
     /// The tab's one indicator slot, by precedence: dead shell > bell (orange
     /// keeps priority) > finished-command tick/mark (inactive tabs, cleared on
     /// select) > live progress hint. All state, no popups — the quiet rules
-    /// live in TerminalActivity (TerminalCapabilities.swift).
+    /// live in `TerminalActivity`.
+    ///
+    /// **Do not copy the `!isSelected` gating into an agent-status indicator.**
+    /// Hiding a mark on the tab you are looking at is right for a shell-command
+    /// outcome — you watched it happen, so selecting the tab acknowledges it. It is
+    /// wrong for a per-workspace agent rollup, where selecting a workspace shows you
+    /// one of its N terminals and says nothing about the others; that indicator must
+    /// follow one rule everywhere, including where you already are.
     @ViewBuilder
     private var indicator: some View {
         if session.status == .exited {

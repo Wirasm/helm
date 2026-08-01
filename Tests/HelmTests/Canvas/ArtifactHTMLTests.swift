@@ -5,22 +5,6 @@ import XCTest
 /// The document page + injection script generation, exercised as pure string
 /// functions — no WebKit, no GUI.
 final class ArtifactHTMLTests: XCTestCase {
-    // MARK: File-kind routing
-
-    func testMarkdownExtensionsDetected() {
-        XCTAssertTrue(ArtifactHTML.isMarkdown(URL(fileURLWithPath: "/a/plan.md")))
-        XCTAssertTrue(ArtifactHTML.isMarkdown(URL(fileURLWithPath: "/a/PLAN.MD")))
-        XCTAssertTrue(ArtifactHTML.isMarkdown(URL(fileURLWithPath: "/a/notes.markdown")))
-        XCTAssertFalse(ArtifactHTML.isMarkdown(URL(fileURLWithPath: "/a/build.log")))
-        XCTAssertFalse(ArtifactHTML.isMarkdown(URL(fileURLWithPath: "/a/script.sh")))
-    }
-
-    func testHTMLExtensionsDetected() {
-        XCTAssertTrue(ArtifactHTML.isHTML(URL(fileURLWithPath: "/a/page.html")))
-        XCTAssertTrue(ArtifactHTML.isHTML(URL(fileURLWithPath: "/a/PAGE.HTM")))
-        XCTAssertFalse(ArtifactHTML.isHTML(URL(fileURLWithPath: "/a/plan.md")))
-    }
-
     // MARK: JS string embedding
 
     func testJsStringRoundTripsThroughJSON() throws {

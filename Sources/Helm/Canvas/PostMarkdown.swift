@@ -7,6 +7,16 @@ import SwiftUI
 /// `##`/``` markers (inline-only parse). So: split the text into blocks ourselves,
 /// then inline-parse each block's text. No external dependencies, plain text on
 /// any parse failure.
+/// **Kept deliberately, with no caller today.** This is a markdown → SwiftUI
+/// renderer, written for the conversation view that left with the kild layer. The
+/// artifact pane does not use it: a whole document renders through marked.js in a
+/// webview instead.
+///
+/// It is retained because the next surface that needs it — a readable view over an
+/// agent's transcript — renders many small blocks of prose rather than one document,
+/// and a WKWebView per message would be absurd. Deleting it would mean writing it
+/// again. If that surface ships and still does not use this, delete it then, along
+/// with `MarkdownTheme` and both test files.
 enum PostMarkdown {
     enum Block: Equatable {
         case heading(level: Int, text: String)
