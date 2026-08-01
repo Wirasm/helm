@@ -12,19 +12,17 @@ final class TerminalLinkRouteTests: XCTestCase {
 
     func testWebAddressesOpenInTheCanvas() {
         // The case the canvas exists for: an agent prints its dev server.
-        let localhost = URL(string: "http://localhost:3000")!
-        XCTAssertEqual(TerminalLinkRoute.route(localhost), .canvasURL(localhost))
-
-        let https = URL(string: "https://example.com/path?q=1")!
-        XCTAssertEqual(TerminalLinkRoute.route(https), .canvasURL(https))
-
-        let port = URL(string: "http://127.0.0.1:8080/status")!
-        XCTAssertEqual(TerminalLinkRoute.route(port), .canvasURL(port))
+        for address in [
+            "http://localhost:3000",
+            "https://example.com/path?q=1",
+            "http://127.0.0.1:8080/status",
+        ] {
+            XCTAssertEqual(TerminalLinkRoute.route(URL(string: address)!), .canvasURL, address)
+        }
     }
 
     func testSchemeMatchingIsCaseInsensitive() {
-        let shouty = URL(string: "HTTPS://example.com")!
-        XCTAssertEqual(TerminalLinkRoute.route(shouty), .canvasURL(shouty))
+        XCTAssertEqual(TerminalLinkRoute.route(URL(string: "HTTPS://example.com")!), .canvasURL)
     }
 
     // MARK: - mailto: stays with the system
@@ -33,24 +31,21 @@ final class TerminalLinkRouteTests: XCTestCase {
         // helm has no mail client and should not pretend to. It passes the outer
         // allowlist and the canvas refuses it — that is the composition working,
         // not a gap in it.
-        let mail = URL(string: "mailto:dev@example.com")!
-        XCTAssertEqual(TerminalLinkRoute.route(mail), .system(mail))
+        XCTAssertEqual(TerminalLinkRoute.route(URL(string: "mailto:dev@example.com")!), .system)
     }
 
     // MARK: - Files: unchanged by this route
 
     func testRenderableFilesOpenInTheCanvas() {
         for path in ["/tmp/plan.md", "/tmp/report.html", "/tmp/page.HTM"] {
-            let url = URL(fileURLWithPath: path)
-            XCTAssertEqual(TerminalLinkRoute.route(url), .canvasFile(url), path)
+            XCTAssertEqual(TerminalLinkRoute.route(URL(fileURLWithPath: path)), .canvasFile, path)
         }
     }
 
     func testUnrenderableFilesGoToTheSystem() {
         // A PDF, an image, an extensionless file: the system owns the apps for these.
         for path in ["/tmp/diagram.png", "/tmp/spec.pdf", "/tmp/Main.swift", "/tmp/notes"] {
-            let url = URL(fileURLWithPath: path)
-            XCTAssertEqual(TerminalLinkRoute.route(url), .system(url), path)
+            XCTAssertEqual(TerminalLinkRoute.route(URL(fileURLWithPath: path)), .system, path)
         }
     }
 
@@ -73,11 +68,11 @@ final class TerminalLinkRouteTests: XCTestCase {
     func testGateAndRouteAgreeOnWhatAClickDoes() {
         // The whole decision, from the string ghostty hands over to where it lands.
         let expected: [(String, TerminalLinkRoute?)] = [
-            ("http://localhost:3000", .canvasURL(URL(string: "http://localhost:3000")!)),
-            ("  https://example.com\n", .canvasURL(URL(string: "https://example.com")!)),
-            ("mailto:dev@example.com", .system(URL(string: "mailto:dev@example.com")!)),
-            ("file:///tmp/plan.md", .canvasFile(URL(string: "file:///tmp/plan.md")!)),
-            ("file:///tmp/diagram.png", .system(URL(string: "file:///tmp/diagram.png")!)),
+            ("http://localhost:3000", .canvasURL),
+            ("  https://example.com\n", .canvasURL),
+            ("mailto:dev@example.com", .system),
+            ("file:///tmp/plan.md", .canvasFile),
+            ("file:///tmp/diagram.png", .system),
             // Dropped by the gate: no route, no click.
             ("ssh://root@evil.example", nil),
             ("example.com/docs", nil),

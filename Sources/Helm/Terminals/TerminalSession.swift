@@ -336,15 +336,17 @@ enum FontSizeStep: Int {
 /// `TerminalNotificationGate` are: a delegate callback needs a live ghostty surface,
 /// so it cannot be reached from `swift test`. Keeping the decision here leaves the
 /// callback with nothing but the posting, and puts the routing under test.
+/// Carries no URL: the destination is the whole decision, and the URL that goes
+/// there is the one that was routed.
 enum TerminalLinkRoute: Equatable {
     /// A file helm renders — the canvas opens it.
-    case canvasFile(URL)
+    case canvasFile
     /// A web address — the canvas follows it, instead of a browser taking the operator
     /// out of the app.
-    case canvasURL(URL)
+    case canvasURL
     /// Everything else the allowlist admits: `mailto:`, and files helm has no renderer
     /// for. The system still owns the apps that handle those.
-    case system(URL)
+    case system
 
     /// **Two policies, two jobs — composed, never merged.** `TerminalURLPolicy` is the
     /// outer gate on untrusted terminal content and has already run when we get here;
@@ -357,9 +359,9 @@ enum TerminalLinkRoute: Equatable {
     /// the terminal's idea of what the canvas takes from drifting away from the canvas's.
     static func route(_ url: URL) -> TerminalLinkRoute {
         if url.isFileURL {
-            return RenderableFile.isRenderable(url) ? .canvasFile(url) : .system(url)
+            return RenderableFile.isRenderable(url) ? .canvasFile : .system
         }
-        return CanvasURLPolicy.allows(url) ? .canvasURL(url) : .system(url)
+        return CanvasURLPolicy.allows(url) ? .canvasURL : .system
     }
 }
 
@@ -423,12 +425,12 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
         guard let validated = TerminalURLPolicy.validated(url) else { return }
         switch TerminalLinkRoute.route(validated) {
-        case let .canvasFile(url):
-            NotificationCenter.default.post(name: .helmOpenArtifactFile, object: url)
-        case let .canvasURL(url):
-            NotificationCenter.default.post(name: .helmOpenCanvasURL, object: url)
-        case let .system(url):
-            NSWorkspace.shared.open(url)
+        case .canvasFile:
+            NotificationCenter.default.post(name: .helmOpenArtifactFile, object: validated)
+        case .canvasURL:
+            NotificationCenter.default.post(name: .helmOpenCanvasURL, object: validated)
+        case .system:
+            NSWorkspace.shared.open(validated)
         }
     }
 
