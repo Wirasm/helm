@@ -12,10 +12,6 @@ import XCTest
 final class ContextPersistenceTests: XCTestCase {
     private let workspacePath = "/tmp/helm-persist-tests"
 
-    private func isolatedDefaults() throws -> UserDefaults {
-        try XCTUnwrap(UserDefaults(suiteName: "helm-persist-tests-\(UUID().uuidString)"))
-    }
-
     func testSaveContextCapturesEveryOpenTerminalInOrder() throws {
         let manager = TerminalManager()
         manager.activate(workspacePath: workspacePath)
@@ -24,7 +20,7 @@ final class ContextPersistenceTests: XCTestCase {
         let live = manager.sessions(for: workspacePath).map(\.id)
         XCTAssertEqual(live.count, 3, "precondition: three terminals are open")
 
-        let defaults = try isolatedDefaults()
+        let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
         model.open(Workspace(path: workspacePath))
         model.saveContext(terminalManager: manager, artifact: ArtifactPaneModel())
@@ -43,7 +39,7 @@ final class ContextPersistenceTests: XCTestCase {
     /// back with one fresh shell. Instrumented and confirmed: the context loaded with one
     /// id and reached `activate` with none.
     func testSavingBeforeTheWorkspaceIsMountedDoesNotWipeItsSavedRow() throws {
-        let defaults = try isolatedDefaults()
+        let defaults = try isolatedDefaults("persist")
         let saved = WorkspaceContext(
             terminalSessionIDs: [UUID(), UUID()], selectedTerminalID: nil)
         WorkspaceContextStore.save([workspacePath: saved], to: defaults)
@@ -68,7 +64,7 @@ final class ContextPersistenceTests: XCTestCase {
     /// that is most of the argument for putting it there.
     func testObservingTerminalsPersistsEachOneAsItOpens() async throws {
         let manager = TerminalManager()
-        let defaults = try isolatedDefaults()
+        let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
         model.open(Workspace(path: workspacePath))
         model.observeTerminals(manager, artifact: ArtifactPaneModel())
@@ -91,7 +87,7 @@ final class ContextPersistenceTests: XCTestCase {
     func testSaveContextSeesATerminalAddedImmediatelyBefore() throws {
         let manager = TerminalManager()
         manager.activate(workspacePath: workspacePath)
-        let defaults = try isolatedDefaults()
+        let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
         model.open(Workspace(path: workspacePath))
 

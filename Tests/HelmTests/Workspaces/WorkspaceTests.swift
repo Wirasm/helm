@@ -58,7 +58,7 @@ final class WorkspaceTests: XCTestCase {
     // MARK: - Persistence
 
     func testWorkspaceListRoundTripsThroughDefaults() throws {
-        let defaults = try isolatedDefaults()
+        let defaults = try isolatedDefaults("workspace")
         let workspaces = [Workspace(path: "/a/b"), Workspace(path: "/a/b/.worktrees/fix")]
 
         WorkspacePersistence.save(workspaces, to: defaults)
@@ -68,7 +68,7 @@ final class WorkspaceTests: XCTestCase {
     }
 
     func testCorruptOrMissingBlobLoadsAsEmptyList() throws {
-        let defaults = try isolatedDefaults()
+        let defaults = try isolatedDefaults("workspace")
         XCTAssertEqual(WorkspacePersistence.load(from: defaults), [])
 
         defaults.set("{not json", forKey: WorkspacePersistence.listKey)
@@ -76,7 +76,7 @@ final class WorkspaceTests: XCTestCase {
     }
 
     func testSelectionPersistsOnlyWhileItIsStillOpen() throws {
-        let defaults = try isolatedDefaults()
+        let defaults = try isolatedDefaults("workspace")
         let open = [Workspace(path: "/a/b")]
 
         WorkspacePersistence.saveSelection(open[0], to: defaults)
@@ -89,12 +89,4 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertNil(WorkspacePersistence.loadSelection(from: defaults, in: open))
     }
 
-    // MARK: - Store key: golden value + differential against prp
-
-    /// THE golden value. helm's own repo root resolves to the store this plan was
-    /// written into, `~/.prp/helm-3ec376fc`. A pure function of the literal path, so
-
-    private func isolatedDefaults() throws -> UserDefaults {
-        try XCTUnwrap(UserDefaults(suiteName: "helm-workspace-tests-\(UUID().uuidString)"))
-    }
 }
