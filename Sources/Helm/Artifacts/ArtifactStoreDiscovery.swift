@@ -30,10 +30,6 @@ struct ArtifactStore: Equatable, Identifiable {
 /// tests). The filesystem IS the artifact API — no engine calls, just a cheap
 /// directory walk on every popover open.
 enum ArtifactStoreDiscovery {
-    /// Directory levels walked below a store root — stores keep artifacts one
-    /// subdirectory deep (plans/, reviews/, …); the listing stays flat.
-    static let maxDepth = 2
-
     static var defaultRoot: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".prp")
     }
@@ -73,9 +69,16 @@ enum ArtifactStoreDiscovery {
 
     /// The store's artifacts as a flat list, newest first, with store-relative
     /// display names.
+    ///
+    /// The walk goes all the way down. It used to stop two levels below the store
+    /// root, on the premise that stores keep artifacts one subdirectory deep — but
+    /// the store's shape is prp's to decide, not helm's to predict, and prp archives
+    /// a level deeper than that (`issues/completed/`, `plans/completed/`). The cap
+    /// therefore hid the artifacts an agent had just written, and hid them silently:
+    /// a flat array has nowhere to say "there were more".
     static func artifactFiles(in root: URL) -> [ArtifactFile] {
         var files: [ArtifactFile] = []
-        collectFiles(in: root, storeRoot: root, depth: 1, into: &files)
+        collectFiles(in: root, storeRoot: root, into: &files)
         return files.sorted { $0.modified > $1.modified }
     }
 
@@ -102,10 +105,13 @@ enum ArtifactStoreDiscovery {
         return RenderableFile.isRenderable(url)
     }
 
+    /// Unbounded in depth, and bounded in three other ways instead: dotfiles are
+    /// skipped, `isArtifactFile` decides what is listed by extension, and only real
+    /// directories are descended into — `isDirectory` is false for a symlink to one,
+    /// so a cycle inside a store cannot spin the walk.
     private static func collectFiles(
-        in directory: URL, storeRoot: URL, depth: Int, into files: inout [ArtifactFile]
+        in directory: URL, storeRoot: URL, into files: inout [ArtifactFile]
     ) {
-        guard depth <= maxDepth else { return }
         let keys: [URLResourceKey] = [.isDirectoryKey, .contentModificationDateKey]
         guard
             let entries = try? FileManager.default.contentsOfDirectory(
@@ -117,7 +123,7 @@ enum ArtifactStoreDiscovery {
             guard !entry.lastPathComponent.hasPrefix(".") else { continue }
             let values = try? entry.resourceValues(forKeys: Set(keys))
             if values?.isDirectory == true {
-                collectFiles(in: entry, storeRoot: storeRoot, depth: depth + 1, into: &files)
+                collectFiles(in: entry, storeRoot: storeRoot, into: &files)
             } else if isArtifactFile(entry) {
                 files.append(
                     ArtifactFile(
