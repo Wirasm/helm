@@ -44,7 +44,7 @@ struct RootView: View {
                 artifact.open(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
             }
         }
-        .onReceive(artifact.$document) { _ in persistCurrentContext() }
+        .onReceive(artifact.$source) { _ in persistCurrentContext() }
         // Opening or closing a terminal, and switching tabs, are the events that
         // change what a relaunch has to rebuild. Without these the context was only
         // written on workspace switch, so quitting from the workspace you had been
