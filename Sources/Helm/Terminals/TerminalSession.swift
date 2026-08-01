@@ -330,6 +330,41 @@ enum FontSizeStep: Int {
     case increase = 1
 }
 
+/// Where a ⌘-clicked link goes once `TerminalURLPolicy` has admitted it.
+///
+/// Pure and separate from the session for the same reason `TerminalURLPolicy` and
+/// `TerminalNotificationGate` are: a delegate callback needs a live ghostty surface,
+/// so it cannot be reached from `swift test`. Keeping the decision here leaves the
+/// callback with nothing but the posting, and puts the routing under test.
+/// Carries no URL: the destination is the whole decision, and the URL that goes
+/// there is the one that was routed.
+enum TerminalLinkRoute: Equatable {
+    /// A file helm renders — the canvas opens it.
+    case canvasFile
+    /// A web address — the canvas follows it, instead of a browser taking the operator
+    /// out of the app.
+    case canvasURL
+    /// Everything else the allowlist admits: `mailto:`, and files helm has no renderer
+    /// for. The system still owns the apps that handle those.
+    case system
+
+    /// **Two policies, two jobs — composed, never merged.** `TerminalURLPolicy` is the
+    /// outer gate on untrusted terminal content and has already run when we get here;
+    /// `CanvasURLPolicy` answers the narrower question of whether the canvas will
+    /// *follow* what the gate let through. `mailto:` passing the gate and being refused
+    /// by the canvas is the wanted outcome, not a gap: helm has no mail client and
+    /// should not pretend to.
+    ///
+    /// Asking `CanvasURLPolicy` rather than re-deriving http/https here is what keeps
+    /// the terminal's idea of what the canvas takes from drifting away from the canvas's.
+    static func route(_ url: URL) -> TerminalLinkRoute {
+        if url.isFileURL {
+            return RenderableFile.isRenderable(url) ? .canvasFile : .system
+        }
+        return CanvasURLPolicy.allows(url) ? .canvasURL : .system
+    }
+}
+
 // The wrapper reports surface events through fine-grained delegate protocols;
 // we sink the ones helm needs into published state.
 extension TerminalSession: TerminalSurfaceLifecycleDelegate,
@@ -375,21 +410,28 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// into a browser — the trip helm exists to absorb. A link to something the
     /// artifact pane renders now opens **in helm** instead.
     ///
-    /// **Offer, not push.** The agent writes a self-contained file and prints a
-    /// link; helm opens it only when you ⌘-click. Nothing appears unbidden — it is
+    /// **Offer, not push.** The agent writes a self-contained file or prints an
+    /// address; helm opens it only when you ⌘-click. Nothing appears unbidden — it is
     /// not helm's job to rearrange the bench on the agent's word.
     ///
-    /// Scoped to `.md`/`.html` deliberately: those are what the pane renders and
-    /// what an agent-authored canvas is. Everything else — a PDF, an image, a web
-    /// URL — keeps its old route to the system, which still owns the apps that
-    /// handle them.
+    /// Both things the canvas renders come in this way: a `.md`/`.html` file, and an
+    /// http address — an agent's `http://localhost:3000` opens **in helm** rather than
+    /// tabbing the operator into a browser. A closed canvas opens itself on either,
+    /// because the canvas subscribes on its model rather than on a view.
+    ///
+    /// Everything else the allowlist admits — a PDF, an image, `mailto:` — keeps its
+    /// old route to the system, which still owns the apps that handle them.
+    /// `TerminalLinkRoute` makes that three-way choice; this method only posts it.
     func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
         guard let validated = TerminalURLPolicy.validated(url) else { return }
-        if validated.isFileURL, RenderableFile.isRenderable(validated) {
+        switch TerminalLinkRoute.route(validated) {
+        case .canvasFile:
             NotificationCenter.default.post(name: .helmOpenArtifactFile, object: validated)
-            return
+        case .canvasURL:
+            NotificationCenter.default.post(name: .helmOpenCanvasURL, object: validated)
+        case .system:
+            NSWorkspace.shared.open(validated)
         }
-        NSWorkspace.shared.open(validated)
     }
 
     /// Hover feedback for ⌘-clickable links: ghostty renders the underline
