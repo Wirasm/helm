@@ -54,6 +54,17 @@ struct RootView: View {
             }
         }
         .onReceive(artifact.$document) { _ in persistCurrentContext() }
+        // Opening or closing a terminal, and switching tabs, are the events that
+        // change what a relaunch has to rebuild. Without these the context was only
+        // written on workspace switch, so quitting from the workspace you had been
+        // working in persisted a stale tab row — the one case restore most needs to
+        // get right. `$sessions`/`$selectedID` fire after the change lands.
+        .onReceive(terminalManager.$sessions.dropFirst()) { _ in persistCurrentContext() }
+        .onReceive(terminalManager.$selectedID.dropFirst()) { _ in persistCurrentContext() }
+        .onReceive(NotificationCenter.default.publisher(for: .helmOpenArtifactFile)) { note in
+            guard let url = note.object as? URL else { return }
+            artifact.open(url)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .helmSelectWorkspace)) { note in
             guard let index = note.object as? Int, model.workspaces.indices.contains(index) else {
                 return
@@ -105,7 +116,8 @@ struct RootView: View {
         guard let workspace = model.selectedWorkspace else { return }
         let context = model.contexts[workspace.path] ?? WorkspaceContext()
         terminalManager.activate(
-            workspacePath: workspace.path, selectedID: context.selectedTerminalID)
+            workspacePath: workspace.path, selectedID: context.selectedTerminalID,
+            restoring: context.terminalSessionIDs)
         if let path = context.openArtifactPath {
             artifact.open(URL(fileURLWithPath: path))
         } else {

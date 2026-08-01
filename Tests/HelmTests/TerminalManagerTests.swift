@@ -20,6 +20,49 @@ final class TerminalManagerTests: XCTestCase {
             manager.sessions(for: secondWorkspace).isEmpty, "other workspaces remain lazy")
     }
 
+    func testRelaunchRebuildsTheTabRowUnderItsPersistedIDs() {
+        let manager = TerminalManager()
+        let first = UUID()
+        let second = UUID()
+
+        manager.activate(
+            workspacePath: firstWorkspace, selectedID: second, restoring: [first, second])
+
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).map(\.id), [first, second],
+            "a restored workspace must rebuild every terminal it had, in order")
+        XCTAssertEqual(
+            manager.selectedID, second,
+            "restoring under the persisted ids is what keeps the saved selection resolvable")
+    }
+
+    func testRestoringIsLazyAndHappensOnlyOnFirstVisit() {
+        let manager = TerminalManager()
+        let persisted = UUID()
+
+        manager.activate(workspacePath: firstWorkspace, restoring: [persisted])
+        XCTAssertTrue(
+            manager.sessions(for: secondWorkspace).isEmpty,
+            "restore must not spawn ptys for workspaces that have not been visited")
+
+        manager.newTerminal()
+        manager.activate(workspacePath: secondWorkspace)
+        manager.activate(workspacePath: firstWorkspace, restoring: [persisted])
+
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).count, 2,
+            "returning to a live workspace must keep its terminals, not restore over them")
+    }
+
+    func testWorkspaceWithNothingPersistedStillGetsOneShell() {
+        let manager = TerminalManager()
+        manager.activate(workspacePath: firstWorkspace, restoring: [])
+
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).count, 1,
+            "a never-visited workspace behaves exactly as it did before restore existed")
+    }
+
     func testSessionsGroupByWorkspaceAndShareOneController() {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)

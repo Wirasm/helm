@@ -21,13 +21,6 @@ struct WorkspaceContext: Codable, Equatable {
     /// git will refresh it when the workspace becomes active again.
     var branch: String?
     var branchResolved = false
-
-    mutating func droppingDanglingSessionIDs(validIDs: Set<UUID>) {
-        terminalSessionIDs = terminalSessionIDs.filter { validIDs.contains($0) }
-        if let selectedTerminalID, !validIDs.contains(selectedTerminalID) {
-            self.selectedTerminalID = nil
-        }
-    }
 }
 
 enum WorkspaceContextStore {
@@ -42,18 +35,19 @@ enum WorkspaceContextStore {
     /// means one stale workspace discards them all. That is acceptable and deliberate: the
     /// alternative is per-entry recovery, which would keep partially-migrated state around
     /// and make "did my context survive?" depend on which workspace you opened.
-    static func load(
-        from defaults: UserDefaults, validSessionIDs: Set<UUID> = []
-    ) -> [String:
-        WorkspaceContext]
-    {
+    ///
+    /// **Persisted session ids survive load.** This used to filter them against the ids
+    /// live *in this process*, which at launch is none — so a cold start always restored
+    /// zero terminals and the persistence was neutered by its own loader. The ids are the
+    /// only record of how many terminals a workspace had and which was selected;
+    /// `TerminalManager.activate(workspacePath:selectedID:restoring:)` rebuilds the row
+    /// under them on first visit. Filtering here is what made a relaunch cost every
+    /// terminal in every workspace.
+    static func load(from defaults: UserDefaults) -> [String: WorkspaceContext] {
         guard let raw = defaults.string(forKey: key),
-            var contexts = try? JSONDecoder().decode(
+            let contexts = try? JSONDecoder().decode(
                 [String: WorkspaceContext].self, from: Data(raw.utf8))
         else { return [:] }
-        for path in contexts.keys {
-            contexts[path]?.droppingDanglingSessionIDs(validIDs: validSessionIDs)
-        }
         return contexts
     }
 

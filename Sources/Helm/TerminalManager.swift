@@ -50,7 +50,10 @@ final class TerminalSession: ObservableObject, Identifiable {
         case failed(String)
     }
 
-    let id = UUID()
+    /// Injectable so a relaunch can rebuild a workspace's tab row under the ids
+    /// it was persisted with — which is what keeps `selectedTerminalID` meaningful
+    /// across restarts. Fresh terminals still mint their own.
+    let id: UUID
 
     /// 1-based creation ordinal, monotonically assigned by the manager —
     /// the "shell N" fallback title when the shell hasn't set one.
@@ -88,7 +91,10 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// tests can assert every session holds the same instance.
     let controller: TerminalController
 
-    init(ordinal: Int, workspacePath: String, controller: TerminalController) {
+    init(
+        id: UUID = UUID(), ordinal: Int, workspacePath: String, controller: TerminalController
+    ) {
+        self.id = id
         self.ordinal = ordinal
         self.workspacePath = workspacePath
         self.controller = controller
@@ -363,8 +369,27 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// ⌘-click on a link in the grid. The allowlist (TerminalURLPolicy) is
     /// the whole security story: terminal content is untrusted, so anything
     /// but http/https/file/mailto is dropped silently.
+    ///
+    /// This is also the agent→helm channel, and it used to point out of the app: every
+    /// link went to `NSWorkspace`, so an agent offering a rendered report tabbed you
+    /// into a browser — the trip helm exists to absorb. A link to something the
+    /// artifact pane renders now opens **in helm** instead.
+    ///
+    /// **Offer, not push.** The agent writes a self-contained file and prints a
+    /// link; helm opens it only when you ⌘-click. Nothing appears unbidden — it is
+    /// not helm's job to rearrange the bench on the agent's word.
+    ///
+    /// Scoped to `.md`/`.html` deliberately: those are what the pane renders and
+    /// what an agent-authored canvas is. Everything else — a PDF, an image, a web
+    /// URL — keeps its old route to the system, which still owns the apps that
+    /// handle them.
     func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
         guard let validated = TerminalURLPolicy.validated(url) else { return }
+        if validated.isFileURL, ArtifactHTML.isMarkdown(validated) || ArtifactHTML.isHTML(validated)
+        {
+            NotificationCenter.default.post(name: .helmOpenArtifactFile, object: validated)
+            return
+        }
         NSWorkspace.shared.open(validated)
     }
 
@@ -447,21 +472,51 @@ final class TerminalManager: ObservableObject {
         sessions.filter { $0.workspacePath == workspacePath }
     }
 
-    /// Makes a workspace active and lazily gives it its first shell. Existing
-    /// sessions are merely parked (their retained NSViews and ptys survive).
-    func activate(workspacePath: String, selectedID preferredID: UUID? = nil) {
+    /// Makes a workspace active, lazily rebuilding its tab row on first visit.
+    /// Existing sessions are merely parked (their retained NSViews and ptys survive).
+    ///
+    /// `restoring` carries the ids persisted for this workspace. On the first visit
+    /// after a relaunch they name terminals whose ptys died with the old process, so
+    /// the row is rebuilt under those same ids — the shells come back **empty**, and
+    /// an agent is a `cls --resume` away. helm deliberately does not re-run it:
+    /// helm attaches to agents, it never owns their launch.
+    ///
+    /// Restore stays lazy on purpose. `init` creates no pty until a workspace is
+    /// visited, which bounds startup to the active context rather than every
+    /// remembered folder — eager restore would spawn each one's shells at launch.
+    func activate(
+        workspacePath: String, selectedID preferredID: UUID? = nil,
+        restoring restorable: [UUID] = []
+    ) {
         activeWorkspacePath = workspacePath
+        if sessions(for: workspacePath).isEmpty {
+            restore(restorable, in: workspacePath)
+        }
         let workspaceSessions = sessions(for: workspacePath)
-        if workspaceSessions.isEmpty {
-            newTerminal(in: workspacePath)
-        } else if let preferredID, workspaceSessions.contains(where: { $0.id == preferredID }),
-            let preferred = workspaceSessions.first(where: { $0.id == preferredID })
+        if let preferredID, let preferred = workspaceSessions.first(where: { $0.id == preferredID })
         {
             setSelected(preferred)
         } else if let selectedID, workspaceSessions.contains(where: { $0.id == selectedID }) {
             // Keep this workspace's selection when returning to it.
         } else if let first = workspaceSessions.first {
             setSelected(first)
+        }
+    }
+
+    /// Rebuilds a workspace's tab row from persisted ids, or opens one fresh shell
+    /// when there is nothing to restore — which is also the never-visited case, so
+    /// a first-run workspace still behaves exactly as it always has.
+    private func restore(_ ids: [UUID], in workspacePath: String) {
+        guard !ids.isEmpty else {
+            newTerminal(in: workspacePath)
+            return
+        }
+        for id in ids {
+            let session = TerminalSession(
+                id: id, ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller)
+            nextOrdinal += 1
+            session.manager = self
+            sessions.append(session)
         }
     }
 

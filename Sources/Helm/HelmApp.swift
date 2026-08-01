@@ -248,6 +248,10 @@ extension Notification.Name {
     static let helmSelectTerminal = Notification.Name("helmSelectTerminal")
     /// ⌘O — the artifact pane presents its open panel.
     static let helmOpenArtifact = Notification.Name("helmOpenArtifact")
+    /// A ⌘-click on an OSC 8 link the agent printed — object is the `file:` URL to
+    /// render in the artifact pane. Distinct from `helmOpenArtifact`, which is the
+    /// payload-less ⌘O that summons the picker.
+    static let helmOpenArtifactFile = Notification.Name("helmOpenArtifactFile")
     /// ⌘⇧O — the sidebar presents the folder picker; the chosen folder becomes an
     /// open workspace. No payload: the panel runs at the receiver.
     static let helmOpenWorkspace = Notification.Name("helmOpenWorkspace")

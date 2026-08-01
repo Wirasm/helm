@@ -22,8 +22,7 @@ final class WorkspaceContextTests: XCTestCase {
             branch: "main", branchResolved: true)
         WorkspaceContextStore.save(["/workspace": context], to: defaults)
 
-        let restored = WorkspaceContextStore.load(from: defaults, validSessionIDs: [id])[
-            "/workspace"]
+        let restored = WorkspaceContextStore.load(from: defaults)["/workspace"]
         XCTAssertEqual(restored, context, "contexts must round-trip through helm defaults")
     }
 
@@ -43,19 +42,28 @@ final class WorkspaceContextTests: XCTestCase {
             "a second workspace must not overwrite the first")
     }
 
-    func testDanglingSessionIDsAreDroppedOnLoad() {
-        let stale = UUID()
+    /// Replaces `testDanglingSessionIDsAreDroppedOnLoad`, whose subject was removed
+    /// rather than renamed. It asserted that "relaunch cannot restore sessions that
+    /// no longer exist" — true of the *old* process's ptys, but it made the loader
+    /// filter ids against the ids live in this process, which at launch is none. The
+    /// result was that persisted terminals were always discarded before anything
+    /// could restore them. The ids are now the record a relaunch rebuilds from.
+    func testSessionIDsSurviveLoadSoTheyCanBeRestored() {
+        let first = UUID()
+        let second = UUID()
         WorkspaceContextStore.save(
             [
                 "/workspace": WorkspaceContext(
-                    terminalSessionIDs: [stale], selectedTerminalID: stale)
+                    terminalSessionIDs: [first, second], selectedTerminalID: second)
             ], to: defaults)
 
-        let restored = WorkspaceContextStore.load(from: defaults, validSessionIDs: [])["/workspace"]
+        let restored = WorkspaceContextStore.load(from: defaults)["/workspace"]
         XCTAssertEqual(
-            restored?.terminalSessionIDs, [],
-            "relaunch cannot restore sessions that no longer exist")
-        XCTAssertNil(restored?.selectedTerminalID, "a dangling selected session must be cleared")
+            restored?.terminalSessionIDs, [first, second],
+            "a relaunch must still know how many terminals the workspace had, and in what order")
+        XCTAssertEqual(
+            restored?.selectedTerminalID, second,
+            "the selected tab must survive a relaunch, not just the tab row")
     }
 
     func testUnvisitedWorkspaceHasDefaultsAndCorruptBlobIsEmpty() {

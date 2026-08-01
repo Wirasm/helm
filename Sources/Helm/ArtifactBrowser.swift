@@ -246,6 +246,17 @@ struct ArtifactBrowser: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(BrowserRowButtonStyle())
+        // Pasting an artifact's path into an agent's context is one of the most
+        // frequent things done in helm, and it has no cheap route today: artifacts
+        // moved out of the repo into ~/.prp, which put them outside every editor
+        // that had a "copy path" on them. The path is tilde-absolute because ~/.prp
+        // sits outside any repo, so there is nothing for it to be relative to —
+        // and it is the form prp's own docs use.
+        .contextMenu {
+            Button("Copy Path") {
+                Pasteboard.copy((file.url.path as NSString).abbreviatingWithTildeInPath)
+            }
+        }
     }
 
     private var browseRow: some View {
