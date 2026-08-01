@@ -44,6 +44,12 @@ final class BoardModel: ObservableObject {
     /// directory-level `DispatchSource` pattern (`ArtifactPane`'s `FileWatcher`)
     /// would not reliably see. Two seconds is well inside glance latency and costs
     /// one directory listing plus a handful of ~400-byte reads, off the main actor.
+    ///
+    /// A second window would start a second loop against this same shared board.
+    /// Deliberately not guarded: both compute the same answer from the same two
+    /// inputs and this actor serialises their writes, so the cost is a duplicated
+    /// scan of a handful of small files. A "already polling" flag would be worse —
+    /// closing the first window would stop the second window's board.
     func poll(every interval: Duration = .seconds(2)) async {
         while !Task.isCancelled {
             await refresh()

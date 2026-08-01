@@ -8,7 +8,10 @@ import XCTest
 /// The pid *match* cannot be exercised here — no pty spawns under a shielded
 /// display, so `foregroundPid` never returns an agent. Everything either side of
 /// the match can be, and is.
-@MainActor
+///
+/// Isolation sits on the test methods rather than the class: `setUpWithError` and
+/// `tearDownWithError` override nonisolated XCTest API, so a `@MainActor` class
+/// cannot own a mutable fixture without the compiler rightly complaining.
 final class BoardModelTests: XCTestCase {
     private let workspace = "/tmp/helm-board-workspace"
     private var root: URL!
@@ -30,6 +33,7 @@ final class BoardModelTests: XCTestCase {
                 to: root.appendingPathComponent("\(pid).json"), atomically: true, encoding: .utf8)
     }
 
+    @MainActor
     func testTerminalWithNoSurfaceYetContributesNoMark() async throws {
         // A workspace helm hosts, an agent row that names its cwd — and still no
         // mark, because the surface has no process for the row's pid to match.
@@ -47,6 +51,7 @@ final class BoardModelTests: XCTestCase {
             "an unattached surface reports no foreground pid, so there is nothing to match")
     }
 
+    @MainActor
     func testWorkspaceHelmDoesNotHostIsNeverInTheMap() async throws {
         try writeRow(pid: 9139, status: "idle")
 
@@ -58,6 +63,7 @@ final class BoardModelTests: XCTestCase {
             "the registry is full of other people's agents; helm reports only its own")
     }
 
+    @MainActor
     func testRefreshOverAMissingRegistryIsQuietNotFatal() async {
         let board = BoardModel(
             manager: TerminalManager(), root: root.appendingPathComponent("never-created"))
@@ -67,6 +73,7 @@ final class BoardModelTests: XCTestCase {
         XCTAssertTrue(board.presence.isEmpty)
     }
 
+    @MainActor
     func testPollStopsWhenItsTaskIsCancelled() async {
         // The loop is `refresh` then sleep; a cancelled sleep throws immediately,
         // so the guard is what has to stop it rather than spin.

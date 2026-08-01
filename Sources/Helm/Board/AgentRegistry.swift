@@ -70,10 +70,11 @@ enum AgentRegistry {
                 at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
         else { return [] }
 
+        let decoder = JSONDecoder()
         return entries.compactMap { url in
             guard url.pathExtension == "json", let data = try? Data(contentsOf: url)
             else { return nil }
-            return try? JSONDecoder().decode(AgentSession.self, from: data)
+            return try? decoder.decode(AgentSession.self, from: data)
         }
     }
 }
