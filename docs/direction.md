@@ -15,12 +15,16 @@ helm having an agent is helm rendering someone else's.
 
 ## Layout
 
-Three columns: **left bar · workbench · right bar**.
+Two columns: **workbench · right bar**.
 
-- **Left bar** — not specified yet.
 - **Workbench** — the middle. Where panes are organised.
 - **Right bar** — quick access. Think of it as **actions**. Artifact browser lives here.
   Possibly a file tree, not a priority. Archon actions go here too.
+
+There is **no left bar**. Every job proposed for one is taken — workspaces by the workspace
+bar, terminals by the tab strip, the file tree by the right bar — so it leaves the early
+route rather than being designed. Ideas exist for later (a list of open worktrees to open a
+terminal in, running Archon workflows), but they wait on dogfooding to prove a need.
 
 ## Primitives
 
@@ -67,7 +71,7 @@ helm renders and routes; it does not decide.
 
 ## Open
 
-- What goes in the left bar.
+- Whether a left bar ever earns its width, once helm has been lived in.
 - What else belongs in the right bar beyond the artifact browser and Archon actions.
 - Whether the file tree earns a place.
 - Exact shape of the Archon panel, pending the API.
