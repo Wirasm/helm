@@ -7,19 +7,21 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root
+- **`CONTEXT.md`** at the repo root — **helm's canonical vocabulary.** It outranks `../GLOSSARY.md`
+  for anything helm shows.
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in
 
-Neither exists yet. If any of these files don't exist, **proceed silently**. Don't flag their absence;
-don't suggest creating them upfront. The `/domain-modeling` skill creates them lazily when terms or
-decisions actually get resolved.
+`docs/adr/` does not exist yet. If a file listed here doesn't exist, **proceed silently**. Don't flag
+its absence; don't suggest creating it upfront. The `/domain-modeling` skill creates them lazily when
+terms or decisions actually get resolved.
 
 ## Also read, for this repo specifically
 
 helm's vocabulary is not all local. Before naming anything:
 
-- **`../GLOSSARY.md`** — canonical vocabulary for the whole sild workspace, which helm sits inside.
-  It outranks any term invented here.
+- **`../GLOSSARY.md`** — the **cross-repo** terms helm shares with kild and prp. Since helm #34 it no
+  longer carries helm's own vocabulary: `CONTEXT.md` outranks it for anything helm shows, and most of
+  what remains there names kild's room model, which helm does not have.
 - **`docs/direction.md`** — where helm is headed. An entry point, explicitly not a spec: it decides
   nothing, and says so. Treat its contents as intent, not as settled fact.
 - **`docs/SPIKE.md`** and **`docs/VENDORED.md`** — the libghostty embed. These *are* settled fact:
@@ -29,7 +31,7 @@ helm's vocabulary is not all local. Before naming anything:
 
 ```
 /
-├── CONTEXT.md          ← does not exist yet
+├── CONTEXT.md          ← helm's canonical vocabulary
 ├── docs/
 │   ├── adr/            ← does not exist yet
 │   ├── agents/         ← this directory
@@ -43,8 +45,8 @@ helm's vocabulary is not all local. Before naming anything:
 ## Use the glossary's vocabulary
 
 When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test
-name), use the term as defined in `CONTEXT.md` — and, above it, `../GLOSSARY.md`. Don't drift to
-synonyms the glossary explicitly avoids.
+name), use the term as defined in `CONTEXT.md` — falling back to `../GLOSSARY.md` only for terms that
+cross into kild or prp. Don't drift to synonyms either file lists under `_Avoid_` / "Never say".
 
 If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language
 the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).

@@ -47,4 +47,5 @@ GitHub issues on `Wirasm/helm`, via `gh`. See `docs/agents/issue-tracker.md`.
 
 ### Domain docs
 
-Single-context; vocabulary is canonical in `../GLOSSARY.md`. See `docs/agents/domain.md`.
+Single-context; vocabulary is canonical in `CONTEXT.md`, with `../GLOSSARY.md` for the
+cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
