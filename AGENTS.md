@@ -39,6 +39,27 @@ that proves the other checkout builds.
 - `swift run helm` to iterate, `make app` for the real bundle.
 - Conventional commits, written as a human — no AI attribution.
 
+## Architecture — how to think about where code goes
+
+**Vertical slices by feature, not layers.** `Sources/Helm/<Feature>/` holds that feature's
+model, views and commands together. If a thing can name a single feature, it belongs in that
+feature's directory — including its keyboard shortcuts and notification handling. Only work
+that genuinely spans features stays in `App/`, which is composition and nothing else. The
+test is simple: two people building two features should not have to edit the same file.
+
+**Put a command handler where its lifetime is right, not where it looks tidy.** A subscription
+that has to work while its view is closed belongs on the model, which outlives the
+presentation. Attaching it to the view means it is dead in exactly the state it exists for.
+
+**Prefer values over live objects at a seam.** Describe what a thing is with a small `Codable`
+value and resolve it to the live object at the edge. Persistence, restore and equality then
+come free, where a tree of protocol existentials would need a hand-rolled type registry.
+
+**Let Swift's access control tell you where the seam is.** `@Published private(set)` state is
+only mutable from the type's own file, so an extension that has to mutate it is not a seam —
+it is the same module wearing two filenames. Fighting that with looser access or wrapper
+methods usually means the split was wrong.
+
 ## Agent skills
 
 ### Issue tracker

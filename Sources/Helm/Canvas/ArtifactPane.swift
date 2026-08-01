@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Inject
 import SwiftUI
 
@@ -39,6 +40,29 @@ final class ArtifactPaneModel: ObservableObject {
     private static let maxBytes = 5_000_000
 
     var isOpen: Bool { document != nil }
+
+    /// The canvas vertical subscribes to its own command rather than having the
+    /// app shell forward it.
+    ///
+    /// It has to live on the model, not on a view: `helmOpenArtifactFile` exists to
+    /// open the pane **while it is closed**, and a receiver attached to the dock
+    /// would be torn down in exactly that state. The model outlives the presentation,
+    /// so the command lands whether the pane is on screen or not.
+    /// An `AnyCancellable` rather than a NotificationCenter token: it unsubscribes in
+    /// its own deinit, and Swift 6 forbids a nonisolated deinit from touching the
+    /// non-Sendable token the observer API hands back.
+    private var openCommand: AnyCancellable?
+
+    init() {
+        openCommand =
+            NotificationCenter.default
+            .publisher(for: .helmOpenArtifactFile)
+            .compactMap { $0.object as? URL }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] url in
+                MainActor.assumeIsolated { self?.open(url) }
+            }
+    }
 
     /// The browser's "Browse…" row and the pre-browser ⌘O behavior. Starts at
     /// `directory` when given (a store root), else ~/.prp when it exists — the
