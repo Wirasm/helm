@@ -4,15 +4,9 @@ import XCTest
 
 final class WorkspaceContextTests: XCTestCase {
     private var defaults: UserDefaults!
-    private var suiteName: String!
 
     override func setUpWithError() throws {
-        suiteName = "helm-workspace-context-tests-\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-    }
-
-    override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: suiteName)
+        defaults = try isolatedDefaults("workspace-context")
     }
 
     func testSaveRestoreRoundTrip() {
