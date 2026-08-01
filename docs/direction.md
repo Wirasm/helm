@@ -15,11 +15,23 @@ helm having an agent is helm rendering someone else's.
 
 ## Layout
 
-Two columns: **workbench · right bar**.
+One column for the early route: the **workbench**, under the workspace bar. A **right bar**
+arrives last, with Archon.
 
-- **Workbench** — the middle. Where panes are organised.
-- **Right bar** — quick access. Think of it as **actions**. Artifact browser lives here.
-  Possibly a file tree, not a priority. Archon actions go here too.
+- **Workbench** — the middle. Where panes are organised. **Panes live here, full stop** — the
+  bar is not a second place one can dock.
+- **Right bar** — not actions. A **rail of ambient things you monitor and act on**, and its
+  one tenant is Archon's run list. Toggleable, remembered, **default hidden**. Nothing else
+  earned a slot, and Archon is ranked last, so helm has nothing either side of the bench for
+  the whole early route.
+
+The **artifact browser is a ⌘O popover**, not a bar tenant — a picker you summon, not
+something you watch. Copying an artifact's path is a context menu on its row, and the path is
+the tilde-absolute `~/.prp/<key>/plans/foo.md` (the form prp's own README invokes).
+
+There is **no file tree**. A tree is navigation, which is not what the rail is for, and
+`git status` already answers the one job it had — checking the agent put files where it
+should. It stays a deferral, not a rejection: dogfooding decides.
 
 There is **no left bar**. Every job proposed for one is taken — workspaces by the workspace
 bar, terminals by the tab strip, the file tree by the right bar — so it leaves the early
@@ -47,12 +59,14 @@ The agent CLIs in use (pi, Claude Code) already write full logs to the filesyste
 overlays a UI on those logs: a readable chat with proper markdown formatting, a chat box,
 and a calmer view for focus.
 
-## Archon panel
+## Archon surface
 
-An openable panel. Roughly: a workflow picker, an input field, a model picker — shaped to
-whatever the API actually offers.
+Not an API client — the CLI's `--json` and the file tree. Two pieces:
 
-Plus some Archon controls in the right bar as actions.
+- A **run list** in the rail — background `--detach` runs with key metadata. Clicking one
+  opens a curated node view as a **bench pane**, not inside the rail.
+- A **launcher** summoned from a `+` at the head of that list: a form composing the CLI
+  command from workflow, input, and flags. Ships without a model control.
 
 ## Sizing
 
@@ -72,9 +86,7 @@ helm renders and routes; it does not decide.
 ## Open
 
 - Whether a left bar ever earns its width, once helm has been lived in.
-- What else belongs in the right bar beyond the artifact browser and Archon actions.
-- Whether the file tree earns a place.
-- Exact shape of the Archon panel, pending the API.
+- Whether a file tree ever earns a job the diff does not already do.
 
 ## Facts that already hold
 
