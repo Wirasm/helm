@@ -59,7 +59,9 @@ if let pid = Int32(target) {
     }
     // Prefer an exact name match when there is one: "helm" should mean helm even if
     // something called "helm-something-else" is also running.
-    let exact = named.filter { ($0.localizedName ?? "").caseInsensitiveCompare(target) == .orderedSame }
+    let exact = named.filter {
+        ($0.localizedName ?? "").caseInsensitiveCompare(target) == .orderedSame
+    }
     matches = exact.isEmpty ? named : exact
 }
 
