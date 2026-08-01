@@ -2,7 +2,13 @@
 
 im the user its built for me and the way i work
 
-Entry point for planning. Nothing here is decided.
+Entry point for planning — the shape, not the sequence.
+
+**The build order is settled**: `~/.prp/helm-3ec376fc/plans/helm-build-order.plan.md`, the
+destination of wayfinder map [#17](https://github.com/Wirasm/helm/issues/17). It ranks every
+surface below, names what each one proves, and puts the **switch-over line after position 1**
+— restoring workspaces and terminals across a restart, which is the only thing keeping helm
+from being the daily driver. Read it before planning any surface here.
 
 helm is the surface you work in, full screen, all day. Native macOS. It hosts terminals,
 renders what agents produce, and gives quick access to the actions you run often. The
@@ -41,15 +47,22 @@ terminal in, running Archon workflows), but they wait on dogfooding to prove a n
 ## Primitives
 
 - **Workspace** — the folder you're working in.
-- **Workbench** — the bench panes are arranged on. Multiple terminals, chats, canvas,
-  markdown. Lego panes, close to a window manager.
-- **Terminal**
-- **Markdown editor**
-- **Integrated webview** — agents can control it, you can draw on it, and it sends context
-  back to the agent.
-- **Agent canvas** — renders agent reports, fully manipulable by agents. e.g. _"build a task
-  tracking tool in the canvas"_ → the agent builds it and it renders as something
-  interactive.
+- **Workbench** — the bench panes are arranged on. **Depth-2**: N columns, each a vertical
+  stack, each slot tabbed. A real window manager, but not a general tree — every arrangement
+  worth having is columns-of-stacks, and depth-2 is a strict subset of the tree so nothing is
+  foreclosed.
+- **Pane** — a workbench tenant. **Two types, and only two.**
+  - **Terminal** — the chat view is a full-pane *swap* on this, button-toggled like ⌘T, so it
+    costs the bench nothing.
+  - **Canvas** — renders a markdown file, an HTML file, or a URL, and accepts annotation on
+    it. Modular by source, extendable to further formats. This is `ArtifactPane` promoted,
+    not new work.
+
+The canvas is **one** primitive, not three: the integrated webview, the draw-on pane and the
+agent canvas merged into it. And the agent **receives and navigates, never drives** — full
+browser control already exists as `playwright-cli` and helm would ship a worse copy. The
+agent's route in is to write a self-contained file and print a link you ⌘-click: **offer, not
+push**. A pane appearing unbidden is helm rearranging the bench on the agent's word.
 
 ## Terminal ↔ chat toggle
 
@@ -85,8 +98,16 @@ helm renders and routes; it does not decide.
 
 ## Open
 
-- Whether a left bar ever earns its width, once helm has been lived in.
-- Whether a file tree ever earns a job the diff does not already do.
+Both wait on the same trigger — **living in helm** — which the build order now makes
+reachable, since switch-over is one change away rather than a whole route away.
+
+- Whether a left bar ever earns its width. Its last candidate is a worktree picker, and it
+  has to beat the test a column tenant must pass: **monitored or acted on, not navigated**.
+- Whether a file tree ever earns a job the diff does not already do. Declined by *both*
+  columns on that same test.
+
+Everything else the map left dim is recorded in
+[#17](https://github.com/Wirasm/helm/issues/17)'s *Not yet specified*.
 
 ## Facts that already hold
 
@@ -103,8 +124,16 @@ Not decisions — things that are true today and shape what is cheap.
   - `ghostty_surface_text` — the wrapper's only public write API — lands printable text but
     silently sanitizes control bytes: ESC arrives as a space, CR is dropped.
   - `ghostty_surface_binding_action("text:…")` delivers raw bytes byte-exact, and is the only
-    route that works. It is module-internal, so writing into a hosted terminal **starts by
-    extending the vendored wrapper patch**, not by calling an API helm already has.
+    route that works. **It is public and helm can call it today** —
+    `AppTerminalView.performBindingAction`, in a file whose header reads *"public wrappers
+    around `TerminalSurface` write paths so hosts can inject bytes into the pty without
+    reaching for internal API."* An earlier version of this file called it module-internal
+    and said writing **starts by extending the vendored wrapper patch** — that was wrong, and
+    it over-generalised the spike's real finding: what is module-internal is the `surface`
+    *property* and the read signals (`mouse_captured` and friends), which is what the spike
+    actually needed its patch for. Writing into a hosted terminal costs **no vendor patch**.
+    The guard on that write is a registry file read (`status == idle`), not a surface signal,
+    so it needs no patch either.
 - Claude Code and pi both write full session transcripts to disk, so a chat view is a
   renderer over files rather than an integration — but the grain is coarse. Measured
   2026-07-31 (`~/.prp/helm-3ec376fc/reports/nice-view-spike-reader.md`): Claude Code writes
@@ -119,6 +148,16 @@ Not decisions — things that are true today and shape what is cheap.
   chat view turns out to be, it cannot be *only* a file renderer: the moments that most
   demand attention are exactly the moments the file is silent. Reading the rendered surface
   (`ghostty_surface_read_text`) is the only source that has them.
+- **Remote control is the agent's, not the terminal's — so it costs helm nothing.** Claude
+  Code publishes a per-session `bridgeSessionId` in `~/.claude/sessions/<pid>.json`, which is
+  how the operator drives a session from his phone. It is a property of the agent process,
+  independent of which terminal hosts it, so helm neither buys nor breaks it. The one real
+  consequence: if helm dies the agent dies with it and the bridge goes too — which is why
+  helm-build work stays outside helm, an accepted tradeoff rather than a problem to solve.
+- **Terminals do not survive a restart, and the persistence shape is deliberately neutered.**
+  `WorkspaceContext.swift:25`'s `droppingDanglingSessionIDs` filters saved `terminalSessionIDs`
+  against *live* ids at load, so a cold start always restores none. This is the switch-over
+  gate and position 1 of the build order.
 - helm already has working markdown and HTML rendering (`ArtifactPane`, `ArtifactHTML`,
   `ArtifactWebViews`, `PostMarkdown`, `MarkdownTheme`, `ArtifactBrowser`) and the terminal
   stack (`TerminalManager`, `TerminalStrip`, `TerminalCapabilities`, `GhosttyConfig`).
