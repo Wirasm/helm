@@ -38,7 +38,8 @@ enum IsolatedDefaults {
     /// Where a suite's backing file lives — the thing `defaults domains` is actually reading.
     static func url(for name: String) -> URL { preferences.appendingPathComponent("\(name).plist") }
 
-    private static let preferences = URL(fileURLWithPath: NSHomeDirectory())
+    /// The folder `defaults domains` reads. The real `helm` and `com.wirasm.helm` live here too.
+    static let preferences = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Library/Preferences")
 
     /// Remove a suite so that `defaults domains` stops listing it.

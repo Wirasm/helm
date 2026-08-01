@@ -58,9 +58,7 @@ final class IsolatedDefaultsTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "key"), "value", "and must be a real suite")
 
         let made = try FileManager.default
-            .contentsOfDirectory(
-                atPath: IsolatedDefaults.url(for: "x").deletingLastPathComponent().path
-            )
+            .contentsOfDirectory(atPath: IsolatedDefaults.preferences.path)
             .filter { $0.hasPrefix("\(IsolatedDefaults.prefix)selfcheck-") }
         XCTAssertFalse(
             made.isEmpty,
