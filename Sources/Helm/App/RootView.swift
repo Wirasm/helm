@@ -39,6 +39,7 @@ struct RootView: View {
             }
         }
         .task {
+            model.observeTerminals(terminalManager, artifact: artifact)
             activateSelectedWorkspace()
             if let path = LaunchOptions.artifactPath {
                 artifact.open(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
@@ -61,17 +62,10 @@ struct RootView: View {
         // 2. `@Published` fires in `willSet`, so a handler that re-reads the manager sees
         //    the value it had *before* the change.
         //
-        // `.task` runs once for the view's lifetime rather than per render, which fixes
-        // identity; awaiting the next iteration puts the read after the mutation lands,
-        // which fixes staleness. `objectWillChange` needs no `dropFirst` — unlike a
-        // `@Published` projection it does not replay a current value on subscribe, and
-        // that replay is what made `dropFirst` look necessary in the first place.
-        .task {
-            for await _ in terminalManager.objectWillChange.values {
-                await Task.yield()
-                persistCurrentContext()
-            }
-        }
+        // The subscription itself lives on the model, whose lifetime is right for it —
+        // see `WorkspaceModel.observeTerminals`, which also records the two ways doing
+        // this from here failed. Wiring it from `.task` rather than `init` keeps the
+        // model unaware of who its collaborators are until there is a view to have them.
         .onReceive(NotificationCenter.default.publisher(for: .helmSelectWorkspace)) { note in
             guard let index = note.object as? Int, model.workspaces.indices.contains(index) else {
                 return

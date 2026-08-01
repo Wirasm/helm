@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// The open folders and their per-workspace UI state.
@@ -17,6 +18,7 @@ final class WorkspaceModel: ObservableObject {
     var selectedWorkspaceRoot: String? { selectedWorkspace?.path }
 
     private let defaults: UserDefaults
+    private var terminalChanges: AnyCancellable?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -61,6 +63,19 @@ final class WorkspaceModel: ObservableObject {
     /// it here would put a `https:` string where a file path is read back.
     func saveContext(terminalManager: TerminalManager, artifact: ArtifactPaneModel) {
         guard let workspace = selectedWorkspace else { return }
+        // Never record a workspace that is not mounted. Until `TerminalManager.activate`
+        // has run for it there are no sessions to see, so saving would write an EMPTY tab
+        // row over the one a relaunch is about to restore from.
+        //
+        // That is not hypothetical — it is what made restore look broken. A `@Published`
+        // projection republishes its current value the moment something subscribes, so
+        // `onReceive(artifact.$source)` fired during the first body evaluation, which is
+        // *before* `.task` activates the workspace. The saved row was wiped and then read
+        // back empty, so a relaunch restored one fresh shell no matter what had been open.
+        //
+        // Guarding here rather than at each call site is deliberate: the wipe came from a
+        // subscription nobody thought of as a save, and the next one will too.
+        guard terminalManager.activeWorkspacePath == workspace.path else { return }
         var context = contexts[workspace.path] ?? WorkspaceContext()
         context.terminalSessionIDs = terminalManager.sessions(for: workspace.path).map(\.id)
         context.selectedTerminalID =
@@ -69,6 +84,41 @@ final class WorkspaceModel: ObservableObject {
         context.openArtifactPath = artifact.fileURL?.path
         contexts[workspace.path] = context
         WorkspaceContextStore.save(contexts, to: defaults)
+    }
+
+    /// Persist this workspace's context whenever its terminals change.
+    ///
+    /// On the model rather than in a `View`, for the reason `AGENTS.md` gives: a
+    /// subscription's lifetime should be its owner's, not a render's. Two earlier
+    /// attempts sat in `RootView` —
+    ///
+    /// - `.onReceive(manager.$sessions.dropFirst())` builds a **new publisher every body
+    ///   evaluation**, so `onReceive` resubscribes and `dropFirst` eats the next real
+    ///   event each time. Reasoned, not measured: the live evidence originally cited for
+    ///   it turned out to be the separate wipe that `saveContext` now guards against.
+    /// - `for await _ in manager.objectWillChange.values` **traps**, and this one is
+    ///   measured — `ObservableObjectPublisher` does not honour `AsyncPublisher`'s demand,
+    ///   so two changes in quick succession killed the app with "Received an output
+    ///   without requesting demand".
+    ///
+    /// A stored `sink` has unlimited demand, so it cannot trap, and one instance lives
+    /// as long as the model. `receive(on:)` is load-bearing rather than decoration:
+    /// `@Published` fires in `willSet`, so reading the manager synchronously would see
+    /// the value from *before* the change. The main-queue hop lands after it.
+    /// `self` is weak because the closure is stored on `self`; the collaborators are held
+    /// **strongly**, and that is deliberate. Neither references this model back, so there
+    /// is no cycle — and capturing them weakly gives the subscription a way to go quietly
+    /// dead if anything but a view ever owns them, which is the failure mode this whole
+    /// area kept producing. A regression test caught exactly that.
+    func observeTerminals(_ manager: TerminalManager, artifact: ArtifactPaneModel) {
+        terminalChanges = manager.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    self.saveContext(terminalManager: manager, artifact: artifact)
+                }
+            }
     }
 
     /// Remember a workspace's git branch for its tab label.
