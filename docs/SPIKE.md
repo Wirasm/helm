@@ -52,6 +52,14 @@ title/close/bell/pwd/OSC events, and an `.exec` backend flag that maps to
 `GHOSTTY_SURFACE_IO_BACKEND_EXEC` (real pty). We hand-rolled only the helm side
 (`Sources/Helm/GhosttyTerminal.swift`):
 
+> **Names, as of 2026-08-01.** This section is the spike's own record and its helm-side
+> names are a snapshot, not current paths. `GhosttyTerminal.swift` no longer exists: the
+> app-level singleton owning ONE view became `Terminals/TerminalSession.swift` (one per
+> tab) plus `Terminals/TerminalManager.swift` (owner of the sessions and the single shared
+> `TerminalController`), and `GhosttyHostView` is `Terminals/GhosttyHostView.swift`. ⌘T no
+> longer toggles anything — it is deliberately unbound. **The lifecycle contract and the
+> API landmines below are unchanged and still load-bearing**; only the file names moved.
+
 - `GhosttyTerminal` (app-level singleton): owns the `TerminalController` and ONE
   long-lived `AppTerminalView`; sinks title/close/lifecycle delegate events into
   published status. The pty survives view unmount because the surface belongs to the

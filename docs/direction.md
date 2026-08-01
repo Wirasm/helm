@@ -154,13 +154,23 @@ Not decisions — things that are true today and shape what is cheap.
   independent of which terminal hosts it, so helm neither buys nor breaks it. The one real
   consequence: if helm dies the agent dies with it and the bridge goes too — which is why
   helm-build work stays outside helm, an accepted tradeoff rather than a problem to solve.
-- **Terminals do not survive a restart, and the persistence shape is deliberately neutered.**
-  `WorkspaceContext.swift:25`'s `droppingDanglingSessionIDs` filters saved `terminalSessionIDs`
-  against *live* ids at load, so a cold start always restores none. This is the switch-over
-  gate and position 1 of the build order.
+- **Terminals survive a restart** — position 1 of the build order, and the switch-over line.
+  A workspace's tab row is rebuilt on first visit from the ids persisted for it, under those
+  same ids so the saved selection still resolves. Shells come back **empty**: helm does not
+  re-run the agent, because it attaches to agents and never owns their launch. A `cls --resume`
+  brings one back, and it republishes to the session registry, so nothing downstream depends on
+  helm having started it. *(Until 2026-08-01 the loader filtered saved ids against the ids live
+  in the process, which at launch is none — so the persistence was neutered by its own loader
+  and a relaunch cost every terminal in every workspace.)*
 - helm already has working markdown and HTML rendering (`ArtifactPane`, `ArtifactHTML`,
-  `ArtifactWebViews`, `PostMarkdown`, `MarkdownTheme`, `ArtifactBrowser`) and the terminal
-  stack (`TerminalManager`, `TerminalStrip`, `TerminalCapabilities`, `GhosttyConfig`).
+  `ArtifactWebViews`, `ArtifactBrowser`) and the terminal stack (`TerminalSession`,
+  `TerminalManager`, `TerminalStrip`, `GhosttyConfig`). `PostMarkdown` + `MarkdownTheme` are a
+  markdown→SwiftUI renderer with **no caller**, kept deliberately for the chat view — many small
+  blocks of prose, where a webview per message would be absurd.
+- **The source is sliced vertically by feature** — `App/`, `Workspaces/`, `Terminals/`,
+  `Canvas/`, `Artifacts/`, `Shared/` — with each vertical owning its own commands, and `App/`
+  reduced to composition. Keyboard shortcuts are a table of values (`Shortcut`) read by both the
+  event monitor and the menu. See `AGENTS.md` for the patterns.
 - The kild layer was removed on `chore/drop-kild-layer`; what remains is workspaces,
   terminals, artifact rendering, and the app shell.
 - GhosttyKit ships iOS and Catalyst slices alongside macOS.

@@ -184,10 +184,11 @@ Wired in three places, keep them in lockstep:
 2. `project.yml` — the same two pins under `packages:`, the same two products
    under `dependencies:`, and `configs.Debug.OTHER_LDFLAGS` carrying the same
    two flags. Release must NOT carry them.
-3. The views that opt in: `RootView`, `SidebarColumn`, `RoomDetailView`,
-   `ArtifactPane`, `TerminalStrip` each hold `@ObserveInjection private var
-   inject` and end their body with `.enableInjection()`. A view without those
-   two lines still compiles and runs — it just won't redraw on a swap.
+3. The views that opt in: `RootView`, `TerminalStrip` and `ArtifactPane` each hold
+   `@ObserveInjection private var inject` and end their body with
+   `.enableInjection()`. A view without those two lines still compiles and runs —
+   it just won't redraw on a swap. (`SidebarColumn` and `RoomDetailView` were on
+   this list until the kild layer was removed at `e544746`.)
 
 Interposing is what makes it work: the Debug linker emits indirect stubs that
 injection repoints. Without the flag, calls are direct and a swap does nothing.

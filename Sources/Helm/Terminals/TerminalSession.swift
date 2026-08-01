@@ -70,7 +70,7 @@ final class TerminalSession: ObservableObject, Identifiable {
     @Published private(set) var hasBell = false
     /// Command-activity chrome: live OSC 9;4 progress plus the
     /// finished-command tick/mark for inactive tabs (rules and formatting in
-    /// TerminalCapabilities.swift). The strip renders it; selection
+    /// `TerminalActivity`). The strip renders it; selection
     /// acknowledges the outcome mark, bell keeps display precedence.
     @Published private(set) var activity = TerminalActivity()
 

@@ -38,9 +38,25 @@ helm's vocabulary is not all local. Before naming anything:
 │   ├── direction.md
 │   ├── SPIKE.md
 │   └── VENDORED.md
-├── Sources/Helm/
-└── Tests/HelmTests/
+├── Sources/Helm/       ← sliced vertically by feature, see below
+└── Tests/HelmTests/    ← mirrors the same slices
 ```
+
+**The source is sliced by feature, not by layer.** Each directory holds that feature's
+model, views and command handling together, so two features can be built at once without
+editing the same file.
+
+```
+Sources/Helm/
+├── App/          composition only — the scene, the keyboard map, the menu, notification names
+├── Workspaces/   the folders helm has open, and their persisted per-workspace state
+├── Terminals/    sessions, the shared ghostty runtime, the tab strip
+├── Canvas/       rendering a markdown/HTML file — the pane and its webviews
+├── Artifacts/    finding artifacts: store discovery, the ⌘O browser, store resolution
+└── Shared/       the few things no single feature owns
+```
+
+`AGENTS.md` carries the reasoning for placing code — read it before adding a file.
 
 ## Use the glossary's vocabulary
 

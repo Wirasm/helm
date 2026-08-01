@@ -1,58 +1,9 @@
-import GhosttyTerminal
 import XCTest
 
 @testable import Helm
 
-/// The pure capability logic (TerminalCapabilities.swift), fully headless:
-/// the ⌘-click URL allowlist, the command-activity tab-state model, and the
-/// desktop-notification gate.
-final class TerminalCapabilitiesTests: XCTestCase {
-    // MARK: - TerminalURLPolicy
-
-    func testAllowsWebMailAndFileSchemes() {
-        XCTAssertEqual(
-            TerminalURLPolicy.validated("https://example.com/path?q=1")?.absoluteString,
-            "https://example.com/path?q=1"
-        )
-        XCTAssertNotNil(TerminalURLPolicy.validated("http://example.com"))
-        XCTAssertNotNil(TerminalURLPolicy.validated("mailto:dev@example.com"))
-        XCTAssertNotNil(TerminalURLPolicy.validated("file:///tmp/report.html"))
-    }
-
-    func testSchemeMatchingIsCaseInsensitive() {
-        XCTAssertNotNil(TerminalURLPolicy.validated("HTTPS://example.com"))
-    }
-
-    func testTrimsGridWrappingWhitespace() {
-        XCTAssertEqual(
-            TerminalURLPolicy.validated("  https://example.com\n")?.absoluteString,
-            "https://example.com"
-        )
-    }
-
-    func testRejectsEveryOtherScheme() {
-        // Terminal content is untrusted; NSWorkspace.open would launch
-        // whatever app claims these. All must be dropped.
-        for hostile in [
-            "javascript:alert(1)",
-            "data:text/html,<script>alert(1)</script>",
-            "ssh://root@evil.example",
-            "vnc://evil.example",
-            "x-apple.systempreferences:com.apple.preference",
-            "ftp://example.com",
-        ] {
-            XCTAssertNil(TerminalURLPolicy.validated(hostile), hostile)
-        }
-    }
-
-    func testRejectsSchemelessAndEmptyStrings() {
-        // No guessing: a bare host is not promoted to https.
-        XCTAssertNil(TerminalURLPolicy.validated("example.com/docs"))
-        XCTAssertNil(TerminalURLPolicy.validated(""))
-        XCTAssertNil(TerminalURLPolicy.validated("   \n"))
-    }
-
-    // MARK: - TerminalActivity: progress
+/// Tab command-activity state. Split out of `TerminalCapabilitiesTests` with the type.
+final class TerminalActivityTests: XCTestCase {
 
     func testProgressStatesMapFromOSC94() {
         var activity = TerminalActivity()
@@ -163,17 +114,4 @@ final class TerminalCapabilitiesTests: XCTestCase {
     }
 
     // MARK: - Notification gating
-
-    func testNotificationDeliversUnlessAppActiveAndTabSelected() {
-        // The one silent case: the user is already looking at that terminal.
-        XCTAssertFalse(
-            TerminalNotificationGate.shouldDeliver(appIsActive: true, tabIsSelected: true))
-
-        XCTAssertTrue(
-            TerminalNotificationGate.shouldDeliver(appIsActive: true, tabIsSelected: false))
-        XCTAssertTrue(
-            TerminalNotificationGate.shouldDeliver(appIsActive: false, tabIsSelected: true))
-        XCTAssertTrue(
-            TerminalNotificationGate.shouldDeliver(appIsActive: false, tabIsSelected: false))
-    }
 }
