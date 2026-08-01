@@ -45,13 +45,33 @@ struct RootView: View {
             }
         }
         .onReceive(artifact.$source) { _ in persistCurrentContext() }
-        // Opening or closing a terminal, and switching tabs, are the events that
-        // change what a relaunch has to rebuild. Without these the context was only
-        // written on workspace switch, so quitting from the workspace you had been
-        // working in persisted a stale tab row — the one case restore most needs to
-        // get right. `$sessions`/`$selectedID` fire after the change lands.
-        .onReceive(terminalManager.$sessions.dropFirst()) { _ in persistCurrentContext() }
-        .onReceive(terminalManager.$selectedID.dropFirst()) { _ in persistCurrentContext() }
+        // Opening or closing a terminal, and switching tabs, are what a relaunch has to
+        // rebuild. Without this the context is only written on workspace switch, so
+        // quitting from the workspace you were working in saves a stale tab row — the
+        // one case restore most needs to get right.
+        //
+        // This was two `.onReceive(terminalManager.$sessions.dropFirst())` subscriptions
+        // and it silently lost writes: measured live, three open terminals persisted as
+        // one. Two faults, both invisible from the code alone —
+        //
+        // 1. `$sessions.dropFirst()` builds a NEW publisher on every body evaluation, so
+        //    `onReceive` resubscribes and `dropFirst` eats the next real event each time.
+        //    (`artifact.$source` above survives precisely because it has no operator: the
+        //    projected publisher is one stored instance, so its identity is stable.)
+        // 2. `@Published` fires in `willSet`, so a handler that re-reads the manager sees
+        //    the value it had *before* the change.
+        //
+        // `.task` runs once for the view's lifetime rather than per render, which fixes
+        // identity; awaiting the next iteration puts the read after the mutation lands,
+        // which fixes staleness. `objectWillChange` needs no `dropFirst` — unlike a
+        // `@Published` projection it does not replay a current value on subscribe, and
+        // that replay is what made `dropFirst` look necessary in the first place.
+        .task {
+            for await _ in terminalManager.objectWillChange.values {
+                await Task.yield()
+                persistCurrentContext()
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .helmSelectWorkspace)) { note in
             guard let index = note.object as? Int, model.workspaces.indices.contains(index) else {
                 return
