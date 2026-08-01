@@ -152,6 +152,11 @@ extension Shortcut {
             Shortcut(
                 .character("o"), .command, posts: .helmOpenArtifact,
                 menu: .init(title: "Open Artifact…", key: "o", modifiers: .command)),
+            // ⌘L — the address bar, wherever the idiom comes from. Payload-less:
+            // the canvas focuses its field and the operator types.
+            Shortcut(
+                .character("l"), .command, posts: .helmOpenCanvasURL,
+                menu: .init(title: "Open URL…", key: "l", modifiers: .command)),
         ]
 
     /// The shortcut a key event fires, or nil to let the event through.

@@ -55,6 +55,10 @@ final class WorkspaceModel: ObservableObject {
     /// `TerminalManager` retains the sessions themselves; only their ids and which one was
     /// selected are context state. The artifact is stored as a path rather than a document
     /// so a workspace can be restored without the file having to still be readable.
+    ///
+    /// A canvas showing a **URL** persists nothing — `fileURL` is nil for it, so the field
+    /// keeps meaning what its name says. Restoring one is not on the map yet, and half-doing
+    /// it here would put a `https:` string where a file path is read back.
     func saveContext(terminalManager: TerminalManager, artifact: ArtifactPaneModel) {
         guard let workspace = selectedWorkspace else { return }
         var context = contexts[workspace.path] ?? WorkspaceContext()
@@ -62,7 +66,7 @@ final class WorkspaceModel: ObservableObject {
         context.selectedTerminalID =
             terminalManager.selected?.workspacePath == workspace.path
             ? terminalManager.selectedID : nil
-        context.openArtifactPath = artifact.document?.url.path
+        context.openArtifactPath = artifact.fileURL?.path
         contexts[workspace.path] = context
         WorkspaceContextStore.save(contexts, to: defaults)
     }

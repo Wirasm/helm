@@ -13,6 +13,14 @@ extension Notification.Name {
     /// render in the artifact pane. Distinct from `helmOpenArtifact`, which is the
     /// payload-less ⌘O that summons the picker.
     static let helmOpenArtifactFile = Notification.Name("helmOpenArtifactFile")
+    /// The canvas takes a URL. Object is the URL to open, or nil — which is ⌘L,
+    /// meaning "show me the address field", whether the canvas is open or not.
+    ///
+    /// The payload form has no poster in the tree yet. It is what the terminal's
+    /// ⌘-click would post for an http link (`TerminalSession.terminalDidRequestOpenURL`
+    /// hands those to `NSWorkspace` today, i.e. out of the app); repointing it is
+    /// one line and needs nothing further from the canvas.
+    static let helmOpenCanvasURL = Notification.Name("helmOpenCanvasURL")
     /// ⌘⇧O — the sidebar presents the folder picker; the chosen folder becomes an
     /// open workspace. No payload: the panel runs at the receiver.
     static let helmOpenWorkspace = Notification.Name("helmOpenWorkspace")

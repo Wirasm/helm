@@ -5,14 +5,29 @@ import SwiftUI
 
 // MARK: - Model
 
-/// State for the read-only artifact pane: which file is open, its content, and
-/// the watcher that reloads on external change (plans get rewritten by agents
-/// while you read them).
+/// State for the read-only canvas: what it is showing, and the watcher that
+/// reloads a file on external change (plans get rewritten by agents while you
+/// read them).
 ///
 /// Read-only on purpose — no editing, no commenting. Those are later slices,
 /// designed against real dogfooding.
 @MainActor
 final class ArtifactPaneModel: ObservableObject {
+    /// Where the canvas gets what it renders. CONTEXT.md: the canvas is *modular
+    /// by source* — a file an agent or the operator opened, or a URL.
+    ///
+    /// A sum rather than two optionals, because a canvas showing both a file and
+    /// a URL is not a state that exists — and because the difference has to
+    /// survive the persistence seam: `WorkspaceContext.openArtifactPath` is a
+    /// **file** path, and a `https:` URL parked in `Document.url` would persist
+    /// as `url.path` (empty, or a stray `/segment`) and be reopened through
+    /// `URL(fileURLWithPath:)` on the next workspace switch. `fileURL` below is
+    /// what keeps that honest.
+    enum Source {
+        case file(Document)
+        case url(Page)
+    }
+
     /// What the pane shows for the open file: a markdown document (rendered as
     /// one webview — marked + mermaid), a full-pane web view (.html — the
     /// escape hatch; the view loads `Document.url` itself), or plain
@@ -31,7 +46,29 @@ final class ArtifactPaneModel: ObservableObject {
         var generation = 0
     }
 
-    @Published private(set) var document: Document?
+    /// A URL the canvas is showing.
+    struct Page {
+        /// What the address field shows — the committed address, never a
+        /// half-typed one.
+        var address = ""
+        /// What was actually loaded. nil right after ⌘L on a closed canvas:
+        /// the field is focused and there is nothing to render yet.
+        var url: URL?
+        /// A load counter, not a revision: it rises on every navigation *and*
+        /// every reload, so re-submitting the address you are already on still
+        /// retries. That is the ordinary case — the dev server was not up yet.
+        var generation = 0
+        /// Why the last load did not render, in the operator's terms. Shown as a
+        /// strip above the page rather than instead of it: a refused link must
+        /// not throw away what you were looking at.
+        var failure: String?
+    }
+
+    @Published private(set) var source: Source?
+
+    /// Bumped by ⌘L. The address field watches it, which is what lets a second
+    /// press re-focus a field that is already on screen.
+    @Published private(set) var addressFocus = 0
 
     private var watcher: FileWatcher?
 
@@ -39,29 +76,57 @@ final class ArtifactPaneModel: ObservableObject {
     /// beachballing the pane on a stray binary or log.
     private static let maxBytes = 5_000_000
 
-    var isOpen: Bool { document != nil }
+    var isOpen: Bool { source != nil }
 
-    /// The canvas vertical subscribes to its own command rather than having the
-    /// app shell forward it.
+    /// The open file, when the canvas is showing one — nil for a URL source.
+    /// This is the persistence seam: `WorkspaceModel.saveContext` reads it, so a
+    /// URL canvas simply persists nothing rather than a path that is not one.
+    var fileURL: URL? {
+        if case let .file(document) = source { document.url } else { nil }
+    }
+
+    private var isShowingURL: Bool {
+        if case .url = source { true } else { false }
+    }
+
+    /// The canvas vertical subscribes to its own commands rather than having the
+    /// app shell forward them.
     ///
-    /// It has to live on the model, not on a view: `helmOpenArtifactFile` exists to
-    /// open the pane **while it is closed**, and a receiver attached to the dock
-    /// would be torn down in exactly that state. The model outlives the presentation,
-    /// so the command lands whether the pane is on screen or not.
-    /// An `AnyCancellable` rather than a NotificationCenter token: it unsubscribes in
-    /// its own deinit, and Swift 6 forbids a nonisolated deinit from touching the
+    /// They have to live on the model, not on a view: both exist to open the pane
+    /// **while it is closed**, and a receiver attached to the dock would be torn
+    /// down in exactly that state. The model outlives the presentation, so the
+    /// command lands whether the pane is on screen or not.
+    /// `AnyCancellable`s rather than NotificationCenter tokens: they unsubscribe in
+    /// their own deinit, and Swift 6 forbids a nonisolated deinit from touching the
     /// non-Sendable token the observer API hands back.
-    private var openCommand: AnyCancellable?
+    private var commands: Set<AnyCancellable> = []
 
     init() {
-        openCommand =
-            NotificationCenter.default
+        NotificationCenter.default
             .publisher(for: .helmOpenArtifactFile)
             .compactMap { $0.object as? URL }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] url in
                 MainActor.assumeIsolated { self?.open(url) }
             }
+            .store(in: &commands)
+
+        // ⌘L carries no payload and means "focus the address field"; a URL
+        // payload means "open this" — which is what the terminal's ⌘-click on an
+        // http link would post if that call site were in this slice.
+        NotificationCenter.default
+            .publisher(for: .helmOpenCanvasURL)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] note in
+                MainActor.assumeIsolated {
+                    if let url = note.object as? URL {
+                        self?.openURL(url)
+                    } else {
+                        self?.focusAddress()
+                    }
+                }
+            }
+            .store(in: &commands)
     }
 
     /// The browser's "Browse…" row and the pre-browser ⌘O behavior. Starts at
@@ -82,7 +147,7 @@ final class ArtifactPaneModel: ObservableObject {
     }
 
     func open(_ url: URL) {
-        document = Document(url: url, content: Self.load(url))
+        source = .file(Document(url: url, content: Self.load(url)))
         // Reload on every external change. Watcher lifetime == document
         // lifetime; opening another file replaces it.
         watcher = FileWatcher(url: url) { [weak self] in
@@ -92,21 +157,85 @@ final class ArtifactPaneModel: ObservableObject {
 
     func close() {
         watcher = nil
-        document = nil
+        source = nil
     }
 
     func revealInFinder() {
-        guard let url = document?.url else { return }
+        guard let url = fileURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private func reload() {
-        guard let previous = document else { return }
-        document = Document(
-            url: previous.url,
-            content: Self.load(previous.url),
-            generation: previous.generation + 1
-        )
+        guard case let .file(previous) = source else { return }
+        source = .file(
+            Document(
+                url: previous.url,
+                content: Self.load(previous.url),
+                generation: previous.generation + 1
+            ))
+    }
+
+    // MARK: - URL source
+
+    /// Take the canvas to a URL. Single pane: this replaces whatever it was
+    /// showing, the same way opening another file does.
+    func openURL(_ url: URL) {
+        watcher = nil
+        source = .url(
+            Page(address: url.absoluteString, url: url, generation: nextGeneration))
+    }
+
+    /// ⌘L. On a canvas already showing a page this is "edit this address" and
+    /// keeps the page; otherwise it opens an empty one with the field focused.
+    func focusAddress() {
+        if !isShowingURL {
+            watcher = nil
+            source = .url(Page())
+        }
+        addressFocus += 1
+    }
+
+    /// The address field was committed. A refusal keeps the page that is up and
+    /// says why, rather than blanking the canvas over a typo.
+    func submitAddress(_ typed: String) {
+        guard case .url(var page) = source else { return }
+        guard let url = CanvasURLPolicy.address(typed) else {
+            page.address = typed
+            page.failure =
+                "Not an address the canvas can open: "
+                + typed.trimmingCharacters(in: .whitespacesAndNewlines)
+            source = .url(page)
+            return
+        }
+        openURL(url)
+    }
+
+    func reloadPage() {
+        guard case .url(var page) = source, page.url != nil else { return }
+        page.generation += 1
+        page.failure = nil
+        source = .url(page)
+    }
+
+    /// The page navigated itself — a link, a redirect. The address follows it, so
+    /// the field never lies about what is on screen and reload reloads what you
+    /// are looking at.
+    func pageDidNavigate(to url: URL) {
+        guard case .url(var page) = source else { return }
+        page.address = url.absoluteString
+        page.url = url
+        page.failure = nil
+        source = .url(page)
+    }
+
+    func pageDidFail(_ message: String) {
+        guard case .url(var page) = source else { return }
+        page.failure = message
+        source = .url(page)
+    }
+
+    private var nextGeneration: Int {
+        if case let .url(page) = source { page.generation + 1 } else { 0 }
     }
 
     private static func load(_ url: URL) -> Content {
@@ -194,8 +323,9 @@ final class FileWatcher {
 
 // MARK: - View
 
-/// The read-only artifact half of the terminal workspace split: a header
-/// (filename · reveal-in-Finder · close) over the rendered file.
+/// The read-only canvas half of the terminal workspace split: a header over the
+/// rendered source. Which header is the source's own — a file gets its filename
+/// and reveal-in-Finder, a URL gets an address bar.
 struct ArtifactPane: View {
     /// Hot reload: `.enableInjection()` below redraws this view when
     /// InjectionNext swaps a recompiled build of it into the running app.
@@ -204,11 +334,14 @@ struct ArtifactPane: View {
     @ObservedObject var model: ArtifactPaneModel
 
     var body: some View {
-        if let document = model.document {
+        if let source = model.source {
             VStack(spacing: 0) {
-                header(for: document)
+                switch source {
+                case let .file(document): header(for: document)
+                case let .url(page): CanvasAddressBar(model: model, page: page)
+                }
                 Divider()
-                content(for: document)
+                content(for: source)
             }
             .background(Color(nsColor: .textBackgroundColor))
             // Inside the `if`: the body is a bare ViewBuilder conditional with
@@ -218,7 +351,46 @@ struct ArtifactPane: View {
     }
 
     @ViewBuilder
-    private func content(for document: ArtifactPaneModel.Document) -> some View {
+    private func content(for source: ArtifactPaneModel.Source) -> some View {
+        switch source {
+        case let .file(document): fileContent(for: document)
+        case let .url(page): urlContent(for: page)
+        }
+    }
+
+    /// The URL source. The failure is a strip above the page rather than a
+    /// replacement for it: a refused link must not cost you the page you were
+    /// reading, and a dead dev server should say so instead of showing WebKit's
+    /// blank white pane.
+    @ViewBuilder
+    private func urlContent(for page: ArtifactPaneModel.Page) -> some View {
+        VStack(spacing: 0) {
+            if let failure = page.failure {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle")
+                    Text(failure)
+                        .lineLimit(2)
+                    Spacer()
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.quaternary)
+                Divider()
+            }
+            if let url = page.url {
+                URLCanvasView(model: model, url: url, generation: page.generation)
+            } else {
+                Text("Type a URL — localhost:3000")
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func fileContent(for document: ArtifactPaneModel.Document) -> some View {
         switch document.content {
         case let .markdown(markdown):
             MarkdownArtifactView(markdown: markdown, generation: document.generation)
