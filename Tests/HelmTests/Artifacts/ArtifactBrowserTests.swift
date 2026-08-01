@@ -148,13 +148,40 @@ final class ArtifactBrowserTests: XCTestCase {
         XCTAssertEqual(files.map(\.relativePath), ["plans/kept.md"])
     }
 
-    func testFileListingCapsDepthAtTwo() throws {
+    /// The walk used to stop two levels below the store root. prp archives a level
+    /// deeper than that — `prp-issue` moves a finished investigation into
+    /// `issues/completed/` — so the files the cap hid were the ones an agent had just
+    /// written and told the operator about.
+    func testFileListingIncludesArtifactsBelowTheOldDepthCap() throws {
         let store = try makeStore("proj", name: "Proj")
-        try addFile("plans/depth2.md", in: store)
-        try addFile("plans/deep/depth3.md", in: store)
+        let now = Date()
+        try addFile("issues/issue-44.md", in: store, modified: now.addingTimeInterval(-60))
+        try addFile(
+            "issues/completed/issue-36.md", in: store, modified: now.addingTimeInterval(-120)
+        )
+        try addFile("a/b/c/d/deep.md", in: store, modified: now.addingTimeInterval(-180))
 
         let files = ArtifactStoreDiscovery.artifactFiles(in: store)
 
-        XCTAssertEqual(files.map(\.relativePath), ["plans/depth2.md"])
+        // No depth is special: the walk goes as far down as the store does.
+        XCTAssertEqual(
+            files.map(\.relativePath),
+            ["issues/issue-44.md", "issues/completed/issue-36.md", "a/b/c/d/deep.md"]
+        )
+    }
+
+    /// With no depth cap, "descend into real directories only" is the sole thing
+    /// keeping a cycle from spinning the walk — so it is asserted, not assumed. The
+    /// link here points at the store that contains it.
+    func testFileListingDoesNotDescendIntoSymlinkedDirectories() throws {
+        let store = try makeStore("proj", name: "Proj")
+        try addFile("plans/real.md", in: store)
+        try FileManager.default.createSymbolicLink(
+            at: store.appendingPathComponent("loop"), withDestinationURL: store
+        )
+
+        let files = ArtifactStoreDiscovery.artifactFiles(in: store)
+
+        XCTAssertEqual(files.map(\.relativePath), ["plans/real.md"])
     }
 }
