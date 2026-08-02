@@ -19,6 +19,7 @@ final class WorkspaceModel: ObservableObject {
 
     private let defaults: UserDefaults
     private var terminalChanges: AnyCancellable?
+    private var workbenchChanges: AnyCancellable?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -54,14 +55,12 @@ final class WorkspaceModel: ObservableObject {
 
     /// Save the current workspace's UI state before switching away from it.
     ///
-    /// `TerminalManager` retains the sessions themselves; only their ids and which one was
-    /// selected are context state. The artifact is stored as a path rather than a document
-    /// so a workspace can be restored without the file having to still be readable.
-    ///
-    /// A canvas showing a **URL** persists nothing — `fileURL` is nil for it, so the field
-    /// keeps meaning what its name says. Restoring one is not on the map yet, and half-doing
-    /// it here would put a `https:` string where a file path is read back.
-    func saveContext(terminalManager: TerminalManager, artifact: CanvasModel) {
+    /// One field now carries what three used to: the bench holds the terminal ids, which
+    /// pane each slot has selected, and **which canvas held which file or URL**. The three
+    /// legacy fields are still read on load (they are the migration source) but are no
+    /// longer written — a URL canvas persists properly now, rather than persisting nothing
+    /// because `openArtifactPath` could only hold a file path.
+    func saveContext(terminalManager: TerminalManager, workbench: WorkbenchModel) {
         guard let workspace = selectedWorkspace else { return }
         // Never record a workspace that is not mounted. Until `TerminalManager.activate`
         // has run for it there are no sessions to see, so saving would write an EMPTY tab
@@ -76,12 +75,14 @@ final class WorkspaceModel: ObservableObject {
         // Guarding here rather than at each call site is deliberate: the wipe came from a
         // subscription nobody thought of as a save, and the next one will too.
         guard terminalManager.activeWorkspacePath == workspace.path else { return }
+        // The bench's twin of the guard above, and it exists for the same failure: a save
+        // that runs before `.task` activates the workspace would write an EMPTY bench over
+        // the one restore is about to read.
+        guard workbench.workspacePath == workspace.path, let bench = workbench.bench else {
+            return
+        }
         var context = contexts[workspace.path] ?? WorkspaceContext()
-        context.terminalSessionIDs = terminalManager.sessions(for: workspace.path).map(\.id)
-        context.selectedTerminalID =
-            terminalManager.selected?.workspacePath == workspace.path
-            ? terminalManager.selectedID : nil
-        context.openArtifactPath = artifact.fileURL?.path
+        context.workbench = bench
         contexts[workspace.path] = context
         WorkspaceContextStore.save(contexts, to: defaults)
     }
@@ -110,15 +111,21 @@ final class WorkspaceModel: ObservableObject {
     /// is no cycle — and capturing them weakly gives the subscription a way to go quietly
     /// dead if anything but a view ever owns them, which is the failure mode this whole
     /// area kept producing. A regression test caught exactly that.
-    func observeTerminals(_ manager: TerminalManager, artifact: CanvasModel) {
+    ///
+    /// Both publishers are sunk, so opening a terminal, switching a tab, splitting a
+    /// column and dragging a divider all persist. Two saves per change where both fire is
+    /// harmless — the write is a small JSON blob to `UserDefaults`, and nothing here is
+    /// per-keystroke: `CanvasModel` holds only committed addresses, never a half-typed one.
+    func observe(terminals manager: TerminalManager, workbench: WorkbenchModel) {
+        let save: @MainActor () -> Void = { [weak self] in
+            self?.saveContext(terminalManager: manager, workbench: workbench)
+        }
         terminalChanges = manager.objectWillChange
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in
-                guard let self else { return }
-                MainActor.assumeIsolated {
-                    self.saveContext(terminalManager: manager, artifact: artifact)
-                }
-            }
+            .sink { MainActor.assumeIsolated(save) }
+        workbenchChanges = workbench.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { MainActor.assumeIsolated(save) }
     }
 
     /// Remember a workspace's git branch for its tab label.

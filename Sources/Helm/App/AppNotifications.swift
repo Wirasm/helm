@@ -34,7 +34,21 @@ extension Notification.Name {
     static let helmSelectWorkspace = Notification.Name("helmSelectWorkspace")
     /// ⌃←/⌃→ — object is -1 / +1.
     static let helmCycleWorkspace = Notification.Name("helmCycleWorkspace")
-    /// ⌘T — swap the terminal pane between its two faces: the terminal, and the
-    /// agent's writing drawn over it. No payload; it is a toggle.
+    /// ⌘T — swap the **focused pane's** two faces: the terminal, and the agent's
+    /// writing drawn over it. No payload; it is a toggle.
+    ///
+    /// The name and the key are unchanged from #37; only the receiver moved, from a
+    /// `@State` on `TerminalWorkspace` to `WorkbenchModel`. It has to reach a pane whose
+    /// view may be mounted, unmounted or not yet built, which is why it cannot be view
+    /// state under a bench.
     static let helmToggleChat = Notification.Name("helmToggleChat")
+    /// ⌘D — a new column right of the focused one, holding a fresh terminal.
+    static let helmSplitRight = Notification.Name("helmSplitRight")
+    /// ⌘⇧D — a new row under the focused slot, holding a fresh terminal.
+    static let helmSplitDown = Notification.Name("helmSplitDown")
+    /// ⌘⌥W — close the focused pane. ⌘W is unavailable: SwiftUI's `WindowGroup` binds it
+    /// to close-window.
+    static let helmClosePane = Notification.Name("helmClosePane")
+    /// ⌘⌥←/→/↑/↓ — object is a `Workbench.Direction` raw value.
+    static let helmMoveFocus = Notification.Name("helmMoveFocus")
 }

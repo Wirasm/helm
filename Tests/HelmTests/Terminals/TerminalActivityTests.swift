@@ -34,7 +34,7 @@ final class TerminalActivityTests: XCTestCase {
 
     func testFreshProgressSupersedesStaleOutcomeButRemoveDoesNot() {
         var activity = TerminalActivity()
-        activity.finishCommand(exitCode: 1, durationNanos: 5, isSelected: false)
+        activity.finishCommand(exitCode: 1, durationNanos: 5, isVisible: false)
         XCTAssertNotNil(activity.outcome)
 
         // A remove (a finishing command withdrawing its bar) must not eat
@@ -52,10 +52,10 @@ final class TerminalActivityTests: XCTestCase {
     func testFinishOnInactiveTabMarksByExitCode() {
         var activity = TerminalActivity()
 
-        activity.finishCommand(exitCode: 0, durationNanos: 1_500_000_000, isSelected: false)
+        activity.finishCommand(exitCode: 0, durationNanos: 1_500_000_000, isVisible: false)
         XCTAssertEqual(activity.outcome, .success(durationNanos: 1_500_000_000))
 
-        activity.finishCommand(exitCode: 2, durationNanos: 3_000_000_000, isSelected: false)
+        activity.finishCommand(exitCode: 2, durationNanos: 3_000_000_000, isVisible: false)
         XCTAssertEqual(activity.outcome, .failure(exitCode: 2, durationNanos: 3_000_000_000))
     }
 
@@ -63,7 +63,7 @@ final class TerminalActivityTests: XCTestCase {
         var activity = TerminalActivity()
         activity.reportProgress(state: .set, percent: 90)
 
-        activity.finishCommand(exitCode: 1, durationNanos: 10, isSelected: true)
+        activity.finishCommand(exitCode: 1, durationNanos: 10, isVisible: true)
 
         XCTAssertNil(activity.outcome, "the user watched the active tab — no mark")
         XCTAssertNil(activity.progress, "finish always retires the progress hint")
@@ -71,15 +71,15 @@ final class TerminalActivityTests: XCTestCase {
 
     func testUnknownExitCodeMarksNothing() {
         var activity = TerminalActivity()
-        activity.finishCommand(exitCode: nil, durationNanos: 10, isSelected: false)
+        activity.finishCommand(exitCode: nil, durationNanos: 10, isVisible: false)
         XCTAssertNil(activity.outcome, "no exit code, nothing truthful to show")
     }
 
     func testAcknowledgeClearsOutcomeButKeepsLiveProgress() {
         var activity = TerminalActivity()
-        activity.finishCommand(exitCode: 0, durationNanos: 10, isSelected: false)
+        activity.finishCommand(exitCode: 0, durationNanos: 10, isVisible: false)
         activity.reportProgress(state: .set, percent: 10)
-        activity.finishCommand(exitCode: 1, durationNanos: 20, isSelected: false)
+        activity.finishCommand(exitCode: 1, durationNanos: 20, isVisible: false)
         activity.reportProgress(state: .set, percent: 55)
 
         // outcome was superseded by fresh progress above; rebuild the combo:
@@ -88,7 +88,7 @@ final class TerminalActivityTests: XCTestCase {
         activity.acknowledge()
         XCTAssertEqual(activity.progress, .percent(55), "progress is not attention")
 
-        activity.finishCommand(exitCode: 1, durationNanos: 20, isSelected: false)
+        activity.finishCommand(exitCode: 1, durationNanos: 20, isVisible: false)
         activity.acknowledge()
         XCTAssertNil(activity.outcome)
     }

@@ -2,11 +2,15 @@ import AppKit
 import UserNotifications
 
 /// When an OSC 9 / OSC 777 desktop notification is actually delivered.
-/// A notification about the terminal the user is looking at is noise; one
-/// from a backgrounded app or an unselected tab is the entire point.
+/// A notification about a terminal the user is looking at is noise; one
+/// from a backgrounded app or a pane they cannot see is the entire point.
+///
+/// `paneIsVisible` rather than `tabIsSelected` since the bench: with three panes on
+/// screen at once, "selected" answers for only one of them, and the rule was always
+/// about what the operator can actually see.
 enum TerminalNotificationGate {
-    static func shouldDeliver(appIsActive: Bool, tabIsSelected: Bool) -> Bool {
-        !(appIsActive && tabIsSelected)
+    static func shouldDeliver(appIsActive: Bool, paneIsVisible: Bool) -> Bool {
+        !(appIsActive && paneIsVisible)
     }
 }
 

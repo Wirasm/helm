@@ -203,9 +203,9 @@ final class ArtifactBrowserTests: XCTestCase {
         try addFile("issues/issue-50.md", in: store)
 
         let browser = ArtifactBrowser(
-            model: CanvasModel(),
             workspaceRoot: "/Users/x/proj",
             root: fixtureRoot,
+            onOpen: { _ in },
             onDismiss: {}
         )
 

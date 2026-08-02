@@ -24,4 +24,32 @@ final class TerminalNotifierTests: XCTestCase {
         XCTAssertTrue(
             TerminalNotifier.canDeliver(from: URL(fileURLWithPath: "/Applications/Helm.app")))
     }
+
+    // MARK: - The gate
+
+    /// The rule the bench renamed: `tabIsSelected` → `paneIsVisible`. Same truth table —
+    /// the only change is that the question now has one answer per session, where
+    /// "selected" answers for only one of the several panes on screen at once.
+    ///
+    /// Written here rather than merely relabelled: the gate had no test, so the rename
+    /// would otherwise have moved an untested rule.
+    func testANotificationFromThePaneYouAreLookingAtIsSuppressed() {
+        XCTAssertFalse(
+            TerminalNotificationGate.shouldDeliver(appIsActive: true, paneIsVisible: true),
+            "you watched it happen; a banner about it is noise")
+    }
+
+    func testANotificationFromAPaneYouCannotSeeIsDelivered() {
+        XCTAssertTrue(
+            TerminalNotificationGate.shouldDeliver(appIsActive: true, paneIsVisible: false),
+            "an off-screen pane asking for attention is the entire point")
+    }
+
+    func testABackgroundedAppAlwaysDelivers() {
+        XCTAssertTrue(
+            TerminalNotificationGate.shouldDeliver(appIsActive: false, paneIsVisible: true),
+            "visible in a helm nobody is looking at is not visible")
+        XCTAssertTrue(
+            TerminalNotificationGate.shouldDeliver(appIsActive: false, paneIsVisible: false))
+    }
 }

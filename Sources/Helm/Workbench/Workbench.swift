@@ -55,6 +55,36 @@ struct Workbench: Codable, Equatable {
         self.init(columns: [Column(slots: [slot])], focusedSlot: slot.id)
     }
 
+    /// The bench a pre-bench context describes, so an operator relaunching onto the first
+    /// bench build gets back exactly the frame they left:
+    /// column 0 — one slot, the persisted terminals as tabs, `selectedTerminalID` selected;
+    /// column 1 — one slot, one canvas on `openArtifactPath`, when there was one.
+    ///
+    /// Two columns rather than one, because that is what the operator SAW: the canvas was
+    /// a right dock beside the terminal, never a tab on it.
+    ///
+    /// nil when there is nothing to migrate — `WorkbenchModel.activate` then builds the
+    /// default 1×1 bench, and a first-run workspace behaves exactly as it always has.
+    static func migrating(from context: WorkspaceContext) -> Workbench? {
+        guard !context.terminalSessionIDs.isEmpty else { return nil }
+        // Every migrated terminal pane is `.terminal(face: .terminal)`. Nothing ever wrote
+        // a face, and a restored shell comes back empty anyway.
+        let terminals = context.terminalSessionIDs.map {
+            Pane(id: $0, content: .terminal(face: .terminal))
+        }
+        var bench = Workbench(panes: terminals, selecting: context.selectedTerminalID)
+        // `openArtifactPath` is a FILE path only — that is the whole point of the field,
+        // and the reason #38 persisted nothing for a URL canvas. There is no URL to
+        // recover here, and inventing one would reintroduce exactly the bug it refused.
+        if let path = context.openArtifactPath {
+            bench.insert(
+                Pane(content: .canvas(.file(URL(fileURLWithPath: path)))), at: .column)
+            // The operator was looking at their terminal, not at the dock.
+            bench.focus(bench.columns[0].slots[0].id)
+        }
+        return bench
+    }
+
     // MARK: - Readers
 
     /// Every pane in the bench, in column → slot → tab order.

@@ -74,7 +74,26 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// acknowledges the outcome mark, bell keeps display precedence.
     @Published private(set) var activity = TerminalActivity()
 
-    /// Set by TerminalManager so bell events can check the live selection.
+    /// Whether the operator can see this terminal — pushed in by `WorkbenchModel`
+    /// whenever the bench changes.
+    ///
+    /// **Pushed, not pulled, and "visible" rather than "selected".** Every rule below
+    /// used to ask `manager?.selectedID == id`, which worked while there was exactly one
+    /// mounted terminal per workspace. Under a bench several panes are their slot's
+    /// selection *at the same time* and all of them are on screen, so "selected" stops
+    /// having one answer per session — while "the operator can see this one", which is
+    /// what the bell and notification rules always meant, still does.
+    ///
+    /// Becoming visible acknowledges the tab's attention marks, exactly as
+    /// `TerminalManager.setSelected` did: looking at a terminal is what clears it.
+    var isVisible = false {
+        didSet {
+            if isVisible, !oldValue { acknowledgeAttention() }
+        }
+    }
+
+    /// The owner, for everything that is not selection. Nothing about visibility goes
+    /// through it any more, which is what let `selectedID` be deleted outright.
     weak var manager: TerminalManager?
 
     /// Tab-strip label: the shell-reported title, or "shell N" until one arrives.
@@ -395,9 +414,9 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     }
 
     func terminalDidRingBell() {
-        // Only inactive tabs get marked — a bell on the tab the user is
-        // looking at needs no indicator (and would linger stale otherwise).
-        guard manager?.selectedID != id else { return }
+        // Only tabs the operator cannot see get marked — a bell on a terminal they
+        // are looking at needs no indicator (and would linger stale otherwise).
+        guard !isVisible else { return }
         hasBell = true
     }
 
@@ -449,19 +468,19 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
         activity.finishCommand(
             exitCode: exitCode,
             durationNanos: durationNanos,
-            isSelected: manager?.selectedID == id
+            isVisible: isVisible
         )
     }
 
     /// OSC 9 / OSC 777 desktop notification. Delivered only when helm is in
-    /// the background or the tab is unselected; title is the tab's, body is
+    /// the background or the pane is off screen; title is the tab's, body is
     /// the message (OSC 9 carries only a body — fall back to the sequence's
     /// title so neither form delivers an empty banner).
     func terminalDidRequestDesktopNotification(title: String, body: String) {
         guard
             TerminalNotificationGate.shouldDeliver(
                 appIsActive: NSApp.isActive,
-                tabIsSelected: manager?.selectedID == id
+                paneIsVisible: isVisible
             )
         else { return }
         let message = body.isEmpty ? title : body

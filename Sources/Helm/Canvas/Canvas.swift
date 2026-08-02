@@ -137,10 +137,14 @@ final class CanvasModel: ObservableObject {
             .store(in: &commands)
     }
 
-    /// The browser's "Browse…" row and the pre-browser ⌘O behavior. Starts at
-    /// `directory` when given (a store root), else ~/.prp when it exists — the
-    /// intelligence layer's artifact home — else the home directory.
-    func presentOpenPanel(startingAt directory: URL? = nil) {
+    /// The browser's "Browse…" row. Starts at `directory` when given (a store root),
+    /// else ~/.prp when it exists — the intelligence layer's artifact home — else the
+    /// home directory.
+    ///
+    /// Returns the choice rather than opening it, and is `static` for the same reason:
+    /// picking a file is not something a canvas does to itself any more. Which canvas
+    /// shows it — an existing one, a new tab, a new column — is the bench's decision.
+    static func chooseFile(startingAt directory: URL? = nil) -> URL? {
         let panel = NSOpenPanel()
         // Any file is choosable: .md renders formatted, other text renders
         // monospaced, and non-text is refused politely at load time.
@@ -150,8 +154,18 @@ final class CanvasModel: ObservableObject {
         let prp = home.appendingPathComponent(".prp")
         panel.directoryURL =
             directory ?? (FileManager.default.fileExists(atPath: prp.path) ? prp : home)
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        open(url)
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    /// Point this canvas at a persisted source — the resolve half of `WorkbenchModel`'s
+    /// resolve-at-the-edge, and how a restored pane gets back what it was showing.
+    func show(_ source: CanvasSource) {
+        switch source {
+        case let .file(path): open(URL(fileURLWithPath: path))
+        case let .url(url): openURL(url)
+        case .empty: focusAddress()
+        }
     }
 
     func open(_ url: URL) {

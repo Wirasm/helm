@@ -83,6 +83,49 @@ final class ShortcutTests: XCTestCase {
             "the terminal almost always has focus — a toggle it could not reach is no toggle")
     }
 
+    // MARK: - Arranging the bench
+
+    func testSplitBindings() {
+        XCTAssertEqual(
+            match("d", .command)?.notification, .helmSplitRight,
+            "⌘D — a new column right of the focused one")
+        XCTAssertEqual(
+            match("D", [.command, .shift])?.notification, .helmSplitDown,
+            "⌘⇧D — a new row under the focused slot; charactersIgnoringModifiers keeps shift "
+                + "applied, so this arrives uppercase")
+    }
+
+    /// ⌘W is unavailable — SwiftUI's `WindowGroup` binds it to close-window — so the pane
+    /// close is ⌘⌥W.
+    func testClosePaneAvoidsTheWindowClose() {
+        XCTAssertEqual(match("w", [.command, .option])?.notification, .helmClosePane)
+        XCTAssertNil(match("w", .command), "⌘W belongs to the window, and helm must not fight it")
+    }
+
+    /// ⌘⌥1–9 is already the workspace fallback, which is why focus movement is on arrows.
+    /// The payload is a `Workbench.Direction` raw value rather than an index.
+    func testFocusMovementCarriesADirection() {
+        for (keyCode, direction) in [
+            (UInt16(123), Workbench.Direction.left), (124, .right), (126, .up), (125, .down),
+        ] {
+            let shortcut = match(nil, keyCode: keyCode, [.command, .option])
+            XCTAssertEqual(shortcut?.notification, .helmMoveFocus, "keyCode \(keyCode)")
+            XCTAssertEqual(shortcut?.object as? String, direction.rawValue)
+        }
+    }
+
+    /// `match` returns the FIRST row whose trigger and modifier set agree, so a duplicate
+    /// triple would silently shadow whatever came after it.
+    func testNoTwoRowsShareATriggerModifierAndFocusTriple() {
+        var seen: Set<String> = []
+        for shortcut in Shortcut.all {
+            let triple = "\(shortcut.trigger)|\(shortcut.modifiers.rawValue)|\(shortcut.focus)"
+            XCTAssertTrue(
+                seen.insert(triple).inserted,
+                "two rows claim \(triple); the second can never fire")
+        }
+    }
+
     func testUnboundCombinationsPassThrough() {
         XCTAssertNil(match("j", .command), "⌘J is deliberately unbound — reserved for maximize")
         XCTAssertNil(match("q", .command), "unclaimed keys must reach the system")
