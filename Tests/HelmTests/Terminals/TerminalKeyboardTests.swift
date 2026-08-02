@@ -148,7 +148,11 @@ final class TerminalKeyboardTests: XCTestCase {
         // A bench change that does not move focus — the same shape as any poll-driven
         // re-render, and the one the old implementation had to defend against.
         let slot = try XCTUnwrap(helm.workbench.bench?.focusedSlot)
-        helm.workbench.resizeSlot(slot, to: 0.4)
+        // A divider is two members, so a resize names the neighbour it trades with — the
+        // rule #90 introduced. `.twoSlots` guarantees there is one, adjacent, same column.
+        let neighbour = try XCTUnwrap(
+            helm.workbench.bench?.slots.map(\.id).first { $0 != slot })
+        helm.workbench.resizeSlot(slot, to: 0.4, against: neighbour)
         helm.settle()
 
         XCTAssertNotNil(
