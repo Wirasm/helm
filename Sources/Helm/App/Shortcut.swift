@@ -206,6 +206,20 @@ extension Shortcut {
             menu: .init(title: "Focus \(name)", key: key, modifiers: [.command, .option]))
     }
 
+    /// Whether this row is live at all, given where focus is.
+    ///
+    /// Extracted from `match` because it has a second caller that is not about a key event:
+    /// the status bar's hints, which have to say ⌃1–9 or ⌘⌥1–9 depending on the same
+    /// answer. Asking the map is what keeps the hint honest — a row that stops firing stops
+    /// being advertised in the same edit, with nothing to keep in step.
+    func canFire(terminalFocused: Bool) -> Bool {
+        switch focus {
+        case .anywhere: true
+        case .terminalOnly: terminalFocused
+        case .awayFromTerminal: !terminalFocused
+        }
+    }
+
     /// The shortcut a key event fires, or nil to let the event through.
     ///
     /// Pure on purpose — `terminalFocused` is passed in rather than read from
@@ -217,11 +231,7 @@ extension Shortcut {
     ) -> Shortcut? {
         all.first { shortcut in
             guard shortcut.modifiers == modifiers else { return false }
-            switch shortcut.focus {
-            case .anywhere: break
-            case .terminalOnly: guard terminalFocused else { return false }
-            case .awayFromTerminal: guard !terminalFocused else { return false }
-            }
+            guard shortcut.canFire(terminalFocused: terminalFocused) else { return false }
             switch shortcut.trigger {
             case let .keyCode(code): return code == keyCode
             // Case-insensitive: a shifted letter arrives uppercase, and the modifier

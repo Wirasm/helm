@@ -25,6 +25,7 @@ struct RootView: View {
                 model: model, select: switchWorkspace, open: openWorkspace,
                 close: closeWorkspace)
             WorkbenchView(model: workbench, workspaceRoot: model.selectedWorkspaceRoot)
+            StatusBarView(model: model)
         }
         // The base plane, and it has to be painted: `translucentWindow` makes the window
         // non-opaque so the chrome's vibrancy has a desktop to sample, and anything that
