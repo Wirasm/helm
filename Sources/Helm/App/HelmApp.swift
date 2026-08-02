@@ -43,22 +43,13 @@ struct HelmApp: App {
 
     var body: some Scene {
         WindowGroup("helm") {
-            // THROWAWAY: the Phase 0 spike, behind `--spike-two-surfaces` so the
-            // same build still runs normal helm. Both this branch and
-            // TwoSurfaceSpike.swift go before Task 2.
-            Group {
-                if TwoSurfaceSpike.isEnabled {
-                    TwoSurfaceSpike()
-                } else {
-                    RootView()
-                }
-            }
-            .frame(minWidth: 900, minHeight: 600)
-            // The override is applied at the AppKit level so it also
-            // reaches sheets and any future windows; re-applied whenever
-            // the stored value changes (menu or strip affordance).
-            .onAppear { appearance.apply() }
-            .onChange(of: appearanceRaw) { appearance.apply() }
+            RootView()
+                .frame(minWidth: 900, minHeight: 600)
+                // The override is applied at the AppKit level so it also
+                // reaches sheets and any future windows; re-applied whenever
+                // the stored value changes (menu or strip affordance).
+                .onAppear { appearance.apply() }
+                .onChange(of: appearanceRaw) { appearance.apply() }
         }
         .commands {
             // View ▸ Appearance — the discoverable, menu-bar home of the
