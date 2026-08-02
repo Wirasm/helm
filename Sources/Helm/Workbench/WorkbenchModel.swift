@@ -222,17 +222,21 @@ final class WorkbenchModel: ObservableObject {
         commit(bench)
     }
 
-    /// A divider was dragged. Sizes are helm's own state because `HSplitView` has no
-    /// divider API to persist instead.
-    func resizeColumn(_ column: Column.ID, to fraction: Double) {
+    /// A divider was dragged, and `neighbour` is the member on its other side.
+    ///
+    /// Sizes are helm's own state because `SplitStack` lays the bench out itself: AppKit's
+    /// split views have no divider API to persist instead, and ignore the ideal sizes that
+    /// were meant to stand in for one (#90). Nothing but a drag reaches here now — the
+    /// mount-time measurement that used to is gone.
+    func resizeColumn(_ column: Column.ID, to fraction: Double, against neighbour: Column.ID) {
         guard var bench else { return }
-        bench.resizeColumn(column, to: fraction)
+        bench.resizeColumn(column, to: fraction, against: neighbour)
         self.bench = bench
     }
 
-    func resizeSlot(_ slot: Slot.ID, to fraction: Double) {
+    func resizeSlot(_ slot: Slot.ID, to fraction: Double, against neighbour: Slot.ID) {
         guard var bench else { return }
-        bench.resizeSlot(slot, to: fraction)
+        bench.resizeSlot(slot, to: fraction, against: neighbour)
         self.bench = bench
     }
 

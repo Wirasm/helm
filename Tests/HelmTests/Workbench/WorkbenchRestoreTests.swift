@@ -130,6 +130,69 @@ final class WorkbenchRestoreTests: XCTestCase {
         XCTAssertEqual(context.openArtifactPath, "/tmp/a.md")
     }
 
+    // MARK: - Geometry (#90)
+
+    /// **#90's acceptance criterion, as a test**: two relaunches with nothing touched in
+    /// between must not move a single fraction.
+    ///
+    /// It walks the launch the operator walks — restore a bench, mount it, let the change
+    /// sink persist it, read the store back — twice, with the widths and heights he
+    /// measured. What it cannot walk is the layout pass in between, and that is exactly
+    /// where the damage was done: an `HSplitView` that ignored the restored sizes laid the
+    /// bench out evenly, and the even split was measured back over them. `SplitLayoutTests`
+    /// is the other half of this pair, and pins the part that is now arithmetic rather than
+    /// a framework's opinion.
+    @MainActor
+    func testTwoRelaunchesDoNotMoveASingleFraction() throws {
+        let defaults = try isolatedDefaults("workbench-geometry")
+        let workspace = Workspace(path: "/tmp/helm-geometry-90")
+        let dragged = Self.draggedBench()
+        let widths = dragged.columns.map(\.width)
+        let heights = dragged.columns[0].slots.map(\.height)
+        // The numbers from the issue, to four places, before anything is asked to keep them.
+        XCTAssertEqual(widths.map { ($0 * 10000).rounded() }, [3349, 4750, 1901])
+        XCTAssertEqual(heights.map { ($0 * 10000).rounded() }, [4986, 5014])
+
+        var restored = dragged
+        for launch in 1...2 {
+            let terminals = TerminalManager()
+            let workbench = WorkbenchModel(terminals: terminals)
+            let workspaces = WorkspaceModel(defaults: defaults)
+            workspaces.open(workspace)
+
+            workbench.activate(workspacePath: workspace.path, restoring: restored)
+            workspaces.saveContext(terminalManager: terminals, workbench: workbench)
+
+            restored = try XCTUnwrap(
+                WorkspaceContextStore.load(from: defaults)[workspace.path]?.workbench,
+                "launch \(launch) persisted no bench at all")
+            XCTAssertEqual(
+                restored.columns.map(\.width), widths,
+                "launch \(launch): every column width came back exactly as it went out")
+            XCTAssertEqual(
+                restored.columns[0].slots.map(\.height), heights,
+                "launch \(launch): and so did every slot height")
+        }
+        XCTAssertEqual(restored, dragged, "the whole bench, not only its geometry")
+    }
+
+    /// The operator's 2+1+1, dragged to the fractions #90 reports: three columns at
+    /// 0.3349 / 0.4750 / 0.1901, the first of them split into two slots at 0.4986 / 0.5014.
+    private static func draggedBench() -> Workbench {
+        func terminal() -> Pane { Pane(content: .terminal(face: .terminal)) }
+        var bench = Workbench(terminal: UUID())
+        bench.splitRight(with: terminal())
+        bench.focus(bench.columns[0].slots[0].id)
+        bench.splitDown(with: terminal())
+        bench.insert(terminal(), at: .column)
+
+        bench.resizeColumn(bench.columns[0].id, to: 0.3349, against: bench.columns[1].id)
+        bench.resizeColumn(bench.columns[2].id, to: 0.1901, against: bench.columns[1].id)
+        let slots = bench.columns[0].slots
+        bench.resizeSlot(slots[0].id, to: 0.4986, against: slots[1].id)
+        return bench
+    }
+
     func testABenchRoundTripsThroughTheStore() throws {
         var bench = Workbench(terminal: UUID())
         bench.insert(

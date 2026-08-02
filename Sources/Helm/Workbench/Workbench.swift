@@ -265,23 +265,33 @@ struct Workbench: Codable, Equatable {
         normalize()
     }
 
-    /// A divider moved. The column keeps the fraction it was dragged to and the others
-    /// share what is left **in their existing proportions**, so dragging one divider in
-    /// a three-column bench does not silently even out the other two.
-    mutating func resizeColumn(_ id: Column.ID, to fraction: Double) {
-        guard columns.count > 1, let index = columns.firstIndex(where: { $0.id == id })
+    /// A divider moved: the column takes the fraction it was dragged to, and `neighbour` —
+    /// the column on the divider's other side — absorbs exactly the difference. Every other
+    /// column keeps what it had, to the digit.
+    ///
+    /// **A divider is between two members and nothing else.** This used to give the dragged
+    /// column its fraction and share the remainder over all the others in proportion, which
+    /// is the right rule for a measurement of the whole stack and the wrong one for a drag:
+    /// in the operator's 2+1+1 bench, moving one divider quietly moved the two columns
+    /// nobody had touched.
+    mutating func resizeColumn(_ id: Column.ID, to fraction: Double, against neighbour: Column.ID) {
+        guard let index = columns.firstIndex(where: { $0.id == id }),
+            let other = columns.firstIndex(where: { $0.id == neighbour }), index != other
         else { return }
-        let widths = Self.redistributing(
-            columns.map(\.width), at: index, to: fraction)
+        let widths = Self.trading(columns.map(\.width), at: index, with: other, to: fraction)
         for (offset, width) in widths.enumerated() { columns[offset].width = width }
         normalize()
     }
 
-    mutating func resizeSlot(_ id: Slot.ID, to fraction: Double) {
-        guard let address = address(ofSlot: id), columns[address.column].slots.count > 1
+    /// The same trade one level down. Both slots must be in the same column, because that
+    /// is the only place a slot divider can sit.
+    mutating func resizeSlot(_ id: Slot.ID, to fraction: Double, against neighbour: Slot.ID) {
+        guard let other = address(ofSlot: neighbour), let address = address(ofSlot: id),
+            address.column == other.column, address.slot != other.slot
         else { return }
-        let heights = Self.redistributing(
-            columns[address.column].slots.map(\.height), at: address.slot, to: fraction)
+        let heights = Self.trading(
+            columns[address.column].slots.map(\.height), at: address.slot, with: other.slot,
+            to: fraction)
         for (offset, height) in heights.enumerated() {
             columns[address.column].slots[offset].height = height
         }
@@ -352,20 +362,18 @@ struct Workbench: Codable, Equatable {
         return repaired.map { $0 / total }
     }
 
-    /// One member set to `fraction`, the rest sharing the remainder in proportion.
-    private static func redistributing(
-        _ fractions: [Double], at index: Int, to fraction: Double
+    /// Two members trading what the two of them have, and nobody else touched. Clamped at
+    /// `minimumFraction` on both sides — and at half the pair when the pair is smaller than
+    /// two of those, so the clamp can never hand out more than there is.
+    private static func trading(
+        _ fractions: [Double], at index: Int, with neighbour: Int, to fraction: Double
     ) -> [Double] {
-        let others = fractions.indices.filter { $0 != index }
-        let ceiling = 1 - minimumFraction * Double(others.count)
-        let target = min(max(fraction, minimumFraction), max(ceiling, minimumFraction))
-        let remainder = 1 - target
-        let othersTotal = others.reduce(0.0) { $0 + max(fractions[$1], 0) }
-        return fractions.indices.map { position in
-            guard position != index else { return target }
-            guard othersTotal > 0 else { return remainder / Double(others.count) }
-            return max(fractions[position], 0) / othersTotal * remainder
-        }
+        let pair = max(fractions[index], 0) + max(fractions[neighbour], 0)
+        let least = min(minimumFraction, pair / 2)
+        var traded = fractions
+        traded[index] = min(max(fraction, least), pair - least)
+        traded[neighbour] = pair - traded[index]
+        return traded
     }
 
     /// Where a pane sits. Indices, deliberately — they are valid only for the split
@@ -429,7 +437,9 @@ struct Column: Codable, Equatable, Identifiable {
     /// Fraction of the bench's width. helm carries this itself because `HSplitView`
     /// exposes **no** divider API of any kind — one `ViewBuilder` initialiser and
     /// nothing else, verified against the macOS 26.2 SDK interface. There is no
-    /// `autosaveName` and no position binding to persist instead.
+    /// `autosaveName` and no position binding to persist instead — and, measured in #90,
+    /// no ideal size it will honour either, which is why `SplitStack` lays the bench out
+    /// itself and this fraction is the layout rather than a record of one.
     var width: Double
 
     init(id: UUID = UUID(), slots: [Slot], width: Double = 1) {
