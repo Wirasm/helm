@@ -31,15 +31,25 @@ struct AgentSession: Equatable {
     /// ever explain a surprising mark while debugging.
     let cwd: String?
     let status: AgentStatus?
+    /// Claude Code's own id for the conversation. The board does not use it; the
+    /// chat face does, because `sessionId` + `cwd` are what locate the transcript
+    /// on disk (`TranscriptLocator`).
+    ///
+    /// It lives here rather than in a second reader by #28's ruling — one registry
+    /// row type, split only if the two consumers genuinely diverge. `var` with a
+    /// default so the memberwise initializer stays source-compatible for callers
+    /// that only care about the board's three fields.
+    var sessionId: String? = nil
 }
 
 extension AgentSession: Decodable {
-    private enum CodingKeys: String, CodingKey { case pid, cwd, status }
+    private enum CodingKeys: String, CodingKey { case pid, cwd, status, sessionId }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         pid = try container.decode(pid_t.self, forKey: .pid)
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
         // Unknown and absent collapse to the same nil. Synthesised `Decodable`
         // would instead throw on an unknown value and drop the whole row — the
         // same outcome by accident rather than by rule, and it would take a

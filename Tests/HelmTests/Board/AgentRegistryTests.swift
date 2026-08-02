@@ -50,12 +50,21 @@ final class AgentRegistryTests: XCTestCase {
 
     // MARK: - Decode
 
+    /// `sessionId` is decoded alongside the board's own three fields. The board
+    /// does not read it — the chat face does, because `sessionId` + `cwd` are
+    /// what locate the transcript on disk. One registry row type, per #28.
     func testDecodesTheFieldsTheBoardReads() throws {
         try write(row(pid: 9139, status: "busy", cwd: "/Users/x/ws"), as: "9139.json")
 
         let sessions = AgentRegistry.sessions(in: root)
 
-        XCTAssertEqual(sessions, [AgentSession(pid: 9139, cwd: "/Users/x/ws", status: .busy)])
+        XCTAssertEqual(
+            sessions,
+            [
+                AgentSession(
+                    pid: 9139, cwd: "/Users/x/ws", status: .busy,
+                    sessionId: "7b3277cb-4fcb-4df0-a452-d30059772818")
+            ])
     }
 
     func testRowWithoutStatusDecodesToNoStatus() throws {

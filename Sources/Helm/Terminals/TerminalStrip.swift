@@ -20,6 +20,9 @@ struct TerminalStrip: View {
     /// The open workspace's repo root, passed straight through to the browser so it
     /// preselects that workspace's `~/.prp` store.
     var workspaceRoot: String?
+    /// Which face the pane below is showing — the terminal, or the agent's
+    /// writing drawn over it.
+    @Binding var chat: Bool
 
     var body: some View {
         HStack(spacing: 4) {
@@ -48,6 +51,27 @@ struct TerminalStrip: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("New terminal (⌘N)")
+
+            Divider()
+                .frame(height: 14)
+
+            // The two faces of this pane. Same terminal underneath either way.
+            //
+            // **Always present, always pressable** — deliberately not gated on
+            // whether an agent is running. The foreground pid moves constantly
+            // beneath it (`shell` was measured at 947 consecutive samples), so a
+            // control that tracked it would flicker between enabled and disabled
+            // while nothing about the operator's intent changed. Pressing it with
+            // no agent is not an error: the face itself names the reason.
+            Button {
+                chat.toggle()
+            } label: {
+                Image(systemName: chat ? "terminal" : "text.alignleft")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(chat ? ChatPalette.accent : .secondary)
+            .help(chat ? "Back to the terminal (⌘T)" : "Read the agent's writing (⌘T)")
+            .accessibilityLabel(chat ? "Show the terminal" : "Read the agent's writing")
 
             Divider()
                 .frame(height: 14)

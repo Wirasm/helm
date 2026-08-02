@@ -12,6 +12,9 @@ struct TerminalWorkspace: View {
     @ObservedObject var artifact: ArtifactPaneModel
     @Binding var showBrowser: Bool
     let workspaceRoot: String?
+    /// Which face the pane is showing. One flag, one button (⌘T) — the terminal
+    /// is always still there underneath either way.
+    @State private var chat = false
 
     var body: some View {
         Group {
@@ -19,9 +22,9 @@ struct TerminalWorkspace: View {
                 VStack(spacing: 0) {
                     TerminalStrip(
                         manager: manager, artifact: artifact, showBrowser: $showBrowser,
-                        workspaceRoot: workspaceRoot)
+                        workspaceRoot: workspaceRoot, chat: $chat)
                     Divider()
-                    SessionPane(session: session)
+                    SessionPane(session: session, chat: chat)
                 }
             } else {
                 ContentUnavailableView(
@@ -48,15 +51,33 @@ struct TerminalWorkspace: View {
             guard manager.selectedTerminalHasFocus, let offset = note.object as? Int else { return }
             manager.selected?.jumpToPrompt(by: offset)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .helmToggleChat)) { _ in
+            chat.toggle()
+        }
     }
 }
 
 private struct SessionPane: View {
     @ObservedObject var session: TerminalSession
+    /// Draw the agent's writing over the terminal.
+    ///
+    /// **The terminal view stays mounted underneath.** One attached surface
+    /// drives the ghostty runtime for every surface on it (`TerminalSession`'s
+    /// header), so unmounting the only attached one would stall every pty in the
+    /// app — including the ones this face is reading.
+    let chat: Bool
+
     var body: some View {
         Group {
             switch session.status {
-            case .starting, .running: GhosttyHostView(view: session.hostView).id(session.id)
+            case .starting, .running:
+                ZStack {
+                    GhosttyHostView(view: session.hostView).id(session.id)
+                    // Keyed on the session: swapping tabs while reading must
+                    // build a fresh model against the new terminal's agent, not
+                    // reuse one pointed at the old pty.
+                    if chat { ChatOverlay(session: session).id(session.id) }
+                }
             case let .failed(message): fallback(title: "ghostty init failed", detail: message)
             case .exited:
                 fallback(

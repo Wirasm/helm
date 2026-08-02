@@ -34,4 +34,7 @@ extension Notification.Name {
     static let helmSelectWorkspace = Notification.Name("helmSelectWorkspace")
     /// ⌃←/⌃→ — object is -1 / +1.
     static let helmCycleWorkspace = Notification.Name("helmCycleWorkspace")
+    /// ⌘T — swap the terminal pane between its two faces: the terminal, and the
+    /// agent's writing drawn over it. No payload; it is a toggle.
+    static let helmToggleChat = Notification.Name("helmToggleChat")
 }
