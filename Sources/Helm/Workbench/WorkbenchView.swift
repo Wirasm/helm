@@ -126,7 +126,9 @@ private struct SlotView: View {
             SlotTabStrip(
                 model: model, slot: slot, isFocused: slot.id == bench.focusedSlot,
                 workspaceRoot: workspaceRoot)
-            Divider()
+            // A palette hairline rather than `Divider()`: a system separator is one more
+            // colour from one more source, which is the thing the palette exists to end.
+            Color.border.frame(height: 1)
             content
         }
         .frame(minHeight: 80, idealHeight: seeded, maxHeight: .infinity)

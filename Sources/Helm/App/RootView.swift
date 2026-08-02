@@ -26,6 +26,12 @@ struct RootView: View {
                 close: closeWorkspace)
             WorkbenchView(model: workbench, workspaceRoot: model.selectedWorkspaceRoot)
         }
+        // The base plane, and it has to be painted: `translucentWindow` makes the window
+        // non-opaque so the chrome's vibrancy has a desktop to sample, and anything that
+        // paints nothing after that is a hole rather than a neutral grey. The terminal and
+        // the canvas cover their own panes; this is everything else.
+        .background(Color.surface)
+        .translucentWindow()
         .task {
             model.observe(terminals: terminalManager, workbench: workbench)
             activateSelectedWorkspace()

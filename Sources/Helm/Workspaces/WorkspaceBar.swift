@@ -35,7 +35,8 @@ struct WorkspaceBar: View {
             Spacer(minLength: 8)
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(.bar)
+        .foregroundStyle(Color.textPrimary)
+        .background(ChromeBackground())
         .task { await board.poll() }
         .onReceive(NotificationCenter.default.publisher(for: .helmOpenWorkspace)) { _ in
             openWorkspace()
@@ -61,7 +62,7 @@ struct WorkspaceBar: View {
             .font(.system(size: 11.5))
             .padding(.horizontal, 9).padding(.vertical, 5)
             .background(
-                isSelected ? Color.accentColor.opacity(0.16) : .clear,
+                isSelected ? Color.selection : .clear,
                 in: RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain)

@@ -30,7 +30,7 @@ struct ChatOverlay: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            ChatPalette.paper
+            Color.surface
             column
 
             // Prose runs to both edges of the pane while it scrolls. The scrims
@@ -173,7 +173,7 @@ struct ChatOverlay: View {
                     + "· best-effort, a shapeless secret still gets through"
             )
             .font(.system(size: 10))
-            .foregroundStyle(ChatPalette.quiet)
+            .foregroundStyle(Color.textMuted)
         }
     }
 
@@ -186,10 +186,10 @@ struct ChatOverlay: View {
         VStack(spacing: 9) {
             Text(model.isWorking ? "Working" : "Nothing to read yet")
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(ChatPalette.ink)
+                .foregroundStyle(Color.textPrimary)
             Text(reason)
                 .font(.system(size: 12.5))
-                .foregroundStyle(ChatPalette.quiet)
+                .foregroundStyle(Color.textMuted)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
         }
@@ -221,9 +221,9 @@ struct ChatOverlay: View {
     private func scrim(_ solid: UnitPoint) -> some View {
         LinearGradient(
             stops: [
-                .init(color: ChatPalette.paper, location: 0),
-                .init(color: ChatPalette.paper.opacity(0.94), location: 0.45),
-                .init(color: ChatPalette.paper.opacity(0), location: 1),
+                .init(color: Color.surface, location: 0),
+                .init(color: Color.surface.opacity(0.94), location: 0.45),
+                .init(color: Color.surface.opacity(0), location: 1),
             ],
             startPoint: solid, endPoint: solid == .top ? .bottom : .top)
     }
@@ -244,8 +244,8 @@ private struct ChatBlock: View {
         VStack(alignment: .leading, spacing: 0) {
             if isAnswer {
                 HStack(spacing: 0) {
-                    Rectangle().fill(ChatPalette.accent).frame(width: 34, height: 1)
-                    Rectangle().fill(ChatPalette.rule).frame(height: 1)
+                    Rectangle().fill(Color.accent).frame(width: 34, height: 1)
+                    Rectangle().fill(Color.border).frame(height: 1)
                 }
                 .padding(.top, 16)
                 .padding(.bottom, 24)
@@ -266,16 +266,16 @@ private struct ChatBlock: View {
             // are context for reading the answer, not the thing being read.
             HStack(alignment: .top, spacing: 12) {
                 Rectangle()
-                    .fill(ChatPalette.accent.opacity(0.45))
+                    .fill(Color.accent.opacity(0.45))
                     .frame(width: 2)
                 MarkdownText(text: entry.text, theme: .chatOperator)
-                    .foregroundStyle(ChatPalette.quiet)
+                    .foregroundStyle(Color.textMuted)
             }
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel("You said")
         case .agent:
             MarkdownText(text: entry.text, theme: isAnswer ? .chatAnswer : .chatAside)
-                .foregroundStyle(isAnswer ? ChatPalette.ink : ChatPalette.quiet)
+                .foregroundStyle(isAnswer ? Color.textPrimary : Color.textMuted)
         }
     }
 }

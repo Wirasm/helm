@@ -574,6 +574,7 @@ struct CanvasView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.bar)
+        .foregroundStyle(Color.textPrimary)
+        .background(ChromeBackground())
     }
 }

@@ -71,7 +71,8 @@ struct SlotTabStrip: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(.bar)
+        .foregroundStyle(Color.textPrimary)
+        .background(ChromeBackground())
         .contentShape(Rectangle())
         .onTapGesture { model.focus(slot.id) }
         .enableInjection()
@@ -130,7 +131,7 @@ struct SlotTabStrip: View {
                 Image(systemName: face == .chat ? "terminal" : "text.alignleft")
             }
             .buttonStyle(.plain)
-            .foregroundStyle(face == .chat ? ChatPalette.accent : .secondary)
+            .foregroundStyle(face == .chat ? Color.accent : .secondary)
             .help(face == .chat ? "Back to the terminal (⌘T)" : "Read the agent's writing (⌘T)")
             .accessibilityLabel(face == .chat ? "Show the terminal" : "Read the agent's writing")
         }
