@@ -5,6 +5,10 @@
 //   swift helm-spawn.swift <cwd> --prompt-file <p>  — prompt from a file
 //   swift helm-spawn.swift <cwd> --dry-run          — preflight only, send nothing
 //
+// Add `--helm-pid <pid>` when more than one helm is running. Two is the NORMAL state while
+// building helm — the operator's, plus a worktree build under test — and they are identical
+// by name, so without this the tool refuses exactly when an agent is doing helm work.
+//
 // This packages the five steps an agent used to do by hand — focus helm, ⌘N, type `cls`,
 // sleep and hope, type the prompt, submit — into one command. Doing it by hand worked, and
 // it was bad: `osascript … set frontmost` fails SILENTLY, so a ⌘1 meant for helm once landed
@@ -299,20 +303,23 @@ func screenIsUnusable() -> String? {
 
 /// The single running helm, or a refusal.
 ///
-/// Two filters, and the second is not an optimisation. `runningApplications` is a cached
-/// snapshot that intermittently reports a WebKit helper — `helm Web Content`, which appears
-/// the moment a canvas opens a WKWebView — as `.regular`. Intersecting with the owners of a
-/// real on-screen window breaks that tie with a fact, and without it a lone helm would trip
-/// the "more than one" refusal at random. See tools/focus.swift for the same trap.
-func theOneHelm(named name: String) -> NSRunningApplication {
-    let focusable = NSWorkspace.shared.runningApplications.filter {
-        $0.activationPolicy == .regular
+/// Selected by pid when one is given, otherwise by name. The pid path exists because two
+/// helms is the *normal* state while building helm — the operator's, plus a worktree build
+/// under test — and name matching cannot tell them apart, so the safe spawn path used to
+/// disappear at exactly the moment an agent was doing helm work.
+///
+/// The name path needs two filters, and the second is not an optimisation.
+/// `runningApplications` is a cached snapshot that intermittently reports a WebKit helper —
+/// `helm Web Content`, which appears the moment a canvas opens a WKWebView — as `.regular`.
+/// Intersecting with the owners of a real on-screen window breaks that tie with a fact, and
+/// without it a lone helm would trip the "more than one" refusal at random. See
+/// tools/focus.swift for the same trap.
+func theOneHelm(named name: String, pid requested: pid_t?) -> NSRunningApplication {
+    let running = NSWorkspace.shared.runningApplications
+
+    func describe(_ app: NSRunningApplication) -> String {
+        "\(app.localizedName ?? "?") (pid \(app.processIdentifier))"
     }
-    let named = focusable.filter { ($0.localizedName ?? "").localizedCaseInsensitiveContains(name) }
-    let exact = named.filter {
-        ($0.localizedName ?? "").caseInsensitiveCompare(name) == .orderedSame
-    }
-    var matches = exact.isEmpty ? named : exact
 
     let onScreen =
         CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
@@ -330,11 +337,35 @@ func theOneHelm(named name: String) -> NSRunningApplication {
                 return height > 100 && width > 100
             }
             .compactMap { $0[kCGWindowOwnerPID as String] as? pid_t })
-    let windowed = matches.filter { windowOwners.contains($0.processIdentifier) }
-    if !windowed.isEmpty { matches = windowed }
 
-    func describe(_ app: NSRunningApplication) -> String {
-        "\(app.localizedName ?? "?") (pid \(app.processIdentifier))"
+    var matches: [NSRunningApplication]
+    if let requested {
+        // Looked up across ALL running apps, not just the focusable ones, so that naming a
+        // helper process is told apart from naming nothing at all.
+        guard let app = running.first(where: { $0.processIdentifier == requested }) else {
+            refuse("no running application has pid \(requested)", .noHelm)
+        }
+        guard app.activationPolicy == .regular else {
+            refuse(
+                """
+                pid \(requested) is \(describe(app)), which can never take focus — its
+                activation policy is not `.regular`, so it is a helper process rather than the
+                app that owns the window. `swift tools/winshot.swift --list` shows the pid that
+                does.
+                """, .noHelm)
+        }
+        matches = [app]
+    } else {
+        let focusable = running.filter { $0.activationPolicy == .regular }
+        let named = focusable.filter {
+            ($0.localizedName ?? "").localizedCaseInsensitiveContains(name)
+        }
+        let exact = named.filter {
+            ($0.localizedName ?? "").caseInsensitiveCompare(name) == .orderedSame
+        }
+        matches = exact.isEmpty ? named : exact
+        let windowed = matches.filter { windowOwners.contains($0.processIdentifier) }
+        if !windowed.isEmpty { matches = windowed }
     }
 
     guard let only = matches.first else {
@@ -345,7 +376,8 @@ func theOneHelm(named name: String) -> NSRunningApplication {
             """
             \(matches.count) apps match "\(name)" — \(matches.map(describe).joined(separator: ", ")).
             Refusing rather than guessing which window to type into. A worktree build and the
-            operator's own helm are indistinguishable by name; quit one.
+            operator's own helm are indistinguishable by name, so say which you mean:
+            --helm-pid \(matches.map { String($0.processIdentifier) }.joined(separator: " | "))
             """, .manyHelms)
     }
     guard windowOwners.contains(only.processIdentifier) else {
@@ -415,11 +447,13 @@ let usage = """
            helm-spawn.swift <cwd> --dry-run           preflight only, send nothing
 
     options: --app <name>      app to drive          (default: helm)
+             --helm-pid <pid>  which helm, by pid    (wins over --app)
              --timeout <secs>  wait for the agent    (default: 90)
     """
 
 var arguments = Array(CommandLine.arguments.dropFirst())
 var appName = "helm"
+var requestedHelmPid: pid_t?
 var timeout = 90.0
 var promptFile: String?
 var dryRun = false
@@ -437,6 +471,10 @@ while index < arguments.count {
     }
     switch argument {
     case "--app": appName = value("--app")
+    case "--helm-pid":
+        let raw = value("--helm-pid")
+        guard let pid = pid_t(raw), pid > 0 else { refuse("bad --helm-pid \(raw)", .usage) }
+        requestedHelmPid = pid
     case "--prompt-file": promptFile = value("--prompt-file")
     case "--dry-run": dryRun = true
     case "--timeout":
@@ -501,7 +539,7 @@ guard AXIsProcessTrusted() else {
 
 if let why = untrustedWorkspace(cwd) { refuse(why, .workspaceUntrusted) }
 
-let helm = theOneHelm(named: appName)
+let helm = theOneHelm(named: appName, pid: requestedHelmPid)
 let helmPid = helm.processIdentifier
 note("helm is pid \(helmPid), one visible window, screen unlocked, Accessibility granted")
 
