@@ -37,6 +37,13 @@ that proves the other checkout builds.
   build, say — is indistinguishable from the operator's. Check `--list` for how many are
   running before trusting a capture.
 - `swift run helm` to iterate, `make app` for the real bundle.
+- **helm persists to one domain, `com.wirasm.helm`, from both launch paths** — so "did it
+  persist?" is `defaults read com.wirasm.helm` whichever way it was started. `swift run helm`
+  used to land in a `helm` domain of its own, and reading the wrong one is how #45 produced a
+  confident, wrong diagnosis. A build with the fix drains `helm` on first launch and leaves a
+  single `helmDefaultsMovedTo` key there saying so. The identity lives in `SPMInfo.plist`,
+  `project.yml`'s `PRODUCT_BUNDLE_IDENTIFIER` and `DefaultsDomain.canonical` — keep all three
+  in step, `DefaultsDomainTests` fails if you don't.
 - Conventional commits, written as a human — no AI attribution.
 
 ## Architecture — how to think about where code goes

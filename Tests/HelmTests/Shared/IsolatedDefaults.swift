@@ -92,11 +92,22 @@ extension XCTestCase {
     func isolatedDefaults(
         _ label: String, file: StaticString = #filePath, line: UInt = #line
     ) throws -> UserDefaults {
+        let name = isolatedDefaultsDomain(label)
+        return try XCTUnwrap(
+            UserDefaults(suiteName: name), "could not open suite \(name)", file: file, line: line)
+    }
+
+    /// The *name* of an isolated suite, for the APIs that take a domain name rather than a
+    /// `UserDefaults` — `persistentDomain(forName:)` and its siblings, which are the only way
+    /// to read or replace a domain's own contents without the registration and global layers
+    /// `dictionaryRepresentation()` folds in.
+    ///
+    /// Cleanup registers exactly as it does above, so a domain reached by name is swept like
+    /// any other. Nothing is created until something writes to the name.
+    func isolatedDefaultsDomain(_ label: String) -> String {
         IsolatedDefaults.sweepOnce()
         let name = IsolatedDefaults.name(for: label)
-        let defaults = try XCTUnwrap(
-            UserDefaults(suiteName: name), "could not open suite \(name)", file: file, line: line)
         addTeardownBlock { IsolatedDefaults.remove(named: name) }
-        return defaults
+        return name
     }
 }

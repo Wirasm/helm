@@ -65,14 +65,32 @@ let package = Package(
                 // GHOSTTY_RESOURCES_DIR at the bundled `ghostty/` dir.
                 .copy("Resources/ghostty"),
             ],
-            // What makes Swift methods swappable at runtime: the linker emits
-            // indirect stubs injection can repoint. Debug only — release keeps
-            // direct calls. Mirrored in project.yml's Debug OTHER_LDFLAGS.
             linkerSettings: [
+                // What makes Swift methods swappable at runtime: the linker emits
+                // indirect stubs injection can repoint. Debug only — release keeps
+                // direct calls. Mirrored in project.yml's Debug OTHER_LDFLAGS.
                 .unsafeFlags(
                     ["-Xlinker", "-interposable"],
                     .when(platforms: [.macOS], configuration: .debug)
-                )
+                ),
+                // Give the bare SPM executable a bundle identifier. A non-bundled Mach-O
+                // has no Info.plist to read one from, so `UserDefaults.standard` fell back
+                // to the process name and `swift run helm` persisted to a `helm` domain
+                // while Helm.app persisted to `com.wirasm.helm` — issue #45. Embedding the
+                // plist as a __TEXT,__info_plist section is what CFBundle reads for a
+                // main bundle that is not a bundle, and it fixes every `@AppStorage` and
+                // `UserDefaults.standard` call site at once, upstream of all of them.
+                //
+                // NOT debug-only, unlike the flag above: which domain state lands in is
+                // not a debugging affordance. `Context.packageDirectory` because the
+                // linker resolves this path against its own working directory, which is
+                // wherever `swift build` was invoked from, not the package root.
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "\(Context.packageDirectory)/SPMInfo.plist",
+                ])
             ]
         ),
         // Non-GUI smoke: ghostty_init + config load + app create, no window.

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The Info.plist for the bare SPM executable (`swift run helm`, `make run`).
+
+  Package.swift links this in as a `__TEXT,__info_plist` section, which is how a
+  non-bundled Mach-O gets a main-bundle info dictionary at all. Without it the process has
+  no CFBundleIdentifier, `UserDefaults.standard` falls back to the process name, and the
+  iteration loop persists to a `helm` domain while Helm.app persists to `com.wirasm.helm`
+  — two states for one app, which is issue #45.
+
+  DELIBERATELY MINIMAL: CFBundleIdentifier and nothing else. Other keys would change
+  things the SPM path already gets right — CFBundleName, for one, is what
+  `kCGWindowOwnerName` prefers, and `tools/winshot.swift` finds helm's window by matching
+  that against the process name.
+
+  The identifier is stated in three places and they MUST agree: here, in project.yml's
+  PRODUCT_BUNDLE_IDENTIFIER for the .app, and as `DefaultsDomain.canonical` in the source.
+  `DefaultsDomainTests` fails if they drift.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.wirasm.helm</string>
+</dict>
+</plist>
