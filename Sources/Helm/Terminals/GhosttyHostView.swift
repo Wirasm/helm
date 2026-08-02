@@ -26,8 +26,8 @@ struct GhosttyHostView: NSViewRepresentable {
         // is deliberately NON-stealing — only when nothing else holds focus
         // (responder == window). updateNSView re-runs on every poll-driven
         // re-render, and grabbing focus each tick would make the sidebar and
-        // the dock composer untypable. AppKit hands the first responder back
-        // to the window when a focused view unmounts (tab switch, dock
+        // the chat face's composer untypable. AppKit hands the first responder
+        // back to the window when a focused view unmounts (tab switch, pane
         // close), so the terminal reclaims focus exactly then.
         DispatchQueue.main.async {
             guard let window = view.window else { return }

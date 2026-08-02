@@ -15,6 +15,6 @@ enum LaunchOptions {
         return args[index + 1]
     }
 
-    /// Artifact file opened in the dock at launch.
+    /// File opened as a canvas pane at launch.
     static var artifactPath: String? { value("--artifact") }
 }

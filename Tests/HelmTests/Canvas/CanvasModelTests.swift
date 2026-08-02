@@ -22,12 +22,13 @@ final class CanvasModelTests: XCTestCase {
         if case let .url(page) = model.showing { page } else { nil }
     }
 
-    // MARK: - The persistence seam
+    // MARK: - File source or URL source
 
     func testAURLSourceExposesNoFilePath() {
-        // WorkspaceModel.saveContext persists `fileURL?.path` into a field read
-        // back through URL(fileURLWithPath:). A URL leaking into it would be
-        // restored as a garbage file path on the next workspace switch.
+        // `fileURL` answers "is there a file here", and the live readers depend on it:
+        // `sidecarURL` writes notes beside that file, and reveal-in-Finder opens it. A
+        // URL leaking into it would put a canvas's notes beside a path that is not one.
+        // (What *persists* is `CanvasSource`, through the bench — not this.)
         let model = CanvasModel()
         model.open(file)
         XCTAssertEqual(model.fileURL, file)
@@ -172,6 +173,85 @@ final class CanvasModelTests: XCTestCase {
         model.pageDidNavigate(to: URL(string: "http://example.com")!)
 
         XCTAssertEqual(model.fileURL, file)
+    }
+
+    // MARK: - Annotating
+
+    // `CanvasAnnotation.decode` and `CanvasNotes.append` are each tested on their own.
+    // What is only decidable here is what happens to the **selection** when either
+    // refuses — because the selection is the operator's place in the document, and
+    // throwing it away on a failure means they have to find it again to retry.
+
+    func testAnnotatingWritesTheNoteAndClearsTheSelection() throws {
+        let model = CanvasModel()
+        model.open(file)
+        model.pageDidSelect(try XCTUnwrap(CanvasSelection(["id": "phase-2", "text": "Phase 2"])))
+
+        model.annotate(comment: "this ordering is wrong")
+
+        XCTAssertNil(model.notesFailure)
+        XCTAssertNil(model.selection, "the comment landed, so the field has nothing left to do")
+        XCTAssertEqual(
+            model.notes, ["`#phase-2` — \"Phase 2\""],
+            "the count in the pane header is read back off the sidecar, not tallied here")
+        addTeardownBlock { [sidecar = model.sidecarURL] in
+            if let sidecar { try? FileManager.default.removeItem(at: sidecar) }
+        }
+    }
+
+    func testAnUnanchorableSelectionKeepsTheSelectionAndSaysSo() throws {
+        let model = CanvasModel()
+        model.open(file)
+        model.pageDidSelect(try XCTUnwrap(CanvasSelection(["text": "a passage"])))
+
+        // An empty comment is what `CanvasAnnotation.decode` refuses — there is nothing
+        // to anchor.
+        model.annotate(comment: "   ")
+
+        XCTAssertNotNil(model.notesFailure)
+        XCTAssertNotNil(
+            model.selection,
+            "dropping the selection on a refusal would make the operator find their place "
+                + "again before they could retry")
+        XCTAssertEqual(model.notes, [], "and nothing was written")
+    }
+
+    func testAWriteFailureReachesThePaneNamingTheFile() throws {
+        let model = CanvasModel()
+        // A canvas opened through Browse… can live somewhere not writable.
+        model.open(URL(fileURLWithPath: "/System/helm-should-not-write-here/plan.md"))
+        model.pageDidSelect(try XCTUnwrap(CanvasSelection(["text": "a passage"])))
+
+        model.annotate(comment: "why?")
+
+        let failure = try XCTUnwrap(model.notesFailure)
+        XCTAssertTrue(
+            failure.contains("plan.notes.md"), "a failure that does not name the file is a shrug")
+        XCTAssertNotNil(model.selection, "the note was not written, so the selection stands")
+    }
+
+    func testAnnotatingWithoutASelectionDoesNothingAtAll() {
+        let model = CanvasModel()
+        model.open(file)
+
+        model.annotate(comment: "this ordering is wrong")
+
+        XCTAssertNil(model.notesFailure, "there was no attempt to fail")
+        XCTAssertEqual(model.notes, [])
+    }
+
+    /// A URL canvas has no file to write beside, so there is no sidecar and nothing to
+    /// annotate — the same reason `fileURL` is nil for one.
+    func testAURLCanvasHasNowhereToPutANote() throws {
+        let model = CanvasModel()
+        model.openURL(URL(string: "https://example.com/dashboard")!)
+        model.pageDidSelect(try XCTUnwrap(CanvasSelection(["text": "a passage"])))
+
+        model.annotate(comment: "why?")
+
+        XCTAssertNil(model.sidecarURL)
+        XCTAssertNil(model.notesFailure)
+        XCTAssertEqual(model.notes, [])
     }
 
     // MARK: - Closing

@@ -8,8 +8,10 @@ import SwiftUI
 /// reloads a file on external change (plans get rewritten by agents while you
 /// read them).
 ///
-/// Read-only on purpose — no editing, no commenting. Those are later slices,
-/// designed against real dogfooding.
+/// Read-only on the **content**: helm never edits the file, because an agent owns it and
+/// rewrites it whole. Commenting is the exception #33 argued for and #39 shipped, and it
+/// keeps that rule — a note goes to a sidecar *beside* the canvas (`CanvasNotes`), never
+/// into it, precisely so the next rewrite cannot clobber it.
 @MainActor
 final class CanvasModel: ObservableObject {
     /// What the pane shows for the open file: a markdown document (rendered as
@@ -104,9 +106,14 @@ final class CanvasModel: ObservableObject {
 
     var isOpen: Bool { showing != nil }
 
-    /// The open file, when the canvas is showing one — nil for a URL source.
-    /// This is the persistence seam: `WorkspaceModel.saveContext` reads it, so a
-    /// URL canvas simply persists nothing rather than a path that is not one.
+    /// The open file, when the canvas is showing one — nil for a URL source. What reads it
+    /// is live: the header, reveal-in-Finder, and `sidecarURL` (a URL canvas has no file to
+    /// write notes beside).
+    ///
+    /// **It is no longer the persistence seam.** It was — `WorkspaceModel.saveContext` read
+    /// `fileURL?.path` into `openArtifactPath`, which is why a URL canvas persisted nothing
+    /// at all. The bench persists `CanvasSource` through `Pane.Content.canvas` instead, so
+    /// a URL canvas now restores properly and `saveContext` does not read this at all.
     var fileURL: URL? {
         if case let .file(document) = showing { document.url } else { nil }
     }

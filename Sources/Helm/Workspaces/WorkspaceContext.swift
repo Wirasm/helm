@@ -64,6 +64,9 @@ struct WorkspaceContext: Codable, Equatable {
     /// than losing the workspace.
     ///
     /// Note the idiom: `try?` over `decodeIfPresent` yields a **double** optional.
+    ///
+    /// The bench is the one field whose loss is worth saying out loud, so it does not use
+    /// that idiom — see the note above it below.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         terminalSessionIDs =
@@ -76,7 +79,35 @@ struct WorkspaceContext: Codable, Equatable {
         branch = (try? container.decodeIfPresent(String.self, forKey: .branch)) ?? nil
         branchResolved =
             ((try? container.decodeIfPresent(Bool.self, forKey: .branchResolved)) ?? nil) ?? false
-        workbench = (try? container.decodeIfPresent(Workbench.self, forKey: .workbench)) ?? nil
+        // The bench degrades the same way, but not silently.
+        //
+        // Dropping it costs the operator their columns, slots, tab order and which canvas
+        // was open where. It is still the right call — see above; the alternative discards
+        // EVERY workspace's context — but it used to happen without a word, and a collapsed
+        // workbench then looked exactly like one that had never been saved. Nothing to grep,
+        // nothing to attach to a bug report.
+        //
+        // `contains` is what makes the line worth having. A blob written before there was a
+        // bench has no key at all and has lost nothing, so it stays quiet; only a key that
+        // is THERE and will not decode is a loss. Without that split this would fire for
+        // every pre-bench workspace on every first launch and mean nothing.
+        //
+        // `Workbench.init(from:)` already throws a specific `DecodingError` — including for
+        // a bench with no panes, which it refuses rather than repairs — so there is a real
+        // message to print. `TerminalSession`'s rejected-config warning is the precedent:
+        // documented fallback, logged.
+        if container.contains(.workbench) {
+            do {
+                workbench = try container.decodeIfPresent(Workbench.self, forKey: .workbench)
+            } catch {
+                NSLog(
+                    "helm: a saved workbench could not be read and was dropped — this "
+                        + "workspace falls back to its terminals: %@", String(describing: error))
+                workbench = nil
+            }
+        } else {
+            workbench = nil
+        }
     }
 }
 
@@ -97,9 +128,10 @@ enum WorkspaceContextStore {
     /// live *in this process*, which at launch is none — so a cold start always restored
     /// zero terminals and the persistence was neutered by its own loader. The ids are the
     /// only record of how many terminals a workspace had and which was selected;
-    /// `TerminalManager.activate(workspacePath:selectedID:restoring:)` rebuilds the row
-    /// under them on first visit. Filtering here is what made a relaunch cost every
-    /// terminal in every workspace.
+    /// `TerminalManager.activate(workspacePath:restoring:)` rebuilds the row under them on
+    /// first visit, and which one is selected is now the migrated `Workbench`'s job rather
+    /// than the manager's. Filtering here is what made a relaunch cost every terminal in
+    /// every workspace.
     static func load(from defaults: UserDefaults) -> [String: WorkspaceContext] {
         guard let raw = defaults.string(forKey: key),
             let contexts = try? JSONDecoder().decode(

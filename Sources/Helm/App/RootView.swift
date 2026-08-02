@@ -29,8 +29,9 @@ struct RootView: View {
         .task {
             model.observe(terminals: terminalManager, workbench: workbench)
             activateSelectedWorkspace()
-            // The screenshot harness's `--artifact <path>`. `tools/winshot.swift` uses it;
-            // it opens into whichever pane placement chooses, exactly like a ⌘-clicked link.
+            // `--artifact <path>` (`LaunchOptions.artifactPath`) — a launch seam for
+            // driving helm into a given state without keystroke injection. It opens into
+            // whichever pane placement chooses, exactly like a ⌘-clicked link.
             if let path = LaunchOptions.artifactPath {
                 workbench.open(
                     .file(URL(fileURLWithPath: (path as NSString).expandingTildeInPath)))
@@ -70,7 +71,11 @@ struct RootView: View {
     private func closeWorkspace(_ workspace: Workspace) {
         persistCurrentContext()
         let wasSelected = model.selectedWorkspace == workspace
+        // Both teardowns are unconditional, and both have to be: the branches below run
+        // only when the workspace being closed was the selected one, and a background
+        // workspace can be closed from any tab's context menu.
         terminalManager.closeWorkspace(workspace.path)
+        workbench.closeWorkspace(workspace.path)
         model.close(workspace)
         if wasSelected, let replacement = model.workspaces.first {
             model.select(replacement)

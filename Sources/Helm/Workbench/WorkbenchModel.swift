@@ -42,7 +42,19 @@ final class WorkbenchModel: ObservableObject {
     /// One `CanvasModel` per canvas pane, keyed by pane id — the "N instances" #23 named.
     /// Dropped when its pane closes, which drops its `FileWatcher` and that watcher's open
     /// file descriptor with it.
-    private var canvases: [Pane.ID: CanvasModel] = [:]
+    ///
+    /// **Stamped with the workspace that opened it**, for the same reason `TerminalSession`
+    /// carries `workspacePath`: `closeWorkspace` has to drop what a workspace owned, and by
+    /// the time it runs that workspace's bench is no longer the live one to ask. Without
+    /// the stamp the cache had no way to answer "whose is this?" and the entries simply
+    /// stayed — a `FileWatcher` and its open descriptor per canvas, for the life of the
+    /// process.
+    private var canvases: [Pane.ID: CachedCanvas] = [:]
+
+    private struct CachedCanvas {
+        let workspacePath: String?
+        let model: CanvasModel
+    }
 
     /// `AnyCancellable`s rather than NotificationCenter tokens: they unsubscribe in their
     /// own deinit, and Swift 6 forbids a nonisolated deinit from touching the non-Sendable
@@ -84,6 +96,22 @@ final class WorkbenchModel: ObservableObject {
         reconcileVisibility()
     }
 
+    /// Closing a workspace is an explicit teardown, unlike switching: drop every canvas it
+    /// owned so each `FileWatcher` — and that watcher's open file descriptor — goes with
+    /// it. The bench's twin of `TerminalManager.closeWorkspace`, and called the same way:
+    /// unconditionally, naming the workspace, whether or not it is the active one.
+    ///
+    /// **Deliberately not done on a workspace SWITCH.** The cache surviving a switch is
+    /// what gets the same webview back instead of a reload, and pane ids are persisted, so
+    /// switching back finds its canvases still there. `activate` is right to leave it
+    /// alone; only closing is a teardown.
+    func closeWorkspace(_ path: String) {
+        for (id, cached) in canvases where cached.workspacePath == path {
+            cached.model.close()
+            canvases[id] = nil
+        }
+    }
+
     /// Today's frame, built out of whatever sessions the manager has: one column, one
     /// slot, the terminals as tabs. nil only when there are none, which
     /// `TerminalManager.activate` does not leave behind.
@@ -102,12 +130,15 @@ final class WorkbenchModel: ObservableObject {
     /// Resolve-or-create, at the edge. The model is cached by pane id so a tab switch or a
     /// re-render gets the same webview back rather than reloading the page.
     func canvas(for pane: Pane) -> CanvasModel {
-        if let existing = canvases[pane.id] { return existing }
+        if let existing = canvases[pane.id] { return existing.model }
         let model = CanvasModel(
             source: {
                 if case let .canvas(source) = pane.content { source } else { nil }
             }())
-        canvases[pane.id] = model
+        // A canvas pane only renders while its workspace is the active one, so this is
+        // that workspace — the same association `TerminalManager` gets for free by
+        // storing `workspacePath` on the session itself.
+        canvases[pane.id] = CachedCanvas(workspacePath: workspacePath, model: model)
         return model
     }
 
@@ -151,7 +182,7 @@ final class WorkbenchModel: ObservableObject {
                 terminals.close(session)
             }
         case .canvas:
-            canvases[pane]?.close()
+            canvases[pane]?.model.close()
             canvases[pane] = nil
         }
     }

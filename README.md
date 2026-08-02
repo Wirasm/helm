@@ -1,9 +1,9 @@
 # helm
 
-The native macOS surface you work in: a libghostty terminal as the permanent centre —
-your CLI agent (pi, Claude Code, codex) runs here — with workspaces above it and a right
-dock for an open artifact. Markdown and HTML are rendered from the filesystem; there is
-no backend.
+The native macOS surface you work in: libghostty terminals where your CLI agent (pi,
+Claude Code, codex) runs, arranged with the files it writes into a workbench — columns of
+tabbed slots, several panes on screen at once — with workspaces above it. Markdown and
+HTML are rendered from the filesystem; there is no backend.
 
 "Agent" always means a CLI agent you already run. helm hosts it in a terminal it owns and
 renders what it writes. It does not build or host an agent of its own.

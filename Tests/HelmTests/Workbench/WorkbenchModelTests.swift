@@ -95,6 +95,69 @@ final class WorkbenchModelTests: XCTestCase {
                 + "descriptor, on a file nothing shows")
     }
 
+    /// The per-pane `close` above was the ONLY thing that dropped a canvas. Closing a
+    /// whole workspace went through neither it nor `deactivate` — `RootView.closeWorkspace`
+    /// reaches `deactivate` only when the closed workspace was selected *and* nothing
+    /// replaces it — so every canvas the workspace held stayed cached, watcher and
+    /// descriptor with it, for the life of the process.
+    func testClosingAWorkspaceDropsTheCanvasesItOwned() throws {
+        let (model, _) = mounted()
+        let id = try XCTUnwrap(model.open(.file(path: "/tmp/a.md")))
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+        let canvas = model.canvas(for: pane)
+
+        // The replacement branch: close the selected workspace, activate another. No
+        // `deactivate` anywhere in it.
+        model.closeWorkspace(workspace)
+        model.activate(workspacePath: other)
+
+        XCTAssertNotIdentical(
+            model.canvas(for: pane), canvas,
+            "the workspace is gone, so nothing can ever show this canvas again — holding "
+                + "its watcher's file descriptor open is a leak with no way back to it")
+    }
+
+    /// "Close Workspace" is on every tab's context menu, so the workspace being closed is
+    /// often not the selected one — the path where `wasSelected` is false and, before the
+    /// teardown existed, the bench was not consulted at all.
+    func testClosingABackgroundWorkspaceDropsItsCanvasesAndLeavesTheLiveOneAlone() throws {
+        let (model, _) = mounted()
+        let parkedID = try XCTUnwrap(model.open(.file(path: "/tmp/a.md")))
+        let parked = try XCTUnwrap(model.bench?.pane(parkedID))
+        let parkedCanvas = model.canvas(for: parked)
+
+        model.activate(workspacePath: other)
+        let liveID = try XCTUnwrap(model.open(.file(path: "/tmp/b.md")))
+        let live = try XCTUnwrap(model.bench?.pane(liveID))
+        let liveCanvas = model.canvas(for: live)
+
+        model.closeWorkspace(workspace)
+
+        XCTAssertNotIdentical(model.canvas(for: parked), parkedCanvas)
+        XCTAssertIdentical(
+            model.canvas(for: live), liveCanvas,
+            "the teardown is scoped to one workspace — closing a background tab must not "
+                + "reload the canvas the operator is looking at")
+    }
+
+    /// The other half of the rule, and the reason the teardown is on `closeWorkspace`
+    /// rather than on `activate`: a **switch** deliberately keeps the cache, which is what
+    /// gets the same webview back instead of reloading the page.
+    func testSwitchingAwayAndBackKeepsTheSameCanvas() throws {
+        let (model, _) = mounted()
+        let id = try XCTUnwrap(model.open(.file(path: "/tmp/a.md")))
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+        let canvas = model.canvas(for: pane)
+        let bench = try XCTUnwrap(model.bench)
+
+        model.activate(workspacePath: other)
+        model.activate(workspacePath: workspace, restoring: bench)
+
+        XCTAssertIdentical(
+            model.canvas(for: pane), canvas,
+            "pane ids are persisted, so a switch back finds its canvases where it left them")
+    }
+
     func testAnAlreadyOpenSourceIsSelectedRatherThanDuplicated() throws {
         let (model, _) = mounted()
         let source = CanvasSource.file(path: "/tmp/plan.md")
@@ -249,5 +312,137 @@ final class WorkbenchModelTests: XCTestCase {
 
         XCTAssertEqual(model.bench?.panes.map(\.id), [only])
         XCTAssertEqual(manager.sessions(for: workspace).count, 1, "and its shell is untouched")
+    }
+
+    // MARK: - ⌘1–⌘9
+
+    /// The eighth of the tests that moved off `TerminalManager` when selection became the
+    /// slot's. Select-by-index changed meaning on the way — it was a position in the
+    /// workspace's one row, and a bench has no such row — so it is by position **within the
+    /// focused slot**, and the bounds guard is the whole of what makes a stray ⌘9 harmless.
+    func testSelectingATabByIndexPicksWithinTheFocusedSlot() throws {
+        let (model, _) = mounted()
+        model.newTerminal()
+        let panes = try XCTUnwrap(model.bench?.slot(try XCTUnwrap(model.bench?.focusedSlot))?.panes)
+        XCTAssertEqual(panes.count, 2, "⌘1 and ⌘2 need two tabs to choose between")
+
+        model.selectTab(0)
+        XCTAssertEqual(model.bench?.focusedPane?.id, panes[0].id)
+
+        model.selectTab(1)
+        XCTAssertEqual(model.bench?.focusedPane?.id, panes[1].id)
+    }
+
+    func testSelectingATabOutOfRangeChangesNothing() throws {
+        let (model, _) = mounted()
+        model.selectTab(0)
+        let before = try XCTUnwrap(model.bench)
+
+        model.selectTab(8)
+        model.selectTab(-1)
+
+        XCTAssertEqual(model.bench, before, "⌘9 over a slot with one tab is a no-op, not a crash")
+    }
+
+    /// ⌘1–⌘9 acts on the focused slot, so a split changes what it means — the point of
+    /// moving it off the manager.
+    func testSelectingATabIgnoresTabsInOtherSlots() throws {
+        let (model, _) = mounted()
+        model.newTerminal()
+        let firstSlotPanes = try XCTUnwrap(
+            model.bench?.slot(try XCTUnwrap(model.bench?.focusedSlot))?.panes)
+        model.splitRight()
+        let split = try XCTUnwrap(model.bench?.focusedPane?.id)
+
+        model.selectTab(1)
+
+        XCTAssertEqual(
+            model.bench?.focusedPane?.id, split,
+            "the new slot holds one pane, so index 1 names nothing in it — and must not "
+                + "reach back into the slot ⌘2 would have hit a moment ago")
+        XCTAssertFalse(
+            firstSlotPanes.map(\.id).contains(try XCTUnwrap(model.bench?.focusedPane?.id)))
+    }
+
+    // MARK: - Post
+
+    /// Post's whole routing rule. The ambiguous case is the one that matters: two chat
+    /// faces open and no focused one means there is no unambiguous answer, and a `nil`
+    /// target is what leaves the button disabled instead of posting into whichever pane
+    /// happened to sort first.
+    func testPostGoesToTheFocusedPaneWhenItIsOnTheChatFace() throws {
+        let (model, _) = mounted()
+        model.toggleFace()
+
+        XCTAssertEqual(model.composeTarget, model.bench?.focusedPane?.id)
+    }
+
+    func testPostFallsBackToTheOnlyChatFaceOpen() throws {
+        let (model, _) = mounted()
+        let reading = try XCTUnwrap(model.bench?.focusedPane?.id)
+        model.toggleFace()
+        model.splitRight()
+
+        XCTAssertEqual(
+            model.bench?.face(ofSelectedPaneIn: try XCTUnwrap(model.bench?.focusedSlot)),
+            .terminal, "focus moved to the split, which is on the terminal face")
+        XCTAssertEqual(
+            model.composeTarget, reading,
+            "the operator is looking at exactly one piece of writing — that is where notes go")
+    }
+
+    func testPostHasNoTargetWhenTwoChatFacesAreOpenAndNeitherIsFocused() throws {
+        let (model, _) = mounted()
+        model.toggleFace()
+        model.splitRight()
+        model.toggleFace()
+        model.splitDown()
+
+        XCTAssertEqual(model.bench?.canvasPanes.count, 0)
+        XCTAssertNil(
+            model.composeTarget,
+            "two chat faces and a terminal focused — guessing between them would put the "
+                + "operator's notes in the wrong agent's composer")
+    }
+
+    func testPostHasNoTargetWhenNothingIsReading() {
+        let (model, _) = mounted()
+
+        XCTAssertNil(model.composeTarget)
+    }
+
+    /// `post` is the gate, not just the messenger: with no target it must send nothing at
+    /// all rather than a request no pane will claim.
+    func testPostWithNoTargetSendsNothing() {
+        let (model, _) = mounted()
+        var received: [ComposeRequest] = []
+        let token = NotificationCenter.default.addObserver(
+            forName: .helmComposeText, object: nil, queue: .main
+        ) { note in
+            if let request = note.object as? ComposeRequest { received.append(request) }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        model.post("## `#phase-2`\n\nthis ordering is wrong")
+
+        XCTAssertTrue(received.isEmpty)
+    }
+
+    func testPostCarriesTheNotesToTheTargetPane() throws {
+        let (model, _) = mounted()
+        model.toggleFace()
+        let target = try XCTUnwrap(model.composeTarget)
+        var received: [ComposeRequest] = []
+        let token = NotificationCenter.default.addObserver(
+            forName: .helmComposeText, object: nil, queue: .main
+        ) { note in
+            if let request = note.object as? ComposeRequest { received.append(request) }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        model.post("this ordering is wrong")
+
+        XCTAssertEqual(received.map(\.pane), [target])
+        XCTAssertEqual(received.map(\.text), ["this ordering is wrong"])
     }
 }
