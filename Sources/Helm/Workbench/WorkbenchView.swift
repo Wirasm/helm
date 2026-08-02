@@ -172,7 +172,12 @@ private struct SlotView: View {
         switch pane.content {
         case let .terminal(face):
             if let session = model.session(for: pane) {
-                TerminalPaneView(session: session, face: face)
+                // `focusedPane` is the bench's own reader — the focused slot's selected
+                // pane — so which terminal owns the keyboard is one question with one
+                // answer, asked where the answer lives rather than re-derived per slot.
+                TerminalPaneView(
+                    session: session, face: face,
+                    holdsKeyboard: bench.focusedPane?.id == pane.id)
             }
         case .canvas:
             CanvasView(model: model.canvas(for: pane), post: postHandler)

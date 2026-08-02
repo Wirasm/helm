@@ -38,9 +38,14 @@ final class TerminalManager: ObservableObject {
 
     private var nextOrdinal = 1
 
+    /// What each new session's surface is wired to. A factory rather than a value because
+    /// an in-memory backend carries per-session state; see `TerminalSession.init`.
+    private let backend: @MainActor () -> TerminalSessionBackend
+
     /// Internal (not private) so tests can build isolated managers; the app
-    /// itself only ever uses `.shared`.
-    init() {
+    /// itself only ever uses `.shared`, which is `.exec` — a real login shell.
+    init(backend: @escaping @MainActor () -> TerminalSessionBackend = { .exec }) {
+        self.backend = backend
         controller = TerminalSession.makeController()
         // No pty is created until a workspace is first visited. This bounds
         // startup cost to the active context rather than all remembered folders.
@@ -79,7 +84,8 @@ final class TerminalManager: ObservableObject {
         }
         for id in ids {
             let session = TerminalSession(
-                id: id, ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller)
+                id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
+                controller: controller, backend: backend())
             nextOrdinal += 1
             session.manager = self
             sessions.append(session)
@@ -120,7 +126,8 @@ final class TerminalManager: ObservableObject {
     @discardableResult
     func newTerminal(in workspacePath: String) -> TerminalSession {
         let session = TerminalSession(
-            ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller)
+            ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller,
+            backend: backend())
         nextOrdinal += 1
         session.manager = self
         sessions.append(session)

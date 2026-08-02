@@ -57,6 +57,14 @@ rules about what is *visible*, which is why `TerminalSession` carries `isVisible
 than a copy of anyone's selection.
 _Avoid_: selected, active, focused
 
+**focused**:
+The one pane the keyboard belongs to: the focused slot's selected pane, `Workbench.focusedPane`.
+Exactly one in the whole bench, where **visible** is one per slot and **selected** is one per
+slot's tabs. It is what a command acts on and where typing goes — and the two must not come
+apart, which is #96: a bench where three panes were visible, one was focused, and the
+keyboard was held by none of them.
+_Avoid_: active, current, selected, first responder (that word is AppKit's, one level down)
+
 **canvas**:
 The pane type that renders content — a markdown file, an HTML file, or a URL — and accepts
 annotation on it. Modular by source; extendable to further formats.
