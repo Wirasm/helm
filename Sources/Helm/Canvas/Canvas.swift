@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import Inject
 import SwiftUI
 
@@ -78,6 +77,25 @@ final class CanvasModel: ObservableObject {
     /// press re-focus a field that is already on screen.
     @Published private(set) var addressFocus = 0
 
+    // MARK: - Annotation
+
+    /// What the operator has selected on the page and not yet commented on. The bridge
+    /// sets it; submitting or dismissing clears it.
+    @Published private(set) var selection: CanvasSelection?
+
+    /// Every note in this canvas's sidecar, by heading. Re-read from the file rather than
+    /// tallied in memory: the sidecar IS the memory, and an agent or an editor may have
+    /// appended to it since.
+    @Published private(set) var notes: [String] = []
+
+    /// Why the last note could not be written, in the operator's terms. Shown in the pane
+    /// — a note someone believes they wrote and that went nowhere is worse than one they
+    /// were told they could not write.
+    @Published private(set) var notesFailure: String?
+
+    /// Where this canvas's notes accumulate — beside it, never inside it.
+    var sidecarURL: URL? { fileURL.map(CanvasNotes.sidecarURL(for:)) }
+
     private var watcher: FileWatcher?
 
     /// Files beyond this are almost certainly not artifacts; refuse instead of
@@ -97,44 +115,18 @@ final class CanvasModel: ObservableObject {
         if case .url = showing { true } else { false }
     }
 
-    /// The canvas vertical subscribes to its own commands rather than having the
-    /// app shell forward them.
+    /// **This model no longer subscribes to `helmOpenCanvasFile` / `helmOpenCanvasURL`,
+    /// and must not.** There is one of these per canvas pane now, not one per app: a
+    /// subscription here would make every ⌘-clicked link replace the contents of *every*
+    /// open canvas at once.
     ///
-    /// They have to live on the model, not on a view: both exist to open the pane
-    /// **while it is closed**, and a receiver attached to the dock would be torn
-    /// down in exactly that state. The model outlives the presentation, so the
-    /// command lands whether the pane is on screen or not.
-    /// `AnyCancellable`s rather than NotificationCenter tokens: they unsubscribe in
-    /// their own deinit, and Swift 6 forbids a nonisolated deinit from touching the
-    /// non-Sendable token the observer API hands back.
-    private var commands: Set<AnyCancellable> = []
-
-    init() {
-        NotificationCenter.default
-            .publisher(for: .helmOpenCanvasFile)
-            .compactMap { $0.object as? URL }
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] url in
-                MainActor.assumeIsolated { self?.open(url) }
-            }
-            .store(in: &commands)
-
-        // ⌘L carries no payload and means "focus the address field"; a URL
-        // payload means "open this" — which is what the terminal's ⌘-click on an
-        // http link would post if that call site were in this slice.
-        NotificationCenter.default
-            .publisher(for: .helmOpenCanvasURL)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] note in
-                MainActor.assumeIsolated {
-                    if let url = note.object as? URL {
-                        self?.openURL(url)
-                    } else {
-                        self?.focusAddress()
-                    }
-                }
-            }
-            .store(in: &commands)
+    /// The reasoning that put those commands on a model rather than a view has not
+    /// changed — both exist to open a canvas **while there is none**, and a receiver on a
+    /// view would be gone in exactly that state. It moved up one level, to
+    /// `WorkbenchModel`, which outlives every canvas pane and is also the thing that now
+    /// decides *where* an opened source goes.
+    init(source: CanvasSource? = nil) {
+        if let source { show(source) }
     }
 
     /// The browser's "Browse…" row. Starts at `directory` when given (a store root),
@@ -170,6 +162,9 @@ final class CanvasModel: ObservableObject {
 
     func open(_ url: URL) {
         showing = .file(Document(url: url, content: Self.load(url)))
+        selection = nil
+        notesFailure = nil
+        refreshNotes()
         // Reload on every external change. Watcher lifetime == document
         // lifetime; opening another file replaces it.
         watcher = FileWatcher(url: url) { [weak self] in
@@ -177,9 +172,59 @@ final class CanvasModel: ObservableObject {
         }
     }
 
+    /// This pane's canvas is going away. Called by `WorkbenchModel` when the pane closes
+    /// — it no longer means "empty the dock", because there is no dock: the ✕ in the
+    /// canvas header closes the **pane**, not the source.
     func close() {
         watcher = nil
         showing = nil
+    }
+
+    func pageDidSelect(_ selection: CanvasSelection) {
+        self.selection = selection
+        notesFailure = nil
+    }
+
+    func dismissSelection() {
+        selection = nil
+    }
+
+    /// Validation is `CanvasAnnotation.decode`'s, and writing is `CanvasNotes.append`'s.
+    /// What is decided here is only what to do when either refuses.
+    func annotate(comment: String) {
+        guard let canvas = fileURL, let selection else { return }
+        guard let annotation = CanvasAnnotation.decode(selection.body, comment: comment) else {
+            notesFailure = "That selection could not be anchored — try selecting the text again."
+            return
+        }
+        do {
+            try CanvasNotes.append(annotation, for: canvas, at: Date())
+            self.selection = nil
+            notesFailure = nil
+            refreshNotes()
+        } catch {
+            // A canvas opened through Browse… can live anywhere, including somewhere not
+            // writable. Say so; never swallow it.
+            notesFailure =
+                "Could not write \(CanvasNotes.sidecarURL(for: canvas).lastPathComponent): "
+                + error.localizedDescription
+        }
+    }
+
+    func refreshNotes() {
+        notes = sidecarURL.map(CanvasNotes.headings(in:)) ?? []
+    }
+
+    func revealNotes() {
+        guard let sidecar = sidecarURL,
+            FileManager.default.fileExists(atPath: sidecar.path)
+        else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([sidecar])
+    }
+
+    /// The accumulated markdown, for `Post`. nil when there is nothing to hand over.
+    var notesMarkdown: String? {
+        sidecarURL.flatMap(CanvasNotes.markdown(in:))
     }
 
     func revealInFinder() {
@@ -354,6 +399,11 @@ struct CanvasView: View {
     /// Both are no-ops in release (docs/VENDORED.md).
     @ObserveInjection private var inject
     @ObservedObject var model: CanvasModel
+    /// Hands the accumulated notes to a composer. The bench decides which one — there may
+    /// be several chat faces open, and an unaddressed notification would prefill them all.
+    var post: ((String) -> Void)?
+
+    @State private var showingNotes = false
 
     var body: some View {
         if let showing = model.showing {
@@ -363,12 +413,46 @@ struct CanvasView: View {
                 case let .url(page): CanvasAddressBar(model: model, page: page)
                 }
                 Divider()
+                if let failure = model.notesFailure {
+                    noticeStrip(failure)
+                }
                 content(for: showing)
+                    // The comment field is drawn over the page rather than beside it, so
+                    // the selection it is about stays visible under it.
+                    .overlay(alignment: .topLeading) { commentField }
             }
             .background(Color(nsColor: .textBackgroundColor))
             // Inside the `if`: the body is a bare ViewBuilder conditional with
             // no else, so there is no single view to hang this on outside it.
             .enableInjection()
+        }
+    }
+
+    /// Anchored near the selection the page reported, clamped so a selection at the
+    /// bottom of a long document does not put the field off screen.
+    @ViewBuilder
+    private var commentField: some View {
+        if let selection = model.selection {
+            CanvasCommentField(model: model, selection: selection)
+                .offset(
+                    x: max(8, selection.rect.minX),
+                    y: max(8, selection.rect.maxY + 8))
+        }
+    }
+
+    private func noticeStrip(_ message: String) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                Text(message).lineLimit(2)
+                Spacer()
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.quaternary)
+            Divider()
         }
     }
 
@@ -415,9 +499,13 @@ struct CanvasView: View {
     private func fileContent(for document: CanvasModel.Document) -> some View {
         switch document.content {
         case let .markdown(markdown):
-            MarkdownCanvasView(markdown: markdown, generation: document.generation)
+            MarkdownCanvasView(
+                markdown: markdown, generation: document.generation,
+                onSelection: model.pageDidSelect)
         case .web:
-            HTMLCanvasView(url: document.url, generation: document.generation)
+            HTMLCanvasView(
+                url: document.url, generation: document.generation,
+                onSelection: model.pageDidSelect)
         case let .plainText(text):
             ScrollView {
                 Text(text)
@@ -444,6 +532,22 @@ struct CanvasView: View {
                 .truncationMode(.middle)
                 .help(document.url.path)
             Spacer()
+            // Attention as state on an existing element, never a popup: a count on the
+            // header, not a badge that pops.
+            if !model.notes.isEmpty {
+                Button {
+                    showingNotes.toggle()
+                } label: {
+                    Text("Notes (\(model.notes.count))")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("The comments written beside this canvas")
+                .popover(isPresented: $showingNotes, arrowEdge: .bottom) {
+                    CanvasNotesList(model: model, post: post)
+                }
+            }
             Button {
                 model.revealInFinder()
             } label: {

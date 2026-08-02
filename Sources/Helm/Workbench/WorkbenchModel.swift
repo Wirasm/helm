@@ -103,8 +103,10 @@ final class WorkbenchModel: ObservableObject {
     /// re-render gets the same webview back rather than reloading the page.
     func canvas(for pane: Pane) -> CanvasModel {
         if let existing = canvases[pane.id] { return existing }
-        let model = CanvasModel()
-        if case let .canvas(source) = pane.content { model.show(source) }
+        let model = CanvasModel(
+            source: {
+                if case let .canvas(source) = pane.content { source } else { nil }
+            }())
         canvases[pane.id] = model
         return model
     }
@@ -215,6 +217,32 @@ final class WorkbenchModel: ObservableObject {
         guard var bench else { return }
         bench.toggleFace()
         commit(bench)
+    }
+
+    /// Hand a canvas's accumulated notes to a composer, if there is one to hand them to.
+    ///
+    /// **Post inherits the composer's gate rather than adding one of its own.** Prefilling
+    /// only fills the field — `ChatModel.canSend` (`status == .idle`, nothing looser) is
+    /// what decides whether it can be sent, and #29 measured why that must not be relaxed.
+    func post(_ text: String) {
+        guard let pane = composeTarget else { return }
+        NotificationCenter.default.post(
+            name: .helmComposeText, object: ComposeRequest(pane: pane, text: text))
+    }
+
+    /// The pane whose composer a `Post` reaches: the focused pane if it is a terminal on
+    /// the chat face, else the only chat face open. nil when there is no unambiguous
+    /// target — and then the button is disabled rather than posting into nothing, because
+    /// a control that silently does nothing is worse than one that says it cannot.
+    var composeTarget: Pane.ID? {
+        guard let bench else { return nil }
+        if let focused = bench.focusedPane, case .terminal(.chat) = focused.content {
+            return focused.id
+        }
+        let reading = bench.panes.filter {
+            if case .terminal(.chat) = $0.content { true } else { false }
+        }
+        return reading.count == 1 ? reading[0].id : nil
     }
 
     func closeFocusedPane() {

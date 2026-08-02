@@ -105,4 +105,42 @@ final class CanvasHTMLTests: XCTestCase {
             "vendored marked build must assign the global the injection relies on"
         )
     }
+    // MARK: - The annotation bridge
+
+    /// The script's *behaviour* is verified by driving a canvas; what is pinned here is
+    /// that it is well-formed, names the handler, and reads rather than writes.
+    func testTheAnnotationScriptPostsToTheNamedHandler() {
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(
+            script.contains("webkit.messageHandlers.\(CanvasBridgePolicy.handlerName)"),
+            script)
+        XCTAssertTrue(script.contains("mouseup"), "the selection is read when it is made")
+        XCTAssertTrue(script.contains("getSelection"), script)
+    }
+
+    /// **The canvas must render correctly without it.** A page that depended on a
+    /// helm-injected global would render in helm and be a blank page in `playwright-cli`,
+    /// so the agent would validate a different artifact from the one it is shown (#33).
+    func testTheAnnotationScriptReturnsEarlyWhenThereIsNoBridge() {
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(
+            script.contains("if (!window.webkit"),
+            "no handler means no listener, and a page that never had one is unaffected")
+        XCTAssertFalse(
+            script.contains("document.write"), "the bridge reads and reports; it never writes")
+        XCTAssertFalse(script.contains("innerHTML"), "…and never changes the page")
+    }
+
+    func testTheAnnotationScriptIsBalanced() {
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertEqual(
+            script.filter { $0 == "{" }.count, script.filter { $0 == "}" }.count,
+            "an unbalanced IIFE is a syntax error the page would swallow silently")
+        XCTAssertEqual(
+            script.filter { $0 == "(" }.count, script.filter { $0 == ")" }.count)
+    }
+
 }

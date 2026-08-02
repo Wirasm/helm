@@ -170,6 +170,35 @@ final class WorkbenchModelTests: XCTestCase {
             "…and the pty behind that tab is still alive")
     }
 
+    // MARK: - The commands that moved off TerminalWorkspace and CanvasModel
+
+    /// The subscription moved here from `CanvasModel`, and it had to: there is one canvas
+    /// model per pane now, so a receiver on the model would make a single ⌘-clicked link
+    /// replace the contents of every open canvas at once.
+    func testAClickedLinkOpensACanvasThroughPlacement() async throws {
+        let (model, _) = mounted()
+        let file = URL(fileURLWithPath: "/tmp/offered.md")
+
+        NotificationCenter.default.post(name: .helmOpenCanvasFile, object: file)
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(
+            model.bench?.canvasPanes.map(\.content), [.canvas(.file(file))],
+            "the offer arrives as a notification and placement decides where it lands")
+        XCTAssertEqual(model.bench?.columns.count, 2, "…which at 1x1 is a new column")
+    }
+
+    func testTheFaceCommandReachesTheModelWhileNoViewHoldsIt() async throws {
+        let (model, _) = mounted()
+
+        NotificationCenter.default.post(name: .helmToggleChat, object: nil)
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(
+            model.bench?.face(ofSelectedPaneIn: try XCTUnwrap(model.bench?.focusedSlot)), .chat,
+            "⌘T has to reach a pane whose view may be mounted, unmounted or not yet built")
+    }
+
     // MARK: - The face
 
     func testTogglingTheFaceReachesTheFocusedPaneAndNothingElse() throws {

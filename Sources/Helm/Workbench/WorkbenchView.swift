@@ -173,7 +173,14 @@ private struct SlotView: View {
                 TerminalPaneView(session: session, face: face)
             }
         case .canvas:
-            CanvasView(model: model.canvas(for: pane))
+            CanvasView(model: model.canvas(for: pane), post: postHandler)
         }
+    }
+
+    /// nil when there is nowhere unambiguous to send notes, which is what leaves the
+    /// canvas's `Post` disabled with a reason rather than silently doing nothing.
+    private var postHandler: ((String) -> Void)? {
+        guard model.composeTarget != nil else { return nil }
+        return { model.post($0) }
     }
 }

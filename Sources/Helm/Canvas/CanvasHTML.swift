@@ -152,6 +152,53 @@ enum CanvasHTML {
         """
     }
 
+    // MARK: The annotation bridge
+
+    /// Reports what the operator selected, so helm can anchor a comment to it.
+    ///
+    /// On `mouseup` it reads the selection, walks up from
+    /// `range.commonAncestorContainer` to the nearest ancestor carrying an `id`, and posts
+    /// `{ id, text, rect }`. Selecting nothing posts nothing.
+    ///
+    /// **The script is helm's, not the canvas's, and the canvas must render correctly
+    /// without it.** A page that depended on a helm-injected global would render in helm
+    /// and be a blank page in `playwright-cli`, so the agent would validate a different
+    /// artifact from the one it is shown (#33). This may only read and report; it must
+    /// never be something the page needs.
+    ///
+    /// The rect is the selection's position in the viewport, so the comment field can be
+    /// anchored near what it is about. It is not part of the anchor and is never persisted
+    /// — an anchor made of coordinates would not survive the agent rewriting the page,
+    /// which is the whole thing it has to survive.
+    static func annotationScript() -> String {
+        """
+        (function () {
+          if (!window.webkit || !window.webkit.messageHandlers
+              || !window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName)) { return; }
+          document.addEventListener("mouseup", function () {
+            var selection = document.getSelection();
+            if (!selection || selection.isCollapsed || selection.rangeCount === 0) { return; }
+            var text = String(selection).trim();
+            if (!text) { return; }
+            var range = selection.getRangeAt(0);
+            var node = range.commonAncestorContainer;
+            if (node.nodeType === 3) { node = node.parentNode; }
+            var id = null;
+            while (node && node !== document.body) {
+              if (node.id) { id = node.id; break; }
+              node = node.parentNode;
+            }
+            var rect = range.getBoundingClientRect();
+            window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName).postMessage({
+              id: id,
+              text: text,
+              rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+            });
+          });
+        })();
+        """
+    }
+
     // MARK: Embedding helpers
 
     /// The markdown source as a JS string literal, via JSON encoding — quotes,

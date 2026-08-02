@@ -51,4 +51,16 @@ extension Notification.Name {
     static let helmClosePane = Notification.Name("helmClosePane")
     /// ⌘⌥←/→/↑/↓ — object is a `Workbench.Direction` raw value.
     static let helmMoveFocus = Notification.Name("helmMoveFocus")
+    /// A canvas's `Post`: prefill a composer with text. Object is a `ComposeRequest`.
+    static let helmComposeText = Notification.Name("helmComposeText")
+}
+
+/// Text offered to one pane's composer.
+///
+/// **Addressed, and that is the point.** The composer lives inside `ChatOverlay`, so under
+/// a bench an unaddressed notification would prefill every open chat face at once. Which
+/// pane is the bench's decision (`WorkbenchModel.composeTarget`); this only carries it.
+struct ComposeRequest {
+    let pane: Pane.ID
+    let text: String
 }
