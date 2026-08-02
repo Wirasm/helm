@@ -19,6 +19,16 @@ struct StatusSummary: Equatable {
     /// Whether an agent in this workspace is working, or has stopped and wants you.
     let agents: AgentPresence?
 
+    /// **Private, so the rule above is checked rather than merely stated.** The synthesized
+    /// memberwise initializer would happily build the state this type exists to rule out —
+    /// `StatusSummary(workspace: nil, branch: "main", agents: .working)` — and nothing would
+    /// object. Both real constructions live in this file, so closing it costs nothing.
+    private init(workspace: String?, branch: String?, agents: AgentPresence?) {
+        self.workspace = workspace
+        self.branch = branch
+        self.agents = agents
+    }
+
     /// Nothing open: the bar's right-hand side goes empty rather than saying "none".
     static let none = StatusSummary(workspace: nil, branch: nil, agents: nil)
 

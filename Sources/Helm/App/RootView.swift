@@ -1,7 +1,7 @@
 import Inject
 import SwiftUI
 
-/// helm's permanent frame: the workspace bar above the workbench.
+/// helm's permanent frame: the workspace bar above the workbench, the status bar below it.
 ///
 /// **Composition only**, and more so than before. The canvas is no longer a special case
 /// wired in here — it is a bench pane, so the dock's `HSplitView` and the single

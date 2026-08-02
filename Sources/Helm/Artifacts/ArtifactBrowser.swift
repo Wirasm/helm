@@ -198,12 +198,14 @@ private struct BrowserRowButtonStyle: ButtonStyle {
         configuration.label
             .background(
                 RoundedRectangle(cornerRadius: 4)
+                    // The same token the tab strips use, at two weights: a row under the
+                    // pointer and a row being pressed are the same idea as a selected tab,
+                    // one step short of committed. It was `.selectedControlColor`, which is
+                    // the fourth colour source the palette exists to end.
                     .fill(
                         configuration.isPressed
-                            ? Color(nsColor: .selectedControlColor).opacity(0.7)
-                            : hovering
-                                ? Color(nsColor: .selectedControlColor).opacity(0.4)
-                                : .clear
+                            ? Color.selection
+                            : hovering ? Color.selection.opacity(0.55) : .clear
                     )
             )
             .onHover { hovering = $0 }

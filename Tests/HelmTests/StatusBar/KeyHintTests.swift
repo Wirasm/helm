@@ -97,6 +97,29 @@ final class KeyHintTests: XCTestCase {
         )
     }
 
+    /// **The half the drift test above cannot see.** It asks whether a *command* is
+    /// accounted for; this asks whether the command's KEYS can be drawn. `KeyGlyph.trigger`
+    /// answers nil for a keyCode it does not name, and `render` quietly drops it — so
+    /// binding a named command to Escape, Tab or a function key would pass every other test
+    /// here while the hint silently lost a glyph or vanished outright. That the four codes
+    /// helm binds today are all arrows is a fact about today, not a guarantee.
+    func testEveryKeyCodeTheMapBindsCanBeDrawn() {
+        for shortcut in Shortcut.all {
+            guard case .keyCode = shortcut.trigger else { continue }
+            XCTAssertNotNil(
+                KeyGlyph.trigger(shortcut.trigger),
+                "\(shortcut.notification.rawValue) binds a keyCode KeyGlyph cannot draw"
+            )
+        }
+    }
+
+    /// `KeyHint.id` is its label, so a duplicated one is two rows with one identity — which
+    /// SwiftUI's `ForEach` renders wrong rather than refusing. Cheap to make impossible.
+    func testCatalogLabelsAreUnique() {
+        let labels = KeyHintCatalog.named.map(\.label)
+        XCTAssertEqual(Set(labels).count, labels.count, "duplicate hint label in \(labels)")
+    }
+
     /// Every hint the bar draws says something in both halves. An empty glyph string would
     /// render as a floating word with no key, which reads as a bug rather than as a hint.
     func testEveryVisibleHintIsComplete() {

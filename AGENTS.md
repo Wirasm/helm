@@ -112,6 +112,13 @@ presentation. Attaching it to the view means it is dead in exactly the state it 
 value and resolve it to the live object at the edge. Persistence, restore and equality then
 come free, where a tree of protocol existentials would need a hand-rolled type registry.
 
+**Colour is a palette token, never a literal and never a system default.** Every surface
+spends `Design/Palette.swift` — views through `Color.surface`/`.textMuted`/…, the terminal
+through the same tokens rendered as ghostty config lines. A `Color(nsColor:)`, a `.bar`, or a
+hex in a view is the defect that slice exists to remove: helm had three unrelated colour
+sources and did not read as one application. If a surface needs a colour that is not there,
+add a token.
+
 **Let Swift's access control tell you where the seam is.** `@Published private(set)` state is
 only mutable from the type's own file, so an extension that has to mutate it is not a seam —
 it is the same module wearing two filenames. Fighting that with looser access or wrapper

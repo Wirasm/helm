@@ -50,9 +50,14 @@ editing the same file.
 Sources/Helm/
 ├── App/          composition only — the scene, the keyboard map, the menu, notification names
 ├── Workspaces/   the folders helm has open, and their persisted per-workspace state
-├── Terminals/    sessions, the shared ghostty runtime, the tab strip
-├── Canvas/       rendering a markdown/HTML file — the pane and its webviews
+├── Workbench/    the pane arrangement: columns, slots, tab strips, placement
+├── Terminals/    sessions, the shared ghostty runtime, a terminal's tab and pane
+├── Chat/         the agent's writing, read from the transcript — the terminal pane's other face
+├── Canvas/       rendering a markdown/HTML file or a URL — the pane and its webviews
 ├── Artifacts/    finding artifacts: store discovery, the ⌘O browser, store resolution
+├── Board/        which workspace has an agent that wants you, without opening it
+├── Design/       the palette every surface spends, and the chrome plane it sits on
+├── StatusBar/    the keys you can press right now, and where you are
 └── Shared/       the few things no single feature owns
 ```
 

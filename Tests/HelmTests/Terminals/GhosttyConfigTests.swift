@@ -211,9 +211,21 @@ final class GhosttyConfigTests: XCTestCase {
             XCTAssertTrue(
                 rendered.contains("cursor-color = \(palette.accent.value(in: appearance).hex)"),
                 rendered)
+            // The two that carry a legibility rule rather than a colour preference, and so
+            // are the two most worth pinning. `cursor-text` is the SURFACE: a block cursor
+            // covers a character, and the character has to stay readable under it — the
+            // line above sets `cursor-color` to the accent, so the obvious copy-paste slip
+            // is accent-on-accent, which is invisible and looks deliberate.
+            XCTAssertTrue(
+                rendered.contains("cursor-text = \(palette.surface.value(in: appearance).hex)"),
+                rendered)
             XCTAssertTrue(
                 rendered.contains(
                     "selection-background = \(palette.selection.value(in: appearance).hex)"),
+                rendered)
+            XCTAssertTrue(
+                rendered.contains(
+                    "selection-foreground = \(palette.textPrimary.value(in: appearance).hex)"),
                 rendered)
         }
     }

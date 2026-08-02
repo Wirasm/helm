@@ -96,6 +96,24 @@ struct Palette: Equatable, Sendable {
     /// Accent mixed most of the way into the surface, so it tints rather than highlights.
     let selection: Token
 
+    /// **Private, which is what makes "helm's one palette" a fact rather than a habit.**
+    /// `PaletteTests` proves the contrast ratios of `helm`; a second palette built elsewhere
+    /// in the module would carry none of that and nothing would ask. `RGB` and `Token` are
+    /// closed the same way, one level down.
+    private init(
+        surface: Token, surfaceRaised: Token, textPrimary: Token, textMuted: Token,
+        textFaint: Token, border: Token, accent: Token, selection: Token
+    ) {
+        self.surface = surface
+        self.surfaceRaised = surfaceRaised
+        self.textPrimary = textPrimary
+        self.textMuted = textMuted
+        self.textFaint = textFaint
+        self.border = border
+        self.accent = accent
+        self.selection = selection
+    }
+
     /// helm's one palette.
     ///
     /// **The chat face's five values, promoted.** `surface`, `textPrimary`, `textMuted`,

@@ -35,8 +35,7 @@ struct TerminalPaneView: View {
                     title: "shell exited", detail: "Close this tab, or open a new terminal with ⌘N."
                 )
             }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(
-            Color(nsColor: .textBackgroundColor))
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.surface)
     }
 
     private func fallback(title: String, detail: String) -> some View {

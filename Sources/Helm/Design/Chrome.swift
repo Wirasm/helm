@@ -80,21 +80,34 @@ extension View {
     }
 }
 
-/// Reaches the `NSWindow` SwiftUI will not hand over.
-///
-/// `makeNSView` is too early — a view has no window until it is in the hierarchy — so the
-/// work happens in `updateNSView`, one runloop turn later. There is no supported
-/// `WindowGroup` API for this on macOS 26; verified against the SDK, not assumed.
+/// Reaches the `NSWindow` SwiftUI will not hand over. There is no supported `WindowGroup`
+/// API for this on macOS 26; verified against the SDK, not assumed.
 private struct TranslucentWindow: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        NSView(frame: .zero)
+    func makeNSView(context: Context) -> WindowOpacityView {
+        WindowOpacityView(frame: .zero)
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
-        DispatchQueue.main.async {
-            guard let window = view.window, window.isOpaque else { return }
-            window.isOpaque = false
-            window.backgroundColor = .clear
-        }
+    func updateNSView(_ view: WindowOpacityView, context: Context) {}
+}
+
+/// A view whose only job is to answer the question "do I have a window yet".
+///
+/// **`viewDidMoveToWindow` rather than a hop off `updateNSView`, and the difference is a
+/// failure mode.** `makeNSView` is too early — a view has no window until something puts it
+/// in one — so the obvious shape is to look again from a `DispatchQueue.main.async` inside
+/// `updateNSView`. But then "the window was not there yet" and "the window is never coming"
+/// are the same silent `return`, on a path with nothing downstream to notice: the app opens
+/// opaque, the chrome quietly loses its vibrancy, and no test, log or crash says so.
+///
+/// AppKit already has the signal. This is called exactly when the view gains a window, so
+/// there is no polling, no retry, and no case where the work is skipped while the app still
+/// renders — if it never fires, this view was never on screen at all.
+final class WindowOpacityView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // nil on the way OUT, which is a real call and not a failure.
+        guard let window, window.isOpaque else { return }
+        window.isOpaque = false
+        window.backgroundColor = .clear
     }
 }
