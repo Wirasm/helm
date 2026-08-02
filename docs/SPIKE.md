@@ -59,6 +59,14 @@ title/close/bell/pwd/OSC events, and an `.exec` backend flag that maps to
 > `TerminalController`), and `GhosttyHostView` is `Terminals/GhosttyHostView.swift`. ⌘T no
 > longer toggles anything — it is deliberately unbound. **The lifecycle contract and the
 > API landmines below are unchanged and still load-bearing**; only the file names moved.
+>
+> **Except focus, which is a different mechanism now (#96, 2026-08-03).** The bullet below
+> says first responder follows the ⌘T toggle, out of `GhosttyHostView`. It does not: the
+> claim comes from AppKit's `viewDidMoveToWindow` on a helm-owned subclass,
+> `FocusClaimingTerminalView`, gated on an intent flag the bench pushes down from
+> `Workbench.focusedPane`. The old shape — a `DispatchQueue.main.async` hop out of
+> `updateNSView` — dropped the claim silently whenever the view had no window yet, which is
+> a terminal that accepts no keystrokes at all. See `Terminals/GhosttyHostView.swift`.
 
 - `GhosttyTerminal` (app-level singleton): owns the `TerminalController` and ONE
   long-lived `AppTerminalView`; sinks title/close/lifecycle delegate events into

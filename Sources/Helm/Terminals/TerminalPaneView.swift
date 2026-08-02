@@ -21,13 +21,18 @@ struct TerminalPaneView: View {
     /// face is reading. Rendering the two faces as a `switch` is the obvious tidy-up and
     /// reintroduces exactly that stall; keep the `ZStack`.
     let face: TerminalFace
+    /// Whether this pane is the bench's focused one — which is helm saying the keyboard
+    /// belongs here. Read off the bench by `WorkbenchView` and passed straight through;
+    /// the pane makes no decision about it.
+    let holdsKeyboard: Bool
 
     var body: some View {
         Group {
             switch session.status {
             case .starting, .running:
                 ZStack {
-                    GhosttyHostView(view: session.hostView).id(session.id)
+                    GhosttyHostView(view: session.hostView, holdsKeyboard: holdsKeyboard)
+                        .id(session.id)
                     // Keyed on the session: swapping tabs while reading must
                     // build a fresh model against the new terminal's agent, not
                     // reuse one pointed at the old pty.

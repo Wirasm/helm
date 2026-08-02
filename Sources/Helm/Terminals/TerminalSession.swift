@@ -104,27 +104,33 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// The long-lived ghostty NSView (Metal-rendered; keyboard/IME/mouse/resize
     /// handled inside the wrapper). Host it via `GhosttyHostView` — never let
     /// SwiftUI own its lifetime.
-    let hostView: TerminalView
+    let hostView: FocusClaimingTerminalView
 
     /// The manager's shared ghostty runtime. Internal rather than private so
     /// tests can assert every session holds the same instance.
     let controller: TerminalController
 
+    /// `backend` is `.exec` — libghostty's real-pty backend — everywhere but the keyboard
+    /// tests. Those need the bytes a keystroke produces to be *readable*, and an exec
+    /// surface writes them into a pty file descriptor nothing in-process can see, where an
+    /// in-memory one hands them to a closure. It is the vendor's own seam
+    /// (`TerminalSessionBackend`), not one invented here, and it is the only way to assert
+    /// what #96 is about: that a synthesised keystroke actually reaches the shell.
     init(
-        id: UUID = UUID(), ordinal: Int, workspacePath: String, controller: TerminalController
+        id: UUID = UUID(), ordinal: Int, workspacePath: String, controller: TerminalController,
+        backend: TerminalSessionBackend = .exec
     ) {
         self.id = id
         self.ordinal = ordinal
         self.workspacePath = workspacePath
         self.controller = controller
 
-        let view = TerminalView(frame: .zero)
+        let view = FocusClaimingTerminalView(frame: .zero)
         view.controller = controller
-        // .exec = libghostty's real-pty backend. `command` is deliberately left
-        // unset: libghostty then runs the user's passwd shell ($SHELL) as a
-        // login shell — exactly the default-terminal behavior we want.
+        // .exec runs the user's passwd shell ($SHELL) as a login shell — `command` is
+        // deliberately left unset, which is exactly the default-terminal behavior we want.
         view.configuration = TerminalSurfaceOptions(
-            backend: .exec,
+            backend: backend,
             workingDirectory: workspacePath,
             envVars: Self.childEnvironment
         )

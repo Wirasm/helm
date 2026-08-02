@@ -22,13 +22,24 @@
 //   new terminal — poll for a NEW direct child of helm's pid (one `login` per terminal)
 //   fresh shell  — that terminal's shell must have NO child, i.e. it is not already
 //                  hosting an agent. This is the guard against typing into a live session.
+//   line landed  — that same shell must GAIN a child within 10s of Return. This is the one
+//                  precondition that cannot be checked in advance: which pane inside helm has
+//                  the keyboard is not observable from out here, so if the operator clicks
+//                  another pane mid-spawn the line goes there and this terminal sits clean.
+//                  It used to be learned from the 90s timeout, which was the common failure
+//                  and the slowest possible way to be told (#96).
 //   agent booted — poll ~/.claude/sessions/ for a new <pid>.json whose pid is a descendant
 //                  of THAT terminal and whose cwd is the one asked for
 //
 // And REFUSE LOUDLY. Locked screen, no Accessibility grant, no helm, more than one helm,
 // focus that never lands, a helm with no key window because it sits on another desktop, a
-// terminal that never appears, an agent that never registers — all exit nonzero with the
-// reason on stderr. Silence is the failure mode being designed out.
+// terminal that never appears, a launch line that never ran, an agent that never registers —
+// all exit nonzero with the reason on stderr. Silence is the failure mode being designed out.
+//
+// PRECONDITION FOR THE CALLER: do not click, type or switch tabs in helm while a spawn is in
+// flight. Nothing here can see which pane holds the keyboard, so an operator moving focus
+// mid-run redirects the launch line — now caught in ~10s rather than 90, but still not
+// prevented.
 //
 // The prompt never passes through the keyboard or the shell's word splitting: it is written
 // to a private temp file and the typed line reads it back with `"$(cat …)"`. That is what
@@ -60,6 +71,7 @@ enum Refusal: Int32 {
     case agentNeverRegistered = 17
     case workspaceUntrusted = 18
     case noKeyWindow = 19
+    case launchLineNeverRan = 20
 }
 
 func refuse(_ message: String, _ reason: Refusal) -> Never {
@@ -622,15 +634,19 @@ note("new terminal is pid \(terminal)")
 // Its shell must exist, and must be the ONLY thing under it. Every terminal already hosting an
 // agent has a `claude` under its zsh, so "no grandchild" is what separates a fresh prompt from
 // a live session — and typing into a live session is the failure worth refusing hardest.
+//
+// The shell's pid is kept, not just checked: "this shell has no child" is the baseline the
+// post-typing check below reads against, and re-deriving it there would ask the question of
+// whatever shell happens to be under that terminal by then.
 guard
-    poll(
+    let shell = poll(
         upTo: 5.0,
-        for: { () -> Bool? in
+        for: { () -> pid_t? in
             let table = ProcessTable.snapshot()
             let shells = table.children(of: terminal)
             guard let shell = shells.first, shells.count == 1 else { return nil }
-            return table.children(of: shell).isEmpty ? true : nil
-        }) == true
+            return table.children(of: shell).isEmpty ? shell : nil
+        })
 else {
     try? FileManager.default.removeItem(at: scratch)
     refuse(
@@ -675,13 +691,62 @@ func shellQuoted(_ text: String) -> String {
 let line = "cd \(shellQuoted(cwd)) && cls \"$(cat \(shellQuoted(promptPath.path)))\""
 typeText(line)
 postKey(keyReturn)
-note(
-    "typed the launch line into terminal \(terminal); waiting up to \(Int(timeout))s for the agent")
+note("typed the launch line into terminal \(terminal)")
+
+// MARK: - Did the line reach THAT shell
+
+// The one precondition this tool cannot check before typing: which pane inside helm has the
+// keyboard. Everything above proves helm is frontmost with a key window, and none of it can
+// see that the operator clicked a different pane a moment ago — issue #96 — so the launch
+// line lands in some other terminal and this one sits at a clean prompt forever.
+//
+// The shell was required to have NO child before anything was typed, so it gaining one is the
+// edge that says the line arrived. `cls` forks essentially immediately; ten seconds is far
+// more than it needs and eighty short of what the registry poll used to spend learning the
+// same thing. That mattered because the 90s timeout was the COMMON failure, not the rare one,
+// and it was the slowest possible way to be told.
+//
+// **What it proves is one-way, and the asymmetry matters when reading the two refusals below.**
+// No child at all means nothing ran in this shell, which is the astray-keystrokes case. A child
+// does NOT mean `cls` itself ran: `cls "$(cat …)"` makes the shell fork for the command
+// substitution while building the argument, BEFORE it resolves the command name — verified, a
+// deliberately nonexistent command still produces a child of the shell. So a missing `cls` may
+// show up here either way, depending on whether that fork is short-lived enough to fall between
+// two samples. Neither message may claim PATH has been ruled out.
+//
+// Charged against `--timeout` rather than added to it, so a successful spawn waits no longer
+// than it did: the child appears in about a second, and the registry poll below keeps the rest.
+let typedAt = Date()
+guard
+    poll(
+        upTo: min(10.0, timeout),
+        for: { ProcessTable.snapshot().children(of: shell).isEmpty ? nil : true }) == true
+else {
+    refuse(
+        """
+        nothing ever started under terminal \(terminal)'s shell (pid \(shell)) in the 10s after
+        the launch line was typed, so the line did not run there.
+
+        KEYSTROKES WERE ALREADY SENT — a terminal was opened in helm and a launch line was
+        typed somewhere, so the world may have been touched. Look before retrying.
+
+        The likeliest cause is that the keystrokes went to a DIFFERENT pane: helm's focus can
+        only be observed from inside helm, so nothing out here can check it before typing.
+        Do not click, type or switch tabs in helm while a spawn is in flight. Less likely: the
+        line ran and everything it forked died between two samples of the process table —
+        `cls` missing from the login shell's PATH can look like this. `command -v cls` in a
+        helm terminal separates the two in one step.
+
+        The prompt is still at \(promptPath.path) (not deleted, so it is not lost).
+        """, .launchLineNeverRan)
+}
+let remaining = max(timeout - Date().timeIntervalSince(typedAt), 1.0)
+note("the launch line is running; waiting up to \(Int(remaining))s for the agent to register")
 
 // MARK: - Confirm the agent
 
 let confirmed = poll(
-    upTo: timeout, every: 0.25,
+    upTo: remaining, every: 0.25,
     for: { () -> SessionRow? in
         let descendants = ProcessTable.snapshot().descendants(of: terminal)
         return SessionRow.all().first {
@@ -699,10 +764,14 @@ guard let agent = confirmed else {
         launch line was typed into it, so the world may have been touched. Look at that terminal
         before retrying.
 
+        Something DID start under that terminal's shell, so the keystrokes reached the
+        intended pane — that much is ruled out. It does NOT rule out `cls`: the shell forks
+        for the `"$(cat …)"` argument before it ever resolves the command name, so a missing
+        `cls` produces that child too. Check `command -v cls` in a helm terminal first; after
+        that, the agent stopped at a dialog preflight could not predict, or it took longer
+        than \(Int(timeout))s to start — retry with --timeout.
+
         The prompt is still at \(promptPath.path) (not deleted, so it is not lost).
-        Likely causes: `cls` not on the login shell's PATH; the agent stopped at a dialog
-        preflight could not predict; or it took longer than \(Int(timeout))s to start —
-        retry with --timeout.
         """, .agentNeverRegistered)
 }
 
