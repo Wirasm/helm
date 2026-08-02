@@ -35,7 +35,16 @@ that proves the other checkout builds.
   as verified on appearance alone without the operator.
 - **`winshot` matches owner names by substring**, so a second helm instance — a worktree
   build, say — is indistinguishable from the operator's. Check `--list` for how many are
-  running before trusting a capture.
+  running before trusting a capture. It also matches *window titles*: an editor with
+  `helm` open shows up as a `helm` row. **Capture by pid when it matters.**
+- **`--list` only sees the CURRENT Space.** `.optionOnScreenOnly` excludes windows on other
+  macOS desktops, so a running helm with live ptys can report zero windows simply because the
+  operator switched desktop. Verified 2026-08-02: two live helms, 22 windows listed, neither
+  helm among them. Absence in `--list` is **not** evidence the app is gone — check the process.
+- **Never hard-code click coordinates.** Read the window's bounds from `--list` and compute
+  from them every time. A click at a stale coordinate does not miss harmlessly: it activates
+  whatever app is underneath and types into it. That happened — a pane click landed in the
+  operator's other terminal.
 - **To start another agent in helm, use `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`**
   (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
   type `cls`, wait, type the prompt, submit — with every step waiting on something observable
