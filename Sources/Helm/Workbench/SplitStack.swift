@@ -181,8 +181,14 @@ private struct SplitDivider: View {
             }
     }
 
+    /// **`.global`, and it is load-bearing.** A `DragGesture` reports its translation in
+    /// its own view's space by default, and this view MOVES as the drag updates the model
+    /// that positions it — so the divider chases the cursor and the translation is measured
+    /// against a ruler running away underneath it. Measured on a real drag: 120 points of
+    /// mouse moved the divider 60. Halved, not broken, which is exactly the kind of thing
+    /// that ships. A space the drag cannot move is the fix.
     private var gesture: some Gesture {
-        DragGesture(minimumDistance: 1)
+        DragGesture(minimumDistance: 1, coordinateSpace: .global)
             .onChanged { value in
                 let origin = began ?? (leading: leading, trailing: trailing)
                 began = origin
