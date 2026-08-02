@@ -62,6 +62,31 @@ The pane type that renders content — a markdown file, an HTML file, or a URL �
 annotation on it. Modular by source; extendable to further formats.
 _Avoid_: artifact pane, webview, browser, draw-on pane
 
+### What helm looks like
+
+**palette**:
+helm's one table of colours, as values (`Palette.helm`). There is exactly one, and every
+surface spends it — the chrome as SwiftUI `Color`s, the terminal as ghostty config lines.
+Before it there were three unrelated sources and the app did not read as one thing.
+_Avoid_: theme (that word is ghostty's, one level down), colour scheme, style
+
+**token**:
+One entry in the palette — a *role*, named for the job it does and carrying a value for each
+appearance. `surface`, `textMuted`, `accent`. Never named after the colour it happens to be
+in one appearance, because it is a different colour in the other.
+_Avoid_: swatch, variable, named colour
+
+**chrome**:
+Everything that is not the work: the workspace bar, a slot's tab strip, a canvas toolbar,
+the status bar. It is translucent — the desktop shows faintly through it — and it recedes.
+The terminal is never chrome and is never translucent.
+_Avoid_: UI, frame, decoration
+
+**hint**:
+One line the status bar draws saying a key and what it does. Rendered from `Shortcut.all`,
+never written down twice; which commands get one is a choice, what they are bound to is not.
+_Avoid_: tooltip, help, cheatsheet
+
 ### What agents produce
 
 **artifact**:
