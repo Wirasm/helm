@@ -68,10 +68,15 @@ that proves the other checkout builds.
   splitting: it is staged in a 0600 temp file and read back with `"$(cat …)"`, so multi-line
   prompts, quotes, and a leading `/` are all ordinary.
 - **helm-spawn needs the display, and refuses rather than typing into nothing.** Unlocked
-  screen, one visible helm window, and an Accessibility grant on the invoking context — the
+  screen, a visible helm window, and an Accessibility grant on the invoking context — the
   same per-context TCC rule as winshot's Screen Recording grant, and one no agent can grant
   itself. A headless agent cannot use it at all; that ceiling is the argument for #51's rung 2.
   `--dry-run` answers "could I spawn right now?" without sending a keystroke.
+- **With two helms running, pass `--helm-pid`.** Two is the *normal* state while building helm
+  — the operator's, plus a worktree build under test — and they are identical by name, so
+  helm-spawn used to refuse (`manyHelms`, 13) exactly when an agent was doing helm work. The
+  refusal now lists the pids to choose from. `winshot --list` shows which is which, subject to
+  the Space caveat above.
 - **A spawn needs Claude Code to already trust the directory, and helm-spawn checks first.**
   An interactive `claude` in an untrusted directory stops at "Is this a project you trust?"
   *before* it registers a session, which from the outside is indistinguishable from an agent
