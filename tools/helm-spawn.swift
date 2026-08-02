@@ -217,8 +217,14 @@ let source = CGEventSource(stateID: .combinedSessionState)
 
 func postKey(_ key: CGKeyCode, flags: CGEventFlags = []) {
     for isDown in [true, false] {
+        // Never skip a failed event: dropping the key-up of ⌘N would leave Command stuck down
+        // for everything typed afterwards. There is no recovery, so say so and stop.
         guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: isDown)
-        else { continue }
+        else {
+            refuse(
+                "the window server refused to create a key event; keystrokes may be half-sent",
+                .focusFailed)
+        }
         event.flags = flags
         event.post(tap: .cghidEventTap)
         usleep(20_000)
@@ -232,8 +238,17 @@ func typeText(_ text: String) {
     // The API takes a short string per event; 16 UTF-16 units is comfortably inside it.
     for chunk in Array(Array(text.utf16).chunked(into: 16)) {
         for isDown in [true, false] {
+            // Skipping a chunk would type a MANGLED command line and then submit it, which is
+            // far worse than not typing at all — so a refused event is a refusal, not a gap.
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: isDown)
-            else { continue }
+            else {
+                refuse(
+                    """
+                    the window server refused to create a key event partway through typing.
+                    A terminal is open in helm with a PARTIAL command line in it — look before
+                    retrying, and do not assume it is empty.
+                    """, .focusFailed)
+            }
             // Explicitly no modifiers: a Command still physically held by the operator would
             // otherwise turn typed text into a string of menu shortcuts.
             event.flags = []
@@ -459,13 +474,9 @@ let helm = theOneHelm(named: appName)
 let helmPid = helm.processIdentifier
 note("helm is pid \(helmPid), one visible window, screen unlocked, Accessibility granted")
 
-let baselineTable = ProcessTable.snapshot()
-guard !baselineTable.isEmpty else {
+guard !ProcessTable.snapshot().isEmpty else {
     refuse("could not read the process table; cannot verify a new terminal", .noNewTerminal)
 }
-let baselineTerminals = baselineTable.children(of: helmPid)
-let baselineSessionPids = Set(SessionRow.all().map(\.pid))
-note("\(baselineTerminals.count) terminal(s) open in helm before spawning")
 
 if dryRun {
     note("dry run: preflight passed. Focus was NOT attempted and nothing was typed.")
@@ -499,6 +510,14 @@ do {
 } catch {
     refuse("could not stage the prompt at \(promptPath.path): \(error)", .usage)
 }
+
+// Baselines are taken HERE, not at preflight. "The new terminal" is defined as one that was
+// not there a moment ago, so every second between the snapshot and ⌘N is a second in which a
+// terminal the operator opened by hand could be mistaken for ours — and then typed into.
+// Focus alone can take 3s, so measuring from preflight left a window worth closing.
+let baselineTerminals = ProcessTable.snapshot().children(of: helmPid)
+let baselineSessionPids = Set(SessionRow.all().map(\.pid))
+note("\(baselineTerminals.count) terminal(s) open in helm before spawning")
 
 postKey(keyN, flags: .maskCommand)
 
