@@ -31,7 +31,7 @@ struct TerminalPaneView: View {
             switch session.status {
             case .starting, .running:
                 ZStack {
-                    GhosttyHostView(view: session.hostView, claimsKeyboard: holdsKeyboard)
+                    GhosttyHostView(view: session.hostView, holdsKeyboard: holdsKeyboard)
                         .id(session.id)
                     // Keyed on the session: swapping tabs while reading must
                     // build a fresh model against the new terminal's agent, not

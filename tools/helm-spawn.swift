@@ -706,6 +706,14 @@ note("typed the launch line into terminal \(terminal)")
 // same thing. That mattered because the 90s timeout was the COMMON failure, not the rare one,
 // and it was the slowest possible way to be told.
 //
+// **What it proves is one-way, and the asymmetry matters when reading the two refusals below.**
+// No child at all means nothing ran in this shell, which is the astray-keystrokes case. A child
+// does NOT mean `cls` itself ran: `cls "$(cat …)"` makes the shell fork for the command
+// substitution while building the argument, BEFORE it resolves the command name — verified, a
+// deliberately nonexistent command still produces a child of the shell. So a missing `cls` may
+// show up here either way, depending on whether that fork is short-lived enough to fall between
+// two samples. Neither message may claim PATH has been ruled out.
+//
 // Charged against `--timeout` rather than added to it, so a successful spawn waits no longer
 // than it did: the child appears in about a second, and the registry poll below keeps the rest.
 let typedAt = Date()
@@ -725,7 +733,9 @@ else {
         The likeliest cause is that the keystrokes went to a DIFFERENT pane: helm's focus can
         only be observed from inside helm, so nothing out here can check it before typing.
         Do not click, type or switch tabs in helm while a spawn is in flight. Less likely: the
-        line ran and exited at once (`cls` not on the login shell's PATH would do that).
+        line ran and everything it forked died between two samples of the process table —
+        `cls` missing from the login shell's PATH can look like this. `command -v cls` in a
+        helm terminal separates the two in one step.
 
         The prompt is still at \(promptPath.path) (not deleted, so it is not lost).
         """, .launchLineNeverRan)
@@ -754,10 +764,12 @@ guard let agent = confirmed else {
         launch line was typed into it, so the world may have been touched. Look at that terminal
         before retrying.
 
-        The line DID run in that terminal — a process started under its shell — so this is not
-        the keystrokes going astray and not `cls` missing from PATH; the check above rules both
-        out. What is left: the agent stopped at a dialog preflight could not predict, or it took
-        longer than \(Int(timeout))s to start — retry with --timeout.
+        Something DID start under that terminal's shell, so the keystrokes reached the
+        intended pane — that much is ruled out. It does NOT rule out `cls`: the shell forks
+        for the `"$(cat …)"` argument before it ever resolves the command name, so a missing
+        `cls` produces that child too. Check `command -v cls` in a helm terminal first; after
+        that, the agent stopped at a dialog preflight could not predict, or it took longer
+        than \(Int(timeout))s to start — retry with --timeout.
 
         The prompt is still at \(promptPath.path) (not deleted, so it is not lost).
         """, .agentNeverRegistered)
