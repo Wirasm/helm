@@ -92,20 +92,11 @@ final class PaletteTests: XCTestCase {
 
     // MARK: - WCAG
 
-    /// The published formula, spelled out rather than pulled in: it is eight lines and a
-    /// dependency for eight lines is how a test file starts owning a package graph.
+    /// Shared with `AnsiPaletteTests` via `ColorMath`, so the two suites cannot end up
+    /// measuring "contrast" two different ways and both passing.
     private func contrast(
         _ foreground: Palette.Token, on background: Palette.Token, in appearance: Palette.Appearance
     ) -> Double {
-        let first = luminance(foreground.value(in: appearance))
-        let second = luminance(background.value(in: appearance))
-        return (max(first, second) + 0.05) / (min(first, second) + 0.05)
-    }
-
-    private func luminance(_ rgb: Palette.RGB) -> Double {
-        let linear = { (channel: Double) in
-            channel <= 0.039_28 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
-        }
-        return 0.2126 * linear(rgb.red) + 0.7152 * linear(rgb.green) + 0.0722 * linear(rgb.blue)
+        ColorMath.contrast(foreground, on: background, in: appearance)
     }
 }
