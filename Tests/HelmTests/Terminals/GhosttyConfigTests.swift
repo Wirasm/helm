@@ -98,9 +98,13 @@ final class GhosttyConfigTests: XCTestCase {
 
         let rendered = controller.renderedConfig
         XCTAssertTrue(rendered.contains("adjust-cell-height = 15%"), rendered)
-        XCTAssertTrue(rendered.contains("window-padding-x = 8"), rendered)
+        XCTAssertTrue(rendered.contains("font-thicken = true"), rendered)
         XCTAssertTrue(rendered.contains("scrollback-limit = 104857600"), rendered)
         XCTAssertTrue(rendered.contains("keybind = shift+enter=text:\\n"), rendered)
+        // `window-padding-x` was asserted here and has moved, not vanished: it stopped
+        // being a default the operator outranks and became an override that outranks them
+        // (`testTheOperatorsConfigCannotTakeTheGridsInsets`). `font-thicken` takes its
+        // place as the "a default helm still yields on" case this test is about.
     }
 
     @MainActor
@@ -189,6 +193,243 @@ final class GhosttyConfigTests: XCTestCase {
             TerminalSession.effectiveFontSize,
             TerminalSession.declaredUserFontSize ?? TerminalSession.baseFontSize,
             "cleared → fall back to the user's declared size, else helm's baseline"
+        )
+    }
+
+    // MARK: - Colour
+
+    /// The point of the palette being values: the terminal's colours are not a second set
+    /// of hexes that has to be kept in step with the chrome's, they are the same tokens
+    /// rendered as ghostty config lines. Asserted against `Palette.helm` rather than
+    /// against literals for exactly that reason — a literal here would be the drift.
+    func testTerminalColoursComeOutOfThePalette() {
+        for appearance in Palette.Appearance.allCases {
+            let rendered = TerminalSession.terminalColors(in: appearance).rendered
+            let palette = Palette.helm
+            XCTAssertTrue(
+                rendered.contains("background = \(palette.surface.value(in: appearance).hex)"),
+                rendered)
+            XCTAssertTrue(
+                rendered.contains("foreground = \(palette.textPrimary.value(in: appearance).hex)"),
+                rendered)
+            XCTAssertTrue(
+                rendered.contains("cursor-color = \(palette.accent.value(in: appearance).hex)"),
+                rendered)
+            // The two that carry a legibility rule rather than a colour preference, and so
+            // are the two most worth pinning. `cursor-text` is the SURFACE: a block cursor
+            // covers a character, and the character has to stay readable under it — the
+            // line above sets `cursor-color` to the accent, so the obvious copy-paste slip
+            // is accent-on-accent, which is invisible and looks deliberate.
+            XCTAssertTrue(
+                rendered.contains("cursor-text = \(palette.surface.value(in: appearance).hex)"),
+                rendered)
+            XCTAssertTrue(
+                rendered.contains(
+                    "selection-background = \(palette.selection.value(in: appearance).hex)"),
+                rendered)
+            XCTAssertTrue(
+                rendered.contains(
+                    "selection-foreground = \(palette.textPrimary.value(in: appearance).hex)"),
+                rendered)
+        }
+    }
+
+    /// Light only, and the raw-string form: the wrapper renders Doubles through a
+    /// locale-sensitive formatter, which produces "1,2" under a comma-decimal locale and
+    /// that is a hard ghostty config error rather than a wrong number.
+    func testMinimumContrastIsSetInLightOnly() {
+        XCTAssertTrue(
+            TerminalSession.terminalColors(in: .light).rendered.contains(
+                "minimum-contrast = 1.2"))
+        XCTAssertFalse(
+            TerminalSession.terminalColors(in: .dark).rendered.contains("minimum-contrast"))
+    }
+
+    /// **The behaviour that changed.** helm's theme used to go empty whenever a user config
+    /// existed, so a helm terminal wore the operator's Ghostty colours and agreed with
+    /// nothing else on screen. Colour is helm's now — the theme renders last, so it wins.
+    @MainActor
+    func testHelmsColoursWinOverAUserConfigThatSetsItsOwn() {
+        let controller = TerminalSession.makeController(userConfig: "background = #ff0000")
+        XCTAssertNil(controller.lastConfigurationIssue)
+
+        // Read line by line, and compared on the LAST one rather than on a specific hex:
+        // the controller renders whichever appearance is current, and the rule being pinned
+        // is "helm has the last word", not which of its two values it happens to say.
+        let rendered = controller.renderedConfig
+        let backgrounds =
+            rendered
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { $0.hasPrefix("background = ") }
+        let palette = Palette.helm.surface
+        XCTAssertEqual(backgrounds.first, "background = #ff0000", rendered)
+        XCTAssertTrue(
+            [palette.light.hex, palette.dark.hex]
+                .map { "background = \($0)" }
+                .contains(backgrounds.last ?? ""),
+            "the final word on background must be a palette token: \(rendered)"
+        )
+    }
+
+    /// The other half of the same decision, and the one that must not regress: what helm
+    /// took is colour and layout. Everything about the TEXT ITSELF is still the operator's.
+    ///
+    /// **This test used to assert the opposite about `palette`.** It required a user's
+    /// `palette = 1=…` to survive, because the sixteen ANSI entries were on the operator's
+    /// side of the line. They are helm's now — see `AnsiPalette` and `GhosttyConfig`'s
+    /// header for why the earlier reasoning was wrong — so the assertion is restated rather
+    /// than dropped: the subject is still "what does a user config keep", the answer moved.
+    @MainActor
+    func testTheOperatorKeepsTheTextItself() {
+        let controller = TerminalSession.makeController(
+            userConfig: "font-family = Menlo\nfont-thicken = false\nkeybind = shift+enter=text:\\n"
+        )
+        XCTAssertNil(controller.lastConfigurationIssue)
+
+        let rendered = controller.renderedConfig
+        XCTAssertTrue(rendered.contains("font-family = Menlo"), rendered)
+        XCTAssertTrue(rendered.contains("keybind = shift+enter=text:\\n"), rendered)
+        guard let helmThicken = rendered.range(of: "font-thicken = true"),
+            let userThicken = rendered.range(of: "font-thicken = false")
+        else {
+            return XCTFail("expected both font-thicken values in: \(rendered)")
+        }
+        XCTAssertLessThan(
+            helmThicken.lowerBound, userThicken.lowerBound,
+            "helm's font tuning is a default the operator outranks, not an override"
+        )
+    }
+
+    /// The sixteen, now on helm's side of the line: a user's entry renders, and helm's
+    /// renders after it.
+    @MainActor
+    func testHelmsAnsiPaletteWinsOverTheOperatorsOwn() {
+        let controller = TerminalSession.makeController(userConfig: "palette = 1=#abcdef")
+        XCTAssertNil(controller.lastConfigurationIssue)
+
+        let rendered = controller.renderedConfig
+        let reds =
+            rendered
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { $0.hasPrefix("palette = 1=") }
+        let ansi = AnsiPalette.helm.red
+        XCTAssertEqual(reds.first, "palette = 1=#abcdef", rendered)
+        XCTAssertTrue(
+            [ansi.light.hex, ansi.dark.hex].map { "palette = 1=\($0)" }.contains(reds.last ?? ""),
+            "the last word on palette 1 must be helm's red: \(rendered)"
+        )
+    }
+
+    /// All sixteen, every one of them, in both appearances — a missing index is a colour
+    /// left at ghostty's default in the middle of a derived set, which reads as a theme
+    /// choice rather than as a gap.
+    func testEverySixteenAnsiEntriesRender() {
+        for appearance in Palette.Appearance.allCases {
+            let rendered = TerminalSession.terminalColors(in: appearance).rendered
+            for entry in AnsiPalette.helm.ordered {
+                XCTAssertTrue(
+                    rendered.contains(
+                        "palette = \(entry.index)=\(entry.token.value(in: appearance).hex)"),
+                    "\(entry.name) missing in \(appearance): \(rendered)"
+                )
+            }
+        }
+    }
+
+    // MARK: - Layout
+
+    /// Padding is layout, not preference: the grid's insets have to agree with the chrome
+    /// wrapped around it, so a config tuned for a standalone Ghostty window — frequently no
+    /// padding at all, which puts text flush against the pane edge — cannot win them.
+    @MainActor
+    func testTheOperatorsConfigCannotTakeTheGridsInsets() {
+        let controller = TerminalSession.makeController(
+            userConfig: "window-padding-x = 0\nwindow-padding-y = 0")
+        XCTAssertNil(controller.lastConfigurationIssue)
+
+        let rendered = controller.renderedConfig
+        let inset = TerminalSession.paneInset
+        guard let user = rendered.range(of: "window-padding-x = 0"),
+            let helm = rendered.range(of: "window-padding-x = \(inset.horizontal)")
+        else {
+            return XCTFail("expected both padding values in: \(rendered)")
+        }
+        XCTAssertLessThan(user.lowerBound, helm.lowerBound, "helm's insets must render last")
+        XCTAssertTrue(
+            rendered.contains("window-padding-y = \(inset.vertical)"), rendered)
+    }
+
+    // MARK: - Translucency
+
+    /// **Formatted, not `.formatted()`.** The wrapper's typed `withBackgroundOpacity` runs a
+    /// `Double` through a locale-sensitive formatter, which emits "0,93" under a
+    /// comma-decimal locale — a hard ghostty config error that would only ever appear on
+    /// somebody else's machine. This pins the decimal point itself, under a locale that
+    /// would otherwise produce a comma.
+    func testBackgroundOpacityRendersWithADecimalPointInEveryLocale() {
+        for appearance in Palette.Appearance.allCases {
+            let expected =
+                "background-opacity = "
+                + String(
+                    format: "%.2f", locale: nil,
+                    TerminalSession.backgroundOpacity(in: appearance))
+            XCTAssertTrue(expected.contains("."), "the test's own baseline must use a point")
+            let rendered = TerminalSession.terminalColors(in: appearance).rendered
+            XCTAssertTrue(rendered.contains(expected), rendered)
+            XCTAssertFalse(rendered.contains("background-opacity = 0,"), rendered)
+        }
+    }
+
+    /// Translucent enough to read as one material with the chrome, opaque enough that a wall
+    /// of small monospace does not pay for it. Both ends are real failures, so both are
+    /// pinned — these are the numbers a future "let's make it glassier" edit has to argue
+    /// with rather than quietly slide past.
+    func testBackgroundOpacityStaysInTheLegibleRange() {
+        for appearance in Palette.Appearance.allCases {
+            let opacity = TerminalSession.backgroundOpacity(in: appearance)
+            XCTAssertGreaterThanOrEqual(
+                opacity, 0.84,
+                "\(appearance): below this the wallpaper competes with terminal text")
+            XCTAssertLessThanOrEqual(
+                opacity, 0.94,
+                "\(appearance): above this it is a solid slab inside a translucent frame again")
+        }
+    }
+
+    /// Paper loses more to translucency than ink does — nearly everything a window sits over
+    /// is darker than a light surface, so the value that gives dark depth makes light dingy.
+    /// Measured: at dark's opacity the light grid came out `#ebebea` against its own
+    /// `#fbfaf8`. If these two ever converge, that asymmetry has been forgotten.
+    func testLightIsHeldMoreOpaqueThanDark() {
+        XCTAssertGreaterThan(
+            TerminalSession.backgroundOpacity(in: .light),
+            TerminalSession.backgroundOpacity(in: .dark)
+        )
+    }
+
+    // MARK: - Truecolor
+
+    /// `term` stays `xterm-256color` — the embedded xcframework ships no terminfo, so
+    /// ghostty's own TERM breaks TUIs — and 24-bit colour is therefore something helm has
+    /// to *say*. It was arriving by accident before, inherited from an unrelated variable
+    /// helm sets for shell integration, which is one refactor away from silently costing
+    /// every colour in the palette its precision.
+    @MainActor
+    func testEveryTerminalChildIsToldItHasTruecolor() {
+        let manager = TerminalManager()
+        manager.activate(workspacePath: "/tmp/helm-truecolor")
+        guard let session = manager.sessions.first else {
+            return XCTFail("activating a workspace opens one terminal")
+        }
+
+        let environment = session.hostView.configuration.envVars
+        XCTAssertEqual(environment["COLORTERM"], "truecolor")
+        XCTAssertEqual(environment["TERM_PROGRAM"], "ghostty")
+        XCTAssertTrue(
+            TerminalSession.sessionOverrides.rendered.contains("term = xterm-256color"),
+            "TERM must stay pinned — the env vars are what carry the colour depth"
         )
     }
 

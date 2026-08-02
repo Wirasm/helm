@@ -1,7 +1,7 @@
 import Inject
 import SwiftUI
 
-/// helm's permanent frame: the workspace bar above the workbench.
+/// helm's permanent frame: the workspace bar above the workbench, the status bar below it.
 ///
 /// **Composition only**, and more so than before. The canvas is no longer a special case
 /// wired in here — it is a bench pane, so the dock's `HSplitView` and the single
@@ -25,7 +25,14 @@ struct RootView: View {
                 model: model, select: switchWorkspace, open: openWorkspace,
                 close: closeWorkspace)
             WorkbenchView(model: workbench, workspaceRoot: model.selectedWorkspaceRoot)
+            StatusBarView(model: model)
         }
+        // The base plane, and it has to be painted: `translucentWindow` makes the window
+        // non-opaque so the chrome's vibrancy has a desktop to sample, and anything that
+        // paints nothing after that is a hole rather than a neutral grey. The terminal and
+        // the canvas cover their own panes; this is everything else.
+        .background(Color.surface)
+        .translucentWindow()
         .task {
             model.observe(terminals: terminalManager, workbench: workbench)
             activateSelectedWorkspace()

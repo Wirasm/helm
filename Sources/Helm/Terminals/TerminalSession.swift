@@ -125,7 +125,8 @@ final class TerminalSession: ObservableObject, Identifiable {
         // login shell — exactly the default-terminal behavior we want.
         view.configuration = TerminalSurfaceOptions(
             backend: .exec,
-            workingDirectory: workspacePath
+            workingDirectory: workspacePath,
+            envVars: Self.childEnvironment
         )
         hostView = view
 
@@ -154,31 +155,47 @@ final class TerminalSession: ObservableObject, Identifiable {
         return makeController(userConfig: validatedUserConfig)
     }
 
+    /// Helm's defaults first, the user's config after them: ghostty's last-value-wins rule
+    /// makes every key they set win, and leaves the rest of helm's tuning standing.
+    ///
+    /// **The theme is unconditional now, and that is the change.** It used to go empty the
+    /// moment a user config existed, so that their colours were never stomped — which is
+    /// also why a helm terminal looked like *their Ghostty* rather than like helm. The
+    /// theme channel renders last and therefore wins, and helm wants it to: the colours are
+    /// the one thing helm has to own for the app to read as one surface. Which keys that
+    /// covers, and which stay the operator's, is written out in `GhosttyConfig.swift`.
     static func makeController(userConfig: String?) -> TerminalController {
-        guard let userConfig else {
-            return TerminalController(
-                configSource: .generated(defaultConfiguration.rendered),
-                theme: defaultTheme,
-                terminalConfiguration: sessionOverrides
-            )
-        }
-        // Helm's defaults first, the user's config after them: ghostty's
-        // last-value-wins rule makes every key they set win, and leaves the
-        // rest of helm's tuning standing.
-        //
-        // Theme stays empty whenever a user config exists, so their colors
-        // (incl. `theme = light:…,dark:…`, which ghostty re-resolves on
-        // setColorScheme) are never stomped by helm's — the theme is applied
-        // through a separate channel that would otherwise always win.
+        let base = [defaultConfiguration.rendered, userConfig]
+            .compactMap { $0 }
+            .joined(separator: "\n")
         return TerminalController(
-            configSource: .generated(defaultConfiguration.rendered + "\n" + userConfig),
-            theme: TerminalTheme(),
+            configSource: .generated(base),
+            theme: terminalTheme,
             terminalConfiguration: sessionOverrides
         )
     }
 
+    /// The environment every pty child gets on top of the ones it inherits.
+    ///
+    /// **Truecolor, declared instead of inherited.** `term` is pinned to
+    /// `xterm-256color` (see `sessionOverrides`) because the embedded xcframework ships no
+    /// terminfo, and a great many programs read that name alone as "256 colours, no more".
+    /// pi and ghostty got 24-bit output here anyway, but only by accident: something in
+    /// helm's own environment — `GHOSTTY_RESOURCES_DIR`, set for shell integration — was
+    /// being inherited by the child and read as a ghostty tell. That is a coincidence one
+    /// refactor away from ending, and its failure is silent: every colour in the palette
+    /// would quietly snap to the nearest of 256 with nothing logged and nothing to see
+    /// except that helm looks slightly wrong. Saying it outright costs two strings.
+    ///
+    /// `TERM_PROGRAM` is the same statement in the other vocabulary — the variable ghostty
+    /// itself exports, and the one a program asks when `TERM` has been overridden.
+    static let childEnvironment: [String: String] = [
+        "COLORTERM": "truecolor",
+        "TERM_PROGRAM": "ghostty",
+    ]
+
     /// What helm applies AFTER any base config (ghostty's last-value-wins
-    /// rule) — the two things helm must win, plus the one thing the human set
+    /// rule) — the things helm must win, plus the one thing the human set
     /// inside helm:
     ///
     /// - `term`: the embedded xcframework ships no terminfo, so ghostty's
@@ -187,6 +204,13 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// - `scrollback-limit`: not taste but a job requirement — an agent
     ///   transcript outruns a general-purpose terminal's default in minutes,
     ///   and a Ghostty config tuned for shell work has no reason to know that.
+    /// - `window-padding-*`: **layout, not preference.** These are the insets
+    ///   the grid is drawn inside, and they have to agree with the chrome
+    ///   wrapped around it — the strip above uses the same 9, so the first
+    ///   character of a line stands where a tab's label does. Left to the
+    ///   operator's config they were whatever a standalone Ghostty window
+    ///   wanted, which for a full-screen terminal is often nothing at all: text
+    ///   flush against the pane edge while every element around it breathes.
     /// - `font-size`: only once ⌘+/⌘- has been used. A size chosen inside helm
     ///   is a more direct statement of intent than a config written months ago,
     ///   so it outranks even the user config.
@@ -195,9 +219,16 @@ final class TerminalSession: ObservableObject, Identifiable {
         return TerminalConfiguration { builder in
             builder.withCustom("term", "xterm-256color")
             builder.withCustom("scrollback-limit", "104857600")  // 100 MiB
+            builder.withWindowPaddingX(paneInset.horizontal)
+            builder.withWindowPaddingY(paneInset.vertical)
             if let chosenFontSize { builder.withFontSize(chosenFontSize) }
         }
     }
+
+    /// The grid's insets, in points — the chrome's own numbers, so the terminal sits in the
+    /// same rhythm as the strip above it rather than in whatever a standalone Ghostty
+    /// window was tuned for.
+    nonisolated static let paneInset = (horizontal: 9, vertical: 4)
 
     /// Helm's baseline font size — the size helm's first ⌘+ steps up from when
     /// the user's config declares none of its own.
@@ -205,36 +236,110 @@ final class TerminalSession: ObservableObject, Identifiable {
 
     /// Helm's own defaults: the BASE every terminal starts from, whether or not
     /// the user has a Ghostty config. A taller cell for breathing room (agent
-    /// output is read, not just watched scroll past), modest padding. Font
-    /// family is left unset on purpose — libghostty falls back to its embedded
-    /// JetBrains Mono, which beats anything named blindly.
+    /// output is read, not just watched scroll past). Font family is left unset
+    /// on purpose — libghostty falls back to its embedded JetBrains Mono, which
+    /// beats anything named blindly.
+    ///
+    /// Padding used to be here, where the operator's config outranked it. It is a
+    /// session override now — see `sessionOverrides` for why insets are layout
+    /// rather than taste.
     static let defaultConfiguration = TerminalConfiguration { builder in
         builder.withFontSize(baseFontSize)
         builder.withFontThicken(true)
         builder.withCursorStyle(.block)
         builder.withCursorStyleBlink(true)
         builder.withCustom("adjust-cell-height", "15%")
-        builder.withWindowPaddingX(8)
-        builder.withWindowPaddingY(4)
     }
 
-    /// Light/dark colors following helm's appearance override — the wrapper's
-    /// NSView observes effectiveAppearance and re-resolves the theme itself,
-    /// so NSApp.appearance changes re-theme live terminals with no helm code.
-    static let defaultTheme = TerminalTheme(
-        light: TerminalConfiguration { builder in
-            builder.withBackground("#ffffff")
-            builder.withForeground("#1f2328")
-            // Raw string, not withMinimumContrast: the wrapper renders Double
-            // values via a locale-sensitive formatter, which produces "1,2"
-            // under comma-decimal locales — a hard ghostty config error.
-            builder.withCustom("minimum-contrast", "1.2")
-        },
-        dark: TerminalConfiguration { builder in
-            builder.withBackground("#22262c")
-            builder.withForeground("#e8eaed")
-        }
+    /// The terminal's colours, out of the same table the chrome spends.
+    ///
+    /// **This is the point of the palette being values.** The chrome resolves those tokens
+    /// to `Color`s; here the same tokens render as `#rrggbb` ghostty config lines, so the
+    /// grid and the strip above it cannot drift apart — there is nothing to keep in step.
+    /// They were two hand-written sets of hexes before, and looked it.
+    ///
+    /// Light/dark follows helm's appearance override for free: the wrapper's NSView
+    /// observes `effectiveAppearance` and re-resolves the theme itself, so switching
+    /// appearance re-themes live terminals with no helm code and no reload.
+    nonisolated static let terminalTheme = TerminalTheme(
+        light: terminalColors(in: .light),
+        dark: terminalColors(in: .dark)
     )
+
+    /// One appearance's colour lines. Separate from `terminalTheme` so a test can render
+    /// and read them without a ghostty controller or a window.
+    nonisolated static func terminalColors(
+        in appearance: Palette.Appearance
+    ) -> TerminalConfiguration {
+        let palette = Palette.helm
+        let surface = palette.surface.value(in: appearance).hex
+        return TerminalConfiguration { builder in
+            builder.withBackground(surface)
+            builder.withForeground(palette.textPrimary.value(in: appearance).hex)
+            // The cursor is the one place the accent earns a whole element: it is the
+            // operator's own position, it is always on screen, and nothing else in the grid
+            // competes with it. `cursor-text` is the surface so the character underneath a
+            // block cursor stays legible rather than inverting to something arbitrary.
+            builder.withCursorColor(palette.accent.value(in: appearance).hex)
+            builder.withCursorText(surface)
+            builder.withSelectionBackground(palette.selection.value(in: appearance).hex)
+            builder.withSelectionForeground(palette.textPrimary.value(in: appearance).hex)
+            // The sixteen, so the content agrees with the frame — see `AnsiPalette` for why
+            // helm took them over and what "hue identity" constrains.
+            for entry in AnsiPalette.helm.ordered {
+                builder.withPalette(entry.index, color: entry.token.value(in: appearance).hex)
+            }
+            // **Formatted here, never through the typed `withBackgroundOpacity`.** The
+            // wrapper renders a `Double` with `.formatted(.number…)`, which is
+            // locale-sensitive and emits "0,93" under a comma-decimal locale — a hard
+            // ghostty config error rather than a wrong number, and one that would only ever
+            // appear on somebody else's machine. `locale: nil` is what makes this the C
+            // formatting the config file wants. Same hazard `minimum-contrast` dodges.
+            builder.withCustom(
+                "background-opacity",
+                String(format: "%.2f", locale: nil, backgroundOpacity(in: appearance)))
+            if appearance == .light {
+                // A floor under the ANSI sixteen on paper. helm tunes them for its own
+                // surface (`AnsiPaletteTests` pins the ratios), so this now guards against
+                // a program that sets its own colours rather than against the palette.
+                builder.withCustom("minimum-contrast", "1.2")
+            }
+        }
+    }
+
+    /// How opaque the grid's background is — the one knob that reaches the Metal layer.
+    ///
+    /// **Native, because nothing else can be.** SwiftUI vibrancy cannot filter a backdrop
+    /// another renderer draws over, so the chrome's trick does not work here; ghostty's own
+    /// `background-opacity` does, because the wrapper already builds the Metal layer with
+    /// `isOpaque = false` and the renderer honours the alpha. What the grid then composites
+    /// against is helm's business, and `TerminalBackdrop` is the answer: a frosted plane
+    /// behind the surface, so what comes through is a soft wash rather than sharp wallpaper.
+    /// `background-blur` is not that answer — libghostty parses the key and does nothing
+    /// with it, because in Ghostty.app the blur is a window effect the *app* applies, and
+    /// this window is helm's.
+    ///
+    /// **Measured on a running build, twice, and the first answer was wrong.** 0.93 was
+    /// tried first and looked right in the source: the grid *was* translucent and the code
+    /// *was* correct. Sampling the composited pixels said it moved 1 to 2 luminance levels
+    /// while the chrome beside it moved 9 to 17 — translucent, and still reading as a slab.
+    /// The frosted plane is a heavily darkened wash, so a few percent of it is nothing.
+    ///
+    /// **Light pays more for this than dark, which is why there are two numbers.** Nearly
+    /// everything a window sits over is darker than paper, so the opacity that gives a dark
+    /// surface depth just makes a light one dingy: at 0.86 the light grid measured `#ebebea`
+    /// against its own `#fbfaf8` — grey where it should be warm.
+    ///
+    /// Neither goes lower. This is a wall of small monospace read for hours, and every point
+    /// of opacity spent is contrast taken off the one surface helm exists to render. The
+    /// worst-case text contrast at these values measured 11.8 dark and 14.6 light, and that
+    /// headroom is what makes them safe rather than merely pretty.
+    nonisolated static func backgroundOpacity(in appearance: Palette.Appearance) -> Double {
+        switch appearance {
+        case .light: 0.92
+        case .dark: 0.86
+        }
+    }
 
     /// The user's Ghostty config, loaded and validated once per process.
     /// Validation matters because the wrapper hard-rejects any config with

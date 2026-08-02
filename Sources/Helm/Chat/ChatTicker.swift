@@ -25,18 +25,18 @@ struct ChatTicker: View {
             HStack(spacing: 13) {
                 Text("working")
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(ChatPalette.quiet)
+                    .foregroundStyle(Color.textMuted)
                 ChatTickerTape(now: context.date, beats: beats)
                     .frame(width: 136, height: 15)
                 Text(elapsed(to: context.date))
                     .font(.system(size: 10, design: .monospaced))
                     .monospacedDigit()
-                    .foregroundStyle(ChatPalette.quiet)
+                    .foregroundStyle(Color.textMuted)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 9)
             .background(.regularMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(ChatPalette.quiet.opacity(0.22), lineWidth: 1))
+            .overlay(Capsule().strokeBorder(Color.textMuted.opacity(0.22), lineWidth: 1))
             .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
         }
         .accessibilityElement(children: .ignore)
@@ -65,7 +65,7 @@ private struct ChatTickerTape: View {
 
             context.fill(
                 Path(CGRect(x: 0, y: middle, width: size.width, height: 1)),
-                with: .color(ChatPalette.quiet.opacity(0.2)))
+                with: .color(Color.textMuted.opacity(0.2)))
 
             // One tick per second of tape. These are the motion — they exist
             // whether or not the agent has written anything, which is the case
@@ -75,7 +75,7 @@ private struct ChatTickerTape: View {
                 let x = size.width - (instant - second) * perSecond
                 context.fill(
                     Path(CGRect(x: x, y: middle - 3, width: 1, height: 4)),
-                    with: .color(ChatPalette.quiet.opacity(0.5)))
+                    with: .color(Color.textMuted.opacity(0.5)))
                 second += 1
             }
 
@@ -86,7 +86,7 @@ private struct ChatTickerTape: View {
                 let x = size.width - age * perSecond
                 context.fill(
                     Path(CGRect(x: x - 0.75, y: middle - 5, width: 1.5, height: 11)),
-                    with: .color(ChatPalette.accent.opacity(0.2 + 0.8 * (1 - age / window))))
+                    with: .color(Color.accent.opacity(0.2 + 0.8 * (1 - age / window))))
             }
         }
         .mask(

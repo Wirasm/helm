@@ -189,7 +189,8 @@ struct CanvasAddressBar: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.bar)
+        .foregroundStyle(Color.textPrimary)
+        .background(ChromeBackground())
         .onAppear {
             typed = page.address
             // Opened with nothing loaded — that is ⌘L on a closed canvas, and the

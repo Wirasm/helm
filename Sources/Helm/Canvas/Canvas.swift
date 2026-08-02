@@ -428,7 +428,7 @@ struct CanvasView: View {
                     // the selection it is about stays visible under it.
                     .overlay(alignment: .topLeading) { commentField }
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(Color.surface)
             // Inside the `if`: the body is a bare ViewBuilder conditional with
             // no else, so there is no single view to hang this on outside it.
             .enableInjection()
@@ -574,6 +574,7 @@ struct CanvasView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.bar)
+        .foregroundStyle(Color.textPrimary)
+        .background(ChromeBackground())
     }
 }

@@ -1,32 +1,17 @@
 import AppKit
 import SwiftUI
 
-/// The chat face's palette. Five values, one accent, spent in exactly two
-/// places: the beats on the ticker, and the tick that opens an answer's rule.
-///
-/// Its own colours rather than the system's because this face is *paper* — the
-/// one surface in helm meant to be read at length rather than watched.
-enum ChatPalette {
-    static let paper = dynamic(light: 0xFB_FA_F8, dark: 0x1C_1E_21)
-    static let ink = dynamic(light: 0x1B_1D_1F, dark: 0xE6_E3_DE)
-    /// Prose from earlier in the turn: the same voice, half a step back.
-    static let quiet = dynamic(light: 0x5C_60_66, dark: 0x93_99_A0)
-    static let rule = dynamic(light: 0xE2_DF_DA, dark: 0x30_34_39)
-    static let accent = dynamic(light: 0x3F_8F_80, dark: 0x5F_C0_AC)
-
-    private static func dynamic(light: UInt32, dark: UInt32) -> Color {
-        Color(
-            nsColor: NSColor(name: nil) { appearance in
-                let hex =
-                    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
-                return NSColor(
-                    srgbRed: Double((hex >> 16) & 0xFF) / 255,
-                    green: Double((hex >> 8) & 0xFF) / 255,
-                    blue: Double(hex & 0xFF) / 255,
-                    alpha: 1)
-            })
-    }
-}
+// `ChatPalette` used to live here: five values — paper, ink, quiet, rule, accent — chosen
+// for this face and reachable from nowhere else. It is gone, and the five values are not:
+// they are `Palette.helm`'s `surface`, `textPrimary`, `textMuted`, `border` and `accent`,
+// unchanged to the digit, spent by the whole app now instead of by one face.
+//
+// The fold went in this direction on purpose. These were the only colours in helm anyone
+// had ever *picked* — the terminal took the operator's, the chrome took the system's — so
+// promoting them cost nothing and choosing new ones would have regressed the one surface
+// that already read well. What the chat face lost is the claim of being separate; what it
+// kept is every pixel. Its distinction was never hue anyway, it is the three reading
+// profiles below.
 
 /// The chat face's three reading profiles.
 ///

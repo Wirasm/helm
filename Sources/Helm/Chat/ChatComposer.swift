@@ -47,7 +47,7 @@ struct ChatComposer: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
                 .font(.system(size: 13))
-                .foregroundStyle(ChatPalette.ink)
+                .foregroundStyle(Color.textPrimary)
                 .focused($focused)
                 .onSubmit(submit)
 
@@ -56,7 +56,7 @@ struct ChatComposer: View {
                     .font(.system(size: 18))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(canSubmit ? ChatPalette.accent : ChatPalette.quiet.opacity(0.4))
+            .foregroundStyle(canSubmit ? Color.accent : Color.textMuted.opacity(0.4))
             .disabled(!canSubmit)
             .help(prompt)
         }
@@ -73,7 +73,7 @@ struct ChatComposer: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(
                     focused && model.canSend
-                        ? ChatPalette.accent.opacity(0.55) : ChatPalette.rule,
+                        ? Color.accent.opacity(0.55) : Color.border,
                     lineWidth: 1)
         )
         // The draft is kept, not cleared, when the gate closes: the agent going

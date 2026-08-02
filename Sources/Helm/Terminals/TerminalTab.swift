@@ -34,7 +34,7 @@ struct TerminalTab: View {
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color(nsColor: .selectedControlColor).opacity(0.55) : .clear)
+                .fill(isSelected ? Color.selection : .clear)
         )
         .contentShape(RoundedRectangle(cornerRadius: 5))
         .onTapGesture(perform: onSelect)
@@ -159,7 +159,7 @@ struct CanvasTab: View {
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color(nsColor: .selectedControlColor).opacity(0.55) : .clear)
+                .fill(isSelected ? Color.selection : .clear)
         )
         .contentShape(RoundedRectangle(cornerRadius: 5))
         .onTapGesture(perform: onSelect)
