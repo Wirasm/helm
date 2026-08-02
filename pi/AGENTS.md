@@ -1,0 +1,144 @@
+# AGENTS.md — pi extensions
+
+helm's repo owns helm's pi work. These are extensions for the **pi sessions helm hosts**,
+in whatever repo the user is in — not for agents working on helm. That is why they live
+here and are symlinked into `~/.pi/agent/extensions/`, and not in helm's own
+`.pi/extensions/`, which would load them only inside this checkout.
+
+Everything below was measured against **pi 0.83.0 on 2026-08-02**, not read off a doc. Where
+it says "measured", there is a command in `test.sh` that shows it.
+
+## The rule that matters
+
+**A factory that throws takes the entire pi CLI down.** `exit 1`, plus
+`Hint: Start without extensions using "pi -ne".` And because `~/.pi/agent/extensions` is
+discovered in *every* directory, one bad extension of ours means pi does not start anywhere on
+the machine — nothing to do with helm. A handler that throws is contained: pi emits
+`extension_error` and exits 0.
+
+So the split is absolute:
+
+- **Below the factory's `try`** — handlers, commands, tools — anything may throw. It costs one
+  `extension_error`.
+- **Inside the factory** — nothing may throw. Ever.
+
+Which gives four rules, all of them visible in `extensions/helm-probe/index.ts`:
+
+1. **The whole factory body is inside one `try`.** The catch prints one attributable line to
+   stderr and returns. That is not swallowing an error — it is the difference between "our
+   extension is broken" and "pi is broken on this machine".
+2. **Feature-detect every pi method before calling it** (`hasMethod`). A future pi that drops a
+   method must leave us inert, not fatal.
+3. **Each registration is its own guarded step** (`step()`). One failure disables one
+   capability and says so; the others stay installed.
+4. **Never call an action method during load.** `pi.sendMessage`, `pi.exec`, `pi.setModel` and
+   friends throw *by design* until the runtime is bound — "Extension runtime not initialized"
+   (`dist/core/extensions/loader.js:130`). At factory time you may only *register*.
+
+## Traps measured on 0.83.0
+
+- **`pi.getFlag()` in a factory returns the registered default, never the value on argv.**
+  Flags are bound from argv only after every extension has loaded
+  (`dist/core/agent-session-services.js:8`). A flag-based kill switch therefore reads
+  correctly and does nothing. Use an environment variable for anything load-time; a flag is
+  fine inside a handler, where it holds the real value. Measured: factory `false`, handler
+  `true`, for the same `--trap-me` on the same run.
+- **Subscribing to an event pi no longer has succeeds silently.** `pi.on()` only pushes into a
+  Map — no validation, no warning, and the handler simply never fires
+  (`dist/core/extensions/loader.js:180`). Nothing at runtime will tell you. Two things catch
+  it, and you need both: the **typecheck**, which names the event, and a **behavioural
+  assertion** in the test suite, which notices the effect went missing. This is why extensions
+  here import the real `ExtensionAPI` type instead of duck-typing the API surface — duck-typing
+  keeps the build green through exactly the upgrade you needed to hear about.
+- **TypeBox is 1.3.7 and pi supplies it.** `Type.Base`, `Type.Awaited`, `Type.Promise`,
+  `Type.AsyncIterator`, `Type.Iterator`, `Type.Options` and `Value.Mutate` are gone as of
+  0.83.0. **Never vendor typebox**: a `node_modules/typebox` beside the extension is ignored,
+  because pi's loader aliases the specifier to its own copy (`loader.js:64-110`). Measured —
+  an extension in a directory with typebox 1.1.38 installed still ran against 1.3.7.
+- **Import `typebox` and `@earendil-works/…`, not the old names.** `@sinclair/typebox` and
+  `@mariozechner/pi-*` still resolve — the loader aliases them — but they name a package that
+  is not what runs.
+
+## Layout
+
+```
+pi/
+  extensions/<name>/index.ts    the extension — one directory each, entry point index.ts
+  extensions/<name>/README.md   what it is, and how to install it
+  tests/<name>.mjs              its unit harness, found by name
+  test.sh                       the test command
+```
+
+pi discovers three forms: `<dir>/*.ts`, `<dir>/*/index.ts`, and `<dir>/*/package.json` with a
+`pi.extensions` array. We use **`<dir>/index.ts`**. The directory gives an extension a home for
+its README; the `package.json` form buys nothing until we publish to a registry and its
+`dependencies` field is actively misleading for the one dependency an extension has (see the
+typebox trap above). When publishing lands, adding the manifest is a one-file change.
+
+Only directories go under `extensions/`. A stray `.ts` at that level would be discovered as its
+own extension. Files *beside* an `index.ts` inside an extension directory are never
+auto-discovered, so helpers are safe there.
+
+## Install
+
+```bash
+ln -s "$(git rev-parse --show-toplevel)/pi/extensions/helm-probe" ~/.pi/agent/extensions/helm-probe
+```
+
+A symlink, so editing in the repo is what ships — pi honours symlinks at both discovery levels.
+Remove it to uninstall. Nothing is copied, nothing is built.
+
+## The dev loop
+
+```bash
+pi --no-extensions -e "$PWD/pi/extensions/helm-probe/index.ts"   # isolated, ignores what is installed
+```
+
+`--no-extensions` suppresses auto-discovery **and** `settings.json` entries (measured), so with
+an explicit `-e` you see exactly one extension no matter what the machine has. Use it in every
+test; without it a run picks up whatever else is installed and stops being reproducible.
+
+Inside a session, `/reload` should re-run the factories on an edited file — `reload()` calls
+`clearExtensionCache()` and re-resolves both discovered and `-e` paths
+(`dist/core/resource-loader.js:262-277`), and the extensions doc says auto-discovered
+extensions hot-reload. **Not confirmed here**: driving a live TUI through `/reload` under
+`expect` did not produce an observable report either way, and `script` refuses a non-tty stdin
+on macOS, so nothing was measured. Treat the iteration speed as unproven until someone watches
+it by hand. A fresh process is always correct; `bash pi/test.sh` never depends on reload.
+
+Whatever reload does, do not hold a captured `ctx` across it — pi invalidates it, and the stale
+ctx throws with an explanatory message (`dist/core/extensions/loader.js:158`).
+
+## Testing
+
+```bash
+bash pi/test.sh            # all four; part of helm's gate
+bash pi/test.sh unit       # milliseconds, no pi process
+```
+
+| Harness | What only it can prove | Cost |
+|---|---|---|
+| `typecheck` | An API we use has changed. **The upgrade alarm.** | `tsc --noEmit` |
+| `unit` | The factory is total, against a deliberately mutilated pi. | milliseconds |
+| `rpc` | It loads under the real loader and its UI call surfaces. | one pi process |
+| `pty` | A real interactive pi reaches a normal prompt with it loaded. | one pi process |
+
+**No harness calls a model.** `session_start` fires at startup, and an extension command
+invoked as a `/`-prefixed prompt over RPC is handled locally — measured, no `agent_start`
+frame. The rpc harness proves the command is registered *before* it invokes it, because a
+`/name` that is not a registered command would be sent to the model.
+
+The typecheck runs against whatever pi is **installed right now** — `test.sh` symlinks pi's own
+`typebox`, `pi-tui` and `@types/node` into a temp workspace. Nothing is vendored and there is no
+pinned upper bound: a newer pi is evidence, never a gate. `PI_PACKAGE_DIR=… bash pi/test.sh
+typecheck` points it at a candidate upgrade before you install one.
+
+Each harness **skips** rather than fails when its toolchain is missing, so this can sit in the
+gate on a machine with no node. Skips are printed, never silent. `tsc` comes from
+`npm install` in this directory.
+
+## Starting the next extension
+
+Copy `extensions/helm-probe/` to `extensions/<name>/`, copy `tests/helm-probe.mjs` to
+`tests/<name>.mjs`, and delete what you do not need. The rules above come with the file; the
+test harness finds the new one by name.

@@ -1,0 +1,10 @@
+{
+  "name": "helm-pi-extensions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling for helm's pi extensions. The extensions themselves have no runtime dependencies — pi supplies typebox and its own types.",
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

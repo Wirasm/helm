@@ -1,0 +1,3 @@
+# Dev tooling only — tsc for the typecheck harness. Extensions have no runtime deps;
+# pi supplies typebox and its own types, and a vendored copy would be ignored anyway.
+node_modules/

@@ -14,12 +14,15 @@ Direction: `docs/direction.md` (an entry point, not a spec).
 Gate, all green before a PR to `development`:
 
 ```
-bash scripts/patch-libghostty.sh && swift build && swift test && make lint && xcodegen generate
+bash scripts/patch-libghostty.sh && swift build && swift test && make lint && xcodegen generate && bash pi/test.sh
 ```
 
 The patch script is first and not optional — the patched libghostty is gitignored, so a
 fresh worktree has nothing to link against. Never borrow another checkout's `vendor/`;
 that proves the other checkout builds.
+
+`pi/test.sh` is last because it is the only step that is not Swift: `swift test` cannot run
+TypeScript and should not learn how. It skips, loudly, on a machine without node or pi.
 
 - **Never restart a running helm without warning the operator** — a live window may be
   hosting their session.
@@ -123,6 +126,12 @@ add a token.
 only mutable from the type's own file, so an extension that has to mutate it is not a seam —
 it is the same module wearing two filenames. Fighting that with looser access or wrapper
 methods usually means the split was wrong.
+
+**pi extensions are TypeScript and live in `pi/`, not `Sources/`.** helm's repo owns helm's pi
+work. They are for the pi sessions helm *hosts*, in whatever repo the user is in — so they are
+symlinked into `~/.pi/agent/extensions/` and never into helm's own `.pi/`. One rule before you
+write one: **a factory that throws takes the whole pi CLI down, in every directory on the
+machine.** `pi/AGENTS.md` has the rest, measured rather than assumed.
 
 ## Agent skills
 
