@@ -16,8 +16,9 @@ import GhosttyTerminal
 //   3. Helm's session overrides — the things helm must win:
 //      `term = xterm-256color` (the embedded xcframework ships no terminfo, so
 //      ghostty's default TERM breaks TUIs — docs/SPIKE.md), `scrollback-limit`
-//      (a job requirement for agent transcripts, not a preference), and the
-//      font size the human chose with ⌘+/⌘- if they ever have.
+//      (a job requirement for agent transcripts, not a preference),
+//      `window-padding-x/y` (layout, see below), and the font size the human
+//      chose with ⌘+/⌘- if they ever have.
 //   4. Helm's theme — LAST, and therefore the final word on colour. This is a
 //      separate channel (`TerminalTheme`) rather than more config lines because
 //      ghostty re-renders it per appearance; helm derives it from the app
@@ -33,21 +34,35 @@ import GhosttyTerminal
 //
 // WHO OWNS WHICH KEY — the decision, not a description of it.
 //
-// Helm owns COLOUR, and nothing else it did not already own:
+// Helm owns COLOUR and LAYOUT:
 //   background, foreground, cursor-color, cursor-text, selection-background,
-//   selection-foreground, and minimum-contrast in the light appearance.
-// Everything else is the operator's, exactly as before — font family, size and
-// thickening, keybinds, cursor style, padding, and the SIXTEEN ANSI PALETTE
-// ENTRIES.
+//   selection-foreground, background-opacity, minimum-contrast in the light
+//   appearance, all SIXTEEN ANSI PALETTE ENTRIES, and window-padding-x/y.
 //
-// The line falls there because a colour is only worth owning where it is helm's
-// own surface. Background, foreground, cursor and selection are the frame the
-// grid is drawn in — the part that has to agree with the strip above it, and the
-// part that made helm look like three applications stacked. The ANSI sixteen are
-// not that: they are what the operator's programs colour their *content* with,
-// they are the most personal thing in a terminal config, and helm has no opinion
-// about them. `ls` staying the green it has always been costs the palette
-// nothing.
+// The operator owns everything about the TEXT ITSELF:
+//   font-family, font-size, font-thicken, keybinds, cursor-style, and every
+//   other key neither list names.
+//
+// The line falls between "what the grid looks like" and "what is drawn in it".
+// A colour and an inset are both answers to "how does this pane sit inside the
+// window", and the window is helm's — the strip above the grid uses the same
+// nine points of inset, so a line of output starts where a tab's label does.
+// Left to a config tuned for a standalone Ghostty window, the insets were
+// frequently nothing at all, and text sat flush against the pane edge while
+// every element around it breathed. Which font that text is set in, and what
+// keys move the cursor through it, are not that question and stay the
+// operator's.
+//
+// **The ANSI sixteen moved across, and the first version of this comment argued
+// they should not.** The argument was that they are the most personal thing in
+// a terminal config and that `ls` should stay the green it has always been. What
+// it missed is that a palette is chosen against a background: sixteen colours
+// picked for somebody else's terminal, sitting in a frame that now agrees with
+// itself, was most of why helm still looked wrong after the frame was fixed.
+// They are derived now — hue identity preserved, so green still reads as green
+// and a `git diff` still says added and removed the way it always did — and
+// `AnsiPaletteTests` pins every hue band and contrast ratio so that promise is
+// checked rather than asserted. See `AnsiPalette`.
 //
 // This reverses tier 4's old behaviour, which was to go empty the moment a user
 // config existed — deliberately, so their colours were never stomped. That is

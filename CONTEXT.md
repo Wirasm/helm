@@ -78,9 +78,15 @@ _Avoid_: swatch, variable, named colour
 
 **chrome**:
 Everything that is not the work: the workspace bar, a slot's tab strip, a canvas toolbar,
-the status bar. It is translucent — the desktop shows faintly through it — and it recedes.
-The terminal is never chrome and is never translucent.
+the status bar. It recedes.
 _Avoid_: UI, frame, decoration
+
+**glass**:
+The one translucent material the whole window is made of — a behind-window vibrancy plane
+that the desktop shows faintly through. Chrome sits on it tinted up a step; the terminal
+grid sits on it too, made translucent by ghostty's own `background-opacity` rather than by
+anything SwiftUI can reach. Two weights of one material, never two materials.
+_Avoid_: blur, vibrancy, frosted (as a noun), calling the chrome's weight "the" glass
 
 **hint**:
 One line the status bar draws saying a key and what it does. Rendered from `Shortcut.all`,

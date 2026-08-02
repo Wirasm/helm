@@ -195,7 +195,7 @@ final class TerminalSession: ObservableObject, Identifiable {
     ]
 
     /// What helm applies AFTER any base config (ghostty's last-value-wins
-    /// rule) — the two things helm must win, plus the one thing the human set
+    /// rule) — the things helm must win, plus the one thing the human set
     /// inside helm:
     ///
     /// - `term`: the embedded xcframework ships no terminfo, so ghostty's
@@ -204,6 +204,13 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// - `scrollback-limit`: not taste but a job requirement — an agent
     ///   transcript outruns a general-purpose terminal's default in minutes,
     ///   and a Ghostty config tuned for shell work has no reason to know that.
+    /// - `window-padding-*`: **layout, not preference.** These are the insets
+    ///   the grid is drawn inside, and they have to agree with the chrome
+    ///   wrapped around it — the strip above uses the same 9, so the first
+    ///   character of a line stands where a tab's label does. Left to the
+    ///   operator's config they were whatever a standalone Ghostty window
+    ///   wanted, which for a full-screen terminal is often nothing at all: text
+    ///   flush against the pane edge while every element around it breathes.
     /// - `font-size`: only once ⌘+/⌘- has been used. A size chosen inside helm
     ///   is a more direct statement of intent than a config written months ago,
     ///   so it outranks even the user config.
@@ -212,9 +219,16 @@ final class TerminalSession: ObservableObject, Identifiable {
         return TerminalConfiguration { builder in
             builder.withCustom("term", "xterm-256color")
             builder.withCustom("scrollback-limit", "104857600")  // 100 MiB
+            builder.withWindowPaddingX(paneInset.horizontal)
+            builder.withWindowPaddingY(paneInset.vertical)
             if let chosenFontSize { builder.withFontSize(chosenFontSize) }
         }
     }
+
+    /// The grid's insets, in points — the chrome's own numbers, so the terminal sits in the
+    /// same rhythm as the strip above it rather than in whatever a standalone Ghostty
+    /// window was tuned for.
+    nonisolated static let paneInset = (horizontal: 9, vertical: 4)
 
     /// Helm's baseline font size — the size helm's first ⌘+ steps up from when
     /// the user's config declares none of its own.
@@ -222,17 +236,19 @@ final class TerminalSession: ObservableObject, Identifiable {
 
     /// Helm's own defaults: the BASE every terminal starts from, whether or not
     /// the user has a Ghostty config. A taller cell for breathing room (agent
-    /// output is read, not just watched scroll past), modest padding. Font
-    /// family is left unset on purpose — libghostty falls back to its embedded
-    /// JetBrains Mono, which beats anything named blindly.
+    /// output is read, not just watched scroll past). Font family is left unset
+    /// on purpose — libghostty falls back to its embedded JetBrains Mono, which
+    /// beats anything named blindly.
+    ///
+    /// Padding used to be here, where the operator's config outranked it. It is a
+    /// session override now — see `sessionOverrides` for why insets are layout
+    /// rather than taste.
     static let defaultConfiguration = TerminalConfiguration { builder in
         builder.withFontSize(baseFontSize)
         builder.withFontThicken(true)
         builder.withCursorStyle(.block)
         builder.withCursorStyleBlink(true)
         builder.withCustom("adjust-cell-height", "15%")
-        builder.withWindowPaddingX(8)
-        builder.withWindowPaddingY(4)
     }
 
     /// The terminal's colours, out of the same table the chrome spends.
@@ -268,16 +284,60 @@ final class TerminalSession: ObservableObject, Identifiable {
             builder.withCursorText(surface)
             builder.withSelectionBackground(palette.selection.value(in: appearance).hex)
             builder.withSelectionForeground(palette.textPrimary.value(in: appearance).hex)
+            // The sixteen, so the content agrees with the frame — see `AnsiPalette` for why
+            // helm took them over and what "hue identity" constrains.
+            for entry in AnsiPalette.helm.ordered {
+                builder.withPalette(entry.index, color: entry.token.value(in: appearance).hex)
+            }
+            // **Formatted here, never through the typed `withBackgroundOpacity`.** The
+            // wrapper renders a `Double` with `.formatted(.number…)`, which is
+            // locale-sensitive and emits "0,93" under a comma-decimal locale — a hard
+            // ghostty config error rather than a wrong number, and one that would only ever
+            // appear on somebody else's machine. `locale: nil` is what makes this the C
+            // formatting the config file wants. Same hazard `minimum-contrast` dodges.
+            builder.withCustom(
+                "background-opacity",
+                String(format: "%.2f", locale: nil, backgroundOpacity(in: appearance)))
             if appearance == .light {
-                // Raw string, not withMinimumContrast: the wrapper renders Double
-                // values via a locale-sensitive formatter, which produces "1,2"
-                // under comma-decimal locales — a hard ghostty config error.
-                //
-                // Light only, and only because the 16 ANSI colours are still the
-                // operator's: a palette tuned on a dark terminal has entries that vanish
-                // on a light one, and this is the floor under that.
+                // A floor under the ANSI sixteen on paper. helm tunes them for its own
+                // surface (`AnsiPaletteTests` pins the ratios), so this now guards against
+                // a program that sets its own colours rather than against the palette.
                 builder.withCustom("minimum-contrast", "1.2")
             }
+        }
+    }
+
+    /// How opaque the grid's background is — the one knob that reaches the Metal layer.
+    ///
+    /// **Native, because nothing else can be.** SwiftUI vibrancy cannot filter a backdrop
+    /// another renderer draws over, so the chrome's trick does not work here; ghostty's own
+    /// `background-opacity` does, because the wrapper already builds the Metal layer with
+    /// `isOpaque = false` and the renderer honours the alpha. What the grid then composites
+    /// against is helm's business, and `TerminalBackdrop` is the answer: a frosted plane
+    /// behind the surface, so what comes through is a soft wash rather than sharp wallpaper.
+    /// `background-blur` is not that answer — libghostty parses the key and does nothing
+    /// with it, because in Ghostty.app the blur is a window effect the *app* applies, and
+    /// this window is helm's.
+    ///
+    /// **Measured on a running build, twice, and the first answer was wrong.** 0.93 was
+    /// tried first and looked right in the source: the grid *was* translucent and the code
+    /// *was* correct. Sampling the composited pixels said it moved 1 to 2 luminance levels
+    /// while the chrome beside it moved 9 to 17 — translucent, and still reading as a slab.
+    /// The frosted plane is a heavily darkened wash, so a few percent of it is nothing.
+    ///
+    /// **Light pays more for this than dark, which is why there are two numbers.** Nearly
+    /// everything a window sits over is darker than paper, so the opacity that gives a dark
+    /// surface depth just makes a light one dingy: at 0.86 the light grid measured `#ebebea`
+    /// against its own `#fbfaf8` — grey where it should be warm.
+    ///
+    /// Neither goes lower. This is a wall of small monospace read for hours, and every point
+    /// of opacity spent is contrast taken off the one surface helm exists to render. The
+    /// worst-case text contrast at these values measured 11.8 dark and 14.6 light, and that
+    /// headroom is what makes them safe rather than merely pretty.
+    nonisolated static func backgroundOpacity(in appearance: Palette.Appearance) -> Double {
+        switch appearance {
+        case .light: 0.92
+        case .dark: 0.86
         }
     }
 

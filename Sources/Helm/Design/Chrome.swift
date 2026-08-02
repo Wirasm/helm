@@ -1,40 +1,47 @@
 import AppKit
 import SwiftUI
 
-/// Translucent chrome, opaque terminal.
+/// One pane of glass: the whole window is translucent, at two weights.
 ///
-/// **The rule, and why it is one-sided.** The bars and tab strips let the desktop through;
-/// the surface under text does not. Translucency behind terminal output costs contrast on
-/// exactly the pixels helm exists to render, and helm's centre is a Metal layer that would
-/// not participate in the effect anyway — a `NSVisualEffectView` cannot filter a backdrop
-/// that a separate renderer is drawing over. So the effect is spent where it is free: the
-/// frame around the work, which is also the part doctrine says should recede.
+/// **This file used to say "translucent chrome, opaque terminal", and it was wrong.** The
+/// reasoning was that SwiftUI vibrancy cannot filter a backdrop a separate renderer draws
+/// over — which is true, and which is not the same as the terminal being unable to
+/// participate. The operator's verdict on the result was exact: a solid slab inside a
+/// translucent frame, and the slab is the part you look at.
+///
+/// The terminal participates NATIVELY instead. ghostty's own `background-opacity` reaches
+/// the Metal layer because the layer is built with `isOpaque = false` and the renderer
+/// honours the alpha, so the grid's background is genuinely translucent — and what it
+/// composites against is the `TerminalBackdrop` below, which is this same frosted plane.
+/// One material, two weights: the chrome tinted up so it reads as a step above, the grid
+/// left where text is safest.
 ///
 /// **It needs the window's help.** `.behindWindow` blending samples what is behind the
 /// *window*, which is undefined while the window is opaque — hence `translucentWindow()`
-/// below. Everything the chrome does not cover therefore has to paint itself, which is what
+/// below. Everything the glass does not cover therefore has to paint itself, which is what
 /// `RootView`'s `Color.surface` base is for. A region that paints nothing is a hole to the
 /// desktop, not a neutral grey.
 enum Chrome {
     /// How much of the raised surface is laid over the vibrancy.
     ///
-    /// **Measured, not guessed.** A running build was parked over a bright wallpaper and the
-    /// composited pixels sampled against the terminal's own `#1c1e21`. At 0.68 the chrome
-    /// came out within a couple of levels of a flat bar — the effect was paid for and not
-    /// visible. At 0.5 it lands 9 to 17 levels above the surface depending on what is
-    /// behind, with the hue shifting toward the wallpaper: the desktop is legibly *back
-    /// there* without ever being readable.
+    /// **Measured, not guessed, and re-measured when the material changed.** A running build
+    /// was parked over a bright wallpaper and the composited pixels sampled against the
+    /// terminal's own `#1c1e21`. The first pass used `.underWindowBackground`, which
+    /// transmits so little that the terminal could not be made to participate without
+    /// spending contrast it did not have; `.hudWindow` transmits enough for both. Against
+    /// the brighter material 0.5 put the chrome at +28 to +32 — a band that announces
+    /// itself, where doctrine says chrome recedes. 0.72 lands it at +6 to +22, a clear step
+    /// above the grid's +0 to +8 with both still moving as the wallpaper behind them changes.
     ///
-    /// The floor matters more than the ceiling. The chrome has to stay ABOVE the surface
+    /// The floor matters more than the ceiling. The chrome has to stay ABOVE the grid
     /// whatever the wallpaper does, or the frame inverts against the terminal on a dark
-    /// desktop and the whole hierarchy reads backwards. 0.5 measured +9 at its darkest,
-    /// which is the number this is really pinned to.
+    /// desktop and the whole hierarchy reads backwards.
     ///
     /// One number rather than a per-surface choice, because every piece of chrome — the
     /// workspace bar, a slot's tab strip, a canvas toolbar, the status bar — is the same
     /// altitude. If one of them ever wants a different value, that is a second plane and it
     /// should be a second token here, not a literal at the call site.
-    static let tint: Double = 0.5
+    static let tint: Double = 0.72
 }
 
 /// The plane every piece of chrome sits on: vibrancy, with the raised surface over it.
@@ -50,6 +57,23 @@ struct ChromeBackground: View {
     }
 }
 
+/// What a terminal pane floats on: the same frosted plane, **untinted**.
+///
+/// **Untinted is the whole point, and getting it wrong cancels the effect.** The grid draws
+/// its own background at `TerminalSession.backgroundOpacity(in:)` and composites against
+/// this, so a surface tint here would be counted twice — 0.86 of the surface over 0.86 of
+/// the surface is 0.98 of it, and the translucency the operator asked for would quietly
+/// evaporate while every line of the code that produces it still looked right. The one knob
+/// is ghostty's.
+///
+/// The pane's placeholder states — a dead shell, a failed config — have no grid to draw that
+/// background, so `TerminalPaneView` lays the surface over this itself at the same value.
+struct TerminalBackdrop: View {
+    var body: some View {
+        Backdrop()
+    }
+}
+
 /// `NSVisualEffectView` in behind-window mode, which SwiftUI's own `Material` is not: a
 /// `Material` blurs what is behind it *within* the window, so over an opaque root it
 /// produces grey. Only this samples the desktop.
@@ -57,9 +81,13 @@ private struct Backdrop: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.blendingMode = .behindWindow
-        // The material meant for exactly this — content that sits over the window's own
-        // backdrop rather than over other content.
-        view.material = .underWindowBackground
+        // **Chosen for transmission, and `.underWindowBackground` was tried first.** That is
+        // the material nominally meant for this, and it darkens a backdrop so heavily that
+        // the grid could not be made to participate at any opacity that left text safe —
+        // measured, the terminal moved 1 to 2 luminance levels while the chrome moved 9 to
+        // 17. `.hudWindow` passes enough through that a 14% window buys real depth, which is
+        // what lets the terminal and the chrome be the same glass at two weights.
+        view.material = .hudWindow
         // `.active` rather than `.followsWindowActiveState`: helm's chrome is a frame the
         // operator reads while looking at something else, and a frame that changes weight
         // when the window loses key is motion for nothing.
