@@ -184,4 +184,32 @@ final class ArtifactBrowserTests: XCTestCase {
 
         XCTAssertEqual(files.map(\.relativePath), ["plans/real.md"])
     }
+
+    // MARK: When the browser knows what to show
+
+    /// #50's actual defect, as an assertion: a browser that has only been *constructed*
+    /// already knows its stores and its files.
+    ///
+    /// This is not pedantry about initialisers. A popover sizes its window once, from its
+    /// content as it stands at presentation, and `.onAppear` runs after that pass — so a
+    /// browser that discovered its stores there was sized from its own "no stores found"
+    /// placeholder and never grew, and the 26 artifacts it then found rendered into an 8pt
+    /// sliver. Nothing about that is visible from a listing assertion; the only thing that
+    /// distinguishes the broken build from the fixed one, without a window, is *when* the
+    /// listing exists. So that is what is pinned here.
+    @MainActor
+    func testANewlyConstructedBrowserAlreadyHasItsListing() throws {
+        let store = try makeStore("proj", name: "Proj")
+        try addFile("issues/issue-50.md", in: store)
+
+        let browser = ArtifactBrowser(
+            model: ArtifactPaneModel(),
+            workspaceRoot: "/Users/x/proj",
+            root: fixtureRoot,
+            onDismiss: {}
+        )
+
+        XCTAssertEqual(browser.listing.selectedKey, "proj")
+        XCTAssertEqual(browser.listing.files.map(\.relativePath), ["issues/issue-50.md"])
+    }
 }

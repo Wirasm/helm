@@ -12,24 +12,45 @@ struct ArtifactBrowser: View {
     /// The open workspace's repo root (`WorkspaceModel.selectedWorkspaceRoot`), which
     /// preselects ITS store instead of whatever was picked last. A plain value, not the
     /// whole model — the browser stays a pure view over the filesystem.
-    var workspaceRoot: String?
-    let onDismiss: () -> Void
+    private let workspaceRoot: String?
+    private let onDismiss: () -> Void
     /// Overridable so previews/tests could point elsewhere; production uses ~/.prp.
-    var root: URL = ArtifactStoreDiscovery.defaultRoot
+    private let root: URL
 
-    /// Last-picked store key — the fallback when no workspace is open, or when the
-    /// open one has no store yet. Remembered across popover opens and relaunch.
-    @AppStorage("artifactBrowserStore") private var selectedKey = ""
-    @State private var stores: [ArtifactStore] = []
-    @State private var files: [ArtifactFile] = []
+    /// Stores, selection and files together, resolved by `ArtifactListing`.
+    ///
+    /// **Seeded in `init`, not in `onAppear`.** A popover sizes its window once, from
+    /// whatever its content is at presentation, and `onAppear` runs after that — so
+    /// discovering there sized this popover from the empty placeholder below and left the
+    /// real listing to render into an 8pt sliver (#50). Anything that moves this work back
+    /// to `onAppear` brings that back. `ArtifactBrowserTests` pins it by constructing a
+    /// browser and reading this without ever laying one out.
+    @State private(set) var listing: ArtifactListing
+
+    init(
+        model: ArtifactPaneModel,
+        workspaceRoot: String?,
+        root: URL = ArtifactStoreDiscovery.defaultRoot,
+        onDismiss: @escaping () -> Void
+    ) {
+        _model = ObservedObject(wrappedValue: model)
+        self.workspaceRoot = workspaceRoot
+        self.root = root
+        self.onDismiss = onDismiss
+        _listing = State(
+            initialValue: .load(
+                root: root, workspaceRoot: workspaceRoot, remembered: Self.rememberedKey
+            )
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            if stores.isEmpty {
+            if listing.stores.isEmpty {
                 emptyState
             } else {
-                Picker("Project", selection: $selectedKey) {
-                    ForEach(stores) { store in
+                Picker("Project", selection: selection) {
+                    ForEach(listing.stores) { store in
                         Text(store.name).tag(store.key)
                     }
                 }
@@ -40,10 +61,10 @@ struct ArtifactBrowser: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(files, id: \.url) { file in
+                        ForEach(listing.files, id: \.url) { file in
                             fileRow(file)
                         }
-                        if files.isEmpty {
+                        if listing.files.isEmpty {
                             Text("No artifacts in this project yet.")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
@@ -60,30 +81,39 @@ struct ArtifactBrowser: View {
         }
         .frame(width: 380)
         .onAppear(perform: refresh)
-        .onChange(of: selectedKey) { _, _ in refreshFiles() }
     }
 
-    private var selectedStore: ArtifactStore? {
-        stores.first { $0.key == selectedKey }
+    /// The picker's binding. Picking a store re-lists and remembers it in one move —
+    /// there is no separate `onChange` to fall out of step with the write.
+    private var selection: Binding<String> {
+        Binding(
+            get: { listing.selectedKey },
+            set: { key in
+                listing = listing.selecting(key)
+                Self.rememberedKey = key
+            }
+        )
     }
 
-    /// The open workspace's store wins the picker on every open — that is the point
-    /// of the wiring: the right store preselected instead of the last-used one. The
-    /// Picker itself stays live, so browsing another project is one click away.
+    /// Re-read on every open, so a store an agent wrote to while the popover was shut is
+    /// listed the next time it is opened. The initialiser has already done this once for
+    /// the sizing pass; this is what keeps a reopened popover current.
     private func refresh() {
-        stores = ArtifactStoreDiscovery.discoverStores(under: root)
-        if let workspaceStore = workspaceRoot.flatMap({
-            WorkspaceStore.store(forRoot: $0, in: stores)
-        }) {
-            selectedKey = workspaceStore.key
-        } else if selectedStore == nil {
-            selectedKey = stores.first?.key ?? ""
-        }
-        refreshFiles()
+        listing = .load(root: root, workspaceRoot: workspaceRoot, remembered: Self.rememberedKey)
+        Self.rememberedKey = listing.selectedKey
     }
 
-    private func refreshFiles() {
-        files = selectedStore.map { ArtifactStoreDiscovery.artifactFiles(in: $0.root) } ?? []
+    /// Last-picked store key — the fallback when no workspace is open, or when the open
+    /// one has no store yet. Remembered across popover opens and relaunch.
+    ///
+    /// Plain `UserDefaults` rather than `@AppStorage` because the initialiser has to read
+    /// it before the view exists, which is not something a property wrapper bound to a
+    /// view's update cycle can promise.
+    private static let rememberedKeyDefault = "artifactBrowserStore"
+
+    private static var rememberedKey: String {
+        get { UserDefaults.standard.string(forKey: rememberedKeyDefault) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: rememberedKeyDefault) }
     }
 
     // MARK: Rows
@@ -125,7 +155,7 @@ struct ArtifactBrowser: View {
     private var browseRow: some View {
         Button {
             onDismiss()
-            model.presentOpenPanel(startingAt: selectedStore?.root)
+            model.presentOpenPanel(startingAt: listing.selectedStore?.root)
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "folder")
