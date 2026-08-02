@@ -36,4 +36,5 @@ final class LaunchContextTests: XCTestCase {
             "the SPM binary carries CFBundleIdentifier \(DefaultsDomain.canonical) and is still "
                 + "not bundled — Launch Services knows nothing about it either way")
     }
+
 }

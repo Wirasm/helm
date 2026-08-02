@@ -2,20 +2,26 @@ import XCTest
 
 @testable import Helm
 
-/// When a terminal-requested desktop notification is delivered. Split out of
-/// `TerminalCapabilitiesTests` with the type.
+/// When a desktop notification may be delivered at all.
+///
+/// `UNUserNotificationCenter.current()` **aborts** for a process with no real bundle — it does
+/// not throw, so nothing downstream can catch it. The only defence is not calling it, which is
+/// why the decision lives in a pure function rather than inside the lazy `center` accessor.
 final class TerminalNotifierTests: XCTestCase {
-
-    func testNotificationDeliversUnlessAppActiveAndTabSelected() {
-        // The one silent case: the user is already looking at that terminal.
+    /// The regression: this guard asked `bundleIdentifier != nil` until #45 gave the SPM binary
+    /// an identifier so both launch paths would share one `UserDefaults` domain. The guard then
+    /// started passing under `swift run` while the abort remained, and helm died with
+    /// `bundleProxyForCurrentProcess is nil` the first time an agent asked for a notification —
+    /// taking every session it hosted down with it.
+    func testABareSPMBinaryMayNotDeliver() {
         XCTAssertFalse(
-            TerminalNotificationGate.shouldDeliver(appIsActive: true, tabIsSelected: true))
+            TerminalNotifier.canDeliver(
+                from: URL(fileURLWithPath: "/Users/x/helm/.build/arm64-apple-macosx/debug")),
+            "an identifier is not a bundle; calling current() here aborts the process")
+    }
 
+    func testARealAppBundleMayDeliver() {
         XCTAssertTrue(
-            TerminalNotificationGate.shouldDeliver(appIsActive: true, tabIsSelected: false))
-        XCTAssertTrue(
-            TerminalNotificationGate.shouldDeliver(appIsActive: false, tabIsSelected: true))
-        XCTAssertTrue(
-            TerminalNotificationGate.shouldDeliver(appIsActive: false, tabIsSelected: false))
+            TerminalNotifier.canDeliver(from: URL(fileURLWithPath: "/Applications/Helm.app")))
     }
 }

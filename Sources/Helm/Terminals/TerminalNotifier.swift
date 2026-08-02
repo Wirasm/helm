@@ -27,8 +27,28 @@ final class TerminalNotifier: NSObject {
 
     private var authorizationRequested = false
 
+    /// nil under `swift run`, where `UNUserNotificationCenter.current()` would **abort the
+    /// process** — it needs a real bundle, not merely an identifier.
+    ///
+    /// This asks `LaunchContext.isAppBundle`, not `bundleIdentifier != nil`. Those were the
+    /// same question until #45 gave the SPM binary an identifier so both launch paths would
+    /// share one `UserDefaults` domain. #45 migrated the activation check in `HelmApp.init`
+    /// and missed this one, so the guard started passing while the abort remained: helm died
+    /// with `bundleProxyForCurrentProcess is nil` the first time an agent asked for a desktop
+    /// notification, taking every hosted session with it.
+    ///
+    /// The bundle *path* is what still separates the two binaries — see `LaunchContext`.
+    /// Whether `UNUserNotificationCenter.current()` is safe to call for a process running from
+    /// `bundleURL`. Pulled out so the rule is reachable from `swift test` — the crash it
+    /// prevents cannot be, since `current()` aborts rather than throwing.
+    /// `nonisolated` because it genuinely is — it reads no actor state, which is what lets the
+    /// rule be tested without a main actor, exactly as `BoardModel.presence` is.
+    nonisolated static func canDeliver(from bundleURL: URL) -> Bool {
+        LaunchContext.isAppBundle(bundleURL)
+    }
+
     private var center: UNUserNotificationCenter? {
-        guard Bundle.main.bundleIdentifier != nil else { return nil }
+        guard Self.canDeliver(from: Bundle.main.bundleURL) else { return nil }
         return UNUserNotificationCenter.current()
     }
 

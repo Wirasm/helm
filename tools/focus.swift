@@ -20,6 +20,7 @@
 // should still confirm with a capture before typing.
 import AppKit
 import ApplicationServices
+import CoreGraphics
 import Foundation
 
 let deadlineSeconds = 3.0
@@ -63,6 +64,24 @@ if let pid = Int32(target) {
         ($0.localizedName ?? "").caseInsensitiveCompare(target) == .orderedSame
     }
     matches = exact.isEmpty ? named : exact
+
+    // Then prefer whoever actually owns a window. `runningApplications` is a cached
+    // snapshot and intermittently reports a WebKit helper as `.regular`, which made this
+    // tool fail with "ambiguous" at random — fine when run by hand, useless in a script.
+    // A helper never owns an on-screen layer-0 window, so the window list breaks the tie
+    // with a fact rather than a heuristic.
+    if matches.count > 1 {
+        let onScreen =
+            CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+            ?? []
+        let owners = Set(
+            onScreen
+                .filter { ($0[kCGWindowLayer as String] as? Int) == 0 }
+                .compactMap { $0[kCGWindowOwnerPID as String] as? pid_t })
+        let windowed = matches.filter { owners.contains($0.processIdentifier) }
+        if !windowed.isEmpty { matches = windowed }
+    }
 }
 
 guard !matches.isEmpty else {
