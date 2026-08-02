@@ -12,7 +12,9 @@
 //
 // So the rule here is VERIFY, NEVER ASSUME. Each step waits on something observable:
 //
-//   focus        — poll NSRunningApplication.isActive until helm really is frontmost
+//   focus        — poll until helm is frontmost AND has a focused window. Frontmost alone is
+//                  not enough: an app on another macOS desktop is frontmost with no key
+//                  window, and every keystroke sent at it disappears without an error
 //   new terminal — poll for a NEW direct child of helm's pid (one `login` per terminal)
 //   fresh shell  — that terminal's shell must have NO child, i.e. it is not already
 //                  hosting an agent. This is the guard against typing into a live session.
@@ -20,8 +22,9 @@
 //                  of THAT terminal and whose cwd is the one asked for
 //
 // And REFUSE LOUDLY. Locked screen, no Accessibility grant, no helm, more than one helm,
-// focus that never lands, a terminal that never appears, an agent that never registers — all
-// exit nonzero with the reason on stderr. Silence is the failure mode being designed out.
+// focus that never lands, a helm with no key window because it sits on another desktop, a
+// terminal that never appears, an agent that never registers — all exit nonzero with the
+// reason on stderr. Silence is the failure mode being designed out.
 //
 // The prompt never passes through the keyboard or the shell's word splitting: it is written
 // to a private temp file and the typed line reads it back with `"$(cat …)"`. That is what
@@ -52,6 +55,7 @@ enum Refusal: Int32 {
     case terminalBusy = 16
     case agentNeverRegistered = 17
     case workspaceUntrusted = 18
+    case noKeyWindow = 19
 }
 
 func refuse(_ message: String, _ reason: Refusal) -> Never {
@@ -346,10 +350,37 @@ func theOneHelm(named name: String) -> NSRunningApplication {
     }
     guard windowOwners.contains(only.processIdentifier) else {
         refuse(
-            "\(describe(only)) is running but owns no visible window — nothing to type into",
-            .noHelm)
+            """
+            \(describe(only)) is running but owns no window this Space can see — nothing to
+            type into. The likeliest cause is not a missing window but the wrong desktop:
+            `.optionOnScreenOnly` excludes other Spaces, so a helm full of live ptys reports
+            zero windows the moment the operator switches desktop. Check the desktop it is on
+            before concluding its window is gone.
+            """, .noHelm)
     }
     return only
+}
+
+/// The title of the app's key window, or nil if a keystroke would land nowhere.
+///
+/// Frontmost is necessary and NOT sufficient, and the gap is not theoretical: helm once sat
+/// frontmost with `AXWindows count: 0` and `AXFocusedWindow: NONE (-25212)` while a whole
+/// command typed at it vanished. Only the ⌘N landed, because a menu command routes to the app
+/// rather than to a first responder — which is exactly what makes this failure so quiet.
+/// Anything that is not a definite window is treated as no window: the caller is about to
+/// synthesise keystrokes, so ambiguity has to resolve to a refusal. See tools/focus.swift,
+/// which exits 5 and 6 on the same distinction.
+func keyWindowTitle(of app: NSRunningApplication) -> String? {
+    let axApp = AXUIElementCreateApplication(app.processIdentifier)
+    var value: CFTypeRef?
+    guard
+        AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &value)
+            == .success,
+        let raw = value, CFGetTypeID(raw) == AXUIElementGetTypeID()
+    else { return nil }
+    var title: CFTypeRef?
+    AXUIElementCopyAttributeValue(raw as! AXUIElement, kAXTitleAttribute as CFString, &title)
+    return (title as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "<untitled>"
 }
 
 func frontmostPid() -> pid_t? { NSWorkspace.shared.frontmostApplication?.processIdentifier }
@@ -493,7 +524,20 @@ guard focusAndProve(helm, upTo: 3.0) else {
         a nonzero exit here means no keystrokes were sent anywhere.
         """, .focusFailed)
 }
-note("focused \(appName) (pid \(helmPid)) — verified frontmost")
+// Frontmost is not enough — see `keyWindowTitle`. This is checked BEFORE ⌘N so that a refusal
+// costs nothing. Without it the run fails in the worst possible shape: the menu command lands,
+// a terminal opens, the launch line is typed into no first responder at all, and the whole
+// thing sits out its 90s timeout before reporting — leaving a stray empty terminal behind.
+guard let keyWindow = poll(upTo: 2.0, for: { keyWindowTitle(of: helm) }) else {
+    refuse(
+        """
+        \(appName) (pid \(helmPid)) is frontmost but has no focused window, so a keystroke
+        would go nowhere. Nothing was typed.
+        Its window is most likely on another macOS desktop — switch to it, or move the window
+        to this one. Otherwise it is minimised or has no window open.
+        """, .noKeyWindow)
+}
+note("focused \(appName) (pid \(helmPid)) — frontmost, key window \"\(keyWindow)\"")
 
 // MARK: - New terminal
 

@@ -45,6 +45,16 @@ that proves the other checkout builds.
   from them every time. A click at a stale coordinate does not miss harmlessly: it activates
   whatever app is underneath and types into it. That happened — a pane click landed in the
   operator's other terminal.
+- **Frontmost is not focused.** An app can be frontmost with *no key window*, and then every
+  keystroke sent at it vanishes with no error at all. That is what an app on another macOS
+  desktop looks like from outside: `AXFrontmost: true`, `AXWindows count: 0`,
+  `AXFocusedWindow: NONE (-25212)`. Only the ⌘N before it landed, because a menu command routes
+  to the app rather than to a first responder — so the run looks half-successful and tempts you
+  to type the next thing. `focus.swift` now proves the key window too and exits **5** when
+  there is none, **6** when it cannot ask (no Accessibility grant, or the app not answering —
+  told apart, because blaming a grant the operator does have is its own wasted hour).
+  `helm-spawn` checks before ⌘N, so it refuses for free instead of after a 90s timeout with a
+  stray terminal left open. Verified 2026-08-02 against windowless Terminal and Safari.
 - **To start another agent in helm, use `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`**
   (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
   type `cls`, wait, type the prompt, submit — with every step waiting on something observable
