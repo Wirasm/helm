@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 // SECURITY: this is the canvas's REMOTE source, and it is a separate file from
-// ArtifactWebViews.swift on purpose. That file's coordinator cancels every
+// CanvasFileViews.swift on purpose. That file's coordinator cancels every
 // navigation that is not local, which is the right posture for an artifact and
 // the wrong one for a dev server — so this source brings its own coordinator
 // rather than relaxing that one. What keeps this half honest is
@@ -16,7 +16,7 @@ import WebKit
 /// actually changes — `generation` is the model's load counter, so re-submitting
 /// the address you are already on still retries.
 struct URLCanvasView: NSViewRepresentable {
-    @ObservedObject var model: ArtifactPaneModel
+    @ObservedObject var model: CanvasModel
     let url: URL
     let generation: Int
 
@@ -55,7 +55,7 @@ struct URLCanvasView: NSViewRepresentable {
 // MARK: - The second navigation coordinator
 
 /// Navigation policy for the URL source — the counterpart to
-/// `ArtifactWebCoordinator`, which this deliberately does not touch.
+/// `CanvasFileCoordinator`, which this deliberately does not touch.
 ///
 /// It reports back to the model rather than swallowing anything: a page that
 /// fails to load says why (WKWebView's own answer is a blank white pane), and a
@@ -69,9 +69,9 @@ final class URLCanvasCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
     var loadedURL: URL?
     var loadedGeneration = -1
 
-    private let model: ArtifactPaneModel
+    private let model: CanvasModel
 
-    init(model: ArtifactPaneModel) {
+    init(model: CanvasModel) {
         self.model = model
     }
 
@@ -152,8 +152,8 @@ final class URLCanvasCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
 /// The URL source's header: the address, a reload, a close. The file source keeps
 /// its own header — a filename and reveal-in-Finder mean nothing here.
 struct CanvasAddressBar: View {
-    @ObservedObject var model: ArtifactPaneModel
-    let page: ArtifactPaneModel.Page
+    @ObservedObject var model: CanvasModel
+    let page: CanvasModel.Page
 
     /// The half-typed address is the field's business, not the model's: the model
     /// holds only what was committed, so SwiftUI cannot navigate on a keystroke.

@@ -203,7 +203,7 @@ final class ArtifactBrowserTests: XCTestCase {
         try addFile("issues/issue-50.md", in: store)
 
         let browser = ArtifactBrowser(
-            model: ArtifactPaneModel(),
+            model: CanvasModel(),
             workspaceRoot: "/Users/x/proj",
             root: fixtureRoot,
             onDismiss: {}

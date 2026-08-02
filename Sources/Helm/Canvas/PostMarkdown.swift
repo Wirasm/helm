@@ -9,7 +9,7 @@ import SwiftUI
 /// any parse failure.
 /// **Kept deliberately, with no caller today.** This is a markdown → SwiftUI
 /// renderer, written for the conversation view that left with the kild layer. The
-/// artifact pane does not use it: a whole document renders through marked.js in a
+/// canvas does not use it: a whole document renders through marked.js in a
 /// webview instead.
 ///
 /// It is retained because the next surface that needs it — a readable view over an

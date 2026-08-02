@@ -5,7 +5,7 @@ import Foundation
 /// Lives in `Shared/` because three verticals ask the same question and none of them
 /// owns it: the artifact browser asks it to decide what to list, the terminal asks it
 /// to decide whether a ⌘-clicked link opens in helm or goes to the system, and the
-/// canvas asks it to pick a renderer. It used to sit on `ArtifactHTML`, which meant
+/// canvas asks it to pick a renderer. It used to sit on `CanvasHTML`, which meant
 /// two verticals depended on an HTML *generation* module to answer a *routing*
 /// question.
 ///

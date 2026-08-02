@@ -5,7 +5,7 @@ import SwiftUI
 /// optional right dock.
 ///
 /// **Composition only.** Each vertical owns its own commands — terminal shortcuts live in
-/// `TerminalWorkspace`, opening a canvas lives on `ArtifactPaneModel` — so what is left
+/// `TerminalWorkspace`, opening a canvas lives on `CanvasModel` — so what is left
 /// here is the work that genuinely spans them. Every subscription below touches two or
 /// more verticals at once: persisting a workspace's context needs the workspace, its
 /// terminals and its open canvas together, and switching workspaces has to move all
@@ -14,7 +14,7 @@ import SwiftUI
 struct RootView: View {
     @ObserveInjection private var inject
     @StateObject private var model = WorkspaceModel()
-    @StateObject private var artifact = ArtifactPaneModel()
+    @StateObject private var artifact = CanvasModel()
     @ObservedObject private var terminalManager = TerminalManager.shared
     @State private var showBrowser = false
 

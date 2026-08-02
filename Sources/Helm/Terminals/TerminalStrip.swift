@@ -12,8 +12,8 @@ struct TerminalStrip: View {
     /// Both are no-ops in release (docs/VENDORED.md).
     @ObserveInjection private var inject
     @ObservedObject var manager: TerminalManager
-    /// The artifact pane the browser opens files into (also owns Recents).
-    @ObservedObject var artifact: ArtifactPaneModel
+    /// The canvas the browser opens files into (also owns Recents).
+    @ObservedObject var artifact: CanvasModel
     /// Owned by TerminalWorkspace so ⌘O can toggle the popover from outside;
     /// the popover itself anchors to the strip's artifact button.
     @Binding var showBrowser: Bool

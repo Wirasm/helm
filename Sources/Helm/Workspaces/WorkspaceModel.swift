@@ -61,7 +61,7 @@ final class WorkspaceModel: ObservableObject {
     /// A canvas showing a **URL** persists nothing — `fileURL` is nil for it, so the field
     /// keeps meaning what its name says. Restoring one is not on the map yet, and half-doing
     /// it here would put a `https:` string where a file path is read back.
-    func saveContext(terminalManager: TerminalManager, artifact: ArtifactPaneModel) {
+    func saveContext(terminalManager: TerminalManager, artifact: CanvasModel) {
         guard let workspace = selectedWorkspace else { return }
         // Never record a workspace that is not mounted. Until `TerminalManager.activate`
         // has run for it there are no sessions to see, so saving would write an EMPTY tab
@@ -110,7 +110,7 @@ final class WorkspaceModel: ObservableObject {
     /// is no cycle — and capturing them weakly gives the subscription a way to go quietly
     /// dead if anything but a view ever owns them, which is the failure mode this whole
     /// area kept producing. A regression test caught exactly that.
-    func observeTerminals(_ manager: TerminalManager, artifact: ArtifactPaneModel) {
+    func observeTerminals(_ manager: TerminalManager, artifact: CanvasModel) {
         terminalChanges = manager.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in

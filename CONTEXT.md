@@ -42,11 +42,6 @@ The pane type that renders content — a markdown file, an HTML file, or a URL �
 annotation on it. Modular by source; extendable to further formats.
 _Avoid_: artifact pane, webview, browser, draw-on pane
 
-> **The code has not caught up, deliberately.** The type is still `ArtifactPane` and the dock
-> that hosts it is `CanvasDock`. The rename touches the same files the canvas work reshapes,
-> so it lands with that work rather than ahead of it — this is a known gap, not a violation to
-> fix in passing. Say **canvas** in prose either way.
-
 ### What agents produce
 
 **artifact**:

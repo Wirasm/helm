@@ -1,14 +1,14 @@
 import Foundation
 
-/// The artifact pane's theme, keyed off the effective appearance. Raw values
+/// The canvas's theme, keyed off the effective appearance. Raw values
 /// are the names mermaid's `initialize` accepts — nothing user-controlled is
 /// ever interpolated into the scripts below.
-enum ArtifactTheme: String {
+enum CanvasTheme: String {
     case light = "default"
     case dark
 }
 
-/// Pure HTML/JS generation for the artifact pane's WKWebViews — the single
+/// Pure HTML/JS generation for the canvas's WKWebViews — the single
 /// document page that renders a whole markdown artifact (marked converts it
 /// client-side, mermaid renders its ```mermaid fences), and the init script
 /// injected into .html artifacts. No WebKit imports: fully exercisable from
@@ -17,7 +17,7 @@ enum ArtifactTheme: String {
 /// Everything is self-contained and offline: the only JavaScript involved is
 /// the vendored marked + mermaid (see docs/VENDORED.md) plus the inline init
 /// script — no external references, no network fetches, ever.
-enum ArtifactHTML {
+enum CanvasHTML {
     // MARK: Document page
 
     /// Full HTML document for one markdown artifact. The vendored marked.js +
@@ -36,7 +36,7 @@ enum ArtifactHTML {
     /// The CSS is the document type scale (15px body, 760px measure centered,
     /// 24/19/16 heading scale) over CSS system colors, so the page follows the
     /// pane's light/dark appearance via `color-scheme`.
-    static func documentPage(markdown: String, theme: ArtifactTheme) -> String {
+    static func documentPage(markdown: String, theme: CanvasTheme) -> String {
         """
         <!DOCTYPE html>
         <html>
@@ -81,7 +81,7 @@ enum ArtifactHTML {
     /// headings, hairline under h1, monospaced code with a subtle fill).
     /// System colors (`Canvas`/`CanvasText`) + `color-scheme` keep the page in
     /// step with the app's appearance.
-    private static func documentCSS(theme: ArtifactTheme) -> String {
+    private static func documentCSS(theme: CanvasTheme) -> String {
         """
         :root { color-scheme: \(theme == .dark ? "dark" : "light"); }
         body {
@@ -137,7 +137,7 @@ enum ArtifactHTML {
     /// mermaid.js at document start) so `<pre class="mermaid">` blocks render —
     /// the prp-diagram skill's documented alternative where "the consuming UI
     /// provides the renderer". A page without mermaid blocks is left untouched.
-    static func htmlArtifactInitScript(theme: ArtifactTheme) -> String {
+    static func htmlArtifactInitScript(theme: CanvasTheme) -> String {
         """
         (function () {
           if (!window.mermaid) { return; }

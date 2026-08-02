@@ -12,22 +12,7 @@ import SwiftUI
 /// Read-only on purpose — no editing, no commenting. Those are later slices,
 /// designed against real dogfooding.
 @MainActor
-final class ArtifactPaneModel: ObservableObject {
-    /// Where the canvas gets what it renders. CONTEXT.md: the canvas is *modular
-    /// by source* — a file an agent or the operator opened, or a URL.
-    ///
-    /// A sum rather than two optionals, because a canvas showing both a file and
-    /// a URL is not a state that exists — and because the difference has to
-    /// survive the persistence seam: `WorkspaceContext.openArtifactPath` is a
-    /// **file** path, and a `https:` URL parked in `Document.url` would persist
-    /// as `url.path` (empty, or a stray `/segment`) and be reopened through
-    /// `URL(fileURLWithPath:)` on the next workspace switch. `fileURL` below is
-    /// what keeps that honest.
-    enum Source {
-        case file(Document)
-        case url(Page)
-    }
-
+final class CanvasModel: ObservableObject {
     /// What the pane shows for the open file: a markdown document (rendered as
     /// one webview — marked + mermaid), a full-pane web view (.html — the
     /// escape hatch; the view loads `Document.url` itself), or plain
@@ -64,7 +49,7 @@ final class ArtifactPaneModel: ObservableObject {
         var failure: String?
     }
 
-    @Published private(set) var source: Source?
+    @Published private(set) var source: CanvasSource?
 
     /// Bumped by ⌘L. The address field watches it, which is what lets a second
     /// press re-focus a field that is already on screen.
@@ -103,7 +88,7 @@ final class ArtifactPaneModel: ObservableObject {
 
     init() {
         NotificationCenter.default
-            .publisher(for: .helmOpenArtifactFile)
+            .publisher(for: .helmOpenCanvasFile)
             .compactMap { $0.object as? URL }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] url in
@@ -326,12 +311,12 @@ final class FileWatcher {
 /// The read-only canvas half of the terminal workspace split: a header over the
 /// rendered source. Which header is the source's own — a file gets its filename
 /// and reveal-in-Finder, a URL gets an address bar.
-struct ArtifactPane: View {
+struct CanvasView: View {
     /// Hot reload: `.enableInjection()` below redraws this view when
     /// InjectionNext swaps a recompiled build of it into the running app.
     /// Both are no-ops in release (docs/VENDORED.md).
     @ObserveInjection private var inject
-    @ObservedObject var model: ArtifactPaneModel
+    @ObservedObject var model: CanvasModel
 
     var body: some View {
         if let source = model.source {
@@ -351,7 +336,7 @@ struct ArtifactPane: View {
     }
 
     @ViewBuilder
-    private func content(for source: ArtifactPaneModel.Source) -> some View {
+    private func content(for source: CanvasSource) -> some View {
         switch source {
         case let .file(document): fileContent(for: document)
         case let .url(page): urlContent(for: page)
@@ -363,7 +348,7 @@ struct ArtifactPane: View {
     /// reading, and a dead dev server should say so instead of showing WebKit's
     /// blank white pane.
     @ViewBuilder
-    private func urlContent(for page: ArtifactPaneModel.Page) -> some View {
+    private func urlContent(for page: CanvasModel.Page) -> some View {
         VStack(spacing: 0) {
             if let failure = page.failure {
                 HStack(spacing: 6) {
@@ -390,12 +375,12 @@ struct ArtifactPane: View {
     }
 
     @ViewBuilder
-    private func fileContent(for document: ArtifactPaneModel.Document) -> some View {
+    private func fileContent(for document: CanvasModel.Document) -> some View {
         switch document.content {
         case let .markdown(markdown):
-            MarkdownArtifactView(markdown: markdown, generation: document.generation)
+            MarkdownCanvasView(markdown: markdown, generation: document.generation)
         case .web:
-            HTMLArtifactView(url: document.url, generation: document.generation)
+            HTMLCanvasView(url: document.url, generation: document.generation)
         case let .plainText(text):
             ScrollView {
                 Text(text)
@@ -412,7 +397,7 @@ struct ArtifactPane: View {
         }
     }
 
-    private func header(for document: ArtifactPaneModel.Document) -> some View {
+    private func header(for document: CanvasModel.Document) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "doc.text")
                 .foregroundStyle(.secondary)

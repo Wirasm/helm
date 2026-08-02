@@ -5,7 +5,7 @@ import XCTest
 
 /// The typographic system behind the room log's markdown. Pure value checks:
 /// fonts per block type and the paragraph-spacing rules. No views, no GUI.
-/// (The artifact pane's document scale is CSS now — see ArtifactHTMLTests.)
+/// (The canvas's document scale is CSS now — see CanvasHTMLTests.)
 final class MarkdownThemeTests: XCTestCase {
     // MARK: Chat scale
 

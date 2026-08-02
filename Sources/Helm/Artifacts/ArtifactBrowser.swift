@@ -8,7 +8,7 @@ import SwiftUI
 /// NSOpenPanel for anything outside the stores. Anchored to the strip's
 /// artifact button; ⌘O opens this. The listing refreshes on every open.
 struct ArtifactBrowser: View {
-    @ObservedObject var model: ArtifactPaneModel
+    @ObservedObject var model: CanvasModel
     /// The open workspace's repo root (`WorkspaceModel.selectedWorkspaceRoot`), which
     /// preselects ITS store instead of whatever was picked last. A plain value, not the
     /// whole model — the browser stays a pure view over the filesystem.
@@ -28,7 +28,7 @@ struct ArtifactBrowser: View {
     @State private(set) var listing: ArtifactListing
 
     init(
-        model: ArtifactPaneModel,
+        model: CanvasModel,
         workspaceRoot: String?,
         root: URL = ArtifactStoreDiscovery.defaultRoot,
         onDismiss: @escaping () -> Void

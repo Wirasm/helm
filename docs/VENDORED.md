@@ -11,7 +11,7 @@ them in lockstep.
 
 ## marked 18.0.7 — `Sources/Helm/Resources/marked.min.js`
 
-Converts markdown artifacts to HTML inside the artifact pane's document
+Converts markdown artifacts to HTML inside the canvas's document
 webview (injected via WKUserScript; the page calls `marked.parse`).
 
 - **Version**: 18.0.7 (latest stable at vendoring time, 2026-07-25)

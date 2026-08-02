@@ -23,7 +23,7 @@ final class ContextPersistenceTests: XCTestCase {
         let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
         model.open(Workspace(path: workspacePath))
-        model.saveContext(terminalManager: manager, artifact: ArtifactPaneModel())
+        model.saveContext(terminalManager: manager, artifact: CanvasModel())
 
         XCTAssertEqual(
             model.contexts[workspacePath]?.terminalSessionIDs, live,
@@ -48,7 +48,7 @@ final class ContextPersistenceTests: XCTestCase {
         model.open(Workspace(path: workspacePath))
         // A manager that has never activated this workspace — exactly the state at launch,
         // between the first render and `.task`.
-        model.saveContext(terminalManager: TerminalManager(), artifact: ArtifactPaneModel())
+        model.saveContext(terminalManager: TerminalManager(), artifact: CanvasModel())
 
         XCTAssertEqual(
             model.contexts[workspacePath]?.terminalSessionIDs, saved.terminalSessionIDs,
@@ -67,7 +67,7 @@ final class ContextPersistenceTests: XCTestCase {
         let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
         model.open(Workspace(path: workspacePath))
-        model.observeTerminals(manager, artifact: ArtifactPaneModel())
+        model.observeTerminals(manager, artifact: CanvasModel())
 
         manager.activate(workspacePath: workspacePath)
         manager.newTerminal()
@@ -92,7 +92,7 @@ final class ContextPersistenceTests: XCTestCase {
         model.open(Workspace(path: workspacePath))
 
         manager.newTerminal()
-        model.saveContext(terminalManager: manager, artifact: ArtifactPaneModel())
+        model.saveContext(terminalManager: manager, artifact: CanvasModel())
 
         XCTAssertEqual(
             model.contexts[workspacePath]?.terminalSessionIDs.count, 2,

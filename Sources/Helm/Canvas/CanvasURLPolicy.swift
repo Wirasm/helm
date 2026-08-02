@@ -3,7 +3,7 @@ import Foundation
 /// Which URLs the canvas's URL source will follow, and how a typed address
 /// becomes one.
 ///
-/// The **opposite** policy to `ArtifactWebCoordinator`'s, which cancels every
+/// The **opposite** policy to `CanvasFileCoordinator`'s, which cancels every
 /// navigation that is not `file:` — deliberately, because that coordinator serves
 /// local artifacts. This one serves a dev server, so it allows the web and nothing
 /// else: an app scheme reached through a redirect (`ssh:`, `x-apple.systempreferences:`)

@@ -9,7 +9,7 @@ import SwiftUI
 /// meeting in the same file.
 struct TerminalWorkspace: View {
     @ObservedObject var manager: TerminalManager
-    @ObservedObject var artifact: ArtifactPaneModel
+    @ObservedObject var artifact: CanvasModel
     @Binding var showBrowser: Bool
     let workspaceRoot: String?
     /// Which face the pane is showing. One flag, one button (⌘T) — the terminal

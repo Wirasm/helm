@@ -6,22 +6,22 @@ import WebKit
 // the user. No remote content is ever loaded: the navigation delegate cancels
 // anything that is not the initially loaded local content, and the only
 // JavaScript that runs is the vendored marked + mermaid (docs/VENDORED.md)
-// plus the inline scripts from ArtifactHTML.
+// plus the inline scripts from CanvasHTML.
 
 // MARK: - Markdown artifact (one webview per document)
 
-/// A whole markdown artifact as a single WKWebView: ArtifactHTML.documentPage
+/// A whole markdown artifact as a single WKWebView: CanvasHTML.documentPage
 /// carries the source, marked converts it in the page, mermaid renders its
 /// fences. Magnification is on — pinch/⌘-scroll zooms the whole document.
 /// `generation` bumps on external file change to force a plain reload.
-struct MarkdownArtifactView: View {
+struct MarkdownCanvasView: View {
     let markdown: String
     let generation: Int
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        MarkdownArtifactWebView(
+        MarkdownCanvasWebView(
             markdown: markdown,
             generation: generation,
             theme: colorScheme == .dark ? .dark : .light
@@ -29,20 +29,20 @@ struct MarkdownArtifactView: View {
     }
 }
 
-private struct MarkdownArtifactWebView: NSViewRepresentable {
+private struct MarkdownCanvasWebView: NSViewRepresentable {
     let markdown: String
     let generation: Int
-    let theme: ArtifactTheme
+    let theme: CanvasTheme
 
-    func makeCoordinator() -> ArtifactWebCoordinator {
-        ArtifactWebCoordinator()
+    func makeCoordinator() -> CanvasFileCoordinator {
+        CanvasFileCoordinator()
     }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         // Vendored renderers arrive as user scripts at document start; the
         // page's inline script then only converts and renders.
-        for script in [ArtifactHTML.vendoredMarked(), ArtifactHTML.vendoredMermaid()] {
+        for script in [CanvasHTML.vendoredMarked(), CanvasHTML.vendoredMermaid()] {
             guard let script else { continue }
             configuration.userContentController.addUserScript(
                 WKUserScript(
@@ -63,12 +63,12 @@ private struct MarkdownArtifactWebView: NSViewRepresentable {
     /// Loads only when the (theme, generation, content) triple actually
     /// changed — file-watch reloads and appearance flips re-render; mere
     /// SwiftUI churn does not.
-    private func load(_ webView: WKWebView, coordinator: ArtifactWebCoordinator) {
+    private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
         let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(markdown)"
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
         webView.loadHTMLString(
-            ArtifactHTML.documentPage(markdown: markdown, theme: theme),
+            CanvasHTML.documentPage(markdown: markdown, theme: theme),
             baseURL: nil
         )
     }
@@ -81,14 +81,14 @@ private struct MarkdownArtifactWebView: NSViewRepresentable {
 /// The vendored mermaid.js + an init script are injected so
 /// `<pre class="mermaid">` blocks render without the page shipping its own
 /// renderer. `generation` bumps on external file change to force a reload.
-struct HTMLArtifactView: View {
+struct HTMLCanvasView: View {
     let url: URL
     let generation: Int
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HTMLArtifactWebView(
+        HTMLCanvasWebView(
             url: url,
             generation: generation,
             theme: colorScheme == .dark ? .dark : .light
@@ -96,13 +96,13 @@ struct HTMLArtifactView: View {
     }
 }
 
-private struct HTMLArtifactWebView: NSViewRepresentable {
+private struct HTMLCanvasWebView: NSViewRepresentable {
     let url: URL
     let generation: Int
-    let theme: ArtifactTheme
+    let theme: CanvasTheme
 
-    func makeCoordinator() -> ArtifactWebCoordinator {
-        ArtifactWebCoordinator()
+    func makeCoordinator() -> CanvasFileCoordinator {
+        CanvasFileCoordinator()
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -120,14 +120,14 @@ private struct HTMLArtifactWebView: NSViewRepresentable {
     /// (Re)loads when the file, its generation (external change), or the theme
     /// changes. Scripts are re-armed per load so a theme flip re-renders the
     /// page's diagrams in the matching mermaid theme.
-    private func load(_ webView: WKWebView, coordinator: ArtifactWebCoordinator) {
+    private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
         let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(url.path)"
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
 
         let controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
-        if let mermaidJS = ArtifactHTML.vendoredMermaid() {
+        if let mermaidJS = CanvasHTML.vendoredMermaid() {
             controller.addUserScript(
                 WKUserScript(
                     source: mermaidJS,
@@ -137,7 +137,7 @@ private struct HTMLArtifactWebView: NSViewRepresentable {
             )
             controller.addUserScript(
                 WKUserScript(
-                    source: ArtifactHTML.htmlArtifactInitScript(theme: theme),
+                    source: CanvasHTML.htmlArtifactInitScript(theme: theme),
                     injectionTime: .atDocumentEnd,
                     forMainFrameOnly: true
                 )
@@ -156,7 +156,7 @@ private struct HTMLArtifactWebView: NSViewRepresentable {
 /// HTML string, the artifact's file: URL) is cancelled — a link in a document
 /// or an .html page's remote reference goes nowhere.
 @MainActor
-final class ArtifactWebCoordinator: NSObject, WKNavigationDelegate {
+final class CanvasFileCoordinator: NSObject, WKNavigationDelegate {
     var loadedKey: String?
 
     func webView(

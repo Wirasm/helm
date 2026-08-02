@@ -408,7 +408,7 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// This is also the agent→helm channel, and it used to point out of the app: every
     /// link went to `NSWorkspace`, so an agent offering a rendered report tabbed you
     /// into a browser — the trip helm exists to absorb. A link to something the
-    /// artifact pane renders now opens **in helm** instead.
+    /// canvas renders now opens **in helm** instead.
     ///
     /// **Offer, not push.** The agent writes a self-contained file or prints an
     /// address; helm opens it only when you ⌘-click. Nothing appears unbidden — it is
@@ -426,7 +426,7 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
         guard let validated = TerminalURLPolicy.validated(url) else { return }
         switch TerminalLinkRoute.route(validated) {
         case .canvasFile:
-            NotificationCenter.default.post(name: .helmOpenArtifactFile, object: validated)
+            NotificationCenter.default.post(name: .helmOpenCanvasFile, object: validated)
         case .canvasURL:
             NotificationCenter.default.post(name: .helmOpenCanvasURL, object: validated)
         case .system:

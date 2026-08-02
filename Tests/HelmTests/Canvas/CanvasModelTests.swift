@@ -5,7 +5,7 @@ import XCTest
 /// The canvas's two sources and the seam between them. No window and no WebKit:
 /// everything here is the model deciding what the pane is showing.
 @MainActor
-final class ArtifactPaneModelTests: XCTestCase {
+final class CanvasModelTests: XCTestCase {
     private var file: URL!
 
     override func setUpWithError() throws {
@@ -18,7 +18,7 @@ final class ArtifactPaneModelTests: XCTestCase {
         try? FileManager.default.removeItem(at: file)
     }
 
-    private func page(of model: ArtifactPaneModel) -> ArtifactPaneModel.Page? {
+    private func page(of model: CanvasModel) -> CanvasModel.Page? {
         if case let .url(page) = model.source { page } else { nil }
     }
 
@@ -28,7 +28,7 @@ final class ArtifactPaneModelTests: XCTestCase {
         // WorkspaceModel.saveContext persists `fileURL?.path` into a field read
         // back through URL(fileURLWithPath:). A URL leaking into it would be
         // restored as a garbage file path on the next workspace switch.
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.open(file)
         XCTAssertEqual(model.fileURL, file)
 
@@ -40,7 +40,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     // MARK: - ⌘L
 
     func testFocusAddressOpensAnEmptyPageOnAClosedCanvas() {
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.focusAddress()
 
         XCTAssertNil(page(of: model)?.url, "nothing is loaded until an address is committed")
@@ -51,7 +51,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     func testFocusAddressKeepsThePageItIsAlreadyShowing() {
         // ⌘L on an open canvas is "edit this address", not "start over" — and the
         // counter still rises so the field re-focuses.
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.openURL(URL(string: "http://localhost:3000")!)
         model.focusAddress()
 
@@ -60,7 +60,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     }
 
     func testFocusAddressReplacesAFileSource() {
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.open(file)
         model.focusAddress()
 
@@ -71,7 +71,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     // MARK: - Committing an address
 
     func testSubmitLoadsAParseableAddress() {
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.focusAddress()
         model.submitAddress("localhost:3000")
 
@@ -81,7 +81,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     }
 
     func testSubmitKeepsThePageAndSaysWhyWhenTheAddressIsRefused() {
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.openURL(URL(string: "http://localhost:3000")!)
         model.submitAddress("ssh://root@evil.example")
 
@@ -93,7 +93,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     }
 
     func testSubmitIgnoresAFileSource() {
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.open(file)
         model.submitAddress("localhost:3000")
 
@@ -105,7 +105,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     func testResubmittingTheSameAddressStillRetries() {
         // The ordinary case: the dev server was not up yet. The view loads on a
         // (url, generation) key, so an unchanged URL has to move the counter.
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.focusAddress()
         model.submitAddress("localhost:3000")
         let first = page(of: model)?.generation
@@ -115,7 +115,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     }
 
     func testReloadBumpsTheCounterAndClearsTheFailure() {
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.openURL(URL(string: "http://localhost:3000")!)
         model.pageDidFail("Could not connect to the server.")
         let before = page(of: model)?.generation
@@ -127,7 +127,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     }
 
     func testReloadDoesNothingWithNothingLoaded() {
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.focusAddress()
         model.reloadPage()
 
@@ -139,7 +139,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     func testNavigationFollowsTheAddressFieldAndClearsTheFailure() {
         // A link click has to move the field, or reload would reload something
         // other than what is on screen.
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.openURL(URL(string: "http://localhost:3000")!)
         model.pageDidFail("stale")
         let before = page(of: model)?.generation
@@ -155,7 +155,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     }
 
     func testFailureIsHeldOnThePage() {
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.openURL(URL(string: "http://localhost:3000")!)
         model.pageDidFail("Could not connect to the server.")
 
@@ -166,7 +166,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     }
 
     func testAFileSourceIgnoresPageCallbacks() {
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.open(file)
         model.pageDidFail("not mine")
         model.pageDidNavigate(to: URL(string: "http://example.com")!)
@@ -177,7 +177,7 @@ final class ArtifactPaneModelTests: XCTestCase {
     // MARK: - Closing
 
     func testCloseEmptiesTheCanvasFromEitherSource() {
-        let model = ArtifactPaneModel()
+        let model = CanvasModel()
         model.openURL(URL(string: "http://localhost:3000")!)
         model.close()
         XCTAssertFalse(model.isOpen)
