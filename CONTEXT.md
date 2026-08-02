@@ -33,9 +33,29 @@ The pane arrangement inside a workspace: columns of vertical stacks, each slot t
 One per workspace. If a workspace ever holds several they are numbered, never named.
 _Avoid_: layout, named layout, window manager, tab group
 
+**slot**:
+One tabbed cell of a workbench column. A slot holds panes and knows which of them is on
+screen; a column is a vertical stack of slots. Selection is a property of a slot, never of
+the app — several slots are visible at once, each with its own selected pane.
+_Avoid_: cell, tab group, split
+
 **pane**:
 A workbench tenant. Two types: **terminal** and **canvas**.
 _Avoid_: view, widget, dock
+
+**face**:
+Which of a terminal pane's two presentations is drawn — the terminal, or the agent's
+writing over it. A property of the pane, so two terminals side by side can show different
+ones; a canvas has none.
+_Avoid_: mode, view, tab
+
+**visible**:
+Whether the operator can actually see a pane — it is its slot's selection, and its
+workspace is the active one. Distinct from **selected**, which is slot-local and answers
+for several panes at once. Bells, finished-command marks and desktop notifications are all
+rules about what is *visible*, which is why `TerminalSession` carries `isVisible` rather
+than a copy of anyone's selection.
+_Avoid_: selected, active, focused
 
 **canvas**:
 The pane type that renders content — a markdown file, an HTML file, or a URL — and accepts
