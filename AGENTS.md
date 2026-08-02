@@ -36,6 +36,31 @@ that proves the other checkout builds.
 - **`winshot` matches owner names by substring**, so a second helm instance — a worktree
   build, say — is indistinguishable from the operator's. Check `--list` for how many are
   running before trusting a capture.
+- **To start another agent in helm, use `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`**
+  (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
+  type `cls`, wait, type the prompt, submit — with every step waiting on something observable
+  instead of on a `sleep`: focus polled until helm really is frontmost, the new terminal
+  confirmed by a new child of helm's pid, that terminal's shell required to have **no** child
+  before anything is typed (every terminal already hosting an agent has a `claude` under its
+  zsh, so this is what stops keystrokes landing in a live session), and the agent confirmed by
+  its row appearing in `~/.claude/sessions/`. It prints the new agent's pid and session id.
+  **A nonzero exit is the whole point** — each refusal has its own code and says on stderr
+  whether anything was typed. The prompt never goes through the keyboard or the shell's word
+  splitting: it is staged in a 0600 temp file and read back with `"$(cat …)"`, so multi-line
+  prompts, quotes, and a leading `/` are all ordinary.
+- **helm-spawn needs the display, and refuses rather than typing into nothing.** Unlocked
+  screen, one visible helm window, and an Accessibility grant on the invoking context — the
+  same per-context TCC rule as winshot's Screen Recording grant, and one no agent can grant
+  itself. A headless agent cannot use it at all; that ceiling is the argument for #51's rung 2.
+  `--dry-run` answers "could I spawn right now?" without sending a keystroke.
+- **A spawn needs Claude Code to already trust the directory, and helm-spawn checks first.**
+  An interactive `claude` in an untrusted directory stops at "Is this a project you trust?"
+  *before* it registers a session, which from the outside is indistinguishable from an agent
+  that is merely slow — it cost a full 90s timeout to find. Trust is **inherited from an
+  ancestor**, so accepting it once at a project root covers every worktree under it; a fresh
+  worktree under `~/Projects/mine/sild` needs nothing. There is no non-interactive way to grant
+  it (`claude -p` skips the dialog but records nothing), so the refusal tells you to run
+  `cd <dir> && claude` once by hand.
 - `swift run helm` to iterate, `make app` for the real bundle.
 - **helm persists to one domain, `com.wirasm.helm`, from both launch paths** — so "did it
   persist?" is `defaults read com.wirasm.helm` whichever way it was started. `swift run helm`
