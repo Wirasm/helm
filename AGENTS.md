@@ -68,6 +68,16 @@ that proves the other checkout builds.
   whether anything was typed. The prompt never goes through the keyboard or the shell's word
   splitting: it is staged in a 0600 temp file and read back with `"$(cat …)"`, so multi-line
   prompts, quotes, and a leading `/` are all ordinary.
+- **Do NOT click, type or switch tabs in helm while a spawn is in flight.** Every guard
+  helm-spawn has is about the *app* — frontmost, key window, a new terminal, an idle shell —
+  and none of them can see **which pane inside helm holds the keyboard**, because that is not
+  observable from outside the process. Move focus mid-run and the launch line is typed into
+  whatever pane you moved to. That is how #96 was filed, and it is a real precondition rather
+  than advice. It is now *caught* rather than prevented: after Return, helm-spawn requires the
+  target terminal's shell to gain a child within 10s and refuses with **20** if it does not
+  (verified: 11s and exit 20 with focus stolen mid-spawn, against 90s before; an uninterrupted
+  spawn still finishes in about 2s, because the check is charged against `--timeout`, not
+  added to it).
 - **helm-spawn needs the display, and refuses rather than typing into nothing.** Unlocked
   screen, a visible helm window, and an Accessibility grant on the invoking context — the
   same per-context TCC rule as winshot's Screen Recording grant, and one no agent can grant
