@@ -192,6 +192,116 @@ final class GhosttyConfigTests: XCTestCase {
         )
     }
 
+    // MARK: - Colour
+
+    /// The point of the palette being values: the terminal's colours are not a second set
+    /// of hexes that has to be kept in step with the chrome's, they are the same tokens
+    /// rendered as ghostty config lines. Asserted against `Palette.helm` rather than
+    /// against literals for exactly that reason — a literal here would be the drift.
+    func testTerminalColoursComeOutOfThePalette() {
+        for appearance in Palette.Appearance.allCases {
+            let rendered = TerminalSession.terminalColors(in: appearance).rendered
+            let palette = Palette.helm
+            XCTAssertTrue(
+                rendered.contains("background = \(palette.surface.value(in: appearance).hex)"),
+                rendered)
+            XCTAssertTrue(
+                rendered.contains("foreground = \(palette.textPrimary.value(in: appearance).hex)"),
+                rendered)
+            XCTAssertTrue(
+                rendered.contains("cursor-color = \(palette.accent.value(in: appearance).hex)"),
+                rendered)
+            XCTAssertTrue(
+                rendered.contains(
+                    "selection-background = \(palette.selection.value(in: appearance).hex)"),
+                rendered)
+        }
+    }
+
+    /// Light only, and the raw-string form: the wrapper renders Doubles through a
+    /// locale-sensitive formatter, which produces "1,2" under a comma-decimal locale and
+    /// that is a hard ghostty config error rather than a wrong number.
+    func testMinimumContrastIsSetInLightOnly() {
+        XCTAssertTrue(
+            TerminalSession.terminalColors(in: .light).rendered.contains(
+                "minimum-contrast = 1.2"))
+        XCTAssertFalse(
+            TerminalSession.terminalColors(in: .dark).rendered.contains("minimum-contrast"))
+    }
+
+    /// **The behaviour that changed.** helm's theme used to go empty whenever a user config
+    /// existed, so a helm terminal wore the operator's Ghostty colours and agreed with
+    /// nothing else on screen. Colour is helm's now — the theme renders last, so it wins.
+    @MainActor
+    func testHelmsColoursWinOverAUserConfigThatSetsItsOwn() {
+        let controller = TerminalSession.makeController(userConfig: "background = #ff0000")
+        XCTAssertNil(controller.lastConfigurationIssue)
+
+        // Read line by line, and compared on the LAST one rather than on a specific hex:
+        // the controller renders whichever appearance is current, and the rule being pinned
+        // is "helm has the last word", not which of its two values it happens to say.
+        let rendered = controller.renderedConfig
+        let backgrounds =
+            rendered
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { $0.hasPrefix("background = ") }
+        let palette = Palette.helm.surface
+        XCTAssertEqual(backgrounds.first, "background = #ff0000", rendered)
+        XCTAssertTrue(
+            [palette.light.hex, palette.dark.hex]
+                .map { "background = \($0)" }
+                .contains(backgrounds.last ?? ""),
+            "the final word on background must be a palette token: \(rendered)"
+        )
+    }
+
+    /// The other half of the same decision, and the one that must not regress: what helm
+    /// took is colour, and only colour. Font and keybinds are still the operator's.
+    @MainActor
+    func testTheOperatorKeepsEverythingThatIsNotColour() {
+        let controller = TerminalSession.makeController(
+            userConfig: "font-family = Menlo\nkeybind = shift+enter=text:\\n\npalette = 1=#abcdef"
+        )
+        XCTAssertNil(controller.lastConfigurationIssue)
+
+        let rendered = controller.renderedConfig
+        XCTAssertTrue(rendered.contains("font-family = Menlo"), rendered)
+        XCTAssertTrue(rendered.contains("keybind = shift+enter=text:\\n"), rendered)
+        XCTAssertTrue(
+            rendered.contains("palette = 1=#abcdef"),
+            "the sixteen ANSI entries are the operator's: \(rendered)"
+        )
+        XCTAssertFalse(
+            rendered.contains("palette = 1=") && rendered.hasSuffix("palette = 1=#000000\n"),
+            "helm must not append a palette of its own"
+        )
+    }
+
+    // MARK: - Truecolor
+
+    /// `term` stays `xterm-256color` — the embedded xcframework ships no terminfo, so
+    /// ghostty's own TERM breaks TUIs — and 24-bit colour is therefore something helm has
+    /// to *say*. It was arriving by accident before, inherited from an unrelated variable
+    /// helm sets for shell integration, which is one refactor away from silently costing
+    /// every colour in the palette its precision.
+    @MainActor
+    func testEveryTerminalChildIsToldItHasTruecolor() {
+        let manager = TerminalManager()
+        manager.activate(workspacePath: "/tmp/helm-truecolor")
+        guard let session = manager.sessions.first else {
+            return XCTFail("activating a workspace opens one terminal")
+        }
+
+        let environment = session.hostView.configuration.envVars
+        XCTAssertEqual(environment["COLORTERM"], "truecolor")
+        XCTAssertEqual(environment["TERM_PROGRAM"], "ghostty")
+        XCTAssertTrue(
+            TerminalSession.sessionOverrides.rendered.contains("term = xterm-256color"),
+            "TERM must stay pinned — the env vars are what carry the colour depth"
+        )
+    }
+
     @MainActor
     func testValidationCatchesBrokenUserConfig() {
         XCTAssertFalse(

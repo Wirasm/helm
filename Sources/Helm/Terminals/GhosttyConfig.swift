@@ -5,20 +5,23 @@ import GhosttyTerminal
 //
 // Effective config precedence (later wins — ghostty's "last value" rule):
 //   1. Helm's own defaults — ALWAYS the base, config or no config: mono with a
-//      taller cell for breathing room and modest padding, plus the light/dark
-//      theme following helm's appearance override (see
+//      taller cell for breathing room and modest padding (see
 //      `TerminalSession.defaultConfiguration`).
 //   2. The user's own Ghostty config, layered on top, so helm terminals feel
-//      like their Ghostty (font, colors, keybinds) — but only for the keys they
+//      like their Ghostty (font, keybinds) — but only for the keys they
 //      actually set. macOS Ghostty load order is mirrored:
 //      $XDG_CONFIG_HOME/ghostty/config first, then
 //      ~/Library/Application Support/com.mitchellh.ghostty/config (which
 //      therefore wins where both set a key).
-//   3. Helm's session overrides — applied last, the things helm must win:
+//   3. Helm's session overrides — the things helm must win:
 //      `term = xterm-256color` (the embedded xcframework ships no terminfo, so
 //      ghostty's default TERM breaks TUIs — docs/SPIKE.md), `scrollback-limit`
 //      (a job requirement for agent transcripts, not a preference), and the
 //      font size the human chose with ⌘+/⌘- if they ever have.
+//   4. Helm's theme — LAST, and therefore the final word on colour. This is a
+//      separate channel (`TerminalTheme`) rather than more config lines because
+//      ghostty re-renders it per appearance; helm derives it from the app
+//      palette in `TerminalSession.terminalColors`.
 //
 // Tier 1 used to be an EITHER/OR with tier 2 — any user config at all, even a
 // single keybind line, discarded every one of helm's defaults. Layering them is
@@ -27,6 +30,30 @@ import GhosttyTerminal
 // A user config that ghostty rejects (unknown key, missing theme, …) is
 // dropped WHOLE with a logged warning; helm's defaults still stand, since they
 // are the base rather than the fallback.
+//
+// WHO OWNS WHICH KEY — the decision, not a description of it.
+//
+// Helm owns COLOUR, and nothing else it did not already own:
+//   background, foreground, cursor-color, cursor-text, selection-background,
+//   selection-foreground, and minimum-contrast in the light appearance.
+// Everything else is the operator's, exactly as before — font family, size and
+// thickening, keybinds, cursor style, padding, and the SIXTEEN ANSI PALETTE
+// ENTRIES.
+//
+// The line falls there because a colour is only worth owning where it is helm's
+// own surface. Background, foreground, cursor and selection are the frame the
+// grid is drawn in — the part that has to agree with the strip above it, and the
+// part that made helm look like three applications stacked. The ANSI sixteen are
+// not that: they are what the operator's programs colour their *content* with,
+// they are the most personal thing in a terminal config, and helm has no opinion
+// about them. `ls` staying the green it has always been costs the palette
+// nothing.
+//
+// This reverses tier 4's old behaviour, which was to go empty the moment a user
+// config existed — deliberately, so their colours were never stomped. That is
+// the behaviour being changed, and only that one: tier 2 still wins every key
+// listed above as the operator's, which is what "font and keybinds survive"
+// means and what `GhosttyConfigTests` pins.
 
 /// Points the embedded libghostty at a resources directory providing the
 /// shell-integration scripts (OSC 133 prompt marks → ⌘↑/⌘↓ jump-to-prompt,
