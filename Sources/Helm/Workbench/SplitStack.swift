@@ -19,7 +19,9 @@ struct SplitLayout: Equatable {
 
     /// The stack's full extent along its axis.
     let extent: CGFloat
-    let members: Int
+    /// How many members share it — a count, and named so it cannot be misread as
+    /// `SplitStack.members`, which is the array one call site away.
+    let memberCount: Int
     /// The smallest a member may be **dragged** to.
     ///
     /// It was `HSplitView`'s `minWidth` to enforce at every layout; helm enforces it where
@@ -30,10 +32,14 @@ struct SplitLayout: Equatable {
 
     /// What the members have to share, once the dividers have taken theirs.
     var available: CGFloat {
-        max(extent - Self.dividerThickness * CGFloat(max(members - 1, 0)), 0)
+        max(extent - Self.dividerThickness * CGFloat(max(memberCount - 1, 0)), 0)
     }
 
     /// A stored fraction, in points. **The whole restore path** — computed, never measured.
+    ///
+    /// The `max` guards an invariant `Workbench.normalize()` already enforces on every
+    /// mutation and on decode, so it is defence in depth rather than a live case — said
+    /// here so a later reader does not go looking for the caller that sends a negative.
     func points(_ fraction: Double) -> CGFloat { max(available * fraction, 0) }
 
     /// The fraction a member takes when the divider on its far side has been dragged
@@ -50,7 +56,8 @@ struct SplitLayout: Equatable {
         guard available > 0 else { return start }
         let pair = max(start, 0) + max(neighbour, 0)
         let least = min(Double(minimumExtent / available), pair / 2)
-        return min(max(start + Double(translation / available), least), pair - least)
+        let moved = start + Double(translation / available)
+        return min(max(moved, least), pair - least)
     }
 }
 
@@ -86,7 +93,7 @@ struct SplitStack<Member: Identifiable, Content: View>: View {
     @ViewBuilder let content: (Member) -> Content
 
     private var layout: SplitLayout {
-        SplitLayout(extent: extent, members: members.count, minimumExtent: minimumExtent)
+        SplitLayout(extent: extent, memberCount: members.count, minimumExtent: minimumExtent)
     }
 
     var body: some View {
@@ -150,6 +157,9 @@ private struct SplitDivider: View {
     /// Non-nil for exactly the length of one drag.
     @State private var began: (leading: Double, trailing: Double)?
 
+    /// True for exactly as long as this divider owns a pushed cursor. See `pop()`.
+    @State private var pushedCursor = false
+
     private static let grab: CGFloat = 9
 
     private var isHorizontal: Bool { axis == .horizontal }
@@ -157,28 +167,46 @@ private struct SplitDivider: View {
     var body: some View {
         // A palette hairline rather than a system divider, for the reason `AGENTS.md`
         // gives: a system separator is one more colour from one more source.
-        Color.border
-            .frame(
-                width: isHorizontal ? SplitLayout.dividerThickness : nil,
-                height: isHorizontal ? nil : SplitLayout.dividerThickness
-            )
+        fixed(Color.border, to: SplitLayout.dividerThickness)
             .overlay {
-                Color.clear
-                    .frame(
-                        width: isHorizontal ? Self.grab : nil,
-                        height: isHorizontal ? nil : Self.grab
-                    )
+                fixed(Color.clear, to: Self.grab)
                     .contentShape(Rectangle())
-                    .onHover { inside in
-                        if inside {
-                            (isHorizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown)
-                                .push()
-                        } else {
-                            NSCursor.pop()
-                        }
-                    }
+                    .onHover { $0 ? push() : pop() }
+                    // **Not belt and braces — the only thing that balances the common
+                    // case.** See `pop()`.
+                    .onDisappear(perform: pop)
                     .gesture(gesture)
             }
+    }
+
+    /// Fixed along the axis, natural across it — which is what the two mirrored `frame`
+    /// calls this replaces each produced.
+    @ViewBuilder
+    private func fixed(_ view: some View, to length: CGFloat) -> some View {
+        switch axis {
+        case .horizontal: view.frame(width: length)
+        case .vertical: view.frame(height: length)
+        }
+    }
+
+    private func push() {
+        guard !pushedCursor else { return }
+        pushedCursor = true
+        (isHorizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
+    }
+
+    /// **`NSCursor` push/pop is a stack, and AppKit does not unwind it for you.** No final
+    /// exit is synthesized for a tracking area whose view is removed while the pointer is
+    /// still inside it — so closing a pane with ⌘W while the mouse rests on a divider used
+    /// to leave a push that nothing would ever balance, and a resize cursor stuck over the
+    /// whole app until relaunch. A later matched pair cannot undo an entry beneath it.
+    ///
+    /// The flag is what makes both callers safe: `onDisappear` after an ordinary exit must
+    /// not pop a second time, and nothing here may pop a cursor it did not push.
+    private func pop() {
+        guard pushedCursor else { return }
+        pushedCursor = false
+        NSCursor.pop()
     }
 
     /// **`.global`, and it is load-bearing.** A `DragGesture` reports its translation in

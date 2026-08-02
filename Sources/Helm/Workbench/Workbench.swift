@@ -274,20 +274,28 @@ struct Workbench: Codable, Equatable {
     /// is the right rule for a measurement of the whole stack and the wrong one for a drag:
     /// in the operator's 2+1+1 bench, moving one divider quietly moved the two columns
     /// nobody had touched.
+    ///
+    /// **Adjacent, and checked rather than assumed.** A pair with a column between them is
+    /// not a divider, and trading across one would leave that column untouched while the two
+    /// either side of it moved — the same defect this method exists to remove, reached
+    /// through a different door. The only caller hands over `members[i]` and `members[i+1]`,
+    /// so this cannot fire today; it is here because the sentence above is a claim about
+    /// what the type permits, and a claim the guard did not enforce is just a comment.
     mutating func resizeColumn(_ id: Column.ID, to fraction: Double, against neighbour: Column.ID) {
         guard let index = columns.firstIndex(where: { $0.id == id }),
-            let other = columns.firstIndex(where: { $0.id == neighbour }), index != other
+            let other = columns.firstIndex(where: { $0.id == neighbour }),
+            abs(index - other) == 1
         else { return }
         let widths = Self.trading(columns.map(\.width), at: index, with: other, to: fraction)
         for (offset, width) in widths.enumerated() { columns[offset].width = width }
         normalize()
     }
 
-    /// The same trade one level down. Both slots must be in the same column, because that
-    /// is the only place a slot divider can sit.
+    /// The same trade one level down, and adjacent for the same reason. Both slots must also
+    /// be in the same column, because that is the only place a slot divider can sit.
     mutating func resizeSlot(_ id: Slot.ID, to fraction: Double, against neighbour: Slot.ID) {
         guard let other = address(ofSlot: neighbour), let address = address(ofSlot: id),
-            address.column == other.column, address.slot != other.slot
+            address.column == other.column, abs(address.slot - other.slot) == 1
         else { return }
         let heights = Self.trading(
             columns[address.column].slots.map(\.height), at: address.slot, with: other.slot,

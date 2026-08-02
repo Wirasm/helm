@@ -17,7 +17,7 @@ final class SplitLayoutTests: XCTestCase {
     /// The operator's dragged 2+1+1, laid out. What came back before this was three
     /// equal thirds.
     func testAStoredFractionIsLaidOutAtExactlyThatFraction() {
-        let layout = SplitLayout(extent: 902, members: 3, minimumExtent: 240)
+        let layout = SplitLayout(extent: 902, memberCount: 3, minimumExtent: 240)
 
         XCTAssertEqual(layout.available, 900, "two 1pt dividers are not the members' to share")
         XCTAssertEqual(layout.points(0.3349), 301.41, accuracy: 1e-9)
@@ -26,7 +26,7 @@ final class SplitLayoutTests: XCTestCase {
     }
 
     func testTheMembersFillTheStackBetweenTheDividers() {
-        let layout = SplitLayout(extent: 1000, members: 4, minimumExtent: 240)
+        let layout = SplitLayout(extent: 1000, memberCount: 4, minimumExtent: 240)
         let fractions = [0.4, 0.3, 0.2, 0.1]
 
         let total = fractions.map(layout.points).reduce(0, +)
@@ -40,7 +40,7 @@ final class SplitLayoutTests: XCTestCase {
     /// It must produce zero rather than a negative or a NaN, and above all must not be a
     /// signal that anything changed.
     func testAStackWithNoExtentYetHasNothingToHandOut() {
-        let layout = SplitLayout(extent: 0, members: 3, minimumExtent: 240)
+        let layout = SplitLayout(extent: 0, memberCount: 3, minimumExtent: 240)
 
         XCTAssertEqual(layout.available, 0, "not a negative, whatever the divider allowance")
         XCTAssertEqual(layout.points(0.5), 0)
@@ -50,7 +50,7 @@ final class SplitLayoutTests: XCTestCase {
     }
 
     func testASingleMemberKeepsTheWholeStack() {
-        let layout = SplitLayout(extent: 800, members: 1, minimumExtent: 240)
+        let layout = SplitLayout(extent: 800, memberCount: 1, minimumExtent: 240)
 
         XCTAssertEqual(layout.available, 800, "there is no divider to pay for")
         XCTAssertEqual(layout.points(1), 800)
@@ -59,7 +59,7 @@ final class SplitLayoutTests: XCTestCase {
     // MARK: - Dragging
 
     func testADragMovesTheMemberByTheDistanceDragged() {
-        let layout = SplitLayout(extent: 1001, members: 2, minimumExtent: 240)
+        let layout = SplitLayout(extent: 1001, memberCount: 2, minimumExtent: 240)
 
         let dragged = layout.dragged(from: 0.5, against: 0.5, by: 100)
 
@@ -70,7 +70,7 @@ final class SplitLayoutTests: XCTestCase {
     /// the fractions it is applied to have to be the ones from then. Applying it to the
     /// live pair would compound it every frame and the divider would run away.
     func testADragIsAppliedToWhereItBeganAndNotToWhereItHasReached() {
-        let layout = SplitLayout(extent: 1001, members: 2, minimumExtent: 240)
+        let layout = SplitLayout(extent: 1001, memberCount: 2, minimumExtent: 240)
 
         let halfway = layout.dragged(from: 0.5, against: 0.5, by: 50)
         let allTheWay = layout.dragged(from: 0.5, against: 0.5, by: 100)
@@ -83,7 +83,7 @@ final class SplitLayoutTests: XCTestCase {
     }
 
     func testADragCannotSqueezeItsOwnMemberBelowTheMinimum() {
-        let layout = SplitLayout(extent: 1001, members: 2, minimumExtent: 240)
+        let layout = SplitLayout(extent: 1001, memberCount: 2, minimumExtent: 240)
 
         let dragged = layout.dragged(from: 0.5, against: 0.5, by: -900)
 
@@ -91,7 +91,7 @@ final class SplitLayoutTests: XCTestCase {
     }
 
     func testADragCannotSqueezeItsNeighbourBelowTheMinimum() {
-        let layout = SplitLayout(extent: 1001, members: 2, minimumExtent: 240)
+        let layout = SplitLayout(extent: 1001, memberCount: 2, minimumExtent: 240)
 
         let dragged = layout.dragged(from: 0.5, against: 0.5, by: 900)
 
@@ -103,7 +103,7 @@ final class SplitLayoutTests: XCTestCase {
     /// The pair, not the stack: a divider between the second and third of four columns can
     /// only ever move within what those two have.
     func testADragIsClampedInsideThePairItSitsBetween() {
-        let layout = SplitLayout(extent: 1003, members: 4, minimumExtent: 100)
+        let layout = SplitLayout(extent: 1003, memberCount: 4, minimumExtent: 100)
 
         let dragged = layout.dragged(from: 0.2, against: 0.2, by: 900)
 
@@ -116,7 +116,7 @@ final class SplitLayoutTests: XCTestCase {
     /// give way to something — and half the pair is the only answer that does not hand out
     /// more than there is.
     func testAStackTooSmallForTheMinimumFallsBackToHalfThePair() {
-        let layout = SplitLayout(extent: 301, members: 2, minimumExtent: 240)
+        let layout = SplitLayout(extent: 301, memberCount: 2, minimumExtent: 240)
 
         XCTAssertEqual(
             layout.dragged(from: 0.5, against: 0.5, by: -900), 0.5, accuracy: 1e-9,
