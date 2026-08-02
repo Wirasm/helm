@@ -69,9 +69,22 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(match("N", .command)?.notification, .helmNewTerminal)
     }
 
+    /// ⌘T swaps the terminal pane between its two faces. It was reserved rather
+    /// than free — the old two-faces toggle, freed by the one-surface re-layout —
+    /// and the chat face claims it deliberately, being the same shape of command.
+    ///
+    /// `.anywhere`, because the terminal grid holds focus almost all the time and
+    /// this has to work from there. The local monitor consumes it, so ghostty's
+    /// own ⌘T (new tab) never sees it.
+    func testCommandTSwapsTheTerminalPanesTwoFaces() {
+        XCTAssertEqual(match("t", .command)?.notification, .helmToggleChat)
+        XCTAssertEqual(
+            match("t", .command, terminalFocused: true)?.notification, .helmToggleChat,
+            "the terminal almost always has focus — a toggle it could not reach is no toggle")
+    }
+
     func testUnboundCombinationsPassThrough() {
-        XCTAssertNil(match("t", .command), "⌘T is deliberately unbound — reserved")
-        XCTAssertNil(match("j", .command), "⌘J is deliberately unbound — reserved")
+        XCTAssertNil(match("j", .command), "⌘J is deliberately unbound — reserved for maximize")
         XCTAssertNil(match("q", .command), "unclaimed keys must reach the system")
         XCTAssertNil(match("n", []), "a bare letter must reach the pty")
     }
