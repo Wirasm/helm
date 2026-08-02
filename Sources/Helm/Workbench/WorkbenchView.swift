@@ -9,23 +9,36 @@ import SwiftUI
 /// defect in this codebase was logic trapped in a `View` where no test could reach it;
 /// this file is the answer to that, and stays worth checking by grepping it for `count`,
 /// `first`, `firstIndex` and `isEmpty`.
+///
+/// The sizes are `SplitStack`'s, and computed from the bench rather than measured off the
+/// screen — see that file for what measuring cost (#90).
 struct WorkbenchView: View {
     @ObserveInjection private var inject
     @ObservedObject var model: WorkbenchModel
     let workspaceRoot: String?
 
+    /// The smallest a column may be dragged to, and a slot below it. Held here rather than
+    /// in `SplitStack` because they are this bench's judgement about its own tenants: a
+    /// terminal narrower than this has nothing readable in it, and a slot shorter than this
+    /// has lost its tab strip.
+    static let minimumColumnWidth: CGFloat = 240
+    static let minimumSlotHeight: CGFloat = 80
+
     var body: some View {
         Group {
             if let bench = model.bench {
-                // The bench's own width, so a column can turn its fraction into points
-                // and a dragged size back into a fraction.
+                // The bench's own size, so a column can turn its fraction into points and
+                // a slot can do the same one level down. The only measurement left in the
+                // file, and it drives the layout rather than being written back into it.
                 GeometryReader { geo in
-                    HSplitView {
-                        ForEach(bench.columns) { column in
-                            ColumnView(
-                                model: model, bench: bench, column: column,
-                                benchWidth: geo.size.width, workspaceRoot: workspaceRoot)
-                        }
+                    SplitStack(
+                        axis: .horizontal, extent: geo.size.width, members: bench.columns,
+                        fraction: { $0.width }, minimumExtent: Self.minimumColumnWidth,
+                        resize: { model.resizeColumn($0, to: $1, against: $2) }
+                    ) { column in
+                        ColumnView(
+                            model: model, bench: bench, column: column, height: geo.size.height,
+                            workspaceRoot: workspaceRoot)
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
                 }
@@ -48,64 +61,21 @@ private struct ColumnView: View {
     @ObservedObject var model: WorkbenchModel
     let bench: Workbench
     let column: Column
-    let benchWidth: CGFloat
+    /// The bench's height, which is the column's — columns span it. Handed down rather
+    /// than measured, so a slot's height is known at the first layout instead of after one.
+    let height: CGFloat
     let workspaceRoot: String?
 
-    /// The column's own height, so its slots can do the same arithmetic one level down.
-    @State private var height: CGFloat = 0
-    /// The stored fraction, in points, captured **once**. See `seed`.
-    @State private var seeded: CGFloat?
-
     var body: some View {
-        VSplitView {
-            ForEach(column.slots) { slot in
-                SlotView(
-                    model: model, bench: bench, slot: slot, columnHeight: height,
-                    workspaceRoot: workspaceRoot)
-            }
+        SplitStack(
+            axis: .vertical, extent: height, members: column.slots,
+            fraction: { $0.height }, minimumExtent: WorkbenchView.minimumSlotHeight,
+            resize: { model.resizeSlot($0, to: $1, against: $2) }
+        ) { slot in
+            SlotView(
+                model: model, bench: bench, slot: slot, workspaceRoot: workspaceRoot)
         }
-        // `HSplitView` exposes exactly one member — `init(content:)`. No divider API, no
-        // `autosaveName`, no binding, verified against the macOS 26.2 SDK interface. So a
-        // size is seeded through `idealWidth` and read back through a GeometryReader,
-        // which is what `CanvasDock` already did at N=1.
-        .frame(minWidth: 240, idealWidth: seeded, maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear {
-                        seed()
-                        height = geo.size.height
-                    }
-                    .onChange(of: geo.size) { _, size in
-                        height = size.height
-                        report(size.width)
-                    }
-            }
-        )
         .enableInjection()
-    }
-
-    /// **Seeded once and never re-read.** `idealWidth` deliberately does not track
-    /// `column.width`: if it did, the write-back below would change the value that drives
-    /// the layout that produced it, and the two would chase each other every frame. Seeding
-    /// at mount is all restore needs — after that the divider is the operator's.
-    private func seed() {
-        guard seeded == nil, benchWidth > 0 else { return }
-        seeded = benchWidth * column.width
-    }
-
-    /// Write a dragged size back as a fraction.
-    ///
-    /// **Dead-banded, and deliberately not a `PreferenceKey`.** `stevengharris/SplitView`
-    /// dropped its `HSplitView` dependency because `GeometryReader` + `PreferenceKey`
-    /// inside *nested* split views produced intermittent "Bound preference … tried to
-    /// update multiple times per frame". `.onChange(of:)` is not that mechanism, and the
-    /// sub-point dead band keeps a rounding difference from writing on every frame.
-    private func report(_ width: CGFloat) {
-        guard benchWidth > 1 else { return }
-        let fraction = width / benchWidth
-        guard abs(fraction - column.width) * benchWidth >= 1 else { return }
-        model.resizeColumn(column.id, to: fraction)
     }
 }
 
@@ -116,10 +86,7 @@ private struct SlotView: View {
     @ObservedObject var model: WorkbenchModel
     let bench: Workbench
     let slot: Slot
-    let columnHeight: CGFloat
     let workspaceRoot: String?
-
-    @State private var seeded: CGFloat?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -131,27 +98,8 @@ private struct SlotView: View {
             Color.border.frame(height: 1)
             content
         }
-        .frame(minHeight: 80, idealHeight: seeded, maxHeight: .infinity)
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear(perform: seed)
-                    .onChange(of: geo.size.height) { _, height in report(height) }
-            }
-        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .enableInjection()
-    }
-
-    private func seed() {
-        guard seeded == nil, columnHeight > 0 else { return }
-        seeded = columnHeight * slot.height
-    }
-
-    private func report(_ height: CGFloat) {
-        guard columnHeight > 1 else { return }
-        let fraction = height / columnHeight
-        guard abs(fraction - slot.height) * columnHeight >= 1 else { return }
-        model.resizeSlot(slot.id, to: fraction)
     }
 
     @ViewBuilder

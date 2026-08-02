@@ -229,33 +229,142 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertEqual(bench.columns.map(\.width).reduce(0, +), 1, accuracy: 1e-9)
     }
 
-    func testResizingOneColumnLeavesTheOthersInProportion() {
+    /// The rule #90's fix turns on, in the shape the operator's 2+1+1 bench meets it: a
+    /// divider is between two columns, so the columns it does not sit between must come
+    /// out of the drag with the fractions they went in with. The earlier rule shared the
+    /// remainder over all of them in proportion, and dragging one divider moved three
+    /// columns.
+    func testMovingADividerLeavesEveryOtherColumnExactlyAsItWas() {
         var bench = Workbench(terminal: UUID())
         bench.splitRight(with: terminal())
         bench.focus(bench.columns[0].slots[0].id)
         bench.splitRight(with: terminal())
         // Three columns at a quarter, a quarter and a half.
         XCTAssertEqual(bench.columns.map(\.width), [0.25, 0.25, 0.5])
+        let untouched = bench.columns[2].width
 
-        bench.resizeColumn(bench.columns[2].id, to: 0.2)
+        bench.resizeColumn(bench.columns[0].id, to: 0.4, against: bench.columns[1].id)
 
-        XCTAssertEqual(bench.columns[2].width, 0.2, accuracy: 1e-9, "the dragged column obeys")
+        XCTAssertEqual(bench.columns[0].width, 0.4, accuracy: 1e-9, "the dragged column obeys")
         XCTAssertEqual(
-            bench.columns[0].width, bench.columns[1].width, accuracy: 1e-9,
-            "the untouched two kept their proportion to each other")
+            bench.columns[1].width, 0.1, accuracy: 1e-9,
+            "and its neighbour across the divider absorbs the whole difference")
+        XCTAssertEqual(
+            bench.columns[2].width, untouched, accuracy: 1e-12,
+            "the column the divider does not touch is not touched")
         XCTAssertEqual(bench.columns.map(\.width).reduce(0, +), 1, accuracy: 1e-9)
     }
 
-    func testAColumnCannotBeResizedToNothing() {
+    func testADividerDraggedPastItsNeighbourLeavesASliver() {
         var bench = Workbench(terminal: UUID())
         bench.splitRight(with: terminal())
 
-        bench.resizeColumn(bench.columns[0].id, to: 0)
+        bench.resizeColumn(bench.columns[0].id, to: 0, against: bench.columns[1].id)
 
         XCTAssertGreaterThanOrEqual(
             bench.columns[0].width, Workbench.minimumFraction,
             "a divider dragged to the edge leaves a sliver you can grab again")
         assertInvariants(bench, "after an extreme resize")
+    }
+
+    func testADividerDraggedTheOtherWayLeavesItsNeighbourASliver() {
+        var bench = Workbench(terminal: UUID())
+        bench.splitRight(with: terminal())
+
+        bench.resizeColumn(bench.columns[0].id, to: 1, against: bench.columns[1].id)
+
+        XCTAssertGreaterThanOrEqual(
+            bench.columns[1].width, Workbench.minimumFraction,
+            "the clamp holds at both ends of the drag, not only the near one")
+        assertInvariants(bench, "after an extreme resize the other way")
+    }
+
+    /// A drag holds the pair it started on, so a pane closed by ⌘W mid-drag leaves the
+    /// next `onChanged` naming a member that is gone. Doing nothing is the right answer —
+    /// the subtree that drag belonged to is being torn down anyway — but it has to be
+    /// PINNED as the answer, or a later refactor that resolves a missing id to index 0
+    /// writes a fraction to the wrong column and nothing says so.
+    func testAResizeAgainstAnIdNobodyHoldsMovesNothing() {
+        var bench = Workbench(terminal: UUID())
+        bench.splitRight(with: terminal())
+        let widths = bench.columns.map(\.width)
+
+        bench.resizeColumn(bench.columns[0].id, to: 0.9, against: UUID())
+        bench.resizeColumn(UUID(), to: 0.9, against: bench.columns[1].id)
+
+        XCTAssertEqual(bench.columns.map(\.width), widths, "neither end of a dead pair moves")
+    }
+
+    func testASlotResizeAgainstAnIdNobodyHoldsMovesNothing() {
+        var bench = Workbench(terminal: UUID())
+        bench.splitDown(with: terminal())
+        let heights = bench.columns[0].slots.map(\.height)
+
+        bench.resizeSlot(bench.columns[0].slots[0].id, to: 0.9, against: UUID())
+
+        XCTAssertEqual(bench.columns[0].slots.map(\.height), heights)
+    }
+
+    /// **The same defect as #90, reached through the other door.** Two columns with a third
+    /// between them are not a divider: trading across the gap would move the pair and leave
+    /// the column in the middle exactly where it was, which is the bug this whole slice
+    /// exists to remove. Nothing calls it that way today — the only caller hands over
+    /// `members[i]` and `members[i+1]` — and that is precisely why the guard needs a test
+    /// rather than an argument.
+    func testColumnsWithAColumnBetweenThemAreNotADivider() {
+        var bench = Workbench(terminal: UUID())
+        bench.splitRight(with: terminal())
+        bench.focus(bench.columns[0].slots[0].id)
+        bench.splitRight(with: terminal())
+        XCTAssertEqual(bench.columns.count, 3)
+        let widths = bench.columns.map(\.width)
+
+        bench.resizeColumn(bench.columns[0].id, to: 0.6, against: bench.columns[2].id)
+
+        XCTAssertEqual(bench.columns.map(\.width), widths, "a gap is not a divider")
+    }
+
+    func testSlotsWithASlotBetweenThemAreNotADivider() {
+        var bench = Workbench(terminal: UUID())
+        bench.splitDown(with: terminal())
+        bench.splitDown(with: terminal())
+        XCTAssertEqual(bench.columns[0].slots.count, 3)
+        let heights = bench.columns[0].slots.map(\.height)
+        let slots = bench.columns[0].slots
+
+        bench.resizeSlot(slots[0].id, to: 0.6, against: slots[2].id)
+
+        XCTAssertEqual(bench.columns[0].slots.map(\.height), heights)
+    }
+
+    /// A member is not its own neighbour. Without the guard `trading` would read the same
+    /// fraction twice, call it a pair of double the size, and hand the member a share of a
+    /// stack that does not exist — a quiet wrong number rather than a crash, which is the
+    /// kind that survives review.
+    func testAMemberCannotTradeWithItself() {
+        var bench = Workbench(terminal: UUID())
+        bench.splitRight(with: terminal())
+        let widths = bench.columns.map(\.width)
+
+        bench.resizeColumn(bench.columns[0].id, to: 0.9, against: bench.columns[0].id)
+
+        XCTAssertEqual(bench.columns.map(\.width), widths)
+    }
+
+    /// Slots trade with a slot, and only with one in the same column — that is the only
+    /// place a slot divider can sit. A pair from two different columns is not a divider
+    /// and must do nothing rather than something arbitrary.
+    func testASlotDividerRefusesAPairFromTwoDifferentColumns() throws {
+        var bench = Workbench(terminal: UUID())
+        bench.splitDown(with: terminal())
+        let elsewhere = terminal()
+        bench.insert(elsewhere, at: .column)
+        let heights = bench.columns[0].slots.map(\.height)
+        let stranger = try XCTUnwrap(bench.slot(for: elsewhere.id)?.id)
+
+        bench.resizeSlot(bench.columns[0].slots[0].id, to: 0.9, against: stranger)
+
+        XCTAssertEqual(bench.columns[0].slots.map(\.height), heights, "nothing moved")
     }
 
     // MARK: - The face (#37)
@@ -360,8 +469,21 @@ final class WorkbenchTests: XCTestCase {
             ("moveFocus left", { $0.moveFocus(.left) }),
             ("toggleFace", { $0.toggleFace() }),
             ("select", { $0.select(page.id) }),
-            ("resizeColumn", { $0.resizeColumn($0.columns[0].id, to: 0.7) }),
-            ("resizeSlot", { $0.resizeSlot($0.focusedSlot, to: 0.9) }),
+            (
+                "resizeColumn",
+                { $0.resizeColumn($0.columns[0].id, to: 0.7, against: $0.columns[1].id) }
+            ),
+            (
+                "resizeSlot",
+                {
+                    // An ADJACENT pair, or the guard refuses it and this step exercises
+                    // nothing — which would look identical from here, since every
+                    // assertion in this sequence is about invariants surviving.
+                    let slots = $0.columns[0].slots
+                    guard slots.count > 1 else { return }
+                    $0.resizeSlot(slots[0].id, to: 0.9, against: slots[1].id)
+                }
+            ),
             ("close a canvas", { $0.close(page.id) }),
             ("close a terminal", { $0.close(third.id) }),
             ("close another", { $0.close(second.id) }),
@@ -384,7 +506,7 @@ final class WorkbenchTests: XCTestCase {
             Pane(content: .canvas(.url(URL(string: "http://localhost:3000")!))),
             at: .tab(in: bench.focusedSlot))
         bench.insert(Pane(content: .canvas(.empty)), at: .row(in: bench.columns[0].id))
-        bench.resizeColumn(bench.columns[0].id, to: 0.7)
+        bench.resizeColumn(bench.columns[0].id, to: 0.7, against: bench.columns[1].id)
 
         let data = try JSONEncoder().encode(bench)
         let restored = try JSONDecoder().decode(Workbench.self, from: data)
