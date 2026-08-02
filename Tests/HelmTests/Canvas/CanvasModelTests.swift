@@ -19,7 +19,7 @@ final class CanvasModelTests: XCTestCase {
     }
 
     private func page(of model: CanvasModel) -> CanvasModel.Page? {
-        if case let .url(page) = model.source { page } else { nil }
+        if case let .url(page) = model.showing { page } else { nil }
     }
 
     // MARK: - The persistence seam

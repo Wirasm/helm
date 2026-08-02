@@ -49,7 +49,30 @@ final class CanvasModel: ObservableObject {
         var failure: String?
     }
 
-    @Published private(set) var source: CanvasSource?
+    /// What the canvas is rendering right now — the live half, with the loaded
+    /// content, the watcher's generation counter and the last load failure.
+    ///
+    /// Distinct from `source`, which is the *address* and the only part a bench pane
+    /// persists. Splitting them is what lets a URL canvas be restored at all: a value
+    /// that carries a `WKWebView`'s navigation state cannot be `Codable`, and one that
+    /// carries only an address cannot render.
+    enum Showing {
+        case file(Document)
+        case url(Page)
+    }
+
+    @Published private(set) var showing: Showing?
+
+    /// Where this canvas is pointed, as the bench persists it.
+    var source: CanvasSource? {
+        switch showing {
+        case let .file(document): .file(document.url)
+        // A ⌘L pane with nothing committed is `.empty`, not a URL — restoring it must
+        // give back the blank address bar the operator left, not a load of "".
+        case let .url(page): page.url.map { CanvasSource.url($0) } ?? .empty
+        case nil: nil
+        }
+    }
 
     /// Bumped by ⌘L. The address field watches it, which is what lets a second
     /// press re-focus a field that is already on screen.
@@ -61,17 +84,17 @@ final class CanvasModel: ObservableObject {
     /// beachballing the pane on a stray binary or log.
     private static let maxBytes = 5_000_000
 
-    var isOpen: Bool { source != nil }
+    var isOpen: Bool { showing != nil }
 
     /// The open file, when the canvas is showing one — nil for a URL source.
     /// This is the persistence seam: `WorkspaceModel.saveContext` reads it, so a
     /// URL canvas simply persists nothing rather than a path that is not one.
     var fileURL: URL? {
-        if case let .file(document) = source { document.url } else { nil }
+        if case let .file(document) = showing { document.url } else { nil }
     }
 
     private var isShowingURL: Bool {
-        if case .url = source { true } else { false }
+        if case .url = showing { true } else { false }
     }
 
     /// The canvas vertical subscribes to its own commands rather than having the
@@ -132,7 +155,7 @@ final class CanvasModel: ObservableObject {
     }
 
     func open(_ url: URL) {
-        source = .file(Document(url: url, content: Self.load(url)))
+        showing = .file(Document(url: url, content: Self.load(url)))
         // Reload on every external change. Watcher lifetime == document
         // lifetime; opening another file replaces it.
         watcher = FileWatcher(url: url) { [weak self] in
@@ -142,7 +165,7 @@ final class CanvasModel: ObservableObject {
 
     func close() {
         watcher = nil
-        source = nil
+        showing = nil
     }
 
     func revealInFinder() {
@@ -151,8 +174,8 @@ final class CanvasModel: ObservableObject {
     }
 
     private func reload() {
-        guard case let .file(previous) = source else { return }
-        source = .file(
+        guard case let .file(previous) = showing else { return }
+        showing = .file(
             Document(
                 url: previous.url,
                 content: Self.load(previous.url),
@@ -166,7 +189,7 @@ final class CanvasModel: ObservableObject {
     /// showing, the same way opening another file does.
     func openURL(_ url: URL) {
         watcher = nil
-        source = .url(
+        showing = .url(
             Page(address: url.absoluteString, url: url, generation: nextGeneration))
     }
 
@@ -175,7 +198,7 @@ final class CanvasModel: ObservableObject {
     func focusAddress() {
         if !isShowingURL {
             watcher = nil
-            source = .url(Page())
+            showing = .url(Page())
         }
         addressFocus += 1
     }
@@ -183,44 +206,44 @@ final class CanvasModel: ObservableObject {
     /// The address field was committed. A refusal keeps the page that is up and
     /// says why, rather than blanking the canvas over a typo.
     func submitAddress(_ typed: String) {
-        guard case .url(var page) = source else { return }
+        guard case .url(var page) = showing else { return }
         guard let url = CanvasURLPolicy.address(typed) else {
             page.address = typed
             page.failure =
                 "Not an address the canvas can open: "
                 + typed.trimmingCharacters(in: .whitespacesAndNewlines)
-            source = .url(page)
+            showing = .url(page)
             return
         }
         openURL(url)
     }
 
     func reloadPage() {
-        guard case .url(var page) = source, page.url != nil else { return }
+        guard case .url(var page) = showing, page.url != nil else { return }
         page.generation += 1
         page.failure = nil
-        source = .url(page)
+        showing = .url(page)
     }
 
     /// The page navigated itself — a link, a redirect. The address follows it, so
     /// the field never lies about what is on screen and reload reloads what you
     /// are looking at.
     func pageDidNavigate(to url: URL) {
-        guard case .url(var page) = source else { return }
+        guard case .url(var page) = showing else { return }
         page.address = url.absoluteString
         page.url = url
         page.failure = nil
-        source = .url(page)
+        showing = .url(page)
     }
 
     func pageDidFail(_ message: String) {
-        guard case .url(var page) = source else { return }
+        guard case .url(var page) = showing else { return }
         page.failure = message
-        source = .url(page)
+        showing = .url(page)
     }
 
     private var nextGeneration: Int {
-        if case let .url(page) = source { page.generation + 1 } else { 0 }
+        if case let .url(page) = showing { page.generation + 1 } else { 0 }
     }
 
     private static func load(_ url: URL) -> Content {
@@ -319,14 +342,14 @@ struct CanvasView: View {
     @ObservedObject var model: CanvasModel
 
     var body: some View {
-        if let source = model.source {
+        if let showing = model.showing {
             VStack(spacing: 0) {
-                switch source {
+                switch showing {
                 case let .file(document): header(for: document)
                 case let .url(page): CanvasAddressBar(model: model, page: page)
                 }
                 Divider()
-                content(for: source)
+                content(for: showing)
             }
             .background(Color(nsColor: .textBackgroundColor))
             // Inside the `if`: the body is a bare ViewBuilder conditional with
@@ -336,8 +359,8 @@ struct CanvasView: View {
     }
 
     @ViewBuilder
-    private func content(for source: CanvasSource) -> some View {
-        switch source {
+    private func content(for showing: CanvasModel.Showing) -> some View {
+        switch showing {
         case let .file(document): fileContent(for: document)
         case let .url(page): urlContent(for: page)
         }
