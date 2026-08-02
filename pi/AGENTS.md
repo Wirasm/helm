@@ -33,19 +33,25 @@ Which gives four rules, all of them visible in `extensions/helm-probe/index.ts`:
    capability and says so; the others stay installed.
 4. **Never call an action method during load.** `pi.sendMessage`, `pi.exec`, `pi.setModel` and
    friends throw *by design* until the runtime is bound — "Extension runtime not initialized"
-   (`dist/core/extensions/loader.js:130`). At factory time you may only *register*.
+   (`createExtensionRuntime` in `dist/core/extensions/loader.js`). At factory time you may only
+   *register*.
+5. **Inert is not the same as silent, and only one of them is acceptable.** Degrading must
+   always leave a trace. The reference for this is `announce()`: a UI call that returns "no UI
+   here" must fall back to stderr, never just return. A review of this very file caught
+   `session_start` discarding that return value — it degraded perfectly and said nothing at
+   all, which is the one outcome this whole directory exists to prevent.
 
 ## Traps measured on 0.83.0
 
 - **`pi.getFlag()` in a factory returns the registered default, never the value on argv.**
   Flags are bound from argv only after every extension has loaded
-  (`dist/core/agent-session-services.js:8`). A flag-based kill switch therefore reads
+  (`applyExtensionFlagValues` in `dist/core/agent-session-services.js`). A flag-based kill switch therefore reads
   correctly and does nothing. Use an environment variable for anything load-time; a flag is
   fine inside a handler, where it holds the real value. Measured: factory `false`, handler
   `true`, for the same `--trap-me` on the same run.
 - **Subscribing to an event pi no longer has succeeds silently.** `pi.on()` only pushes into a
   Map — no validation, no warning, and the handler simply never fires
-  (`dist/core/extensions/loader.js:180`). Nothing at runtime will tell you. Two things catch
+  (the `on()` in `createExtensionAPI`, `dist/core/extensions/loader.js`). Nothing at runtime will tell you. Two things catch
   it, and you need both: the **typecheck**, which names the event, and a **behavioural
   assertion** in the test suite, which notices the effect went missing. This is why extensions
   here import the real `ExtensionAPI` type instead of duck-typing the API surface — duck-typing
@@ -53,7 +59,7 @@ Which gives four rules, all of them visible in `extensions/helm-probe/index.ts`:
 - **TypeBox is 1.3.7 and pi supplies it.** `Type.Base`, `Type.Awaited`, `Type.Promise`,
   `Type.AsyncIterator`, `Type.Iterator`, `Type.Options` and `Value.Mutate` are gone as of
   0.83.0. **Never vendor typebox**: a `node_modules/typebox` beside the extension is ignored,
-  because pi's loader aliases the specifier to its own copy (`loader.js:64-110`). Measured —
+  because pi's loader aliases the specifier to its own copy (`getAliases` in `dist/core/extensions/loader.js`). Measured —
   an extension in a directory with typebox 1.1.38 installed still ran against 1.3.7.
 - **Import `typebox` and `@earendil-works/…`, not the old names.** `@sinclair/typebox` and
   `@mariozechner/pi-*` still resolve — the loader aliases them — but they name a package that
@@ -100,14 +106,14 @@ test; without it a run picks up whatever else is installed and stops being repro
 
 Inside a session, `/reload` should re-run the factories on an edited file — `reload()` calls
 `clearExtensionCache()` and re-resolves both discovered and `-e` paths
-(`dist/core/resource-loader.js:262-277`), and the extensions doc says auto-discovered
+(`reload` in `dist/core/resource-loader.js`), and the extensions doc says auto-discovered
 extensions hot-reload. **Not confirmed here**: driving a live TUI through `/reload` under
 `expect` did not produce an observable report either way, and `script` refuses a non-tty stdin
 on macOS, so nothing was measured. Treat the iteration speed as unproven until someone watches
 it by hand. A fresh process is always correct; `bash pi/test.sh` never depends on reload.
 
 Whatever reload does, do not hold a captured `ctx` across it — pi invalidates it, and the stale
-ctx throws with an explanatory message (`dist/core/extensions/loader.js:158`).
+ctx throws with an explanatory message (`assertActive` in `dist/core/extensions/loader.js`).
 
 ## Testing
 
@@ -133,12 +139,32 @@ The typecheck runs against whatever pi is **installed right now** — `test.sh` 
 pinned upper bound: a newer pi is evidence, never a gate. `PI_PACKAGE_DIR=… bash pi/test.sh
 typecheck` points it at a candidate upgrade before you install one.
 
-Each harness **skips** rather than fails when its toolchain is missing, so this can sit in the
+Each harness **skips** rather than fails when its *toolchain* is missing, so this can sit in the
 gate on a machine with no node. Skips are printed, never silent. `tsc` comes from
 `npm install` in this directory.
+
+An absent toolchain is a skip. **A shipped extension with no `tests/<name>.mjs` is a failure**,
+not a skip — skipping there would leave "the factory is total" unverified while the gate stayed
+green, which is the exact false-green this suite exists to prevent.
+
+## The name is load-bearing
+
+An extension's directory name is used three times, and `test.sh` relies on all three:
+
+| Where | Must be |
+|---|---|
+| `extensions/<name>/index.ts` | the extension |
+| `tests/<name>.mjs` | its unit harness — found by name |
+| the command it registers, and the first word of what it reports | `<name>` |
+
+That is what lets `rpc` and `pty` cover every extension rather than a hard-coded one. An
+extension that deliberately breaks the convention must extend those two harnesses itself —
+otherwise it will fail them, loudly, which is the right default.
 
 ## Starting the next extension
 
 Copy `extensions/helm-probe/` to `extensions/<name>/`, copy `tests/helm-probe.mjs` to
-`tests/<name>.mjs`, and delete what you do not need. The rules above come with the file; the
-test harness finds the new one by name.
+`tests/<name>.mjs`, rename `helm-probe`/`helm_probe`/`HELM_PROBE_OFF` throughout, and delete
+what you do not need. The rules above come with the file, and all four harnesses pick the new
+extension up by name with no edit to `test.sh` — verified by doing exactly this and running
+two extensions side by side.

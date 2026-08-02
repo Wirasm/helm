@@ -11,12 +11,15 @@
  * Borrowed in shape from firstmate's tests/fm-calm-pi-extension.test.sh, which drives its
  * extensions the same way.
  *
- * Usage: node pi/tests/unit.mjs <path-to-extension-index.ts>
+ * One of these per extension, named for it — pi/test.sh finds tests/<name>.mjs by the
+ * extension's directory name.
+ *
+ * Usage: node pi/tests/helm-probe.mjs <path-to-extension-index.ts>
  */
 
 const extensionPath = process.argv[2];
 if (!extensionPath) {
-	console.error("usage: node unit.mjs <path-to-extension-index.ts>");
+	console.error("usage: node helm-probe.mjs <path-to-extension-index.ts>");
 	process.exit(2);
 }
 
@@ -93,17 +96,22 @@ if (typeof factory !== "function") {
 	process.exit(1);
 }
 
-await test("registers a session_start handler, the /helm-probe command and the helm_probe tool", () => {
+/** A full install against a fully-capable pi — what every well-formed test starts from. */
+function freshRecord() {
 	const { pi, record } = recordingPi();
 	factory(pi);
+	return record;
+}
+
+await test("registers a session_start handler, the /helm-probe command and the helm_probe tool", () => {
+	const record = freshRecord();
 	check(record.handlers.has("session_start"), "no session_start handler");
 	check(record.commands.has("helm-probe"), "no helm-probe command");
 	check(record.tools.has("helm_probe"), "no helm_probe tool");
 });
 
 await test("session_start reports through ctx.ui.notify", () => {
-	const { pi, record } = recordingPi();
-	factory(pi);
+	const record = freshRecord();
 	const { ctx, messages } = recordingCtx();
 	record.handlers.get("session_start")({ reason: "startup" }, ctx);
 	check(messages.length === 1, `expected one notify, got ${messages.length}`);
@@ -111,27 +119,37 @@ await test("session_start reports through ctx.ui.notify", () => {
 });
 
 await test("the command reports the same text as the handler", async () => {
-	const { pi, record } = recordingPi();
-	factory(pi);
-	const { ctx, messages } = recordingCtx();
-	await record.commands.get("helm-probe").handler("", ctx);
-	check(messages.length === 1, `expected one notify, got ${messages.length}`);
-	check(messages[0].includes("present:"), `report has no capability list: ${messages[0]}`);
+	const record = freshRecord();
+	const start = recordingCtx();
+	record.handlers.get("session_start")({ reason: "startup" }, start.ctx);
+	const command = recordingCtx();
+	await record.commands.get("helm-probe").handler("", command.ctx);
+	check(command.messages.length === 1, `expected one notify, got ${command.messages.length}`);
+	check(
+		command.messages[0] === start.messages[0],
+		`command text diverged from handler text:\n  ${start.messages[0]}\n  ${command.messages[0]}`,
+	);
 });
 
 await test("the tool executes and returns the report as text", async () => {
-	const { pi, record } = recordingPi();
-	factory(pi);
+	const record = freshRecord();
 	const result = await record.tools.get("helm_probe").execute("call-1", {}, undefined, undefined, {});
 	const text = result?.content?.[0]?.text ?? "";
 	check(text.startsWith("helm-probe v"), `unexpected tool output: ${text}`);
 });
 
-await test("a ctx with no ui does not throw", () => {
-	const { pi, record } = recordingPi();
-	factory(pi);
-	record.handlers.get("session_start")({ reason: "startup" }, {});
-	record.handlers.get("session_start")({ reason: "startup" }, { ui: {} });
+// A ctx with no usable ui must not swallow the report. Asserting "does not throw" was not
+// enough: it passed while session_start dropped its report with no trace at all, in the one
+// file whose stated purpose is never to be silent.
+await test("a ctx with no usable ui falls back to stderr rather than going quiet", () => {
+	const record = freshRecord();
+	for (const ctx of [{}, { ui: {} }]) {
+		const printed = capturingStderr(() => record.handlers.get("session_start")({ reason: "startup" }, ctx));
+		check(
+			printed.some((line) => line.startsWith("helm-probe v")),
+			`session_start reported nothing for ctx ${JSON.stringify(ctx)}: ${JSON.stringify(printed)}`,
+		);
+	}
 });
 
 // ── The mutilated-pi cases. Each one must leave the factory returning normally. ──────────
@@ -146,6 +164,25 @@ await test("a pi missing registerTool still loads, keeps the rest, and says what
 	check(
 		warnings.some((line) => line.includes("registerTool")),
 		`no warning named the missing method: ${JSON.stringify(warnings)}`,
+	);
+});
+
+// One throwing method among healthy siblings. Distinct from both neighbours: "missing"
+// never reaches step() at all, and "everything throws" cannot tell per-capability isolation
+// from one shared try. Without this, collapsing the three step() calls into one would pass.
+await test("one throwing registration does not take its healthy siblings with it", () => {
+	const { pi, record } = recordingPi({
+		registerCommand() {
+			throw new Error("mutilated");
+		},
+	});
+	const warnings = capturingStderr(() => factory(pi));
+	check(record.handlers.has("session_start"), "lost the handler when a sibling step threw");
+	check(record.tools.has("helm_probe"), "lost the tool when a sibling step threw");
+	check(record.commands.size === 0, "registered a command through a throwing method");
+	check(
+		warnings.filter((line) => line.includes("command")).length === 1,
+		`expected exactly one warning for the failed step: ${JSON.stringify(warnings)}`,
 	);
 });
 
@@ -171,10 +208,10 @@ await test("a pi that is not an object at all still leaves the factory returning
 });
 
 await test("HELM_PROBE_OFF makes it register nothing", () => {
-	const { pi, record } = recordingPi();
+	let record;
 	process.env.HELM_PROBE_OFF = "1";
 	try {
-		factory(pi);
+		record = freshRecord();
 	} finally {
 		delete process.env.HELM_PROBE_OFF;
 	}

@@ -2,8 +2,10 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
-**Layout: single-context.** helm is one Swift package with one target — no workspace file, no
-`packages/`, no `package.json` at all.
+**Layout: single-context.** helm is one Swift package with one target — no workspace file and no
+`packages/`. The one non-Swift corner is `pi/`, the TypeScript pi extensions helm hosts; its
+`package.json` is dev tooling for their test harness, not a JS build for the app. See
+`pi/AGENTS.md`.
 
 ## Before exploring, read these
 
@@ -38,6 +40,7 @@ helm's vocabulary is not all local. Before naming anything:
 │   ├── direction.md
 │   ├── SPIKE.md
 │   └── VENDORED.md
+├── pi/                 ← TypeScript pi extensions helm hosts, see pi/AGENTS.md
 ├── Sources/Helm/       ← sliced vertically by feature, see below
 └── Tests/HelmTests/    ← mirrors the same slices
 ```

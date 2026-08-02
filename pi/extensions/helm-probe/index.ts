@@ -22,12 +22,7 @@
  * that has to keep working when a future pi removes one of them.
  */
 
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-	ExtensionContext,
-	ExtensionUIContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 /** Bump when the report's shape changes; it is what a reader sees first. */
@@ -39,17 +34,22 @@ const NAME = "helm-probe";
  * because a registered flag cannot be read at load time — measured on 0.83.0,
  * `pi.getFlag()` inside a factory returns the registered *default*, never the value on
  * argv, since flags are bound from argv only after every extension has loaded
- * (`dist/core/agent-session-services.js:8`). A flag-based kill switch reads correctly
- * and does nothing, which is worse than not having one.
+ * (`applyExtensionFlagValues` in `dist/core/agent-session-services.js`). A flag-based
+ * kill switch reads correctly and does nothing, which is worse than not having one.
  */
 const OFF_ENV = "HELM_PROBE_OFF";
 
-/** The pi methods this extension uses. Each is probed before use, and named in the report. */
-const USES = ["on", "registerCommand", "registerTool"] as const;
+/**
+ * The pi methods this extension uses. Typed at the declaration rather than left to `as
+ * const`, so a misspelling is a compile error here and not merely wherever it happens to
+ * be consumed — the guarantee should not depend on how the list is used downstream.
+ */
+const USES: readonly (keyof ExtensionAPI)[] = ["on", "registerCommand", "registerTool"];
 
 /** One line to stderr, prefixed so it is attributable in a busy terminal. */
 function warn(what: string, error: unknown): void {
-	const reason = error instanceof Error ? error.message : String(error);
+	const reason =
+		error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error);
 	console.error(`[${NAME}] ${what}: ${reason}`);
 }
 
@@ -69,19 +69,28 @@ function step(what: string, run: () => void): boolean {
 
 /** Is this pi method actually present? Never assume — see the note about upgrades above. */
 function hasMethod(pi: ExtensionAPI, method: keyof ExtensionAPI): boolean {
-	return typeof (pi as unknown as Record<string, unknown>)[method] === "function";
+	return typeof pi[method] === "function";
 }
 
 /**
- * Notify through the UI if there is one. In a TUI this is a notification; under
- * `pi --mode rpc` it surfaces as an extension_ui_request frame, which is how the test
- * harness observes this extension without spending a model call.
+ * Notify through the UI if there is one, reporting whether it landed. In a TUI this is a
+ * notification; under `pi --mode rpc` it surfaces as an extension_ui_request frame, which
+ * is how the test harness observes this extension without spending a model call.
+ *
+ * The parameter is typed strictly because the only real caller is pi's own runtime and the
+ * strict type is what makes a removed API a compile error. The runtime checks below are
+ * what actually survive a pi that does not honour it — so **every** caller must handle
+ * `false`, or the report vanishes with no trace at all.
  */
 function notify(ctx: ExtensionContext | ExtensionCommandContext, message: string): boolean {
-	const ui = (ctx as Partial<ExtensionContext>).ui as Partial<ExtensionUIContext> | undefined;
-	if (typeof ui?.notify !== "function") return false;
-	ui.notify(message, "info");
+	if (typeof ctx.ui?.notify !== "function") return false;
+	ctx.ui.notify(message, "info");
 	return true;
+}
+
+/** Report through the UI, falling back to stderr. Never silent — that is the whole point. */
+function announce(ctx: ExtensionContext | ExtensionCommandContext, message: string): void {
+	if (!notify(ctx, message)) console.error(message);
 }
 
 /** What this pi gave us, split into what we can use and what has gone missing. */
@@ -102,26 +111,28 @@ function install(pi: ExtensionAPI): void {
 		console.error(`[${NAME}] this pi is missing ${missing.join(", ")}; degrading to what is left`);
 	}
 
-	if (hasMethod(pi, "on")) {
+	// `present` is the single source of truth for what this pi offers — probing again per
+	// registration would just ask the same question twice.
+	if (present.includes("on")) {
 		step("session_start handler", () =>
 			pi.on("session_start", (_event, ctx) => {
-				notify(ctx, text);
+				announce(ctx, text);
 			}),
 		);
 	}
 
-	if (hasMethod(pi, "registerCommand")) {
+	if (present.includes("registerCommand")) {
 		step("/helm-probe command", () =>
 			pi.registerCommand(NAME, {
 				description: "Report which pi extension APIs this session offers",
 				handler: async (_args, ctx) => {
-					if (!notify(ctx, text)) console.error(text);
+					announce(ctx, text);
 				},
 			}),
 		);
 	}
 
-	if (hasMethod(pi, "registerTool")) {
+	if (present.includes("registerTool")) {
 		step("helm_probe tool", () =>
 			pi.registerTool({
 				name: "helm_probe",
