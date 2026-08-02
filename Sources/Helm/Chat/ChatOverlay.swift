@@ -21,6 +21,12 @@ import SwiftUI
 struct ChatOverlay: View {
     @ObservedObject var session: TerminalSession
     @StateObject private var model = ChatModel()
+    /// Text a canvas's `Post` offered this pane, waiting to be dropped into the composer.
+    ///
+    /// **Filtered by pane.** A `ComposeRequest` names the pane the workbench chose, and a
+    /// terminal pane's id is its session id — so this is how one Post reaches one composer
+    /// rather than every open chat face. The workbench makes the choice; this obeys it.
+    @State private var prefill: String?
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -39,6 +45,11 @@ struct ChatOverlay: View {
             .animation(.easeOut(duration: 0.32), value: model.isWorking)
 
             footer
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .helmComposeText)) { note in
+            guard let request = note.object as? ComposeRequest, request.pane == session.id
+            else { return }
+            prefill = request.text
         }
         .task {
             // The pid is read fresh each tick rather than captured: the
@@ -143,7 +154,7 @@ struct ChatOverlay: View {
                 ChatTicker(beats: model.beats, since: model.workingSince)
                     .transition(.opacity.combined(with: .offset(y: 8)))
             }
-            ChatComposer(model: model, send: send)
+            ChatComposer(model: model, send: send, prefill: $prefill)
                 .frame(maxWidth: 620)
             maskNotice
         }

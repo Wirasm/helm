@@ -8,7 +8,10 @@ import SwiftUI
 /// NSOpenPanel for anything outside the stores. Anchored to the strip's
 /// artifact button; ⌘O opens this. The listing refreshes on every open.
 struct ArtifactBrowser: View {
-    @ObservedObject var model: ArtifactPaneModel
+    /// What to do with a chosen file — a closure rather than the workbench, so the
+    /// browser stays a pure view over the filesystem and never learns what a bench is.
+    /// *Where* the chosen file lands is `Workbench.placement(forOpening:)`'s decision.
+    private let onOpen: (URL) -> Void
     /// The open workspace's repo root (`WorkspaceModel.selectedWorkspaceRoot`), which
     /// preselects ITS store instead of whatever was picked last. A plain value, not the
     /// whole model — the browser stays a pure view over the filesystem.
@@ -28,12 +31,12 @@ struct ArtifactBrowser: View {
     @State private(set) var listing: ArtifactListing
 
     init(
-        model: ArtifactPaneModel,
         workspaceRoot: String?,
         root: URL = ArtifactStoreDiscovery.defaultRoot,
+        onOpen: @escaping (URL) -> Void,
         onDismiss: @escaping () -> Void
     ) {
-        _model = ObservedObject(wrappedValue: model)
+        self.onOpen = onOpen
         self.workspaceRoot = workspaceRoot
         self.root = root
         self.onDismiss = onDismiss
@@ -120,7 +123,7 @@ struct ArtifactBrowser: View {
 
     private func fileRow(_ file: ArtifactFile) -> some View {
         Button {
-            model.open(file.url)
+            onOpen(file.url)
             onDismiss()
         } label: {
             HStack(spacing: 6) {
@@ -155,7 +158,9 @@ struct ArtifactBrowser: View {
     private var browseRow: some View {
         Button {
             onDismiss()
-            model.presentOpenPanel(startingAt: listing.selectedStore?.root)
+            if let url = CanvasModel.chooseFile(startingAt: listing.selectedStore?.root) {
+                onOpen(url)
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "folder")

@@ -30,11 +30,13 @@ enum ChatPalette {
 
 /// The chat face's three reading profiles.
 ///
-/// **Declared here rather than beside `.chat`** because `Canvas/` belongs to
-/// another workstream right now. `MarkdownTheme`'s memberwise initializer is
-/// internal, so an extension in this slice is a complete answer and the profiles
-/// live with the only surface that uses them. Fold them in beside `.chat` if the
-/// two ever want to be read together.
+/// **Declared here rather than beside `.chat`, and they stay here by choice.** The note
+/// this replaces said `Canvas/` belonged to another workstream; that workstream was the
+/// workbench, and it is finished. Folding them in was reconsidered and refused: these are
+/// the *chat face's* reading profiles, used by nothing else, so moving them into `Canvas/`
+/// would put chat-specific values in another slice for no gain. `MarkdownTheme`'s
+/// memberwise initializer is internal, so an extension in this slice is a complete answer
+/// and the profiles live with the only surface that uses them.
 extension MarkdownTheme {
     /// The turn's last word — the thing the operator opened this face for.
     /// Bigger than chat and much airier: read once, carefully, not scanned.

@@ -41,7 +41,7 @@ final class BoardModel: ObservableObject {
     /// is the window's and SwiftUI cancels it on teardown.
     ///
     /// Polling, not watching: a status change rewrites an existing file, which the
-    /// directory-level `DispatchSource` pattern (`ArtifactPane`'s `FileWatcher`)
+    /// directory-level `DispatchSource` pattern (`CanvasModel`'s `FileWatcher`)
     /// would not reliably see. Two seconds is well inside glance latency and costs
     /// one directory listing plus a handful of ~400-byte reads, off the main actor.
     ///

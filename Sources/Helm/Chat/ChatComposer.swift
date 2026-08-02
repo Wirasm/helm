@@ -23,6 +23,14 @@ struct ChatComposer: View {
     @ObservedObject var model: ChatModel
     /// Handed the finished message. The view owns no pty knowledge.
     let send: (String) -> Void
+    /// Text offered by something else — a canvas's `Post`. Consumed once and cleared, so
+    /// a re-render cannot re-seed a field the operator has since edited.
+    ///
+    /// **It fills the field and nothing more.** Typing was always allowed here; only
+    /// sending is gated, and that gate is `ChatModel.canSend` — `status == .idle`, with a
+    /// measured reason (#29) not to loosen it. Offering text is exactly as safe as the
+    /// operator typing it.
+    @Binding var prefill: String?
 
     @State private var draft = ""
     @FocusState private var focused: Bool
@@ -51,6 +59,12 @@ struct ChatComposer: View {
             .foregroundStyle(canSubmit ? ChatPalette.accent : ChatPalette.quiet.opacity(0.4))
             .disabled(!canSubmit)
             .help(prompt)
+        }
+        .onChange(of: prefill) { _, offered in
+            guard let offered else { return }
+            draft = draft.isEmpty ? offered : draft + "\n\n" + offered
+            prefill = nil
+            focused = true
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)

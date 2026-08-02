@@ -65,11 +65,11 @@ struct TerminalActivity: Equatable {
         outcome = nil
     }
 
-    mutating func finishCommand(exitCode: Int?, durationNanos: UInt64, isSelected: Bool) {
+    mutating func finishCommand(exitCode: Int?, durationNanos: UInt64, isVisible: Bool) {
         progress = nil
         // The active tab's finish needs no chrome, and no exit code means
         // nothing truthful to show.
-        guard !isSelected, let exitCode else { return }
+        guard !isVisible, let exitCode else { return }
         outcome =
             exitCode == 0
             ? .success(durationNanos: durationNanos)

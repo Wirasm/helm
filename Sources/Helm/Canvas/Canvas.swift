@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import Inject
 import SwiftUI
 
@@ -9,25 +8,12 @@ import SwiftUI
 /// reloads a file on external change (plans get rewritten by agents while you
 /// read them).
 ///
-/// Read-only on purpose — no editing, no commenting. Those are later slices,
-/// designed against real dogfooding.
+/// Read-only on the **content**: helm never edits the file, because an agent owns it and
+/// rewrites it whole. Commenting is the exception #33 argued for and #39 shipped, and it
+/// keeps that rule — a note goes to a sidecar *beside* the canvas (`CanvasNotes`), never
+/// into it, precisely so the next rewrite cannot clobber it.
 @MainActor
-final class ArtifactPaneModel: ObservableObject {
-    /// Where the canvas gets what it renders. CONTEXT.md: the canvas is *modular
-    /// by source* — a file an agent or the operator opened, or a URL.
-    ///
-    /// A sum rather than two optionals, because a canvas showing both a file and
-    /// a URL is not a state that exists — and because the difference has to
-    /// survive the persistence seam: `WorkspaceContext.openArtifactPath` is a
-    /// **file** path, and a `https:` URL parked in `Document.url` would persist
-    /// as `url.path` (empty, or a stray `/segment`) and be reopened through
-    /// `URL(fileURLWithPath:)` on the next workspace switch. `fileURL` below is
-    /// what keeps that honest.
-    enum Source {
-        case file(Document)
-        case url(Page)
-    }
-
+final class CanvasModel: ObservableObject {
     /// What the pane shows for the open file: a markdown document (rendered as
     /// one webview — marked + mermaid), a full-pane web view (.html — the
     /// escape hatch; the view loads `Document.url` itself), or plain
@@ -64,11 +50,53 @@ final class ArtifactPaneModel: ObservableObject {
         var failure: String?
     }
 
-    @Published private(set) var source: Source?
+    /// What the canvas is rendering right now — the live half, with the loaded
+    /// content, the watcher's generation counter and the last load failure.
+    ///
+    /// Distinct from `source`, which is the *address* and the only part a bench pane
+    /// persists. Splitting them is what lets a URL canvas be restored at all: a value
+    /// that carries a `WKWebView`'s navigation state cannot be `Codable`, and one that
+    /// carries only an address cannot render.
+    enum Showing {
+        case file(Document)
+        case url(Page)
+    }
+
+    @Published private(set) var showing: Showing?
+
+    /// Where this canvas is pointed, as the bench persists it.
+    var source: CanvasSource? {
+        switch showing {
+        case let .file(document): .file(document.url)
+        // A ⌘L pane with nothing committed is `.empty`, not a URL — restoring it must
+        // give back the blank address bar the operator left, not a load of "".
+        case let .url(page): page.url.map { CanvasSource.url($0) } ?? .empty
+        case nil: nil
+        }
+    }
 
     /// Bumped by ⌘L. The address field watches it, which is what lets a second
     /// press re-focus a field that is already on screen.
     @Published private(set) var addressFocus = 0
+
+    // MARK: - Annotation
+
+    /// What the operator has selected on the page and not yet commented on. The bridge
+    /// sets it; submitting or dismissing clears it.
+    @Published private(set) var selection: CanvasSelection?
+
+    /// Every note in this canvas's sidecar, by heading. Re-read from the file rather than
+    /// tallied in memory: the sidecar IS the memory, and an agent or an editor may have
+    /// appended to it since.
+    @Published private(set) var notes: [String] = []
+
+    /// Why the last note could not be written, in the operator's terms. Shown in the pane
+    /// — a note someone believes they wrote and that went nowhere is worse than one they
+    /// were told they could not write.
+    @Published private(set) var notesFailure: String?
+
+    /// Where this canvas's notes accumulate — beside it, never inside it.
+    var sidecarURL: URL? { fileURL.map(CanvasNotes.sidecarURL(for:)) }
 
     private var watcher: FileWatcher?
 
@@ -76,63 +104,46 @@ final class ArtifactPaneModel: ObservableObject {
     /// beachballing the pane on a stray binary or log.
     private static let maxBytes = 5_000_000
 
-    var isOpen: Bool { source != nil }
+    var isOpen: Bool { showing != nil }
 
-    /// The open file, when the canvas is showing one — nil for a URL source.
-    /// This is the persistence seam: `WorkspaceModel.saveContext` reads it, so a
-    /// URL canvas simply persists nothing rather than a path that is not one.
+    /// The open file, when the canvas is showing one — nil for a URL source. What reads it
+    /// is live: the header, reveal-in-Finder, and `sidecarURL` (a URL canvas has no file to
+    /// write notes beside).
+    ///
+    /// **It is no longer the persistence seam.** It was — `WorkspaceModel.saveContext` read
+    /// `fileURL?.path` into `openArtifactPath`, which is why a URL canvas persisted nothing
+    /// at all. The bench persists `CanvasSource` through `Pane.Content.canvas` instead, so
+    /// a URL canvas now restores properly and `saveContext` does not read this at all.
     var fileURL: URL? {
-        if case let .file(document) = source { document.url } else { nil }
+        if case let .file(document) = showing { document.url } else { nil }
     }
 
     private var isShowingURL: Bool {
-        if case .url = source { true } else { false }
+        if case .url = showing { true } else { false }
     }
 
-    /// The canvas vertical subscribes to its own commands rather than having the
-    /// app shell forward them.
+    /// **This model no longer subscribes to `helmOpenCanvasFile` / `helmOpenCanvasURL`,
+    /// and must not.** There is one of these per canvas pane now, not one per app: a
+    /// subscription here would make every ⌘-clicked link replace the contents of *every*
+    /// open canvas at once.
     ///
-    /// They have to live on the model, not on a view: both exist to open the pane
-    /// **while it is closed**, and a receiver attached to the dock would be torn
-    /// down in exactly that state. The model outlives the presentation, so the
-    /// command lands whether the pane is on screen or not.
-    /// `AnyCancellable`s rather than NotificationCenter tokens: they unsubscribe in
-    /// their own deinit, and Swift 6 forbids a nonisolated deinit from touching the
-    /// non-Sendable token the observer API hands back.
-    private var commands: Set<AnyCancellable> = []
-
-    init() {
-        NotificationCenter.default
-            .publisher(for: .helmOpenArtifactFile)
-            .compactMap { $0.object as? URL }
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] url in
-                MainActor.assumeIsolated { self?.open(url) }
-            }
-            .store(in: &commands)
-
-        // ⌘L carries no payload and means "focus the address field"; a URL
-        // payload means "open this" — which is what the terminal's ⌘-click on an
-        // http link would post if that call site were in this slice.
-        NotificationCenter.default
-            .publisher(for: .helmOpenCanvasURL)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] note in
-                MainActor.assumeIsolated {
-                    if let url = note.object as? URL {
-                        self?.openURL(url)
-                    } else {
-                        self?.focusAddress()
-                    }
-                }
-            }
-            .store(in: &commands)
+    /// The reasoning that put those commands on a model rather than a view has not
+    /// changed — both exist to open a canvas **while there is none**, and a receiver on a
+    /// view would be gone in exactly that state. It moved up one level, to
+    /// `WorkbenchModel`, which outlives every canvas pane and is also the thing that now
+    /// decides *where* an opened source goes.
+    init(source: CanvasSource? = nil) {
+        if let source { show(source) }
     }
 
-    /// The browser's "Browse…" row and the pre-browser ⌘O behavior. Starts at
-    /// `directory` when given (a store root), else ~/.prp when it exists — the
-    /// intelligence layer's artifact home — else the home directory.
-    func presentOpenPanel(startingAt directory: URL? = nil) {
+    /// The browser's "Browse…" row. Starts at `directory` when given (a store root),
+    /// else ~/.prp when it exists — the intelligence layer's artifact home — else the
+    /// home directory.
+    ///
+    /// Returns the choice rather than opening it, and is `static` for the same reason:
+    /// picking a file is not something a canvas does to itself any more. Which canvas
+    /// shows it — an existing one, a new tab, a new column — is the bench's decision.
+    static func chooseFile(startingAt directory: URL? = nil) -> URL? {
         let panel = NSOpenPanel()
         // Any file is choosable: .md renders formatted, other text renders
         // monospaced, and non-text is refused politely at load time.
@@ -142,12 +153,25 @@ final class ArtifactPaneModel: ObservableObject {
         let prp = home.appendingPathComponent(".prp")
         panel.directoryURL =
             directory ?? (FileManager.default.fileExists(atPath: prp.path) ? prp : home)
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        open(url)
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    /// Point this canvas at a persisted source — the resolve half of `WorkbenchModel`'s
+    /// resolve-at-the-edge, and how a restored pane gets back what it was showing.
+    func show(_ source: CanvasSource) {
+        switch source {
+        case let .file(path): open(URL(fileURLWithPath: path))
+        case let .url(url): openURL(url)
+        case .empty: focusAddress()
+        }
     }
 
     func open(_ url: URL) {
-        source = .file(Document(url: url, content: Self.load(url)))
+        showing = .file(Document(url: url, content: Self.load(url)))
+        selection = nil
+        notesFailure = nil
+        refreshNotes()
         // Reload on every external change. Watcher lifetime == document
         // lifetime; opening another file replaces it.
         watcher = FileWatcher(url: url) { [weak self] in
@@ -155,9 +179,59 @@ final class ArtifactPaneModel: ObservableObject {
         }
     }
 
+    /// This pane's canvas is going away. Called by `WorkbenchModel` when the pane closes
+    /// — it no longer means "empty the dock", because there is no dock: the ✕ in the
+    /// canvas header closes the **pane**, not the source.
     func close() {
         watcher = nil
-        source = nil
+        showing = nil
+    }
+
+    func pageDidSelect(_ selection: CanvasSelection) {
+        self.selection = selection
+        notesFailure = nil
+    }
+
+    func dismissSelection() {
+        selection = nil
+    }
+
+    /// Validation is `CanvasAnnotation.decode`'s, and writing is `CanvasNotes.append`'s.
+    /// What is decided here is only what to do when either refuses.
+    func annotate(comment: String) {
+        guard let canvas = fileURL, let selection else { return }
+        guard let annotation = CanvasAnnotation.decode(selection.body, comment: comment) else {
+            notesFailure = "That selection could not be anchored — try selecting the text again."
+            return
+        }
+        do {
+            try CanvasNotes.append(annotation, for: canvas, at: Date())
+            self.selection = nil
+            notesFailure = nil
+            refreshNotes()
+        } catch {
+            // A canvas opened through Browse… can live anywhere, including somewhere not
+            // writable. Say so; never swallow it.
+            notesFailure =
+                "Could not write \(CanvasNotes.sidecarURL(for: canvas).lastPathComponent): "
+                + error.localizedDescription
+        }
+    }
+
+    func refreshNotes() {
+        notes = sidecarURL.map(CanvasNotes.headings(in:)) ?? []
+    }
+
+    func revealNotes() {
+        guard let sidecar = sidecarURL,
+            FileManager.default.fileExists(atPath: sidecar.path)
+        else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([sidecar])
+    }
+
+    /// The accumulated markdown, for `Post`. nil when there is nothing to hand over.
+    var notesMarkdown: String? {
+        sidecarURL.flatMap(CanvasNotes.markdown(in:))
     }
 
     func revealInFinder() {
@@ -166,8 +240,8 @@ final class ArtifactPaneModel: ObservableObject {
     }
 
     private func reload() {
-        guard case let .file(previous) = source else { return }
-        source = .file(
+        guard case let .file(previous) = showing else { return }
+        showing = .file(
             Document(
                 url: previous.url,
                 content: Self.load(previous.url),
@@ -181,7 +255,7 @@ final class ArtifactPaneModel: ObservableObject {
     /// showing, the same way opening another file does.
     func openURL(_ url: URL) {
         watcher = nil
-        source = .url(
+        showing = .url(
             Page(address: url.absoluteString, url: url, generation: nextGeneration))
     }
 
@@ -190,7 +264,7 @@ final class ArtifactPaneModel: ObservableObject {
     func focusAddress() {
         if !isShowingURL {
             watcher = nil
-            source = .url(Page())
+            showing = .url(Page())
         }
         addressFocus += 1
     }
@@ -198,44 +272,44 @@ final class ArtifactPaneModel: ObservableObject {
     /// The address field was committed. A refusal keeps the page that is up and
     /// says why, rather than blanking the canvas over a typo.
     func submitAddress(_ typed: String) {
-        guard case .url(var page) = source else { return }
+        guard case .url(var page) = showing else { return }
         guard let url = CanvasURLPolicy.address(typed) else {
             page.address = typed
             page.failure =
                 "Not an address the canvas can open: "
                 + typed.trimmingCharacters(in: .whitespacesAndNewlines)
-            source = .url(page)
+            showing = .url(page)
             return
         }
         openURL(url)
     }
 
     func reloadPage() {
-        guard case .url(var page) = source, page.url != nil else { return }
+        guard case .url(var page) = showing, page.url != nil else { return }
         page.generation += 1
         page.failure = nil
-        source = .url(page)
+        showing = .url(page)
     }
 
     /// The page navigated itself — a link, a redirect. The address follows it, so
     /// the field never lies about what is on screen and reload reloads what you
     /// are looking at.
     func pageDidNavigate(to url: URL) {
-        guard case .url(var page) = source else { return }
+        guard case .url(var page) = showing else { return }
         page.address = url.absoluteString
         page.url = url
         page.failure = nil
-        source = .url(page)
+        showing = .url(page)
     }
 
     func pageDidFail(_ message: String) {
-        guard case .url(var page) = source else { return }
+        guard case .url(var page) = showing else { return }
         page.failure = message
-        source = .url(page)
+        showing = .url(page)
     }
 
     private var nextGeneration: Int {
-        if case let .url(page) = source { page.generation + 1 } else { 0 }
+        if case let .url(page) = showing { page.generation + 1 } else { 0 }
     }
 
     private static func load(_ url: URL) -> Content {
@@ -326,22 +400,33 @@ final class FileWatcher {
 /// The read-only canvas half of the terminal workspace split: a header over the
 /// rendered source. Which header is the source's own — a file gets its filename
 /// and reveal-in-Finder, a URL gets an address bar.
-struct ArtifactPane: View {
+struct CanvasView: View {
     /// Hot reload: `.enableInjection()` below redraws this view when
     /// InjectionNext swaps a recompiled build of it into the running app.
     /// Both are no-ops in release (docs/VENDORED.md).
     @ObserveInjection private var inject
-    @ObservedObject var model: ArtifactPaneModel
+    @ObservedObject var model: CanvasModel
+    /// Hands the accumulated notes to a composer. The bench decides which one — there may
+    /// be several chat faces open, and an unaddressed notification would prefill them all.
+    var post: ((String) -> Void)?
+
+    @State private var showingNotes = false
 
     var body: some View {
-        if let source = model.source {
+        if let showing = model.showing {
             VStack(spacing: 0) {
-                switch source {
+                switch showing {
                 case let .file(document): header(for: document)
                 case let .url(page): CanvasAddressBar(model: model, page: page)
                 }
                 Divider()
-                content(for: source)
+                if let failure = model.notesFailure {
+                    noticeStrip(failure)
+                }
+                content(for: showing)
+                    // The comment field is drawn over the page rather than beside it, so
+                    // the selection it is about stays visible under it.
+                    .overlay(alignment: .topLeading) { commentField }
             }
             .background(Color(nsColor: .textBackgroundColor))
             // Inside the `if`: the body is a bare ViewBuilder conditional with
@@ -350,9 +435,37 @@ struct ArtifactPane: View {
         }
     }
 
+    /// Anchored near the selection the page reported, clamped so a selection at the
+    /// bottom of a long document does not put the field off screen.
     @ViewBuilder
-    private func content(for source: ArtifactPaneModel.Source) -> some View {
-        switch source {
+    private var commentField: some View {
+        if let selection = model.selection {
+            CanvasCommentField(model: model, selection: selection)
+                .offset(
+                    x: max(8, selection.rect.minX),
+                    y: max(8, selection.rect.maxY + 8))
+        }
+    }
+
+    private func noticeStrip(_ message: String) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                Text(message).lineLimit(2)
+                Spacer()
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.quaternary)
+            Divider()
+        }
+    }
+
+    @ViewBuilder
+    private func content(for showing: CanvasModel.Showing) -> some View {
+        switch showing {
         case let .file(document): fileContent(for: document)
         case let .url(page): urlContent(for: page)
         }
@@ -363,7 +476,7 @@ struct ArtifactPane: View {
     /// reading, and a dead dev server should say so instead of showing WebKit's
     /// blank white pane.
     @ViewBuilder
-    private func urlContent(for page: ArtifactPaneModel.Page) -> some View {
+    private func urlContent(for page: CanvasModel.Page) -> some View {
         VStack(spacing: 0) {
             if let failure = page.failure {
                 HStack(spacing: 6) {
@@ -390,12 +503,16 @@ struct ArtifactPane: View {
     }
 
     @ViewBuilder
-    private func fileContent(for document: ArtifactPaneModel.Document) -> some View {
+    private func fileContent(for document: CanvasModel.Document) -> some View {
         switch document.content {
         case let .markdown(markdown):
-            MarkdownArtifactView(markdown: markdown, generation: document.generation)
+            MarkdownCanvasView(
+                markdown: markdown, generation: document.generation,
+                onSelection: model.pageDidSelect)
         case .web:
-            HTMLArtifactView(url: document.url, generation: document.generation)
+            HTMLCanvasView(
+                url: document.url, generation: document.generation,
+                onSelection: model.pageDidSelect)
         case let .plainText(text):
             ScrollView {
                 Text(text)
@@ -412,7 +529,7 @@ struct ArtifactPane: View {
         }
     }
 
-    private func header(for document: ArtifactPaneModel.Document) -> some View {
+    private func header(for document: CanvasModel.Document) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "doc.text")
                 .foregroundStyle(.secondary)
@@ -422,6 +539,22 @@ struct ArtifactPane: View {
                 .truncationMode(.middle)
                 .help(document.url.path)
             Spacer()
+            // Attention as state on an existing element, never a popup: a count on the
+            // header, not a badge that pops.
+            if !model.notes.isEmpty {
+                Button {
+                    showingNotes.toggle()
+                } label: {
+                    Text("Notes (\(model.notes.count))")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("The comments written beside this canvas")
+                .popover(isPresented: $showingNotes, arrowEdge: .bottom) {
+                    CanvasNotesList(model: model, post: post)
+                }
+            }
             Button {
                 model.revealInFinder()
             } label: {

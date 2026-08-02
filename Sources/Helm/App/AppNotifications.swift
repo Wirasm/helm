@@ -7,12 +7,12 @@ extension Notification.Name {
     static let helmNewTerminal = Notification.Name("helmNewTerminal")
     /// ⌘1–⌘9 — object is the 0-based tab index to select.
     static let helmSelectTerminal = Notification.Name("helmSelectTerminal")
-    /// ⌘O — the artifact pane presents its open panel.
+    /// ⌘O — the canvas presents its open panel.
     static let helmOpenArtifact = Notification.Name("helmOpenArtifact")
     /// A ⌘-click on an OSC 8 link the agent printed — object is the `file:` URL to
-    /// render in the artifact pane. Distinct from `helmOpenArtifact`, which is the
+    /// render in the canvas. Distinct from `helmOpenArtifact`, which is the
     /// payload-less ⌘O that summons the picker.
-    static let helmOpenArtifactFile = Notification.Name("helmOpenArtifactFile")
+    static let helmOpenCanvasFile = Notification.Name("helmOpenCanvasFile")
     /// The canvas takes a URL. Object is the URL to open, or nil — which is ⌘L,
     /// meaning "show me the address field", whether the canvas is open or not.
     ///
@@ -34,7 +34,33 @@ extension Notification.Name {
     static let helmSelectWorkspace = Notification.Name("helmSelectWorkspace")
     /// ⌃←/⌃→ — object is -1 / +1.
     static let helmCycleWorkspace = Notification.Name("helmCycleWorkspace")
-    /// ⌘T — swap the terminal pane between its two faces: the terminal, and the
-    /// agent's writing drawn over it. No payload; it is a toggle.
+    /// ⌘T — swap the **focused pane's** two faces: the terminal, and the agent's
+    /// writing drawn over it. No payload; it is a toggle.
+    ///
+    /// The name and the key are unchanged from #37; only the receiver moved, from a
+    /// `@State` on `TerminalWorkspace` to `WorkbenchModel`. It has to reach a pane whose
+    /// view may be mounted, unmounted or not yet built, which is why it cannot be view
+    /// state under a bench.
     static let helmToggleChat = Notification.Name("helmToggleChat")
+    /// ⌘D — a new column right of the focused one, holding a fresh terminal.
+    static let helmSplitRight = Notification.Name("helmSplitRight")
+    /// ⌘⇧D — a new row under the focused slot, holding a fresh terminal.
+    static let helmSplitDown = Notification.Name("helmSplitDown")
+    /// ⌘⌥W — close the focused pane. ⌘W is unavailable: SwiftUI's `WindowGroup` binds it
+    /// to close-window.
+    static let helmClosePane = Notification.Name("helmClosePane")
+    /// ⌘⌥←/→/↑/↓ — object is a `Workbench.Direction` raw value.
+    static let helmMoveFocus = Notification.Name("helmMoveFocus")
+    /// A canvas's `Post`: prefill a composer with text. Object is a `ComposeRequest`.
+    static let helmComposeText = Notification.Name("helmComposeText")
+}
+
+/// Text offered to one pane's composer.
+///
+/// **Addressed, and that is the point.** The composer lives inside `ChatOverlay`, so under
+/// a bench an unaddressed notification would prefill every open chat face at once. Which
+/// pane is the bench's decision (`WorkbenchModel.composeTarget`); this only carries it.
+struct ComposeRequest {
+    let pane: Pane.ID
+    let text: String
 }

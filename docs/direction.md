@@ -52,11 +52,17 @@ terminal in, running Archon workflows), but they wait on dogfooding to prove a n
   worth having is columns-of-stacks, and depth-2 is a strict subset of the tree so nothing is
   foreclosed.
 - **Pane** — a workbench tenant. **Two types, and only two.**
-  - **Terminal** — the chat view is a full-pane *swap* on this, button-toggled like ⌘T, so it
-    costs the bench nothing.
+  - **Terminal** — the chat view is a second **face** on this, drawn over a terminal that
+    stays mounted underneath, toggled with ⌘T. The face is a property of the pane, so two
+    terminals side by side can show different ones.
   - **Canvas** — renders a markdown file, an HTML file, or a URL, and accepts annotation on
     it. Modular by source, extendable to further formats. This is `ArtifactPane` promoted,
-    not new work.
+    not new work — and the promotion has shipped, so it is `CanvasView` / `CanvasModel` now.
+
+Two corrections to what that list used to say, both from building it. The chat view is not
+a *swap*: the terminal view stays mounted under it, because one attached surface drives the
+ghostty runtime for every surface on it. And it does not cost the bench *nothing* — it
+costs it the decision of where the face lives, which is on the pane.
 
 The canvas is **one** primitive, not three: the integrated webview, the draw-on pane and the
 agent canvas merged into it. And the agent **receives and navigates, never drives** — full

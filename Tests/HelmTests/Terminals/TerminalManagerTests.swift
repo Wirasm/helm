@@ -2,8 +2,18 @@ import XCTest
 
 @testable import Helm
 
-/// Grouping tests use a fresh manager: every session still creates its surface
-/// from that manager's one shared ghostty runtime, never from a workspace runtime.
+/// Session **ownership** — creation, grouping, restore, teardown. Grouping tests use a
+/// fresh manager: every session still creates its surface from that manager's one shared
+/// ghostty runtime, never from a workspace runtime.
+///
+/// Selection is not here any more. `testSelectionAndCreationStayInsideActiveWorkspace`,
+/// `testCloseRefusesLastTerminalInEachWorkspace`,
+/// `testStartsWithOneSessionThatCannotBeClosedAfterActivation`,
+/// `testNewTerminalAppendsAndSelectsWithinWorkspace`,
+/// `testClosingSelectedMovesSelectionToNeighbor`, `testClosingLastPositionSelectsNewLast`,
+/// `testClosingUnselectedKeepsSelection` and `testSelectByIndexIgnoresOutOfRange` **moved**
+/// to `WorkbenchTests`, restated against `Workbench` — where the rules now live. None was
+/// dropped.
 @MainActor
 final class TerminalManagerTests: XCTestCase {
     private let firstWorkspace = "/tmp/helm-workspace-one"
@@ -25,15 +35,11 @@ final class TerminalManagerTests: XCTestCase {
         let first = UUID()
         let second = UUID()
 
-        manager.activate(
-            workspacePath: firstWorkspace, selectedID: second, restoring: [first, second])
+        manager.activate(workspacePath: firstWorkspace, restoring: [first, second])
 
         XCTAssertEqual(
             manager.sessions(for: firstWorkspace).map(\.id), [first, second],
             "a restored workspace must rebuild every terminal it had, in order")
-        XCTAssertEqual(
-            manager.selectedID, second,
-            "restoring under the persisted ids is what keeps the saved selection resolvable")
     }
 
     func testRestoringIsLazyAndHappensOnlyOnFirstVisit() {
@@ -45,7 +51,7 @@ final class TerminalManagerTests: XCTestCase {
             manager.sessions(for: secondWorkspace).isEmpty,
             "restore must not spawn ptys for workspaces that have not been visited")
 
-        manager.newTerminal()
+        manager.newTerminal(in: firstWorkspace)
         manager.activate(workspacePath: secondWorkspace)
         manager.activate(workspacePath: firstWorkspace, restoring: [persisted])
 
@@ -66,9 +72,9 @@ final class TerminalManagerTests: XCTestCase {
     func testSessionsGroupByWorkspaceAndShareOneController() {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)
-        manager.newTerminal()
+        manager.newTerminal(in: firstWorkspace)
         manager.activate(workspacePath: secondWorkspace)
-        manager.newTerminal()
+        manager.newTerminal(in: secondWorkspace)
 
         XCTAssertEqual(
             manager.sessions(for: firstWorkspace).count, 2, "first workspace owns two tabs")
@@ -84,23 +90,21 @@ final class TerminalManagerTests: XCTestCase {
     func testSwitchingParksSessionsWithoutClosingThem() {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)
-        let parked = try! XCTUnwrap(manager.selected)
+        let parked = try! XCTUnwrap(manager.sessions(for: firstWorkspace).first)
         manager.activate(workspacePath: secondWorkspace)
         manager.activate(workspacePath: firstWorkspace)
 
         XCTAssertTrue(
             manager.sessions.contains { $0.id == parked.id },
             "switching must retain the parked session")
-        XCTAssertEqual(
-            manager.selectedID, parked.id, "returning restores the workspace terminal selection")
     }
 
     func testClosingWorkspaceReleasesOnlyItsSessions() {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)
-        manager.newTerminal()
+        manager.newTerminal(in: firstWorkspace)
         manager.activate(workspacePath: secondWorkspace)
-        let survivor = try! XCTUnwrap(manager.selected)
+        let survivor = try! XCTUnwrap(manager.sessions(for: secondWorkspace).first)
 
         manager.closeWorkspace(firstWorkspace)
 
@@ -115,164 +119,108 @@ final class TerminalManagerTests: XCTestCase {
             "teardown never replaces the shared controller")
     }
 
-    func testCloseRefusesLastTerminalInEachWorkspace() {
-        let manager = TerminalManager()
-        manager.activate(workspacePath: firstWorkspace)
-        let only = try! XCTUnwrap(manager.selected)
-        manager.close(only)
-        XCTAssertEqual(
-            manager.sessions(for: firstWorkspace).count, 1,
-            "last terminal of a workspace cannot close")
-
-        manager.newTerminal()
-        manager.close(try! XCTUnwrap(manager.selected))
-        XCTAssertEqual(
-            manager.sessions(for: firstWorkspace).count, 1,
-            "closing a non-last terminal leaves its workspace alive")
-    }
-
-    func testSelectionAndCreationStayInsideActiveWorkspace() {
-        let manager = TerminalManager()
-        manager.activate(workspacePath: firstWorkspace)
-        manager.newTerminal()
-        let firstIDs = manager.sessions(for: firstWorkspace).map(\.id)
-        manager.activate(workspacePath: secondWorkspace)
-        manager.select(index: 1)
-
-        XCTAssertEqual(
-            manager.selectedID, manager.sessions(for: secondWorkspace)[0].id,
-            "out-of-range selection is ignored within its workspace")
-        XCTAssertEqual(
-            manager.sessions(for: firstWorkspace).map(\.id), firstIDs,
-            "other workspace tabs are untouched")
-    }
-
-    func testStartsWithOneSessionThatCannotBeClosedAfterActivation() {
-        let manager = TerminalManager()
-        manager.activate(workspacePath: firstWorkspace)
-        XCTAssertEqual(
-            manager.sessions(for: firstWorkspace).count, 1,
-            "a visited workspace starts with one session")
-        XCTAssertFalse(manager.canClose, "the first workspace session cannot close")
-        manager.close(try! XCTUnwrap(manager.selected))
-        XCTAssertEqual(
-            manager.sessions(for: firstWorkspace).count, 1, "closing the sole session is refused")
-    }
-
-    func testNewTerminalAppendsAndSelectsWithinWorkspace() {
-        let manager = TerminalManager()
-        manager.activate(workspacePath: firstWorkspace)
-        let first = try! XCTUnwrap(manager.selected)
-        manager.newTerminal()
-        let sessions = manager.sessions(for: firstWorkspace)
-        XCTAssertEqual(sessions.map(\.id).first, first.id, "new tabs append in workspace order")
-        XCTAssertEqual(manager.selectedID, sessions.last?.id, "new tab becomes selected")
-        XCTAssertTrue(manager.canClose, "two workspace terminals permit closing one")
-    }
-
     func testFallbackTitlesUseCreationOrdinals() {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)
-        manager.newTerminal()
+        manager.newTerminal(in: firstWorkspace)
         XCTAssertEqual(
             manager.sessions(for: firstWorkspace).map(\.displayTitle), ["shell 1", "shell 2"],
             "titles use creation ordinals")
         manager.close(manager.sessions(for: firstWorkspace)[1])
-        manager.newTerminal()
+        manager.newTerminal(in: firstWorkspace)
         XCTAssertEqual(
             manager.sessions(for: firstWorkspace).map(\.displayTitle), ["shell 1", "shell 3"],
             "ordinals never reuse a closed tab number")
     }
 
-    func testClosingSelectedMovesSelectionToNeighbor() {
+    // MARK: - Attention, driven by visibility
+
+    /// These used to be driven through `manager.select`, which is gone: selection is the
+    /// bench's and is per slot. What the rules always meant is *"can the operator see
+    /// this one"*, which still has a single answer per session — so they are driven
+    /// through `session.isVisible`, which `WorkbenchModel` pushes.
+
+    func testBellOnAHiddenPaneMarksAndBecomingVisibleClears() {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)
-        manager.newTerminal(); manager.newTerminal()
-        manager.select(index: 1)
-        let middle = try! XCTUnwrap(manager.selected)
-        manager.close(middle)
-        let sessions = manager.sessions(for: firstWorkspace)
-        XCTAssertFalse(sessions.contains { $0.id == middle.id }, "closed session is removed")
+        let session = try! XCTUnwrap(manager.sessions(for: firstWorkspace).first)
+
+        session.terminalDidRingBell()
+        XCTAssertTrue(session.hasBell, "a bell from a pane you cannot see marks it")
+
+        session.isVisible = true
+        XCTAssertFalse(session.hasBell, "looking at it acknowledges the bell")
+    }
+
+    func testBellOnAVisiblePaneIsNotMarked() {
+        let manager = TerminalManager()
+        manager.activate(workspacePath: firstWorkspace)
+        let session = try! XCTUnwrap(manager.sessions(for: firstWorkspace).first)
+        session.isVisible = true
+
+        session.terminalDidRingBell()
+
+        XCTAssertFalse(session.hasBell, "visible panes do not retain a stale bell")
+    }
+
+    func testCommandFinishInAHiddenPaneMarksAndBecomingVisibleAcknowledges() {
+        let manager = TerminalManager()
+        manager.activate(workspacePath: firstWorkspace)
+        let session = try! XCTUnwrap(manager.sessions(for: firstWorkspace).first)
+
+        session.terminalDidFinishCommand(exitCode: 1, durationNanos: 2_000_000_000)
         XCTAssertEqual(
-            manager.selectedID, sessions[1].id,
-            "selection moves to the neighbor at the closed position")
+            session.activity.outcome, .failure(exitCode: 1, durationNanos: 2_000_000_000),
+            "a command finishing out of sight marks its tab")
+
+        session.isVisible = true
+        XCTAssertNil(session.activity.outcome, "looking at it acknowledges the mark")
     }
 
-    func testClosingLastPositionSelectsNewLast() {
+    func testCommandFinishInAVisiblePaneIsNotMarked() {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)
-        manager.newTerminal()
-        manager.close(try! XCTUnwrap(manager.selected))
+        let session = try! XCTUnwrap(manager.sessions(for: firstWorkspace).first)
+        session.isVisible = true
+
+        session.terminalDidFinishCommand(exitCode: 0, durationNanos: 1)
+
+        XCTAssertNil(session.activity.outcome, "you watched it happen; it needs no chrome")
+    }
+
+    func testProgressReportSurvivesBecomingVisible() {
+        let manager = TerminalManager()
+        manager.activate(workspacePath: firstWorkspace)
+        let session = try! XCTUnwrap(manager.sessions(for: firstWorkspace).first)
+
+        session.terminalDidReportProgress(state: .set, percent: 30)
+        session.isVisible = true
+
         XCTAssertEqual(
-            manager.selectedID, manager.sessions(for: firstWorkspace)[0].id,
-            "closing the final position selects the new last tab")
+            session.activity.progress, .percent(30),
+            "progress is a live hint, not an attention mark — acknowledging must not clear it")
     }
 
-    func testClosingUnselectedKeepsSelection() {
+    func testVisibilityOnlyAcknowledgesOnTheRisingEdge() {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)
-        let first = try! XCTUnwrap(manager.selected)
-        manager.newTerminal()
-        let second = try! XCTUnwrap(manager.selected)
-        manager.close(first)
-        XCTAssertEqual(
-            manager.selectedID, second.id, "closing an unselected tab preserves selection")
-    }
+        let session = try! XCTUnwrap(manager.sessions(for: firstWorkspace).first)
+        session.isVisible = true
 
-    func testBellOnInactiveTabMarksAndSelectionClears() {
-        let manager = TerminalManager()
-        manager.activate(workspacePath: firstWorkspace)
-        let first = try! XCTUnwrap(manager.selected)
-        manager.newTerminal()
-        first.terminalDidRingBell()
-        XCTAssertTrue(first.hasBell, "bell on inactive tab marks it")
-        manager.select(first)
-        XCTAssertFalse(first.hasBell, "selecting acknowledges the bell")
-    }
+        session.isVisible = true
+        session.terminalDidRingBell()
 
-    func testBellOnSelectedTabIsNotMarked() {
-        let manager = TerminalManager()
-        manager.activate(workspacePath: firstWorkspace)
-        let selected = try! XCTUnwrap(manager.selected)
-        selected.terminalDidRingBell()
-        XCTAssertFalse(selected.hasBell, "visible tabs do not retain a stale bell")
-    }
-
-    func testCommandFinishInInactiveTabMarksAndSelectionAcknowledges() {
-        let manager = TerminalManager()
-        manager.activate(workspacePath: firstWorkspace)
-        let first = try! XCTUnwrap(manager.selected)
-        manager.newTerminal()
-        first.terminalDidFinishCommand(exitCode: 1, durationNanos: 2_000_000_000)
-        XCTAssertEqual(
-            first.activity.outcome, .failure(exitCode: 1, durationNanos: 2_000_000_000),
-            "inactive completion marks its tab")
-        manager.select(first)
-        XCTAssertNil(first.activity.outcome, "selection acknowledges the completion mark")
-    }
-
-    func testCommandFinishInSelectedTabIsNotMarked() {
-        let manager = TerminalManager()
-        manager.activate(workspacePath: firstWorkspace)
-        let selected = try! XCTUnwrap(manager.selected)
-        selected.terminalDidFinishCommand(exitCode: 0, durationNanos: 1)
-        XCTAssertNil(selected.activity.outcome, "selected completion needs no chrome")
-    }
-
-    func testProgressReportSurvivesSelection() {
-        let manager = TerminalManager()
-        manager.activate(workspacePath: firstWorkspace)
-        let first = try! XCTUnwrap(manager.selected)
-        manager.newTerminal()
-        first.terminalDidReportProgress(state: .set, percent: 30)
-        manager.select(first)
-        XCTAssertEqual(first.activity.progress, .percent(30), "selection preserves live progress")
+        XCTAssertFalse(
+            session.hasBell,
+            "reconcileVisibility runs on every bench change, so a re-push of the same value "
+                + "must not be an event")
     }
 
     func testClosingATabLeavesOthersOnSharedController() {
         let manager = TerminalManager()
         manager.activate(workspacePath: firstWorkspace)
-        manager.newTerminal(); manager.newTerminal()
+        manager.newTerminal(in: firstWorkspace)
+        manager.newTerminal(in: firstWorkspace)
         let sessions = manager.sessions(for: firstWorkspace)
         let survivors = [sessions[0], sessions[2]]
         manager.close(sessions[1])
@@ -282,8 +230,6 @@ final class TerminalManagerTests: XCTestCase {
         for session in survivors {
             XCTAssertTrue(
                 session.controller === manager.controller, "survivors retain the shared runtime")
-            manager.select(session)
-            XCTAssertEqual(manager.selectedID, session.id, "survivors remain selectable")
         }
     }
 
@@ -294,13 +240,4 @@ final class TerminalManagerTests: XCTestCase {
             first.controller === second.controller, "test managers own isolated controllers")
     }
 
-    func testSelectByIndexIgnoresOutOfRange() {
-        let manager = TerminalManager()
-        manager.activate(workspacePath: firstWorkspace)
-        manager.newTerminal()
-        manager.select(index: 0)
-        let first = manager.selectedID
-        manager.select(index: 8)
-        XCTAssertEqual(manager.selectedID, first, "out-of-range terminal index is a no-op")
-    }
 }

@@ -40,10 +40,17 @@ struct Shortcut {
     let notification: Notification.Name
     /// Posted as the notification's `object`. nil for the payload-less commands.
     let payload: Int?
+    /// Set instead of `payload` on the focus-movement rows.
+    let direction: Workbench.Direction?
     let focus: Focus
     /// Present when the shortcut also appears in the menu bar, which is both a
     /// discoverability surface and the mouse-only route to the same command.
     let menu: MenuEntry?
+
+    /// What is actually posted as the notification's `object`: the payload index, or a
+    /// direction's raw value. Two fields rather than one `Any` so the table stays
+    /// `Equatable`-friendly and a test can assert what a row sends.
+    var object: Any? { direction?.rawValue ?? payload }
 
     struct MenuEntry {
         let title: String
@@ -54,12 +61,14 @@ struct Shortcut {
     init(
         _ trigger: Trigger, _ modifiers: NSEvent.ModifierFlags,
         posts notification: Notification.Name,
-        payload: Int? = nil, focus: Focus = .anywhere, menu: MenuEntry? = nil
+        payload: Int? = nil, direction: Workbench.Direction? = nil,
+        focus: Focus = .anywhere, menu: MenuEntry? = nil
     ) {
         self.trigger = trigger
         self.modifiers = modifiers
         self.notification = notification
         self.payload = payload
+        self.direction = direction
         self.focus = focus
         self.menu = menu
     }
@@ -166,7 +175,36 @@ extension Shortcut {
             Shortcut(
                 .character("l"), .command, posts: .helmOpenCanvasURL,
                 menu: .init(title: "Open URL…", key: "l", modifiers: .command)),
-        ]
+            // ⌘⇧D before ⌘D: `match` returns the FIRST row whose modifier set compares
+            // equal, and while these two cannot collide (the sets differ), keeping the
+            // more-specific one first is the habit that stops the next pair colliding.
+            Shortcut(
+                .character("d"), [.command, .shift], posts: .helmSplitDown,
+                menu: .init(title: "Split Down", key: "d", modifiers: [.command, .shift])),
+            Shortcut(
+                .character("d"), .command, posts: .helmSplitRight,
+                menu: .init(title: "Split Right", key: "d", modifiers: .command)),
+            // ⌘⌥W, because ⌘W is not available: SwiftUI's `WindowGroup` binds it to
+            // close-window and helm would be fighting its own shell for it.
+            Shortcut(
+                .character("w"), [.command, .option], posts: .helmClosePane,
+                menu: .init(title: "Close Pane", key: "w", modifiers: [.command, .option])),
+        ] + focusMovement
+
+    /// ⌘⌥ + arrows, because ⌘⌥1–9 is already the workspace fallback. The payload is a
+    /// `Workbench.Direction` raw value rather than an Int: the map carries `payload: Int?`
+    /// for tab and workspace indices, and a direction is not an index.
+    private static let focusMovement: [Shortcut] = [
+        (123, Workbench.Direction.left, KeyEquivalent.leftArrow, "Left"),
+        (124, .right, .rightArrow, "Right"),
+        (126, .up, .upArrow, "Up"),
+        (125, .down, .downArrow, "Down"),
+    ].map { keyCode, direction, key, name in
+        Shortcut(
+            .keyCode(keyCode), [.command, .option], posts: .helmMoveFocus,
+            direction: direction,
+            menu: .init(title: "Focus \(name)", key: key, modifiers: [.command, .option]))
+    }
 
     /// The shortcut a key event fires, or nil to let the event through.
     ///

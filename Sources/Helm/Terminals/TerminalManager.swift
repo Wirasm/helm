@@ -4,13 +4,19 @@ import SwiftUI
 
 // MARK: - TerminalManager
 
-/// App-level owner of the ordered terminal sessions and the tab selection.
+/// App-level owner of the ordered terminal sessions. **Ownership only** — selection
+/// belongs to the slot that shows a session, under a bench.
+///
+/// It used to own both. `selectedID` was one id per workspace, which worked while helm
+/// mounted exactly one terminal; under a bench N slots each have their own selected pane
+/// and all of them are on screen at once, so a single id could not express the state at
+/// all. It is `Slot.selected` now, and a shadow copy kept "in sync" here would be the
+/// same module wearing two filenames (`AGENTS.md`). Deleted rather than deprecated.
 ///
 /// Invariants:
-/// - `sessions` is never empty: init creates the first shell and `close`
-///   refuses to remove the last one (the tab strip disables that button too).
-/// - `selectedID` always names a live session; closing the selected tab moves
-///   selection to its nearest surviving neighbor.
+/// - Sessions are never removed by this type on its own account: `close` does what it is
+///   told, and refusing the bench's last pane is `Workbench.canClose`'s rule. A workspace
+///   whose panes are all canvases legitimately has no terminal left.
 /// - Sessions (and their NSViews + ptys) live exactly as long as their tab:
 ///   dropping the last reference here deallocs the view → coordinator →
 ///   surface, which is what actually kills the shell.
@@ -25,7 +31,6 @@ final class TerminalManager: ObservableObject {
     /// Flat app-level ownership of every workspace's sessions. Switching a
     /// workspace only changes which subset is mounted; it never releases one.
     @Published private(set) var sessions: [TerminalSession] = []
-    @Published private(set) var selectedID: TerminalSession.ID?
     @Published private(set) var activeWorkspacePath: String?
 
     /// The single ghostty runtime every session's surface is created on.
@@ -57,22 +62,10 @@ final class TerminalManager: ObservableObject {
     /// Restore stays lazy on purpose. `init` creates no pty until a workspace is
     /// visited, which bounds startup to the active context rather than every
     /// remembered folder — eager restore would spawn each one's shells at launch.
-    func activate(
-        workspacePath: String, selectedID preferredID: UUID? = nil,
-        restoring restorable: [UUID] = []
-    ) {
+    func activate(workspacePath: String, restoring restorable: [UUID] = []) {
         activeWorkspacePath = workspacePath
         if sessions(for: workspacePath).isEmpty {
             restore(restorable, in: workspacePath)
-        }
-        let workspaceSessions = sessions(for: workspacePath)
-        if let preferredID, let preferred = workspaceSessions.first(where: { $0.id == preferredID })
-        {
-            setSelected(preferred)
-        } else if let selectedID, workspaceSessions.contains(where: { $0.id == selectedID }) {
-            // Keep this workspace's selection when returning to it.
-        } else if let first = workspaceSessions.first {
-            setSelected(first)
         }
     }
 
@@ -95,7 +88,6 @@ final class TerminalManager: ObservableObject {
 
     func deactivate() {
         activeWorkspacePath = nil
-        selectedID = nil
     }
 
     /// Closing a workspace is an explicit tab teardown, unlike switching: drop
@@ -105,83 +97,45 @@ final class TerminalManager: ObservableObject {
         if activeWorkspacePath == workspacePath { deactivate() }
     }
 
-    var selected: TerminalSession? {
-        guard let selectedID else { return nil }
-        return sessions.first { $0.id == selectedID }
-    }
-
-    /// The last terminal in the active workspace cannot be closed.
-    var canClose: Bool {
-        guard let activeWorkspacePath else { return false }
-        return sessions(for: activeWorkspacePath).count > 1
-    }
-
-    /// Whether the selected terminal's view is (or contains) the key window's
-    /// first responder — the focus gate for terminal-only shortcuts (⌘↑/⌘↓
-    /// prompt jump). Needed since the one-surface re-layout: the terminal is
-    /// always frontmost now, so "the terminal face is active" no longer
-    /// implies the terminal has keyboard focus.
-    var selectedTerminalHasFocus: Bool {
-        guard let selected else { return false }
-        let view = selected.hostView
-        guard let window = view.window, window.isKeyWindow,
-            let responder = window.firstResponder as? NSView
+    /// Whether ANY terminal's view is (or contains) the key window's first responder —
+    /// the focus gate for terminal-only shortcuts (⌘↑/⌘↓ prompt jump). Needed since the
+    /// one-surface re-layout: the terminal is always frontmost now, so "the terminal face
+    /// is active" no longer implies the terminal has keyboard focus.
+    ///
+    /// This is *simpler* than the `selectedTerminalHasFocus` it replaces, and that is the
+    /// tell: "is a terminal focused" never needed a selection to answer. Under a bench
+    /// several terminals are on screen, and the shortcut belongs to whichever one the
+    /// operator is typing into.
+    var anyTerminalHasFocus: Bool {
+        guard let window = NSApp.keyWindow, let responder = window.firstResponder as? NSView
         else { return false }
-        return responder === view || responder.isDescendant(of: view)
+        return sessions.contains { session in
+            let view = session.hostView
+            return responder === view || responder.isDescendant(of: view)
+        }
     }
 
-    /// ⌘N / the strip's + button: a fresh login shell in the active workspace.
-    func newTerminal() {
-        guard let activeWorkspacePath else { return }
-        newTerminal(in: activeWorkspacePath)
-    }
-
-    func newTerminal(in workspacePath: String) {
+    /// A fresh login shell in a workspace. Returns it, because the caller is the bench and
+    /// the bench needs the id to build the pane that will show it.
+    @discardableResult
+    func newTerminal(in workspacePath: String) -> TerminalSession {
         let session = TerminalSession(
             ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller)
         nextOrdinal += 1
         session.manager = self
         sessions.append(session)
         activeWorkspacePath = workspacePath
-        setSelected(session)
-    }
-
-    func select(_ session: TerminalSession) {
-        guard session.workspacePath == activeWorkspacePath,
-            sessions.contains(where: { $0.id == session.id })
-        else { return }
-        setSelected(session)
-    }
-
-    /// ⌘1–⌘9: select by 0-based tab position; out-of-range is a no-op.
-    func select(index: Int) {
-        guard let activeWorkspacePath else { return }
-        let workspaceSessions = sessions(for: activeWorkspacePath)
-        guard workspaceSessions.indices.contains(index) else { return }
-        setSelected(workspaceSessions[index])
-    }
-
-    /// Selection always clears the incoming tab's bell and finished-command
-    /// marks — looking at a terminal acknowledges its attention state.
-    private func setSelected(_ session: TerminalSession) {
-        selectedID = session.id
-        session.acknowledgeAttention()
+        return session
     }
 
     /// Closes the tab AND its shell: removing the session drops the last strong
     /// reference (once SwiftUI unmounts the view), deallocating view →
-    /// coordinator → surface → pty. Refuses on the last remaining terminal.
+    /// coordinator → surface → pty.
+    ///
+    /// It no longer refuses the workspace's last terminal. That rule did not disappear —
+    /// it generalised, to `Workbench.canClose`, which refuses the bench's last *pane*. A
+    /// workspace showing one terminal and one canvas may legitimately close the terminal.
     func close(_ session: TerminalSession) {
-        guard session.workspacePath == activeWorkspacePath,
-            canClose,
-            let index = sessions.firstIndex(where: { $0.id == session.id })
-        else { return }
-        let workspaceSessions = sessions(for: session.workspacePath)
-        let workspaceIndex = workspaceSessions.firstIndex(where: { $0.id == session.id }) ?? 0
-        sessions.remove(at: index)
-        if selectedID == session.id {
-            let survivors = sessions(for: session.workspacePath)
-            setSelected(survivors[min(workspaceIndex, survivors.count - 1)])
-        }
+        sessions.removeAll { $0.id == session.id }
     }
 }

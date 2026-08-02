@@ -3,7 +3,7 @@ import XCTest
 @testable import Helm
 
 /// File-kind routing, moved here with the type itself — these cases previously
-/// lived in `ArtifactHTMLTests` when routing sat on the HTML generator.
+/// lived in `CanvasHTMLTests` when routing sat on the HTML generator.
 final class RenderableFileTests: XCTestCase {
     func testMarkdownExtensionsDetected() {
         XCTAssertTrue(RenderableFile.isMarkdown(URL(fileURLWithPath: "/a/plan.md")))

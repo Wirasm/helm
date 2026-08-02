@@ -16,7 +16,7 @@ enum Keymap {
             let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             // The monitor runs on the main thread, so assumeIsolated is safe.
             let terminalFocused = MainActor.assumeIsolated {
-                TerminalManager.shared.selectedTerminalHasFocus
+                TerminalManager.shared.anyTerminalHasFocus
             }
             guard
                 let shortcut = Shortcut.match(
@@ -26,7 +26,7 @@ enum Keymap {
                     terminalFocused: terminalFocused
                 )
             else { return event }
-            NotificationCenter.default.post(name: shortcut.notification, object: shortcut.payload)
+            NotificationCenter.default.post(name: shortcut.notification, object: shortcut.object)
             return nil
         }
     }

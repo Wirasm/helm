@@ -1,71 +1,47 @@
 import Inject
 import SwiftUI
 
-/// helm's permanent frame: the workspace bar above a terminal, with the canvas as an
-/// optional right dock.
+/// helm's permanent frame: the workspace bar above the workbench.
 ///
-/// **Composition only.** Each vertical owns its own commands — terminal shortcuts live in
-/// `TerminalWorkspace`, opening a canvas lives on `ArtifactPaneModel` — so what is left
-/// here is the work that genuinely spans them. Every subscription below touches two or
-/// more verticals at once: persisting a workspace's context needs the workspace, its
-/// terminals and its open canvas together, and switching workspaces has to move all
-/// three. Anything that can name a single vertical belongs in that vertical's slice,
-/// not in this file.
+/// **Composition only**, and more so than before. The canvas is no longer a special case
+/// wired in here — it is a bench pane, so the dock's `HSplitView` and the single
+/// `CanvasModel` are both gone. Every subscription left below touches two or more
+/// verticals at once: persisting a workspace's context needs the workspace and its bench
+/// together, and switching workspaces has to move both. Anything that can name a single
+/// vertical belongs in that vertical's slice — the terminal and canvas commands live on
+/// `WorkbenchModel`, whose lifetime is right for them.
 struct RootView: View {
     @ObserveInjection private var inject
     @StateObject private var model = WorkspaceModel()
-    @StateObject private var artifact = ArtifactPaneModel()
+    /// A `@StateObject` rather than a `.shared`: `TerminalManager.shared` and
+    /// `BoardModel.shared` are singletons because other slices reach them, and nothing
+    /// outside the workbench reaches this one.
+    @StateObject private var workbench = WorkbenchModel(terminals: .shared)
     @ObservedObject private var terminalManager = TerminalManager.shared
-    @State private var showBrowser = false
 
     var body: some View {
         VStack(spacing: 0) {
             WorkspaceBar(
                 model: model, select: switchWorkspace, open: openWorkspace,
                 close: closeWorkspace)
-            HSplitView {
-                TerminalWorkspace(
-                    manager: terminalManager,
-                    artifact: artifact,
-                    showBrowser: $showBrowser,
-                    workspaceRoot: model.selectedWorkspaceRoot
-                )
-                .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
-                .layoutPriority(1)
-
-                if artifact.isOpen {
-                    CanvasDock(model: artifact)
-                }
-            }
+            WorkbenchView(model: workbench, workspaceRoot: model.selectedWorkspaceRoot)
         }
         .task {
-            model.observeTerminals(terminalManager, artifact: artifact)
+            model.observe(terminals: terminalManager, workbench: workbench)
             activateSelectedWorkspace()
+            // `--artifact <path>` (`LaunchOptions.artifactPath`) — a launch seam for
+            // driving helm into a given state without keystroke injection. It opens into
+            // whichever pane placement chooses, exactly like a ⌘-clicked link.
             if let path = LaunchOptions.artifactPath {
-                artifact.open(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
+                workbench.open(
+                    .file(URL(fileURLWithPath: (path as NSString).expandingTildeInPath)))
             }
         }
-        .onReceive(artifact.$source) { _ in persistCurrentContext() }
-        // Opening or closing a terminal, and switching tabs, are what a relaunch has to
-        // rebuild. Without this the context is only written on workspace switch, so
-        // quitting from the workspace you were working in saves a stale tab row — the
-        // one case restore most needs to get right.
-        //
-        // This was two `.onReceive(terminalManager.$sessions.dropFirst())` subscriptions
-        // and it silently lost writes: measured live, three open terminals persisted as
-        // one. Two faults, both invisible from the code alone —
-        //
-        // 1. `$sessions.dropFirst()` builds a NEW publisher on every body evaluation, so
-        //    `onReceive` resubscribes and `dropFirst` eats the next real event each time.
-        //    (`artifact.$source` above survives precisely because it has no operator: the
-        //    projected publisher is one stored instance, so its identity is stable.)
-        // 2. `@Published` fires in `willSet`, so a handler that re-reads the manager sees
-        //    the value it had *before* the change.
-        //
-        // The subscription itself lives on the model, whose lifetime is right for it —
-        // see `WorkspaceModel.observeTerminals`, which also records the two ways doing
-        // this from here failed. Wiring it from `.task` rather than `init` keeps the
-        // model unaware of who its collaborators are until there is a view to have them.
+        // The context is written by `WorkspaceModel.observe`, which sinks BOTH the
+        // manager's and the bench's `objectWillChange`. It lives on the model rather than
+        // here for the reason that file records at length: two earlier attempts in this
+        // view lost writes, one by rebuilding its publisher on every body evaluation and
+        // one by trapping the app outright.
         .onReceive(NotificationCenter.default.publisher(for: .helmSelectWorkspace)) { note in
             guard let index = note.object as? Int, model.workspaces.indices.contains(index) else {
                 return
@@ -83,7 +59,7 @@ struct RootView: View {
     }
 
     private func persistCurrentContext() {
-        model.saveContext(terminalManager: terminalManager, artifact: artifact)
+        model.saveContext(terminalManager: terminalManager, workbench: workbench)
     }
 
     private func openWorkspace(_ workspace: Workspace) {
@@ -95,14 +71,18 @@ struct RootView: View {
     private func closeWorkspace(_ workspace: Workspace) {
         persistCurrentContext()
         let wasSelected = model.selectedWorkspace == workspace
+        // Both teardowns are unconditional, and both have to be: the branches below run
+        // only when the workspace being closed was the selected one, and a background
+        // workspace can be closed from any tab's context menu.
         terminalManager.closeWorkspace(workspace.path)
+        workbench.closeWorkspace(workspace.path)
         model.close(workspace)
         if wasSelected, let replacement = model.workspaces.first {
             model.select(replacement)
             activateSelectedWorkspace()
         } else if wasSelected {
             terminalManager.deactivate()
-            artifact.close()
+            workbench.deactivate()
         }
     }
 
@@ -113,16 +93,13 @@ struct RootView: View {
         activateSelectedWorkspace()
     }
 
+    /// The persisted bench, else the one a pre-bench context describes, else nothing —
+    /// which `WorkbenchModel.activate` turns into today's 1×1 frame.
     private func activateSelectedWorkspace() {
         guard let workspace = model.selectedWorkspace else { return }
         let context = model.contexts[workspace.path] ?? WorkspaceContext()
-        terminalManager.activate(
-            workspacePath: workspace.path, selectedID: context.selectedTerminalID,
-            restoring: context.terminalSessionIDs)
-        if let path = context.openArtifactPath {
-            artifact.open(URL(fileURLWithPath: path))
-        } else {
-            artifact.close()
-        }
+        workbench.activate(
+            workspacePath: workspace.path,
+            restoring: context.workbench ?? .migrating(from: context))
     }
 }

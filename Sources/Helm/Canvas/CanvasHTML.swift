@@ -1,14 +1,14 @@
 import Foundation
 
-/// The artifact pane's theme, keyed off the effective appearance. Raw values
+/// The canvas's theme, keyed off the effective appearance. Raw values
 /// are the names mermaid's `initialize` accepts — nothing user-controlled is
 /// ever interpolated into the scripts below.
-enum ArtifactTheme: String {
+enum CanvasTheme: String {
     case light = "default"
     case dark
 }
 
-/// Pure HTML/JS generation for the artifact pane's WKWebViews — the single
+/// Pure HTML/JS generation for the canvas's WKWebViews — the single
 /// document page that renders a whole markdown artifact (marked converts it
 /// client-side, mermaid renders its ```mermaid fences), and the init script
 /// injected into .html artifacts. No WebKit imports: fully exercisable from
@@ -17,7 +17,7 @@ enum ArtifactTheme: String {
 /// Everything is self-contained and offline: the only JavaScript involved is
 /// the vendored marked + mermaid (see docs/VENDORED.md) plus the inline init
 /// script — no external references, no network fetches, ever.
-enum ArtifactHTML {
+enum CanvasHTML {
     // MARK: Document page
 
     /// Full HTML document for one markdown artifact. The vendored marked.js +
@@ -36,7 +36,7 @@ enum ArtifactHTML {
     /// The CSS is the document type scale (15px body, 760px measure centered,
     /// 24/19/16 heading scale) over CSS system colors, so the page follows the
     /// pane's light/dark appearance via `color-scheme`.
-    static func documentPage(markdown: String, theme: ArtifactTheme) -> String {
+    static func documentPage(markdown: String, theme: CanvasTheme) -> String {
         """
         <!DOCTYPE html>
         <html>
@@ -81,7 +81,7 @@ enum ArtifactHTML {
     /// headings, hairline under h1, monospaced code with a subtle fill).
     /// System colors (`Canvas`/`CanvasText`) + `color-scheme` keep the page in
     /// step with the app's appearance.
-    private static func documentCSS(theme: ArtifactTheme) -> String {
+    private static func documentCSS(theme: CanvasTheme) -> String {
         """
         :root { color-scheme: \(theme == .dark ? "dark" : "light"); }
         body {
@@ -137,7 +137,7 @@ enum ArtifactHTML {
     /// mermaid.js at document start) so `<pre class="mermaid">` blocks render —
     /// the prp-diagram skill's documented alternative where "the consuming UI
     /// provides the renderer". A page without mermaid blocks is left untouched.
-    static func htmlArtifactInitScript(theme: ArtifactTheme) -> String {
+    static func htmlArtifactInitScript(theme: CanvasTheme) -> String {
         """
         (function () {
           if (!window.mermaid) { return; }
@@ -148,6 +148,53 @@ enum ArtifactHTML {
             theme: "\(theme.rawValue)"
           });
           mermaid.run();
+        })();
+        """
+    }
+
+    // MARK: The annotation bridge
+
+    /// Reports what the operator selected, so helm can anchor a comment to it.
+    ///
+    /// On `mouseup` it reads the selection, walks up from
+    /// `range.commonAncestorContainer` to the nearest ancestor carrying an `id`, and posts
+    /// `{ id, text, rect }`. Selecting nothing posts nothing.
+    ///
+    /// **The script is helm's, not the canvas's, and the canvas must render correctly
+    /// without it.** A page that depended on a helm-injected global would render in helm
+    /// and be a blank page in `playwright-cli`, so the agent would validate a different
+    /// artifact from the one it is shown (#33). This may only read and report; it must
+    /// never be something the page needs.
+    ///
+    /// The rect is the selection's position in the viewport, so the comment field can be
+    /// anchored near what it is about. It is not part of the anchor and is never persisted
+    /// — an anchor made of coordinates would not survive the agent rewriting the page,
+    /// which is the whole thing it has to survive.
+    static func annotationScript() -> String {
+        """
+        (function () {
+          if (!window.webkit || !window.webkit.messageHandlers
+              || !window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName)) { return; }
+          document.addEventListener("mouseup", function () {
+            var selection = document.getSelection();
+            if (!selection || selection.isCollapsed || selection.rangeCount === 0) { return; }
+            var text = String(selection).trim();
+            if (!text) { return; }
+            var range = selection.getRangeAt(0);
+            var node = range.commonAncestorContainer;
+            if (node.nodeType === 3) { node = node.parentNode; }
+            var id = null;
+            while (node && node !== document.body) {
+              if (node.id) { id = node.id; break; }
+              node = node.parentNode;
+            }
+            var rect = range.getBoundingClientRect();
+            window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName).postMessage({
+              id: id,
+              text: text,
+              rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+            });
+          });
         })();
         """
     }

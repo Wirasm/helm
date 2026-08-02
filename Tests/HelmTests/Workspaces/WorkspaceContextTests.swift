@@ -11,13 +11,48 @@ final class WorkspaceContextTests: XCTestCase {
 
     func testSaveRestoreRoundTrip() {
         let id = UUID()
+        // `Equatable` is synthesized off the stored properties, so `workbench` is part of
+        // equality now: the fixture carries one rather than the assertion being loosened.
         let context = WorkspaceContext(
             terminalSessionIDs: [id], selectedTerminalID: id, openArtifactPath: "/tmp/a.md",
-            branch: "main", branchResolved: true)
+            branch: "main", branchResolved: true, workbench: Workbench(terminal: id))
         WorkspaceContextStore.save(["/workspace": context], to: defaults)
 
         let restored = WorkspaceContextStore.load(from: defaults)["/workspace"]
         XCTAssertEqual(restored, context, "contexts must round-trip through helm defaults")
+    }
+
+    // MARK: - Tolerant decode
+
+    /// Every field is read with `try?` and falls back to its default, so a single bad or
+    /// missing value costs that field and nothing else. Before this, one corrupt value
+    /// threw for the whole entry — and, because the store decodes the dictionary
+    /// atomically, for every OTHER workspace's context too.
+    func testAFieldOfTheWrongTypeCostsThatFieldAlone() {
+        let id = UUID()
+        let blob = """
+            {"/workspace":{"terminalSessionIDs":["\(id.uuidString)"],
+                           "branchResolved":"yes please","branch":17,
+                           "openArtifactPath":"/tmp/a.md"}}
+            """
+        defaults.set(blob, forKey: WorkspaceContextStore.key)
+
+        let restored = WorkspaceContextStore.load(from: defaults)["/workspace"]
+
+        XCTAssertEqual(restored?.terminalSessionIDs, [id], "the good fields still decode")
+        XCTAssertEqual(restored?.openArtifactPath, "/tmp/a.md")
+        XCTAssertFalse(restored?.branchResolved ?? true, "a bad bool falls back to its default")
+        XCTAssertNil(restored?.branch, "a bad optional falls back to nil")
+    }
+
+    func testAMissingKeyIsNotAnError() {
+        defaults.set(#"{"/workspace":{}}"#, forKey: WorkspaceContextStore.key)
+
+        let restored = WorkspaceContextStore.load(from: defaults)["/workspace"]
+
+        XCTAssertEqual(
+            restored, WorkspaceContext(),
+            "a blob written by an older build decodes to the defaults, not to nothing")
     }
 
     func testContextsAreIsolatedByWorkspacePath() {
