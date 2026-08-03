@@ -25,8 +25,20 @@ Each row is `{handle, runtime, pid, sessionId, cwd, claimedAt}`. `cwd` is what t
 apart — it carries the worktree path, so *"the claude in the pr-122 worktree"* is a match on
 `runtime` plus a `cwd` ending in `.worktrees/pr-122`.
 
-A dead agent's mailbox is reaped, so anything listed is live. If two rows match what the operator
-described, **ask which** rather than guessing — a message to the wrong agent is silent.
+**Listed is not the same as live — check the pid.** A dead agent's mailbox is usually reaped, but
+not always: one still holding unread mail is kept deliberately (that mail is evidence, and the
+handle may be re-claimed), and reaping only runs when some agent starts a session, so an idle
+machine keeps its corpses.
+
+```bash
+kill -0 <pid> 2>/dev/null && echo live || echo DEAD
+```
+
+Mail to a dead handle goes nowhere and says nothing. If the one you want is dead, tell the operator
+rather than sending into it.
+
+If two live rows match what the operator described, **ask which** rather than guessing — a message
+to the wrong agent is equally silent.
 
 ## Which one is you
 

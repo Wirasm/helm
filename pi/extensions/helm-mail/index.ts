@@ -696,6 +696,26 @@ function install(pi: ExtensionAPI): void {
 			}),
 		);
 
+		// Reap on the way out as well as on the way in. Reaping used to happen only when some
+		// agent CLAIMED, so a machine where nobody starts a session keeps its corpses — and a
+		// corpse is addressable, which means mail sent to it is silently never read. This does
+		// not touch a dead mailbox that still holds mail; that one is kept on purpose.
+		step("session_shutdown handler", () =>
+			pi.on("session_shutdown", () => {
+				try {
+					watcher?.close();
+					if (poll) clearInterval(poll);
+				} catch {
+					// Shutting down; a watcher that will not close is not worth a message.
+				}
+				try {
+					if (claimed && queued(claimed.dir).length === 0) fs.rmSync(claimed.dir, { recursive: true, force: true });
+				} catch {
+					// Best effort. The next claim by anyone reaps it instead.
+				}
+			}),
+		);
+
 		// A fresh agent run: drop what the previous one was carrying, so a notice is injected
 		// for exactly the run that consumed it and an aborted run cannot strand one.
 		//
