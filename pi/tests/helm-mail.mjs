@@ -521,6 +521,26 @@ await test("a pi with no sendUserMessage delivers normally — it is not used an
 	check(queuedIn(path.join(root, handle)).length === 0, "mail was not consumed");
 });
 
+// Reaping used to run only on CLAIM, so a machine where nobody starts a session kept its
+// corpses — and a corpse is addressable, which makes mail to it silently unread.
+await test("a session that shuts down takes its own empty mailbox with it", () => {
+	const s = started();
+	check(fs.existsSync(s.dir), "precondition: expected a mailbox");
+	s.record.handlers.get("session_shutdown")({ type: "session_shutdown" }, s.ctx);
+	check(!fs.existsSync(s.dir), "a clean session left its mailbox behind for someone to address");
+});
+
+// The other half of the same rule: mail outlives the agent it was sent to. Deleting the box
+// would destroy an unread message and the record that it ever arrived.
+await test("a session that shuts down HOLDING mail leaves the mailbox alone", () => {
+	const s = started();
+	s.idle.value = false; // do not let the wake consume it out from under the test
+	deliver(s.root, s.handle, { subject: "never read" });
+	s.record.handlers.get("session_shutdown")({ type: "session_shutdown" }, s.ctx);
+	check(fs.existsSync(s.dir), "shutdown destroyed a mailbox that still held unread mail");
+	check(queuedIn(s.dir).length === 1, "the unread message did not survive shutdown");
+});
+
 await test("a dead agent's empty mailbox is reaped, so a sender cannot address a corpse", () => {
 	const root = freshRoot();
 	const dead = path.join(root, "dead-9999");
