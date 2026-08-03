@@ -43,8 +43,13 @@ final class ArchonRailModelTests: XCTestCase {
 
     // MARK: - Polling
 
+    /// **Rewritten, not deleted.** This asserted "only `running` gets a line", which was #40's
+    /// first sketch and is no longer true: a paused run is stopped waiting for a person, and
+    /// answering that with a number is the actions gap the rail was reframed to close. The
+    /// property that replaced it is *running and paused get lines, and the collapsed counts
+    /// never say the same run twice.*
     @MainActor
-    func testOnlyRunningRunsGetALineAndEverythingElseCollapses() async throws {
+    func testRunningAndPausedGetLinesAndTheCountsDoNotRepeatThem() async throws {
         let client = FakeArchonClient(
             runsResponse: .fixture(
                 runs: [
@@ -58,10 +63,30 @@ final class ArchonRailModelTests: XCTestCase {
 
         await model.refresh(in: workspace)
 
-        XCTAssertEqual(model.running.map(\.id), ["a"])
+        XCTAssertEqual(model.active.map(\.id), ["a", "c"])
         XCTAssertEqual(
-            model.statusCounts.map(\.status), ["running", "paused", "failed", "completed"])
+            model.statusCounts.map(\.status), ["failed", "completed"],
+            "the one running and the one paused run are lines above, so their counts are spent")
+        XCTAssertEqual(model.statusCounts.map(\.count), [2, 5])
         XCTAssertEqual(model.liveness, .live)
+    }
+
+    /// Archon's `counts` are over the whole project while its `runs` array is the newest
+    /// twenty, so a status can hold more runs than the rail can show. The remainder has to
+    /// stay on the collapsed line rather than vanishing with the row.
+    @MainActor
+    func testARunWithNoRowLeavesItsRemainderOnTheCollapsedLine() async throws {
+        let client = FakeArchonClient(
+            runsResponse: .fixture(
+                runs: [.fixture(id: "a", status: "running")],
+                counts: ["all": 4, "running": 3]))
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-remainder"))
+
+        await model.refresh(in: workspace)
+
+        XCTAssertEqual(model.active.map(\.id), ["a"])
+        XCTAssertEqual(model.statusCounts, [ArchonStatusCount(status: "running", count: 2)])
     }
 
     @MainActor
@@ -99,7 +124,7 @@ final class ArchonRailModelTests: XCTestCase {
 
         await model.refresh(in: workspace)
 
-        XCTAssertEqual(model.running.map(\.id), ["a"])
+        XCTAssertEqual(model.active.map(\.id), ["a"])
         XCTAssertNil(model.previews["a"])
         XCTAssertEqual(model.liveness, .live)
     }
@@ -114,7 +139,7 @@ final class ArchonRailModelTests: XCTestCase {
 
         await model.refresh(in: workspace)
         XCTAssertEqual(model.liveness, .live)
-        XCTAssertEqual(model.running, [])
+        XCTAssertEqual(model.active, [])
 
         await client.setFailure(.notInstalled())
         await model.refresh(in: workspace)
@@ -136,7 +161,7 @@ final class ArchonRailModelTests: XCTestCase {
         await client.setFailure(.notInstalled())
         await model.refresh(in: workspace)
 
-        XCTAssertEqual(model.running.map(\.id), ["a"])
+        XCTAssertEqual(model.active.map(\.id), ["a"])
     }
 
     @MainActor
@@ -149,7 +174,7 @@ final class ArchonRailModelTests: XCTestCase {
 
         await model.refresh(in: nil)
 
-        XCTAssertEqual(model.running, [])
+        XCTAssertEqual(model.active, [])
         XCTAssertEqual(model.liveness, .unknown)
         let metrics = await client.metrics()
         XCTAssertEqual(metrics.listCalls, 1, "no workspace, no project to ask about")
@@ -327,5 +352,192 @@ final class ArchonRailModelTests: XCTestCase {
         await model.loadWorkflows(in: nil)
 
         XCTAssertEqual(model.launchFailure, ArchonRailModel.noWorkspace)
+    }
+
+    // MARK: - Archon's own verbs
+
+    /// Abandon is terminal, so nothing is resumed after it — and the rail re-reads Archon
+    /// straight away rather than showing the run for another two seconds as if the click had
+    /// missed.
+    @MainActor
+    func testAbandonEndsTheRunAndResumesNothing() async throws {
+        let run = ArchonRun.fixture(id: "a", status: "running")
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [run]))
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-abandon"))
+        await model.refresh(in: workspace)
+
+        await model.act(.abandon, on: run, in: workspace)
+
+        let log = await client.actionLog()
+        XCTAssertEqual(log.map(\.action), [.abandon])
+        XCTAssertEqual(log.map(\.runID), ["a"])
+        let metrics = await client.metrics()
+        XCTAssertEqual(metrics.resumedRuns, [], "abandon ends a run; there is nothing to continue")
+        XCTAssertEqual(metrics.listCalls, 2, "the row must not linger after the verb succeeded")
+        XCTAssertNil(model.actionFailure)
+    }
+
+    /// **The half of `approve` that Archon does not do for you.** In `--json` mode approve
+    /// records the decision and returns without executing — it says so with `resumable: true` —
+    /// because executing would stream workflow output over the one-line JSON contract. A rail
+    /// that stopped there would leave the run sitting exactly where it was, which is a button
+    /// that lies by omission.
+    @MainActor
+    func testApproveRecordsTheDecisionAndThenActuallyContinuesTheRun() async throws {
+        let run = ArchonRun.fixture(id: "a", status: "paused")
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [run]))
+        await client.setActionAcknowledgement(
+            .fixture(action: "approve", resumable: true))
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-approve"))
+        await model.refresh(in: workspace)
+
+        await model.act(.approve(comment: nil), on: run, in: workspace)
+
+        let metrics = await client.metrics()
+        XCTAssertEqual(metrics.resumedRuns, ["a"])
+        XCTAssertNil(model.actionFailure)
+    }
+
+    /// A reject that Archon answers with `resumable: false` cancelled the run outright — there
+    /// is no rework pass to drive, and resuming it anyway would restart something the operator
+    /// just refused.
+    @MainActor
+    func testARejectThatCancelledTheRunIsNotResumed() async throws {
+        let run = ArchonRun.fixture(id: "a", status: "paused")
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [run]))
+        await client.setActionAcknowledgement(
+            .fixture(action: "reject", cancelled: true, resumable: false))
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-reject"))
+
+        await model.act(.reject(reason: nil), on: run, in: workspace)
+
+        let metrics = await client.metrics()
+        XCTAssertEqual(metrics.resumedRuns, [])
+    }
+
+    /// The decision is already recorded by the time the resume runs, so "approve failed" would
+    /// be the wrong sentence — the operator has to be told which half worked.
+    @MainActor
+    func testAFailedResumeSaysTheApprovalWasStillRecorded() async throws {
+        let run = ArchonRun.fixture(id: "a", status: "paused")
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [run]))
+        await client.setActionAcknowledgement(.fixture(action: "approve", resumable: true))
+        await client.setResumeFailure(.notInstalled())
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-approve-failure"))
+
+        await model.act(.approve(comment: nil), on: run, in: workspace)
+
+        let failure = try XCTUnwrap(model.actionFailure)
+        XCTAssertTrue(failure.hasPrefix("Approve recorded, but the run did not restart:"), failure)
+    }
+
+    /// `--json` mode catches its own failures, prints `{"ok": false}` and exits ZERO. Reporting
+    /// success off the exit status would tell the operator a run was abandoned that Archon
+    /// never found.
+    @MainActor
+    func testAVerbArchonRefusedIsReportedRatherThanCountedAsDone() async throws {
+        let run = ArchonRun.fixture(id: "a", status: "running")
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [run]))
+        await client.setActionAcknowledgement(
+            .fixture(ok: false, action: "abandon", error: "Workflow run not found"))
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-refused"))
+
+        await model.act(.abandon, on: run, in: workspace)
+
+        XCTAssertEqual(
+            model.actionFailure, "Archon refused to abandon this run: Workflow run not found")
+    }
+
+    // MARK: - Dismissing, which is not deleting
+
+    /// Dismissal drops the row **and** the count it came from, so the rail never shows a
+    /// dismissed run twice — once as a line and once as a number.
+    @MainActor
+    func testDismissingARunDropsItsLineAndItsCountWithoutTouchingArchon() async throws {
+        let run = ArchonRun.fixture(id: "a", status: "running")
+        let client = FakeArchonClient(
+            runsResponse: .fixture(runs: [run], counts: ["all": 1, "running": 1]))
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-dismiss"))
+        await model.refresh(in: workspace)
+        XCTAssertEqual(model.active.map(\.id), ["a"])
+
+        model.dismiss(run, in: workspace)
+
+        XCTAssertEqual(model.active, [])
+        XCTAssertEqual(model.statusCounts, [], "a dismissed run must not come back as a number")
+        XCTAssertEqual(model.dismissedCount, 1)
+        let log = await client.actionLog()
+        XCTAssertTrue(log.isEmpty, "dismissal is helm's own filter — Archon is never told")
+    }
+
+    /// Bulk is the real case, and it has to ask Archon for the ids: the line's number comes
+    /// from `counts`, computed over the whole project, while the rows are the newest twenty.
+    /// Dismissing what happened to be on hand would take a line reading 128 to 108.
+    @MainActor
+    func testDismissingAStatusAsksForEveryRunInItRatherThanTheVisibleTwenty() async throws {
+        let completed = (1...3).map { ArchonRun.fixture(id: "c\($0)", status: "completed") }
+        let client = FakeArchonClient(
+            runsResponse: .fixture(runs: completed, counts: ["all": 3, "completed": 3]))
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-dismiss-all"))
+        await model.refresh(in: workspace)
+        XCTAssertEqual(model.statusCounts.map(\.count), [3])
+
+        await model.dismissAll(status: "completed", in: workspace)
+
+        XCTAssertEqual(model.statusCounts, [])
+        XCTAssertEqual(model.dismissedCount, 3)
+        let metrics = await client.metrics()
+        XCTAssertEqual(metrics.statusFilters.last, "completed")
+        XCTAssertEqual(
+            metrics.limits.last, ArchonRailModel.bulkDismissLimit,
+            "'dismiss all' that dismisses the newest twenty of a hundred is not 'all'")
+    }
+
+    /// The way back. Dismissal is a view filter, and a filter with no undo is indistinguishable
+    /// from the deletion Archon does not offer and helm must not imply.
+    @MainActor
+    func testDismissalsSurviveARelaunchAndCanBeUndone() async throws {
+        let defaults = try isolatedDefaults("archon-rail-dismiss-persist")
+        let run = ArchonRun.fixture(id: "a", status: "running")
+        let response = ArchonRunsResponse.fixture(runs: [run], counts: ["all": 1, "running": 1])
+        let first = ArchonRailModel(
+            client: FakeArchonClient(runsResponse: response), defaults: defaults)
+        await first.refresh(in: workspace)
+        first.dismiss(run, in: workspace)
+
+        let second = ArchonRailModel(
+            client: FakeArchonClient(runsResponse: response), defaults: defaults)
+        await second.refresh(in: workspace)
+        XCTAssertEqual(second.active, [], "a dismissal that a relaunch forgets is not a dismissal")
+
+        second.restoreDismissed(in: workspace)
+
+        XCTAssertEqual(second.active.map(\.id), ["a"])
+        XCTAssertEqual(second.dismissedCount, 0)
+    }
+
+    /// Per workspace: dismissing a run in one project must not hide anything in another, and
+    /// the two projects' Archon histories have nothing to do with each other.
+    @MainActor
+    func testDismissalsAreScopedToOneWorkspace() async throws {
+        let defaults = try isolatedDefaults("archon-rail-dismiss-scope")
+        let run = ArchonRun.fixture(id: "a", status: "running")
+        let client = FakeArchonClient(
+            runsResponse: .fixture(runs: [run], counts: ["all": 1, "running": 1]))
+        let model = ArchonRailModel(client: client, defaults: defaults)
+        await model.refresh(in: workspace)
+        model.dismiss(run, in: workspace)
+        XCTAssertEqual(model.active, [])
+
+        await model.refresh(in: "/tmp/other-project")
+
+        XCTAssertEqual(model.active.map(\.id), ["a"])
     }
 }

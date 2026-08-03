@@ -15,13 +15,23 @@ actor FakeArchonClient: ArchonClient {
     var detailFailure: ArchonCLIError?
     var delay: Duration?
 
+    /// The ack every verb answers with unless a test says otherwise.
+    var actionAcknowledgement: ArchonActionAcknowledgement = .fixture()
+    var resumeAcknowledgement: ArchonLaunchAcknowledgement = .fixture()
+    /// Fails only the resume that follows an approve or reject, which is the branch where the
+    /// decision is already recorded and cannot be taken back.
+    var resumeFailure: ArchonCLIError?
+
     private(set) var listCalls = 0
     private(set) var currentListCalls = 0
     private(set) var maximumListCalls = 0
     private(set) var statusFilters: [String?] = []
+    private(set) var limits: [Int?] = []
     private(set) var detailRequests: [String] = []
     private(set) var workspacePaths: [String] = []
     private(set) var launchRequests: [ArchonLaunchRequest] = []
+    private(set) var actions: [(action: ArchonRunAction, runID: String)] = []
+    private(set) var resumedRuns: [String] = []
 
     init(
         runsResponse: ArchonRunsResponse = .fixture(),
@@ -43,24 +53,37 @@ actor FakeArchonClient: ArchonClient {
     func setAcknowledgement(_ acknowledgement: ArchonLaunchAcknowledgement) {
         self.acknowledgement = acknowledgement
     }
+    func setActionAcknowledgement(_ acknowledgement: ArchonActionAcknowledgement) {
+        actionAcknowledgement = acknowledgement
+    }
+    func setResumeFailure(_ failure: ArchonCLIError?) { resumeFailure = failure }
+    func setResumeAcknowledgement(_ acknowledgement: ArchonLaunchAcknowledgement) {
+        resumeAcknowledgement = acknowledgement
+    }
 
     func metrics() -> (
         listCalls: Int, maximumListCalls: Int, launchRequests: Int, detailRequests: [String],
-        statusFilters: [String?], workspacePaths: [String]
+        statusFilters: [String?], workspacePaths: [String], limits: [Int?], resumedRuns: [String]
     ) {
         (
             listCalls, maximumListCalls, launchRequests.count, detailRequests, statusFilters,
-            workspacePaths
+            workspacePaths, limits, resumedRuns
         )
     }
 
     func lastLaunch() -> ArchonLaunchRequest? { launchRequests.last }
+    func actionLog() -> [(action: ArchonRunAction, runID: String)] { actions }
 
-    func runs(in workspacePath: String, status: String?) async throws -> ArchonRunsResponse {
+    func runs(
+        in workspacePath: String, status: String?, limit: Int?
+    ) async throws
+        -> ArchonRunsResponse
+    {
         listCalls += 1
         currentListCalls += 1
         maximumListCalls = max(maximumListCalls, currentListCalls)
         statusFilters.append(status)
+        limits.append(limit)
         workspacePaths.append(workspacePath)
         if let delay { try? await Task.sleep(for: delay) }
         currentListCalls -= 1
@@ -92,17 +115,47 @@ actor FakeArchonClient: ArchonClient {
         if let failure { throw failure }
         return acknowledgement
     }
+
+    func act(
+        _ action: ArchonRunAction, on runID: String, in workspacePath: String
+    ) async throws
+        -> ArchonActionAcknowledgement
+    {
+        actions.append((action, runID))
+        workspacePaths.append(workspacePath)
+        if let failure { throw failure }
+        return actionAcknowledgement
+    }
+
+    func resume(_ run: ArchonRun) async throws -> ArchonLaunchAcknowledgement {
+        resumedRuns.append(run.id)
+        if let resumeFailure { throw resumeFailure }
+        return resumeAcknowledgement
+    }
 }
 
 extension ArchonRun {
     static func fixture(
         id: String = "run-1", workflowName: String = "implement", status: String = "running",
-        workingPath: String? = "/tmp/project", nodes: [ArchonNode]? = []
+        workingPath: String? = "/tmp/project", userMessage: String? = "do the thing",
+        nodes: [ArchonNode]? = []
     ) -> ArchonRun {
         ArchonRun(
             id: id, workflowName: workflowName, status: status, workingPath: workingPath,
-            startedAt: nil, completedAt: nil,
+            userMessage: userMessage, startedAt: nil, completedAt: nil,
             metadata: nil, nodes: nodes)
+    }
+}
+
+extension ArchonActionAcknowledgement {
+    static func fixture(
+        ok: Bool = true, action: String = "abandon", cancelled: Bool? = nil,
+        resumable: Bool? = nil, error: String? = nil
+    ) -> ArchonActionAcknowledgement {
+        ArchonActionAcknowledgement(
+            ok: ok, runId: "run-1", action: action, workflowName: "implement",
+            status: ok ? "cancelled" : nil, cancelled: cancelled, maxAttemptsReached: nil,
+            resumable: resumable, error: error)
     }
 }
 

@@ -134,7 +134,13 @@ struct ArchonRun: Codable, Equatable, Sendable {
     let id: String
     let workflowName: String
     let status: String
+    /// **Load-bearing for `resume`, not decoration.** A run cut into a worktree records that
+    /// worktree here, and `--resume` resolves the run to continue by (workflow name, working
+    /// path) — so this is the directory the resume has to be invoked from.
     let workingPath: String?
+    /// The instruction the run was started with. `--resume` re-enters the workflow rather than
+    /// starting a new one, so it needs the original message back, not a fresh one.
+    let userMessage: String?
     let startedAt: Date?
     let completedAt: Date?
     let metadata: Metadata?
@@ -143,6 +149,19 @@ struct ArchonRun: Codable, Equatable, Sendable {
     struct Metadata: Codable, Equatable, Sendable {
         let error: String?
     }
+
+    /// The eight characters `workflow runs` prints and every Archon surface identifies a run
+    /// by — including `archon workflow get <short-id>`, which resolves a prefix. What the rail
+    /// shows, so what is on screen is what you would type.
+    var shortID: String { String(id.prefix(8)) }
+
+    /// Whether this run is still helm's business: it is doing something, or it is waiting on
+    /// a person. Everything else is history and collapses to a count.
+    var isActive: Bool { ArchonRunStatus.active.contains(status) }
+
+    /// A run stopped at an approval gate — the one state where the rail is the *only* place
+    /// the operator would find out, and the reason `approve` and `reject` are here at all.
+    var isPaused: Bool { status == ArchonRunStatus.paused }
 
     /// The node the subline animates: the one Archon says is running, else the last one it
     /// reported. **Last rather than first** — `nodes` arrives in DAG order, and a fan-out
@@ -156,9 +175,27 @@ struct ArchonRun: Codable, Equatable, Sendable {
         case id, status, metadata, nodes
         case workflowName = "workflow_name"
         case workingPath = "working_path"
+        case userMessage = "user_message"
         case startedAt = "started_at"
         case completedAt = "completed_at"
     }
+}
+
+/// The status words, in one place.
+///
+/// **Strings rather than an enum, for the reason `ArchonRun.status` is one**: this vocabulary
+/// lives in a repo that has zero knowledge of helm and grows without warning. These are the
+/// two helm has to *reason* about — everything else it only has to display, which needs no
+/// name here.
+///
+/// Archon declares `RunStatus = 'running' | 'paused' | 'failed' | 'completed' | 'cancelled'`.
+/// `pending`, `error` and `aborted` also appear in its source but belong to nodes and
+/// workflows, not runs.
+enum ArchonRunStatus {
+    static let running = "running"
+    static let paused = "paused"
+    /// The two the rail gives a line to: one is working, one is waiting on you.
+    static let active = [running, paused]
 }
 
 struct ArchonNode: Codable, Equatable, Sendable {
