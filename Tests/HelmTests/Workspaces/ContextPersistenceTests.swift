@@ -134,6 +134,32 @@ final class ContextPersistenceTests: XCTestCase {
             "the columns must come back, not just the terminals in them")
     }
 
+    /// The change that starts OUTSIDE the bench's own commands. Every other case here
+    /// begins with a `WorkbenchModel` method; this one begins in a live `CanvasModel` — the
+    /// operator typing an address into a canvas ⌘L opened — and has to reach the store
+    /// through the same sink. It did not, and the page rendered while the bench went on
+    /// persisting `{"kind":"empty"}` for it (#89).
+    func testObservingPersistsAnAddressCommittedInACanvas() async throws {
+        let manager = TerminalManager()
+        let defaults = try isolatedDefaults("persist")
+        let model = WorkspaceModel(defaults: defaults)
+        model.open(Workspace(path: workspacePath))
+        let workbench = WorkbenchModel(terminals: manager)
+        model.observe(terminals: manager, workbench: workbench)
+
+        workbench.activate(workspacePath: workspacePath)
+        let canvas = try XCTUnwrap(workbench.open(.empty))
+        workbench.canvas(for: try XCTUnwrap(workbench.bench?.pane(canvas)))
+            .submitAddress("localhost:3000")
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(
+            model.contexts[workspacePath]?.workbench?.pane(canvas)?.content,
+            .canvas(.url(URL(string: "http://localhost:3000")!)),
+            "nothing but the canvas changed, so this is the only publisher that could carry "
+                + "it — and a saved bench that disagrees with the pane on screen is the bug")
+    }
+
     /// The bug this file was written for: the persist ran while the manager still held
     /// its previous array, so the row saved was always one change behind.
     func testSaveContextSeesATerminalAddedImmediatelyBefore() throws {

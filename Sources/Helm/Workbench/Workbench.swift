@@ -323,6 +323,34 @@ struct Workbench: Codable, Equatable {
         normalize()
     }
 
+    /// A canvas went somewhere: the address on a ⌘L pane was committed, or a page followed a
+    /// link. The pane is what carries the source, so this is what the bench persists.
+    ///
+    /// **The bench used to learn a canvas's source once and never again**, which is fine for
+    /// the two openings that know it before the pane exists — a file, and a ⌘-clicked link —
+    /// and wrong for ⌘L, which opens `.empty` because at that moment there is no address.
+    /// The URL that followed reached the live `CanvasModel` and nothing else, so the pane
+    /// persisted `{"kind":"empty"}` while the canvas was displaying a page, and a relaunch
+    /// gave back a blank one (#89).
+    ///
+    /// **A canvas pane only.** Nothing else can hold a source, and a terminal pane quietly
+    /// becoming a canvas is not a repair — it is a pane whose pty has nowhere to render.
+    ///
+    /// **It does not defend `pane(showing:)`'s "one pane per source".** That rule is
+    /// `placement(forOpening:)`'s, and it holds for every canvas that is *opened*; two panes
+    /// can now reach the same source by navigation — ⌘-click a link into one canvas, then
+    /// type that address into another. Nothing breaks (no invariant here is about content,
+    /// and `normalize()` does not care), but `pane(showing:)` picks the first of the two, so
+    /// a later ⌘-click on that URL selects whichever comes first in bench order. Deduping
+    /// here instead would mean closing or merging a pane the operator is looking at, which
+    /// is a worse answer than an arbitrary one.
+    mutating func repoint(_ pane: Pane.ID, to source: CanvasSource) {
+        guard let address = address(of: pane), case .canvas = self.pane(pane)?.content
+        else { return }
+        columns[address.column].slots[address.slot].panes[address.pane].content = .canvas(source)
+        normalize()
+    }
+
     // MARK: - Invariants
 
     /// Re-establishes all four invariants. Idempotent, and cheap enough to run after

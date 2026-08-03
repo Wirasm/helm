@@ -62,7 +62,43 @@ final class CanvasModel: ObservableObject {
         case url(Page)
     }
 
-    @Published private(set) var showing: Showing?
+    @Published private(set) var showing: Showing? {
+        didSet {
+            if let source { onSourceChange?(source) }
+        }
+    }
+
+    /// This canvas is now pointed somewhere else — an address was committed, or a page
+    /// followed a link.
+    ///
+    /// The pane's `CanvasSource` is what the bench persists, and it is written **once**,
+    /// when the pane is made. ⌘L makes one at `.empty` because at that moment there is no
+    /// address; without this hook the URL it goes on to load reaches nothing, and the pane
+    /// restores blank however long it was read (#89). `WorkbenchModel` — which owns both
+    /// this model and the pane naming it — is what sets this.
+    ///
+    /// Fired from `showing`'s `didSet` rather than from `openURL`, `submitAddress` and
+    /// `pageDidNavigate` one at a time: `source` is a pure function of `showing`, so one
+    /// observer catches every move and there is no fourth call site to forget.
+    ///
+    /// A closure rather than a subscription on `$showing`, because `@Published` fires in
+    /// `willSet` — a subscriber reading `source` back would get the value from *before* the
+    /// change (`WorkspaceModel.observe` documents that trap and what it cost), and the
+    /// main-queue hop that fixes it would make the write-back asynchronous for no gain.
+    /// Inside `didSet` the new value is already stored.
+    ///
+    /// **`showing == nil` is deliberately not reported**, and the non-optional parameter is
+    /// what says so. `source` is nil exactly when `showing` is — an emptied canvas is not
+    /// pointed anywhere, so there is nothing to hand over. That is the whole reason, and it
+    /// holds for every caller of `close()`: the pane-level one in `WorkbenchModel.close`,
+    /// which has already dropped the pane, and the two ✕ buttons, which empty the canvas and
+    /// leave the pane where it is. Those keep the source they last reported, which is the
+    /// right answer while ✕ empties a pane rather than closing it.
+    ///
+    /// **One writer.** Swift has no access level for "settable by `WorkbenchModel` only", so
+    /// this is a plain `var` and overwriting it after `canvas(for:)` has wired it turns the
+    /// write-back off silently — which is #89 again, with no compiler to say so.
+    var onSourceChange: ((CanvasSource) -> Void)?
 
     /// Where this canvas is pointed, as the bench persists it.
     var source: CanvasSource? {

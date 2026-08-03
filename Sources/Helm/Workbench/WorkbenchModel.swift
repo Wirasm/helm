@@ -135,11 +135,49 @@ final class WorkbenchModel: ObservableObject {
             source: {
                 if case let .canvas(source) = pane.content { source } else { nil }
             }())
+        // The other direction, and the half that was missing: a canvas that goes somewhere
+        // has to take its pane with it, or the bench persists where the pane *started*
+        // (#89). Wired here because this is the only place a `CanvasModel` is made — and
+        // wired AFTER construction on purpose, so resolving a restored pane into its own
+        // canvas is not mistaken for that canvas moving.
+        //
+        // The identity check is what keeps an ORPHAN quiet. `deactivate` drops the cache
+        // without closing what is in it, so a model whose pane was re-resolved afterwards is
+        // still alive, still holding this closure, and still able to report — into a bench
+        // that now resolves that pane to a different canvas. `model` is captured weakly
+        // because the closure is stored on it; it is always there when the closure runs.
+        model.onSourceChange = { [weak self, weak model] source in
+            guard let self, let model, canvases[pane.id]?.model === model else { return }
+            canvas(pane.id, didPointAt: source)
+        }
         // A canvas pane only renders while its workspace is the active one, so this is
         // that workspace — the same association `TerminalManager` gets for free by
         // storing `workspacePath` on the session itself.
         canvases[pane.id] = CachedCanvas(workspacePath: workspacePath, model: model)
         return model
+    }
+
+    /// Record where a canvas is pointed now. The rule for what may be repointed is
+    /// `Workbench.repoint(_:to:)`'s; what is decided here is **when it is worth committing**.
+    ///
+    /// Only a real move. `CanvasModel.source` is unchanged by a reload, by a load failure,
+    /// and by an address the policy refuses — and every commit reaches `UserDefaults`,
+    /// because `WorkspaceModel.observe` saves on each bench change. The pane is looked up
+    /// each time rather than captured, so a canvas that outlives its pane by a moment
+    /// repoints nothing.
+    ///
+    /// **Only this workspace's bench**, because that is the only one there is: a parked
+    /// workspace's arrangement is a value in `WorkspaceModel.contexts` and nothing can
+    /// mutate it until it is activated again. A canvas belonging to one reports into a
+    /// bench that does not hold its pane and is dropped here — which is reachable only if a
+    /// webview outlives the teardown of the view that owned it, since a parked pane has no
+    /// webview left to navigate.
+    private func canvas(_ pane: Pane.ID, didPointAt source: CanvasSource) {
+        guard var bench, let target = bench.pane(pane),
+            case let .canvas(current) = target.content, current != source
+        else { return }
+        bench.repoint(pane, to: source)
+        commit(bench)
     }
 
     /// What ⌘+/⌘0/⌘↑ act on.

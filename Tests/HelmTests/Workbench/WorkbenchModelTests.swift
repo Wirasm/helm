@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 
 @testable import Helm
@@ -167,6 +168,131 @@ final class WorkbenchModelTests: XCTestCase {
 
         XCTAssertEqual(again, first, "⌘-clicking the same link twice is one canvas")
         XCTAssertEqual(model.bench?.canvasPanes.count, 1)
+    }
+
+    // MARK: - A canvas that goes somewhere takes its pane with it (#89)
+
+    /// The issue's reproduction, from the keystroke. ⌘L opens a canvas at `.empty` because
+    /// at that moment there is no address; the operator types one and the page renders — and
+    /// the bench used to keep `.empty` for the rest of the session, so a relaunch gave back
+    /// a blank canvas labelled "New canvas".
+    func testCommittingAnAddressPointsTheCanvasPaneAtTheURL() async throws {
+        let (model, _) = mounted()
+
+        // ⌘L carries no payload, which is what tells the model to open the address field.
+        NotificationCenter.default.post(name: .helmOpenCanvasURL, object: nil)
+        try await Task.sleep(for: .milliseconds(100))
+        let pane = try XCTUnwrap(model.bench?.canvasPanes.first)
+        XCTAssertEqual(pane.content, .canvas(.empty), "⌘L has nothing to point at yet")
+
+        model.canvas(for: pane).submitAddress("localhost:3000")
+
+        XCTAssertEqual(
+            model.bench?.pane(pane.id)?.content,
+            .canvas(.url(URL(string: "http://localhost:3000")!)),
+            "the address that loaded is what a relaunch has to give back")
+    }
+
+    /// The other half of the acceptance: an unset canvas restores empty rather than onto
+    /// something the operator never saw.
+    func testARefusedAddressLeavesTheCanvasPaneEmpty() throws {
+        let (model, _) = mounted()
+        let id = try XCTUnwrap(model.open(.empty))
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+
+        model.canvas(for: pane).submitAddress("ssh://root@evil.example")
+
+        XCTAssertEqual(
+            model.bench?.pane(id)?.content, .canvas(.empty),
+            "an address the policy refused never loaded — persisting it would restore the "
+                + "canvas onto a page that was never on screen")
+    }
+
+    func testAPageThatFollowsALinkTakesItsPaneWithIt() throws {
+        let (model, _) = mounted()
+        let id = try XCTUnwrap(model.open(.url(URL(string: "http://localhost:3000")!)))
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+
+        model.canvas(for: pane).pageDidNavigate(to: URL(string: "http://localhost:3000/status")!)
+
+        XCTAssertEqual(
+            model.bench?.pane(id)?.content,
+            .canvas(.url(URL(string: "http://localhost:3000/status")!)),
+            "the address bar follows a link click so it never lies about what is on screen; "
+                + "restore has the same reason")
+    }
+
+    /// Every bench change is a `UserDefaults` write, through `WorkspaceModel.observe`. The
+    /// events that leave the canvas exactly where it was must not produce one.
+    ///
+    /// Counted rather than compared, because comparing proves nothing here: repointing a
+    /// pane to the source it already has leaves a bench *equal* to the one before it, so an
+    /// equality assertion passes whether or not the redundant commit happened — and the
+    /// commit is the thing that reaches the store.
+    func testAReloadOrAFailureDoesNotRewriteTheBench() throws {
+        let (model, _) = mounted()
+        let id = try XCTUnwrap(model.open(.url(URL(string: "http://localhost:3000")!)))
+        let canvas = model.canvas(for: try XCTUnwrap(model.bench?.pane(id)))
+        let before = try XCTUnwrap(model.bench)
+        var commits = 0
+        let subscription = model.objectWillChange.sink { _ in commits += 1 }
+        defer { subscription.cancel() }
+
+        canvas.reloadPage()
+        canvas.pageDidFail("Could not connect to the server.")
+
+        XCTAssertEqual(commits, 0, "neither event may reach the store at all")
+        XCTAssertEqual(model.bench, before, "…and neither moves the canvas anywhere")
+    }
+
+    /// `close(_:)` drops the pane from the bench before it empties the canvas, and an
+    /// emptied canvas reports nothing anyway. Both have to hold, because a late callback
+    /// from a webview that is going away is exactly when this fires.
+    func testALateCallbackFromAClosedCanvasCannotResurrectItsPane() throws {
+        let (model, _) = mounted()
+        let id = try XCTUnwrap(model.open(.url(URL(string: "http://localhost:3000")!)))
+        let canvas = model.canvas(for: try XCTUnwrap(model.bench?.pane(id)))
+
+        model.close(id)
+        canvas.pageDidNavigate(to: URL(string: "http://localhost:3000/late")!)
+
+        XCTAssertNil(model.bench?.pane(id), "a closed pane must not come back")
+    }
+
+    /// `deactivate` drops the canvas cache without closing what is in it, so a model whose
+    /// pane is later re-resolved is still alive and still holding its write-back closure.
+    /// Nothing today calls `deactivate` without `closeWorkspace` first — but the write-back
+    /// is what made an orphan able to reach the bench at all, so the guard is its own.
+    func testAnOrphanedCanvasCannotRepointTheBenchThatReplacedIt() throws {
+        let live = URL(string: "http://localhost:3000")!
+        let page = Pane(content: .canvas(.url(live)))
+        let restored = Workbench(panes: [Pane(content: .terminal(face: .terminal)), page])
+        let model = WorkbenchModel(terminals: TerminalManager())
+        model.activate(workspacePath: workspace, restoring: restored)
+        let orphan = model.canvas(for: page)
+
+        model.deactivate()
+        model.activate(workspacePath: workspace, restoring: restored)
+        XCTAssertNotIdentical(model.canvas(for: page), orphan, "precondition: it is an orphan")
+
+        orphan.pageDidNavigate(to: URL(string: "http://localhost:3000/zombie")!)
+
+        XCTAssertEqual(
+            model.bench?.pane(page.id)?.content, .canvas(.url(live)),
+            "a canvas nothing shows any more must not write over the one that does")
+    }
+
+    /// The ordering the write-back depends on: a restored pane resolves to a canvas that is
+    /// *shown its own source*, and that must not read as the canvas having moved.
+    func testResolvingARestoredCanvasDoesNotRewriteItsPane() {
+        let page = Pane(content: .canvas(.url(URL(string: "http://localhost:3000/status")!)))
+        let restored = Workbench(panes: [Pane(content: .terminal(face: .terminal)), page])
+        let model = WorkbenchModel(terminals: TerminalManager())
+        model.activate(workspacePath: workspace, restoring: restored)
+
+        _ = model.canvas(for: page)
+
+        XCTAssertEqual(model.bench, restored, "showing a canvas its own source is not a move")
     }
 
     // MARK: - Visibility
