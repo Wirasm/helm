@@ -193,6 +193,12 @@ function howToReply(me, root) {
 		`  ${path.join(root, "<their-handle>", "<millis>-<6 hex>.json")}`,
 		'  {"id","from","to","subject","body","sentAt"}',
 		`Everyone reachable is a directory in ${root} — each has an owner.json saying who it is.`,
+		"",
+		"To stay reachable while idle, watch your own mailbox and re-arm the watch whenever it",
+		"ends. Nothing outside a Claude Code session can start a turn in it — but a background",
+		"watch YOU arm can, because being notified is itself the wake. Without one, mail sent",
+		"while you are idle waits until the operator next speaks to you.",
+		`  watch: ${path.join(root, me)}/*.json   (ignore owner.json; move what you read into read/)`,
 	];
 }
 

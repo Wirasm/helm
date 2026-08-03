@@ -48,13 +48,17 @@ function check(condition, message) {
 
 async function test(name, run) {
 	current = name;
+	// A failing `check` used to record the failure and then let the test print `ok` anyway, so
+	// the output carried both lines for one test. The exit code stayed honest; the line a
+	// human reads did not.
+	const before = failures;
 	try {
 		await run();
 	} catch (error) {
 		fail(`threw ${error instanceof Error ? error.stack : String(error)}`);
 		return;
 	}
-	ok(name);
+	if (failures === before) ok(name);
 }
 
 // ── the fakes ────────────────────────────────────────────────────────────────────────────
@@ -71,6 +75,10 @@ function recordingPi(overrides = {}) {
 		},
 		sendUserMessage(content, options) {
 			record.sent.push({ content, options });
+			// Real pi turns this into a prompt, which fires `agent_start`. The fake has to do
+			// the same or the extension can never tell a run IT caused from one the operator
+			// started — which is exactly what the wake cap's reset depends on.
+			record.handlers.get("agent_start")?.({ type: "agent_start" });
 		},
 	};
 	return { pi: { ...base, ...overrides }, record };
@@ -79,14 +87,18 @@ function recordingPi(overrides = {}) {
 /** A ctx whose ui.notify records instead of drawing. */
 function recordingCtx(sessionId = "aaaabbbb-1111", cwd = "/tmp/helm-mail-test-cwd") {
 	const messages = [];
+	const idle = { value: true };
 	return {
 		ctx: {
 			ui: { notify: (message) => messages.push(message) },
 			cwd,
 			sessionManager: { getSessionId: () => sessionId, getCwd: () => cwd },
-			isIdle: () => true,
+			// Overridable, because "is this session idle?" is the whole difference between
+			// waking an agent and interrupting one.
+			isIdle: () => idle.value,
 		},
 		messages,
+		idle,
 	};
 }
 
@@ -168,10 +180,10 @@ function started(options = {}) {
 	const root = options.root ?? freshRoot();
 	const { pi, record } = recordingPi(options.overrides);
 	factory(pi);
-	const { ctx, messages } = recordingCtx(options.sessionId, options.cwd);
+	const { ctx, messages, idle } = recordingCtx(options.sessionId, options.cwd);
 	const warnings = capturingStderr(() => record.handlers.get("session_start")({ reason: "startup" }, ctx));
 	const handle = /handle: (\S+)/.exec(messages[0] ?? "")?.[1];
-	return { root, pi, record, ctx, messages, warnings, handle, dir: handle && path.join(root, handle) };
+	return { root, pi, record, ctx, messages, warnings, handle, idle, dir: handle && path.join(root, handle) };
 }
 
 // ── registration ─────────────────────────────────────────────────────────────────────────
@@ -391,19 +403,89 @@ await test("a context round with an empty mailbox injects nothing at all", () =>
 	check(result === undefined, `injected into a turn with no mail: ${JSON.stringify(result)}`);
 });
 
-// ── the wake cap, and why it is GONE ────────────────────────────────────────────────────
+// ── the wake: an idle agent that gets mail is woken ─────────────────────────────────────
 //
-// Three tests lived here: the cap held at 3, it said so on stderr, and a quiet drain reset it.
-// Their subject no longer exists. The cap was there because delivery SPENT a turn —
-// `sendUserMessage` starts one, so two agents replying to each other woke each other until the
-// money ran out. `context` delivery rides a turn the operator already asked for and starts
-// nothing, so there is no runaway to cap; and a cap would now do real harm, silently
-// withholding mail from an operator sitting there typing prompts.
-//
-// This asserts the replacement property, which is the one that would break if any of it crept
-// back: delivery keeps working, unbounded, and never starts a turn of its own.
+// These drive the REAL `fs.watch`, not a handler, because the thing under test is whether a
+// file appearing reaches a session nobody is talking to. They wait on the filesystem.
 
-await test("delivery is unbounded and never spends a turn — there is no cap any more", () => {
+/**
+ * Wait for a condition rather than for a duration. A fixed sleep against a real `fs.watch` is
+ * a race — it passed locally and failed on the next run of the same commit, which is the
+ * worst kind of test: one that is green often enough to be believed.
+ */
+async function until(predicate, what, ms = 4000) {
+	const deadline = Date.now() + ms;
+	while (Date.now() < deadline) {
+		if (predicate()) return true;
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+	check(false, `timed out after ${ms}ms waiting for ${what}`);
+	return false;
+}
+
+/** Nothing should happen. Give the watcher a real chance to misbehave before believing it. */
+const quiet = () => new Promise((resolve) => setTimeout(resolve, 500));
+
+await test("mail arriving while the session is IDLE wakes it, with no prompt", async () => {
+	const s = started();
+	deliver(s.root, s.handle, { from: "peer-9", subject: "the build is broken" });
+	await until(() => s.record.sent.length > 0, "the idle session to be woken");
+	check(s.record.sent.length === 1, `expected exactly one wake, got ${s.record.sent.length}`);
+	const text = s.record.sent[0]?.content ?? "";
+	check(text.includes("peer-9"), `the wake did not carry the sender: ${text}`);
+	check(queuedIn(s.dir).length === 0, "the wake did not consume the mail");
+});
+
+// Waking mid-turn would interrupt work the operator asked for. `context` covers that case,
+// so the watch must stay out of the way rather than race it.
+await test("mail arriving MID-TURN does not wake — the turn in flight picks it up instead", async () => {
+	const s = started();
+	s.idle.value = false;
+	deliver(s.root, s.handle, { from: "peer-9", subject: "mid-turn" });
+	await quiet();
+	check(s.record.sent.length === 0, `interrupted a running turn: ${s.record.sent.length} sends`);
+	check(queuedIn(s.dir).length === 1, "consumed mail without delivering it");
+	// And it is still there for the turn that is running.
+	check(contextRound(s).includes("peer-9"), "mail left mid-turn never reached the turn either");
+});
+
+await test("the wake stops at the cap and does NOT eat the held mail", async () => {
+	const s = started();
+	for (let i = 0; i < 5; i += 1) {
+		const before = s.record.sent.length;
+		deliver(s.root, s.handle, { subject: `message ${i}` });
+		// Past the cap nothing will happen, so only wait for a wake while one is still due.
+		if (before < 3) await until(() => s.record.sent.length > before, `wake ${i + 1}`);
+		else await quiet();
+	}
+	check(s.record.sent.length === 3, `expected the cap to hold at 3 wakes, got ${s.record.sent.length}`);
+	check(queuedIn(s.dir).length === 2, `held mail was eaten: ${queuedIn(s.dir).length} queued, expected 2`);
+});
+
+// The reset is on an agent run the OPERATOR started. A run we started by waking must not reset
+// the counter that limits waking, or the cap can never be reached at all.
+await test("a turn the operator starts resets the cap; a woken one does not", async () => {
+	const s = started();
+	for (let i = 0; i < 4; i += 1) {
+		const before = s.record.sent.length;
+		deliver(s.root, s.handle, { subject: `message ${i}` });
+		if (before < 3) await until(() => s.record.sent.length > before, `wake ${i + 1}`);
+		else await quiet();
+	}
+	check(s.record.sent.length === 3, "precondition: expected to be capped");
+	newRun(s);
+	deliver(s.root, s.handle, { subject: "after the operator spoke" });
+	await until(() => s.record.sent.length > 3, "the wake the operator's turn should have re-enabled");
+	check(s.record.sent.length === 4, `the operator's turn did not reset the cap: ${s.record.sent.length} sends`);
+});
+
+// ── pre-turn delivery stays uncapped ────────────────────────────────────────────────────
+//
+// The cap is back (above) because waking spends a turn. It must NOT apply to the `context`
+// path, which rides a turn the operator already asked for and spends nothing — capping there
+// would silently withhold mail from an operator sitting right there typing prompts.
+
+await test("pre-turn delivery is unbounded and never spends a turn", () => {
 	const s = started();
 	let delivered = 0;
 	for (let i = 0; i < 6; i += 1) {

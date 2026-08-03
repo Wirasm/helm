@@ -203,6 +203,18 @@ case "$OUT" in *rename*) teaches=$((teaches + 1)) ;; esac
 	ok "the notice says who the reader is and how to reply (#132)" ||
 	bad "deliver: the notice teaches $teaches of 4 things a replier needs:\n$OUT"
 
+# The wake, and the half only this runtime needs told. A pi extension is a live event loop and
+# watches its own mailbox; a hook is a process at a fixed moment and cannot. So the Claude Code
+# agent has to arm the watch itself, and the only place it can learn that is here.
+case "$OUT" in
+*"watch: $root/$handle"*) ok "the notice tells the agent to watch its own mailbox, and where" ;;
+*) bad "deliver: the notice does not say how to stay reachable while idle:\n$OUT" ;;
+esac
+case "$OUT" in
+*"re-arm"*) ok "it says to re-arm, so a watch that ends does not leave the agent dark" ;;
+*) bad "deliver: the notice does not mention re-arming:\n$OUT" ;;
+esac
+
 # GONE, and named rather than quietly dropped: the wake cap. Three consecutive deliveries used
 # to hold the fourth, because delivering by exiting 2 CONTINUED a turn and two agents replying
 # to each other continued each other until the money ran out. A UserPromptSubmit delivery

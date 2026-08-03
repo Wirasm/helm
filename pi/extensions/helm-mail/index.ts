@@ -7,9 +7,8 @@
  *
  * WHAT THIS FILE IS, AND WHAT IT IS NOT. The convention below is runtime-neutral on
  * purpose: a Claude Code agent reads the same directories with the same rules. This file is
- * only pi's *reader* — plus the sender that makes pi→pi work today. The Claude Code reader
- * is #56, and it needs a background `Stop` hook parked in a loop because an idle Claude
- * Code session cannot be woken by a file appearing.
+ * only pi's *reader* — plus the sender that makes pi→pi work today. Claude Code's half is
+ * `hooks/`, and the two now work the same way for the same reason (see the wake, below).
  *
  * DELIVERY IS BEFORE A TURN, NOT AFTER ONE. This first drained on `agent_settled`, which is
  * genuinely between turns and was easy — but it meant an agent carried out the operator's
@@ -19,8 +18,18 @@
  * `context` fires as the message list for a provider request is assembled, and `sdk.js` feeds
  * whatever a handler returns straight back to the agent as `transformContext`. So the notice
  * arrives at the START of the turn the operator asked for. Mail informs the work instead of
- * chasing it, delivery costs no extra model call, and the wake cap that guarded that cost
- * stops being needed at all.
+ * chasing it, and it costs no extra model call.
+ *
+ * AND AN IDLE SESSION IS WOKEN, which pre-turn delivery on its own does not do — an agent
+ * nobody prompts sits there with mail it will never see. `fs.watch` on the mailbox plus
+ * `sendUserMessage` starts a turn from nothing: measured on 0.83.0, an idle session went
+ * agent_start → answer → agent_end with no human involved. It works because a pi extension is
+ * a live event loop INSIDE the session, which is the whole asymmetry with a hook — a hook is a
+ * process at a fixed moment and cannot reach in. (A Claude Code agent gets there anyway, by
+ * arming its own watcher before it goes quiet. Same shape, different hands.)
+ *
+ * The two paths are not redundant. The watch covers idle; `context` covers mail that lands
+ * mid-turn, where waking would interrupt work the operator asked for.
  *
  * THE ONE RULE: the factory must be total. A factory that throws exits the whole pi CLI —
  * and `~/.pi/agent/extensions` is discovered in every directory, so "our extension is
@@ -34,7 +43,12 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ContextEvent,
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 /** Bump when the report or the on-disk shape changes; it is what a reader sees first. */
 const VERSION = "1";
@@ -55,14 +69,16 @@ const ROOT_ENV = "HELM_MAIL_DIR";
 const HANDLE_ENV = "HELM_MAIL_HANDLE";
 
 /**
- * THERE IS NO WAKE CAP, and its absence is a consequence rather than an omission.
+ * Consecutive WAKES before this goes quiet — kild's `DEFAULT_WAKE_CAP`, and back because the
+ * thing it guards is back. Pre-turn delivery spends nothing and needs no cap; waking an idle
+ * session calls `sendUserMessage`, which starts a turn, so two agents replying to each other
+ * wake each other until the money runs out.
  *
- * kild's `DEFAULT_WAKE_CAP = 3` existed because delivery SPENT a turn: `sendUserMessage`
- * starts one, so two agents replying to each other wake each other until the money runs out.
- * Delivering on `context` spends nothing — the notice rides a turn the operator already asked
- * for — so there is no runaway to cap. An agent that is never prompted is never delivered to,
- * which is the same property from the other side.
+ * Mail is NOT eaten at the cap — it stays queued and arrives on the next turn either way. The
+ * counter resets on any agent run the OPERATOR started, so a real conversation is never
+ * permanently capped; only a runaway between two agents is.
  */
+const WAKE_CAP = 3;
 
 /** Where consumed messages go. Rename, never delete: the record is the point. */
 const READ_DIR = "read";
@@ -74,7 +90,7 @@ const OWNER_FILE = "owner.json";
  * The pi methods this extension uses. Typed at the declaration rather than left to `as
  * const`, so a misspelling is a compile error here rather than wherever it is consumed.
  */
-const USES: readonly (keyof ExtensionAPI)[] = ["on", "registerCommand"];
+const USES: readonly (keyof ExtensionAPI)[] = ["on", "registerCommand", "sendUserMessage"];
 
 /** A subject line is another agent's text. It may occupy one line and no more. */
 const SUBJECT_MAX = 80;
@@ -486,6 +502,17 @@ function install(pi: ExtensionAPI): void {
 	let claimed: Claim | undefined;
 	/** The notice this agent run is carrying, re-injected on every request within it. */
 	let pending: string | undefined;
+	/** The mailbox watch. Closed and re-armed on every claim; closed at shutdown. */
+	let watcher: fs.FSWatcher | undefined;
+	/** fs.watch fires several times per file. Collapse a burst into one look. */
+	let settle: ReturnType<typeof setTimeout> | undefined;
+	/** The backstop behind the watch. See POLL_MS. */
+	let poll: ReturnType<typeof setInterval> | undefined;
+	/** Consecutive wakes with no operator-driven turn between them. See WAKE_CAP. */
+	let wakes = 0;
+	/** True between calling sendUserMessage and the run it starts, so the cap can tell the
+	 *  runs it caused from the ones the operator did. */
+	let waking = false;
 
 	function report(): string {
 		const lines = [`${NAME} v${VERSION}`];
@@ -552,7 +579,10 @@ function install(pi: ExtensionAPI): void {
 	 * reaches an end event; clearing on entry means the next run always re-injects whatever it
 	 * is holding, so an interrupted turn cannot swallow a notice.
 	 */
-	function inject(messages: readonly unknown[]): { messages: unknown[] } | undefined {
+	// The return type is inferred rather than annotated: pi exports `ContextEvent` but NOT
+	// `ContextEventResult`, so there is nothing to name. `pi.on("context", …)` still checks the
+	// shape through its own overload, which is where a mismatch would matter.
+	function inject(event: ContextEvent) {
 		if (!claimed) return undefined;
 		if (!pending) {
 			const waiting = queued(claimed.dir);
@@ -562,23 +592,121 @@ function install(pi: ExtensionAPI): void {
 			pending = notice(taken, claimed.handle, root);
 		}
 		return {
-			messages: [...messages, { role: "user", content: [{ type: "text", text: pending }], timestamp: Date.now() }],
+			messages: [
+				...event.messages,
+				{ role: "user" as const, content: [{ type: "text" as const, text: pending }], timestamp: Date.now() },
+			],
 		};
+	}
+
+	/**
+	 * Wake this session because mail arrived while it was idle.
+	 *
+	 * THIS IS THE PIECE THAT WAS MISSING, and the reason it looked impossible for so long: a
+	 * pi extension is a live event loop INSIDE the session, so `fs.watch` firing is already in
+	 * the right process, and `sendUserMessage` starts a turn with no idle guard on it. Measured
+	 * against 0.83.0 — an idle session went agent_start → answer → agent_end with no human and
+	 * no prior turn.
+	 *
+	 * Deliberately NOT the only delivery path. `context` still runs, and covers the two cases
+	 * this cannot: mail that lands mid-turn (waking would interrupt work the operator asked
+	 * for) and mail that arrives while the cap is spent.
+	 */
+	function wake(pi: ExtensionAPI, ctx: ExtensionContext): void {
+		if (!claimed) return;
+		if (queued(claimed.dir).length === 0) return;
+
+		// Mid-turn: leave it. The turn in flight will pick it up through `context`, which is
+		// both cheaper and less rude than interrupting work already underway.
+		const idle = typeof ctx?.isIdle === "function" ? ctx.isIdle() : true;
+		if (!idle) return;
+
+		if (wakes >= WAKE_CAP) {
+			console.error(
+				`[${NAME}] mail waiting, but ${WAKE_CAP} consecutive wakes with no turn of yours between them. ` +
+					`Not eaten — it arrives on your next turn, or run /${NAME} read.`,
+			);
+			return;
+		}
+		if (!hasMethod(pi, "sendUserMessage")) return;
+
+		const taken = consume(claimed.dir, queued(claimed.dir));
+		if (taken.length === 0) return;
+		wakes += 1;
+		waking = true;
+		try {
+			pi.sendUserMessage(notice(taken, claimed.handle, root));
+		} catch (error) {
+			waking = false;
+			// Consumed and then failed to deliver: the path is the important part of this line,
+			// because the mail is in read/ and would otherwise be gone with no trace.
+			warn(`could not wake with ${taken.length} message(s); they are in ${path.join(claimed.dir, READ_DIR)}`, error);
+		}
+	}
+
+	/**
+	 * Watch this session's mailbox. Re-armed on every claim, because a claim can widen to a
+	 * different directory and a watch on the old one would be silently dead.
+	 *
+	 * `fs.watch` fires several times for one file — create, then write, then rename in — so the
+	 * burst is collapsed into a single look rather than one wake per event.
+	 */
+	/**
+	 * A slow poll behind the watch, because `fs.watch` is explicitly not guaranteed:
+	 * "not 100% consistent across platforms, and unavailable in some situations" (node docs),
+	 * and it proved it here — the same commit woke on one run of the gate and timed out on the
+	 * next. Mail delivery must not rest on an event that is allowed to go missing.
+	 *
+	 * It costs one readdir every few seconds against a directory that is nearly always empty,
+	 * which is the cheapest possible insurance against silence being indistinguishable from
+	 * "no mail".
+	 */
+	const POLL_MS = 3000;
+
+	function armWatch(pi: ExtensionAPI, ctx: ExtensionContext): void {
+		try {
+			watcher?.close();
+		} catch {
+			// A watcher that will not close is not worth failing a session over.
+		}
+		watcher = undefined;
+		if (!claimed) return;
+		try {
+			watcher = fs.watch(claimed.dir, () => {
+				if (settle) clearTimeout(settle);
+				settle = setTimeout(() => wake(pi, ctx), 150);
+			});
+			// Never hold the process open on our account: an extension's watcher must not be
+			// the reason a pi that is otherwise finished refuses to exit.
+			watcher.unref?.();
+		} catch (error) {
+			warn("could not watch the mailbox; falling back to the poll below", error);
+		}
+		if (poll) clearInterval(poll);
+		poll = setInterval(() => wake(pi, ctx), POLL_MS);
+		poll.unref?.();
 	}
 
 	if (present.includes("on")) {
 		step("session_start handler", () =>
 			pi.on("session_start", (_event, ctx) => {
 				establish(ctx);
+				armWatch(pi, ctx);
 				announce(ctx, report());
 			}),
 		);
 
 		// A fresh agent run: drop what the previous one was carrying, so a notice is injected
 		// for exactly the run that consumed it and an aborted run cannot strand one.
+		//
+		// It is also where the wake cap resets, and the `waking` flag is what makes that
+		// correct: a run WE started by waking must not reset the counter that limits waking,
+		// or the cap can never be reached. A run the operator started always resets it.
 		step("agent_start handler", () =>
 			pi.on("agent_start", () => {
 				pending = undefined;
+				if (waking) waking = false;
+				else wakes = 0;
 			}),
 		);
 
@@ -586,9 +714,7 @@ function install(pi: ExtensionAPI): void {
 		// cleanly — it only pushes into a Map — and the handler simply never fires. Nothing at
 		// runtime can tell you. The typecheck naming this event, and the unit harness
 		// asserting the handler exists, are the only two things that can.
-		step("context handler", () =>
-			pi.on("context", (event: { messages: readonly unknown[] }) => inject(event.messages)),
-		);
+		step("context handler", () => pi.on("context", (event) => inject(event)));
 	}
 
 	if (present.includes("registerCommand")) {
