@@ -21,6 +21,21 @@ The patch script is first and not optional — the patched libghostty is gitigno
 fresh worktree has nothing to link against. Never borrow another checkout's `vendor/`;
 that proves the other checkout builds.
 
+**This gate needs only the Swift toolchain and xcodegen. Keep it that way.** It is the one
+command a fresh worktree runs, and every dependency added to it is a dependency every
+contributor now needs.
+
+**If you touched `pi/`, run its gate too — it is separate on purpose:**
+
+```
+bash .claude/skills/pi-extensions/scripts/test.sh
+```
+
+Only when `pi/` changed. It needs node, and `tsc` from an `npm install` in `pi/`, which is
+why it is not part of the Swift gate: `swift test` cannot run TypeScript and should not
+learn how, and a Swift contributor should never need a JS toolchain to go green. See
+`pi/AGENTS.md`.
+
 - **Never restart a running helm without warning the operator** — a live window may be
   hosting their session.
 - **Never delete a test to make the gate green.** If its subject genuinely no longer
@@ -134,6 +149,11 @@ only mutable from the type's own file, so an extension that has to mutate it is 
 it is the same module wearing two filenames. Fighting that with looser access or wrapper
 methods usually means the split was wrong.
 
+**pi extensions are TypeScript and live in `pi/`, not `Sources/`.** helm's repo owns helm's pi
+work. They are for the pi sessions helm *hosts*, in whatever repo the user is in — so they are
+symlinked into `~/.pi/agent/extensions/` and never into helm's own `.pi/`. Before writing or
+changing one, read the `pi-extensions` skill; `pi/AGENTS.md` covers the layout and its gate.
+
 ## Agent skills
 
 ### Issue tracker
@@ -144,3 +164,10 @@ GitHub issues on `Wirasm/helm`, via `gh`. See `docs/agents/issue-tracker.md`.
 
 Single-context; vocabulary is canonical in `CONTEXT.md`, with `../GLOSSARY.md` for the
 cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
+
+### pi extensions
+
+How to build one without taking the pi CLI down, how to read the installed pi rather than guess
+at its API, and how to test one without spending a model call. See
+`.claude/skills/pi-extensions/`. Hand-written and helm-local — not vendored, so not in
+`skills-lock.json`.
