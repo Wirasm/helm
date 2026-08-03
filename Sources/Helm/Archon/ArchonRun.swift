@@ -85,7 +85,18 @@ extension ArchonPaneRef: Codable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        switch try container.decode(Kind.self, forKey: .kind) {
+        // No discriminator means a bench stored by the build before this one, when the only
+        // Archon address was a bare `{id, workflowName}`. Read as a run rather than thrown on,
+        // because `WorkspaceContextStore.load` decodes one dictionary for the whole app: a
+        // single pane it cannot read returns `[:]`, and **every** workspace's arrangement goes
+        // with it, not just the one holding the pane.
+        guard let kind = try container.decodeIfPresent(Kind.self, forKey: .kind) else {
+            self = .run(
+                id: try container.decode(String.self, forKey: .id),
+                workflowName: try container.decode(String.self, forKey: .workflowName))
+            return
+        }
+        switch kind {
         case .run:
             self = .run(
                 id: try container.decode(String.self, forKey: .id),

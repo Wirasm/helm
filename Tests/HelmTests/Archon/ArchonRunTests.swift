@@ -155,6 +155,18 @@ final class ArchonRunTests: XCTestCase {
         }
     }
 
+    /// A bench stored by the build before this one holds the bare shape. Rejecting it would
+    /// not cost that pane — `WorkspaceContextStore.load` decodes one dictionary for the whole
+    /// app, so a single unreadable pane returns `[:]` and takes **every** workspace's
+    /// arrangement with it.
+    func testTheAddressFromTheBuildBeforeThisOneStillDecodes() throws {
+        let stored = Data(#"{"id":"r1","workflowName":"ship"}"#.utf8)
+
+        XCTAssertEqual(
+            try decoder().decode(ArchonPaneRef.self, from: stored),
+            .run(id: "r1", workflowName: "ship"))
+    }
+
     func testThePaneAddressIsStoredWithNamedKeysRatherThanPositions() throws {
         let json = String(
             decoding: try JSONEncoder().encode(ArchonPaneRef.runs(status: "failed")), as: UTF8.self)
