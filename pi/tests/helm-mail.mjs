@@ -334,6 +334,20 @@ await test("a hand-written subject cannot forge lines of the notice", () => {
 	check(text.includes("hello"), `sanitizing dropped the real subject entirely: ${text}`);
 });
 
+// #132: an agent can read its mail and, without this, cannot answer it. pi has
+// `/helm-mail send`; Claude Code has no command surface at all, so the notice is the only
+// thing that reaches both. Costs nothing when there is no mail, because there is no notice.
+await test("the notice says how to reply, and who the reader is", () => {
+	const s = started();
+	deliver(s.root, s.handle, { from: "bench-2", subject: "hi" });
+	const text = contextRound(s);
+	check(text.includes(s.handle), `the notice never says which handle the reader is: ${text}`);
+	check(text.includes("<their-handle>"), `the notice gives no path shape to write to: ${text}`);
+	check(/"id","from","to","subject","body","sentAt"/.test(text), `the notice gives no field shape: ${text}`);
+	check(/rename/i.test(text), `the notice does not say to rename, so a reader can see half a message: ${text}`);
+	check(text.includes(s.root), `the notice does not say where to list peers: ${text}`);
+});
+
 // The `from` field sits on the same line as the subject and comes from the same file.
 await test("a hand-written sender cannot forge lines of the notice either", () => {
 	const s = started();

@@ -186,6 +186,23 @@ senders=$(printf '%s\n' "$OUT" | grep -c '^  from ')
 	ok "a hand-written subject cannot forge lines of the notice (#127)" ||
 	bad "drain: a sender forged structure — $forged helm-mail lines, $senders sender lines"
 
+# #132: the notice must teach the half an agent cannot look up. This runtime has no
+# `/helm-mail send` and no skill, so without these lines a Claude Code agent can read its mail
+# and has no idea how to answer it.
+root=$(fresh)
+run "$root" claude-session-start '{"session_id":"aaaa-bbbb-cccc-1234","cwd":"/tmp/teach"}'
+handle=$(handle_of "$root")
+seed "$root/$handle" >/dev/null
+run "$root" claude-user-prompt-submit '{"session_id":"aaaa-bbbb-cccc-1234","cwd":"/tmp/teach"}'
+teaches=0
+case "$OUT" in *"$handle"*) teaches=$((teaches + 1)) ;; esac
+case "$OUT" in *"<their-handle>"*) teaches=$((teaches + 1)) ;; esac
+case "$OUT" in *'"id","from","to","subject","body","sentAt"'*) teaches=$((teaches + 1)) ;; esac
+case "$OUT" in *rename*) teaches=$((teaches + 1)) ;; esac
+[ "$teaches" = 4 ] &&
+	ok "the notice says who the reader is and how to reply (#132)" ||
+	bad "deliver: the notice teaches $teaches of 4 things a replier needs:\n$OUT"
+
 # GONE, and named rather than quietly dropped: the wake cap. Three consecutive deliveries used
 # to hold the fourth, because delivering by exiting 2 CONTINUED a turn and two agents replying
 # to each other continued each other until the money ran out. A UserPromptSubmit delivery
