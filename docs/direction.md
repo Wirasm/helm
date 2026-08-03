@@ -101,12 +101,23 @@ to cost zero clicks, and reading a finished run is rare and belongs on the bench
   detached.
 - A **gear** beneath it holding what Enter launches — the workflow and how it isolates. Built
   to grow as the CLI does; ships without a model control.
-- **One line per running run**, with a subline that follows the current node. Every other
-  status collapses to a count; clicking one opens that list as a **bench pane**, which is also
-  how a single run's node view opens. Nothing is read inside the rail.
+- **One line per active run** — `running` or `paused` — with a subline that follows the current
+  node. Every other status collapses to a count; clicking one opens that list as a **bench
+  pane**, which is also how a single run's node view opens. Nothing is read inside the rail.
+- **Archon's own verbs on a run**: `abandon` on any active one, `approve` and `reject` on a
+  paused one. `--json` mode records an approval without executing, so helm resumes the run
+  itself afterwards — the CLI's interactive form does the same, and a rail whose Approve left
+  the run parked would be a control that lies by omission.
+- **Dismissal, which is not deletion.** Archon has no delete, archive or purge for a run, so
+  "stop showing me this" can only be helm's own filter: per workspace, persisted, bounded, and
+  labelled as what it is. Reaching into Archon's SQLite to make it more than that is out.
 - A **liveness mark**, because there is no daemon: `archon` is invoked per poll, so "live"
   means the last poll answered. Without it, "no runs" and "Archon cannot be reached" look
   identical.
+- **It looks like Archon's console**, inside the palette rule rather than around it: density,
+  monospace run ids, tracked micro-labels — and two governed tokens carrying Archon's own
+  brand magenta and warning amber (`Palette.archonBrand`, `Palette.archonAttention`). Not hex
+  in a view, and not Archon's palette wholesale: *distinctly Archon's*, not *foreign*.
 
 ## Sizing
 
