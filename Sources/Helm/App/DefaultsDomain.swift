@@ -18,6 +18,17 @@ import Foundation
 /// with none to miss — where threading a named suite through the call sites would have been
 /// seven chances to split state *within* a build, which is worse than a clean split between
 /// two. What is left here is the names, and moving the old domain's contents across.
+///
+/// **#86 took the other half of that trade after all, and on purpose.** One domain for both
+/// launch paths also meant a helm built from a worktree writes the operator's live
+/// `helmWorkspaceContexts`, so the seven call sites now go through `store` and
+/// `HELM_DEFAULTS_SUITE` can move all seven at once. The argument above still holds: what it
+/// warns against is threading a suite through the call sites *by hand*, and the guard test in
+/// `DefaultsDomainTests` is what keeps it from becoming that — `UserDefaults.standard` and a
+/// storeless `@AppStorage` anywhere outside this file both fail the suite.
+///
+/// **`swift test`, not `swift build`.** The gate runs them as separate steps and a violation
+/// compiles perfectly well, so it is caught by the run and not by the compiler.
 enum DefaultsDomain {
     /// The domain both launch paths now resolve to.
     ///
@@ -29,6 +40,155 @@ enum DefaultsDomain {
     /// What `swift run helm` used to get: no identifier, so the process name.
     static let legacy = "helm"
 
+    // MARK: - The opt-in override
+
+    /// Set this to move every default helm owns into a suite of its own.
+    ///
+    /// **Unset is today's behaviour, exactly** — `canonical`, both launch paths, one answer to
+    /// *"did it persist?"*. That is #45's win and nothing here touches it.
+    ///
+    /// Set is for the second instance: a helm built from a worktree can be launched, filled,
+    /// quit, relaunched and hand-corrupted with no reachable path to the operator's state.
+    /// That was the missing affordance in #86 — it cost Task 27 of the workbench plan
+    /// outright, and made two separate agents hand-roll a throwaway `PRODUCT_BUNDLE_IDENTIFIER`
+    /// to verify anything safely (PRs #97, #100). The trick worked; reinventing it did not
+    /// scale, and an agent who forgot it would have written over live workspaces.
+    ///
+    ///     HELM_DEFAULTS_SUITE=helm-task27 swift run helm
+    ///     defaults read helm-task27
+    static let suiteVariable = "HELM_DEFAULTS_SUITE"
+
+    /// What `HELM_DEFAULTS_SUITE` asked for, as a decision rather than a string.
+    ///
+    /// A closed set so the awkward values are answered once, here, instead of at whichever
+    /// call site meets them first.
+    enum Override: Equatable {
+        /// Unset, blank, or naming `canonical` — helm persists exactly as it does today.
+        case none
+        /// An isolated suite, by name.
+        case suite(String)
+        /// Set to something helm will not honour. The string says why, for the operator.
+        ///
+        /// **There is no fallback from here and there must not be.** Quietly reverting to
+        /// `canonical` would hand an agent who believes it is isolated a live write to the
+        /// operator's workspaces, which is the whole failure #86 is about — so a refusal
+        /// stops the launch instead.
+        case refused(String)
+    }
+
+    /// Read `HELM_DEFAULTS_SUITE` and decide. Pure, so every rule below is a test.
+    ///
+    /// The two nil-returning cases of `UserDefaults(suiteName:)` were measured rather than
+    /// read off the documentation: the canonical name (it is this process's own bundle
+    /// identifier, which "does not make sense as a suite") and `NSGlobalDomain`. The empty
+    /// string is **not** one of them — that one comes back as a usable object writing to a
+    /// nameless domain, so it is refused here.
+    static func override(
+        in environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Override {
+        guard let raw = environment[suiteVariable] else { return .none }
+
+        // `export HELM_DEFAULTS_SUITE=` — a shell's own way of saying "not set", and the
+        // operator meant no override. This is the ONLY blank that is read as a decision.
+        guard !raw.isEmpty else { return .none }
+
+        // Anything else that trims away is a **broken value, not a choice**, and folding it
+        // into `.none` would be the one silent path in a function whose every other rejection
+        // is loud. `HELM_DEFAULTS_SUITE="$SUITE "` with `$SUITE` empty upstream, a template
+        // that did not substitute, a newline off a copy-paste: each of those launches an
+        // agent that believes it is contained straight at `com.wirasm.helm`, which is #86
+        // itself reached through the mechanism built to prevent it.
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            return .refused(
+                "\(suiteVariable) is set but names no domain — it is whitespace. Unset it to "
+                    + "mean the default; a blank value is a bug in whatever built it.")
+        }
+
+        // Asking for the canonical domain is asking for the default. Not a refusal — it is
+        // what an unset variable already does — but it cannot go through `suiteName:`, which
+        // returns nil for the running process's own identifier.
+        guard name != canonical else { return .none }
+
+        guard name != legacy else {
+            return .refused(
+                "\(suiteVariable)=\(name) names the domain the legacy migration drains, "
+                    + "so anything written there is liable to be emptied. Pick another name.")
+        }
+        guard !name.contains("/") else {
+            return .refused("\(suiteVariable)=\(name) looks like a path; a suite name is a domain.")
+        }
+        guard UserDefaults(suiteName: name) != nil else {
+            return .refused("\(suiteVariable)=\(name) is not a usable UserDefaults suite name.")
+        }
+        return .suite(name)
+    }
+
+    /// The domain this process persists to, and the `UserDefaults` that writes there.
+    ///
+    /// Resolved once, on first use, because a process cannot change its mind about this
+    /// halfway through and a second reading that disagreed would be a split domain again.
+    ///
+    /// `nonisolated(unsafe)` because `UserDefaults` is not `Sendable` and is nonetheless
+    /// documented thread-safe — which is exactly the case that annotation is for. The
+    /// alternative, `@MainActor`, would put the store behind the main actor and every
+    /// persistence path here is already reached from off it.
+    nonisolated(unsafe) private static let resolved = resolve(override())
+
+    /// A decision turned into the store that carries it out.
+    ///
+    /// Pulled out of the memoized `resolved` above so it is answerable from `swift test`, for
+    /// the reason `TerminalNotifier.canDeliver` gives: resolving once per process is right for
+    /// the process and leaves the mapping itself unreachable, and this mapping is where a
+    /// decision the parser got right could still be carried out wrong.
+    static func resolve(_ override: Override) -> (name: String, defaults: UserDefaults) {
+        switch override {
+        case .none:
+            return (canonical, .standard)
+        case .suite(let name):
+            // Force-unwrapped deliberately: `override(in:)` has already opened this exact
+            // name and found it usable, so a nil here is not an environment problem — it is
+            // this file disagreeing with itself, and a silent `.standard` would be the write
+            // to live state the whole override exists to prevent.
+            return (name, UserDefaults(suiteName: name)!)
+        case .refused(let why):
+            // The one place helm gives up rather than carrying on. An agent who set the
+            // variable is about to do something destructive under the belief that it is
+            // contained; being told no, loudly, is the cheap outcome.
+            fatalError("\(why)")
+        }
+    }
+
+    /// The one `UserDefaults` every default helm owns goes through.
+    ///
+    /// `UserDefaults.standard` survives in this file only, where the migration needs a handle
+    /// to reach *other* domains by name. `DefaultsDomainTests` fails if it reappears anywhere
+    /// else in `Sources/`, which is what stops a new call site from quietly escaping a suite.
+    static var store: UserDefaults { resolved.defaults }
+
+    /// The domain `defaults read` should be pointed at for this process.
+    static var activeDomain: String { resolved.name }
+
+    /// Whether this instance is deliberately not the operator's.
+    static var isIsolated: Bool { isIsolated(domain: activeDomain) }
+
+    /// The same question about a named domain, and pure so the **polarity** is pinned by a
+    /// test rather than by reading it. Backwards, this hides the badge on a test instance and
+    /// shows it on the operator's — the two ways of being wrong that matter.
+    static func isIsolated(domain: String) -> Bool { domain != canonical }
+
+    /// The window's title, which is also what `winshot --list` and `helm-spawn` see.
+    ///
+    /// Two helms are the *normal* state while building helm, and `AGENTS.md` records that
+    /// they are indistinguishable by name — so an isolated one says so in the one place an
+    /// agent outside the process can read. That makes this a safety mechanism another tool
+    /// depends on, not decoration, which is why it is pinned rather than eyeballed.
+    static var windowTitle: String { windowTitle(for: activeDomain) }
+
+    static func windowTitle(for domain: String) -> String {
+        isIsolated(domain: domain) ? "helm — \(domain)" : "helm"
+    }
+
     /// Written into `canonical` once the move has run, so it runs exactly once. Its value is
     /// the domain that was drained — the question anyone reading it will actually have.
     static let migratedFromKey = "helmDefaultsMigratedFrom"
@@ -37,6 +197,28 @@ enum DefaultsDomain {
     /// went is the difference between `defaults read helm` answering the question and
     /// answering a different one convincingly, which is the failure #45 is about.
     static let movedToKey = "helmDefaultsMovedTo"
+
+    /// What `HelmApp.init` calls: the move, unless this process is an isolated instance.
+    ///
+    /// **A suite must never inherit the legacy domain.** The move is destructive on the far
+    /// side — it empties `helm` and leaves a forwarding note — and it happens once per
+    /// machine. A test instance that ran it would swallow state the operator's own build has
+    /// not migrated yet, and the marker it left behind would stop that build from ever
+    /// trying. So the rule lives here, where it is a unit test, rather than as a condition at
+    /// a call site inside `HelmApp.init` that nothing can reach.
+    ///
+    /// - Returns: whether anything moved.
+    @discardableResult
+    static func migrateLegacyDomainAtLaunch(
+        override resolvedOverride: Override = override(),
+        from legacyDomain: String = legacy,
+        to canonicalDomain: String = canonical,
+        using defaults: UserDefaults = .standard
+    ) -> Bool {
+        guard resolvedOverride == .none else { return false }
+        return migrateLegacyDomain(
+            from: legacyDomain, to: canonicalDomain, using: defaults)
+    }
 
     /// Move the old process-name domain's contents into the canonical one, once.
     ///

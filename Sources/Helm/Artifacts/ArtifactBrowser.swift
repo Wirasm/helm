@@ -115,8 +115,8 @@ struct ArtifactBrowser: View {
     private static let rememberedKeyDefault = "artifactBrowserStore"
 
     private static var rememberedKey: String {
-        get { UserDefaults.standard.string(forKey: rememberedKeyDefault) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: rememberedKeyDefault) }
+        get { DefaultsDomain.store.string(forKey: rememberedKeyDefault) ?? "" }
+        set { DefaultsDomain.store.set(newValue, forKey: rememberedKeyDefault) }
     }
 
     // MARK: Rows

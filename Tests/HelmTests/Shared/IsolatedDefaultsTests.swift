@@ -97,6 +97,10 @@ final class IsolatedDefaultsTests: XCTestCase {
             .deletingLastPathComponent()  // Shared/
             .deletingLastPathComponent()  // HelmTests/
         let helper = testsRoot.appendingPathComponent("Shared/IsolatedDefaults.swift").path
+        // `DefaultsDomainTests` runs the same scan over `Sources/` for #86's override, so it
+        // holds this pattern as a literal to search *for* and never constructs one. Exempted
+        // on the same grounds this file exempts itself: a scanner contains what it scans.
+        let scanner = testsRoot.appendingPathComponent("App/DefaultsDomainTests.swift").path
 
         let files = try XCTUnwrap(
             FileManager.default.enumerator(atPath: testsRoot.path),
@@ -105,7 +109,7 @@ final class IsolatedDefaultsTests: XCTestCase {
         var offenders: [String] = []
         for case let relative as String in files where relative.hasSuffix(".swift") {
             let path = testsRoot.appendingPathComponent(relative).path
-            guard path != helper, path != #filePath else { continue }
+            guard path != helper, path != scanner, path != #filePath else { continue }
             let source = try String(contentsOfFile: path, encoding: .utf8)
             guard source.contains("UserDefaults(suiteName:") else { continue }
             offenders.append(relative)

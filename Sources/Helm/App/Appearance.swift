@@ -42,7 +42,7 @@ enum AppearanceOverride: String, CaseIterable, Identifiable {
 /// key or the enum — the terminal strip currently carries it, but that is a
 /// placement choice, not a terminal concern.
 struct AppearanceMenu: View {
-    @AppStorage(HelmApp.appearanceKey)
+    @AppStorage(HelmApp.appearanceKey, store: DefaultsDomain.store)
     private var appearanceRaw = AppearanceOverride.system.rawValue
 
     var body: some View {

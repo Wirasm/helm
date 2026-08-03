@@ -21,7 +21,7 @@ final class WorkspaceModel: ObservableObject {
     private var terminalChanges: AnyCancellable?
     private var workbenchChanges: AnyCancellable?
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = DefaultsDomain.store) {
         self.defaults = defaults
         workspaces = WorkspacePersistence.load(from: defaults)
         contexts = WorkspaceContextStore.load(from: defaults)

@@ -390,16 +390,16 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// dropped back to the config's size.
     static var persistedFontSize: Float? {
         get {
-            guard UserDefaults.standard.object(forKey: fontSizeDefaultsKey) != nil else {
+            guard DefaultsDomain.store.object(forKey: fontSizeDefaultsKey) != nil else {
                 return nil
             }
-            return Float(UserDefaults.standard.double(forKey: fontSizeDefaultsKey))
+            return Float(DefaultsDomain.store.double(forKey: fontSizeDefaultsKey))
         }
         set {
             guard let newValue else {
-                return UserDefaults.standard.removeObject(forKey: fontSizeDefaultsKey)
+                return DefaultsDomain.store.removeObject(forKey: fontSizeDefaultsKey)
             }
-            UserDefaults.standard.set(Double(newValue), forKey: fontSizeDefaultsKey)
+            DefaultsDomain.store.set(Double(newValue), forKey: fontSizeDefaultsKey)
         }
     }
 
