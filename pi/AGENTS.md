@@ -5,8 +5,11 @@ in whatever repo the user is in — not for agents working on helm. That is why 
 here and are symlinked into `~/.pi/agent/extensions/`, and not in helm's own
 `.pi/extensions/`, which would load them only inside this checkout.
 
-Everything below was measured against **pi 0.83.0 on 2026-08-02**, not read off a doc. Where
-it says "measured", there is a command in `test.sh` that shows it.
+Everything below was measured against **pi 0.83.0 on 2026-08-02**, not read off a doc. Where it
+says "measured", there is a command in `test.sh` that shows it. Exactly one claim here rests on
+a human watching instead — `/reload` — and it says so where it appears. Keep that distinction
+when you add to this file: what a command proved and what someone reported are not the same
+kind of fact, and a reader deserves to know which one they are getting.
 
 ## The rule that matters
 
@@ -45,22 +48,25 @@ Which gives four rules, all of them visible in `extensions/helm-probe/index.ts`:
 
 - **`pi.getFlag()` in a factory returns the registered default, never the value on argv.**
   Flags are bound from argv only after every extension has loaded
-  (`applyExtensionFlagValues` in `dist/core/agent-session-services.js`). A flag-based kill switch therefore reads
-  correctly and does nothing. Use an environment variable for anything load-time; a flag is
+  (`applyExtensionFlagValues` in
+  `dist/core/agent-session-services.js`). A flag-based kill switch therefore reads correctly
+  and does nothing. Use an environment variable for anything load-time; a flag is
   fine inside a handler, where it holds the real value. Measured: factory `false`, handler
   `true`, for the same `--trap-me` on the same run.
 - **Subscribing to an event pi no longer has succeeds silently.** `pi.on()` only pushes into a
   Map — no validation, no warning, and the handler simply never fires
-  (the `on()` in `createExtensionAPI`, `dist/core/extensions/loader.js`). Nothing at runtime will tell you. Two things catch
-  it, and you need both: the **typecheck**, which names the event, and a **behavioural
-  assertion** in the test suite, which notices the effect went missing. This is why extensions
+  (the `on()` in `createExtensionAPI`, `dist/core/extensions/loader.js`). Nothing at runtime
+  will tell you. Two things catch it, and you need both: the **typecheck**, which names the
+  event, and a **behavioural assertion** in the suite, which notices the effect went
+  missing. This is why extensions
   here import the real `ExtensionAPI` type instead of duck-typing the API surface — duck-typing
   keeps the build green through exactly the upgrade you needed to hear about.
 - **TypeBox is 1.3.7 and pi supplies it.** `Type.Base`, `Type.Awaited`, `Type.Promise`,
   `Type.AsyncIterator`, `Type.Iterator`, `Type.Options` and `Value.Mutate` are gone as of
   0.83.0. **Never vendor typebox**: a `node_modules/typebox` beside the extension is ignored,
-  because pi's loader aliases the specifier to its own copy (`getAliases` in `dist/core/extensions/loader.js`). Measured —
-  an extension in a directory with typebox 1.1.38 installed still ran against 1.3.7.
+  because pi's loader aliases the specifier to its own copy (`getAliases` in
+  `dist/core/extensions/loader.js`). Measured — an extension in a directory with typebox
+  1.1.38 installed still ran against 1.3.7.
 - **Import `typebox` and `@earendil-works/…`, not the old names.** `@sinclair/typebox` and
   `@mariozechner/pi-*` still resolve — the loader aliases them — but they name a package that
   is not what runs.
@@ -104,23 +110,33 @@ pi --no-extensions -e "$PWD/pi/extensions/helm-probe/index.ts"   # isolated, ign
 an explicit `-e` you see exactly one extension no matter what the machine has. Use it in every
 test; without it a run picks up whatever else is installed and stops being reproducible.
 
-Inside a session, `/reload` should re-run the factories on an edited file — `reload()` calls
-`clearExtensionCache()` and re-resolves both discovered and `-e` paths
-(`reload` in `dist/core/resource-loader.js`), and the extensions doc says auto-discovered
-extensions hot-reload. **Not confirmed here**: driving a live TUI through `/reload` under
-`expect` did not produce an observable report either way, and `script` refuses a non-tty stdin
-on macOS, so nothing was measured. Treat the iteration speed as unproven until someone watches
-it by hand. A fresh process is always correct; `bash pi/test.sh` never depends on reload.
+**`/reload` works — so iterating on an extension does not need a session restart.** Edit the
+file, `/reload` in the running session, and the new factory is what answers next. That is the
+iteration loop: no restart, no lost context, no relaunching whatever the session was in the
+middle of.
 
-Whatever reload does, do not hold a captured `ctx` across it — pi invalidates it, and the stale
-ctx throws with an explanatory message (`assertActive` in `dist/core/extensions/loader.js`).
+Provenance matters here, because the rest of this file is careful about it: this one is
+**verified by the operator, by hand, not by a command**. The automation could not watch it —
+`script` refuses a non-tty stdin on macOS and an `expect`-driven TUI produced no observable
+result either way — so there is no harness assertion behind this line, and `bash pi/test.sh`
+deliberately does not depend on reload. The source agrees (`reload` in
+`dist/core/resource-loader.js` clears the extension cache and re-resolves both discovered and
+`-e` paths), but source reading is not evidence of behaviour. A human watched it.
+
+Do not hold a captured `ctx` across a reload — pi invalidates it, and the stale ctx throws with
+an explanatory message (`assertActive` in `dist/core/extensions/loader.js`).
 
 ## Testing
 
 ```bash
-bash pi/test.sh            # all four; part of helm's gate
+bash pi/test.sh            # all four — this directory's gate
 bash pi/test.sh unit       # milliseconds, no pi process
 ```
+
+**This is its own gate, and it runs when you touch `pi/` — not as part of the Swift one.**
+helm's gate needs only the Swift toolchain and xcodegen; this needs node and a `tsc`. Bolting
+them together would mean every Swift contributor and every fresh worktree had to install a JS
+toolchain before the repo could go green, which is too high a price for one command.
 
 | Harness | What only it can prove | Cost |
 |---|---|---|
@@ -139,8 +155,8 @@ The typecheck runs against whatever pi is **installed right now** — `test.sh` 
 pinned upper bound: a newer pi is evidence, never a gate. `PI_PACKAGE_DIR=… bash pi/test.sh
 typecheck` points it at a candidate upgrade before you install one.
 
-Each harness **skips** rather than fails when its *toolchain* is missing, so this can sit in the
-gate on a machine with no node. Skips are printed, never silent. `tsc` comes from
+Each harness **skips** rather than fails when its *toolchain* is missing, so this still runs
+usefully on a machine with only some of it. Skips are printed, never silent. `tsc` comes from
 `npm install` in this directory.
 
 An absent toolchain is a skip. **A shipped extension with no `tests/<name>.mjs` is a failure**,

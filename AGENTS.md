@@ -14,15 +14,27 @@ Direction: `docs/direction.md` (an entry point, not a spec).
 Gate, all green before a PR to `development`:
 
 ```
-bash scripts/patch-libghostty.sh && swift build && swift test && make lint && xcodegen generate && bash pi/test.sh
+bash scripts/patch-libghostty.sh && swift build && swift test && make lint && xcodegen generate
 ```
 
 The patch script is first and not optional — the patched libghostty is gitignored, so a
 fresh worktree has nothing to link against. Never borrow another checkout's `vendor/`;
 that proves the other checkout builds.
 
-`pi/test.sh` is last because it is the only step that is not Swift: `swift test` cannot run
-TypeScript and should not learn how. It skips, loudly, on a machine without node or pi.
+**This gate needs only the Swift toolchain and xcodegen. Keep it that way.** It is the one
+command a fresh worktree runs, and every dependency added to it is a dependency every
+contributor now needs.
+
+**If you touched `pi/`, run its gate too — it is separate on purpose:**
+
+```
+bash pi/test.sh
+```
+
+Only when `pi/` changed. It needs node, and `tsc` from an `npm install` in `pi/`, which is
+why it is not part of the Swift gate: `swift test` cannot run TypeScript and should not
+learn how, and a Swift contributor should never need a JS toolchain to go green. See
+`pi/AGENTS.md`.
 
 - **Never restart a running helm without warning the operator** — a live window may be
   hosting their session.

@@ -8,8 +8,12 @@
 #
 # Usage: bash pi/test.sh [typecheck|unit|rpc|pty|all]   (default: all)
 #
-# Every harness SKIPS rather than fails when its toolchain is absent, so this can sit in
-# helm's gate on a machine with no node. A skip is printed; it is never silent.
+# This directory's own gate — run it when you touch pi/. Deliberately NOT part of helm's
+# Swift gate: that one needs only the Swift toolchain and xcodegen, and a Swift contributor
+# should not have to install node to make the repo go green.
+#
+# Every harness SKIPS rather than fails when its toolchain is absent, so this still runs
+# usefully with only some of it installed. A skip is printed; it is never silent.
 #
 # Verified against pi 0.83.0 on 2026-08-02.
 set -u
