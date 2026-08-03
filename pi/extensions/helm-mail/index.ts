@@ -11,13 +11,16 @@
  * is #56, and it needs a background `Stop` hook parked in a loop because an idle Claude
  * Code session cannot be woken by a file appearing.
  *
- * pi needs none of that, and it is the most useful thing measured here: pi 0.83.0 emits
- * `agent_settled` — "after an agent run has fully settled and no automatic retry,
- * compaction, or queued continuation will run" — and `dist/core/agent-session.js:315`
- * clears `_isAgentRunActive` *before* awaiting extension handlers. So a handler on that
- * event is genuinely between turns, `ctx.isIdle()` is true inside it, and
- * `pi.sendUserMessage()` starts a clean turn. Rungs 3 and 4 collapse into this one file for
- * pi, with no lock file and no 8-hour park.
+ * DELIVERY IS BEFORE A TURN, NOT AFTER ONE. This first drained on `agent_settled`, which is
+ * genuinely between turns and was easy — but it meant an agent carried out the operator's
+ * instruction and only THEN learned what it had been told. Measured live: a session sent hop
+ * 2 of a relay while hop 1 sat unread in its own mailbox.
+ *
+ * `context` fires as the message list for a provider request is assembled, and `sdk.js` feeds
+ * whatever a handler returns straight back to the agent as `transformContext`. So the notice
+ * arrives at the START of the turn the operator asked for. Mail informs the work instead of
+ * chasing it, delivery costs no extra model call, and the wake cap that guarded that cost
+ * stops being needed at all.
  *
  * THE ONE RULE: the factory must be total. A factory that throws exits the whole pi CLI —
  * and `~/.pi/agent/extensions` is discovered in every directory, so "our extension is
@@ -52,12 +55,14 @@ const ROOT_ENV = "HELM_MAIL_DIR";
 const HANDLE_ENV = "HELM_MAIL_HANDLE";
 
 /**
- * Consecutive wakes before this extension goes quiet, copied from kild's `DEFAULT_WAKE_CAP`
- * and for its reason: waking a session spends the owner's money, and two agents replying to
- * each other wake each other until it runs out. Mail is NOT eaten at the cap — the next
- * drain reports it. The counter resets on any drain that finds nothing.
+ * THERE IS NO WAKE CAP, and its absence is a consequence rather than an omission.
+ *
+ * kild's `DEFAULT_WAKE_CAP = 3` existed because delivery SPENT a turn: `sendUserMessage`
+ * starts one, so two agents replying to each other wake each other until the money runs out.
+ * Delivering on `context` spends nothing — the notice rides a turn the operator already asked
+ * for — so there is no runaway to cap. An agent that is never prompted is never delivered to,
+ * which is the same property from the other side.
  */
-const WAKE_CAP = 3;
 
 /** Where consumed messages go. Rename, never delete: the record is the point. */
 const READ_DIR = "read";
@@ -69,7 +74,7 @@ const OWNER_FILE = "owner.json";
  * The pi methods this extension uses. Typed at the declaration rather than left to `as
  * const`, so a misspelling is a compile error here rather than wherever it is consumed.
  */
-const USES: readonly (keyof ExtensionAPI)[] = ["on", "registerCommand", "sendUserMessage"];
+const USES: readonly (keyof ExtensionAPI)[] = ["on", "registerCommand"];
 
 /** A subject line is another agent's text. It may occupy one line and no more. */
 const SUBJECT_MAX = 80;
@@ -411,7 +416,7 @@ function consume(dir: string, names: readonly string[]): Delivered[] {
  * place every path into the notice converges, so it is the only place the guard belongs.
  */
 function notice(taken: readonly Delivered[]): string {
-	const lines = [`${NAME}: ${taken.length} message${taken.length === 1 ? "" : "s"} arrived while you were idle.`];
+	const lines = [`${NAME}: ${taken.length} message${taken.length === 1 ? "" : "s"} waiting for you.`];
 	for (const { message, file } of taken) {
 		lines.push(`  from ${sanitizeFrom(message.from)} — ${sanitizeSubject(message.subject)}`);
 		lines.push(`    ${file}`);
@@ -455,8 +460,8 @@ function install(pi: ExtensionAPI): void {
 	const root = mailRoot();
 	/** Set at session_start. Undefined means we never got an address; every path checks. */
 	let claimed: Claim | undefined;
-	/** Consecutive wakes with no quiet drain between them. See WAKE_CAP. */
-	let wakes = 0;
+	/** The notice this agent run is carrying, re-injected on every request within it. */
+	let pending: string | undefined;
 
 	function report(): string {
 		const lines = [`${NAME} v${VERSION}`];
@@ -499,43 +504,42 @@ function install(pi: ExtensionAPI): void {
 	}
 
 	/**
-	 * The drain, on the one event that means "genuinely between turns".
+	 * The drain, on the one event that puts mail in front of the agent BEFORE it acts.
 	 *
-	 * Order matters and is load-bearing: the cap is checked and `sendUserMessage` is proven
-	 * present BEFORE anything is consumed. Consuming first would eat mail we then cannot
-	 * deliver — the message renamed into `read/` and nobody ever told.
+	 * `context` fires as the message list for a provider request is assembled, and whatever
+	 * this returns is what the provider sees — measured: `sdk.js` passes `transformContext`
+	 * into the agent, which calls `emitContext(messages)` and takes the result. So the notice
+	 * rides the turn the operator already asked for, and the mail informs the work rather than
+	 * arriving after it is done.
+	 *
+	 * That ordering is the whole reason this replaced `agent_settled`. Delivering at turn END
+	 * meant an agent carried out an instruction and only then learned what it had been told —
+	 * measured live: a session sent hop 2 while hop 1 sat unread in its own mailbox.
+	 *
+	 * TWO THINGS THIS FUNCTION MUST GET RIGHT, and neither is obvious.
+	 *
+	 * **`context` fires per provider REQUEST, not per turn.** A turn with tool calls assembles
+	 * the context several times. Consuming on the first one and injecting nothing afterwards
+	 * would show the model a notice on request 1 that has vanished from its history by request
+	 * 2 — it would be acting on something it can no longer see. So the drained notice is held
+	 * in `pending` for the rest of the agent run and re-injected every time.
+	 *
+	 * **`pending` is cleared at the START of a run, not the end.** An aborted turn never
+	 * reaches an end event; clearing on entry means the next run always re-injects whatever it
+	 * is holding, so an interrupted turn cannot swallow a notice.
 	 */
-	function drain(pi: ExtensionAPI, ctx: ExtensionContext): void {
-		if (!claimed) return;
-		const waiting = queued(claimed.dir);
-		if (waiting.length === 0) {
-			// The quiet drain is what resets the cap — kild's rule, kept exactly.
-			wakes = 0;
-			return;
+	function inject(messages: readonly unknown[]): { messages: unknown[] } | undefined {
+		if (!claimed) return undefined;
+		if (!pending) {
+			const waiting = queued(claimed.dir);
+			if (waiting.length === 0) return undefined;
+			const taken = consume(claimed.dir, waiting);
+			if (taken.length === 0) return undefined;
+			pending = notice(taken);
 		}
-		if (wakes >= WAKE_CAP) {
-			console.error(
-				`[${NAME}] ${waiting.length} message(s) held: ${WAKE_CAP} consecutive wakes without a quiet turn. ` +
-					`Not eaten — run /${NAME} read, or they arrive after the next turn you take.`,
-			);
-			return;
-		}
-		if (!hasMethod(pi, "sendUserMessage")) {
-			console.error(`[${NAME}] ${waiting.length} message(s) waiting, but this pi cannot deliver them.`);
-			return;
-		}
-		const taken = consume(claimed.dir, waiting);
-		if (taken.length === 0) return;
-		wakes += 1;
-		const text = notice(taken);
-		try {
-			pi.sendUserMessage(text);
-		} catch (error) {
-			// Delivery failed after consuming. The mail is in read/ and would otherwise be
-			// gone with no trace, so the path is the important part of this line.
-			warn(`could not deliver ${taken.length} message(s); they are in ${path.join(claimed.dir, READ_DIR)}`, error);
-			announce(ctx, text);
-		}
+		return {
+			messages: [...messages, { role: "user", content: [{ type: "text", text: pending }], timestamp: Date.now() }],
+		};
 	}
 
 	if (present.includes("on")) {
@@ -546,14 +550,20 @@ function install(pi: ExtensionAPI): void {
 			}),
 		);
 
-		// This subscription IS rung 4 for pi. If a future pi removes the event, `pi.on()`
-		// still returns cleanly — it only pushes into a Map — and the handler simply never
-		// fires. Nothing at runtime can tell you. The typecheck naming this event, and the
-		// unit harness asserting the handler exists, are the only two things that can.
-		step("agent_settled handler", () =>
-			pi.on("agent_settled", (_event, ctx) => {
-				drain(pi, ctx);
+		// A fresh agent run: drop what the previous one was carrying, so a notice is injected
+		// for exactly the run that consumed it and an aborted run cannot strand one.
+		step("agent_start handler", () =>
+			pi.on("agent_start", () => {
+				pending = undefined;
 			}),
+		);
+
+		// THE delivery point for pi. If a future pi removes the event, `pi.on()` still returns
+		// cleanly — it only pushes into a Map — and the handler simply never fires. Nothing at
+		// runtime can tell you. The typecheck naming this event, and the unit harness
+		// asserting the handler exists, are the only two things that can.
+		step("context handler", () =>
+			pi.on("context", (event: { messages: readonly unknown[] }) => inject(event.messages)),
 		);
 	}
 
@@ -583,14 +593,13 @@ function install(pi: ExtensionAPI): void {
 						}
 						const waiting = queued(claimed.dir);
 						if (waiting.length === 0) {
-							wakes = 0;
 							announce(ctx, `${NAME}: no mail waiting for ${claimed.handle}`);
 							return;
 						}
 						const taken = consume(claimed.dir, waiting);
-						// A human asked, so this reports rather than waking a turn — and it
-						// resets the cap, because a read the operator drove is not a loop.
-						wakes = 0;
+						// A human asked, so this reports NOW rather than waiting for the next
+						// turn to carry it. The same consume either way: the rename is what
+						// makes a message arrive exactly once, whoever asked for it.
 						announce(ctx, notice(taken));
 						return;
 					}
