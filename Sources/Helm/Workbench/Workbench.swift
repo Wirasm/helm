@@ -335,9 +335,17 @@ struct Workbench: Codable, Equatable {
     ///
     /// **A canvas pane only.** Nothing else can hold a source, and a terminal pane quietly
     /// becoming a canvas is not a repair — it is a pane whose pty has nowhere to render.
+    ///
+    /// **It does not defend `pane(showing:)`'s "one pane per source".** That rule is
+    /// `placement(forOpening:)`'s, and it holds for every canvas that is *opened*; two panes
+    /// can now reach the same source by navigation — ⌘-click a link into one canvas, then
+    /// type that address into another. Nothing breaks (no invariant here is about content,
+    /// and `normalize()` does not care), but `pane(showing:)` picks the first of the two, so
+    /// a later ⌘-click on that URL selects whichever comes first in bench order. Deduping
+    /// here instead would mean closing or merging a pane the operator is looking at, which
+    /// is a worse answer than an arbitrary one.
     mutating func repoint(_ pane: Pane.ID, to source: CanvasSource) {
-        guard let address = address(of: pane),
-            case .canvas = columns[address.column].slots[address.slot].panes[address.pane].content
+        guard let address = address(of: pane), case .canvas = self.pane(pane)?.content
         else { return }
         columns[address.column].slots[address.slot].panes[address.pane].content = .canvas(source)
         normalize()

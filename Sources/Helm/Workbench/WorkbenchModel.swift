@@ -140,8 +140,15 @@ final class WorkbenchModel: ObservableObject {
         // (#89). Wired here because this is the only place a `CanvasModel` is made — and
         // wired AFTER construction on purpose, so resolving a restored pane into its own
         // canvas is not mistaken for that canvas moving.
-        model.onSourceChange = { [weak self] source in
-            self?.canvas(pane.id, didPointAt: source)
+        //
+        // The identity check is what keeps an ORPHAN quiet. `deactivate` drops the cache
+        // without closing what is in it, so a model whose pane was re-resolved afterwards is
+        // still alive, still holding this closure, and still able to report — into a bench
+        // that now resolves that pane to a different canvas. `model` is captured weakly
+        // because the closure is stored on it; it is always there when the closure runs.
+        model.onSourceChange = { [weak self, weak model] source in
+            guard let self, let model, canvases[pane.id]?.model === model else { return }
+            canvas(pane.id, didPointAt: source)
         }
         // A canvas pane only renders while its workspace is the active one, so this is
         // that workspace — the same association `TerminalManager` gets for free by
@@ -158,9 +165,16 @@ final class WorkbenchModel: ObservableObject {
     /// because `WorkspaceModel.observe` saves on each bench change. The pane is looked up
     /// each time rather than captured, so a canvas that outlives its pane by a moment
     /// repoints nothing.
+    ///
+    /// **Only this workspace's bench**, because that is the only one there is: a parked
+    /// workspace's arrangement is a value in `WorkspaceModel.contexts` and nothing can
+    /// mutate it until it is activated again. A canvas belonging to one reports into a
+    /// bench that does not hold its pane and is dropped here — which is reachable only if a
+    /// webview outlives the teardown of the view that owned it, since a parked pane has no
+    /// webview left to navigate.
     private func canvas(_ pane: Pane.ID, didPointAt source: CanvasSource) {
-        guard var bench, case let .canvas(current)? = bench.pane(pane)?.content,
-            current != source
+        guard var bench, let target = bench.pane(pane),
+            case let .canvas(current) = target.content, current != source
         else { return }
         bench.repoint(pane, to: source)
         commit(bench)

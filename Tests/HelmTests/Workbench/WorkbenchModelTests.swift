@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 
 @testable import Helm
@@ -223,16 +224,62 @@ final class WorkbenchModelTests: XCTestCase {
 
     /// Every bench change is a `UserDefaults` write, through `WorkspaceModel.observe`. The
     /// events that leave the canvas exactly where it was must not produce one.
+    ///
+    /// Counted rather than compared, because comparing proves nothing here: repointing a
+    /// pane to the source it already has leaves a bench *equal* to the one before it, so an
+    /// equality assertion passes whether or not the redundant commit happened — and the
+    /// commit is the thing that reaches the store.
     func testAReloadOrAFailureDoesNotRewriteTheBench() throws {
         let (model, _) = mounted()
         let id = try XCTUnwrap(model.open(.url(URL(string: "http://localhost:3000")!)))
         let canvas = model.canvas(for: try XCTUnwrap(model.bench?.pane(id)))
         let before = try XCTUnwrap(model.bench)
+        var commits = 0
+        let subscription = model.objectWillChange.sink { _ in commits += 1 }
+        defer { subscription.cancel() }
 
         canvas.reloadPage()
         canvas.pageDidFail("Could not connect to the server.")
 
-        XCTAssertEqual(model.bench, before, "neither moves the canvas anywhere")
+        XCTAssertEqual(commits, 0, "neither event may reach the store at all")
+        XCTAssertEqual(model.bench, before, "…and neither moves the canvas anywhere")
+    }
+
+    /// `close(_:)` drops the pane from the bench before it empties the canvas, and an
+    /// emptied canvas reports nothing anyway. Both have to hold, because a late callback
+    /// from a webview that is going away is exactly when this fires.
+    func testALateCallbackFromAClosedCanvasCannotResurrectItsPane() throws {
+        let (model, _) = mounted()
+        let id = try XCTUnwrap(model.open(.url(URL(string: "http://localhost:3000")!)))
+        let canvas = model.canvas(for: try XCTUnwrap(model.bench?.pane(id)))
+
+        model.close(id)
+        canvas.pageDidNavigate(to: URL(string: "http://localhost:3000/late")!)
+
+        XCTAssertNil(model.bench?.pane(id), "a closed pane must not come back")
+    }
+
+    /// `deactivate` drops the canvas cache without closing what is in it, so a model whose
+    /// pane is later re-resolved is still alive and still holding its write-back closure.
+    /// Nothing today calls `deactivate` without `closeWorkspace` first — but the write-back
+    /// is what made an orphan able to reach the bench at all, so the guard is its own.
+    func testAnOrphanedCanvasCannotRepointTheBenchThatReplacedIt() throws {
+        let live = URL(string: "http://localhost:3000")!
+        let page = Pane(content: .canvas(.url(live)))
+        let restored = Workbench(panes: [Pane(content: .terminal(face: .terminal)), page])
+        let model = WorkbenchModel(terminals: TerminalManager())
+        model.activate(workspacePath: workspace, restoring: restored)
+        let orphan = model.canvas(for: page)
+
+        model.deactivate()
+        model.activate(workspacePath: workspace, restoring: restored)
+        XCTAssertNotIdentical(model.canvas(for: page), orphan, "precondition: it is an orphan")
+
+        orphan.pageDidNavigate(to: URL(string: "http://localhost:3000/zombie")!)
+
+        XCTAssertEqual(
+            model.bench?.pane(page.id)?.content, .canvas(.url(live)),
+            "a canvas nothing shows any more must not write over the one that does")
     }
 
     /// The ordering the write-back depends on: a restored pane resolves to a canvas that is

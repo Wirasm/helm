@@ -63,7 +63,9 @@ final class CanvasModel: ObservableObject {
     }
 
     @Published private(set) var showing: Showing? {
-        didSet { if let source { onSourceChange?(source) } }
+        didSet {
+            if let source { onSourceChange?(source) }
+        }
     }
 
     /// This canvas is now pointed somewhere else — an address was committed, or a page
@@ -85,9 +87,17 @@ final class CanvasModel: ObservableObject {
     /// main-queue hop that fixes it would make the write-back asynchronous for no gain.
     /// Inside `didSet` the new value is already stored.
     ///
-    /// **`showing == nil` is deliberately not reported.** That is `close()`, and by the time
-    /// it runs `WorkbenchModel.close` has already taken the pane out of the bench — there is
-    /// nothing left to point anywhere.
+    /// **`showing == nil` is deliberately not reported**, and the non-optional parameter is
+    /// what says so. `source` is nil exactly when `showing` is — an emptied canvas is not
+    /// pointed anywhere, so there is nothing to hand over. That is the whole reason, and it
+    /// holds for every caller of `close()`: the pane-level one in `WorkbenchModel.close`,
+    /// which has already dropped the pane, and the two ✕ buttons, which empty the canvas and
+    /// leave the pane where it is. Those keep the source they last reported, which is the
+    /// right answer while ✕ empties a pane rather than closing it.
+    ///
+    /// **One writer.** Swift has no access level for "settable by `WorkbenchModel` only", so
+    /// this is a plain `var` and overwriting it after `canvas(for:)` has wired it turns the
+    /// write-back off silently — which is #89 again, with no compiler to say so.
     var onSourceChange: ((CanvasSource) -> Void)?
 
     /// Where this canvas is pointed, as the bench persists it.
