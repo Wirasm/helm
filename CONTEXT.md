@@ -40,13 +40,18 @@ the app — several slots are visible at once, each with its own selected pane.
 _Avoid_: cell, tab group, split
 
 **pane**:
-A workbench tenant. Two types: **terminal** and **canvas**.
+A workbench tenant. Three types: **terminal**, **canvas**, and **run pane**.
 _Avoid_: view, widget, dock
+
+**run pane**:
+The pane type that resolves one persisted Archon run address and renders Archon's compact,
+ordered node summaries. It does not render raw workflow events or control the run.
+_Avoid_: event log, Archon canvas, rail detail
 
 **face**:
 Which of a terminal pane's two presentations is drawn — the terminal, or the agent's
 writing over it. A property of the pane, so two terminals side by side can show different
-ones; a canvas has none.
+ones; a canvas and a run pane have none.
 _Avoid_: mode, view, tab
 
 **visible**:
@@ -71,6 +76,12 @@ annotation on it. Modular by source; extendable to further formats.
 _Avoid_: artifact pane, webview, browser, draw-on pane
 
 ### What helm looks like
+
+**rail**:
+The remembered, default-hidden strip to the right of the workbench. It monitors active
+Archon runs and launches detached workflows; selecting a run opens a run pane on the bench.
+It is not another place panes can dock.
+_Avoid_: sidebar, right bar, pane dock
 
 **palette**:
 helm's one table of colours, as values (`Palette.helm`). There is exactly one, and every

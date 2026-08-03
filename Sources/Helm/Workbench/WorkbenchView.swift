@@ -129,6 +129,8 @@ private struct SlotView: View {
             }
         case .canvas:
             CanvasView(model: model.canvas(for: pane), post: postHandler)
+        case .archonRun:
+            ArchonRunPaneView(model: model.archonRun(for: pane))
         }
     }
 

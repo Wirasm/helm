@@ -51,13 +51,15 @@ terminal in, running Archon workflows), but they wait on dogfooding to prove a n
   stack, each slot tabbed. A real window manager, but not a general tree — every arrangement
   worth having is columns-of-stacks, and depth-2 is a strict subset of the tree so nothing is
   foreclosed.
-- **Pane** — a workbench tenant. **Two types, and only two.**
+- **Pane** — a workbench tenant. **Three types.**
   - **Terminal** — the chat view is a second **face** on this, drawn over a terminal that
     stays mounted underneath, toggled with ⌘T. The face is a property of the pane, so two
     terminals side by side can show different ones.
   - **Canvas** — renders a markdown file, an HTML file, or a URL, and accepts annotation on
     it. Modular by source, extendable to further formats. This is `ArtifactPane` promoted,
     not new work — and the promotion has shipped, so it is `CanvasView` / `CanvasModel` now.
+  - **Run pane** — resolves one persisted Archon run address and renders the compact ordered
+    node summaries published by `workflow get --verbose --json`.
 
 Two corrections to what that list used to say, both from building it. The chat view is not
 a *swap*: the terminal view stays mounted under it, because one attached surface drives the
@@ -80,7 +82,8 @@ and a calmer view for focus.
 
 ## Archon surface
 
-Not an API client — the CLI's `--json` and the file tree. Two pieces:
+Not an API client — the development CLI's `--json` through temporary-file stdout capture.
+No HTTP and no direct SQLite reads. Two pieces:
 
 - A **run list** in the rail — background `--detach` runs with key metadata. Clicking one
   opens a curated node view as a **bench pane**, not inside the rail.

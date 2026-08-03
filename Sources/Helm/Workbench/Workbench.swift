@@ -9,7 +9,8 @@ import Foundation
 ///
 /// A value, not a tree of live objects: persistence, restore and equality come free,
 /// and every rule below is exercisable without a window, a pty or a webview. The
-/// live objects a pane *names* — a `TerminalSession`, a `CanvasModel` — are resolved
+/// live objects a pane *names* — a `TerminalSession`, `CanvasModel`, or
+/// `ArchonRunPaneModel` — are resolved
 /// at the edge by `WorkbenchModel`, which is the only thing here that needs a runtime.
 ///
 /// Invariants — re-established by `normalize()` after EVERY mutation:
@@ -109,6 +110,10 @@ struct Workbench: Codable, Equatable {
         panes.filter { if case .canvas = $0.content { true } else { false } }
     }
 
+    var archonRunPanes: [Pane] {
+        panes.filter { if case .archonRun = $0.content { true } else { false } }
+    }
+
     /// The panes actually on screen: one per slot. Several at once, which is the whole
     /// difference between a bench and a tab row, and why `TerminalSession.isVisible`
     /// replaced a single app-level `selectedID`.
@@ -130,8 +135,12 @@ struct Workbench: Codable, Equatable {
         panes.first { $0.content == .canvas(source) }?.id
     }
 
+    func pane(showing reference: ArchonRunRef) -> Pane.ID? {
+        panes.first { $0.content == .archonRun(reference) }?.id
+    }
+
     /// Which face a slot's strip should offer, or nil when that slot's selected pane is a
-    /// canvas and there is no face to offer. The strip renders `if let` on this rather
+    /// a non-terminal and there is no face to offer. The strip renders `if let` on this rather
     /// than asking what kind of pane it is — that question is a decision, and decisions
     /// live here.
     func face(ofSelectedPaneIn slot: Slot.ID) -> TerminalFace? {
@@ -528,6 +537,7 @@ struct Pane: Codable, Equatable, Identifiable {
     enum Content: Equatable {
         case terminal(face: TerminalFace)
         case canvas(CanvasSource)
+        case archonRun(ArchonRunRef)
     }
 }
 
@@ -552,8 +562,8 @@ enum TerminalFace: String, Codable, Equatable {
 /// gives: the synthesized shape uses positional `_0` keys, which break on any reordering
 /// of the cases and are unreadable in the stored blob.
 extension Pane.Content: Codable {
-    private enum CodingKeys: String, CodingKey { case kind, source }
-    private enum Kind: String, Codable { case terminal, canvas }
+    private enum CodingKeys: String, CodingKey { case kind, source, run }
+    private enum Kind: String, Codable { case terminal, canvas, archonRun }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -561,6 +571,8 @@ extension Pane.Content: Codable {
         // The face is deliberately not read, because it is deliberately not written.
         case .terminal: self = .terminal(face: .terminal)
         case .canvas: self = .canvas(try container.decode(CanvasSource.self, forKey: .source))
+        case .archonRun:
+            self = .archonRun(try container.decode(ArchonRunRef.self, forKey: .run))
         }
     }
 
@@ -577,6 +589,9 @@ extension Pane.Content: Codable {
         case let .canvas(source):
             try container.encode(Kind.canvas, forKey: .kind)
             try container.encode(source, forKey: .source)
+        case let .archonRun(reference):
+            try container.encode(Kind.archonRun, forKey: .kind)
+            try container.encode(reference, forKey: .run)
         }
     }
 }

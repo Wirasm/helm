@@ -43,6 +43,17 @@ extension Workbench {
         return .column
     }
 
+    /// Run panes group with other run panes, while repeated selection of the same run
+    /// selects its existing persisted address instead of opening a duplicate.
+    func placement(forOpening reference: ArchonRunRef) -> Placement {
+        if let open = pane(showing: reference) { return .existing(open) }
+        if let focused = slot(focusedSlot), focused.holdsArchonRun {
+            return .tab(in: focused.id)
+        }
+        if let anyRun = slots.first(where: \.holdsArchonRun) { return .tab(in: anyRun.id) }
+        return .column
+    }
+
     /// A new terminal is a new tab in the focused slot — what ⌘N does today
     /// (`TerminalManager.newTerminal`: append, then select).
     func placementForNewTerminal() -> Placement {
@@ -55,5 +66,9 @@ extension Slot {
     /// and a canvas counts: the operator put a canvas there, so that is where canvases go.
     fileprivate var holdsCanvas: Bool {
         panes.contains { if case .canvas = $0.content { true } else { false } }
+    }
+
+    fileprivate var holdsArchonRun: Bool {
+        panes.contains { if case .archonRun = $0.content { true } else { false } }
     }
 }
