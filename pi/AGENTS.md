@@ -29,7 +29,7 @@ own extension.
 ## The gate
 
 ```bash
-bash pi/test.sh
+bash .claude/skills/pi-extensions/scripts/test.sh
 ```
 
 **Run this when you touch `pi/`. It is separate from helm's Swift gate on purpose** — that one

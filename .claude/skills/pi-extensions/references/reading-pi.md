@@ -78,7 +78,7 @@ To check an upgrade *before* installing it, point the typecheck at a candidate p
 than the active one:
 
 ```bash
-PI_PACKAGE_DIR=/path/to/candidate bash pi/test.sh typecheck
+PI_PACKAGE_DIR=/path/to/candidate bash scripts/test.sh typecheck
 ```
 
 Never pin an upper bound on the pi version. Record which version was verified and let a newer one

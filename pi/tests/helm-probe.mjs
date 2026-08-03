@@ -8,8 +8,6 @@
  * 0.83.0 a factory that throws exits the whole CLI, so "the factory is total" is the single
  * property most worth testing, and this is the only harness that can test it directly.
  *
- * Borrowed in shape from firstmate's tests/fm-calm-pi-extension.test.sh, which drives its
- * extensions the same way.
  *
  * One of these per extension, named for it — pi/test.sh finds tests/<name>.mjs by the
  * extension's directory name.

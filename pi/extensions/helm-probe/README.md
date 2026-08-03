@@ -50,5 +50,5 @@ pi --no-extensions -e "$(git rev-parse --show-toplevel)/pi/extensions/helm-probe
 ## Test it
 
 ```bash
-bash pi/test.sh          # typecheck, unit, rpc, pty — none of them calls a model
+bash .claude/skills/pi-extensions/scripts/test.sh          # typecheck, unit, rpc, pty — none of them calls a model
 ```

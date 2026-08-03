@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
-# The test command for helm's pi extensions. Four harnesses, none of which calls a model.
+# The gate for pi extensions. Four harnesses, none of which calls a model.
 #
 #   typecheck  tsc --noEmit against the pi that is actually installed.  THE UPGRADE ALARM.
 #   unit       node + a fake pi, including a deliberately mutilated one. Milliseconds.
 #   rpc        a real `pi --mode rpc`; asserts the extension loads and its UI call surfaces.
 #   pty        a real TUI under `script`; asserts pi reaches a normal prompt.
 #
-# Usage: bash pi/test.sh [typecheck|unit|rpc|pty|all]   (default: all)
+# Usage: bash <this-script> [typecheck|unit|rpc|pty|all]   (default: all)
 #
-# This directory's own gate — run it when you touch pi/. Deliberately NOT part of helm's
-# Swift gate: that one needs only the Swift toolchain and xcodegen, and a Swift contributor
-# should not have to install node to make the repo go green.
+# Run it from anywhere inside the project whose extensions are under test — it operates on
+# THAT project, never on the skill directory it happens to live in, so it works unchanged in
+# any repo that grows pi extensions. Layout it expects, overridable:
+#
+#   PI_EXT_DIR      extensions   (default: <git root>/pi/extensions)
+#   PI_TESTS_DIR    unit tests   (default: the extensions dir's sibling `tests/`)
+#   PI_PACKAGE_DIR  installed pi (default: `npm root -g`/@earendil-works/pi-coding-agent)
+#   PI_TSC          a tsc        (default: <project>/pi/node_modules/.bin/tsc, then PATH)
+#
+# Deliberately NOT wired into a project's main build gate when that gate is another language's:
+# this needs node and a tsc, and a contributor who never touches pi/ should not have to install
+# a JS toolchain to make the repo go green. Run it when the extensions change.
 #
 # Every harness SKIPS rather than fails when its toolchain is absent, so this still runs
 # usefully with only some of it installed. A skip is printed; it is never silent.
@@ -18,8 +27,10 @@
 # Verified against pi 0.83.0 on 2026-08-02.
 set -u
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXTENSIONS_DIR="$ROOT/extensions"
+# The project under test, derived from where this is RUN, never from where this file LIVES.
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+EXTENSIONS_DIR=${PI_EXT_DIR:-"$PROJECT_ROOT/pi/extensions"}
+TESTS_DIR=${PI_TESTS_DIR:-"$(dirname "$EXTENSIONS_DIR")/tests"}
 FAILURES=0
 
 say()  { printf '%s\n' "$*"; }
@@ -49,10 +60,10 @@ pi_version() {
 }
 
 # A private temp dir named for the harness that owns it.
-make_tempdir() { mktemp -d "${TMPDIR:-/tmp}/helm-pi-$1.XXXXXX"; }
+make_tempdir() { mktemp -d "${TMPDIR:-/tmp}/pi-ext-$1.XXXXXX"; }
 
 # Every extension directory's name. The name is load-bearing: it is also the unit test's
-# filename and, by the convention in AGENTS.md, the command the extension registers.
+# filename and, by convention, the command the extension registers.
 extension_names() {
 	local dir
 	for dir in "$EXTENSIONS_DIR"/*/; do
@@ -63,8 +74,7 @@ extension_names() {
 
 # A temp workspace with the extensions copied in and pi's OWN type packages symlinked
 # beside them. Nothing is vendored: the types are always whatever pi is installed right
-# now, which is the entire point of the typecheck. Borrowed from firstmate's
-# tests/fm-pi-primary-types.test.sh.
+# now, which is the entire point of the typecheck.
 make_fixture() {
 	local fixture=$1 dep
 	# The same three packages both the typecheck and the unit harness symlink. Checked here
@@ -101,7 +111,7 @@ make_fixture() {
 
 find_tsc() {
 	if [ -n "${PI_TSC:-}" ]; then printf '%s' "$PI_TSC"; return 0; fi
-	if [ -x "$ROOT/node_modules/.bin/tsc" ]; then printf '%s' "$ROOT/node_modules/.bin/tsc"; return 0; fi
+	if [ -x "$PROJECT_ROOT/pi/node_modules/.bin/tsc" ]; then printf %s "$PROJECT_ROOT/pi/node_modules/.bin/tsc"; return 0; fi
 	if have_cmd tsc; then command -v tsc; return 0; fi
 	return 1
 }
@@ -146,8 +156,8 @@ harness_unit() {
 		# A shipped extension with no unit harness is a DEFECT, not an absent toolchain:
 		# skipping here would leave "the factory is total" — the one property measured as
 		# catastrophic — unverified while the gate stayed green.
-		[ -f "$ROOT/tests/$name.mjs" ] || { bad "unit: $name has no tests/$name.mjs"; continue; }
-		(cd "$fixture" && node "$ROOT/tests/$name.mjs" "$fixture/extensions/$name/index.ts") ||
+		[ -f "$TESTS_DIR/$name.mjs" ] || { bad "unit: $name has no tests/$name.mjs"; continue; }
+		(cd "$fixture" && node "$TESTS_DIR/$name.mjs" "$fixture/extensions/$name/index.ts") ||
 			bad "unit: $name failed its checks"
 	done
 	if [ "$FAILURES" -eq "$before" ]; then
@@ -299,7 +309,7 @@ case "${1:-all}" in
 	rpc)       harness_rpc ;;
 	pty)       harness_pty ;;
 	all)       harness_typecheck; harness_unit; harness_rpc; harness_pty ;;
-	*)         say "usage: bash pi/test.sh [typecheck|unit|rpc|pty|all]"; exit 2 ;;
+	*)         say "usage: bash <this-script> [typecheck|unit|rpc|pty|all]"; exit 2 ;;
 esac
 
 if [ "$FAILURES" -ne 0 ]; then

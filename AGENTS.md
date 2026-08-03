@@ -28,7 +28,7 @@ contributor now needs.
 **If you touched `pi/`, run its gate too — it is separate on purpose:**
 
 ```
-bash pi/test.sh
+bash .claude/skills/pi-extensions/scripts/test.sh
 ```
 
 Only when `pi/` changed. It needs node, and `tsc` from an `npm install` in `pi/`, which is

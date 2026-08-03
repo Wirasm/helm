@@ -1,11 +1,11 @@
 # Testing an extension
 
-Four harnesses, none of which calls a model. `pi/test.sh` is the working implementation; this is
+Four harnesses, none of which calls a model. `scripts/test.sh` is the working implementation; this is
 what each one is for and why it exists.
 
 ```bash
-bash pi/test.sh            # all four
-bash pi/test.sh unit       # milliseconds, no pi process
+bash scripts/test.sh            # all four
+bash scripts/test.sh unit       # milliseconds, no pi process
 ```
 
 Each harness **skips** rather than fails when its toolchain is absent, printing the skip. An
@@ -44,7 +44,7 @@ $TMP/node_modules/@types/node                      →  $PI/node_modules/@types/
 `allowImportingTsExtensions`.
 
 Point it at a candidate package to check an upgrade before installing it:
-`PI_PACKAGE_DIR=/path/to/candidate bash pi/test.sh typecheck`.
+`PI_PACKAGE_DIR=/path/to/candidate bash scripts/test.sh typecheck`.
 
 Never pin an upper bound on the pi version — record what was verified, let newer through.
 
