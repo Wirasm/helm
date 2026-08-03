@@ -31,6 +31,20 @@ contributor now needs.
 bash .claude/skills/pi-extensions/scripts/test.sh
 ```
 
+**If you touched `hooks/`, run its gate:**
+
+```
+bash hooks/test.sh
+```
+
+`hooks/` is the **Claude Code** half of the mailbox — `claude-session-start` claims a mailbox so
+a session can be addressed, `claude-stop` delivers waiting mail by exiting **2**, which blocks the
+stop and hands its stderr to the model. Both are wired by hand into `~/.claude/settings.json` and
+never write themselves there; `hooks/helm-mail.mjs` is the convention, and it is a **deliberate
+duplicate** of `pi/extensions/helm-mail/index.ts` — there is no shared module because pi loads a
+`.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice
+or the on-disk shape has to be made in both. Needs node, which is why it is not in the Swift gate.
+
 Only when `pi/` changed. It needs node, and `tsc` from an `npm install` in `pi/`, which is
 why it is not part of the Swift gate: `swift test` cannot run TypeScript and should not
 learn how, and a Swift contributor should never need a JS toolchain to go green. See

@@ -1,0 +1,29 @@
+#!/bin/sh
+# helm-mail → Claude Code `SessionStart` hook: claim a mailbox, so this session can be
+# ADDRESSED. Issue #129. Delivery is the sibling hook, `claude-stop`.
+#
+# WIRE THIS BY HAND, and from this path. It lives in the helm repo, versioned with the
+# convention it implements, and never writes itself into ~/.claude — kild's hook header
+# records why: a hook that auto-generates itself into the operator's home goes stale when the
+# thing it talks to moves on, and fires into nothing for months, invisibly, because hooks
+# swallow their own failures.
+#
+#   ~/.claude/settings.json:
+#     { "hooks": { "SessionStart": [ { "hooks": [ { "type": "command",
+#         "command": "/abs/path/to/helm/hooks/claude-session-start", "timeout": 5 } ] } ] } }
+#
+# `HELM_MAIL_OFF=1` switches it off; `HELM_MAIL_DIR` points the whole convention elsewhere,
+# which is what makes a test hermetic.
+#
+# Silence and exit 0 are the only acceptable failures: no node, no home, no anything. A
+# session that cannot claim a mailbox is unreachable by mail, which is bad — a session that
+# cannot START is worse.
+set -u
+
+# No node → consume stdin so Claude Code never writes into a closed pipe, then say nothing.
+if ! command -v node >/dev/null 2>&1; then
+	cat >/dev/null 2>&1 || true
+	exit 0
+fi
+
+exec node "$(dirname "$0")/helm-mail.mjs" claim
