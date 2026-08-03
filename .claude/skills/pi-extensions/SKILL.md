@@ -34,6 +34,27 @@ Four places hold the truth, in decreasing order of reliability:
 The docs are good but lag the code; when prose and `dist/` disagree, `dist/` wins and the
 disagreement is worth recording. Details and the upgrade-diff procedure: `references/reading-pi.md`.
 
+## Two kinds, one skeleton
+
+Both are built from `pi/extensions/helm-probe/` and tested by `pi/test.sh`. The difference is
+who they are for, and it decides what may go in them.
+
+**Class A — drives helm.** Publishes a session registry row so helm's board lights up for a pi
+terminal, emits OSC 9;4 so the tab ring animates, reports pane state. Useless without helm, and
+free to depend on it.
+
+**Class B — works in a bare pi TUI.** A HUD showing cost, model, git dirty state, current tool,
+turn elapsed. Keybinding and theme helpers. **Must not depend on helm at all** — no helm paths,
+no helm env vars, no assumption that a terminal is hosted. Someone running pi with no helm
+should be able to install it and have it work.
+
+State which class an extension is in its header. A class B extension that quietly reaches for a
+helm path is the failure this distinction exists to prevent.
+
+**When a class B extension is worth publishing on its own, this skill and the skeleton move out
+of helm.** That is the extraction trigger — not a second codebase, which would arrive much later.
+Until then both classes live here because they share one harness and one test command.
+
 ## The one rule
 
 **A factory that throws takes the entire pi CLI down** — `exit 1`, for every directory on the
