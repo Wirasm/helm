@@ -38,8 +38,11 @@ bash hooks/test.sh
 ```
 
 `hooks/` is the **Claude Code** half of the mailbox — `claude-session-start` claims a mailbox so
-a session can be addressed, `claude-stop` delivers waiting mail by exiting **2**, which blocks the
-stop and hands its stderr to the model. Both are wired by hand into `~/.claude/settings.json` and
+a session can be addressed, `claude-user-prompt-submit` delivers waiting mail by writing the notice
+to **stdout**, which Claude Code feeds to the model as context for the turn about to run. Delivery
+is deliberately **before** a turn rather than after one: an agent that learns its mail on `Stop` has
+already carried out the instruction it should have read the mail first. pi does the same thing
+through its `context` event. Both are wired by hand into `~/.claude/settings.json` and
 never write themselves there; `hooks/helm-mail.mjs` is the convention, and it is a **deliberate
 duplicate** of `pi/extensions/helm-mail/index.ts` — there is no shared module because pi loads a
 `.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice

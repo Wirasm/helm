@@ -1,0 +1,26 @@
+#!/bin/sh
+# helm-mail → Claude Code `UserPromptSubmit` hook: put waiting mail in front of the agent
+# BEFORE it acts on the prompt. Issue #56. Claiming is the sibling hook,
+# `claude-session-start`, and must be wired too — this one delivers to a mailbox it does not
+# create.
+#
+#   ~/.claude/settings.json:
+#     { "hooks": { "UserPromptSubmit": [ { "hooks": [ { "type": "command",
+#         "command": "/abs/path/to/helm/hooks/claude-user-prompt-submit", "timeout": 5 } ] } ] } }
+#
+# STDOUT IS THE MECHANISM, and it is why this replaced a `Stop` hook. A UserPromptSubmit
+# hook's stdout becomes context for the turn about to run, so the mail informs the work the
+# operator just asked for. The `Stop` version delivered by exiting 2, which blocks the stop and
+# hands stderr to the model — correct, but only AFTER the instruction had been carried out.
+# Measured live: an agent sent hop 2 of a relay while hop 1 sat unread in its own mailbox.
+#
+# Everything exits 0. A hook that cannot deliver must never stop a prompt from running, and
+# unlike the Stop version there is no exit code here that means anything else.
+set -u
+
+if ! command -v node >/dev/null 2>&1; then
+	cat >/dev/null 2>&1 || true
+	exit 0
+fi
+
+exec node "$(dirname "$0")/helm-mail.mjs" deliver

@@ -3,8 +3,9 @@
 //
 // pi got both halves in one file because a pi extension is a process inside the agent.
 // Claude Code has no such seam, so its halves are two hooks: `SessionStart` claims a mailbox
-// so this session can be ADDRESSED, and `Stop` drains it so mail ARRIVES. This file is both,
-// behind a verb, because they share every rule and splitting them would split the rules too.
+// so this session can be ADDRESSED, and `UserPromptSubmit` drains it so mail ARRIVES — before
+// the turn, not after it. This file is both, behind a verb, because they share every rule and
+// splitting them would split the rules too.
 //
 // THE CONVENTION IS DUPLICATED HERE, DELIBERATELY, AND THAT IS THE RISK IN THIS FILE.
 // `pi/extensions/helm-mail/index.ts` is the same convention in TypeScript. There is no shared
@@ -14,17 +15,19 @@
 // files.** The tests in `hooks/test.sh` assert the notice matches pi's, which is the part a
 // reader would actually notice drifting.
 //
-// WHAT THIS DOES NOT DO: park. kild's `kild-rewake.sh` runs in the background under
+// WHAT THIS DOES NOT DO: park, or wake. kild's `kild-rewake.sh` runs in the background under
 // `asyncRewake: true` for eight hours so a genuinely idle session can be woken by mail
-// arriving. That is a real capability and it is deliberately not built here — the ruling was
-// "next turn is fine", pi delivers on `agent_settled` and nothing else, and a Claude Code
-// session that delivers on `Stop` is exactly symmetric with it. The cost is honest: mail sent
-// to a session that never takes another turn waits until someone prompts it. Add the park when
-// something needs it; the file to add it to is this one.
+// arriving, and Claude Code has no cheaper way — a hook is a process at a fixed moment, not a
+// resident runtime. (pi is the opposite and can be woken cold: an extension is a live event
+// loop, so `fs.watch` plus `sendUserMessage` starts a turn in an idle session. Measured.)
 //
-// The contract, copied from kild's hook because it was paid for: never block the Stop decision
-// by accident, never write stdout, and exit 0 on ANY uncertainty. A hook that cannot do its job
-// must never stop the operator finishing a turn.
+// Neither is built, because delivery here is PRE-TURN: mail arrives with the operator's next
+// prompt, which is when the agent was going to act anyway. The honest cost is unchanged and
+// worth restating — mail sent to a session nobody prompts again is never delivered.
+//
+// The contract, copied from kild's hook because it was paid for: exit 0 on ANY uncertainty, and
+// never write stdout except as deliberate delivery. A hook that cannot do its job must never
+// stop the operator's prompt from running.
 
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
@@ -43,15 +46,13 @@ const SUBJECT_MAX = 80;
 const FROM_MAX = 64;
 
 /**
- * Consecutive deliveries before this hook goes quiet — kild's `DEFAULT_WAKE_CAP`, for its
- * reason: two agents replying to each other continue each other's turns until the money runs
- * out. Held mail is NOT eaten; the next turn reports it. Any quiet drain resets the counter.
+ * THERE IS NO WAKE CAP, and its absence is a consequence rather than an omission.
  *
- * pi keeps this in memory because its extension outlives a turn. A hook is a fresh process
- * every firing, so it lives in a file beside the mailbox.
+ * kild's `DEFAULT_WAKE_CAP = 3` existed because delivering on `Stop` CONTINUED a turn, so two
+ * agents replying to each other continued each other until the money ran out. Delivering on
+ * `UserPromptSubmit` spends nothing — the notice rides a prompt the operator just typed — so
+ * there is no runaway to cap, and no `.wakes` file to keep beside the mailbox.
  */
-const WAKE_CAP = 3;
-const WAKES_FILE = ".wakes";
 
 // ── the convention (keep in step with pi/extensions/helm-mail/index.ts) ───────────────────
 
@@ -167,7 +168,7 @@ function oneLine(text, max, missing) {
  * own `id`, which it is free to disagree with.
  */
 function notice(taken) {
-	const lines = [`${NAME}: ${taken.length} message${taken.length === 1 ? "" : "s"} arrived while you were idle.`];
+	const lines = [`${NAME}: ${taken.length} message${taken.length === 1 ? "" : "s"} waiting for you.`];
 	for (const { message, file } of taken) {
 		lines.push(`  from ${oneLine(message.from, FROM_MAX, "(unknown sender)")} — ${oneLine(message.subject, SUBJECT_MAX, "(no subject)")}`);
 		lines.push(`    ${file}`);
@@ -285,19 +286,6 @@ function claim(root, sessionId, cwd) {
 	return { handle, dir };
 }
 
-function wakesIn(dir) {
-	const raw = Number.parseInt(String(readJson(path.join(dir, WAKES_FILE)) ?? ""), 10);
-	return Number.isInteger(raw) && raw >= 0 ? raw : 0;
-}
-
-function setWakes(dir, count) {
-	try {
-		writeAtomic(path.join(dir, WAKES_FILE), count);
-	} catch {
-		// A cap we cannot persist is a cap that does not hold. Worth no more than this.
-	}
-}
-
 // ── the verbs ────────────────────────────────────────────────────────────────────────────
 
 async function payload() {
@@ -328,37 +316,24 @@ try {
 		process.exit(0);
 	}
 
-	if (verb === "drain") {
-		// Claude Code sets this when a Stop hook has ALREADY blocked once this turn. Delivering
-		// again inside a turn we ourselves continued is how a hook talks to itself forever.
-		if (input.stop_hook_active) process.exit(0);
-
+	if (verb === "deliver") {
 		const handle = mineIn(root, sessionId, cwd);
 		const dir = path.join(root, handle);
 		const waiting = queued(dir);
-		if (waiting.length === 0) {
-			// The quiet drain is what resets the cap — a real conversation is never permanently
-			// capped, only a runaway one.
-			setWakes(dir, 0);
-			process.exit(0);
-		}
-
-		const wakes = wakesIn(dir);
-		if (wakes >= WAKE_CAP) {
-			// Held, not eaten, and said out loud on a channel that does not continue the turn.
-			process.stderr.write(
-				`[${NAME}] ${waiting.length} message(s) held: ${WAKE_CAP} consecutive deliveries without a quiet turn.\n`,
-			);
-			process.exit(0);
-		}
+		if (waiting.length === 0) process.exit(0);
 
 		const taken = consume(dir, waiting);
 		if (taken.length === 0) process.exit(0);
-		setWakes(dir, wakes + 1);
-		process.stderr.write(`${notice(taken)}\n`);
-		// 2 is the whole mechanism: it blocks the stop and hands this stderr to the model, so
-		// the mail arrives at the end of the turn rather than needing a human to prompt.
-		process.exit(2);
+
+		// STDOUT, and exit 0. On `UserPromptSubmit` the hook's stdout becomes context for the
+		// turn that is about to run, so this is the whole delivery: no exit code carries
+		// meaning, nothing is blocked, and the notice is in front of the agent BEFORE it acts.
+		//
+		// The `Stop` version wrote to stderr and exited 2 — which worked, and delivered after
+		// the instruction had already been carried out. Verified live against Claude Code
+		// v2.1.220 both ways.
+		process.stdout.write(`${notice(taken)}\n`);
+		process.exit(0);
 	}
 } catch {
 	// Any uncertainty at all — exit 0. Never stop the operator finishing a turn.
