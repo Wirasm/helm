@@ -169,6 +169,85 @@ final class WorkbenchModelTests: XCTestCase {
         XCTAssertEqual(model.bench?.canvasPanes.count, 1)
     }
 
+    // MARK: - A canvas that goes somewhere takes its pane with it (#89)
+
+    /// The issue's reproduction, from the keystroke. ⌘L opens a canvas at `.empty` because
+    /// at that moment there is no address; the operator types one and the page renders — and
+    /// the bench used to keep `.empty` for the rest of the session, so a relaunch gave back
+    /// a blank canvas labelled "New canvas".
+    func testCommittingAnAddressPointsTheCanvasPaneAtTheURL() async throws {
+        let (model, _) = mounted()
+
+        // ⌘L carries no payload, which is what tells the model to open the address field.
+        NotificationCenter.default.post(name: .helmOpenCanvasURL, object: nil)
+        try await Task.sleep(for: .milliseconds(100))
+        let pane = try XCTUnwrap(model.bench?.canvasPanes.first)
+        XCTAssertEqual(pane.content, .canvas(.empty), "⌘L has nothing to point at yet")
+
+        model.canvas(for: pane).submitAddress("localhost:3000")
+
+        XCTAssertEqual(
+            model.bench?.pane(pane.id)?.content,
+            .canvas(.url(URL(string: "http://localhost:3000")!)),
+            "the address that loaded is what a relaunch has to give back")
+    }
+
+    /// The other half of the acceptance: an unset canvas restores empty rather than onto
+    /// something the operator never saw.
+    func testARefusedAddressLeavesTheCanvasPaneEmpty() throws {
+        let (model, _) = mounted()
+        let id = try XCTUnwrap(model.open(.empty))
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+
+        model.canvas(for: pane).submitAddress("ssh://root@evil.example")
+
+        XCTAssertEqual(
+            model.bench?.pane(id)?.content, .canvas(.empty),
+            "an address the policy refused never loaded — persisting it would restore the "
+                + "canvas onto a page that was never on screen")
+    }
+
+    func testAPageThatFollowsALinkTakesItsPaneWithIt() throws {
+        let (model, _) = mounted()
+        let id = try XCTUnwrap(model.open(.url(URL(string: "http://localhost:3000")!)))
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+
+        model.canvas(for: pane).pageDidNavigate(to: URL(string: "http://localhost:3000/status")!)
+
+        XCTAssertEqual(
+            model.bench?.pane(id)?.content,
+            .canvas(.url(URL(string: "http://localhost:3000/status")!)),
+            "the address bar follows a link click so it never lies about what is on screen; "
+                + "restore has the same reason")
+    }
+
+    /// Every bench change is a `UserDefaults` write, through `WorkspaceModel.observe`. The
+    /// events that leave the canvas exactly where it was must not produce one.
+    func testAReloadOrAFailureDoesNotRewriteTheBench() throws {
+        let (model, _) = mounted()
+        let id = try XCTUnwrap(model.open(.url(URL(string: "http://localhost:3000")!)))
+        let canvas = model.canvas(for: try XCTUnwrap(model.bench?.pane(id)))
+        let before = try XCTUnwrap(model.bench)
+
+        canvas.reloadPage()
+        canvas.pageDidFail("Could not connect to the server.")
+
+        XCTAssertEqual(model.bench, before, "neither moves the canvas anywhere")
+    }
+
+    /// The ordering the write-back depends on: a restored pane resolves to a canvas that is
+    /// *shown its own source*, and that must not read as the canvas having moved.
+    func testResolvingARestoredCanvasDoesNotRewriteItsPane() {
+        let page = Pane(content: .canvas(.url(URL(string: "http://localhost:3000/status")!)))
+        let restored = Workbench(panes: [Pane(content: .terminal(face: .terminal)), page])
+        let model = WorkbenchModel(terminals: TerminalManager())
+        model.activate(workspacePath: workspace, restoring: restored)
+
+        _ = model.canvas(for: page)
+
+        XCTAssertEqual(model.bench, restored, "showing a canvas its own source is not a move")
+    }
+
     // MARK: - Visibility
 
     func testVisibilityIsPushedOntoExactlyTheOnScreenPanes() throws {

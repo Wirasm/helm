@@ -193,6 +193,60 @@ final class WorkbenchRestoreTests: XCTestCase {
         return bench
     }
 
+    // MARK: - Which canvas held which file, and which held which URL (#89)
+
+    /// **Task 27's check, as a test** — the one marked `[f]` that never ran, whose wording
+    /// is *"confirm … which canvas held which file **and which held which URL**"*.
+    ///
+    /// All three canvases are in the SAME SLOT, which is the arrangement the task names and
+    /// the one a single `openArtifactPath` could never describe. It walks the operator's
+    /// launch rather than a value: open through `WorkbenchModel` — the seam ⌘O and ⌘L both
+    /// reach — commit an address on one of them, let the save path run, read the store back.
+    ///
+    /// The middle pane is the whole issue. It is opened `.empty`, because at the moment ⌘L
+    /// opens a canvas there is no address to give it, and the URL that follows used to reach
+    /// the live `CanvasModel` and nothing else.
+    @MainActor
+    func testEachCanvasInOneSlotComesBackToWhatItHeld() throws {
+        let defaults = try isolatedDefaults("workbench-canvas-sources")
+        let workspace = Workspace(path: "/tmp/helm-issue-89")
+        let terminals = TerminalManager()
+        let workbench = WorkbenchModel(terminals: terminals)
+        let workspaces = WorkspaceModel(defaults: defaults)
+        workspaces.open(workspace)
+        workbench.activate(workspacePath: workspace.path)
+
+        let file = try XCTUnwrap(workbench.open(.file(path: "/tmp/pr-84-review.md")))
+        let page = try XCTUnwrap(workbench.open(.empty))
+        workbench.canvas(for: try XCTUnwrap(workbench.bench?.pane(page)))
+            .submitAddress("https://example.com")
+        // Only now is there no pane showing `.empty`, so this is a second canvas rather
+        // than a re-selection of the one above — and it is the canvas nobody typed into.
+        let untouched = try XCTUnwrap(workbench.open(.empty))
+        XCTAssertEqual(
+            Set([file, page, untouched].map { workbench.bench?.slot(for: $0)?.id }).count, 1,
+            "placement puts each canvas beside the last — one slot, three tabs")
+
+        workspaces.saveContext(terminalManager: terminals, workbench: workbench)
+
+        let restored = try XCTUnwrap(
+            WorkspaceContextStore.load(from: defaults)[workspace.path]?.workbench,
+            "no bench was persisted at all")
+        XCTAssertEqual(
+            restored.pane(file)?.content, .canvas(.file(path: "/tmp/pr-84-review.md")),
+            "the file canvas comes back to its file")
+        XCTAssertEqual(
+            restored.pane(page)?.content, .canvas(.url(URL(string: "https://example.com")!)),
+            "and the URL canvas to its URL — the half that used to persist {\"kind\":\"empty\"}")
+        XCTAssertEqual(
+            restored.pane(untouched)?.content, .canvas(.empty),
+            "while a canvas that never had an address comes back blank, rather than onto a "
+                + "page the operator never saw")
+        XCTAssertEqual(
+            restored.slot(for: untouched)?.selected, untouched,
+            "…and the tab that was on top is still on top")
+    }
+
     func testABenchRoundTripsThroughTheStore() throws {
         var bench = Workbench(terminal: UUID())
         bench.insert(

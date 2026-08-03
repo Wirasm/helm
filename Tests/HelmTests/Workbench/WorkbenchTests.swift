@@ -413,6 +413,44 @@ final class WorkbenchTests: XCTestCase {
             "switching back to the terminal tab offers it again")
     }
 
+    // MARK: - Repointing a canvas (#89)
+
+    func testRepointingACanvasRecordsWhereItWent() {
+        var bench = Workbench(terminal: UUID())
+        let page = Pane(content: .canvas(.empty))
+        bench.splitRight(with: page)
+
+        bench.repoint(page.id, to: .url(URL(string: "https://example.com")!))
+
+        XCTAssertEqual(
+            bench.pane(page.id)?.content, .canvas(.url(URL(string: "https://example.com")!)),
+            "⌘L opens `.empty` because there is no address yet — the one that follows is "
+                + "what a relaunch has to give back")
+        assertInvariants(bench, "repoint")
+    }
+
+    func testRepointingATerminalPaneIsRefused() {
+        let shell = terminal()
+        var bench = Workbench(panes: [shell])
+        let before = bench
+
+        bench.repoint(shell.id, to: .url(URL(string: "https://example.com")!))
+
+        XCTAssertEqual(
+            bench, before,
+            "a terminal that quietly became a canvas is not a repair — it is a pane whose "
+                + "pty has nowhere to render")
+    }
+
+    func testRepointingAPaneTheBenchDoesNotHoldIsANoOp() {
+        var bench = Workbench(terminal: UUID())
+        let before = bench
+
+        bench.repoint(UUID(), to: .url(URL(string: "https://example.com")!))
+
+        XCTAssertEqual(bench, before, "a canvas may outlive its pane by a moment")
+    }
+
     // MARK: - Selecting
 
     func testSelectingAPaneTheBenchDoesNotHoldIsANoOp() {

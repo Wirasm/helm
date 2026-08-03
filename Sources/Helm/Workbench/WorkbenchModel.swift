@@ -135,11 +135,35 @@ final class WorkbenchModel: ObservableObject {
             source: {
                 if case let .canvas(source) = pane.content { source } else { nil }
             }())
+        // The other direction, and the half that was missing: a canvas that goes somewhere
+        // has to take its pane with it, or the bench persists where the pane *started*
+        // (#89). Wired here because this is the only place a `CanvasModel` is made — and
+        // wired AFTER construction on purpose, so resolving a restored pane into its own
+        // canvas is not mistaken for that canvas moving.
+        model.onSourceChange = { [weak self] source in
+            self?.canvas(pane.id, didPointAt: source)
+        }
         // A canvas pane only renders while its workspace is the active one, so this is
         // that workspace — the same association `TerminalManager` gets for free by
         // storing `workspacePath` on the session itself.
         canvases[pane.id] = CachedCanvas(workspacePath: workspacePath, model: model)
         return model
+    }
+
+    /// Record where a canvas is pointed now. The rule for what may be repointed is
+    /// `Workbench.repoint(_:to:)`'s; what is decided here is **when it is worth committing**.
+    ///
+    /// Only a real move. `CanvasModel.source` is unchanged by a reload, by a load failure,
+    /// and by an address the policy refuses — and every commit reaches `UserDefaults`,
+    /// because `WorkspaceModel.observe` saves on each bench change. The pane is looked up
+    /// each time rather than captured, so a canvas that outlives its pane by a moment
+    /// repoints nothing.
+    private func canvas(_ pane: Pane.ID, didPointAt source: CanvasSource) {
+        guard var bench, case let .canvas(current)? = bench.pane(pane)?.content,
+            current != source
+        else { return }
+        bench.repoint(pane, to: source)
+        commit(bench)
     }
 
     /// What ⌘+/⌘0/⌘↑ act on.

@@ -62,7 +62,33 @@ final class CanvasModel: ObservableObject {
         case url(Page)
     }
 
-    @Published private(set) var showing: Showing?
+    @Published private(set) var showing: Showing? {
+        didSet { if let source { onSourceChange?(source) } }
+    }
+
+    /// This canvas is now pointed somewhere else — an address was committed, or a page
+    /// followed a link.
+    ///
+    /// The pane's `CanvasSource` is what the bench persists, and it is written **once**,
+    /// when the pane is made. ⌘L makes one at `.empty` because at that moment there is no
+    /// address; without this hook the URL it goes on to load reaches nothing, and the pane
+    /// restores blank however long it was read (#89). `WorkbenchModel` — which owns both
+    /// this model and the pane naming it — is what sets this.
+    ///
+    /// Fired from `showing`'s `didSet` rather than from `openURL`, `submitAddress` and
+    /// `pageDidNavigate` one at a time: `source` is a pure function of `showing`, so one
+    /// observer catches every move and there is no fourth call site to forget.
+    ///
+    /// A closure rather than a subscription on `$showing`, because `@Published` fires in
+    /// `willSet` — a subscriber reading `source` back would get the value from *before* the
+    /// change (`WorkspaceModel.observe` documents that trap and what it cost), and the
+    /// main-queue hop that fixes it would make the write-back asynchronous for no gain.
+    /// Inside `didSet` the new value is already stored.
+    ///
+    /// **`showing == nil` is deliberately not reported.** That is `close()`, and by the time
+    /// it runs `WorkbenchModel.close` has already taken the pane out of the bench — there is
+    /// nothing left to point anywhere.
+    var onSourceChange: ((CanvasSource) -> Void)?
 
     /// Where this canvas is pointed, as the bench persists it.
     var source: CanvasSource? {
