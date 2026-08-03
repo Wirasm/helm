@@ -39,14 +39,41 @@ private struct IsolatedInstanceWindow: NSViewRepresentable {
 /// `viewDidMoveToWindow` for the reason `WindowOpacityView` gives at length: a hop off
 /// `updateNSView` makes "no window yet" and "no window ever" the same silent return, and this
 /// is a job with nothing downstream to notice it was skipped.
+///
+/// **Clearing it once is not enough, and that was measured rather than reasoned about.** An
+/// isolated instance that cleared the name in `viewDidMoveToWindow` alone still wrote
+/// `NSWindow Frame SwiftUI.ModifiedContent<…>-1-AppWindow-1` into `com.wirasm.helm` — because
+/// SwiftUI assigns the name itself, and does it *after* the view tree is in the window. So the
+/// one-shot clear lands first and is overwritten. `didUpdateNotification` is the re-ask:
+/// AppKit posts it on every pass through the event loop for a live window, so a name SwiftUI
+/// re-applies is cleared again long before the next move can save under it.
 final class IsolatedInstanceWindowView: NSView {
+    private var observing = false
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         // nil on the way out, which is a real call and not a failure.
         guard let window, DefaultsDomain.isIsolated else { return }
 
-        // An empty name is AppKit's own "do not autosave this window", and it is the whole
-        // change: nothing is written on move, resize or close from here on.
+        disableFrameAutosave(window)
+        guard !observing else { return }
+        observing = true
+        // The selector form rather than the block form: its observer is zeroing-weak, so it
+        // goes when this view does and there is no token to remember to remove.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowDidUpdate(_:)),
+            name: NSWindow.didUpdateNotification, object: window)
+    }
+
+    @objc private func windowDidUpdate(_ note: Notification) {
+        guard let window = note.object as? NSWindow else { return }
+        disableFrameAutosave(window)
+    }
+
+    /// An empty name is AppKit's own "do not autosave this window". Guarded so the common
+    /// case — already cleared, several times a second — is a string check and no work.
+    private func disableFrameAutosave(_ window: NSWindow) {
+        guard !window.frameAutosaveName.isEmpty else { return }
         window.setFrameAutosaveName("")
     }
 }
