@@ -152,6 +152,15 @@ struct ArtifactBrowser: View {
             Button("Copy Path") {
                 Pasteboard.copy((file.url.path as NSString).abbreviatingWithTildeInPath)
             }
+            // The other half of the same problem. ~/.prp is outside every repo, so an
+            // artifact is not reachable from an editor's file tree either — reading one
+            // outside helm means typing the path into Finder by hand. `activateFileViewerSelecting`
+            // reveals it *selected* in its folder rather than opening it, which is the
+            // difference between "look at this next to its siblings" and "launch whatever
+            // is registered for .md".
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([file.url])
+            }
         }
     }
 
