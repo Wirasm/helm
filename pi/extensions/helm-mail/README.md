@@ -26,10 +26,22 @@ shaped."*
 
 ## The address
 
-`<basename of cwd>-<first 4 of the session id>` — `helm-a3f9`, `kild-2b7c`. Unique **by
-construction** rather than by claiming a name and resolving collisions, because many instances of
-one agent run at once, in separate worktrees and sometimes in the same directory, and a claim
-race is a bug you only meet when two of them start together.
+`<basename of cwd>-<last 4 of the session id>` — `helm-a3f9`, `kild-2b7c`. Derived rather than
+negotiated, because many instances of one agent run at once, in separate worktrees and sometimes
+in the same directory, and a claim race is a bug you only meet when two of them start together.
+
+**The LAST four, and that word is the whole of [#126](https://github.com/Wirasm/helm/issues/126).**
+This first said *first* four and called the result unique *by construction*; both were wrong, and
+in the same way. pi session ids are UUIDv7 — the leading 48 bits are a millisecond clock — so the
+first four hex characters advance about once every 50 days, and every pi session started this
+month derived the same `019f`. Two live sessions in helm, measured: `sild-019f` and `kild-019f`.
+Three concurrent sessions in *one* directory got one mailbox between them, which is precisely the
+race the paragraph above says this avoids.
+
+The tail sits in the random half, so 4 characters is 16 real bits. That is unique with **high
+probability**, not by construction — so the claim also looks: if the handle is already held by a
+**live** process, it takes 6 characters, then 8, then the whole id. A dead owner's handle is free,
+so a widened handle is temporary rather than a permanent scar on the address space.
 
 Handles are folded to lower case. That is not cosmetic: on a case-insensitive filesystem — the
 macOS default — `Alice` and `alice` are two agents to a sender and one directory to the disk, so
@@ -66,6 +78,14 @@ No CLI is needed and none is provided. The convention is the interface — write
 
 Write to a temp name in the same directory and `rename` it in, so a reader listing mid-write sees
 nothing rather than half a message.
+
+**Nothing here is trusted, and it used not to be true.** This path never passes through the
+extension's own `send()`, which is where `subject` was being sanitized — so a subject with
+newlines in it forged whole lines of the recipient's notice, carrying this extension's prefix and
+an approval nobody gave ([#127](https://github.com/Wirasm/helm/issues/127)). The guard now sits in
+`notice()`, the one place every sender converges: `from` and `subject` are each collapsed to one
+bounded line there, and the path is taken from the **file on disk** rather than from the `id`
+field, which a sender is free to disagree with.
 
 A Claude Code agent **reading** its own mailbox is [#56](https://github.com/Wirasm/helm/issues/56)
 and is not built here.

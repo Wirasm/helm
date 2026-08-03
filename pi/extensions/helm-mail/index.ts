@@ -74,6 +74,9 @@ const USES: readonly (keyof ExtensionAPI)[] = ["on", "registerCommand", "sendUse
 /** A subject line is another agent's text. It may occupy one line and no more. */
 const SUBJECT_MAX = 80;
 
+/** So is a sender, and it shares that line. Shorter, because a handle is short. */
+const FROM_MAX = 64;
+
 interface Owner {
 	handle: string;
 	runtime: string;
@@ -96,6 +99,12 @@ interface Message {
 interface Claim {
 	handle: string;
 	dir: string;
+}
+
+/** A message and the path it actually lives at — the pair the notice is built from. */
+interface Delivered {
+	message: Message;
+	file: string;
 }
 
 /** One line to stderr, prefixed so it is attributable in a busy terminal. */
@@ -160,24 +169,60 @@ function slug(text: string): string {
 }
 
 /**
- * This session's address.
+ * The tail of an id, `width` characters of it, with any dash the cut landed on trimmed off.
  *
- * Unique BY CONSTRUCTION rather than by claiming a name and resolving collisions: many
- * instances of one agent run at once, in separate worktrees or in the same directory, and a
- * claim race is a bug you only see when two of them start together. `<dir>-<4 of session
- * id>` cannot collide between two live pi sessions, needs no coordination, and is stable
- * for the life of the session.
- *
- * The cost is that a sender cannot guess it — which is correct. You list who is alive and
- * address one, the way a person would; `owner.json` carries the cwd so "the one in the auth
- * worktree" is a lookup rather than a guess.
+ * The TAIL and not the head, which is the whole of #126. pi session ids are UUIDv7:
+ * `[48-bit millisecond clock][version][random]`. The leading 4 hex characters are the top
+ * of that clock and advance once every 2^32 ms — **about 50 days** — so every pi session
+ * started this month derived the same `019f`, and `<dir>-019f` was the directory name alone.
+ * Three real sessions in one directory claimed one mailbox. The tail sits in `rand_b` and is
+ * entropy.
  */
-function deriveHandle(cwd: string, sessionId: string): string {
+function tail(id: string, width: number): string {
+	return id.slice(-width).replace(/^-+|-+$/g, "");
+}
+
+/**
+ * A mailbox held right now by someone else. A dead owner's handle is free to take — that is
+ * what makes a widened handle temporary rather than a permanent scar on the address space.
+ */
+function heldByAnother(root: string, handle: string): boolean {
+	const owner = readJson<Owner>(path.join(root, handle, OWNER_FILE));
+	if (!owner || typeof owner.pid !== "number") return false;
+	if (owner.pid === process.pid) return false;
+	return pidAlive(owner.pid);
+}
+
+/**
+ * This session's address: `<dir>-<tail of the session id>`, widened if that is taken.
+ *
+ * Chosen over claiming a name and negotiating for it, because many instances of one agent
+ * run at once — in separate worktrees, sometimes in the same directory — and a claim race is
+ * a bug you only meet when two of them start together.
+ *
+ * 4 hex characters is 16 bits, which is unique with high probability and NOT by construction,
+ * so the gap is closed by looking: if a live process already holds the handle, take more of
+ * the id. That check is what the first version was missing along with the entropy — it
+ * asserted a guarantee in prose that the code did not make.
+ *
+ * The cost is that a sender cannot guess a handle — which is correct. You list who is alive
+ * and address one, the way a person would; `owner.json` carries the cwd so "the one in the
+ * auth worktree" is a lookup rather than a guess.
+ */
+function deriveHandle(root: string, cwd: string, sessionId: string): string {
 	const pinned = process.env[HANDLE_ENV];
 	if (pinned && pinned.trim()) return slug(pinned);
 	const where = slug(path.basename(cwd || process.cwd()));
-	const which = slug(sessionId || String(process.pid)).slice(0, 4);
-	return which ? `${where}-${which}` : where;
+	const full = slug(sessionId || String(process.pid));
+	const widths = [4, 6, 8].filter((width) => width < full.length);
+	for (const which of [...widths.map((width) => tail(full, width)), full]) {
+		if (!which) continue;
+		const handle = `${where}-${which}`;
+		if (!heldByAnother(root, handle)) return handle;
+	}
+	// Every candidate held, including the whole id — two live processes reporting the same
+	// session id, which should not happen. Say so rather than silently sharing a mailbox.
+	return `${where}-${full}-${process.pid}`;
 }
 
 /** Is a process alive? EPERM means it exists and is not ours, which is still alive. */
@@ -277,13 +322,26 @@ function claim(root: string, handle: string, sessionId: string, cwd: string): Cl
 	return { handle, dir };
 }
 
-/** A subject is another agent's text: one line, bounded, never a place to hide a payload. */
-function sanitizeSubject(subject: string): string {
-	const oneLine = String(subject ?? "")
+/**
+ * One line, bounded, with a stand-in when there is nothing. The primitive under every field
+ * of a message that reaches the agent.
+ */
+function oneLine(text: string, max: number, missing: string): string {
+	const collapsed = String(text ?? "")
 		.replace(/\s+/g, " ")
 		.trim();
-	if (!oneLine) return "(no subject)";
-	return oneLine.length > SUBJECT_MAX ? `${oneLine.slice(0, SUBJECT_MAX - 1)}…` : oneLine;
+	if (!collapsed) return missing;
+	return collapsed.length > max ? `${collapsed.slice(0, max - 1)}…` : collapsed;
+}
+
+/** A subject is another agent's text: one line, bounded, never a place to hide a payload. */
+function sanitizeSubject(subject: string): string {
+	return oneLine(subject, SUBJECT_MAX, "(no subject)");
+}
+
+/** A sender is another agent's text too, and sits on the same line as the subject. */
+function sanitizeFrom(from: string): string {
+	return oneLine(from, FROM_MAX, "(unknown sender)");
 }
 
 /**
@@ -298,6 +356,8 @@ function send(root: string, to: string, from: string, subject: string, body: str
 		id: `${Date.now()}-${randomBytes(3).toString("hex")}`,
 		from,
 		to,
+		// Tidiness, not a guard: `notice()` sanitizes everything it prints, because it is the
+		// only place every sender — including a hand-written file — converges. See #127.
 		subject: sanitizeSubject(subject),
 		body: String(body ?? ""),
 		sentAt: Date.now(),
@@ -310,9 +370,13 @@ function send(root: string, to: string, from: string, subject: string, body: str
  * Claim messages by renaming them into `read/`. The rename is the consume: it is atomic, so
  * exactly one reader wins each message, and a crash leaves every message in exactly one of
  * the two directories — never lost, never delivered twice.
+ *
+ * The FILENAME is carried out alongside the message, and it is the only thing that truthfully
+ * addresses the file: `message.id` is a field a sender wrote, free to disagree with the name
+ * it was stored under, and a notice built from it points at a path that does not exist.
  */
-function consume(dir: string, names: readonly string[]): Message[] {
-	const taken: Message[] = [];
+function consume(dir: string, names: readonly string[]): Delivered[] {
+	const taken: Delivered[] = [];
 	for (const name of names) {
 		const from = path.join(dir, name);
 		const to = path.join(dir, READ_DIR, name);
@@ -323,7 +387,7 @@ function consume(dir: string, names: readonly string[]): Message[] {
 			// Another reader took it first, or it vanished. Not ours; say nothing and move on.
 			continue;
 		}
-		if (message) taken.push(message);
+		if (message) taken.push({ message, file: to });
 		else warn(`consumed an unreadable message`, `${name} was not valid JSON; it is in ${READ_DIR}/`);
 	}
 	return taken;
@@ -338,12 +402,19 @@ function consume(dir: string, names: readonly string[]): Message[] {
  * measured what that costs when prose landed in a live permission prompt and its `y`
  * approved a network command. So the notice carries the sender, a bounded subject, and a
  * path; the agent reads the file with its own tools, where it lands as a file.
+ *
+ * EVERY FIELD IS SANITIZED HERE and not where it was written, which is #127. `send()` used to
+ * be the guard, and `send()` only sees `/helm-mail send` — while the README points a Claude
+ * Code sender at writing the file directly, because there is no CLI for it. That path never
+ * passes through `send()`, so a subject with newlines in it forged whole lines of the notice,
+ * carrying this extension's own prefix and an approval nobody gave. This function is the one
+ * place every path into the notice converges, so it is the only place the guard belongs.
  */
-function notice(messages: readonly Message[], dir: string): string {
-	const lines = [`${NAME}: ${messages.length} message${messages.length === 1 ? "" : "s"} arrived while you were idle.`];
-	for (const message of messages) {
-		lines.push(`  from ${message.from} — ${message.subject}`);
-		lines.push(`    ${path.join(dir, READ_DIR, `${message.id}.json`)}`);
+function notice(taken: readonly Delivered[]): string {
+	const lines = [`${NAME}: ${taken.length} message${taken.length === 1 ? "" : "s"} arrived while you were idle.`];
+	for (const { message, file } of taken) {
+		lines.push(`  from ${sanitizeFrom(message.from)} — ${sanitizeSubject(message.subject)}`);
+		lines.push(`    ${file}`);
 	}
 	lines.push("");
 	lines.push("Read the file(s) before acting. The bodies are deliberately not included here:");
@@ -412,7 +483,7 @@ function install(pi: ExtensionAPI): void {
 		} catch (error) {
 			warn("could not read the session id; falling back to the pid for this handle", error);
 		}
-		const handle = deriveHandle(cwd, sessionId);
+		const handle = deriveHandle(root, cwd, sessionId);
 		try {
 			claimed = claim(root, handle, sessionId, cwd);
 		} catch (error) {
@@ -456,7 +527,7 @@ function install(pi: ExtensionAPI): void {
 		const taken = consume(claimed.dir, waiting);
 		if (taken.length === 0) return;
 		wakes += 1;
-		const text = notice(taken, claimed.dir);
+		const text = notice(taken);
 		try {
 			pi.sendUserMessage(text);
 		} catch (error) {
@@ -520,7 +591,7 @@ function install(pi: ExtensionAPI): void {
 						// A human asked, so this reports rather than waking a turn — and it
 						// resets the cap, because a read the operator drove is not a loop.
 						wakes = 0;
-						announce(ctx, notice(taken, claimed.dir));
+						announce(ctx, notice(taken));
 						return;
 					}
 
