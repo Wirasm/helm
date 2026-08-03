@@ -5,6 +5,11 @@ description: Offer an artifact to the operator as a helm canvas — a rendered m
 
 # Offer a canvas
 
+**helm is the macOS terminal application this session is running inside.** Not a library, not a
+dependency, and not something in the repository you are working in — you could be in any repo and
+still be in helm. Nothing in the current project needs to know about it, and you will not find it
+there. Do not go looking.
+
 helm renders a markdown or HTML file as a **canvas** — a pane beside the terminal. You put
 something there by writing a file and printing a link to it. The operator ⌘-clicks the link.
 
@@ -36,9 +41,10 @@ and offer it instead.
 
 ## Two things that will bite
 
-**Do not write into a canvas the operator has marked up.** Annotations come back in a sidecar
-(`canvas/<name>.notes.md`) precisely because you rewrite the artifact and would clobber anything
-kept inside it. Read the sidecar; write the artifact.
+**Do not write into a canvas the operator has marked up.** When they annotate one, helm writes
+their notes to a file *beside* the artifact rather than into it — precisely because you rewrite
+the artifact and would clobber anything kept inside. That is helm's behaviour, not a convention
+you set up or go looking for: read the notes if they appear, and only ever write the artifact.
 
 **Mermaid node ids are not stable across renders yet** (helm #113). A diagram meant to be
 annotated will hand back an anchor that has already changed. Until that lands, prefer HTML with
