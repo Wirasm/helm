@@ -96,13 +96,47 @@ struct Palette: Equatable, Sendable {
     /// Accent mixed most of the way into the surface, so it tints rather than highlights.
     let selection: Token
 
+    // MARK: - Archon's voice
+
+    /// Archon's brand magenta, at helm's legibility floor.
+    ///
+    /// **A second voice, governed — which is the only kind this file allows.** The operator
+    /// wants the Archon rail to read as a piece of Archon's console rather than as another
+    /// helm panel, and Archon's console has a real token system to borrow from: oklch
+    /// throughout, a `--brand-magenta` at `oklch(0.640 0.295 330)`, in
+    /// `packages/web/src/experiments/console/theme.css`. Borrowing it as *hex in a view*
+    /// would be the exact defect `Design/` exists to remove; borrowing it as a token is the
+    /// sentence in `AGENTS.md` that says to add one when a surface needs a colour that is
+    /// not here.
+    ///
+    /// **Not Archon's value to the digit, and deliberately so.** Their magenta is authored
+    /// against a charcoal console at hue 265 and lands at 3.76 on helm's light surface —
+    /// under the 4.5 a small label needs, and helm has a light appearance that Archon's
+    /// console does not. These are the same hue held at helm's floors: `oklch(0.52 0.26
+    /// 330)` light, `oklch(0.68 0.26 332)` dark. Unmistakably theirs, readable in both.
+    ///
+    /// Spent on one thing: the rail's wordmark and the ring on the field you type into.
+    /// Everything else in the rail is still helm's palette, because a rail that is *foreign*
+    /// beside the operator's terminals all day is a different outcome from one that is
+    /// *distinctly Archon's*.
+    let archonBrand: Token
+    /// A run that has stopped and is waiting on a person — Archon's paused gate, and the
+    /// unreachable CLI.
+    ///
+    /// Amber, from the same console (`--warning`, `oklch(0.8 0.14 85)`), held at helm's
+    /// floors for the same reason as `archonBrand`. It is deliberately NOT `accent`: teal is
+    /// helm's "this is live and fine", and an approval gate is the opposite claim. It is the
+    /// same meaning helm's orange agent dot carries at a different altitude.
+    let archonAttention: Token
+
     /// **Private, which is what makes "helm's one palette" a fact rather than a habit.**
     /// `PaletteTests` proves the contrast ratios of `helm`; a second palette built elsewhere
     /// in the module would carry none of that and nothing would ask. `RGB` and `Token` are
     /// closed the same way, one level down.
     private init(
         surface: Token, surfaceRaised: Token, textPrimary: Token, textMuted: Token,
-        textFaint: Token, border: Token, accent: Token, selection: Token
+        textFaint: Token, border: Token, accent: Token, selection: Token, archonBrand: Token,
+        archonAttention: Token
     ) {
         self.surface = surface
         self.surfaceRaised = surfaceRaised
@@ -112,6 +146,8 @@ struct Palette: Equatable, Sendable {
         self.border = border
         self.accent = accent
         self.selection = selection
+        self.archonBrand = archonBrand
+        self.archonAttention = archonAttention
     }
 
     /// helm's one palette.
@@ -131,6 +167,8 @@ struct Palette: Equatable, Sendable {
         textFaint: Token(light: 0x83_87_8E, dark: 0x6E_74_7B),
         border: Token(light: 0xE2_DF_DA, dark: 0x30_34_39),
         accent: Token(light: 0x3F_8F_80, dark: 0x5F_C0_AC),
-        selection: Token(light: 0xD5_E5_E0, dark: 0x29_3E_3D)
+        selection: Token(light: 0xD5_E5_E0, dark: 0x29_3E_3D),
+        archonBrand: Token(light: 0xB2_00_AD, dark: 0xED_41_DD),
+        archonAttention: Token(light: 0x9D_5F_00, dark: 0xE1_A0_35)
     )
 }

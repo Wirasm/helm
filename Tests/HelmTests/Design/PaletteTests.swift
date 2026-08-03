@@ -90,6 +90,56 @@ final class PaletteTests: XCTestCase {
         }
     }
 
+    // MARK: - Archon's voice
+
+    /// Pinned, for the reason the chat face's five are: these two exist so the Archon rail can
+    /// read as Archon's console, and moving one is a change to how that surface *identifies
+    /// itself*, not a tweak. They are Archon's own `--brand-magenta` and `--warning` hues —
+    /// `oklch(… 330)` and `oklch(… 85)`, in `packages/web/src/experiments/console/theme.css` —
+    /// converted to sRGB and held at the lightness helm's two appearances need.
+    func testTheArchonTokensAreArchonsHuesAtHelmsLightnesses() {
+        XCTAssertEqual(palette.archonBrand.light.hex, "#b200ad", "Archon's magenta, darkened")
+        XCTAssertEqual(palette.archonBrand.dark.hex, "#ed41dd")
+        XCTAssertEqual(palette.archonAttention.light.hex, "#9d5f00", "Archon's amber, darkened")
+        XCTAssertEqual(palette.archonAttention.dark.hex, "#e1a035")
+    }
+
+    /// **Not the console's values to the digit, and this is the assertion that says why.**
+    /// Archon's magenta is authored against a charcoal console at hue 265 and lands at 3.76 on
+    /// helm's light surface; helm has a light appearance that Archon's console does not, and
+    /// both tokens carry small labels — a wordmark, a gate's verbs — so the bar is the body
+    /// floor of 4.5 rather than the non-text 3 that `accent` and `textFaint` are held to.
+    func testTheArchonTokensCarrySmallLabelsInBothAppearances() {
+        for appearance in Palette.Appearance.allCases {
+            for (name, token) in [
+                ("archonBrand", palette.archonBrand),
+                ("archonAttention", palette.archonAttention),
+            ] {
+                let onSurface = contrast(token, on: palette.surface, in: appearance)
+                XCTAssertGreaterThanOrEqual(
+                    onSurface, 4.5, "\(name) in \(appearance): \(onSurface)")
+                // The rail sits on chrome, not on the reading plane, so the raised surface is
+                // the background that actually matters for the wordmark.
+                let onChrome = contrast(token, on: palette.surfaceRaised, in: appearance)
+                XCTAssertGreaterThanOrEqual(onChrome, 4, "\(name) on chrome in \(appearance)")
+            }
+        }
+    }
+
+    /// `archonAttention` marks a run stopped waiting for a person; `accent` marks one that is
+    /// live and fine. They are opposite claims, so a build that quietly retuned one into the
+    /// other would leave the rail saying nothing at all with a straight face.
+    func testAttentionAndAccentAreNotTheSameColour() {
+        for appearance in Palette.Appearance.allCases {
+            let attention = palette.archonAttention.value(in: appearance)
+            let accent = palette.accent.value(in: appearance)
+            let distance =
+                abs(attention.red - accent.red) + abs(attention.green - accent.green)
+                + abs(attention.blue - accent.blue)
+            XCTAssertGreaterThan(distance, 0.5, "in \(appearance)")
+        }
+    }
+
     // MARK: - WCAG
 
     /// Shared with `AnsiPaletteTests` via `ColorMath`, so the two suites cannot end up

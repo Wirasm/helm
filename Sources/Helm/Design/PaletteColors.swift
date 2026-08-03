@@ -37,4 +37,6 @@ extension Color {
     static let border = Palette.helm.border.color
     static let accent = Palette.helm.accent.color
     static let selection = Palette.helm.selection.color
+    static let archonBrand = Palette.helm.archonBrand.color
+    static let archonAttention = Palette.helm.archonAttention.color
 }
