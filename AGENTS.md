@@ -141,9 +141,8 @@ methods usually means the split was wrong.
 
 **pi extensions are TypeScript and live in `pi/`, not `Sources/`.** helm's repo owns helm's pi
 work. They are for the pi sessions helm *hosts*, in whatever repo the user is in — so they are
-symlinked into `~/.pi/agent/extensions/` and never into helm's own `.pi/`. One rule before you
-write one: **a factory that throws takes the whole pi CLI down, in every directory on the
-machine.** `pi/AGENTS.md` has the rest, measured rather than assumed.
+symlinked into `~/.pi/agent/extensions/` and never into helm's own `.pi/`. Before writing or
+changing one, read the `pi-extensions` skill; `pi/AGENTS.md` covers the layout and its gate.
 
 ## Agent skills
 
@@ -155,3 +154,10 @@ GitHub issues on `Wirasm/helm`, via `gh`. See `docs/agents/issue-tracker.md`.
 
 Single-context; vocabulary is canonical in `CONTEXT.md`, with `../GLOSSARY.md` for the
 cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
+
+### pi extensions
+
+How to build one without taking the pi CLI down, how to read the installed pi rather than guess
+at its API, and how to test one without spending a model call. See
+`.claude/skills/pi-extensions/`. Hand-written and helm-local — not vendored, so not in
+`skills-lock.json`.
