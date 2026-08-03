@@ -26,6 +26,19 @@ struct HelmApp: App {
         // into a test instance would take it from the build entitled to it (#86).
         DefaultsDomain.migrateLegacyDomainAtLaunch()
 
+        // One line on stderr when this is not the operator's helm, because from inside the
+        // process an isolated instance looks entirely normal: it opens with an empty
+        // workspace bar, which is indistinguishable from having lost one. The status bar and
+        // the window title say so too, and both need a window — this is what a headless
+        // launch, or one that dies before drawing, leaves behind. The house convention is a
+        // line wherever a fallback or a skip quietly changes behaviour; two do so here, and
+        // this names both.
+        if DefaultsDomain.isIsolated {
+            NSLog(
+                "helm: %@=%@ — persisting to that suite only; legacy-domain migration skipped",
+                DefaultsDomain.suiteVariable, DefaultsDomain.activeDomain)
+        }
+
         // Running as a bare SPM executable (`swift run helm`) nothing registers the process
         // with Launch Services, so AppKit treats it as a background app and the window never
         // fronts — force it regular and activate. Inside the real .app bundle (`make app`)

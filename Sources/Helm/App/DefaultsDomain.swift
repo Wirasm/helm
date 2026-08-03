@@ -25,7 +25,10 @@ import Foundation
 /// `HELM_DEFAULTS_SUITE` can move all seven at once. The argument above still holds: what it
 /// warns against is threading a suite through the call sites *by hand*, and the guard test in
 /// `DefaultsDomainTests` is what keeps it from becoming that — `UserDefaults.standard` and a
-/// storeless `@AppStorage` are both now build failures anywhere outside this file.
+/// storeless `@AppStorage` anywhere outside this file both fail the suite.
+///
+/// **`swift test`, not `swift build`.** The gate runs them as separate steps and a violation
+/// compiles perfectly well, so it is caught by the run and not by the compiler.
 enum DefaultsDomain {
     /// The domain both launch paths now resolve to.
     ///
@@ -84,11 +87,23 @@ enum DefaultsDomain {
         in environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Override {
         guard let raw = environment[suiteVariable] else { return .none }
-        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Blank is how an unset variable arrives from a shell that exported it empty, and the
-        // operator meant "no override" either way.
-        guard !name.isEmpty else { return .none }
+        // `export HELM_DEFAULTS_SUITE=` — a shell's own way of saying "not set", and the
+        // operator meant no override. This is the ONLY blank that is read as a decision.
+        guard !raw.isEmpty else { return .none }
+
+        // Anything else that trims away is a **broken value, not a choice**, and folding it
+        // into `.none` would be the one silent path in a function whose every other rejection
+        // is loud. `HELM_DEFAULTS_SUITE="$SUITE "` with `$SUITE` empty upstream, a template
+        // that did not substitute, a newline off a copy-paste: each of those launches an
+        // agent that believes it is contained straight at `com.wirasm.helm`, which is #86
+        // itself reached through the mechanism built to prevent it.
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            return .refused(
+                "\(suiteVariable) is set but names no domain — it is whitespace. Unset it to "
+                    + "mean the default; a blank value is a bug in whatever built it.")
+        }
 
         // Asking for the canonical domain is asking for the default. Not a refusal — it is
         // what an unset variable already does — but it cannot go through `suiteName:`, which
@@ -118,8 +133,16 @@ enum DefaultsDomain {
     /// documented thread-safe — which is exactly the case that annotation is for. The
     /// alternative, `@MainActor`, would put the store behind the main actor and every
     /// persistence path here is already reached from off it.
-    nonisolated(unsafe) private static let resolved: (name: String, defaults: UserDefaults) = {
-        switch override() {
+    nonisolated(unsafe) private static let resolved = resolve(override())
+
+    /// A decision turned into the store that carries it out.
+    ///
+    /// Pulled out of the memoized `resolved` above so it is answerable from `swift test`, for
+    /// the reason `TerminalNotifier.canDeliver` gives: resolving once per process is right for
+    /// the process and leaves the mapping itself unreachable, and this mapping is where a
+    /// decision the parser got right could still be carried out wrong.
+    static func resolve(_ override: Override) -> (name: String, defaults: UserDefaults) {
+        switch override {
         case .none:
             return (canonical, .standard)
         case .suite(let name):
@@ -134,7 +157,7 @@ enum DefaultsDomain {
             // contained; being told no, loudly, is the cheap outcome.
             fatalError("\(why)")
         }
-    }()
+    }
 
     /// The one `UserDefaults` every default helm owns goes through.
     ///
@@ -147,14 +170,24 @@ enum DefaultsDomain {
     static var activeDomain: String { resolved.name }
 
     /// Whether this instance is deliberately not the operator's.
-    static var isIsolated: Bool { resolved.name != canonical }
+    static var isIsolated: Bool { isIsolated(domain: activeDomain) }
+
+    /// The same question about a named domain, and pure so the **polarity** is pinned by a
+    /// test rather than by reading it. Backwards, this hides the badge on a test instance and
+    /// shows it on the operator's — the two ways of being wrong that matter.
+    static func isIsolated(domain: String) -> Bool { domain != canonical }
 
     /// The window's title, which is also what `winshot --list` and `helm-spawn` see.
     ///
     /// Two helms are the *normal* state while building helm, and `AGENTS.md` records that
     /// they are indistinguishable by name — so an isolated one says so in the one place an
-    /// agent outside the process can read.
-    static var windowTitle: String { isIsolated ? "helm — \(activeDomain)" : "helm" }
+    /// agent outside the process can read. That makes this a safety mechanism another tool
+    /// depends on, not decoration, which is why it is pinned rather than eyeballed.
+    static var windowTitle: String { windowTitle(for: activeDomain) }
+
+    static func windowTitle(for domain: String) -> String {
+        isIsolated(domain: domain) ? "helm — \(domain)" : "helm"
+    }
 
     /// Written into `canonical` once the move has run, so it runs exactly once. Its value is
     /// the domain that was drained — the question anyone reading it will actually have.

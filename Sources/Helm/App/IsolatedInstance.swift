@@ -48,16 +48,39 @@ private struct IsolatedInstanceWindow: NSViewRepresentable {
 /// AppKit posts it on every pass through the event loop for a live window, so a name SwiftUI
 /// re-applies is cleared again long before the next move can save under it.
 final class IsolatedInstanceWindowView: NSView {
-    private var observing = false
+    /// The window the re-ask is currently watching.
+    ///
+    /// Tracked rather than a "have I registered yet" flag, because those are different
+    /// questions the moment a view is put in a *second* window: a flag leaves the observer
+    /// bound to the first one, so the new window gets the one-shot clear and never the
+    /// re-ask — which is precisely the half of this that was measured to be insufficient.
+    /// `weak` so a closed window is not held open by its own watcher.
+    private weak var observed: NSWindow?
+
+    /// Whether this instance is deliberately not the operator's.
+    ///
+    /// A closure rather than a direct read of `DefaultsDomain.isIsolated`, for the reason
+    /// `TerminalNotifier.canDeliver` gives: **pulled out so the rule is reachable from `swift
+    /// test`.** The real answer resolves once per process from the environment, and `swift
+    /// test` runs with `HELM_DEFAULTS_SUITE` unset — so with the read inlined, everything
+    /// below is dead code under test, which is how the one behaviour in this change that was
+    /// tuned by observation ended up with nothing guarding it.
+    ///
+    /// Set before the view is put in a window; `viewDidMoveToWindow` is what reads it.
+    var isIsolatedInstance: () -> Bool = { DefaultsDomain.isIsolated }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         // nil on the way out, which is a real call and not a failure.
-        guard let window, DefaultsDomain.isIsolated else { return }
+        guard let window, isIsolatedInstance() else { return }
 
         disableFrameAutosave(window)
-        guard !observing else { return }
-        observing = true
+        guard observed !== window else { return }
+        if let observed {
+            NotificationCenter.default.removeObserver(
+                self, name: NSWindow.didUpdateNotification, object: observed)
+        }
+        observed = window
         // The selector form rather than the block form: its observer is zeroing-weak, so it
         // goes when this view does and there is no token to remember to remove.
         NotificationCenter.default.addObserver(

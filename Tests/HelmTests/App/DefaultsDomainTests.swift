@@ -231,14 +231,26 @@ final class DefaultsDomainTests: XCTestCase {
         XCTAssertEqual(DefaultsDomain.override(in: [:]), .none)
     }
 
-    /// A shell that exports the variable empty — `HELM_DEFAULTS_SUITE=` — meant no override,
-    /// and `UserDefaults(suiteName: "")` hands back a usable object writing to a nameless
-    /// domain rather than refusing, so nothing below this line would catch it.
-    func testABlankVariableIsTheSameAsNoVariable() {
-        for blank in ["", " ", "\t", "\n", "  \n "] {
-            XCTAssertEqual(
-                DefaultsDomain.override(in: [DefaultsDomain.suiteVariable: blank]), .none,
-                "\(blank.debugDescription) is not a suite name")
+    /// A shell that exports the variable empty — `HELM_DEFAULTS_SUITE=` — meant no override.
+    /// The exactly-empty string is the only blank that is read that way.
+    func testAnEmptyVariableIsTheSameAsNoVariable() {
+        XCTAssertEqual(DefaultsDomain.override(in: [DefaultsDomain.suiteVariable: ""]), .none)
+    }
+
+    /// **Whitespace is a broken value, not a choice**, and this is the distinction that keeps
+    /// `override(in:)` from having one silent path. `HELM_DEFAULTS_SUITE="$SUITE "` with
+    /// `$SUITE` empty upstream used to resolve to `com.wirasm.helm` with no badge, no title
+    /// change and nothing on stderr — an agent believing it was contained, writing live state.
+    /// That is #86 reached through the mechanism built to prevent it.
+    func testAVariableThatTrimsAwayIsRefusedRatherThanReadAsUnset() {
+        for blank in [" ", "\t", "\n", "  \n "] {
+            guard
+                case .refused = DefaultsDomain.override(
+                    in: [DefaultsDomain.suiteVariable: blank])
+            else {
+                return XCTFail(
+                    "\(blank.debugDescription) must be refused, not silently read as unset")
+            }
         }
     }
 
@@ -290,6 +302,52 @@ final class DefaultsDomainTests: XCTestCase {
             case .refused = DefaultsDomain.override(
                 in: [DefaultsDomain.suiteVariable: "NSGlobalDomain"])
         else { return XCTFail("writing every app's defaults is not an isolated instance") }
+    }
+
+    /// The decision is only half of it: `override(in:)` can be right and the store it turns
+    /// into still be wrong. `.none` in particular must land on `UserDefaults.standard` rather
+    /// than on a suite *named* `com.wirasm.helm`, which is not the same domain — the API
+    /// refuses that name for this process precisely because it is the app's own.
+    func testTheDefaultResolvesToTheCanonicalDomainAndTheStandardStore() {
+        let resolved = DefaultsDomain.resolve(.none)
+
+        XCTAssertEqual(resolved.name, DefaultsDomain.canonical)
+        XCTAssertTrue(
+            resolved.defaults === UserDefaults.standard,
+            "unset must be today's behaviour to the object, not merely to the name")
+    }
+
+    /// And a suite must resolve to a store that writes *there*, which is the whole promise.
+    func testASuiteResolvesToAStoreThatWritesOnlyToIt() throws {
+        let name = isolatedDefaultsDomain("resolved")
+
+        let resolved = DefaultsDomain.resolve(.suite(name))
+        resolved.defaults.set("written", forKey: "helmProbe")
+        resolved.defaults.synchronize()
+
+        XCTAssertEqual(resolved.name, name)
+        XCTAssertEqual(
+            contents(of: name)["helmProbe"] as? String, "written",
+            "the store handed back must be the one that domain reads")
+        XCTAssertNil(
+            UserDefaults.standard.persistentDomain(forName: DefaultsDomain.canonical)?[
+                "helmProbe"],
+            "and nothing it writes may appear in the operator's domain")
+    }
+
+    /// **Polarity**, pinned rather than eyeballed. `AGENTS.md` has `winshot --list` and
+    /// `helm-spawn --helm-pid` telling two helms apart by this title, so backwards is not a
+    /// cosmetic bug — it is a safety mechanism pointing at the wrong instance.
+    func testOnlyANonCanonicalDomainReadsAsIsolated() {
+        XCTAssertFalse(DefaultsDomain.isIsolated(domain: DefaultsDomain.canonical))
+        XCTAssertTrue(DefaultsDomain.isIsolated(domain: "helm-task27"))
+
+        XCTAssertEqual(
+            DefaultsDomain.windowTitle(for: DefaultsDomain.canonical), "helm",
+            "the operator's helm is titled what it has always been titled")
+        XCTAssertEqual(
+            DefaultsDomain.windowTitle(for: "helm-task27"), "helm — helm-task27",
+            "and a test instance names its suite where a tool outside the process can read it")
     }
 
     /// **The acceptance criterion this file exists to hold.** The move empties the legacy
@@ -411,10 +469,9 @@ final class DefaultsDomainTests: XCTestCase {
         var calls: [String] = []
         var rest = Substring(source)
         while let start = rest.range(of: opening) {
-            var depth = 0
             var index = start.upperBound
             // `start` ends just past the "(" the marker carries, so the counter opens at 1.
-            depth = 1
+            var depth = 1
             while index < rest.endIndex, depth > 0 {
                 if rest[index] == "(" { depth += 1 }
                 if rest[index] == ")" { depth -= 1 }

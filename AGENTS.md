@@ -113,7 +113,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   `cd <dir> && claude` once by hand.
 - `swift run helm` to iterate, `make app` for the real bundle.
 - **helm persists to one domain, `com.wirasm.helm`, from both launch paths** — so "did it
-  persist?" is `defaults read com.wirasm.helm` whichever way it was started. `swift run helm`
+  persist?" is `defaults read com.wirasm.helm` whichever way it was started, unless
+  `HELM_DEFAULTS_SUITE` overrides it (next bullet). `swift run helm`
   used to land in a `helm` domain of its own, and reading the wrong one is how #45 produced a
   confident, wrong diagnosis. A build with the fix drains `helm` on first launch and leaves a
   single `helmDefaultsMovedTo` key there saying so. The identity lives in `SPMInfo.plist`,
