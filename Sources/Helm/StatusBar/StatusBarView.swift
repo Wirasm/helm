@@ -68,6 +68,7 @@ struct StatusBarView: View {
             presence: board.presence
         )
         HStack(spacing: 6) {
+            isolationBadge
             if let label = summary.agentLabel {
                 AgentDot(presence: summary.agents)
                 Text(label).foregroundStyle(Color.textMuted)
@@ -81,5 +82,26 @@ struct StatusBarView: View {
         }
         .fixedSize()
         .layoutPriority(1)
+    }
+
+    /// Which defaults domain this instance is writing, when it is not the operator's (#86).
+    ///
+    /// **The loudest thing in the bar, and deliberately so.** Everything else here recedes;
+    /// this one exists because a test instance mistaken for the real one is how #86 nearly
+    /// cost the operator their workspaces. It is `accent` on a filled capsule against a bar
+    /// of muted greys, and it names the suite rather than saying "isolated" — the name is
+    /// what `defaults read` needs.
+    ///
+    /// Absent entirely with the variable unset, which is every normal launch.
+    @ViewBuilder
+    private var isolationBadge: some View {
+        if DefaultsDomain.isIsolated {
+            Text(DefaultsDomain.activeDomain)
+                .foregroundStyle(Color.surface)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Color.accent, in: Capsule())
+                .help("Isolated instance — persisting to the \(DefaultsDomain.activeDomain) suite")
+        }
     }
 }

@@ -33,6 +33,10 @@ struct RootView: View {
         // the canvas cover their own panes; this is everything else.
         .background(Color.surface)
         .translucentWindow()
+        // A no-op unless `HELM_DEFAULTS_SUITE` is set (#86): stops an isolated instance
+        // autosaving its frame over the operator's, which is the one write a suite cannot
+        // catch because AppKit makes it rather than helm.
+        .isolatedInstanceWindow()
         .task {
             model.observe(terminals: terminalManager, workbench: workbench)
             activateSelectedWorkspace()

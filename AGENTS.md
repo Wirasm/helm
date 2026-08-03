@@ -119,6 +119,26 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   single `helmDefaultsMovedTo` key there saying so. The identity lives in `SPMInfo.plist`,
   `project.yml`'s `PRODUCT_BUNDLE_IDENTIFIER` and `DefaultsDomain.canonical` — keep all three
   in step, `DefaultsDomainTests` fails if you don't.
+- **A second helm must run on its own defaults suite: `HELM_DEFAULTS_SUITE=<name>`.** Unset is the
+  behaviour above to the letter — `com.wirasm.helm`, both launch paths, one answer to "did it
+  persist?". Set, helm reads and writes that suite and nothing else, so a worktree instance can be
+  filled, quit, relaunched and hand-corrupted with **no reachable path to the operator's state**
+  (measured: `UserDefaults(suiteName:)` does not read through to the app's own domain). Verify with
+  `defaults read <name>`, and prove the negative with `defaults read com.wirasm.helm`.
+
+  ```
+  HELM_DEFAULTS_SUITE=helm-bench swift run helm
+  ```
+
+  **Do not hand-roll a throwaway `PRODUCT_BUNDLE_IDENTIFIER` any more** — that is what PRs #97 and
+  #100 each had to invent, and #86 is that made supported. Refusals are loud rather than silent:
+  the legacy `helm` domain, a path, and `NSGlobalDomain` all stop the launch, because falling back
+  to `com.wirasm.helm` under a variable that promised isolation is precisely the disaster. An
+  isolated instance says so — the status bar carries the suite name on an accent capsule, and the
+  window is titled `helm — <name>`, which is what `winshot --list` and `helm-spawn --helm-pid` see
+  when two helms are running. The legacy-domain migration never fires under it, and the window
+  frame is not autosaved: that last one is AppKit's write rather than helm's, and the only one a
+  suite cannot catch by itself.
 - Conventional commits, written as a human — no AI attribution.
 
 ## Architecture — how to think about where code goes

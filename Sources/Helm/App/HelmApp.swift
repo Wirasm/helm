@@ -11,7 +11,7 @@ struct HelmApp: App {
     /// `AppearanceOverride` value; unknown values fall back to system).
     static let appearanceKey = "helmAppearance"
 
-    @AppStorage(HelmApp.appearanceKey)
+    @AppStorage(HelmApp.appearanceKey, store: DefaultsDomain.store)
     private var appearanceRaw = AppearanceOverride.system.rawValue
 
     private var appearance: AppearanceOverride {
@@ -21,8 +21,10 @@ struct HelmApp: App {
     init() {
         // First, before anything reads a default. Until #45 the two launch paths resolved
         // `UserDefaults.standard` to two different domains; this carries what the SPM one
-        // accumulated into the domain both now use. One-time and marker-guarded.
-        DefaultsDomain.migrateLegacyDomain()
+        // accumulated into the domain both now use. One-time and marker-guarded — and
+        // skipped outright under `HELM_DEFAULTS_SUITE`, because draining the legacy domain
+        // into a test instance would take it from the build entitled to it (#86).
+        DefaultsDomain.migrateLegacyDomainAtLaunch()
 
         // Running as a bare SPM executable (`swift run helm`) nothing registers the process
         // with Launch Services, so AppKit treats it as a background app and the window never
@@ -42,7 +44,11 @@ struct HelmApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("helm") {
+        // Titled from the domain, so an instance running on an isolated suite says so
+        // where an agent outside the process can read it — `winshot --list` matches on
+        // window titles, and `AGENTS.md` records that two helms are otherwise identical
+        // by name. Unset, this is the literal "helm" it has always been.
+        WindowGroup(DefaultsDomain.windowTitle) {
             RootView()
                 .frame(minWidth: 900, minHeight: 600)
                 // The override is applied at the AppKit level so it also
