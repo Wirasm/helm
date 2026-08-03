@@ -110,10 +110,6 @@ struct Workbench: Codable, Equatable {
         panes.filter { if case .canvas = $0.content { true } else { false } }
     }
 
-    var archonRunPanes: [Pane] {
-        panes.filter { if case .archonRun = $0.content { true } else { false } }
-    }
-
     /// The panes actually on screen: one per slot. Several at once, which is the whole
     /// difference between a bench and a tab row, and why `TerminalSession.isVisible`
     /// replaced a single app-level `selectedID`.

@@ -28,7 +28,6 @@ actor FakeArchonClient: ArchonClient {
 
     func setFailure(_ failure: ArchonCLIError?) { self.failure = failure }
     func setDelay(_ delay: Duration?) { self.delay = delay }
-    func setActive(_ active: [ArchonRun]) { self.active = active }
     func metrics() -> (activeCalls: Int, maximumActiveCalls: Int, launchRequests: Int) {
         (activeCalls, maximumActiveCalls, launchRequests.count)
     }
