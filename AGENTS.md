@@ -42,7 +42,14 @@ a session can be addressed, `claude-user-prompt-submit` delivers waiting mail by
 to **stdout**, which Claude Code feeds to the model as context for the turn about to run. Delivery
 is deliberately **before** a turn rather than after one: an agent that learns its mail on `Stop` has
 already carried out the instruction it should have read the mail first. pi does the same thing
-through its `context` event. Both are wired by hand into `~/.claude/settings.json` and
+through its `context` event.
+
+**An idle agent is woken, and the two runtimes get there differently.** pi's extension is a live
+event loop inside the session, so it watches its own mailbox and calls `sendUserMessage` — a turn
+starts from nothing. Nothing outside a Claude Code session can do that, so the notice instead
+**tells the agent to arm its own watch**; being notified is the wake. Both are capped at 3
+consecutive wakes, because waking spends a turn and two agents replying to each other would
+otherwise burn until the money ran out. Both are wired by hand into `~/.claude/settings.json` and
 never write themselves there; `hooks/helm-mail.mjs` is the convention, and it is a **deliberate
 duplicate** of `pi/extensions/helm-mail/index.ts` — there is no shared module because pi loads a
 `.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice
