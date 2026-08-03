@@ -26,10 +26,10 @@ arrives last, with Archon.
 
 - **Workbench** — the middle. Where panes are organised. **Panes live here, full stop** — the
   bar is not a second place one can dock.
-- **Right bar** — not actions. A **rail of ambient things you monitor and act on**, and its
-  one tenant is Archon's run list. Toggleable, remembered, **default hidden**. Nothing else
-  earned a slot, and Archon is ranked last, so helm has nothing either side of the bench for
-  the whole early route.
+- **Right bar** — a **rail of quick actions on things that are not your current work**
+  (#142), and its one tenant is Archon. Toggleable, remembered, **default hidden**. Nothing
+  else earned a slot, and Archon is ranked last, so helm has nothing either side of the bench
+  for the whole early route.
 
 The **artifact browser is a ⌘O popover**, not a bar tenant — a picker you summon, not
 something you watch. Copying an artifact's path is a context menu on its row, and the path is
@@ -51,15 +51,25 @@ terminal in, running Archon workflows), but they wait on dogfooding to prove a n
   stack, each slot tabbed. A real window manager, but not a general tree — every arrangement
   worth having is columns-of-stacks, and depth-2 is a strict subset of the tree so nothing is
   foreclosed.
-- **Pane** — a workbench tenant. **Three types.**
+- **Pane** — a workbench tenant. **Three types**, where this list said "two, and only two"
+  until Archon arrived.
   - **Terminal** — the chat view is a second **face** on this, drawn over a terminal that
     stays mounted underneath, toggled with ⌘T. The face is a property of the pane, so two
     terminals side by side can show different ones.
   - **Canvas** — renders a markdown file, an HTML file, or a URL, and accepts annotation on
     it. Modular by source, extendable to further formats. This is `ArtifactPane` promoted,
     not new work — and the promotion has shipped, so it is `CanvasView` / `CanvasModel` now.
-  - **Run pane** — resolves one persisted Archon run address and renders the compact ordered
-    node summaries published by `workflow get --verbose --json`.
+  - **Run pane** — resolves one persisted Archon address and renders it live: a run's ordered
+    node summaries, or every run with a status.
+
+  **The third type is a decision, not a drift.** A run pane is not a terminal — no pty, no
+  face, nothing to type into. It is not a canvas either, on this list's own definition: a
+  canvas renders *a file or a URL* **and accepts annotation on it**, and neither half holds.
+  There is no file — the content is a process's state, re-fetched every two seconds — and an
+  annotation anchor has to survive a rewrite, where a run pane rewrites itself on every poll.
+  "Modular by source, extendable to further formats" means *formats*; a live process is not
+  one. Making it a canvas would have meant either a canvas that cannot be annotated or an
+  annotation that silently detaches, and both are worse than a third type.
 
 Two corrections to what that list used to say, both from building it. The chat view is not
 a *swap*: the terminal view stays mounted under it, because one attached surface drives the
@@ -82,13 +92,21 @@ and a calmer view for focus.
 
 ## Archon surface
 
-Not an API client — the development CLI's `--json` through temporary-file stdout capture.
-No HTTP and no direct SQLite reads. Two pieces:
+Not an API client — the `archon` CLI's `--json`, captured through a temporary file. No HTTP
+and no direct SQLite reads. **Input first**, which is the correction #40 made after the
+list-first version was built and run: the same workflow is started over and over, so that has
+to cost zero clicks, and reading a finished run is rare and belongs on the bench.
 
-- A **run list** in the rail — background `--detach` runs with key metadata. Clicking one
-  opens a curated node view as a **bench pane**, not inside the rail.
-- A **launcher** summoned from a `+` at the head of that list: a form composing the CLI
-  command from workflow, input, and flags. Ships without a model control.
+- A **prompt field** in the rail, always present. Type, press Enter, the workflow runs
+  detached.
+- A **gear** beneath it holding what Enter launches — the workflow and how it isolates. Built
+  to grow as the CLI does; ships without a model control.
+- **One line per running run**, with a subline that follows the current node. Every other
+  status collapses to a count; clicking one opens that list as a **bench pane**, which is also
+  how a single run's node view opens. Nothing is read inside the rail.
+- A **liveness mark**, because there is no daemon: `archon` is invoked per poll, so "live"
+  means the last poll answered. Without it, "no runs" and "Archon cannot be reached" look
+  identical.
 
 ## Sizing
 

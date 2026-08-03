@@ -44,8 +44,9 @@ A workbench tenant. Three types: **terminal**, **canvas**, and **run pane**.
 _Avoid_: view, widget, dock
 
 **run pane**:
-The pane type that resolves one persisted Archon run address and renders Archon's compact,
-ordered node summaries. It does not render raw workflow events or control the run.
+The pane type that resolves a persisted Archon address and renders it live — one run's
+compact, ordered node summaries, or every run with a given status. It does not render raw
+workflow events or control the run.
 _Avoid_: event log, Archon canvas, rail detail
 
 **face**:
@@ -78,10 +79,12 @@ _Avoid_: artifact pane, webview, browser, draw-on pane
 ### What helm looks like
 
 **rail**:
-The remembered, default-hidden strip to the right of the workbench. It monitors active
-Archon runs and launches detached workflows; selecting a run opens a run pane on the bench.
-It is not another place panes can dock.
-_Avoid_: sidebar, right bar, pane dock
+The remembered, default-hidden strip to the right of the workbench: **quick actions on things
+that are not your current work**. Its one tenant is Archon — a prompt field that launches a
+detached workflow on Enter, a gear holding what Enter launches, one line per running run, and
+a count per other status. Everything worth reading opens as a pane on the bench; nothing is
+read in the rail, and it is not another place panes can dock.
+_Avoid_: sidebar, pane dock, monitor rail, calling it a run list
 
 **palette**:
 helm's one table of colours, as values (`Palette.helm`). There is exactly one, and every

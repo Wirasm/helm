@@ -1,7 +1,7 @@
 # AGENTS.md — helm
 
 Native macOS surface: SwiftUI + GhosttyKit. Workspaces above a **workbench** — columns of
-tabbed slots holding terminal and canvas panes, several on screen at once. **No backend** —
+tabbed slots holding terminal, canvas and run panes, several on screen at once. **No backend** —
 artifacts are files. Vocabulary is canonical in `CONTEXT.md`.
 
 **"Agent" means a CLI agent already in use — Claude Code, pi, codex.** helm hosts one in a
