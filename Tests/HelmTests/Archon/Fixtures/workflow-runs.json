@@ -1,0 +1,119 @@
+{
+  "runs": [
+    {
+      "id": "d1fa8be31bc358408b436690b285099d",
+      "conversation_id": "c12674f37d39cd5bbac43a5380fa2b1d",
+      "codebase_id": "5895a2c4595ff5f1c1ecbb672a991697",
+      "workflow_name": "archon-fix-github-issue-experimental",
+      "user_message": "fix gh issue 40",
+      "status": "failed",
+      "current_step_index": null,
+      "metadata": {
+        "error": "DAG workflow 'archon-fix-github-issue-experimental' completed with failures: 'create-pr': Node 'create-pr' failed: SDK returned codex_turn_failed \u2014 Selected model is at capacity. Please try a different model."
+      },
+      "parent_conversation_id": null,
+      "started_at": "2026-08-03 16:18:09",
+      "completed_at": "2026-08-03 16:52:00",
+      "last_activity_at": "2026-08-03 16:51:41",
+      "working_path": "/Users/rasmus/.archon/workspaces/Wirasm/helm/worktrees/archon/task-archon-fix-github-issue-experimental-1785773886177",
+      "user_id": "342ba40edcc5e14ec3c88f456c6fa862",
+      "parent_run_id": null,
+      "output_root": null,
+      "platform_type": "cli",
+      "worker_platform_id": "cli-1785773886170-5pixxb",
+      "parent_platform_id": null,
+      "codebase_name": "Wirasm/helm",
+      "current_step_name": null,
+      "total_steps": null,
+      "current_step_status": null,
+      "agents_completed": 0,
+      "agents_failed": 0,
+      "agents_total": null
+    },
+    {
+      "id": "ccfbb5ffd205fbbec15541bc4cdb2351",
+      "conversation_id": "132c940e1555aacaa40481f0823b66d8",
+      "codebase_id": "2d3826b2efc38b826630f6e34b067a18",
+      "workflow_name": "archon-fix-github-issue-experimental",
+      "user_message": "2354",
+      "status": "completed",
+      "current_step_index": null,
+      "metadata": {
+        "node_counts": {
+          "completed": 24,
+          "failed": 0,
+          "skipped": 3,
+          "total": 27
+        },
+        "total_tokens_in": 12293237,
+        "total_tokens_out": 69251
+      },
+      "parent_conversation_id": null,
+      "started_at": "2026-08-03 16:03:12",
+      "completed_at": "2026-08-03 16:38:51",
+      "last_activity_at": "2026-08-03 16:38:35",
+      "working_path": "/Users/rasmus/.archon/workspaces/coleam00/Archon/worktrees/archon/task-archon-fix-github-issue-experimental-1785772990622",
+      "user_id": "342ba40edcc5e14ec3c88f456c6fa862",
+      "parent_run_id": null,
+      "output_root": null,
+      "platform_type": "cli",
+      "worker_platform_id": "cli-1785772990617-bsvy4v",
+      "parent_platform_id": null,
+      "codebase_name": "coleam00/Archon",
+      "current_step_name": null,
+      "total_steps": null,
+      "current_step_status": null,
+      "agents_completed": 0,
+      "agents_failed": 0,
+      "agents_total": null
+    },
+    {
+      "id": "17e4f1e3c6d18d477fe17351731be08e",
+      "conversation_id": "0fecbdb916fa33dc42ce94739526026d",
+      "codebase_id": "2d3826b2efc38b826630f6e34b067a18",
+      "workflow_name": "archon-fix-github-issue-experimental",
+      "user_message": "2396",
+      "status": "completed",
+      "current_step_index": null,
+      "metadata": {
+        "node_counts": {
+          "completed": 25,
+          "failed": 0,
+          "skipped": 2,
+          "total": 27
+        },
+        "total_tokens_in": 16112713,
+        "total_tokens_out": 88976
+      },
+      "parent_conversation_id": null,
+      "started_at": "2026-08-03 16:02:40",
+      "completed_at": "2026-08-03 16:41:05",
+      "last_activity_at": "2026-08-03 16:40:59",
+      "working_path": "/Users/rasmus/.archon/workspaces/coleam00/Archon/worktrees/archon/task-archon-fix-github-issue-experimental-1785772957854",
+      "user_id": "342ba40edcc5e14ec3c88f456c6fa862",
+      "parent_run_id": null,
+      "output_root": null,
+      "platform_type": "cli",
+      "worker_platform_id": "cli-1785772957850-zktt4y",
+      "parent_platform_id": null,
+      "codebase_name": "coleam00/Archon",
+      "current_step_name": null,
+      "total_steps": null,
+      "current_step_status": null,
+      "agents_completed": 0,
+      "agents_failed": 0,
+      "agents_total": null
+    }
+  ],
+  "total": 128,
+  "counts": {
+    "all": 128,
+    "running": 0,
+    "completed": 97,
+    "failed": 28,
+    "cancelled": 1,
+    "pending": 0,
+    "paused": 2
+  },
+  "scopeFallback": true
+}

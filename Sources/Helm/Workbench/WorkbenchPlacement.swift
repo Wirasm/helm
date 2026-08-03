@@ -45,7 +45,7 @@ extension Workbench {
 
     /// Run panes group with other run panes, while repeated selection of the same run
     /// selects its existing persisted address instead of opening a duplicate.
-    func placement(forOpening reference: ArchonRunRef) -> Placement {
+    func placement(forOpening reference: ArchonPaneRef) -> Placement {
         if let open = pane(showing: reference) { return .existing(open) }
         if let focused = slot(focusedSlot), focused.holdsArchonRun {
             return .tab(in: focused.id)

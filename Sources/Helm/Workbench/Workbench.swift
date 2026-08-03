@@ -131,12 +131,12 @@ struct Workbench: Codable, Equatable {
         panes.first { $0.content == .canvas(source) }?.id
     }
 
-    func pane(showing reference: ArchonRunRef) -> Pane.ID? {
+    func pane(showing reference: ArchonPaneRef) -> Pane.ID? {
         panes.first { $0.content == .archonRun(reference) }?.id
     }
 
     /// Which face a slot's strip should offer, or nil when that slot's selected pane is a
-    /// a non-terminal and there is no face to offer. The strip renders `if let` on this rather
+    /// non-terminal and there is no face to offer. The strip renders `if let` on this rather
     /// than asking what kind of pane it is — that question is a decision, and decisions
     /// live here.
     func face(ofSelectedPaneIn slot: Slot.ID) -> TerminalFace? {
@@ -533,7 +533,7 @@ struct Pane: Codable, Equatable, Identifiable {
     enum Content: Equatable {
         case terminal(face: TerminalFace)
         case canvas(CanvasSource)
-        case archonRun(ArchonRunRef)
+        case archonRun(ArchonPaneRef)
     }
 }
 
@@ -568,7 +568,7 @@ extension Pane.Content: Codable {
         case .terminal: self = .terminal(face: .terminal)
         case .canvas: self = .canvas(try container.decode(CanvasSource.self, forKey: .source))
         case .archonRun:
-            self = .archonRun(try container.decode(ArchonRunRef.self, forKey: .run))
+            self = .archonRun(try container.decode(ArchonPaneRef.self, forKey: .run))
         }
     }
 

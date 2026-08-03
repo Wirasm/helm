@@ -169,16 +169,20 @@ final class WorkbenchModel: ObservableObject {
         return model
     }
 
-    /// Resolve a persisted run address to one live polling model per pane.
+    /// Resolve a persisted Archon address to one live polling model per pane.
     func archonRun(for pane: Pane) -> ArchonRunPaneModel {
         if let existing = archonRuns[pane.id] { return existing.model }
-        let reference: ArchonRunRef
+        let reference: ArchonPaneRef
         if case let .archonRun(value) = pane.content {
             reference = value
         } else {
             preconditionFailure("asked for an Archon model for a non-Archon pane")
         }
-        let model = ArchonRunPaneModel(reference: reference, client: archon)
+        // The workspace is stamped on the model as well as on the cache entry: every `archon`
+        // call resolves its project from a working directory, and by the time a pane is being
+        // polled the app's selection may have moved on.
+        let model = ArchonRunPaneModel(
+            reference: reference, workspacePath: workspacePath, client: archon)
         archonRuns[pane.id] = CachedArchonRun(workspacePath: workspacePath, model: model)
         return model
     }
@@ -236,8 +240,11 @@ final class WorkbenchModel: ObservableObject {
         return pane.id
     }
 
+    /// nil when there is no bench to put it on, which is only true with no workspace open.
+    /// The rail disables its rows on the same condition rather than letting a click land
+    /// nowhere — see `ArchonRailView.canOpenRuns`.
     @discardableResult
-    func openRun(_ reference: ArchonRunRef) -> Pane.ID? {
+    func openRun(_ reference: ArchonPaneRef) -> Pane.ID? {
         guard var bench else { return nil }
         let placement = bench.placement(forOpening: reference)
         let pane = Pane(content: .archonRun(reference))

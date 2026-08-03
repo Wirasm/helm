@@ -32,6 +32,7 @@ struct RootView: View {
                     ArchonRailView(
                         model: archonRail,
                         workspacePath: model.selectedWorkspaceRoot,
+                        canOpenRuns: workbench.bench != nil,
                         openRun: { workbench.openRun($0) })
                 }
             }
