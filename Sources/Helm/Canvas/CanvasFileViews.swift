@@ -50,6 +50,8 @@ struct MarkdownCanvasView: View {
     let url: URL
     let markdown: String
     let generation: Int
+    /// What the operator is holding, pushed into the page on change.
+    let markTool: CanvasMarkTool
     /// What the operator selected on the page, for the comment field to anchor to — and
     /// when they clicked away and selected nothing, which is what takes the field down.
     let onSelection: (CanvasPageSelection) -> Void
@@ -61,6 +63,7 @@ struct MarkdownCanvasView: View {
             url: url,
             markdown: markdown,
             generation: generation,
+            markTool: markTool,
             theme: colorScheme == .dark ? .dark : .light,
             onSelection: onSelection
         )
@@ -71,6 +74,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
     let url: URL
     let markdown: String
     let generation: Int
+    let markTool: CanvasMarkTool
     let theme: CanvasTheme
     let onSelection: (CanvasPageSelection) -> Void
 
@@ -115,6 +119,15 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         load(webView, coordinator: context.coordinator)
+        pushTool(webView, coordinator: context.coordinator)
+    }
+
+    /// Only on change, and never as part of a load: switching tools must not cost the
+    /// operator their place in the document.
+    private func pushTool(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
+        guard coordinator.pushedTool != markTool else { return }
+        coordinator.pushedTool = markTool
+        webView.evaluateJavaScript(CanvasHTML.setMarkTool(markTool))
     }
 
     /// Loads only when the (theme, generation, content) triple actually
@@ -142,6 +155,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
 struct HTMLCanvasView: View {
     let url: URL
     let generation: Int
+    let markTool: CanvasMarkTool
     let onSelection: (CanvasPageSelection) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -150,6 +164,7 @@ struct HTMLCanvasView: View {
         HTMLCanvasWebView(
             url: url,
             generation: generation,
+            markTool: markTool,
             theme: colorScheme == .dark ? .dark : .light,
             onSelection: onSelection
         )
@@ -159,6 +174,7 @@ struct HTMLCanvasView: View {
 private struct HTMLCanvasWebView: NSViewRepresentable {
     let url: URL
     let generation: Int
+    let markTool: CanvasMarkTool
     let theme: CanvasTheme
     let onSelection: (CanvasPageSelection) -> Void
 
@@ -193,6 +209,15 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         load(webView, coordinator: context.coordinator)
+        pushTool(webView, coordinator: context.coordinator)
+    }
+
+    /// Only on change, and never as part of a load: switching tools must not cost the
+    /// operator their place in the document.
+    private func pushTool(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
+        guard coordinator.pushedTool != markTool else { return }
+        coordinator.pushedTool = markTool
+        webView.evaluateJavaScript(CanvasHTML.setMarkTool(markTool))
     }
 
     /// (Re)loads when the file, its generation (external change), or the theme
@@ -252,6 +277,11 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     static let bridgeWorld = WKContentWorld.world(name: "helm-canvas-bridge")
 
     var loadedKey: String?
+    /// The tool the page was last told about. A change is pushed with `evaluateJavaScript`
+    /// rather than folded into `loadedKey`, because reloading to switch tools would throw
+    /// away the scroll position — and a canvas is something you are part-way down when you
+    /// decide to mark it.
+    var pushedTool: CanvasMarkTool?
     /// The generated document the scheme handler should serve on the next request. Only
     /// the markdown canvas stages one; the .html canvas reads its artifact from disk.
     var stagedDocument: Data?

@@ -102,6 +102,59 @@ final class CanvasHTMLTests: XCTestCase {
         XCTAssertTrue(script.contains("mermaid.run()"))
     }
 
+    // MARK: The mark tools (#112)
+
+    func testTheToolDrivesTheMarkSoNothingIsInferred() {
+        let script = CanvasHTML.annotationScript()
+
+        // The first cut guessed the mark from the gesture's shape. The tool says what it is.
+        XCTAssertTrue(script.contains("mark: \"point\""))
+        XCTAssertTrue(script.contains("mark: \"relation\""))
+        XCTAssertTrue(script.contains("mark: \"enclosure\""))
+        XCTAssertFalse(
+            script.contains("altKey"),
+            "marking is a tool you pick up, not a modifier you have to know about")
+    }
+
+    func testSelectIsUntouchedByTheDrawingLayer() {
+        XCTAssertTrue(
+            CanvasHTML.annotationScript().contains("var selection = document.getSelection()"),
+            "with no tool held, a canvas reports text selection exactly as before")
+    }
+
+    func testOneResolverServesEveryTool() {
+        // #112's own acceptance: the draw-time hit test and any later re-resolution share a
+        // code path, because inconsistent resolution between capture and action is its own
+        // bug class.
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertEqual(script.components(separatedBy: "function resolve(").count - 1, 1)
+        XCTAssertTrue(
+            script.contains("function targetAt(") && script.contains("function targetsInside("))
+    }
+
+    func testAFreehandLoopIsTreatedAsClosedAndMeasuredByCentres() {
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(
+            script.contains("function inside("),
+            "a loop encircles things; a bounding box would over-select what it grazed")
+        XCTAssertTrue(script.contains("r.left + r.width / 2"))
+    }
+
+    func testTheInkIsInertAndCannotBeHitTestedAgainstItself() {
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(script.contains("pointer-events:none"))
+        XCTAssertTrue(script.contains("data-helm-mark"))
+        XCTAssertTrue(
+            script.contains("paper.style.display = \"none\""),
+            "the overlay is hidden for the hit test, or a mark would resolve to helm's own ink")
+        XCTAssertTrue(
+            script.contains("closest(\"[data-helm-mark]\")"),
+            "and excluded when collecting what a loop covers")
+    }
+
     // MARK: Vendored scripts
 
     func testVendoredScriptsAreBundledAndExposeTheirGlobals() {

@@ -185,32 +185,211 @@ enum CanvasHTML {
     /// anchored near what it is about. It is not part of the anchor and is never persisted
     /// — an anchor made of coordinates would not survive the agent rewriting the page,
     /// which is the whole thing it has to survive.
+    /// The name the page reads to know which tool the operator is holding. Set from Swift
+    /// with `evaluateJavaScript` rather than baked into the script, so switching tools does
+    /// not reload the document and lose the scroll position — a canvas is something you are
+    /// part-way down when you decide to mark it.
+    static let markToolGlobal = "__helmMarkTool"
+
+    /// One statement, so `CanvasFileViews` has no JS of its own to get wrong.
+    static func setMarkTool(_ tool: CanvasMarkTool) -> String {
+        "window.\(markToolGlobal) = \(jsString(tool.token));"
+    }
+
     static func annotationScript() -> String {
         """
         (function () {
           if (!window.webkit || !window.webkit.messageHandlers
               || !window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName)) { return; }
           var bridge = window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName);
-          document.addEventListener("mouseup", function () {
-            var selection = document.getSelection();
-            var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
-            var text = empty ? "" : String(selection).trim();
-            if (!text) { bridge.postMessage({ cleared: true }); return; }
-            var range = selection.getRangeAt(0);
-            var node = range.commonAncestorContainer;
+          if (!window.\(markToolGlobal)) { window.\(markToolGlobal) = "select"; }
+          function tool() { return window.\(markToolGlobal) || "select"; }
+
+          // The nearest ancestor carrying an id, and the text it covers. ONE resolver, used
+          // by every tool — #112 asks for the draw-time hit test and any later re-resolution
+          // to share a code path, because inconsistent resolution between capture and action
+          // is its own bug class.
+          function resolve(node) {
+            if (!node) { return null; }
             if (node.nodeType === 3) { node = node.parentNode; }
+            var labelled = node;
             var id = null;
             while (node && node !== document.body) {
               if (node.id) { id = node.id; break; }
               node = node.parentNode;
             }
-            var rect = range.getBoundingClientRect();
-            bridge.postMessage({
-              id: id,
-              text: text,
-              rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
-            });
-          });
+            var text = ((node || labelled).textContent || "").trim().slice(0, 400);
+            if (!text) { return null; }
+            return { id: id, text: text };
+          }
+
+          function targetAt(x, y) {
+            if (paper) { paper.style.display = "none"; }
+            var hit = document.elementFromPoint(x, y);
+            if (paper) { paper.style.display = ""; }
+            return resolve(hit);
+          }
+
+          // Ray casting. A freehand loop is treated as closed, because a person circling
+          // something does not carefully meet the ends and helm should not make them.
+          function inside(poly, x, y) {
+            var yes = false;
+            for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+              var xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+              if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
+                yes = !yes;
+              }
+            }
+            return yes;
+          }
+
+          // Everything the loop encircles, by CENTRE rather than by any overlap: a stroke
+          // that grazes a neighbour did not mean the neighbour.
+          function targetsInside(poly) {
+            var seen = {}, found = [];
+            var nodes = document.querySelectorAll("[id], p, li, td, th, h1, h2, h3");
+            for (var i = 0; i < nodes.length; i++) {
+              if (nodes[i].closest("[data-helm-mark]")) { continue; }
+              var r = nodes[i].getBoundingClientRect();
+              if (!r.width && !r.height) { continue; }
+              if (!inside(poly, r.left + r.width / 2, r.top + r.height / 2)) { continue; }
+              var t = resolve(nodes[i]);
+              if (!t) { continue; }
+              var key = (t.id || "") + "\\u0000" + t.text;
+              if (seen[key]) { continue; }
+              seen[key] = true;
+              found.push(t);
+            }
+            return found;
+          }
+
+          // The ink. helm's own chrome, marked as such so an agent reading the DOM can tell
+          // it from what it authored, and inert so the page can never come to need it.
+          var paper = null, ink = null, stroke = [], from = null;
+
+          function sheet() {
+            if (paper) { return paper; }
+            paper = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            paper.setAttribute("data-helm-mark", "");
+            paper.style.cssText =
+              "position:fixed;left:0;top:0;width:100vw;height:100vh;" +
+              "pointer-events:none;z-index:2147483647;overflow:visible";
+            document.body.appendChild(paper);
+            return paper;
+          }
+
+          function draw(d, head) {
+            var svg = sheet();
+            if (!ink) {
+              ink = document.createElementNS("http://www.w3.org/2000/svg", "path");
+              ink.setAttribute("fill", "none");
+              ink.setAttribute("stroke", "currentColor");
+              ink.setAttribute("stroke-width", "2.5");
+              ink.setAttribute("stroke-linecap", "round");
+              ink.setAttribute("stroke-linejoin", "round");
+              ink.setAttribute("opacity", "0.85");
+              if (head) { ink.setAttribute("marker-end", "url(#helm-mark-head)"); }
+              svg.appendChild(ink);
+            }
+            ink.setAttribute("d", d);
+          }
+
+          function wipe() {
+            if (paper && paper.parentNode) { paper.parentNode.removeChild(paper); }
+            paper = null; ink = null; stroke = [];
+          }
+
+          function bounds(points) {
+            var l = Infinity, r = -Infinity, t = Infinity, b = -Infinity;
+            for (var i = 0; i < points.length; i++) {
+              l = Math.min(l, points[i].x); r = Math.max(r, points[i].x);
+              t = Math.min(t, points[i].y); b = Math.max(b, points[i].y);
+            }
+            return { x: l, y: t, width: r - l, height: b - t };
+          }
+
+          document.addEventListener("mousedown", function (e) {
+            var t = tool();
+            if (t === "select") { return; }
+            e.preventDefault();
+            wipe();
+            stroke = [{ x: e.clientX, y: e.clientY }];
+            from = targetAt(e.clientX, e.clientY);
+          }, true);
+
+          document.addEventListener("mousemove", function (e) {
+            if (!stroke.length) { return; }
+            var t = tool();
+            if (t === "point") { return; }
+            stroke.push({ x: e.clientX, y: e.clientY });
+            if (t === "arrow") {
+              var a = stroke[0], b = stroke[stroke.length - 1];
+              draw("M" + a.x + " " + a.y + " L" + b.x + " " + b.y, true);
+            } else {
+              var d = "M" + stroke[0].x + " " + stroke[0].y;
+              for (var i = 1; i < stroke.length; i++) { d += " L" + stroke[i].x + " " + stroke[i].y; }
+              draw(d, false);
+            }
+          }, true);
+
+          document.addEventListener("mouseup", function (e) {
+            var t = tool();
+
+            if (t === "select") {
+              // Unchanged: the text selection helm has always reported.
+              var selection = document.getSelection();
+              var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
+              var text = empty ? "" : String(selection).trim();
+              if (!text) { bridge.postMessage({ cleared: true }); return; }
+              var range = selection.getRangeAt(0);
+              var node = range.commonAncestorContainer;
+              if (node.nodeType === 3) { node = node.parentNode; }
+              var id = null;
+              while (node && node !== document.body) {
+                if (node.id) { id = node.id; break; }
+                node = node.parentNode;
+              }
+              var r = range.getBoundingClientRect();
+              bridge.postMessage({
+                id: id, text: text,
+                rect: { x: r.left, y: r.top, width: r.width, height: r.height }
+              });
+              return;
+            }
+
+            if (!stroke.length) { return; }
+            var start = stroke[0], startTarget = from;
+            var box = bounds(stroke.concat([{ x: e.clientX, y: e.clientY }]));
+            var drawn = stroke.slice();
+            wipe();
+            stroke = []; from = null;
+
+            if (t === "point") {
+              var at = targetAt(e.clientX, e.clientY);
+              if (!at) { bridge.postMessage({ cleared: true }); return; }
+              bridge.postMessage({ mark: "point", id: at.id, text: at.text, rect: box });
+              return;
+            }
+
+            if (t === "arrow") {
+              var end = targetAt(e.clientX, e.clientY);
+              // Either end may be empty — an arrow into blank space is "add a node here".
+              bridge.postMessage({ mark: "relation", from: startTarget, to: end, rect: box });
+              return;
+            }
+
+            if (t === "freehand") {
+              // What the loop encircles. Posted even when empty, so decode refuses it
+              // visibly — silence is indistinguishable from the stroke never registering.
+              bridge.postMessage({
+                mark: "enclosure", targets: targetsInside(drawn), rect: box
+              });
+              return;
+            }
+
+            // A tool helm does not know. Do nothing rather than guess — freehand used to be
+            // the fall-through here, so a garbage token silently drew a circle.
+          }, true);
         })();
         """
     }
