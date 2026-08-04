@@ -122,7 +122,8 @@ final class CanvasModel: ObservableObject {
     /// Which tool the operator is holding (#112). Lives on the model rather than the view
     /// because it has to survive the pane being rebuilt — a tool that silently reset to
     /// `.select` on a SwiftUI churn would look like the canvas ignoring the picker.
-    @Published var markTool: CanvasMarkTool = .select
+    @Published private(set) var markTool: CanvasMarkTool = .select
+
     @Published private(set) var selection: CanvasSelection?
 
     /// Every note in this canvas's sidecar, by heading. Re-read from the file rather than
@@ -251,6 +252,13 @@ final class CanvasModel: ObservableObject {
     /// what makes that safe is that **every dismissal above is reachable with a mouse**.
     /// #165 was the other arrangement: one exit, on the responder chain, gone the instant
     /// focus moved, leaving a box that could not be closed at all.
+    /// Pick a tool up, or put it down by picking it again. The toggle is a rule rather than
+    /// a button's closure, so it is reachable from `swift test` — and so getting back to
+    /// reading the page does not require remembering which icon `.select` is.
+    func pick(_ tool: CanvasMarkTool) {
+        markTool = markTool == tool ? .select : tool
+    }
+
     func dismissSelection() {
         selection = nil
         // The strip explains why the field is still up. Once it is gone the message points
@@ -535,9 +543,7 @@ struct CanvasView: View {
         HStack(spacing: 2) {
             ForEach(CanvasMarkTool.allCases, id: \.self) { tool in
                 Button {
-                    // Tapping the held tool puts it down. Otherwise the only way back to
-                    // reading the page is to remember which one `.select` is.
-                    model.markTool = model.markTool == tool ? .select : tool
+                    model.pick(tool)
                 } label: {
                     Image(systemName: tool.symbol)
                         .font(.system(size: 11))

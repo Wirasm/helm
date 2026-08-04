@@ -34,10 +34,10 @@ final class CanvasMarkToolTests: XCTestCase {
         XCTAssertTrue(CanvasMarkTool.allCases.allSatisfy { !$0.help.isEmpty })
     }
 
-    func testSettingTheToolIsOneStatementAndQuotesItsArgument() {
+    func testSettingTheToolQuotesItsArgument() {
         // It is evaluated in the page, so the token has to arrive as a JS string rather than
         // a bare identifier — the difference between setting a tool and a ReferenceError.
-        XCTAssertEqual(
-            CanvasHTML.setMarkTool(.freehand), "window.__helmMarkTool = \"freehand\";")
+        XCTAssertTrue(
+            CanvasHTML.setMarkTool(.freehand).contains("window.__helmMarkTool = \"freehand\";"))
     }
 }

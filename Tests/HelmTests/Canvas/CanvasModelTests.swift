@@ -356,4 +356,41 @@ final class CanvasModelTests: XCTestCase {
         model.close()
         XCTAssertFalse(model.isOpen)
     }
+
+    // MARK: - Picking a mark tool (#112)
+
+    @MainActor
+    func testPickingAToolHoldsIt() {
+        let model = CanvasModel()
+
+        model.pick(.freehand)
+
+        XCTAssertEqual(model.markTool, .freehand)
+    }
+
+    @MainActor
+    func testPickingTheHeldToolPutsItDown() {
+        // Otherwise getting back to reading the page means remembering which icon is select.
+        let model = CanvasModel()
+        model.pick(.arrow)
+
+        model.pick(.arrow)
+
+        XCTAssertEqual(model.markTool, .select)
+    }
+
+    @MainActor
+    func testPickingAnotherToolSwapsRatherThanClears() {
+        let model = CanvasModel()
+        model.pick(.arrow)
+
+        model.pick(.point)
+
+        XCTAssertEqual(model.markTool, .point)
+    }
+
+    @MainActor
+    func testACanvasNobodyHasTouchedIsReading() {
+        XCTAssertEqual(CanvasModel().markTool, .select)
+    }
 }

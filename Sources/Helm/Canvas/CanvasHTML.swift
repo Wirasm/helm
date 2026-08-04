@@ -163,6 +163,20 @@ enum CanvasHTML {
 
     // MARK: The annotation bridge
 
+    /// The name the page reads to know which tool the operator is holding. Set from Swift
+    /// with `evaluateJavaScript` rather than baked into the script, so switching tools does
+    /// not reload the document and lose the scroll position — a canvas is something you are
+    /// part-way down when you decide to mark it.
+    static let markToolGlobal = "__helmMarkTool"
+
+    /// One statement, so `CanvasFileViews` has no JS of its own to get wrong.
+    static func setMarkTool(_ tool: CanvasMarkTool) -> String {
+        """
+        window.\(markToolGlobal) = \(jsString(tool.token));
+        if (window.__helmWipeMark) { window.__helmWipeMark(); }
+        """
+    }
+
     /// Reports what the operator selected, so helm can anchor a comment to it.
     ///
     /// On `mouseup` it reads the selection, walks up from
@@ -185,17 +199,6 @@ enum CanvasHTML {
     /// anchored near what it is about. It is not part of the anchor and is never persisted
     /// — an anchor made of coordinates would not survive the agent rewriting the page,
     /// which is the whole thing it has to survive.
-    /// The name the page reads to know which tool the operator is holding. Set from Swift
-    /// with `evaluateJavaScript` rather than baked into the script, so switching tools does
-    /// not reload the document and lose the scroll position — a canvas is something you are
-    /// part-way down when you decide to mark it.
-    static let markToolGlobal = "__helmMarkTool"
-
-    /// One statement, so `CanvasFileViews` has no JS of its own to get wrong.
-    static func setMarkTool(_ tool: CanvasMarkTool) -> String {
-        "window.\(markToolGlobal) = \(jsString(tool.token));"
-    }
-
     static func annotationScript() -> String {
         """
         (function () {
@@ -274,6 +277,28 @@ enum CanvasHTML {
             paper.style.cssText =
               "position:fixed;left:0;top:0;width:100vw;height:100vh;" +
               "pointer-events:none;z-index:2147483647;overflow:visible";
+            // The arrowhead `marker-end` points at. An unresolvable url() is IGNORED rather
+            // than erroring, so without this the arrow tool silently drew a bare line — the
+            // one cue that tells it apart from freehand while you are drawing.
+            //
+            // Built with DOM calls rather than a markup string: this script reads and
+            // reports and never writes markup, which is an invariant with a test on it, and
+            // a markup string here is the shape that quietly becomes an injection vector.
+            var svgNS = "http://www.w3.org/2000/svg";
+            var defs = document.createElementNS(svgNS, "defs");
+            var marker = document.createElementNS(svgNS, "marker");
+            marker.setAttribute("id", "helm-mark-head");
+            marker.setAttribute("markerWidth", "8");
+            marker.setAttribute("markerHeight", "8");
+            marker.setAttribute("refX", "6");
+            marker.setAttribute("refY", "3");
+            marker.setAttribute("orient", "auto");
+            var barb = document.createElementNS(svgNS, "path");
+            barb.setAttribute("d", "M0,0 L6,3 L0,6 Z");
+            barb.setAttribute("fill", "currentColor");
+            marker.appendChild(barb);
+            defs.appendChild(marker);
+            paper.appendChild(defs);
             document.body.appendChild(paper);
             return paper;
           }
@@ -296,7 +321,24 @@ enum CanvasHTML {
 
           function wipe() {
             if (paper && paper.parentNode) { paper.parentNode.removeChild(paper); }
-            paper = null; ink = null; stroke = [];
+            paper = null; ink = null; stroke = []; from = null;
+          }
+
+          // A drag released outside the document — over helm's own header, another pane —
+          // never fires mouseup here, and the ink would sit at max z-index until the next
+          // stroke. Both of these end it.
+          window.addEventListener("blur", wipe);
+          document.addEventListener("mouseleave", wipe);
+          // Called from Swift when the tool changes, so putting a tool down also drops
+          // whatever was half-drawn with it.
+          window.__helmWipeMark = wipe;
+
+          function pathFrom(points) {
+            var d = "M" + points[0].x + " " + points[0].y;
+            for (var i = 1; i < points.length; i++) {
+              d += " L" + points[i].x + " " + points[i].y;
+            }
+            return d;
           }
 
           function bounds(points) {
@@ -311,6 +353,10 @@ enum CanvasHTML {
           document.addEventListener("mousedown", function (e) {
             var t = tool();
             if (t === "select") { return; }
+            // Primary button only. A tool is a STICKY selection, unlike the modifier it
+            // replaced — so a right-click for the page's own context menu would otherwise
+            // start a stroke, and the menu's tracking loop eats the matching mouseup.
+            if (e.button !== 0) { return; }
             e.preventDefault();
             wipe();
             stroke = [{ x: e.clientX, y: e.clientY }];
@@ -323,12 +369,9 @@ enum CanvasHTML {
             if (t === "point") { return; }
             stroke.push({ x: e.clientX, y: e.clientY });
             if (t === "arrow") {
-              var a = stroke[0], b = stroke[stroke.length - 1];
-              draw("M" + a.x + " " + a.y + " L" + b.x + " " + b.y, true);
+              draw(pathFrom([stroke[0], stroke[stroke.length - 1]]), true);
             } else {
-              var d = "M" + stroke[0].x + " " + stroke[0].y;
-              for (var i = 1; i < stroke.length; i++) { d += " L" + stroke[i].x + " " + stroke[i].y; }
-              draw(d, false);
+              draw(pathFrom(stroke), false);
             }
           }, true);
 

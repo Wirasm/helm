@@ -149,10 +149,41 @@ final class CanvasHTMLTests: XCTestCase {
         XCTAssertTrue(script.contains("data-helm-mark"))
         XCTAssertTrue(
             script.contains("paper.style.display = \"none\""),
-            "the overlay is hidden for the hit test, or a mark would resolve to helm's own ink")
+            "the paper is hidden for the hit test, or a mark would resolve to helm's own ink")
         XCTAssertTrue(
             script.contains("closest(\"[data-helm-mark]\")"),
             "and excluded when collecting what a loop covers")
+    }
+
+    func testTheArrowheadItReferencesActuallyExists() {
+        // An unresolvable marker url() is ignored rather than erroring, so a missing <marker>
+        // is a silently bare line — the one cue that tells arrow from freehand mid-draw.
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(script.contains("url(#helm-mark-head)"))
+        XCTAssertTrue(
+            script.contains("marker.setAttribute(\"id\", \"helm-mark-head\")"),
+            "referenced but never defined")
+    }
+
+    func testOnlyThePrimaryButtonStartsAStroke() {
+        // A tool is a sticky selection, unlike the modifier it replaced: a right-click for
+        // the page's context menu would otherwise start a stroke the menu then swallows.
+        XCTAssertTrue(CanvasHTML.annotationScript().contains("e.button !== 0"))
+    }
+
+    func testAnAbandonedStrokeCanBeCleanedUpFromOutsideTheDocument() {
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(script.contains("addEventListener(\"blur\", wipe)"))
+        XCTAssertTrue(script.contains("mouseleave"))
+        XCTAssertTrue(
+            script.contains("window.__helmWipeMark = wipe"),
+            "putting a tool down must also drop what was half-drawn with it")
+    }
+
+    func testSettingTheToolAlsoWipes() {
+        XCTAssertTrue(CanvasHTML.setMarkTool(.select).contains("__helmWipeMark"))
     }
 
     // MARK: Vendored scripts
