@@ -18,7 +18,6 @@ final class WorktreesRailModel: ObservableObject {
     @Published private(set) var isExpanded = false
     @Published private(set) var rows: [Worktree] = []
     @Published private(set) var isRefreshing = false
-    @Published private(set) var refreshingWorkspace: String?
     @Published private(set) var confirmation: Confirmation?
     @Published private(set) var actingPaths: Set<String> = []
     @Published private(set) var isCleaningAll = false
@@ -65,7 +64,6 @@ final class WorktreesRailModel: ObservableObject {
         actionFailures = [:]
         rows = []
         guard let workspacePath else {
-            rows = []
             refreshFailure = nil
             return
         }
@@ -169,6 +167,5 @@ final class WorktreesRailModel: ObservableObject {
 
     private func updateRefreshingState() {
         isRefreshing = !refreshesInFlight.isEmpty
-        refreshingWorkspace = refreshesInFlight.first
     }
 }
