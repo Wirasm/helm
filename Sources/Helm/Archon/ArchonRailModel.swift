@@ -20,10 +20,25 @@ import Foundation
 /// what it produced. Clearing one removes it **from helm only**, which is honest here in a way
 /// it was not before, because a list of runs you have not cleared never claimed to be history.
 ///
-/// **`paused` has no surface at all now, and that is a real subtraction.** It had a number; the
-/// numbers are gone, and a paused run is not finished so it does not reach the inbox. Giving it
-/// a row means putting Archon's approve/reject verbs back, which this rail removed on purpose —
-/// so it is left visibly missing rather than quietly half-solved.
+/// **A gate is the one thing here that is blocked on you, so it is the one thing above the
+/// live work.** `paused` lost its number with the counts and never reached the inbox, and #147
+/// had already taken the row Archon's approve/reject verbs hung on — two subtractions of the
+/// same capability, put back as one line rather than two answers. The rail is now three lists:
+/// gates, running, finished. A gate has verbs; the other two do not.
+///
+/// **Typed input retargets the one field rather than growing a second one.** The rail has
+/// exactly one input and that stays true — arming a gate swaps what the composer is *for*, and
+/// the launch draft is held aside untouched rather than overwritten, because losing a
+/// half-written instruction to answer a gate is the version of this that gets sworn at. Which
+/// decisions collect text is not a UI preference: Archon says which gates read it (see
+/// `ArchonGate.needsText(for:)`), and the two that do would otherwise be answered blind.
+///
+/// **A gate is still invisible while the rail is hidden, and that is the rail's problem rather
+/// than the gate's.** The inbox #153 shipped has exactly the same property, and the poll only
+/// runs while `ArchonRailView` is on screen — so an always-visible gate means giving the poll a
+/// lifetime independent of the view, which changes what helm costs when idle for every user
+/// including those who never touch Archon. Solving it here would answer for gates a question
+/// the whole rail asks, which is the second answer #150 warns against.
 @MainActor
 final class ArchonRailModel: ObservableObject {
     static let visibilityKey = "archonRailVisible"
@@ -49,6 +64,14 @@ final class ArchonRailModel: ObservableObject {
         }
     }
 
+    /// What the operator is typing **at a gate**, kept apart from `draft` on purpose: answering
+    /// a gate must not cost a half-written launch instruction, and one string for both is
+    /// exactly how it would.
+    @Published var replyText = "" { didSet { actionFailure = nil } }
+
+    /// The paused runs, above the running ones. Not all of them are actionable — see
+    /// `ArchonGate.isAwaitingDecision` — but every one of them is a run with no other surface.
+    @Published private(set) var gated: [ArchonRun] = []
     /// The runs that get a live line. Only `running` — see the note on the type.
     @Published private(set) var running: [ArchonRun] = []
     /// Finished runs the operator has not cleared, newest first. Bounded by what Archon
@@ -63,6 +86,15 @@ final class ArchonRailModel: ObservableObject {
     /// send button that silently does nothing is a worse defect than a line of text, and this
     /// is the only place Archon's own reason for refusing a launch can be read.
     @Published private(set) var launchFailure: String?
+    /// Why the last decision did not land. **Separate from `launchFailure`** because the two sit
+    /// on different halves of the rail, and a rejected launch must not be cleared by a
+    /// successful approve.
+    @Published private(set) var actionFailure: String?
+    /// The gate the composer is currently answering, if any. Nil is the launch composer.
+    @Published private(set) var reply: ArchonGateReply?
+    /// A set rather than a flag: two gates are independently answerable, and a spinner over the
+    /// whole rail would say the wrong thing about the other one.
+    @Published private(set) var busyRuns: Set<String> = []
     @Published private(set) var workflows: [ArchonWorkflow] = []
     @Published private(set) var workflowLoadErrors: [ArchonWorkflowLoadError] = []
     @Published private(set) var isLoadingWorkflows = false
@@ -128,9 +160,11 @@ final class ArchonRailModel: ObservableObject {
 
     func refresh(in workspacePath: String?) async {
         guard let workspacePath else {
+            gated = []
             running = []
             finished = []
             stages = [:]
+            disarm()
             return
         }
         // Drop rather than queue: a poll that overran its interval means Archon is slower than
@@ -162,6 +196,7 @@ final class ArchonRailModel: ObservableObject {
     /// while `runs` is the newest twenty — and the arithmetic that reconciled them existed only
     /// to keep a tally honest. There is no tally left to keep honest.
     private func apply(_ response: ArchonRunsResponse, in workspacePath: String) {
+        gated = response.runs.filter(\.isPaused)
         running = response.runs.filter(\.isRunning)
         finished =
             response.runs
@@ -171,6 +206,12 @@ final class ArchonRailModel: ObservableObject {
                 // run missing it sorts last rather than crashing the comparison.
                 (left.completedAt ?? .distantPast) > (right.completedAt ?? .distantPast)
             }
+        // A gate answered from anywhere — Archon's own UI, a terminal, or the approve that
+        // already landed here — takes the composer back with it. Leaving it armed would offer
+        // Send against a decision that has already been made.
+        if let reply, !gated.contains(where: { $0.id == reply.runID && $0.isAwaitingDecision }) {
+            disarm()
+        }
     }
 
     /// Clear one finished run. **From helm only** — Archon's record is untouched, which is
@@ -188,6 +229,123 @@ final class ArchonRailModel: ObservableObject {
     func open(_ run: ArchonRun) {
         let opener = self.opener
         Task { await opener.open(run) }
+    }
+
+    // MARK: - Answering a gate
+
+    /// A verb was pressed on a gate: either send it now, or point the composer at it first.
+    ///
+    /// **The branch is read from the gate, not chosen by taste.** `needsText(for:)` is true for
+    /// exactly the decisions whose text Archon acts on — a rejection's rework prompt, a
+    /// `captureResponse` node's own output, an interactive loop's iterate-or-finalize — so
+    /// sending those blind would quietly pick an answer on the operator's behalf. Everywhere
+    /// else the comment reaches an audit event nobody reads, and asking for one would be a
+    /// second click that buys nothing.
+    func choose(
+        _ decision: ArchonGateDecision, on run: ArchonRun, in workspacePath: String?
+    ) async {
+        guard let gate = run.gate, gate.isAwaitingDecision else { return }
+        guard !busyRuns.contains(run.id) else { return }
+        if gate.needsText(for: decision) {
+            arm(decision, on: run)
+            return
+        }
+        await decide(decision, text: nil, on: run, in: workspacePath)
+    }
+
+    /// Point the composer at a gate. The launch draft is untouched — the field simply binds to
+    /// the other string until this is sent or cancelled.
+    func arm(_ decision: ArchonGateDecision, on run: ArchonRun) {
+        reply = ArchonGateReply(runID: run.id, decision: decision, workflowName: run.workflowName)
+        replyText = ""
+        actionFailure = nil
+    }
+
+    /// Give the composer back to launching. Nothing is sent.
+    func disarm() {
+        reply = nil
+        replyText = ""
+    }
+
+    /// Enter in an armed composer, or its send button.
+    ///
+    /// **An empty answer is allowed through.** Both flags are optional to Archon, and for an
+    /// interactive loop "nothing to add" is a real decision — it is what finalizes the loop
+    /// rather than running another iteration. Refusing to send it would make the one gate that
+    /// distinguishes them unanswerable in the finalize direction.
+    func sendReply(in workspacePath: String?) async {
+        guard let reply, let run = gated.first(where: { $0.id == reply.runID }) else { return }
+        await decide(reply.decision, text: replyText, on: run, in: workspacePath)
+    }
+
+    /// One of Archon's gate verbs, run against one run, and then the resume it leaves behind.
+    ///
+    /// **`ok` is checked, not the exit status** — the standing rule for every `--json` verb:
+    /// they catch their own failures, print `{"ok": false, …}` and exit zero, so "the process
+    /// succeeded" and "the gate was answered" are different facts.
+    ///
+    /// **A decision that leaves the run parked is finished by resuming it here.** Archon records
+    /// the decision in `--json` mode without executing, because executing streams the workflow's
+    /// output over the JSON contract; its own interactive form resumes immediately afterwards,
+    /// and an Approve that left the run sitting exactly where it was would be a control that
+    /// lies by omission. **The resume is reported separately when it fails**, because by then the
+    /// approval is already recorded and saying "approve failed" would be a third wrong answer.
+    private func decide(
+        _ decision: ArchonGateDecision, text: String?, on run: ArchonRun, in workspacePath: String?
+    ) async {
+        guard let workspacePath else {
+            actionFailure = Self.noWorkspace
+            return
+        }
+        guard !busyRuns.contains(run.id) else { return }
+        busyRuns.insert(run.id)
+        actionFailure = nil
+        defer { busyRuns.remove(run.id) }
+
+        // **The failure is carried, not assigned as it is found, and the order is the point.**
+        // `disarm()` and the refresh below both write state whose observers clear
+        // `actionFailure` — so a sentence set before them is a sentence the operator never
+        // reads. It is published last, when nothing is left to wipe it.
+        var failure: String?
+        do {
+            let acknowledgement = try await client.decide(
+                decision, text: text, on: run.id, in: workspacePath)
+            if acknowledgement.ok {
+                disarm()
+                if acknowledgement.leavesRunResumable {
+                    failure = await resumeFailure(for: run, after: decision)
+                }
+            } else {
+                failure =
+                    "Archon refused to \(decision.verb) this run: "
+                    + (acknowledgement.error ?? "no reason given")
+            }
+        } catch {
+            failure = error.localizedDescription
+        }
+        // Refreshed even on a refusal, and especially then: the commonest reason Archon refuses
+        // is that the gate was already answered somewhere else, so the row helm is showing is
+        // the stale thing that produced the click.
+        await refresh(in: workspacePath)
+        actionFailure = failure
+    }
+
+    /// nil when the run really did restart.
+    private func resumeFailure(
+        for run: ArchonRun, after decision: ArchonGateDecision
+    ) async -> String? {
+        let recorded = decision.verb.capitalized
+        do {
+            let resumed = try await client.resume(run)
+            guard resumed.ok, resumed.detached else {
+                return "\(recorded) recorded, but Archon did not restart the run. "
+                    + "Resume it from a terminal."
+            }
+            return nil
+        } catch {
+            return "\(recorded) recorded, but the run did not restart: "
+                + error.localizedDescription
+        }
     }
 
     /// One extra `archon` per running run, per poll — issued concurrently, so they cost latency

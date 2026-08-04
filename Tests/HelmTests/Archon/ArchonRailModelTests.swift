@@ -9,8 +9,8 @@ import XCTest
 /// *renamed* are rewritten to the property that replaced them rather than dropped:
 /// "running and paused both get lines" became "only running does", and "the subline is the
 /// current node's output preview" became "the subline is the current node's stage". What is
-/// gone entirely is the liveness state, the `approve`/`reject`/`abandon` verbs and the
-/// dismissal filter — see the commit message.
+/// gone entirely is the liveness state, the `abandon` verb and the run pane — see the commit
+/// message. `approve`/`reject` came back with #150 and are exercised below.
 final class ArchonRailModelTests: XCTestCase {
     private let workspace = "/tmp/project"
 
@@ -51,21 +51,19 @@ final class ArchonRailModelTests: XCTestCase {
 
     // MARK: - Polling
 
-    /// **Rewritten twice, not deleted.** It first asserted that a paused run gets its own line;
-    /// the minimal rail gave it a count instead. Now the counts are gone too, so what it
-    /// asserts is the split that replaced them: `running` gets a live line, `completed` and
-    /// `failed` go to the inbox, and everything else gets nothing at all.
-    ///
-    /// **`paused` getting nothing is the deliberate hole**, recorded on `ArchonRailModel`: it
-    /// had only a number, and a row for it means putting the approve/reject verbs back.
+    /// **Rewritten three times, not deleted.** It first asserted that a paused run gets its own
+    /// line; the minimal rail gave it a count instead; then the counts went and it had nothing
+    /// at all. What it asserts now is the three-way split the gates restored: `paused` is its
+    /// own list, `running` is another, `completed` and `failed` are the inbox, and `cancelled`
+    /// is still nowhere because the operator ended it themselves.
     @MainActor
-    func testRunningRunsGetALineAndFinishedRunsGetAnInboxRow() async throws {
+    func testTheThreeListsAreGatedRunningAndFinished() async throws {
         let client = FakeArchonClient(
             runsResponse: .fixture(
                 runs: [
                     .fixture(id: "a", status: "running"),
                     .fixture(id: "b", status: "completed"),
-                    .fixture(id: "c", status: "paused"),
+                    .paused(id: "c"),
                     .fixture(id: "d", status: "failed"),
                     .fixture(id: "e", status: "cancelled"),
                 ],
@@ -75,10 +73,11 @@ final class ArchonRailModelTests: XCTestCase {
 
         await model.refresh(in: workspace)
 
+        XCTAssertEqual(model.gated.map(\.id), ["c"])
         XCTAssertEqual(model.running.map(\.id), ["a"])
         XCTAssertEqual(
             Set(model.finished.map(\.id)), ["b", "d"],
-            "completed and failed are the inbox; cancelled produced nothing and paused is not finished"
+            "completed and failed are the inbox; cancelled produced nothing and paused has its own list"
         )
     }
 
@@ -449,6 +448,182 @@ final class ArchonRailModelTests: XCTestCase {
         await model.loadWorkflows(in: nil)
 
         XCTAssertEqual(model.launchFailure, ArchonRailModel.noWorkspace)
+    }
+
+    // MARK: - Answering a gate
+
+    @MainActor
+    private func gatedModel(
+        _ name: String, gate: ArchonGate = .fixture(), client: FakeArchonClient? = nil
+    ) async throws -> (ArchonRailModel, FakeArchonClient) {
+        let client =
+            client ?? FakeArchonClient(runsResponse: .fixture(runs: [.paused(gate: gate)]))
+        let model = ArchonRailModel(client: client, defaults: try isolatedDefaults(name))
+        await model.refresh(in: workspace)
+        return (model, client)
+    }
+
+    /// A gate whose text Archon does not read sends on one click. Two would be a click that
+    /// buys nothing, which is exactly the bloat #147 cut.
+    @MainActor
+    func testAPlainApprovalSendsOnTheFirstClick() async throws {
+        let (model, client) = try await gatedModel("archon-gate-plain")
+
+        await model.choose(.approve, on: model.gated[0], in: workspace)
+
+        let calls = await client.gateCalls()
+        XCTAssertEqual(calls.decisions.map(\.decision), [.approve])
+        XCTAssertNil(calls.decisions.first?.text)
+        XCTAssertNil(model.reply, "nothing was armed — it just went")
+    }
+
+    /// A rejection's reason drives the `on_reject` rework, so the click points the composer at
+    /// the gate instead of sending an unexplained failure.
+    @MainActor
+    func testRejectArmsTheComposerRatherThanSendingBlind() async throws {
+        let (model, client) = try await gatedModel("archon-gate-reject-arms")
+
+        await model.choose(.reject, on: model.gated[0], in: workspace)
+
+        let calls = await client.gateCalls()
+        XCTAssertEqual(calls.decisions.count, 0, "nothing is sent until the reason is typed")
+        XCTAssertEqual(model.reply?.decision, .reject)
+        XCTAssertEqual(model.reply?.runID, "run-1")
+    }
+
+    /// `captureResponse` makes the comment the node's own output, so a one-click approve would
+    /// silently write the literal string `Approved` into the run.
+    @MainActor
+    func testACaptureResponseGateArmsTheComposer() async throws {
+        let (model, _) = try await gatedModel(
+            "archon-gate-capture", gate: .fixture(captureResponse: true))
+
+        await model.choose(.approve, on: model.gated[0], in: workspace)
+
+        XCTAssertEqual(model.reply?.decision, .approve)
+    }
+
+    /// **The launch draft survives a gate.** One field, two strings behind it — because losing a
+    /// half-written instruction to answer an approval is the version of this that gets sworn at.
+    @MainActor
+    func testAnsweringAGateNeverTouchesTheLaunchDraft() async throws {
+        let (model, _) = try await gatedModel("archon-gate-draft")
+        model.draft = "half a thought"
+
+        await model.choose(.reject, on: model.gated[0], in: workspace)
+        model.replyText = "the tests are red"
+        model.disarm()
+
+        XCTAssertNil(model.reply)
+        XCTAssertEqual(model.draft, "half a thought")
+        XCTAssertEqual(model.replyText, "")
+    }
+
+    /// The typed answer reaches Archon, and the recorded decision is followed through with the
+    /// resume it leaves behind — `--json` records without executing.
+    @MainActor
+    func testTheTypedAnswerIsSentAndTheParkedRunIsResumed() async throws {
+        let (model, client) = try await gatedModel("archon-gate-send")
+
+        await model.choose(.reject, on: model.gated[0], in: workspace)
+        model.replyText = "the tests are red"
+        await model.sendReply(in: workspace)
+
+        let calls = await client.gateCalls()
+        XCTAssertEqual(calls.decisions.map(\.text), ["the tests are red"])
+        XCTAssertEqual(calls.decisions.map(\.runID), ["run-1"])
+        XCTAssertEqual(calls.resumes, ["run-1"], "resumable: true means helm has to drive it")
+        XCTAssertNil(model.reply, "a sent answer gives the composer back")
+        XCTAssertNil(model.actionFailure)
+    }
+
+    /// An empty answer is a real one: for an interactive loop it is what finalizes rather than
+    /// running another iteration, so it must be sendable.
+    @MainActor
+    func testAnEmptyAnswerStillSends() async throws {
+        let (model, client) = try await gatedModel(
+            "archon-gate-empty", gate: .fixture(type: .interactiveLoop))
+
+        await model.choose(.approve, on: model.gated[0], in: workspace)
+        await model.sendReply(in: workspace)
+
+        let calls = await client.gateCalls()
+        XCTAssertEqual(calls.decisions.count, 1)
+        XCTAssertEqual(calls.decisions.first?.text, "")
+    }
+
+    /// `ok: false` on a zero exit. Reported as Archon's own refusal rather than as success.
+    @MainActor
+    func testARefusedDecisionSaysWhyAndResumesNothing() async throws {
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [.paused()]))
+        await client.setDecision(.fixture(ok: false, error: "run not found"))
+        let (model, _) = try await gatedModel("archon-gate-refused", client: client)
+
+        await model.choose(.approve, on: model.gated[0], in: workspace)
+
+        let calls = await client.gateCalls()
+        XCTAssertEqual(model.actionFailure, "Archon refused to approve this run: run not found")
+        XCTAssertEqual(calls.resumes, [], "a refusal is not a decision to follow through")
+    }
+
+    /// **The third wrong answer this avoids**: by the time a resume fails the approval is
+    /// already recorded, so "approve failed" would be false. The sentence says both halves —
+    /// and it survives the refresh that follows, which is where an earlier shape lost it.
+    @MainActor
+    func testAResumeThatFailsIsReportedWithoutUnsayingTheApproval() async throws {
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [.paused()]))
+        await client.setResume(.fixture(ok: true, detached: false))
+        let (model, _) = try await gatedModel("archon-gate-resume-failed", client: client)
+
+        await model.choose(.approve, on: model.gated[0], in: workspace)
+
+        XCTAssertEqual(
+            model.actionFailure,
+            "Approve recorded, but Archon did not restart the run. Resume it from a terminal.")
+    }
+
+    /// A gate answered anywhere else — Archon's own UI, a terminal — takes the composer back
+    /// with it. Leaving it armed would offer Send against a decision already made.
+    @MainActor
+    func testAGateAnsweredElsewhereDisarmsTheComposer() async throws {
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [.paused()]))
+        let (model, _) = try await gatedModel("archon-gate-elsewhere", client: client)
+        await model.choose(.reject, on: model.gated[0], in: workspace)
+        XCTAssertNotNil(model.reply)
+
+        await client.setRuns(.fixture(runs: [.fixture(id: "run-1", status: "running")]))
+        await model.refresh(in: workspace)
+
+        XCTAssertNil(model.reply)
+        XCTAssertEqual(model.gated, [])
+    }
+
+    /// A gate that is not the operator's has no verbs, and asking for one anyway is a call
+    /// Archon throws on — so the model refuses before the process is spawned.
+    @MainActor
+    func testAGateThatIsNotYoursIsNeverSent() async throws {
+        let (model, client) = try await gatedModel(
+            "archon-gate-not-yours", gate: .fixture(resolved: "approved"))
+
+        await model.choose(.approve, on: model.gated[0], in: workspace)
+
+        let calls = await client.gateCalls()
+        XCTAssertEqual(model.gated.map(\.id), ["run-1"], "it still gets a line — it is paused")
+        XCTAssertEqual(calls.decisions.count, 0)
+        XCTAssertNil(model.reply)
+    }
+
+    /// The rail's other failure line must not be cleared by this one: they sit on different
+    /// halves and mean different things.
+    @MainActor
+    func testADecisionWithNoWorkspaceSaysSoOnItsOwnLine() async throws {
+        let (model, _) = try await gatedModel("archon-gate-no-workspace")
+        let run = model.gated[0]
+
+        await model.choose(.approve, on: run, in: nil)
+
+        XCTAssertEqual(model.actionFailure, ArchonRailModel.noWorkspace)
+        XCTAssertNil(model.launchFailure)
     }
 }
 

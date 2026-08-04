@@ -74,6 +74,24 @@ struct ArchonRun: Codable, Equatable, Sendable {
 
     struct Metadata: Codable, Equatable, Sendable {
         let error: String?
+        /// The gate a paused run is waiting at. Written by `pauseWorkflowRun` and carried
+        /// whole into `workflow runs --json`, so it costs no extra call — see `ArchonGate`.
+        let approval: ArchonGate?
+
+        init(error: String?, approval: ArchonGate?) {
+            self.error = error
+            self.approval = approval
+        }
+
+        /// **A gate helm cannot read costs the gate, never the run.** `ArchonGate` already
+        /// tolerates missing keys; this handles the other shape — `approval` present but not
+        /// an object at all, which a stale run can carry and which would otherwise throw
+        /// through the whole `runs` decode and blank the rail.
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            error = try container.decodeIfPresent(String.self, forKey: .error)
+            approval = try? container.decodeIfPresent(ArchonGate.self, forKey: .approval)
+        }
     }
 
     /// The eight characters `workflow runs` prints and every Archon surface identifies a run
@@ -84,14 +102,30 @@ struct ArchonRun: Codable, Equatable, Sendable {
     /// The one status that gets a live line of its own.
     var isRunning: Bool { status == ArchonRunStatus.running }
 
+    /// Stopped, waiting for a person. The status that gets the rail's top line.
+    var isPaused: Bool { status == ArchonRunStatus.paused }
+
     /// The two statuses that put a run in the inbox.
     ///
     /// **`cancelled` is deliberately absent**: the operator ended it themselves, so it is not
-    /// news, and it produced nothing to be handed. `paused` is not finished at all — see the
-    /// note on `ArchonRailModel`, which is where that gap is recorded.
+    /// news, and it produced nothing to be handed. `paused` is not finished either — it has its
+    /// own list, above the running one, because it is the one state blocked on the operator.
     var isFinished: Bool {
         status == ArchonRunStatus.completed || status == ArchonRunStatus.failed
     }
+
+    /// The gate holding this run, when there is one.
+    ///
+    /// **Only meaningful while `paused`.** Archon never clears the approval context on resume —
+    /// it is deliberately kept for the executor's resume-time reads — so a completed run still
+    /// carries the last gate it passed, and reading it on any other status would put a stale
+    /// question under a finished row.
+    var gate: ArchonGate? { isPaused ? metadata?.approval : nil }
+
+    /// Whether this run is waiting on **the operator**, as opposed to merely being paused.
+    /// A paused run with no gate at all, a gate already answered, or a gate belonging to a
+    /// sub-run are all paused and none of them is yours — see `ArchonGate.isAwaitingDecision`.
+    var isAwaitingDecision: Bool { gate?.isAwaitingDecision ?? false }
 
     /// The node the subline animates: the one Archon says is running, else the last one it
     /// reported. **Last rather than first** — `nodes` arrives in DAG order, and a fan-out
@@ -115,7 +149,7 @@ struct ArchonRun: Codable, Equatable, Sendable {
 ///
 /// **Strings rather than an enum, for the reason `ArchonRun.status` is one**: this vocabulary
 /// lives in a repo that has zero knowledge of helm and grows without warning. These are the
-/// two helm has to *reason* about — everything else it only has to display, which needs no
+/// ones helm has to *reason* about — everything else it only has to display, which needs no
 /// name here.
 ///
 /// Archon declares `RunStatus = 'running' | 'paused' | 'failed' | 'completed' | 'cancelled'`.
@@ -123,6 +157,7 @@ struct ArchonRun: Codable, Equatable, Sendable {
 /// workflows, not runs.
 enum ArchonRunStatus {
     static let running = "running"
+    static let paused = "paused"
     static let completed = "completed"
     static let failed = "failed"
 }

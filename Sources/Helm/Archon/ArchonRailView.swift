@@ -2,15 +2,20 @@ import SwiftUI
 
 /// The rail, reduced to what the operator kept.
 ///
-/// **Five things render, top to bottom, and nothing else**: the Archon title, the field you
-/// type in, the button that sends it, one line per running run with a subline naming the stage
-/// it is on, and one line per finished run you have not cleared. No headers, no hints, no
-/// empty-state prose, no footers, no liveness word. The version this replaces had all of them
-/// and the verdict was *"too much bloat"*.
+/// **Six things render, top to bottom, and nothing else**: the Archon title, the field you type
+/// in, the button that sends it, one line per gated run carrying that gate's question and its
+/// two verbs, one line per running run with a subline naming the stage it is on, and one line
+/// per finished run you have not cleared. No headers, no hints, no empty-state prose, no
+/// footers, no liveness word. The version this replaces had all of them and the verdict was
+/// *"too much bloat"*.
 ///
-/// The fifth was a collapsed count per status and is now a row per run, because a count is the
-/// one thing here that could not be acted on — and, under `scopeFallback`, could be wrong by
-/// two orders of magnitude with nothing on screen to say so.
+/// The count-per-status line is gone and is now a row per run, because a count is the one thing
+/// here that could not be acted on — and, under `scopeFallback`, could be wrong by two orders
+/// of magnitude with nothing on screen to say so.
+///
+/// **The gate line is the sixth and it is the only row with controls**, because it is the only
+/// row where the run is blocked on the person reading it. Everything else the rail shows is
+/// something to look at; this is something to answer.
 ///
 /// **The brand is the duotone, not a magenta.** Archon's console says so itself — *"the duotone
 /// magenta → violet → teal gradient drawn from the shield logo is THE brand"* — and defines two
@@ -71,36 +76,41 @@ struct ArchonRailView: View {
 
     // MARK: - Input
 
+    /// **One input, two jobs, and the second one says so.** Armed at a gate the field answers
+    /// that gate; otherwise it launches. The launch draft is not swapped out or cleared — the
+    /// binding simply points at the other string — so cancelling a gate hands back exactly the
+    /// half-written instruction that was there.
     private var composer: some View {
         VStack(alignment: .leading, spacing: 7) {
+            if let reply = model.reply { armed(reply) }
             // The same field shape as the chat composer, for the same reason: a vertical-axis
             // `TextField` submits on Return and keeps ⌥Return for a newline, so a one-line
             // instruction costs one keystroke and a paragraph is still possible.
-            TextField(prompt, text: $model.draft, axis: .vertical)
+            TextField(prompt, text: text, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
                 .font(.system(size: 12.5))
                 .foregroundStyle(Color.textPrimary)
                 .focused($composerFocused)
                 .disabled(workspacePath == nil)
-                .onSubmit { launch() }
+                .onSubmit { submit() }
                 .padding(.horizontal, 9)
                 .padding(.vertical, 7)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.surfaceRaised))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(
-                            composerFocused ? Color.archonMagenta.opacity(0.6) : Color.border,
+                            composerFocused ? borderTint.opacity(0.6) : Color.border,
                             lineWidth: 1)
                 )
 
             HStack(spacing: 6) {
-                settings
+                if model.reply == nil { settings } else { cancelReply }
                 Spacer()
                 send
             }
 
-            if let failure = model.launchFailure {
+            if let failure = model.actionFailure ?? model.launchFailure {
                 Text(failure)
                     .font(.caption2)
                     .foregroundStyle(Color.archonError)
@@ -111,8 +121,65 @@ struct ArchonRailView: View {
         .padding(.vertical, 10)
     }
 
+    /// While armed, the field writes `replyText`; otherwise `draft`. Two strings behind one
+    /// control, which is what keeps the launch draft alive across a gate.
+    private var text: Binding<String> {
+        model.reply == nil ? $model.draft : $model.replyText
+    }
+
     private var prompt: String {
-        workspacePath == nil ? ArchonRailModel.noWorkspace : "What should Archon do?"
+        guard workspacePath != nil else { return ArchonRailModel.noWorkspace }
+        switch model.reply?.decision {
+        case .approve: return "Anything to add? (optional)"
+        case .reject: return "What was wrong? This drives the rework."
+        case nil: return "What should Archon do?"
+        }
+    }
+
+    /// Whose colour the focus ring and the send button carry: the brand when launching, the
+    /// decision's own tint when answering — so the field visibly belongs to the gate above it
+    /// rather than looking like a launch that will go somewhere unexpected.
+    private var borderTint: Color {
+        model.reply.map { Self.tint(of: $0.decision) } ?? Color.archonMagenta
+    }
+
+    private static func tint(of decision: ArchonGateDecision) -> Color {
+        switch decision {
+        case .approve: .accent
+        case .reject: .archonAttention
+        }
+    }
+
+    /// The one line that says the field has been repointed, and at what.
+    private func armed(_ reply: ArchonGateReply) -> some View {
+        HStack(spacing: 6) {
+            Text(reply.decision.verb.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .tracking(1)
+                .foregroundStyle(Self.tint(of: reply.decision))
+            Text(reply.workflowName)
+                .font(.system(size: 10))
+                .foregroundStyle(Color.textMuted)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            Text(String(reply.runID.prefix(8)))
+                .font(.system(size: 9.5, design: .monospaced))
+                .foregroundStyle(Color.textFaint)
+        }
+    }
+
+    private var cancelReply: some View {
+        Button {
+            model.disarm()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 10))
+                .foregroundStyle(Color.textMuted)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Back to launching — nothing is sent")
     }
 
     /// **Thin, and the second element carrying the gradient.** `.brand-bar` in the console is a
@@ -120,27 +187,48 @@ struct ArchonRailView: View {
     /// rather than white or black, because the stops are dark in the light appearance and
     /// bright in the dark one — the surface colour is the knockout that is right in both, and
     /// `PaletteTests` holds every stop to the contrast floor that makes it so.
+    @ViewBuilder
     private var send: some View {
-        Button(action: launch) {
-            Text("SEND")
+        let armed = model.reply
+        // **Which "busy" this button watches depends on which job it is doing.** Launching is
+        // `isLaunching`; answering is that gate's own entry in `busyRuns`, because a second
+        // press during a decision is the double-approve Archon throws on.
+        let busy =
+            workspacePath == nil
+            || (armed.map { model.busyRuns.contains($0.runID) } ?? model.isLaunching)
+        Button(action: submit) {
+            Text(armed?.decision.verb.uppercased() ?? "SEND")
                 .font(.system(size: 9.5, weight: .bold, design: .monospaced))
                 .tracking(1.1)
                 .foregroundStyle(Color.surface)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 3.5)
-                .background(RoundedRectangle(cornerRadius: 4).fill(.archonBrand))
+                .background {
+                    let shape = RoundedRectangle(cornerRadius: 4)
+                    if let armed {
+                        shape.fill(Self.tint(of: armed.decision))
+                    } else {
+                        shape.fill(.archonBrand)
+                    }
+                }
                 .contentShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
-        .disabled(model.isLaunching || workspacePath == nil)
-        .opacity(model.isLaunching || workspacePath == nil ? 0.4 : 1)
+        .disabled(busy)
+        .opacity(busy ? 0.4 : 1)
     }
 
-    private func launch() {
-        Task { await model.launch(in: workspacePath) }
+    private func submit() {
+        Task {
+            if model.reply == nil {
+                await model.launch(in: workspacePath)
+            } else {
+                await model.sendReply(in: workspacePath)
+            }
+        }
     }
 
-    /// An icon, not a sentence — the rail renders five things, and "which workflow Enter
+    /// An icon, not a sentence — the rail renders six things, and "which workflow Enter
     /// launches" is not one of them. It is one click away instead of on screen.
     private var settings: some View {
         Button {
@@ -234,9 +322,18 @@ struct ArchonRailView: View {
 
     // MARK: - What is happening
 
+    /// Three lists in one column, ordered by who is waiting on whom: **gates first**, because a
+    /// gate is the only thing here blocked on the operator; then the live work, which is
+    /// blocked on nothing; then what has finished, which is news.
     private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                ForEach(model.gated, id: \.id) { run in
+                    gatedLine(run)
+                }
+                if !model.gated.isEmpty, !model.running.isEmpty || !model.finished.isEmpty {
+                    Color.border.frame(height: 1).padding(.vertical, 6)
+                }
                 ForEach(model.running, id: \.id) { run in
                     runningLine(run)
                 }
@@ -253,6 +350,91 @@ struct ArchonRailView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
         }
+    }
+
+    /// A paused run, and the gate holding it.
+    ///
+    /// **The subline is the gate's own question**, which Archon writes into the run's metadata
+    /// at the pause — not the node id the running line shows. A running run's subline answers
+    /// *where is it*; this one has to answer *what is being asked of me*, and only one of those
+    /// is worth a click.
+    ///
+    /// **Verbs appear only when the gate is genuinely the operator's**, which is a fact read
+    /// from Archon rather than a guard: a gate already resolved, or one belonging to a
+    /// `workflow:` sub-run, is answered by a call Archon throws on. The row says why instead,
+    /// because "no buttons" is an observation and the reason is what you act on.
+    private func gatedLine(_ run: ArchonRun) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 7) {
+                // Running breathes; a gate holds still and waits. Two shapes as well as two
+                // colours, so the states are told apart without relying on hue.
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color.archonAttention)
+                    .frame(width: 6, height: 6)
+                Text(run.workflowName)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Text(run.shortID)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(Color.textFaint)
+            }
+            Text(Self.detail(of: run))
+                .font(.system(size: 9.5))
+                .foregroundStyle(Color.textFaint)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 13)
+            if run.isAwaitingDecision { verbs(for: run) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 5)
+    }
+
+    /// What the gate says, or why it is not yours to answer.
+    private static func detail(of run: ArchonRun) -> String {
+        guard let gate = run.gate else {
+            return "Paused with no gate recorded — Archon cannot resolve this one either."
+        }
+        if let blocked = gate.blockedReason { return blocked }
+        return gate.message.isEmpty ? gate.nodeId : gate.message
+    }
+
+    private func verbs(for run: ArchonRun) -> some View {
+        let busy = model.busyRuns.contains(run.id)
+        return HStack(spacing: 6) {
+            verb("APPROVE", tint: .accent) { choose(.approve, on: run) }
+            verb("REJECT", tint: .archonAttention) { choose(.reject, on: run) }
+            if busy { ProgressView().controlSize(.small) }
+            Spacer()
+        }
+        .padding(.leading, 13)
+        .padding(.top, 2)
+        .disabled(busy)
+        .opacity(busy ? 0.5 : 1)
+    }
+
+    private func verb(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(0.7)
+                .foregroundStyle(tint)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2.5)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3).strokeBorder(tint.opacity(0.5), lineWidth: 1)
+                )
+                .background(RoundedRectangle(cornerRadius: 3).fill(tint.opacity(0.12)))
+                .contentShape(RoundedRectangle(cornerRadius: 3))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func choose(_ decision: ArchonGateDecision, on run: ArchonRun) {
+        Task { await model.choose(decision, on: run, in: workspacePath) }
     }
 
     /// One thin line, and a subline that changes as the run's nodes advance. **The subline is

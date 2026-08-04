@@ -15,6 +15,10 @@ actor FakeArchonClient: ArchonClient {
     var detailFailure: ArchonCLIError?
     var completeFailure: ArchonCLIError?
     var delay: Duration?
+    var decision: ArchonActionAcknowledgement = .fixture()
+    var decisionFailure: ArchonCLIError?
+    var resumeAcknowledgement: ArchonLaunchAcknowledgement = .fixture()
+    var resumeFailure: ArchonCLIError?
 
     private(set) var listCalls = 0
     private(set) var currentListCalls = 0
@@ -23,6 +27,11 @@ actor FakeArchonClient: ArchonClient {
     private(set) var workspacePaths: [String] = []
     private(set) var launchRequests: [ArchonLaunchRequest] = []
     private(set) var completeRequests: [(branch: String, workspacePath: String)] = []
+    private(set) var decisions:
+        [(
+            decision: ArchonGateDecision, text: String?, runID: String, workspacePath: String
+        )] = []
+    private(set) var resumeRequests: [String] = []
 
     init(
         runsResponse: ArchonRunsResponse = .fixture(),
@@ -92,18 +101,81 @@ actor FakeArchonClient: ArchonClient {
         if let completeFailure { throw completeFailure }
         if let failure { throw failure }
     }
+
+    func decide(
+        _ decision: ArchonGateDecision, text: String?, on runID: String, in workspacePath: String
+    ) async throws -> ArchonActionAcknowledgement {
+        decisions.append((decision, text, runID, workspacePath))
+        if let decisionFailure { throw decisionFailure }
+        return self.decision
+    }
+
+    func resume(_ run: ArchonRun) async throws -> ArchonLaunchAcknowledgement {
+        resumeRequests.append(run.id)
+        if let resumeFailure { throw resumeFailure }
+        return resumeAcknowledgement
+    }
+
+    func setDecision(_ acknowledgement: ArchonActionAcknowledgement) {
+        decision = acknowledgement
+    }
+    func setDecisionFailure(_ failure: ArchonCLIError?) { decisionFailure = failure }
+    func setResume(_ acknowledgement: ArchonLaunchAcknowledgement) {
+        resumeAcknowledgement = acknowledgement
+    }
+    func setResumeFailure(_ failure: ArchonCLIError?) { resumeFailure = failure }
+    func gateCalls() -> (
+        decisions: [(
+            decision: ArchonGateDecision, text: String?, runID: String, workspacePath: String
+        )], resumes: [String]
+    ) {
+        (decisions, resumeRequests)
+    }
 }
 
 extension ArchonRun {
     static func fixture(
         id: String = "run-1", workflowName: String = "implement", status: String = "running",
         workingPath: String? = "/tmp/project", userMessage: String? = "do the thing",
-        completedAt: Date? = nil, nodes: [ArchonNode]? = []
+        completedAt: Date? = nil, nodes: [ArchonNode]? = [], gate: ArchonGate? = nil
     ) -> ArchonRun {
         ArchonRun(
             id: id, workflowName: workflowName, status: status, workingPath: workingPath,
             userMessage: userMessage, startedAt: nil, completedAt: completedAt,
-            metadata: nil, nodes: nodes)
+            metadata: gate.map { Metadata(error: nil, approval: $0) }, nodes: nodes)
+    }
+
+    /// A run stopped at a gate that is waiting for the operator.
+    static func paused(
+        id: String = "run-1", workflowName: String = "implement", gate: ArchonGate = .fixture()
+    ) -> ArchonRun {
+        .fixture(id: id, workflowName: workflowName, status: "paused", gate: gate)
+    }
+}
+
+extension ArchonGate {
+    static func fixture(
+        nodeId: String = "review", message: String = "Ship the migration?",
+        type: Kind = .approval, childRunId: String? = nil, captureResponse: Bool = false,
+        resolved: String? = nil
+    ) -> ArchonGate {
+        ArchonGate(
+            nodeId: nodeId, message: message, type: type, childRunId: childRunId,
+            captureResponse: captureResponse, resolved: resolved)
+    }
+}
+
+extension ArchonActionAcknowledgement {
+    /// The field set `workflow approve --json` prints, read off its own `writeJsonLine` call in
+    /// `packages/cli/src/commands/workflow.ts` — including `resumable: true`, which is the
+    /// whole reason `resume` exists.
+    static func fixture(
+        ok: Bool = true, action: String = "approve", resumable: Bool? = true,
+        cancelled: Bool? = nil, error: String? = nil
+    ) -> ArchonActionAcknowledgement {
+        ArchonActionAcknowledgement(
+            ok: ok, runId: "run-1", action: action, workflowName: "implement",
+            cancelled: cancelled, maxAttemptsReached: nil, resumable: resumable, error: error)
     }
 }
 
