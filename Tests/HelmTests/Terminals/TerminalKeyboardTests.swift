@@ -204,22 +204,50 @@ final class TerminalKeyboardTests: XCTestCase {
         XCTAssertTrue(try helm.pty(of: arriving).received.contains("z"))
     }
 
-    /// **A pane showing the chat face still claims the keyboard, and this pins that.**
+    /// **The chat face gives its composer the keyboard, and ⌘T gives it back to the shell.**
     ///
-    /// `holdsKeyboard` is `bench.focusedPane?.id == pane.id` with no reference to the face,
-    /// so a focused pane reading an agent's prose hands its terminal the keyboard exactly as
-    /// a bare terminal would. That is deliberate rather than overlooked: the composer is a
-    /// SwiftUI `TextField` that focuses itself only on an offered prefill, so making the
-    /// claim face-aware would leave *nothing* holding the keyboard on the chat face — which
-    /// is #96 again, on a different pane. Clicking the composer takes it, and no edge fires
-    /// afterwards to snatch it back.
-    func testAPaneOnTheChatFaceStillGivesItsTerminalTheKeyboard() throws {
+    /// This test used to assert the opposite — that a pane reading an agent's prose still
+    /// handed the keyboard to the terminal underneath — and the reasoning was sound at the
+    /// time: `ChatComposer` set `focused = true` in exactly one place, an `onChange(of:
+    /// prefill)`, so a face-aware claim would have left *nothing* holding the keyboard on the
+    /// chat face, which is #96 again one pane over.
+    ///
+    /// The premise is what changed, not the principle. #152 made the composer take the
+    /// keyboard when its overlay opens, so the face-blind claim stopped being the safe option
+    /// and became the bug: with the grid holding the keyboard, typing on the reading face went
+    /// to the **shell**, invisible under the overlay, and the operator's sentence was executed
+    /// rather than sent.
+    ///
+    /// **Both halves are here for the reason the redraw test gives.** "The terminal does not
+    /// hold it" passes just as well if nothing holds it at all, so the second half toggles back
+    /// and requires the grid to take it — which is also the `false → true` edge that would not
+    /// fire if `holdsKeyboard` were still face-blind.
+    func testTheChatFaceTakesTheKeyboardAndGivesItBackOnToggle() throws {
         let helm = HelmWindow(terminals: 1, layout: .oneSlotReadingChat)
         defer { helm.close() }
 
-        XCTAssertEqual(helm.window.firstResponder as? NSView, helm.session(0).hostView)
+        XCTAssertNotEqual(
+            helm.window.firstResponder as? NSView, helm.session(0).hostView,
+            "the grid holds the keyboard on the reading face; the composer is untypable and "
+                + "everything typed reaches the shell instead")
+        XCTAssertTrue(
+            helm.window.firstResponder is NSTextView,
+            "nothing that edits text holds the keyboard — the composer did not claim it, which "
+                + "is #96 on the chat face rather than a fix for it")
+
         helm.type("q")
-        XCTAssertTrue(try helm.pty(0).received.contains("q"))
+        XCTAssertFalse(
+            try helm.pty(0).received.contains("q"),
+            "a keystroke meant for the composer reached the pty")
+
+        // Back to the grid: the same pane, the other face.
+        helm.command(.helmToggleChat)
+
+        XCTAssertEqual(
+            helm.window.firstResponder as? NSView, helm.session(0).hostView,
+            "⌘T returned to the terminal and nothing handed the shell its keyboard back")
+        helm.type("z")
+        XCTAssertTrue(try helm.pty(0).received.contains("z"))
     }
 
     // MARK: - The mechanism #96 turned on

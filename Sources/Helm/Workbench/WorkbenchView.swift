@@ -97,6 +97,16 @@ private struct SlotView: View {
             // colour from one more source, which is the thing the palette exists to end.
             Color.border.frame(height: 1)
             content
+                // Clicking a pane's body is the operator saying *this is the pane I mean now*,
+                // exactly as clicking its tab is — and until #152 only the tab said it. One
+                // reporter per slot rather than one per pane type: it sits below whatever the
+                // slot renders, so a terminal grid, a chat face and a canvas all report the
+                // same way, and focus is measured in slots regardless.
+                //
+                // Behind the content rather than over it. The reporter takes no part in hit
+                // testing at all — it reads a local event monitor — so nothing it covers stops
+                // working, and putting it in front would only risk that.
+                .background(PaneClickReporter { model.focus(slot.id) })
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .enableInjection()

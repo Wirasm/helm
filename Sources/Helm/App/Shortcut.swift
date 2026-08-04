@@ -52,6 +52,20 @@ struct Shortcut {
     /// `Equatable`-friendly and a test can assert what a row sends.
     var object: Any? { direction?.rawValue ?? payload }
 
+    /// Fire this row's command.
+    ///
+    /// **The one place a notification is paired with its object**, because the two consumers
+    /// pairing it themselves is a defect that already shipped: `Keymap` posted `object` and the
+    /// menu posted the raw `payload`, which is nil on all four focus-movement rows — so View ▸
+    /// Focus Left/Right/Up/Down were silent no-ops from the day `HelmCommands` was split out
+    /// (#152). The header's promise is *one table, two consumers*; a row that can be posted two
+    /// ways is that promise with a hole in it.
+    ///
+    /// A method rather than discipline: there is now nothing at either call site to get wrong.
+    func post() {
+        NotificationCenter.default.post(name: notification, object: object)
+    }
+
     struct MenuEntry {
         let title: String
         let key: KeyEquivalent

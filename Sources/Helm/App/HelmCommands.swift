@@ -10,11 +10,13 @@ struct HelmCommands: View {
     var body: some View {
         ForEach(Array(Shortcut.all.enumerated()), id: \.offset) { _, shortcut in
             if let menu = shortcut.menu {
-                Button(menu.title) {
-                    NotificationCenter.default.post(
-                        name: shortcut.notification, object: shortcut.payload)
-                }
-                .keyboardShortcut(menu.key, modifiers: menu.modifiers)
+                // `Shortcut.post()`, not a notification assembled here. This file used to pair
+                // the name with the raw `payload`, which is nil on all four focus-movement
+                // rows — so View ▸ Focus Left/Right/Up/Down posted nothing the subscriber
+                // would accept and were silent no-ops from the day this file was split out of
+                // the god module (#152). Pairing happens once, in the table.
+                Button(menu.title) { shortcut.post() }
+                    .keyboardShortcut(menu.key, modifiers: menu.modifiers)
             }
         }
     }

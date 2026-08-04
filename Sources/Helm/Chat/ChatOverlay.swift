@@ -20,6 +20,10 @@ import SwiftUI
 /// terminal face, one keystroke away.
 struct ChatOverlay: View {
     @ObservedObject var session: TerminalSession
+    /// Whether this pane is the bench's focused one. Carried down to the composer and used for
+    /// nothing else here: the face that is being *read* wants the keyboard in its text field,
+    /// and with two chat faces open at once only one of them may claim it.
+    let holdsKeyboard: Bool
     @StateObject private var model = ChatModel()
     /// Text a canvas's `Post` offered this pane, waiting to be dropped into the composer.
     ///
@@ -154,8 +158,10 @@ struct ChatOverlay: View {
                 ChatTicker(beats: model.beats, since: model.workingSince)
                     .transition(.opacity.combined(with: .offset(y: 8)))
             }
-            ChatComposer(model: model, send: send, prefill: $prefill)
-                .frame(maxWidth: 620)
+            ChatComposer(
+                model: model, send: send, prefill: $prefill, holdsKeyboard: holdsKeyboard
+            )
+            .frame(maxWidth: 620)
             maskNotice
         }
         .padding(.horizontal, 44)
