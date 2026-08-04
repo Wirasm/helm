@@ -1,23 +1,7 @@
 import Foundation
 
-// MARK: - CanvasSource
+// MARK: - StandardizedPath
 
-/// What a canvas pane is showing, as a value the workbench can persist. CONTEXT.md:
-/// the canvas is *modular by source* — a file an agent or the operator opened, or a
-/// URL.
-///
-/// A sum rather than two optionals, because a canvas showing both a file and a URL is
-/// not a state that exists — and because the difference has to survive the persistence
-/// seam. `WorkspaceContext.openArtifactPath` was a **file** path, so #38 deliberately
-/// persisted nothing for a URL canvas rather than write `url.path` (empty, or a stray
-/// `/segment`) into a field read back through `URL(fileURLWithPath:)`. This type is what
-/// retires that field: a bench pane carries its own source, so a URL canvas comes back.
-///
-/// **An address, not a document.** It used to carry `CanvasModel.Document` /
-/// `CanvasModel.Page` — the rendered content, the file watcher's generation counter, the
-/// last load failure — which is live state that cannot be `Codable` and should not be. The
-/// model keeps all of that as `CanvasModel.Showing`; what a pane persists is only enough to
-/// re-open the same thing.
 /// A file path that has already been standardized, and cannot be anything else.
 ///
 /// `Workbench.pane(showing:)` compares sources **by value**, so "is this file already
@@ -53,6 +37,24 @@ struct StandardizedPath: Equatable, Hashable, Codable {
     }
 }
 
+// MARK: - CanvasSource
+
+/// What a canvas pane is showing, as a value the workbench can persist. CONTEXT.md:
+/// the canvas is *modular by source* — a file an agent or the operator opened, or a
+/// URL.
+///
+/// A sum rather than two optionals, because a canvas showing both a file and a URL is
+/// not a state that exists — and because the difference has to survive the persistence
+/// seam. `WorkspaceContext.openArtifactPath` was a **file** path, so #38 deliberately
+/// persisted nothing for a URL canvas rather than write `url.path` (empty, or a stray
+/// `/segment`) into a field read back through `URL(fileURLWithPath:)`. This type is what
+/// retires that field: a bench pane carries its own source, so a URL canvas comes back.
+///
+/// **An address, not a document.** It used to carry `CanvasModel.Document` /
+/// `CanvasModel.Page` — the rendered content, the file watcher's generation counter, the
+/// last load failure — which is live state that cannot be `Codable` and should not be. The
+/// model keeps all of that as `CanvasModel.Showing`; what a pane persists is only enough to
+/// re-open the same thing.
 enum CanvasSource: Equatable {
     /// A file on disk. The payload type carries the guarantee: a `StandardizedPath` cannot
     /// be built unstandardized, so `Workbench.pane(showing:)`'s by-value compare cannot

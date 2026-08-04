@@ -79,7 +79,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
         // rendering the current document rather than the one this view was built with.
         let coordinator = context.coordinator
         configuration.setURLSchemeHandler(
-            CanvasSchemeHandler(artifact: URL(fileURLWithPath: path.value), mimeType: "text/html") {
+            CanvasSchemeHandler(artifact: URL(fileURLWithPath: path.value)) {
                 [weak coordinator] in coordinator?.stagedDocument
             },
             forURLScheme: CanvasAddress.scheme
@@ -157,7 +157,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
         // Read straight from disk per request: the artifact IS the document here, and a
         // reload is meant to show what the agent just wrote.
         configuration.setURLSchemeHandler(
-            CanvasSchemeHandler(artifact: artifact, mimeType: "text/html") {
+            CanvasSchemeHandler(artifact: artifact) {
                 try? Data(contentsOf: artifact)
             },
             forURLScheme: CanvasAddress.scheme
