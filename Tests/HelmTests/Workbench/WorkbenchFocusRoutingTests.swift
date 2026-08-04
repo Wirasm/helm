@@ -149,6 +149,38 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
             "a click belonging to another window moved this bench's focus")
     }
 
+    /// **Reaching for a divider must not take the keyboard with it.**
+    ///
+    /// A divider is a 1pt hairline with a 9pt grab overlay, and that overlay does not take
+    /// part in layout — `SplitStack` gives it `zIndex(1)` precisely so the half overhanging
+    /// the next member is not buried. So a mouse-down aimed squarely at the divider lands 4pt
+    /// *inside* the pane above it, and a reporter reading its own rectangle would call that
+    /// "focus the pane above" — moving the keyboard out of the pane the operator is typing in,
+    /// which is #152 reopened through the resize handle rather than the pane click.
+    ///
+    /// The two stacked slots butt against one divider, so the upper slot's bottom edge in
+    /// window coordinates *is* the divider, and two points above it is inside the grab band.
+    func testAClickInADividersGrabBandDoesNotMoveFocus() throws {
+        let bench = Bench(terminals: 2)
+        defer { bench.close() }
+
+        let upper = try XCTUnwrap(bench.workbench.bench?.slots.first?.id)
+        let lower = try XCTUnwrap(bench.workbench.bench?.slots.last?.id)
+
+        try bench.clickPane(inSlot: lower)
+        XCTAssertEqual(
+            bench.workbench.bench?.focusedSlot, lower, "the fixture never reached the lower slot")
+
+        let rect = try bench.paneRect(inSlot: upper)
+        bench.click(
+            at: NSPoint(x: rect.midX, y: rect.minY + 2), windowNumber: bench.window.windowNumber)
+
+        XCTAssertEqual(
+            bench.workbench.bench?.focusedSlot, lower,
+            "a mouse-down in the divider's grab band moved focus to the pane above it — resizing "
+                + "would carry the keyboard out of the pane being typed in")
+    }
+
     // MARK: - The menu's route
 
     /// View ▸ Focus Left/Right/Up/Down were silent no-ops: the menu posted `payload`, which is
@@ -269,15 +301,21 @@ private final class Bench {
         try XCTUnwrap(workbench.bench?.slot(for: pane)?.id, "no slot holds pane \(pane)")
     }
 
-    /// The middle of the terminal grid in a slot, in window coordinates — read off the view's
-    /// own bounds every time, never written down.
-    func centre(ofPaneInSlot slot: Slot.ID) throws -> NSPoint {
+    /// A slot's terminal grid in **window** coordinates — read off the view every time, never
+    /// written down. Everything that needs a point computes it from this.
+    func paneRect(inSlot slot: Slot.ID) throws -> NSRect {
         let pane = try XCTUnwrap(workbench.bench?.slot(slot)?.selected, "slot \(slot) is empty")
         let view = try XCTUnwrap(
             terminals.sessions.first { $0.id == pane }?.hostView, "no view for pane \(pane)")
         XCTAssertFalse(
             view.bounds.isEmpty, "the pane's view has no size; a click cannot land in it")
-        return view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+        return view.convert(view.bounds, to: nil)
+    }
+
+    /// The middle of the terminal grid in a slot, in window coordinates.
+    func centre(ofPaneInSlot slot: Slot.ID) throws -> NSPoint {
+        let rect = try paneRect(inSlot: slot)
+        return NSPoint(x: rect.midX, y: rect.midY)
     }
 
     func clickPane(inSlot slot: Slot.ID) throws {
@@ -307,13 +345,26 @@ private final class Bench {
                 timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil,
                 characters: String(character), charactersIgnoringModifiers: String(character),
-                isARepeat: false, keyCode: character == "x" ? 7 : 0)
+                isARepeat: false, keyCode: Self.keyCode(for: character))
             guard let event else {
                 return XCTFail("could not synthesise a key event for \(character)")
             }
             window.sendEvent(event)
         }
         settle(0.3)
+    }
+
+    /// ANSI US virtual key codes. ghostty translates the physical key, so a wrong code
+    /// produces a wrong byte rather than none — which would surface as "the clicked terminal
+    /// received nothing", reading as a focus bug when it is a typo. Unknown characters fail
+    /// here rather than defaulting to a code that happens to mean `a`.
+    private static func keyCode(for character: Character) -> UInt16 {
+        let codes: [Character: UInt16] = ["x": 7, "z": 6]
+        guard let code = codes[character] else {
+            XCTFail("no key code for \(character) — add it rather than sending a wrong one")
+            return 0
+        }
+        return code
     }
 
     func command(_ name: Notification.Name, _ object: Any? = nil) {

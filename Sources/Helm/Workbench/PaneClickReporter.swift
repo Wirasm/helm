@@ -99,7 +99,29 @@ final class ClickWatchingView: NSView {
     /// two say the same thing about a popover; only one of them is answerable in a test.
     private func report(_ event: NSEvent) {
         guard let window, event.windowNumber == window.windowNumber else { return }
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        guard focusable.contains(convert(event.locationInWindow, from: nil)) else { return }
         onClick?()
+    }
+
+    /// This slot's rectangle, less the band a divider can be grabbed by.
+    ///
+    /// **A divider's grab area is an overlay, so it overhangs its neighbours' rectangles** —
+    /// deliberately, so the hairline stays a hairline and the target is still hittable. Which
+    /// means a mouse-down aimed squarely at a divider lands geometrically inside the pane
+    /// beside it, and reading that as *focus this pane* would move the keyboard to a pane the
+    /// operator never clicked. Reaching down to resize while typing above would take your next
+    /// keystrokes with it: #152 reopened through the resize handle.
+    ///
+    /// Inset on **every** edge rather than only the ones with a divider on them, because which
+    /// edges those are is `SplitStack`'s knowledge and threading it here would buy a few points
+    /// of click target at the price of a second thing to keep in step. The cost is that the
+    /// outer few points of a pane no longer focus it; the divider is what you are aiming at
+    /// there anyway, and a click one pixel further in still lands.
+    ///
+    /// An inset larger than the view leaves a null rectangle, which `contains` answers false
+    /// for — so a pane too small to have a middle refuses rather than guesses.
+    private var focusable: NSRect {
+        let overhang = (SplitLayout.dividerGrab - SplitLayout.dividerThickness) / 2
+        return bounds.insetBy(dx: overhang, dy: overhang)
     }
 }
