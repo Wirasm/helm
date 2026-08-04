@@ -191,7 +191,136 @@ enum CanvasHTML {
           if (!window.webkit || !window.webkit.messageHandlers
               || !window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName)) { return; }
           var bridge = window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName);
-          document.addEventListener("mouseup", function () {
+
+          // The nearest ancestor carrying an id, and the text it covers. ONE resolver, used
+          // by every gesture — #112 asks for the draw-time hit test and any later
+          // re-resolution to share a code path, because inconsistent resolution between
+          // capture and action is its own bug class.
+          function resolve(node) {
+            if (!node) { return null; }
+            if (node.nodeType === 3) { node = node.parentNode; }
+            var labelled = node;
+            var id = null;
+            while (node && node !== document.body) {
+              if (node.id) { id = node.id; break; }
+              node = node.parentNode;
+            }
+            var text = ((node || labelled).textContent || "").trim().slice(0, 400);
+            if (!text) { return null; }
+            return { id: id, text: text };
+          }
+
+          function targetAt(x, y) { return resolve(document.elementFromPoint(x, y)); }
+
+          // Everything an enclosure covers, deduplicated by the element it resolved to.
+          // Centre-in-rect rather than any-overlap: a lasso that grazes a neighbour did not
+          // mean the neighbour.
+          function targetsIn(box) {
+            var seen = {};
+            var found = [];
+            var nodes = document.querySelectorAll("[id], p, li, td, th, h1, h2, h3");
+            for (var i = 0; i < nodes.length; i++) {
+              var r = nodes[i].getBoundingClientRect();
+              if (!r.width && !r.height) { continue; }
+              var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+              if (cx < box.left || cx > box.right || cy < box.top || cy > box.bottom) { continue; }
+              var t = resolve(nodes[i]);
+              if (!t) { continue; }
+              var key = (t.id || "") + "\\u0000" + t.text;
+              if (seen[key]) { continue; }
+              seen[key] = true;
+              found.push(t);
+            }
+            return found;
+          }
+
+          // MARK MODE. Holding a modifier turns the page into a surface you draw on, so an
+          // ordinary drag still selects text and nothing about reading a canvas changes.
+          // The overlay sits ON a frozen frame in the sense that matters: the DOM is not
+          // re-rendered while a gesture is in flight, so what was under the pointer when the
+          // drag began is what the mark names.
+          var overlay = null, origin = null, from = null;
+          function marking(e) { return e.altKey; }
+
+          function paint(box) {
+            if (!overlay) {
+              overlay = document.createElement("div");
+              overlay.setAttribute("data-helm-mark", "");
+              overlay.style.cssText =
+                "position:fixed;pointer-events:none;z-index:2147483647;" +
+                "border:2px solid currentColor;border-radius:6px;opacity:0.7";
+              document.body.appendChild(overlay);
+            }
+            overlay.style.left = box.left + "px";
+            overlay.style.top = box.top + "px";
+            overlay.style.width = (box.right - box.left) + "px";
+            overlay.style.height = (box.bottom - box.top) + "px";
+          }
+
+          function clearOverlay() {
+            if (overlay && overlay.parentNode) { overlay.parentNode.removeChild(overlay); }
+            overlay = null;
+          }
+
+          function boxOf(a, b) {
+            return {
+              left: Math.min(a.x, b.x), right: Math.max(a.x, b.x),
+              top: Math.min(a.y, b.y), bottom: Math.max(a.y, b.y)
+            };
+          }
+
+          document.addEventListener("mousedown", function (e) {
+            if (!marking(e)) { return; }
+            e.preventDefault();
+            origin = { x: e.clientX, y: e.clientY };
+            from = targetAt(e.clientX, e.clientY);
+          }, true);
+
+          document.addEventListener("mousemove", function (e) {
+            if (!origin) { return; }
+            paint(boxOf(origin, { x: e.clientX, y: e.clientY }));
+          }, true);
+
+          document.addEventListener("mouseup", function (e) {
+            if (origin) {
+              var start = origin, startTarget = from;
+              origin = null; from = null;
+              var box = boxOf(start, { x: e.clientX, y: e.clientY });
+              clearOverlay();
+              var span = Math.max(box.right - box.left, box.bottom - box.top);
+              var rect = { x: box.left, y: box.top,
+                           width: box.right - box.left, height: box.bottom - box.top };
+
+              // A tap: no travel. The nearest thing under it.
+              if (span < 6) {
+                var at = targetAt(e.clientX, e.clientY);
+                if (!at) { bridge.postMessage({ cleared: true }); return; }
+                bridge.postMessage({ mark: "point", id: at.id, text: at.text, rect: rect });
+                return;
+              }
+
+              // Classify, do not digitise. A drag that STARTS on one thing and ENDS on a
+              // different one is an arrow; anything else is a circle round what it covers.
+              var end = targetAt(e.clientX, e.clientY);
+              var different = startTarget && end
+                && ((startTarget.id || startTarget.text) !== (end.id || end.text));
+              if (different) {
+                bridge.postMessage({
+                  mark: "relation", from: startTarget, to: end, rect: rect
+                });
+                return;
+              }
+              var covered = targetsIn(box);
+              if (!covered.length) {
+                // Refused visibly rather than shipped as a coordinate.
+                bridge.postMessage({ mark: "enclosure", targets: [], rect: rect });
+                return;
+              }
+              bridge.postMessage({ mark: "enclosure", targets: covered, rect: rect });
+              return;
+            }
+
+            // No gesture: the text selection helm has always reported.
             var selection = document.getSelection();
             var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
             var text = empty ? "" : String(selection).trim();
@@ -204,11 +333,11 @@ enum CanvasHTML {
               if (node.id) { id = node.id; break; }
               node = node.parentNode;
             }
-            var rect = range.getBoundingClientRect();
+            var r = range.getBoundingClientRect();
             bridge.postMessage({
               id: id,
               text: text,
-              rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+              rect: { x: r.left, y: r.top, width: r.width, height: r.height }
             });
           });
         })();

@@ -134,3 +134,65 @@ final class CanvasNotesTests: XCTestCase {
             CanvasNotes.headings(in: directory.appendingPathComponent("nothing.notes.md")), [])
     }
 }
+
+/// The sidecar heading for a geometric mark (#112). The verb is the gesture, and the target
+/// is what an agent greps for.
+final class CanvasNotesMarkTests: XCTestCase {
+    private let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+
+    private func heading(_ mark: CanvasAnnotation.Mark) -> String {
+        let entry = CanvasNotes.entry(
+            CanvasAnnotation(mark: mark, comment: "this shouldn't talk to that"), at: stamp)
+        return entry.split(separator: "\n").first.map(String.init) ?? ""
+    }
+
+    func testACircleReadsAsCircled() {
+        XCTAssertEqual(
+            heading(.enclosure(covering: [.element(id: "phase-2", text: "Phase 2: Ship")])),
+            "## circled `#phase-2` — \"Phase 2: Ship\"")
+    }
+
+    func testCirclingSeveralListsThemWithoutTheirLabels() {
+        // A heading carrying three quoted labels is a paragraph, not a heading.
+        XCTAssertEqual(
+            heading(
+                .enclosure(covering: [
+                    .element(id: "phase-1", text: "One"), .element(id: "phase-2", text: "Two"),
+                ])),
+            "## circled `#phase-1`, `#phase-2`")
+    }
+
+    func testAnArrowReadsAsAnArrow() {
+        XCTAssertEqual(
+            heading(
+                .relation(
+                    from: .element(id: "phase-1", text: "One"),
+                    to: .element(id: "phase-3", text: "Three"))),
+            "## arrow `#phase-1` → `#phase-3`")
+    }
+
+    func testAnArrowIntoEmptySpaceSaysSo() {
+        XCTAssertEqual(
+            heading(.relation(from: .element(id: "phase-1", text: "One"), to: nil)),
+            "## arrow `#phase-1` → (empty space)")
+    }
+
+    func testATapReadsAsPointedAt() {
+        XCTAssertEqual(
+            heading(.point(.element(id: "phase-2", text: "Phase 2"))),
+            "## pointed at `#phase-2` — \"Phase 2\"")
+    }
+
+    func testASelectionIsUnchangedFromBeforeThisSlice() {
+        XCTAssertEqual(
+            heading(.selection(.element(id: "phase-2", text: "Phase 2"))),
+            "## `#phase-2` — \"Phase 2\"")
+        XCTAssertEqual(heading(.selection(.quote("the store move"))), "## \"the store move\"")
+    }
+
+    func testADegradedMarkStillReadsAsTheGesture() {
+        // A mindmap node has no anchor, but the operator still circled something.
+        XCTAssertEqual(
+            heading(.enclosure(covering: [.quote("branchA")])), "## circled \"branchA\"")
+    }
+}

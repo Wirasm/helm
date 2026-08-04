@@ -21,11 +21,43 @@ struct CanvasAnnotation: Equatable {
         case element(id: String, text: String)
         case quote(String)
     }
-    var anchor: Anchor
+
+    /// What the operator drew, and what it names (#112).
+    ///
+    /// **Classify the gesture; do not digitise it.** No case carries a coordinate. SketchVLM
+    /// ships no shape recogniser and tldraw sends no freehand geometry at all — what travels
+    /// in every system that works is *type plus target*. A mark made of pixels is not
+    /// something the agent can edit, which is the same reason an anchor is an id and not a
+    /// rect.
+    enum Mark: Equatable {
+        /// Text the operator selected. helm's behaviour before this slice, unchanged.
+        case selection(Anchor)
+        /// A circle or box. **Multiplicity is data, not an error** — circling three nodes
+        /// means all three, and flattening that to "the nearest one" would be helm deciding
+        /// what the operator meant.
+        case enclosure(covering: [Anchor])
+        /// An arrow. Both ends are optional because an arrow into empty space is a real
+        /// thing to draw — "add a node here" — so it is representable rather than refused.
+        /// Both ends nil is the one shape that means nothing.
+        case relation(from: Anchor?, to: Anchor?)
+        /// A tap: the nearest thing under it.
+        case point(Anchor)
+    }
+
+    var mark: Mark
     var comment: String
 }
 
 extension CanvasAnnotation {
+    /// A selection is the ordinary construction, and was the only one before #112.
+    init(anchor: Anchor, comment: String) {
+        self.init(mark: .selection(anchor), comment: comment)
+    }
+
+    /// An enclosure may not cover an unbounded number of things — a drag across a whole
+    /// document is not a mark, it is a mistake.
+    static let maximumEnclosureCount = 32
+
     /// An element id is at most this long, and holds only characters that can appear in
     /// one. Anything else is a page trying to write something other than an id.
     static let maximumIDLength = 200
@@ -50,21 +82,64 @@ extension CanvasAnnotation {
         let comment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !comment.isEmpty else { return nil }
         guard let payload = body as? [String: Any] else { return nil }
-        guard let text = sanitizedText(payload["text"]) else { return nil }
 
-        if let id = payload["id"] as? String, let valid = validID(id) {
-            // A mermaid node's id is mostly renderer bookkeeping, and only the fence
-            // identifier inside it survives the agent editing the diagram — so the
-            // anchor is reduced to that. Anything else, including an id the agent
-            // authored by hand, passes through untouched (#113).
-            let anchored = MermaidAnchor.sourceIdentifier(in: valid) ?? valid
-            return CanvasAnnotation(anchor: .element(id: anchored, text: text), comment: comment)
+        switch payload["mark"] as? String {
+        case "enclosure":
+            let covered = decodedAnchors(payload["targets"])
+            // Refused rather than shipped as a coordinate: a circle around nothing is the
+            // operator pointing at empty space, and helm has no honest anchor for that.
+            guard !covered.isEmpty, covered.count <= maximumEnclosureCount else { return nil }
+            return CanvasAnnotation(mark: .enclosure(covering: covered), comment: comment)
+
+        case "relation":
+            let from = decodedAnchor(payload["from"])
+            let to = decodedAnchor(payload["to"])
+            // One end may be empty — that is "add a node here". Neither end is nothing.
+            guard from != nil || to != nil else { return nil }
+            return CanvasAnnotation(mark: .relation(from: from, to: to), comment: comment)
+
+        case "point":
+            guard let at = decodedAnchor(payload) else { return nil }
+            return CanvasAnnotation(mark: .point(at), comment: comment)
+
+        default:
+            // No mark, or one helm does not know: today's text selection, unchanged. An
+            // unknown value degrades here rather than refusing, because the page is
+            // agent-authored and a future mark helm has not learned is not a reason to
+            // throw away a comment the operator already typed.
+            guard let at = decodedAnchor(payload) else { return nil }
+            return CanvasAnnotation(mark: .selection(at), comment: comment)
         }
-        // The documented degradation, not a failure: markdown goes through `marked`
-        // client-side and headings get no id unless the page adds one, so `.md` canvases
-        // mostly produce quotes. Teaching agents to emit ids on sections is the other
-        // half, and it lives in prp rather than in helm.
-        return CanvasAnnotation(anchor: .quote(text), comment: comment)
+    }
+
+    /// One target — an element with an id, or the text it covers.
+    ///
+    /// **The one place a DOM id becomes an anchor**, so the draw-time hit test and any later
+    /// re-resolution cannot disagree about what a mark named (#112's own acceptance).
+    private static func decodedAnchor(_ raw: Any?) -> Anchor? {
+        guard let payload = raw as? [String: Any] else { return nil }
+        guard let text = sanitizedText(payload["text"]) else { return nil }
+        guard let id = payload["id"] as? String, let valid = validID(id) else {
+            return .quote(text)
+        }
+        if let identifier = MermaidAnchor.sourceIdentifier(in: valid) {
+            // The fence identifier — greppable in the file the agent will edit (#113).
+            return .element(id: identifier, text: text)
+        }
+        if MermaidAnchor.isRenderGenerated(valid) {
+            // A rendered id carrying no author identifier: a mindmap's `node_1`, an edge, a
+            // marker def. Keeping it would hand the agent an anchor that survives a
+            // re-render and matches nothing in the source — precisely the anchor #113
+            // abolished, reintroduced by the back door. Degrade to the quote instead.
+            return .quote(text)
+        }
+        // An id the agent authored. Already the greppable thing.
+        return .element(id: valid, text: text)
+    }
+
+    private static func decodedAnchors(_ raw: Any?) -> [Anchor] {
+        guard let list = raw as? [Any] else { return [] }
+        return list.compactMap(decodedAnchor)
     }
 
     private static func validID(_ id: String) -> String? {

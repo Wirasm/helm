@@ -18,11 +18,7 @@ enum CanvasNotes {
     /// One entry, in the shape an agent reads without being taught anything: the anchor as
     /// a heading, the comment as prose, the time as a footnote.
     static func entry(_ annotation: CanvasAnnotation, at timestamp: Date) -> String {
-        let heading =
-            switch annotation.anchor {
-            case let .element(id, text): "## `#\(id)` — \"\(singleLine(text))\""
-            case let .quote(text): "## \"\(singleLine(text))\""
-            }
+        let heading = "## " + describe(annotation.mark)
         return """
             \(heading)
 
@@ -31,6 +27,47 @@ enum CanvasNotes {
             <sub>\(stamp(timestamp))</sub>
 
             """
+    }
+
+    /// The mark as a heading an agent reads without being taught anything.
+    ///
+    /// The verb is the gesture. `circled` and `arrow` are the operator's own vocabulary, and
+    /// an agent grepping the sidecar for what to change wants the target, not the shape.
+    private static func describe(_ mark: CanvasAnnotation.Mark) -> String {
+        switch mark {
+        case let .selection(anchor):
+            return name(anchor)
+        case let .point(anchor):
+            return "pointed at \(name(anchor))"
+        case let .enclosure(covering):
+            // One thing reads as prose; several read as a list, because circling three nodes
+            // means three and collapsing that would be helm choosing which one mattered.
+            guard covering.count > 1 else { return "circled \(name(covering[0]))" }
+            return "circled " + covering.map(shortName).joined(separator: ", ")
+        case let .relation(from, to):
+            // An arrow into empty space is a real instruction — "add a node here" — so the
+            // missing end is named rather than the whole mark being refused.
+            let start = from.map(shortName) ?? "(empty space)"
+            let end = to.map(shortName) ?? "(empty space)"
+            return "arrow \(start) → \(end)"
+        }
+    }
+
+    /// The anchor with its text, for a mark about one thing.
+    private static func name(_ anchor: CanvasAnnotation.Anchor) -> String {
+        switch anchor {
+        case let .element(id, text): "`#\(id)` — \"\(singleLine(text))\""
+        case let .quote(text): "\"\(singleLine(text))\""
+        }
+    }
+
+    /// Just the handle, for a mark naming several things or two ends — a heading carrying
+    /// three quoted labels is a paragraph, not a heading.
+    private static func shortName(_ anchor: CanvasAnnotation.Anchor) -> String {
+        switch anchor {
+        case let .element(id, _): "`#\(id)`"
+        case let .quote(text): "\"\(singleLine(text))\""
+        }
     }
 
     /// **Append, never rewrite.** The sidecar is the memory; a rewrite would lose earlier

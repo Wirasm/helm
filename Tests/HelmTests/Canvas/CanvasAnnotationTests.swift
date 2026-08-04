@@ -18,7 +18,8 @@ final class CanvasAnnotationTests: XCTestCase {
         let annotation = decode(["id": "phase-2", "text": "Phase 2 — migrate the store"])
 
         XCTAssertEqual(
-            annotation?.anchor, .element(id: "phase-2", text: "Phase 2 — migrate the store"),
+            annotation?.mark,
+            .selection(.element(id: "phase-2", text: "Phase 2 — migrate the store")),
             "the agent authored the page, so it knows its own ids — #phase-2 is directly "
                 + "editable rather than merely descriptive")
         XCTAssertEqual(annotation?.comment, "this ordering is wrong")
@@ -31,7 +32,7 @@ final class CanvasAnnotationTests: XCTestCase {
         let annotation = decode(
             ["id": "mermaid-0-flowchart-phase2-1", "text": "Phase 2: Ship"])
 
-        XCTAssertEqual(annotation?.anchor, .element(id: "phase2", text: "Phase 2: Ship"))
+        XCTAssertEqual(annotation?.mark, .selection(.element(id: "phase2", text: "Phase 2: Ship")))
     }
 
     func testANonMermaidIDIsLeftExactlyAsAuthored() {
@@ -39,7 +40,8 @@ final class CanvasAnnotationTests: XCTestCase {
         let annotation = decode(["id": "mermaid-flavoured-notes", "text": "a passage"])
 
         XCTAssertEqual(
-            annotation?.anchor, .element(id: "mermaid-flavoured-notes", text: "a passage"),
+            annotation?.mark,
+            .selection(.element(id: "mermaid-flavoured-notes", text: "a passage")),
             "an id that merely starts with the word is still the agent's own")
     }
 
@@ -47,7 +49,7 @@ final class CanvasAnnotationTests: XCTestCase {
         let annotation = decode(["text": "the store move has to come first"])
 
         XCTAssertEqual(
-            annotation?.anchor, .quote("the store move has to come first"),
+            annotation?.mark, .selection(.quote("the store move has to come first")),
             "markdown goes through marked client-side and headings get no id unless the "
                 + "page adds one — this is the documented degradation, not a bug")
     }
@@ -56,7 +58,7 @@ final class CanvasAnnotationTests: XCTestCase {
         // The script posts `id: null` when it found no ancestor with one.
         let annotation = decode(["id": NSNull(), "text": "a passage"])
 
-        XCTAssertEqual(annotation?.anchor, .quote("a passage"))
+        XCTAssertEqual(annotation?.mark, .selection(.quote("a passage")))
     }
 
     // MARK: - Hostile and malformed bodies
@@ -64,7 +66,7 @@ final class CanvasAnnotationTests: XCTestCase {
     func testAnIDWithCharactersAnIDCannotHaveIsRefused() {
         for hostile in ["a\"b", "id with spaces", "</script>", "a'); drop--", "\u{0}"] {
             XCTAssertEqual(
-                decode(["id": hostile, "text": "some text"])?.anchor, .quote("some text"),
+                decode(["id": hostile, "text": "some text"])?.mark, .selection(.quote("some text")),
                 "\(hostile) is not an id, so it degrades rather than being trusted")
         }
     }
@@ -72,7 +74,8 @@ final class CanvasAnnotationTests: XCTestCase {
     func testAnOversizedIDIsRefused() {
         let long = String(repeating: "a", count: CanvasAnnotation.maximumIDLength + 1)
 
-        XCTAssertEqual(decode(["id": long, "text": "some text"])?.anchor, .quote("some text"))
+        XCTAssertEqual(
+            decode(["id": long, "text": "some text"])?.mark, .selection(.quote("some text")))
     }
 
     /// Refused rather than truncated: half a quotation anchors to the wrong place just as
@@ -104,7 +107,7 @@ final class CanvasAnnotationTests: XCTestCase {
         let annotation = decode(["text": "clean\u{7}text\nkept"])
 
         XCTAssertEqual(
-            annotation?.anchor, .quote("cleantext\nkept"),
+            annotation?.mark, .selection(.quote("cleantext\nkept")),
             "newlines and tabs survive; a bell does not")
     }
 
