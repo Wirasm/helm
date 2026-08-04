@@ -130,6 +130,12 @@ Two facts make no-model testing possible: `session_start` fires at startup with 
 an extension command invoked over RPC as a `/`-prefixed prompt is handled locally. How each
 harness works, and how to add one: `references/testing.md`.
 
+`rpc` and `pty` run a real pi, which loads a real extension, which writes real files — so the gate
+sandboxes every root helm's conventions honour **once, before any harness starts**, and then
+proves the operator's real `~/.helm/mail` was untouched. **A new root override goes in that one
+block, never in a harness**, and if the sandbox cannot be made the gate refuses rather than
+running against the real directory.
+
 The script operates on the project it is **run from**, not on the skill directory it lives in, so
 it works unchanged in any repo with extensions under `pi/extensions/`. `PI_EXT_DIR` overrides
 that layout.
