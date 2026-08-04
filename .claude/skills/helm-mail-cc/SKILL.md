@@ -49,10 +49,13 @@ to the wrong agent is equally silent.
 
 A handle is `<basename of your cwd>-<tail of your session id>` — the last **4** characters of the
 id when that is free, widened to 6, then 8, then the whole id when a live process already holds the
-shorter form (`deriveHandle`, `hooks/helm-mail.mjs`). Collisions are the normal case here rather
-than the exception, because agents share directories: two in one worktree differ only in a suffix
-whose *width* you cannot predict. `HELM_MAIL_HANDLE` short-circuits the derivation entirely, so a
-pinned session's handle need not look like this at all.
+shorter form (`deriveHandle`, `hooks/helm-mail.mjs`). Widening is **rare** — every mailbox claimed
+on this machine so far resolved at 4, four of them agents sharing one directory — and rare is what
+makes computing the name the wrong move rather than a safe one. The width is not fixed, nothing
+tells you which one you got, and a derivation that is right in every test anyone writes is wrong
+the first time two session ids happen to end in the same four characters. `HELM_MAIL_HANDLE`
+short-circuits the derivation entirely as well, so a pinned session's handle need not look like
+this at all.
 
 **Which is the reason to read `owner.json` rather than compute anything: a session id does not
 yield a handle.** Knowing exactly which session you are still leaves the name of your mailbox as
