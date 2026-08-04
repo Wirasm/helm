@@ -156,7 +156,7 @@ extension ArchonGate: Codable {
 /// `abandon` ends a run rather than answering a gate, and #147 removed it along with the row it
 /// lived on; `resume` is not this shape of call at all (see `ArchonClient.resume(_:)`). This
 /// enum is the gate's vocabulary, not Archon's whole surface.
-enum ArchonGateDecision: String, Equatable, Sendable, CaseIterable {
+enum ArchonGateDecision: String, Equatable, Sendable {
     case approve, reject
 
     /// What Archon calls it, and what the operator reads. The same word deliberately: a control
@@ -168,10 +168,14 @@ enum ArchonGateDecision: String, Equatable, Sendable, CaseIterable {
     /// dash and joins a multi-word one back together on spaces. The flag passes the operator's
     /// sentence through whole.
     func arguments(for runID: String, text: String?) -> [String] {
-        let flag = self == .approve ? "--comment" : "--reason"
-        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let carried = (trimmed?.isEmpty == false) ? [flag, trimmed!] : []
-        return ["workflow", verb, runID, "--json"] + carried
+        let command = ["workflow", verb, runID, "--json"]
+        // **Whitespace-only is no comment, and the difference is load-bearing.** Archon converts
+        // an empty comment to `undefined` explicitly so a signal-bearing loop gate finalizes
+        // instead of running another iteration; passing `--comment "   "` would record blanks as
+        // feedback and iterate. Its own CLI trims for the same reason.
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
+        else { return command }
+        return command + [self == .approve ? "--comment" : "--reason", text]
     }
 }
 
