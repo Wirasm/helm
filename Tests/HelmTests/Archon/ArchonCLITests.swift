@@ -121,6 +121,34 @@ final class ArchonCLITests: XCTestCase {
             "no flag at all is a real choice: Archon mints the branch and cuts the worktree")
     }
 
+    func testCompleteUsesTheWorkspaceAndExactUnforcedArguments() async throws {
+        let argsRecord = root.appendingPathComponent("complete-args")
+        try install(
+            "printf '%s\\n' \"$@\" > \"$ARGS_RECORD\"\n"
+                + "printf 'Completed archon/task-141\\n'\n")
+
+        try await cli(extraEnvironment: ["ARGS_RECORD": argsRecord.path])
+            .complete(branch: "archon/task-141", in: workspace.path)
+
+        XCTAssertEqual(
+            try String(contentsOf: argsRecord, encoding: .utf8),
+            "complete\narchon/task-141\n")
+        XCTAssertFalse(try String(contentsOf: argsRecord).contains("force"))
+    }
+
+    func testCompleteTreatsNotFoundTextAsARefusal() async throws {
+        try install("printf 'Not found: archon/task-missing\\n'\n")
+
+        do {
+            try await cli().complete(branch: "archon/task-missing", in: workspace.path)
+            XCTFail("expected refusal")
+        } catch let error as ArchonCLIError {
+            XCTAssertEqual(
+                error.reason, .actionRejected("Not found: archon/task-missing"))
+            XCTAssertEqual(error.command, "archon complete archon/task-missing")
+        }
+    }
+
     // MARK: - What a failure carries
 
     /// "archon is not installed" used to surface as a bare `nonzeroExit(127)`. Everything that

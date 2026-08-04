@@ -32,6 +32,8 @@ struct ArchonRailView: View {
             composer
             Color.border.frame(height: 1)
             content
+            Color.border.frame(height: 1)
+            WorktreesRailView(model: model.worktrees, workspacePath: workspacePath)
         }
         .frame(width: 300)
         .background(ChromeBackground())

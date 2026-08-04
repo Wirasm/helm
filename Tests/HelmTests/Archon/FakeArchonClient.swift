@@ -13,6 +13,7 @@ actor FakeArchonClient: ArchonClient {
     /// Fails only the per-run detail call, which is how a run keeps its line and loses its
     /// subline.
     var detailFailure: ArchonCLIError?
+    var completeFailure: ArchonCLIError?
     var delay: Duration?
 
     private(set) var listCalls = 0
@@ -21,6 +22,7 @@ actor FakeArchonClient: ArchonClient {
     private(set) var detailRequests: [String] = []
     private(set) var workspacePaths: [String] = []
     private(set) var launchRequests: [ArchonLaunchRequest] = []
+    private(set) var completeRequests: [(branch: String, workspacePath: String)] = []
 
     init(
         runsResponse: ArchonRunsResponse = .fixture(),
@@ -36,6 +38,7 @@ actor FakeArchonClient: ArchonClient {
 
     func setFailure(_ failure: ArchonCLIError?) { self.failure = failure }
     func setDetailFailure(_ failure: ArchonCLIError?) { detailFailure = failure }
+    func setCompleteFailure(_ failure: ArchonCLIError?) { completeFailure = failure }
     func setDelay(_ delay: Duration?) { self.delay = delay }
     func setRuns(_ response: ArchonRunsResponse) { runsResponse = response }
     func setDetails(_ details: [String: ArchonRun]) { self.details = details }
@@ -51,6 +54,7 @@ actor FakeArchonClient: ArchonClient {
     }
 
     func lastLaunch() -> ArchonLaunchRequest? { launchRequests.last }
+    func completions() -> [(branch: String, workspacePath: String)] { completeRequests }
 
     func runs(in workspacePath: String) async throws -> ArchonRunsResponse {
         listCalls += 1
@@ -81,6 +85,12 @@ actor FakeArchonClient: ArchonClient {
         launchRequests.append(request)
         if let failure { throw failure }
         return acknowledgement
+    }
+
+    func complete(branch: String, in workspacePath: String) async throws {
+        completeRequests.append((branch, workspacePath))
+        if let completeFailure { throw completeFailure }
+        if let failure { throw failure }
     }
 }
 

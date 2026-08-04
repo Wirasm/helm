@@ -12,6 +12,7 @@ protocol ArchonClient: Sendable {
     func workflows(in workspacePath: String) async throws -> ArchonWorkflowListResponse
     func run(id: String, in workspacePath: String) async throws -> ArchonRun
     func launch(_ request: ArchonLaunchRequest) async throws -> ArchonLaunchAcknowledgement
+    func complete(branch: String, in workspacePath: String) async throws
 }
 
 /// A failed `archon` call, with enough in it to act on.
@@ -33,6 +34,7 @@ struct ArchonCLIError: Error, Equatable, LocalizedError, Sendable {
         case timedOut(after: Duration)
         case unreadableOutput(String)
         case emptyOutput
+        case actionRejected(String)
         /// `capturedAt` is the temporary file the bytes are still in, deliberately not
         /// deleted: a decode failure is the one outcome where the payload is the evidence.
         case malformedJSON(String, capturedAt: String?)
@@ -52,6 +54,7 @@ struct ArchonCLIError: Error, Equatable, LocalizedError, Sendable {
         case let .timedOut(after): "Archon did not answer within \(after)."
         case let .unreadableOutput(reason): "Archon output could not be read: \(reason)"
         case .emptyOutput: "Archon returned no data."
+        case let .actionRejected(reason): "Archon refused the action: \(reason)"
         case let .malformedJSON(reason, capturedAt):
             capturedAt.map { "Archon returned malformed data: \(reason) (kept at \($0))" }
                 ?? "Archon returned malformed data: \(reason)"
@@ -127,6 +130,18 @@ struct ArchonCLI: ArchonClient, Sendable {
             + request.worktree.arguments
         return try await decode(
             ArchonLaunchAcknowledgement.self, arguments: arguments, in: request.workspacePath)
+    }
+
+    func complete(branch: String, in workspacePath: String) async throws {
+        let arguments = ["complete", branch]
+        let capture = try await capture(arguments: arguments, in: workspacePath)
+        defer { try? FileManager.default.removeItem(at: capture.url) }
+        let text = String(decoding: capture.data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.localizedCaseInsensitiveContains("not found") {
+            throw ArchonCLIError(
+                command: Self.command(arguments), reason: .actionRejected(text))
+        }
     }
 
     /// `~/.bun/bin` ahead of the inherited `PATH`: Archon is installed as a bun global, and a

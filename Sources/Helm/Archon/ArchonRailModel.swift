@@ -59,13 +59,19 @@ final class ArchonRailModel: ObservableObject {
     @Published private(set) var workflows: [ArchonWorkflow] = []
     @Published private(set) var workflowLoadErrors: [ArchonWorkflowLoadError] = []
     @Published private(set) var isLoadingWorkflows = false
+    let worktrees: WorktreesRailModel
 
     private let client: any ArchonClient
     private let defaults: UserDefaults
     private var commands: Set<AnyCancellable> = []
 
-    init(client: any ArchonClient = ArchonCLI(), defaults: UserDefaults = DefaultsDomain.store) {
+    init(
+        client: any ArchonClient = ArchonCLI(),
+        worktreeClient: any WorktreeClient = WorktreeCLI(),
+        defaults: UserDefaults = DefaultsDomain.store
+    ) {
         self.client = client
+        worktrees = WorktreesRailModel(worktreeClient: worktreeClient, archonClient: client)
         self.defaults = defaults
         isVisible = defaults.bool(forKey: Self.visibilityKey)
         config =
