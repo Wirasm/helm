@@ -39,7 +39,8 @@ final class WorktreeCLITests: XCTestCase {
         ]
         environment.merge(extraEnvironment) { _, new in new }
         return WorktreeCLI(
-            environment: environment, gitExecutable: git.path, duExecutable: du.path, timeout: timeout)
+            environment: environment, gitExecutable: git.path, duExecutable: du.path,
+            timeout: timeout)
     }
 
     func testListsWithPorcelainAndEnrichesAgainstAnExplicitRemoteDefault() async throws {
@@ -122,18 +123,32 @@ final class WorktreeCLITests: XCTestCase {
         }
     }
 
+    /// **The timeout has to outlast the fake git's own start-up, not merely the work.**
+    /// This raced at 300ms: the child is killed when the timeout fires whether or not it has
+    /// reached its first `printf`, so on a loaded machine `git-pid` was never written and
+    /// `assertChildIsGone` read a file that did not exist — surfacing as an `XCTUnwrap` on
+    /// `NSCocoaErrorDomain 260` rather than as the scheduling delay it was. Measured at one
+    /// failure in five full-suite runs. `waitForPid` proves the child really started, the way
+    /// the cancellation test below already did; the wider budget is what stops the timeout
+    /// winning that race in the first place.
     func testHungListTimesOutAndTerminatesItsGitChild() async throws {
         let pidRecord = root.appendingPathComponent("git-pid")
         try install("printf '%s' \"$$\" > \"$PID_RECORD\"\nexec /bin/sleep 999\n", at: git)
         try install("exit 0\n", at: du)
+        let budget = Duration.seconds(2)
+        // Built outside the `Task` so the closure captures only the client and the path —
+        // capturing `self` to reach the `client(…)` helper is a `sending` violation. The
+        // cancellation test below is shaped this way for the same reason.
+        let client = client(extraEnvironment: ["PID_RECORD": pidRecord.path], timeout: budget)
+        let workspacePath = workspace.path
+        let call = Task { try await client.worktrees(in: workspacePath) }
+        try await waitForPid(pidRecord)
 
         do {
-            _ = try await client(
-                extraEnvironment: ["PID_RECORD": pidRecord.path], timeout: .milliseconds(300)
-            ).worktrees(in: workspace.path)
+            _ = try await call.value
             XCTFail("expected timeout")
         } catch let error as WorktreeCLIError {
-            XCTAssertEqual(error.reason, .timedOut(after: .milliseconds(300)))
+            XCTAssertEqual(error.reason, .timedOut(after: budget))
         }
         try assertChildIsGone(pidRecord)
     }

@@ -165,7 +165,8 @@ struct WorktreeCLI: WorktreeClient, Sendable {
             (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date
         let bytes: Int64?
         if let result = try? await run(
-            executable: "/usr/bin/env", arguments: [duExecutable, "-sk", path], commandName: "du -sk \(path)"),
+            executable: "/usr/bin/env", arguments: [duExecutable, "-sk", path],
+            commandName: "du -sk \(path)"),
             let kilobytes = Int64(result.stdout.split(whereSeparator: \.isWhitespace).first ?? "")
         {
             bytes = kilobytes * 1_024
@@ -230,7 +231,8 @@ struct WorktreeCLI: WorktreeClient, Sendable {
             try await child.run(timeout: timeout)
         } catch let failure as WorktreeChild.LaunchFailure {
             throw WorktreeCLIError(
-                command: commandName, reason: .launchFailed(failure.underlying.localizedDescription))
+                command: commandName, reason: .launchFailed(failure.underlying.localizedDescription)
+            )
         }
         guard !child.didTimeOut else {
             throw WorktreeCLIError(command: commandName, reason: .timedOut(after: timeout))
