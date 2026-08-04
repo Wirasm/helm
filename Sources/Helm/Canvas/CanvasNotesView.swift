@@ -23,6 +23,19 @@ struct CanvasCommentField: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Color.textMuted)
                     .lineLimit(2)
+                Spacer(minLength: 4)
+                // The way out, drawn. Escape is `.onExitCommand` below and travels the
+                // responder chain, so it is gone the moment focus is elsewhere — this is
+                // not, and it also says the field can be closed at all (#165).
+                Button {
+                    model.dismissSelection()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.textMuted)
+                .help("Dismiss without writing a note (esc)")
             }
 
             HStack(spacing: 8) {

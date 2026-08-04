@@ -22,6 +22,11 @@ final class CanvasModelTests: XCTestCase {
         if case let .url(page) = model.showing { page } else { nil }
     }
 
+    /// What the bridge reports when the operator selects `payload["text"]` on the page.
+    private func selection(_ payload: [String: Any]) throws -> CanvasPageSelection {
+        .selected(try XCTUnwrap(CanvasSelection(payload)))
+    }
+
     // MARK: - File source or URL source
 
     func testAURLSourceExposesNoFilePath() {
@@ -185,7 +190,7 @@ final class CanvasModelTests: XCTestCase {
     func testAnnotatingWritesTheNoteAndClearsTheSelection() throws {
         let model = CanvasModel()
         model.open(file)
-        model.pageDidSelect(try XCTUnwrap(CanvasSelection(["id": "phase-2", "text": "Phase 2"])))
+        model.pageDidReport(try selection(["id": "phase-2", "text": "Phase 2"]))
 
         model.annotate(comment: "this ordering is wrong")
 
@@ -202,7 +207,7 @@ final class CanvasModelTests: XCTestCase {
     func testAnUnanchorableSelectionKeepsTheSelectionAndSaysSo() throws {
         let model = CanvasModel()
         model.open(file)
-        model.pageDidSelect(try XCTUnwrap(CanvasSelection(["text": "a passage"])))
+        model.pageDidReport(try selection(["text": "a passage"]))
 
         // An empty comment is what `CanvasAnnotation.decode` refuses — there is nothing
         // to anchor.
@@ -220,7 +225,7 @@ final class CanvasModelTests: XCTestCase {
         let model = CanvasModel()
         // A canvas opened through Browse… can live somewhere not writable.
         model.open(URL(fileURLWithPath: "/System/helm-should-not-write-here/plan.md"))
-        model.pageDidSelect(try XCTUnwrap(CanvasSelection(["text": "a passage"])))
+        model.pageDidReport(try selection(["text": "a passage"]))
 
         model.annotate(comment: "why?")
 
@@ -245,13 +250,98 @@ final class CanvasModelTests: XCTestCase {
     func testAURLCanvasHasNowhereToPutANote() throws {
         let model = CanvasModel()
         model.openURL(URL(string: "https://example.com/dashboard")!)
-        model.pageDidSelect(try XCTUnwrap(CanvasSelection(["text": "a passage"])))
+        model.pageDidReport(try selection(["text": "a passage"]))
 
         model.annotate(comment: "why?")
 
         XCTAssertNil(model.sidecarURL)
         XCTAssertNil(model.notesFailure)
         XCTAssertEqual(model.notes, [])
+    }
+
+    // MARK: - Dismissing
+
+    // #165: the comment field's only exit was `.onExitCommand` in the view, which travels
+    // the responder chain — so Escape stopped working the moment focus left the field, and
+    // there was then no way to close the box at all. **What can dismiss a selection is the
+    // model's decision**, so it is decided and tested here rather than in a `View` no test
+    // can drive.
+
+    func testDismissingClearsTheSelectionAndWritesNothing() throws {
+        let model = CanvasModel()
+        model.open(file)
+        model.pageDidReport(try selection(["id": "phase-2", "text": "Phase 2"]))
+
+        // The field's ✕, and Escape while it has focus. Neither needs a responder chain to
+        // reach the model, which is the whole point.
+        model.dismissSelection()
+
+        XCTAssertNil(model.selection, "the field has nothing left to be about")
+        XCTAssertEqual(model.notes, [], "a dismissal abandons the note rather than writing it")
+    }
+
+    func testAClickThatSelectedNothingDismissesTheField() throws {
+        let model = CanvasModel()
+        model.open(file)
+        model.pageDidReport(try selection(["text": "a passage"]))
+        XCTAssertNotNil(model.selection)
+
+        // The page's `mouseup` with an empty selection: clicking elsewhere in the document.
+        model.pageDidReport(.cleared)
+
+        XCTAssertNil(model.selection, "click-elsewhere-to-dismiss, the same as any popover")
+    }
+
+    func testDismissingTakesTheFailureStripWithIt() throws {
+        let model = CanvasModel()
+        model.open(file)
+        model.pageDidReport(try selection(["text": "a passage"]))
+        // An empty comment is what `CanvasAnnotation.decode` refuses.
+        model.annotate(comment: "   ")
+        XCTAssertNotNil(model.notesFailure, "the strip is up, and the selection with it")
+
+        model.dismissSelection()
+
+        XCTAssertNil(
+            model.notesFailure,
+            "\"try selecting the text again\" would be naming a selection that is gone")
+    }
+
+    /// **The decision on focus loss, stated as a test.** A selection is not dropped by
+    /// anything except a dismissal — going to a terminal to read what the agent said about
+    /// a passage and coming back to comment on it is the ordinary annotation loop, and the
+    /// model has no path that ends it. Only these three do, and all three are canvas-local
+    /// acts by the operator.
+    func testASelectionSurvivesEverythingThatIsNotADismissal() throws {
+        let model = CanvasModel()
+        model.open(file)
+        model.pageDidReport(try selection(["text": "a passage"]))
+
+        model.refreshNotes()
+        model.reloadPage()
+
+        XCTAssertNotNil(
+            model.selection,
+            "only a submit, a dismissal, or opening another source may take the field away")
+    }
+
+    /// The bridge is the untrusted edge, so a body that is neither must be dropped rather
+    /// than rounded down to "cleared" — that would let a malformed message close a field the
+    /// operator was typing in.
+    func testOnlyARecognisedBodyIsAReport() throws {
+        XCTAssertNil(CanvasPageSelection("not a payload at all"))
+        XCTAssertNil(CanvasPageSelection(["cleared": "yes"]), "a string is not the flag")
+
+        guard case .cleared = try XCTUnwrap(CanvasPageSelection(["cleared": true])) else {
+            return XCTFail("a cleared body is a dismissal")
+        }
+        guard
+            case let .selected(selection) = try XCTUnwrap(
+                CanvasPageSelection(["id": "phase-2", "text": "Phase 2"]))
+        else {
+            return XCTFail("a body with a selection in it is one")
+        }
+        XCTAssertEqual(selection.body["id"] as? String, "phase-2")
     }
 
     // MARK: - Closing
