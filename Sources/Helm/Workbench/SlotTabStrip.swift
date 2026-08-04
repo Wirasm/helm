@@ -40,7 +40,7 @@ struct SlotTabStrip: View {
                 Image(systemName: "plus")
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.textMuted)
             .help("New terminal (⌘N)")
 
             faceToggle
@@ -55,7 +55,7 @@ struct SlotTabStrip: View {
                     Image(systemName: "doc.text")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.textMuted)
                 .help("Open artifact (⌘O)")
                 .popover(isPresented: $model.isBrowserOpen, arrowEdge: .bottom) {
                     ArtifactBrowser(workspaceRoot: workspaceRoot) { url in

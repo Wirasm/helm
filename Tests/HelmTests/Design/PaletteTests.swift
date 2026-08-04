@@ -113,13 +113,17 @@ final class PaletteTests: XCTestCase {
     /// The status hues, which are **deliberately not the brand**: Archon keeps them *"distinct
     /// from accent so brand swaps don't break meaning"*, and a build that quietly folded one
     /// into the magenta would make the rail's counts decorative.
-    func testTheStatusTokensAreArchonsStatusHues() {
+    ///
+    /// `attention` and `danger` keep Archon's authored amber and red to the digit after #149
+    /// promoted them out of the `archon` prefix — the rail was only the first surface to need
+    /// them, and the workspace bar's agent dot and the terminal tab now spend the same two.
+    func testTheStatusTokensKeepArchonsHues() {
         XCTAssertEqual(palette.archonRunning.light.hex, "#0170b3", "Archon's electric blue")
         XCTAssertEqual(palette.archonRunning.dark.hex, "#3dacfe")
-        XCTAssertEqual(palette.archonAttention.light.hex, "#9d5f00", "Archon's amber, darkened")
-        XCTAssertEqual(palette.archonAttention.dark.hex, "#e1a035")
-        XCTAssertEqual(palette.archonError.light.hex, "#c91f3f", "Archon's hot red, darkened")
-        XCTAssertEqual(palette.archonError.dark.hex, "#ff5166")
+        XCTAssertEqual(palette.attention.light.hex, "#9d5f00", "Archon's amber, darkened")
+        XCTAssertEqual(palette.attention.dark.hex, "#e1a035")
+        XCTAssertEqual(palette.danger.light.hex, "#c91f3f", "Archon's hot red, darkened")
+        XCTAssertEqual(palette.danger.dark.hex, "#ff5166")
     }
 
     /// **Not the console's values to the digit, and this is the assertion that says why.**
@@ -131,15 +135,15 @@ final class PaletteTests: XCTestCase {
     /// **This is also what makes the send button legible.** Its label is `Color.surface`
     /// knocked out of the gradient, so "each stop against the surface" and "the label against
     /// each stop" are the same measurement — one floor covers the title and the button both.
-    func testEveryArchonTokenCarriesSmallTextInBothAppearances() {
+    func testEveryBrandAndStatusTokenCarriesSmallTextInBothAppearances() {
         for appearance in Palette.Appearance.allCases {
             for (name, token) in [
                 ("archonMagenta", palette.archonMagenta),
                 ("archonViolet", palette.archonViolet),
                 ("archonTeal", palette.archonTeal),
                 ("archonRunning", palette.archonRunning),
-                ("archonAttention", palette.archonAttention),
-                ("archonError", palette.archonError),
+                ("attention", palette.attention),
+                ("danger", palette.danger),
             ] {
                 let onSurface = contrast(token, on: palette.surface, in: appearance)
                 XCTAssertGreaterThanOrEqual(
@@ -164,17 +168,17 @@ final class PaletteTests: XCTestCase {
         }
     }
 
-    /// `archonAttention` marks a run stopped waiting for a person; `accent` marks one that is
+    /// `attention` marks a run stopped waiting for a person; `accent` marks one that is
     /// live and fine. They are opposite claims, so a build that quietly retuned one into the
     /// other would leave the rail saying nothing at all with a straight face. The same holds
-    /// for `archonError` against the teal a completed count spends.
+    /// for `danger` against the teal a completed count spends.
     func testTheStatusColoursCannotBeMistakenForOneAnother() {
         for appearance in Palette.Appearance.allCases {
             XCTAssertGreaterThan(
-                distance(palette.archonAttention, palette.accent, in: appearance), 0.5,
+                distance(palette.attention, palette.accent, in: appearance), 0.5,
                 "attention vs accent in \(appearance)")
             XCTAssertGreaterThan(
-                distance(palette.archonError, palette.archonTeal, in: appearance), 0.5,
+                distance(palette.danger, palette.archonTeal, in: appearance), 0.5,
                 "failed vs completed in \(appearance)")
             XCTAssertGreaterThan(
                 distance(palette.archonRunning, palette.archonMagenta, in: appearance), 0.5,

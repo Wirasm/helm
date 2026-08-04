@@ -116,6 +116,26 @@ enum KeyHints {
 
 /// A key event's shape, as the glyphs a menu would print.
 enum KeyGlyph {
+    /// One command's binding, as the glyphs a menu would print — "⇧⌘O".
+    ///
+    /// **Because typing them by hand goes wrong, and did.** The empty bench said `⌘⇧O` while
+    /// the status bar said `⇧⌘O`, two places in one window disagreeing about one key (#149);
+    /// the second is right, because macOS prints modifiers in the fixed order ⌃⌥⇧⌘ and the
+    /// operator's eye already parses that. Any surface outside the status bar that wants to
+    /// name a key asks here instead, on `KeyHint`'s own reasoning: a hand-written glyph is a
+    /// second copy of the keymap, and the second copy is the one that goes stale.
+    ///
+    /// The first row that binds the command, which for a command bound once is the only one.
+    /// nil when nothing binds it or its trigger has no glyph.
+    static func binding(
+        for command: Notification.Name, in shortcuts: [Shortcut] = Shortcut.all
+    ) -> String? {
+        guard let row = shortcuts.first(where: { $0.notification == command }),
+            let key = trigger(row.trigger)
+        else { return nil }
+        return modifiers(row.modifiers) + key
+    }
+
     /// macOS's canonical modifier order — ⌃⌥⇧⌘ — which is what a menu bar prints and
     /// therefore what the operator's eye already parses.
     static func modifiers(_ flags: NSEvent.ModifierFlags) -> String {

@@ -45,12 +45,111 @@ struct WorkbenchView: View {
             } else {
                 // No workspace open, so there is no bench — `Workbench`'s first invariant
                 // is that a bench always holds a pane, so this is nil rather than empty.
-                ContentUnavailableView(
-                    "Open a workspace", systemImage: "folder",
-                    description: Text("Choose a folder with ⌘⇧O to start a terminal."))
+                EmptyBench()
             }
         }
         .enableInjection()
+    }
+}
+
+// MARK: - The empty bench
+
+/// What helm shows with no workspace open — a fresh install, and the state it returns to
+/// when the last workspace is closed.
+///
+/// **It was a `ContentUnavailableView`, and that is what #149 is about.** A SwiftUI system
+/// component styles its title, description and glyph from AppKit, so the most-seen surface
+/// in the app was the one surface that spent none of `Design/Palette.swift` — a live
+/// instance of the defect the palette exists to remove, on the first thing anyone sees.
+///
+/// **It offers the action rather than naming a keystroke.** The old copy said "choose a
+/// folder with ⌘⇧O" — a thing to remember, and written backwards besides (macOS prints
+/// modifiers ⌃⌥⇧⌘, so it is ⇧⌘O, which is what the status bar already said). The button is
+/// one click; the key is still shown beside it, rendered from `Shortcut.all` through
+/// `KeyGlyph.binding` so the two can no longer disagree.
+///
+/// **It posts rather than opening the panel itself.** `WorkspaceBar` owns the `NSOpenPanel`
+/// and already listens for `.helmOpenWorkspace`, so the button, the bar's `+` and ⇧⌘O are
+/// one path with one behaviour. A second panel here would be a second answer to "what does
+/// opening a workspace do".
+///
+/// **`ViewThatFits` because the bench is not always a pane.** With the rail open and a short
+/// window this space is a band, and a column laid out for a full pane renders into a strip
+/// with its rhythm collapsed — which is how the issue's capture looked. The horizontal form
+/// is the fallback, not a second design.
+private struct EmptyBench: View {
+    /// nil only if the row is ever removed from the map, in which case the button stands
+    /// alone rather than claiming a key that does not fire.
+    private let keys = KeyGlyph.binding(for: .helmOpenWorkspace)
+
+    var body: some View {
+        ViewThatFits(in: .vertical) {
+            VStack(spacing: 18) {
+                glyph(size: 34)
+                VStack(spacing: 6) {
+                    heading
+                    detail
+                }
+                openButton
+            }
+            HStack(spacing: 14) {
+                glyph(size: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    heading
+                    detail
+                }
+                openButton
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.surface)
+    }
+
+    private func glyph(size: CGFloat) -> some View {
+        Image(systemName: "folder")
+            .font(.system(size: size, weight: .light))
+            .foregroundStyle(Color.textFaint)
+    }
+
+    private var heading: some View {
+        Text("Open a workspace")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(Color.textPrimary)
+    }
+
+    private var detail: some View {
+        Text("A workspace is a folder. helm opens a terminal in it.")
+            .font(.system(size: 12))
+            .foregroundStyle(Color.textMuted)
+            .multilineTextAlignment(.center)
+    }
+
+    private var openButton: some View {
+        Button {
+            NotificationCenter.default.post(name: .helmOpenWorkspace, object: nil)
+        } label: {
+            HStack(spacing: 8) {
+                Text("Choose Folder…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.textPrimary)
+                if let keys {
+                    Text(keys)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Color.textFaint)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(Color.surfaceRaised, in: RoundedRectangle(cornerRadius: 7))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(Color.border, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .help(keys.map { "Open a folder as a workspace (\($0))" } ?? "Open a folder as a workspace")
     }
 }
 

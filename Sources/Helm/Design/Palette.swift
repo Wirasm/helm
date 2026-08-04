@@ -89,8 +89,8 @@ struct Palette: Equatable, Sendable {
     /// Hairlines and the edges of things. Never a fill.
     let border: Token
     /// helm's one colour with an opinion. Spent sparingly: the cursor, the mark on an
-    /// answer, an active control. Orange stays what it has always been — the attention
-    /// colour, which is a different job (see `AgentDot`).
+    /// answer, an active control, a command that finished cleanly. Attention is a
+    /// different job and has its own token (`attention`, below).
     let accent: Token
     /// What a selection leaves behind: dragged text in the terminal, the selected tab.
     /// Accent mixed most of the way into the surface, so it tints rather than highlights.
@@ -130,24 +130,31 @@ struct Palette: Equatable, Sendable {
     /// count is this and not a fourth colour.
     let archonTeal: Token
 
-    // MARK: - Archon's status colours
+    // MARK: - Status
 
     /// **Deliberately not brand.** Archon's console keeps its status hues *"distinct from
     /// accent so brand swaps don't break meaning"*, and helm honours the separation rather
     /// than painting everything magenta: a run that is working is `--running` electric blue
     /// (`oklch(0.72 0.155 245)`), not a shade of the wordmark.
     let archonRunning: Token
-    /// A run that has stopped and is waiting on a person — Archon's paused gate.
+    /// **Something has stopped and is waiting on a person.** A bell from a terminal you are
+    /// not looking at, an agent that has finished its turn, an Archon run at its approval
+    /// gate — one meaning at three altitudes, and therefore one colour.
     ///
-    /// Amber, from the same console (`--warning`, `oklch(0.8 0.14 85)`), held at helm's
-    /// floors for the same reason as the brand stops. It is deliberately NOT `accent`: teal
-    /// is helm's "this is live and fine", and an approval gate is the opposite claim. It is
-    /// the same meaning helm's orange agent dot carries at a different altitude.
-    let archonAttention: Token
-    /// A run that failed — Archon's `--error`, `oklch(0.68 0.215 18)`. The one collapsed
-    /// count that is a call to look, and rendering it in the same grey as `completed` throws
-    /// that away.
-    let archonError: Token
+    /// It is deliberately NOT `accent`: teal is helm's "this is live and fine", and a thing
+    /// waiting on you is the opposite claim.
+    ///
+    /// Amber, from Archon's console (`--warning`, `oklch(0.8 0.14 85)`), held at helm's
+    /// floors for the same reason as the brand stops. It arrived as `archonAttention`
+    /// because the rail was the first surface to need it; the workspace bar's agent dot and
+    /// the terminal tab's bell were spending SwiftUI's `.orange` at the time, which is the
+    /// second colour source this palette exists to end (#149).
+    let attention: Token
+    /// **Something failed, and the operator has to look.** A command that exited nonzero, a
+    /// worktree action that refused, an Archon run that errored. Archon's `--error`,
+    /// `oklch(0.68 0.215 18)`; named for the job rather than the rail, because the worktrees
+    /// rail and the terminal tab spend it too.
+    let danger: Token
 
     /// **Private, which is what makes "helm's one palette" a fact rather than a habit.**
     /// `PaletteTests` proves the contrast ratios of `helm`; a second palette built elsewhere
@@ -156,8 +163,8 @@ struct Palette: Equatable, Sendable {
     private init(
         surface: Token, surfaceRaised: Token, textPrimary: Token, textMuted: Token,
         textFaint: Token, border: Token, accent: Token, selection: Token, archonMagenta: Token,
-        archonViolet: Token, archonTeal: Token, archonRunning: Token, archonAttention: Token,
-        archonError: Token
+        archonViolet: Token, archonTeal: Token, archonRunning: Token, attention: Token,
+        danger: Token
     ) {
         self.surface = surface
         self.surfaceRaised = surfaceRaised
@@ -171,8 +178,8 @@ struct Palette: Equatable, Sendable {
         self.archonViolet = archonViolet
         self.archonTeal = archonTeal
         self.archonRunning = archonRunning
-        self.archonAttention = archonAttention
-        self.archonError = archonError
+        self.attention = attention
+        self.danger = danger
     }
 
     /// helm's one palette.
@@ -197,7 +204,7 @@ struct Palette: Equatable, Sendable {
         archonViolet: Token(light: 0x8A_38_CE, dark: 0xB2_66_F9),
         archonTeal: Token(light: 0x04_79_5B, dark: 0x06_CE_94),
         archonRunning: Token(light: 0x01_70_B3, dark: 0x3D_AC_FE),
-        archonAttention: Token(light: 0x9D_5F_00, dark: 0xE1_A0_35),
-        archonError: Token(light: 0xC9_1F_3F, dark: 0xFF_51_66)
+        attention: Token(light: 0x9D_5F_00, dark: 0xE1_A0_35),
+        danger: Token(light: 0xC9_1F_3F, dark: 0xFF_51_66)
     )
 }

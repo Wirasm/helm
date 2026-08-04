@@ -160,7 +160,7 @@ struct MarkdownText: View {
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Text(marker)
                     .font(theme.bodyFont)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textMuted)
                     .frame(minWidth: theme.listMarkerWidth, alignment: .leading)
                 inline(text)
                     .font(theme.bodyFont)
@@ -174,7 +174,7 @@ struct MarkdownText: View {
                     .padding(theme.codeBlockInset)
             }
             .background(
-                .quaternary,
+                Color.surfaceRaised,
                 in: RoundedRectangle(cornerRadius: theme.codeBlockCornerRadius)
             )
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -196,7 +196,7 @@ struct MarkdownText: View {
         }
         for range in codeRanges {
             attributed[range].font = theme.inlineCodeFont
-            attributed[range].backgroundColor = Color(nsColor: .quaternarySystemFill)
+            attributed[range].backgroundColor = Color.surfaceRaised
         }
         return Text(attributed)
     }

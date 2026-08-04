@@ -23,7 +23,7 @@ struct TerminalTab: View {
                     .font(.system(size: 8, weight: .bold))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.textMuted)
             .disabled(!canClose)
             .opacity(canClose ? 1 : 0.3)
             .help(
@@ -40,10 +40,15 @@ struct TerminalTab: View {
         .onTapGesture(perform: onSelect)
     }
 
-    /// The tab's one indicator slot, by precedence: dead shell > bell (orange
+    /// The tab's one indicator slot, by precedence: dead shell > bell (`attention`
     /// keeps priority) > finished-command tick/mark (panes you cannot see, cleared
     /// when one comes on screen) > live progress hint. All state, no popups — the
     /// quiet rules live in `TerminalActivity`.
+    ///
+    /// Every mark here is a palette token: `attention` for a bell — the same colour the
+    /// workspace bar's agent dot spends, because it is the same claim one altitude up —
+    /// `accent` for a command that finished cleanly, `danger` for one that did not. They
+    /// were SwiftUI's `.orange`, `.green` and `.red` until #149.
     ///
     /// **Do not copy the `!isSelected` gating into an agent-status indicator.**
     /// Hiding a mark on the tab you are looking at is right for a shell-command
@@ -57,12 +62,12 @@ struct TerminalTab: View {
             // Dead shell: mark the tab so the fallback pane isn't a surprise.
             Image(systemName: "poweroff")
                 .font(.system(size: 8))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Color.textFaint)
         } else if session.hasBell, !isSelected {
             // Bell from a tab you are not looking at (BEL — e.g. an agent asking
             // for attention). Cleared when the tab is selected.
             Circle()
-                .fill(.orange)
+                .fill(Color.attention)
                 .frame(width: 5, height: 5)
                 .accessibilityLabel("Bell")
         } else if let outcome = session.activity.outcome, !isSelected {
@@ -72,13 +77,13 @@ struct TerminalTab: View {
             case .success:
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 9))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Color.accent)
                     .help(outcome.tooltip)
                     .accessibilityLabel("Command finished")
             case .failure:
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 9))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.danger)
                     .help(outcome.tooltip)
                     .accessibilityLabel("Command failed")
             }
@@ -97,10 +102,10 @@ struct TerminalTab: View {
             // ProgressView doesn't shrink to tab-chrome size.
             ZStack {
                 Circle()
-                    .stroke(.quaternary, lineWidth: 1.5)
+                    .stroke(Color.border, lineWidth: 1.5)
                 Circle()
                     .trim(from: 0, to: CGFloat(percent) / 100)
-                    .stroke(.secondary, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    .stroke(Color.textMuted, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
             .frame(width: 9, height: 9)
@@ -109,7 +114,7 @@ struct TerminalTab: View {
         case .error:
             Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 9))
-                .foregroundStyle(.red)
+                .foregroundStyle(Color.danger)
                 .help("Command reported a progress error")
                 .accessibilityLabel("Progress error")
         case .indeterminate, .paused:
@@ -138,7 +143,7 @@ struct CanvasTab: View {
         HStack(spacing: 5) {
             Image(systemName: icon)
                 .font(.system(size: 9))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.textMuted)
             Text(label)
                 .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
@@ -150,7 +155,7 @@ struct CanvasTab: View {
                     .font(.system(size: 8, weight: .bold))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.textMuted)
             .disabled(!canClose)
             .opacity(canClose ? 1 : 0.3)
             .help(canClose ? "Close canvas" : "The last pane cannot be closed")

@@ -18,10 +18,10 @@ struct CanvasCommentField: View {
             HStack(spacing: 6) {
                 Image(systemName: "quote.opening")
                     .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textMuted)
                 Text(quoted)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textMuted)
                     .lineLimit(2)
             }
 
@@ -44,8 +44,8 @@ struct CanvasCommentField: View {
         }
         .padding(10)
         .frame(width: 320)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
+        .background(Color.surfaceRaised, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.border))
         .shadow(radius: 8, y: 2)
         .onAppear { focused = true }
         .onExitCommand { model.dismissSelection() }
@@ -91,7 +91,7 @@ struct CanvasNotesList: View {
                 Button("Reveal in Finder") { model.revealNotes() }
                     .buttonStyle(.plain)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textMuted)
                 Spacer()
                 if let markdown = model.notesMarkdown {
                     Button("Post") { post?(markdown) }

@@ -69,7 +69,7 @@ struct WorktreesRailView: View {
             if let failure = model.refreshFailure {
                 Text(failure)
                     .font(.caption2)
-                    .foregroundStyle(Color.archonError)
+                    .foregroundStyle(Color.danger)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 6)
@@ -93,7 +93,7 @@ struct WorktreesRailView: View {
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.archonError)
+                    .foregroundStyle(Color.danger)
                     .disabled(model.isCleaningAll)
                 }
                 .padding(.horizontal, 12)
@@ -115,7 +115,7 @@ struct WorktreesRailView: View {
                     Button("CLEAN") { model.requestCleanup(of: row) }
                         .buttonStyle(.plain)
                         .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Color.archonError)
+                        .foregroundStyle(Color.danger)
                         .disabled(model.actingPaths.contains(row.id))
                 }
             }
@@ -133,7 +133,7 @@ struct WorktreesRailView: View {
             if let failure = model.actionFailures[row.id] {
                 Text(failure)
                     .font(.caption2)
-                    .foregroundStyle(Color.archonError)
+                    .foregroundStyle(Color.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
