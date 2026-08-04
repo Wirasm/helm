@@ -21,6 +21,51 @@ The patch script is first and not optional — the patched libghostty is gitigno
 fresh worktree has nothing to link against. Never borrow another checkout's `vendor/`;
 that proves the other checkout builds.
 
+**To run one suite alone, set `INJECTION_NOGENERICS=1`:**
+
+```
+INJECTION_NOGENERICS=1 swift test --filter TerminalKeyboardTests
+```
+
+Without it `--filter` dies with `error: signalled(10)` from `swiftpm-xctest-helper`, and that
+was read for months as "helm's bundle cannot be enumerated". It is not helm's bundle. The
+helper `dlopen`s the test bundle, that runs `+[NSObject(InjectionBoot) load]`, and
+InjectionNext rebinds `swift_allocateGenericClassMetadata` across every loaded image —
+`rebind_symbols_image` takes SIGBUS on a `KERN_PROTECTION_FAILURE` (read the `.ips` in
+`~/Library/Logs/DiagnosticReports`, it names every frame). A normal `swift test` survives it
+because InjectionNext skips the hook when `XCTestConfigurationFilePath` is in the environment
+and the real `xctest` host sets it; the bare helper sets nothing. `INJECTION_NOGENERICS=1` is
+the same off switch by its other name, and it changes nothing else — the hook only exists to
+hot-swap generics in a running app.
+
+`xcrun xctest -XCTest HelmTests.TerminalKeyboardTests/testFoo <bundle>.xctest` is the other
+way in, and it never involves the helper at all. Useful against a bundle you did not just
+build — including an old one, which is how #192 was settled.
+
+**What the gate guarantees when several agents share the machine — which is now the normal
+state here, not the exception.** `swift test` is *not* load-sensitive and a red keyboard test
+is *not* evidence that the machine is busy. That was assumed once, cost two confident wrong
+diagnoses in an afternoon, and #192 is the measurement that disproved it: a test bundle built
+at 13:19 and never rebuilt was green at 13:19 and red at 19:00, and every worktree on the
+machine went red within the same second (17:17:19). Concurrency did not do that; nothing in
+any diff did.
+
+So before suspecting your diff, or the load, ask ghostty:
+
+```
+log show --last 30m --style compact --predicate 'subsystem == "com.mitchellh.ghostty"'
+```
+
+`embedded_window: error initializing surface` means `ghostty_surface_new` refused, so **no
+terminal exists to type into** and every keystroke assertion in `TerminalKeyboardTests` and
+`WorkbenchFocusRoutingTests` fails for that reason alone, on any tree. Those two suites now
+say so themselves rather than reporting `pty saw <nothing>` — the sentence that reads as a
+focus bug and is not one. Everything in them that does *not* need a surface still runs and
+still fails on a real regression: proved by reinstating #96's contract (seven tests then also
+fail on the first-responder assertion) and #152's click routing (five more, on the bench).
+A surface failure is an **environment** report, not a verdict on the diff, and the log line is
+the evidence to bring.
+
 **This gate needs only the Swift toolchain and xcodegen. Keep it that way.** It is the one
 command a fresh worktree runs, and every dependency added to it is a dependency every
 contributor now needs.
