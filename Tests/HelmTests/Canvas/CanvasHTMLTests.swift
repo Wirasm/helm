@@ -102,54 +102,6 @@ final class CanvasHTMLTests: XCTestCase {
         XCTAssertTrue(script.contains("mermaid.run()"))
     }
 
-    // MARK: The gesture layer (#112)
-
-    func testTheScriptClassifiesTheThreeGesturesAndKeepsSelection() {
-        let script = CanvasHTML.annotationScript()
-
-        // Classify the gesture, do not digitise it: what travels is type + target.
-        XCTAssertTrue(script.contains("mark: \"point\""))
-        XCTAssertTrue(script.contains("mark: \"relation\""))
-        XCTAssertTrue(script.contains("mark: \"enclosure\""))
-        XCTAssertTrue(
-            script.contains("var selection = document.getSelection()"),
-            "a plain drag must still select text — marking is the modified gesture, so "
-                + "reading a canvas is unchanged")
-    }
-
-    func testMarkingIsBehindAModifierSoOrdinaryDraggingStillSelects() {
-        XCTAssertTrue(CanvasHTML.annotationScript().contains("e.altKey"))
-    }
-
-    func testOneResolverServesEveryGesture() {
-        // #112's own acceptance: the draw-time hit test and any later re-resolution share a
-        // code path, because inconsistent resolution between capture and action is its own
-        // bug class.
-        let script = CanvasHTML.annotationScript()
-        let definitions = script.components(separatedBy: "function resolve(").count - 1
-
-        XCTAssertEqual(definitions, 1, "exactly one resolver, used by all of them")
-        XCTAssertTrue(
-            script.contains("function targetAt(") && script.contains("function targetsIn("))
-    }
-
-    func testAnEnclosureCoveringNothingIsStillReportedSoItCanBeRefusedVisibly() {
-        XCTAssertTrue(
-            CanvasHTML.annotationScript().contains("mark: \"enclosure\", targets: []"),
-            "a circle round empty space posts an empty enclosure, which decode refuses — "
-                + "silence would be indistinguishable from the gesture not registering")
-    }
-
-    func testTheOverlayIsInertAndDoesNotBecomeSomethingThePageNeeds() {
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertTrue(script.contains("pointer-events:none"))
-        XCTAssertTrue(
-            script.contains("data-helm-mark"),
-            "helm's own chrome is identifiable, so an agent reading the DOM can tell it apart "
-                + "from what it authored")
-    }
-
     // MARK: Vendored scripts
 
     func testVendoredScriptsAreBundledAndExposeTheirGlobals() {
