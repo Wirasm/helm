@@ -50,6 +50,8 @@ struct MarkdownCanvasView: View {
     let url: URL
     let markdown: String
     let generation: Int
+    /// What the operator is holding, pushed into the page on change.
+    let markTool: CanvasMarkTool
     /// What the operator selected on the page, for the comment field to anchor to — and
     /// when they clicked away and selected nothing, which is what takes the field down.
     let onSelection: (CanvasPageSelection) -> Void
@@ -61,6 +63,7 @@ struct MarkdownCanvasView: View {
             url: url,
             markdown: markdown,
             generation: generation,
+            markTool: markTool,
             theme: colorScheme == .dark ? .dark : .light,
             onSelection: onSelection
         )
@@ -71,6 +74,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
     let url: URL
     let markdown: String
     let generation: Int
+    let markTool: CanvasMarkTool
     let theme: CanvasTheme
     let onSelection: (CanvasPageSelection) -> Void
 
@@ -115,6 +119,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         load(webView, coordinator: context.coordinator)
+        context.coordinator.pushTool(markTool, to: webView)
     }
 
     /// Loads only when the (theme, generation, content) triple actually
@@ -124,6 +129,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
         let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(markdown)"
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
+        coordinator.forgetPushedTool()
         coordinator.stagedDocument = Data(
             CanvasHTML.documentPage(markdown: markdown, theme: theme).utf8)
         guard let address = CanvasAddress.url(for: path) else { return }
@@ -142,6 +148,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
 struct HTMLCanvasView: View {
     let url: URL
     let generation: Int
+    let markTool: CanvasMarkTool
     let onSelection: (CanvasPageSelection) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -150,6 +157,7 @@ struct HTMLCanvasView: View {
         HTMLCanvasWebView(
             url: url,
             generation: generation,
+            markTool: markTool,
             theme: colorScheme == .dark ? .dark : .light,
             onSelection: onSelection
         )
@@ -159,6 +167,7 @@ struct HTMLCanvasView: View {
 private struct HTMLCanvasWebView: NSViewRepresentable {
     let url: URL
     let generation: Int
+    let markTool: CanvasMarkTool
     let theme: CanvasTheme
     let onSelection: (CanvasPageSelection) -> Void
 
@@ -193,6 +202,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         load(webView, coordinator: context.coordinator)
+        context.coordinator.pushTool(markTool, to: webView)
     }
 
     /// (Re)loads when the file, its generation (external change), or the theme
@@ -202,6 +212,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
         let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(path.value)"
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
+        coordinator.forgetPushedTool()
 
         let controller = webView.configuration.userContentController
         // `removeAllUserScripts` takes the annotation script with it, so it is re-added
@@ -252,6 +263,12 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     static let bridgeWorld = WKContentWorld.world(name: "helm-canvas-bridge")
 
     var loadedKey: String?
+    /// The tool the page was last told about, or nil when the page has not been told at
+    /// all — which includes every fresh document. A change is pushed with
+    /// `evaluateJavaScript` rather than folded into `loadedKey`, because reloading to switch
+    /// tools would throw away the scroll position, and a canvas is something you are part-way
+    /// down when you decide to mark it.
+    private(set) var pushedTool: CanvasMarkTool?
     /// The generated document the scheme handler should serve on the next request. Only
     /// the markdown canvas stages one; the .html canvas reads its artifact from disk.
     var stagedDocument: Data?
@@ -266,6 +283,25 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
         self.host = host
         self.onAnnotation = onAnnotation
     }
+
+    /// Tell the page which tool is held. **Into `bridgeWorld`, never the page world.**
+    /// `evaluateJavaScript(_:)` without a world runs in `WKContentWorld.page`, and the
+    /// annotation script lives in a named world (#164) whose `window` is a different object
+    /// — so the plain overload sets the global somewhere the script cannot see it and the
+    /// tool stays `select` forever. The toolbar highlights, and nothing else happens.
+    func pushTool(_ tool: CanvasMarkTool, to webView: WKWebView) {
+        guard pushedTool != tool else { return }
+        pushedTool = tool
+        webView.evaluateJavaScript(
+            CanvasHTML.setMarkTool(tool), in: nil, in: Self.bridgeWorld,
+            completionHandler: { _ in })
+    }
+
+    /// A load destroys the JS context, so whatever the page was told is gone with it.
+    /// Without this the guard above sees "no change" and never re-pushes — the tool silently
+    /// reverts to `select` on the next agent write, which is the ordinary way a canvas
+    /// updates.
+    func forgetPushedTool() { pushedTool = nil }
 
     func installBridge(on controller: WKUserContentController) {
         controller.add(

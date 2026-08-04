@@ -163,6 +163,20 @@ enum CanvasHTML {
 
     // MARK: The annotation bridge
 
+    /// The name the page reads to know which tool the operator is holding. Set from Swift
+    /// with `evaluateJavaScript` rather than baked into the script, so switching tools does
+    /// not reload the document and lose the scroll position — a canvas is something you are
+    /// part-way down when you decide to mark it.
+    static let markToolGlobal = "__helmMarkTool"
+
+    /// One statement, so `CanvasFileViews` has no JS of its own to get wrong.
+    static func setMarkTool(_ tool: CanvasMarkTool) -> String {
+        """
+        window.\(markToolGlobal) = \(jsString(tool.token));
+        if (window.__helmWipeMark) { window.__helmWipeMark(); }
+        """
+    }
+
     /// Reports what the operator selected, so helm can anchor a comment to it.
     ///
     /// On `mouseup` it reads the selection, walks up from
@@ -191,11 +205,13 @@ enum CanvasHTML {
           if (!window.webkit || !window.webkit.messageHandlers
               || !window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName)) { return; }
           var bridge = window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName);
+          if (!window.\(markToolGlobal)) { window.\(markToolGlobal) = "select"; }
+          function tool() { return window.\(markToolGlobal) || "select"; }
 
           // The nearest ancestor carrying an id, and the text it covers. ONE resolver, used
-          // by every gesture — #112 asks for the draw-time hit test and any later
-          // re-resolution to share a code path, because inconsistent resolution between
-          // capture and action is its own bug class.
+          // by every tool — #112 asks for the draw-time hit test and any later re-resolution
+          // to share a code path, because inconsistent resolution between capture and action
+          // is its own bug class.
           function resolve(node) {
             if (!node) { return null; }
             if (node.nodeType === 3) { node = node.parentNode; }
@@ -210,20 +226,36 @@ enum CanvasHTML {
             return { id: id, text: text };
           }
 
-          function targetAt(x, y) { return resolve(document.elementFromPoint(x, y)); }
+          function targetAt(x, y) {
+            if (paper) { paper.style.display = "none"; }
+            var hit = document.elementFromPoint(x, y);
+            if (paper) { paper.style.display = ""; }
+            return resolve(hit);
+          }
 
-          // Everything an enclosure covers, deduplicated by the element it resolved to.
-          // Centre-in-rect rather than any-overlap: a lasso that grazes a neighbour did not
-          // mean the neighbour.
-          function targetsIn(box) {
-            var seen = {};
-            var found = [];
+          // Ray casting. A freehand loop is treated as closed, because a person circling
+          // something does not carefully meet the ends and helm should not make them.
+          function inside(poly, x, y) {
+            var yes = false;
+            for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+              var xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+              if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
+                yes = !yes;
+              }
+            }
+            return yes;
+          }
+
+          // Everything the loop encircles, by CENTRE rather than by any overlap: a stroke
+          // that grazes a neighbour did not mean the neighbour.
+          function targetsInside(poly) {
+            var seen = {}, found = [];
             var nodes = document.querySelectorAll("[id], p, li, td, th, h1, h2, h3");
             for (var i = 0; i < nodes.length; i++) {
+              if (nodes[i].closest("[data-helm-mark]")) { continue; }
               var r = nodes[i].getBoundingClientRect();
               if (!r.width && !r.height) { continue; }
-              var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-              if (cx < box.left || cx > box.right || cy < box.top || cy > box.bottom) { continue; }
+              if (!inside(poly, r.left + r.width / 2, r.top + r.height / 2)) { continue; }
               var t = resolve(nodes[i]);
               if (!t) { continue; }
               var key = (t.id || "") + "\\u0000" + t.text;
@@ -234,112 +266,173 @@ enum CanvasHTML {
             return found;
           }
 
-          // MARK MODE. Holding a modifier turns the page into a surface you draw on, so an
-          // ordinary drag still selects text and nothing about reading a canvas changes.
-          // The overlay sits ON a frozen frame in the sense that matters: the DOM is not
-          // re-rendered while a gesture is in flight, so what was under the pointer when the
-          // drag began is what the mark names.
-          var overlay = null, origin = null, from = null;
-          function marking(e) { return e.altKey; }
+          // The ink. helm's own chrome, marked as such so an agent reading the DOM can tell
+          // it from what it authored, and inert so the page can never come to need it.
+          var paper = null, ink = null, stroke = [], from = null;
 
-          function paint(box) {
-            if (!overlay) {
-              overlay = document.createElement("div");
-              overlay.setAttribute("data-helm-mark", "");
-              overlay.style.cssText =
-                "position:fixed;pointer-events:none;z-index:2147483647;" +
-                "border:2px solid currentColor;border-radius:6px;opacity:0.7";
-              document.body.appendChild(overlay);
+          function sheet() {
+            if (paper) { return paper; }
+            paper = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            paper.setAttribute("data-helm-mark", "");
+            paper.style.cssText =
+              "position:fixed;left:0;top:0;width:100vw;height:100vh;" +
+              "pointer-events:none;z-index:2147483647;overflow:visible";
+            // The arrowhead `marker-end` points at. An unresolvable url() is IGNORED rather
+            // than erroring, so without this the arrow tool silently drew a bare line — the
+            // one cue that tells it apart from freehand while you are drawing.
+            //
+            // Built with DOM calls rather than a markup string: this script reads and
+            // reports and never writes markup, which is an invariant with a test on it, and
+            // a markup string here is the shape that quietly becomes an injection vector.
+            var svgNS = "http://www.w3.org/2000/svg";
+            var defs = document.createElementNS(svgNS, "defs");
+            var marker = document.createElementNS(svgNS, "marker");
+            marker.setAttribute("id", "helm-mark-head");
+            marker.setAttribute("markerWidth", "8");
+            marker.setAttribute("markerHeight", "8");
+            marker.setAttribute("refX", "6");
+            marker.setAttribute("refY", "3");
+            marker.setAttribute("orient", "auto");
+            var barb = document.createElementNS(svgNS, "path");
+            barb.setAttribute("d", "M0,0 L6,3 L0,6 Z");
+            barb.setAttribute("fill", "currentColor");
+            marker.appendChild(barb);
+            defs.appendChild(marker);
+            paper.appendChild(defs);
+            document.body.appendChild(paper);
+            return paper;
+          }
+
+          function draw(d, head) {
+            var svg = sheet();
+            if (!ink) {
+              ink = document.createElementNS("http://www.w3.org/2000/svg", "path");
+              ink.setAttribute("fill", "none");
+              ink.setAttribute("stroke", "currentColor");
+              ink.setAttribute("stroke-width", "2.5");
+              ink.setAttribute("stroke-linecap", "round");
+              ink.setAttribute("stroke-linejoin", "round");
+              ink.setAttribute("opacity", "0.85");
+              if (head) { ink.setAttribute("marker-end", "url(#helm-mark-head)"); }
+              svg.appendChild(ink);
             }
-            overlay.style.left = box.left + "px";
-            overlay.style.top = box.top + "px";
-            overlay.style.width = (box.right - box.left) + "px";
-            overlay.style.height = (box.bottom - box.top) + "px";
+            ink.setAttribute("d", d);
           }
 
-          function clearOverlay() {
-            if (overlay && overlay.parentNode) { overlay.parentNode.removeChild(overlay); }
-            overlay = null;
+          function wipe() {
+            if (paper && paper.parentNode) { paper.parentNode.removeChild(paper); }
+            paper = null; ink = null; stroke = []; from = null;
           }
 
-          function boxOf(a, b) {
-            return {
-              left: Math.min(a.x, b.x), right: Math.max(a.x, b.x),
-              top: Math.min(a.y, b.y), bottom: Math.max(a.y, b.y)
-            };
+          // A drag released outside the document — over helm's own header, another pane —
+          // never fires mouseup here, and the ink would sit at max z-index until the next
+          // stroke. Both of these end it.
+          window.addEventListener("blur", wipe);
+          document.addEventListener("mouseleave", wipe);
+          // Called from Swift when the tool changes, so putting a tool down also drops
+          // whatever was half-drawn with it.
+          window.__helmWipeMark = wipe;
+
+          function pathFrom(points) {
+            var d = "M" + points[0].x + " " + points[0].y;
+            for (var i = 1; i < points.length; i++) {
+              d += " L" + points[i].x + " " + points[i].y;
+            }
+            return d;
+          }
+
+          function bounds(points) {
+            var l = Infinity, r = -Infinity, t = Infinity, b = -Infinity;
+            for (var i = 0; i < points.length; i++) {
+              l = Math.min(l, points[i].x); r = Math.max(r, points[i].x);
+              t = Math.min(t, points[i].y); b = Math.max(b, points[i].y);
+            }
+            return { x: l, y: t, width: r - l, height: b - t };
           }
 
           document.addEventListener("mousedown", function (e) {
-            if (!marking(e)) { return; }
+            var t = tool();
+            if (t === "select") { return; }
+            // Primary button only. A tool is a STICKY selection, unlike the modifier it
+            // replaced — so a right-click for the page's own context menu would otherwise
+            // start a stroke, and the menu's tracking loop eats the matching mouseup.
+            if (e.button !== 0) { return; }
             e.preventDefault();
-            origin = { x: e.clientX, y: e.clientY };
+            wipe();
+            stroke = [{ x: e.clientX, y: e.clientY }];
             from = targetAt(e.clientX, e.clientY);
           }, true);
 
           document.addEventListener("mousemove", function (e) {
-            if (!origin) { return; }
-            paint(boxOf(origin, { x: e.clientX, y: e.clientY }));
+            if (!stroke.length) { return; }
+            var t = tool();
+            if (t === "point") { return; }
+            stroke.push({ x: e.clientX, y: e.clientY });
+            if (t === "arrow") {
+              draw(pathFrom([stroke[0], stroke[stroke.length - 1]]), true);
+            } else {
+              draw(pathFrom(stroke), false);
+            }
           }, true);
 
           document.addEventListener("mouseup", function (e) {
-            if (origin) {
-              var start = origin, startTarget = from;
-              origin = null; from = null;
-              var box = boxOf(start, { x: e.clientX, y: e.clientY });
-              clearOverlay();
-              var span = Math.max(box.right - box.left, box.bottom - box.top);
-              var rect = { x: box.left, y: box.top,
-                           width: box.right - box.left, height: box.bottom - box.top };
+            var t = tool();
 
-              // A tap: no travel. The nearest thing under it.
-              if (span < 6) {
-                var at = targetAt(e.clientX, e.clientY);
-                if (!at) { bridge.postMessage({ cleared: true }); return; }
-                bridge.postMessage({ mark: "point", id: at.id, text: at.text, rect: rect });
-                return;
+            if (t === "select") {
+              // Unchanged: the text selection helm has always reported.
+              var selection = document.getSelection();
+              var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
+              var text = empty ? "" : String(selection).trim();
+              if (!text) { bridge.postMessage({ cleared: true }); return; }
+              var range = selection.getRangeAt(0);
+              var node = range.commonAncestorContainer;
+              if (node.nodeType === 3) { node = node.parentNode; }
+              var id = null;
+              while (node && node !== document.body) {
+                if (node.id) { id = node.id; break; }
+                node = node.parentNode;
               }
-
-              // Classify, do not digitise. A drag that STARTS on one thing and ENDS on a
-              // different one is an arrow; anything else is a circle round what it covers.
-              var end = targetAt(e.clientX, e.clientY);
-              var different = startTarget && end
-                && ((startTarget.id || startTarget.text) !== (end.id || end.text));
-              if (different) {
-                bridge.postMessage({
-                  mark: "relation", from: startTarget, to: end, rect: rect
-                });
-                return;
-              }
-              var covered = targetsIn(box);
-              if (!covered.length) {
-                // Refused visibly rather than shipped as a coordinate.
-                bridge.postMessage({ mark: "enclosure", targets: [], rect: rect });
-                return;
-              }
-              bridge.postMessage({ mark: "enclosure", targets: covered, rect: rect });
+              var r = range.getBoundingClientRect();
+              bridge.postMessage({
+                id: id, text: text,
+                rect: { x: r.left, y: r.top, width: r.width, height: r.height }
+              });
               return;
             }
 
-            // No gesture: the text selection helm has always reported.
-            var selection = document.getSelection();
-            var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
-            var text = empty ? "" : String(selection).trim();
-            if (!text) { bridge.postMessage({ cleared: true }); return; }
-            var range = selection.getRangeAt(0);
-            var node = range.commonAncestorContainer;
-            if (node.nodeType === 3) { node = node.parentNode; }
-            var id = null;
-            while (node && node !== document.body) {
-              if (node.id) { id = node.id; break; }
-              node = node.parentNode;
+            if (!stroke.length) { return; }
+            var start = stroke[0], startTarget = from;
+            var box = bounds(stroke.concat([{ x: e.clientX, y: e.clientY }]));
+            var drawn = stroke.slice();
+            wipe();
+            stroke = []; from = null;
+
+            if (t === "point") {
+              var at = targetAt(e.clientX, e.clientY);
+              if (!at) { bridge.postMessage({ cleared: true }); return; }
+              bridge.postMessage({ mark: "point", id: at.id, text: at.text, rect: box });
+              return;
             }
-            var r = range.getBoundingClientRect();
-            bridge.postMessage({
-              id: id,
-              text: text,
-              rect: { x: r.left, y: r.top, width: r.width, height: r.height }
-            });
-          });
+
+            if (t === "arrow") {
+              var end = targetAt(e.clientX, e.clientY);
+              // Either end may be empty — an arrow into blank space is "add a node here".
+              bridge.postMessage({ mark: "relation", from: startTarget, to: end, rect: box });
+              return;
+            }
+
+            if (t === "freehand") {
+              // What the loop encircles. Posted even when empty, so decode refuses it
+              // visibly — silence is indistinguishable from the stroke never registering.
+              bridge.postMessage({
+                mark: "enclosure", targets: targetsInside(drawn), rect: box
+              });
+              return;
+            }
+
+            // A tool helm does not know. Do nothing rather than guess — freehand used to be
+            // the fall-through here, so a garbage token silently drew a circle.
+          }, true);
         })();
         """
     }

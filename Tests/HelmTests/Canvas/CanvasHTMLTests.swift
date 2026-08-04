@@ -102,52 +102,88 @@ final class CanvasHTMLTests: XCTestCase {
         XCTAssertTrue(script.contains("mermaid.run()"))
     }
 
-    // MARK: The gesture layer (#112)
+    // MARK: The mark tools (#112)
 
-    func testTheScriptClassifiesTheThreeGesturesAndKeepsSelection() {
+    func testTheToolDrivesTheMarkSoNothingIsInferred() {
         let script = CanvasHTML.annotationScript()
 
-        // Classify the gesture, do not digitise it: what travels is type + target.
+        // The first cut guessed the mark from the gesture's shape. The tool says what it is.
         XCTAssertTrue(script.contains("mark: \"point\""))
         XCTAssertTrue(script.contains("mark: \"relation\""))
         XCTAssertTrue(script.contains("mark: \"enclosure\""))
+        XCTAssertFalse(
+            script.contains("altKey"),
+            "marking is a tool you pick up, not a modifier you have to know about")
+    }
+
+    func testSelectIsUntouchedByTheDrawingLayer() {
         XCTAssertTrue(
-            script.contains("var selection = document.getSelection()"),
-            "a plain drag must still select text — marking is the modified gesture, so "
-                + "reading a canvas is unchanged")
+            CanvasHTML.annotationScript().contains("var selection = document.getSelection()"),
+            "with no tool held, a canvas reports text selection exactly as before")
     }
 
-    func testMarkingIsBehindAModifierSoOrdinaryDraggingStillSelects() {
-        XCTAssertTrue(CanvasHTML.annotationScript().contains("e.altKey"))
-    }
-
-    func testOneResolverServesEveryGesture() {
+    func testOneResolverServesEveryTool() {
         // #112's own acceptance: the draw-time hit test and any later re-resolution share a
         // code path, because inconsistent resolution between capture and action is its own
         // bug class.
         let script = CanvasHTML.annotationScript()
-        let definitions = script.components(separatedBy: "function resolve(").count - 1
 
-        XCTAssertEqual(definitions, 1, "exactly one resolver, used by all of them")
+        XCTAssertEqual(script.components(separatedBy: "function resolve(").count - 1, 1)
         XCTAssertTrue(
-            script.contains("function targetAt(") && script.contains("function targetsIn("))
+            script.contains("function targetAt(") && script.contains("function targetsInside("))
     }
 
-    func testAnEnclosureCoveringNothingIsStillReportedSoItCanBeRefusedVisibly() {
+    func testAFreehandLoopIsTreatedAsClosedAndMeasuredByCentres() {
+        let script = CanvasHTML.annotationScript()
+
         XCTAssertTrue(
-            CanvasHTML.annotationScript().contains("mark: \"enclosure\", targets: []"),
-            "a circle round empty space posts an empty enclosure, which decode refuses — "
-                + "silence would be indistinguishable from the gesture not registering")
+            script.contains("function inside("),
+            "a loop encircles things; a bounding box would over-select what it grazed")
+        XCTAssertTrue(script.contains("r.left + r.width / 2"))
     }
 
-    func testTheOverlayIsInertAndDoesNotBecomeSomethingThePageNeeds() {
+    func testTheInkIsInertAndCannotBeHitTestedAgainstItself() {
         let script = CanvasHTML.annotationScript()
 
         XCTAssertTrue(script.contains("pointer-events:none"))
+        XCTAssertTrue(script.contains("data-helm-mark"))
         XCTAssertTrue(
-            script.contains("data-helm-mark"),
-            "helm's own chrome is identifiable, so an agent reading the DOM can tell it apart "
-                + "from what it authored")
+            script.contains("paper.style.display = \"none\""),
+            "the paper is hidden for the hit test, or a mark would resolve to helm's own ink")
+        XCTAssertTrue(
+            script.contains("closest(\"[data-helm-mark]\")"),
+            "and excluded when collecting what a loop covers")
+    }
+
+    func testTheArrowheadItReferencesActuallyExists() {
+        // An unresolvable marker url() is ignored rather than erroring, so a missing <marker>
+        // is a silently bare line — the one cue that tells arrow from freehand mid-draw.
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(script.contains("url(#helm-mark-head)"))
+        XCTAssertTrue(
+            script.contains("marker.setAttribute(\"id\", \"helm-mark-head\")"),
+            "referenced but never defined")
+    }
+
+    func testOnlyThePrimaryButtonStartsAStroke() {
+        // A tool is a sticky selection, unlike the modifier it replaced: a right-click for
+        // the page's context menu would otherwise start a stroke the menu then swallows.
+        XCTAssertTrue(CanvasHTML.annotationScript().contains("e.button !== 0"))
+    }
+
+    func testAnAbandonedStrokeCanBeCleanedUpFromOutsideTheDocument() {
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(script.contains("addEventListener(\"blur\", wipe)"))
+        XCTAssertTrue(script.contains("mouseleave"))
+        XCTAssertTrue(
+            script.contains("window.__helmWipeMark = wipe"),
+            "putting a tool down must also drop what was half-drawn with it")
+    }
+
+    func testSettingTheToolAlsoWipes() {
+        XCTAssertTrue(CanvasHTML.setMarkTool(.select).contains("__helmWipeMark"))
     }
 
     // MARK: Vendored scripts

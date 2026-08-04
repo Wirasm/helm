@@ -119,6 +119,11 @@ final class CanvasModel: ObservableObject {
 
     /// What the operator has selected on the page and not yet commented on. The bridge
     /// sets it; submitting or dismissing clears it.
+    /// Which tool the operator is holding (#112). Lives on the model rather than the view
+    /// because it has to survive the pane being rebuilt — a tool that silently reset to
+    /// `.select` on a SwiftUI churn would look like the canvas ignoring the picker.
+    @Published private(set) var markTool: CanvasMarkTool = .select
+
     @Published private(set) var selection: CanvasSelection?
 
     /// Every note in this canvas's sidecar, by heading. Re-read from the file rather than
@@ -247,6 +252,13 @@ final class CanvasModel: ObservableObject {
     /// what makes that safe is that **every dismissal above is reachable with a mouse**.
     /// #165 was the other arrangement: one exit, on the responder chain, gone the instant
     /// focus moved, leaving a box that could not be closed at all.
+    /// Pick a tool up, or put it down by picking it again. The toggle is a rule rather than
+    /// a button's closure, so it is reachable from `swift test` — and so getting back to
+    /// reading the page does not require remembering which icon `.select` is.
+    func pick(_ tool: CanvasMarkTool) {
+        markTool = markTool == tool ? .select : tool
+    }
+
     func dismissSelection() {
         selection = nil
         // The strip explains why the field is still up. Once it is gone the message points
@@ -522,6 +534,31 @@ struct CanvasView: View {
         }
     }
 
+    /// The tools, as chrome on the canvas rather than a mode you have to know about.
+    ///
+    /// Four small buttons instead of a `Picker`: a segmented control would grow the header
+    /// by its own chrome, and this sits beside three existing icon buttons that already
+    /// establish the shape.
+    private var markPicker: some View {
+        HStack(spacing: 2) {
+            ForEach(CanvasMarkTool.allCases, id: \.self) { tool in
+                Button {
+                    model.pick(tool)
+                } label: {
+                    Image(systemName: tool.symbol)
+                        .font(.system(size: 11))
+                        .frame(width: 20, height: 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(model.markTool == tool ? Color.selection : .clear))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(model.markTool == tool ? Color.accent : Color.textMuted)
+                .help(tool.help)
+            }
+        }
+    }
+
     @ViewBuilder
     private func content(for showing: CanvasModel.Showing) -> some View {
         switch showing {
@@ -567,11 +604,11 @@ struct CanvasView: View {
         case let .markdown(markdown):
             MarkdownCanvasView(
                 url: document.url, markdown: markdown, generation: document.generation,
-                onSelection: model.pageDidReport)
+                markTool: model.markTool, onSelection: model.pageDidReport)
         case .web:
             HTMLCanvasView(
                 url: document.url, generation: document.generation,
-                onSelection: model.pageDidReport)
+                markTool: model.markTool, onSelection: model.pageDidReport)
         case let .plainText(text):
             ScrollView {
                 Text(text)
@@ -606,6 +643,7 @@ struct CanvasView: View {
                     .truncationMode(.middle)
             }
             Spacer()
+            markPicker
             // Attention as state on an existing element, never a popup: a count on the
             // header, not a badge that pops.
             if !model.notes.isEmpty {
