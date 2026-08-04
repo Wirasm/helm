@@ -187,6 +187,42 @@ final class ArchonRunTests: XCTestCase {
         XCTAssertEqual(response.total, 12)
     }
 
+    // MARK: - The id the rail shows is not the id the rail copies
+
+    /// **What is drawn is a truncation of what is copied, and this measures the gap.**
+    ///
+    /// The rail's rows put `shortID` on screen and `CopyableLabel(value: run.id)` on the
+    /// clipboard (#169). The reason that asymmetry is worth a type and a test is entirely
+    /// visible here: against what Archon actually printed, every id is four times the length
+    /// of the label standing in for it, so "copy the label" — the obvious implementation — is
+    /// a string that looks right, pastes cleanly, and is three quarters missing.
+    func testWhatARowDrawsIsAStrictPrefixOfWhatItCopies() throws {
+        let response = try decoder().decode(
+            ArchonRunsResponse.self, from: try fixture("workflow-runs"))
+
+        XCTAssertFalse(response.runs.isEmpty)
+        for run in response.runs {
+            XCTAssertTrue(
+                run.id.hasPrefix(run.shortID),
+                "the label must be the head of the id, or the two name different runs")
+            XCTAssertGreaterThan(
+                run.id.count, run.shortID.count,
+                "\(run.id) is not longer than the \(run.shortID) drawn for it — if Archon has "
+                    + "started printing eight-character ids, #169's whole argument is moot")
+            XCTAssertEqual(run.shortID.count, 8)
+        }
+    }
+
+    /// One definition of the shortening, so the armed-reply line — which holds a run id
+    /// without the run — cannot draw a different label from the rows above it.
+    func testTheReplyLineShortensARawIdTheSameWayARunDoes() throws {
+        let response = try decoder().decode(
+            ArchonRunsResponse.self, from: try fixture("workflow-runs"))
+        let run = try XCTUnwrap(response.runs.first)
+
+        XCTAssertEqual(ArchonRun.shortID(of: run.id), run.shortID)
+    }
+
     // MARK: - What Enter launches
 
     /// The pair this replaced could describe states that do not exist —
