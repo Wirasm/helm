@@ -97,7 +97,19 @@ struct ArchonRun: Codable, Equatable, Sendable {
     /// The eight characters `workflow runs` prints and every Archon surface identifies a run
     /// by — including `archon workflow get <short-id>`, which resolves a prefix. What the rail
     /// shows, so what is on screen is what you would type.
-    var shortID: String { String(id.prefix(8)) }
+    ///
+    /// **It is a label, never a value.** The rail's rows now copy on click (#169) and what
+    /// they copy is the full `id`: a prefix is a convenience Archon's own CLI offers and
+    /// nothing else does — not a log grep, not a message to another agent, not a second run
+    /// whose id happens to start the same way. Truncating on the way to the clipboard would
+    /// produce a string that looks right, pastes cleanly and then resolves the wrong run or
+    /// none at all.
+    var shortID: String { Self.shortID(of: id) }
+
+    /// The same rule, for a surface holding a run id without the run — the armed-reply line
+    /// in the rail carries only `ArchonGateReply.runID`. One definition, so the label the two
+    /// draw cannot drift.
+    static func shortID(of id: String) -> String { String(id.prefix(8)) }
 
     /// The one status that gets a live line of its own.
     var isRunning: Bool { status == ArchonRunStatus.running }
