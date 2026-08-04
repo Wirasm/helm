@@ -116,8 +116,10 @@ final class CanvasAnnotationTests: XCTestCase {
 
     // MARK: - What is deliberately absent
 
-    /// #39 forbids screenshots in the payload, and the guarantee is structural: there is no
-    /// field here that could carry one, so a page sending image data has nowhere to put it.
+    /// #39 asks for no screenshots in the *payload*, and the guarantee is structural: there
+    /// is no field here that could carry one, so a page sending image data has nowhere to
+    /// put it. Nothing wider is meant by that — the rendered canvas is screenshotted
+    /// elsewhere, and that is how an agent validates what it wrote.
     func testNothingFromTheBodyIsCarriedBeyondTheAnchorAndComment() {
         let annotation = decode([
             "id": "phase-2", "text": "Phase 2", "screenshot": "data:image/png;base64,AAAA",

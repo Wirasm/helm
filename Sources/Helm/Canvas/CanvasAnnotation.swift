@@ -7,8 +7,15 @@ import Foundation
 /// `#phase-2` is directly editable rather than merely descriptive. It degrades to quoted
 /// text for a `.md` canvas or any section without an authored id.
 ///
-/// **No screenshot, ever** — #39 forbids it, and there is deliberately no field here that
-/// could carry one.
+/// **The anchor carries no image**, and there is deliberately no field here that could
+/// carry one: an anchor made of pixels is not something the agent can edit, which is the
+/// same reason the anchor is an id rather than a rect.
+///
+/// That is a fact about this payload and nothing wider. #39 asks only for "no screenshots
+/// in the payload", as one acceptance checkbox — helm has no rule against screenshots as
+/// such, and could not: a canvas is *validated* by screenshotting the rendered page, which
+/// is exactly why #39's own load-bearing constraint is that canvases stay self-contained
+/// rather than render as "a blank page in playwright".
 struct CanvasAnnotation: Equatable {
     enum Anchor: Equatable {
         case element(id: String, text: String)
