@@ -39,6 +39,14 @@ make the repo go green.
 
 Nothing in it calls a model, so it is free to run.
 
+**It is hermetic, and it now proves that rather than claiming it.** Two harnesses start a real pi,
+which loads a real extension, which writes real files — helm-mail claims a mailbox, and the gate
+used to claim it in the operator's own `~/.helm/mail`, where live agents address each other
+(#133). Every root helm's conventions honour is redirected to a per-run temp directory once,
+before any harness runs, and the run then fails loudly if the real root gained anything. **Adding
+a harness needs no thought about this; adding a root override does** — see the sandbox block in
+`scripts/test.sh` and `references/testing.md`.
+
 ## Provenance
 
 Everything the skill states about pi was measured against **pi 0.83.0 on 2026-08-02**, except one

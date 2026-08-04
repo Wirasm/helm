@@ -12,6 +12,41 @@ Each harness **skips** rather than fails when its toolchain is absent, printing 
 absent toolchain is a skip; a shipped extension with no unit harness is a **failure** — skipping
 there leaves the one property that matters unverified while the suite reports green.
 
+## Hermetic — the roots are sandboxed once, before any harness runs
+
+`rpc` and `pty` start a **real** pi, which loads a **real** extension, which writes **real**
+files. helm-mail claims a mailbox under `~/.helm/mail` at `session_start`, so the gate used to put
+a live, addressable mailbox in the operator's own mail root, beside the agents they actually talk
+to (#133). Measured on 0.83.0: *both* real-pi harnesses claim one — rpc's is removed by the
+extension's own `session_shutdown`, pty's pi is killed and its mailbox is the one that survives.
+Self-healing is not the same as hermetic; a throwaway mailbox is addressable for as long as it
+exists.
+
+So `scripts/test.sh` points every root helm's conventions honour (`HELM_MAIL_DIR`,
+`HELM_SPOOL_DIR`) at a per-run temp directory **once, before the dispatch** — not per harness. A
+harness added later then inherits the sandbox instead of having to remember it, which is exactly
+how `pty` came to be the odd one out. **A new root override goes in that block, never in a
+harness.**
+
+Not by sandboxing `HOME`, which is the general form and was tried first: pi keeps its own tooling
+under `~/.pi/agent/bin`, so a fake `HOME` makes the first TUI run **download `fd`** before it
+renders. That trades a leaked mailbox for a network dependency in a gate whose whole point is
+being free and offline.
+
+Two guards, because a sandbox nobody checks is a claim rather than a property:
+
+- **rpc asserts that no frame names the real root.** This is the only *deterministic* proof
+  available: an extension that claims a mailbox and then tidies up leaves nothing to find
+  afterwards, which is what made #133 hard to see in the first place.
+- **A post-run sweep of the real root for the gate's temp-dir prefix.** Every mailbox the gate can
+  create is named for the temp directory its harness ran in, so the prefix names ours exactly. A
+  before/after diff would have been the wrong shape — the operator's other agents claim and
+  release mailboxes in that directory *while the gate runs*, and a guard that flags their work is
+  a guard that gets switched off.
+
+If the sandbox cannot be created, the gate **refuses and runs nothing**. Falling back to the real
+`~/.helm/mail` is the defect; it is not an acceptable fallback.
+
 ## Why none of them needs a model
 
 - `session_start` fires at startup, with no prompt. An extension that reports there is observable
