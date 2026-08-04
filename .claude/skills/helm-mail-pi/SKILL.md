@@ -34,6 +34,12 @@ machine keeps its corpses.
 kill -0 <pid> 2>/dev/null && echo live || echo DEAD
 ```
 
+**A live pid is not proof of a live agent, on the Claude side.** If two `claude` rows share one pid,
+the one whose `sessionId` matches `~/.claude/sessions/<pid>.json` is the real agent and the other is
+a `/clear` ghost — that session ended, but the process it ran in did not. The next Claude session
+start reaps it; sending into it before that is silent. pi has no equivalent, so a pi row with a live
+pid is a live agent.
+
 Mail to a dead handle goes nowhere and says nothing. If the one you want is dead, tell the operator
 rather than sending into it.
 
