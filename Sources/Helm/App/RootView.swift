@@ -18,6 +18,11 @@ struct RootView: View {
     /// outside the workbench reaches this one.
     @StateObject private var workbench = WorkbenchModel(terminals: .shared)
     @StateObject private var archonRail = ArchonRailModel()
+    /// #54's watcher. A `@StateObject` here rather than a `.shared` for the same reason the
+    /// bench is: a second window gets its own, and the claim-by-rename in `SpoolDirectory` is
+    /// what stops two of them acting on one request — the same mechanism that already has to
+    /// hold between two helm *processes*.
+    @StateObject private var spool = SpoolModel()
     @ObservedObject private var terminalManager = TerminalManager.shared
 
     var body: some View {
@@ -55,6 +60,13 @@ struct RootView: View {
                 workbench.open(
                     .file(URL(fileURLWithPath: (path as NSString).expandingTildeInPath)))
             }
+            // The spool (#54) — the one seam an agent with no display can drive. It is wired
+            // here for the same reason `observe` is: opening a workspace spans the workspace
+            // list and the bench together, and `openWorkspace` is where that already lives.
+            spool.attach(
+                spawner: WorkbenchSpoolSpawner(
+                    workbench: workbench, terminals: terminalManager, activate: openWorkspace))
+            spool.start()
         }
         // The context is written by `WorkspaceModel.observe`, which sinks BOTH the
         // manager's and the bench's `objectWillChange`. It lives on the model rather than
