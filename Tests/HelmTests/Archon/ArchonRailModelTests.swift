@@ -596,6 +596,28 @@ final class ArchonRailModelTests: XCTestCase {
 
         XCTAssertNil(model.reply)
         XCTAssertEqual(model.gated, [])
+        XCTAssertEqual(
+            model.actionFailure, "That gate was answered elsewhere. Nothing was sent.",
+            "the silent version reverts the field mid-sentence and turns the next Enter into a launch"
+        )
+    }
+
+    /// helm answering the gate itself is the one case the composer is *expected* to lose, so it
+    /// gets no sentence — the approve that just succeeded is not news of a lost draft.
+    ///
+    /// The guard that makes this true is the `busyRuns` check in `apply`, and this is the half
+    /// of it a test can pin deterministically: drop the `disarm()` from `decide` and a
+    /// successful send starts telling the operator their answer went somewhere else.
+    @MainActor
+    func testHelmsOwnDecisionDisarmsWithoutComplaining() async throws {
+        let (model, _) = try await gatedModel("archon-gate-own-decision")
+
+        await model.choose(.reject, on: model.gated[0], in: workspace)
+        model.replyText = "no good"
+        await model.sendReply(in: workspace)
+
+        XCTAssertNil(model.reply)
+        XCTAssertNil(model.actionFailure)
     }
 
     /// A gate that is not the operator's has no verbs, and asking for one anyway is a call

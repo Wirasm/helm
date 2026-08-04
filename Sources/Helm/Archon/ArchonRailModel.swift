@@ -206,11 +206,21 @@ final class ArchonRailModel: ObservableObject {
                 // run missing it sorts last rather than crashing the comparison.
                 (left.completedAt ?? .distantPast) > (right.completedAt ?? .distantPast)
             }
-        // A gate answered from anywhere — Archon's own UI, a terminal, or the approve that
-        // already landed here — takes the composer back with it. Leaving it armed would offer
-        // Send against a decision that has already been made.
+        // A gate answered from anywhere — Archon's own UI, a terminal, another helm — takes the
+        // composer back with it. Leaving it armed would offer Send against a decision already
+        // made.
+        //
+        // **And it says so, because the silent version of this is worse than it looks.** The
+        // field would revert to the launch draft under the operator's hands mid-sentence, and
+        // the Enter they were about to press would launch a workflow instead of answering a
+        // gate. `busyRuns` marks the decision helm is itself making, which is the one case the
+        // composer is *expected* to lose and needs no sentence.
         if let reply, !gated.contains(where: { $0.id == reply.runID && $0.isAwaitingDecision }) {
+            let ours = busyRuns.contains(reply.runID)
             disarm()
+            if !ours {
+                actionFailure = "That gate was answered elsewhere. Nothing was sent."
+            }
         }
     }
 
@@ -274,7 +284,15 @@ final class ArchonRailModel: ObservableObject {
     /// rather than running another iteration. Refusing to send it would make the one gate that
     /// distinguishes them unanswerable in the finalize direction.
     func sendReply(in workspacePath: String?) async {
-        guard let reply, let run = gated.first(where: { $0.id == reply.runID }) else { return }
+        guard let reply else { return }
+        // The run going missing between arming and sending is the same race `apply` handles,
+        // caught here for the frame in which the press wins. Reported rather than dropped: a
+        // Send that does nothing at all is the failure this whole rail keeps arguing against.
+        guard let run = gated.first(where: { $0.id == reply.runID }) else {
+            disarm()
+            actionFailure = "That gate is gone. Nothing was sent."
+            return
+        }
         await decide(reply.decision, text: replyText, on: run, in: workspacePath)
     }
 
