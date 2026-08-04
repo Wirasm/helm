@@ -95,7 +95,27 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   told apart, because blaming a grant the operator does have is its own wasted hour).
   `helm-spawn` checks before ⌘N, so it refuses for free instead of after a 90s timeout with a
   stray terminal left open. Verified 2026-08-02 against windowless Terminal and Safari.
-- **To start another agent in helm, use `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`**
+- **To start another agent in helm, prefer the spool: `swift tools/helm-spool.swift <cwd> --prompt-file <p>`.**
+  It writes `{id, cwd, command, args, prompt}` into `~/.helm/spool` and waits on
+  `results/<id>.json`. **No display, no focused window, no Accessibility grant, no keystrokes**
+  — so it works with the screen locked, headless and over ssh, which is the ceiling
+  `helm-spawn` cannot get past. The result carries the new agent's `terminalId`, `pid`,
+  `sessionId` and **`handle`**, so the next move — sending it mail — needs no lookup: helm
+  created the terminal, so it knows the pid, and it *reads* the handle out of
+  `~/.helm/mail/*/owner.json` rather than deriving it (a derivation is silently wrong whenever
+  `deriveHandle` widened or `HELM_MAIL_HANDLE` was pinned). Exit codes say what happened —
+  3 refused, 4 failed, 5 started-but-unaddressable, 6 abandoned by a restart. Only the agents
+  in `SpoolPolicy.allowedCommands` may be named: a request is a file, so `sh` in a login shell
+  is what an ungated spool would actually be. `HELM_SPOOL_OFF=1` turns the watcher off, which
+  is the negative control for any claim about it. A second instance gets its own spool
+  automatically under `HELM_DEFAULTS_SUITE`.
+  - **The launch line is pasted and then submitted separately, and it has to be.** libghostty
+    wraps *every* `sendText` in bracketed-paste markers when the shell has enabled mode 2004 —
+    fish, zsh and bash all do — so a line ending in `\r` lands on the command line and simply
+    sits there. Measured, and it cost the first live run: a terminal opened, a shell ran, and
+    no agent ever started. `WorkbenchSpoolSpawner.send` pastes, then sends Return as a
+    `text:` binding action.
+- **`helm-spawn` is the GUI path, and still there** — `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`
   (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
   type `cls`, wait, type the prompt, submit — with every step waiting on something observable
   instead of on a `sleep`: focus polled until helm really is frontmost, the new terminal

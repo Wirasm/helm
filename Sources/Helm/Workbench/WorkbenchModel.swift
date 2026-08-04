@@ -187,13 +187,18 @@ final class WorkbenchModel: ObservableObject {
 
     // MARK: - Commands
 
-    func newTerminal() {
-        guard let path = workspacePath, var bench else { return }
+    /// Returns the session it made, because a caller that did not press ⌘N needs the id: the
+    /// spool has to write it into `results/<id>.json` and then send a launch line to that
+    /// exact pane. nil is the honest answer when there is no workspace to open one in.
+    @discardableResult
+    func newTerminal() -> TerminalSession? {
+        guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
         bench.insert(
             Pane(id: session.id, content: .terminal(face: .terminal)),
             at: bench.placementForNewTerminal())
         commit(bench)
+        return session
     }
 
     /// Where an offered canvas lands is `Workbench.placement(forOpening:)`'s decision, not

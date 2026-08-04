@@ -157,6 +157,30 @@ about `prp-orchestrate`. The sild glossary's retirement of this word was kild-sc
 does not bind helm.
 _Avoid_: room, fleet
 
+### How an agent reaches helm
+
+**spool**:
+A directory helm watches — `~/.helm/spool` — where a **request** to start an agent appears as
+a file. helm's one push channel, and the only one that works with the screen locked, headless
+or over ssh: everything else needs a display, a focused window and an Accessibility grant.
+Under `HELM_DEFAULTS_SUITE=<name>` it moves to `~/.helm/spool-<name>` with the rest of that
+instance's state.
+_Avoid_: queue, inbox (the mailbox is the inbox), API, control channel
+
+**request**:
+One file in the spool: `{id, cwd, command, args, prompt}`. Acted on **at most once** — claimed
+by rename into `claimed/`, which is a graveyard and never re-read, so a restart mid-spawn
+cannot double-open. Only the agents in `SpoolPolicy.allowedCommands` may be named.
+_Avoid_: job, task, command (the `command` is a field of it)
+
+**result**:
+What helm writes back at `spool/results/<id>.json`, and the half that makes the spool a
+protocol rather than a shout. Carries the terminal id, the pid, the session id and the
+**handle** — so the caller's next move, addressing the agent it just started, needs no lookup
+of its own. Written twice on success: `started` at once, `ready` when the agent claims a
+mailbox. Every request gets one, refusals included.
+_Avoid_: response, ack, receipt
+
 ### Not levels in helm
 
 **worktree**:
