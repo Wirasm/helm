@@ -20,9 +20,11 @@
 // (see MailboxDirectory for why a derivation is silently wrong).
 //
 // helm adds the agent's unattended posture to `--arg` for you — `--dangerously-skip-permissions`
-// for claude, `--ask-for-approval never` for codex, `--no-approve` for pi — because a prompt in a
-// pane nobody is watching is a spawn that silently did nothing (#179). Naming a flag from the same
-// family yourself turns that off for the run; the reasoning is in `SpoolUnattendedPolicy`.
+// for claude, `-p yolo` for codex, `--approve` for pi — because a prompt in a pane nobody is
+// watching is a spawn that silently did nothing (#179). Each is the operator's own standing
+// choice (`cls`, `cdxy`), and a posture removes a prompt rather than withholding capability.
+// Naming a flag from the same family yourself turns that off for the run; the reasoning, and the
+// costs weighed against it, are in `SpoolUnattendedPolicy`.
 //
 // A nonzero exit is the point: each refusal has its own code, and stderr says what happened.
 

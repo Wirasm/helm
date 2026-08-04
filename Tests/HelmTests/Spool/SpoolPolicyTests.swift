@@ -110,27 +110,52 @@ final class SpoolPolicyTests: XCTestCase {
         }
     }
 
-    func testCodexIsUnblockedWithoutHelmRemovingItsSandbox() throws {
-        // codex escalates to a human mid-run, so it hangs the same way — but unlike Claude Code
-        // it has a sandbox, and its default `workspace-write` is the cwd the agent was spawned
-        // for. Removing the prompt is the fix; removing the sandbox is a grant helm is not
-        // making on behalf of a directory named in an untrusted file.
-        XCTAssertEqual(
-            try accept(request(command: "codex")).get().args, ["--ask-for-approval", "never"])
-        // The operator's own `cdxy` is `codex -p yolo` — a request may still ask for it.
-        XCTAssertEqual(
-            try accept(request(command: "codex", args: ["-p", "yolo"])).get().args,
-            ["-p", "yolo"])
+    func testCodexGetsTheProfileThatCdxyGets() throws {
+        // `cdxy` is `codex -p yolo`, and `~/.codex/yolo.config.toml` is approval_policy=never
+        // with sandbox_mode=danger-full-access. The operator's standing choice for codex, the
+        // same way `--dangerously-skip-permissions` is his for claude.
+        XCTAssertEqual(try accept(request(command: "codex")).get().args, ["-p", "yolo"])
     }
 
-    func testPiDeclinesProjectTrustRatherThanGrantingIt() throws {
-        // pi never asks "may I act?" — it has no sandbox and no per-tool prompt. It asks
-        // whether to load settings, extensions and skills out of the directory, and hangs
-        // identically when nobody answers. Declining is the half that grants nothing.
-        XCTAssertEqual(try accept(request(command: "pi")).get().args, ["--no-approve"])
+    func testARequestThatChoseItsOwnCodexProfileKeepsIt() throws {
+        // `-p` is in codex's `settled` set *and* in its posture, so the two must never be the
+        // same `-p`: `settled` is matched against what the request asked for, never against
+        // the composed line. If that order ever inverted, helm's own `-p` would answer its own
+        // question and every codex posture would silently cancel itself.
         XCTAssertEqual(
-            try accept(request(command: "pi", args: ["-a"])).get().args, ["-a"],
-            "a caller that does want project trust says so, where it is auditable")
+            try accept(request(command: "codex", args: ["-p", "something-else"])).get().args,
+            ["-p", "something-else"])
+        XCTAssertEqual(
+            try accept(request(command: "codex", args: ["--profile=read-only"])).get().args,
+            ["--profile=read-only"])
+        XCTAssertEqual(
+            try accept(request(command: "codex", args: ["--ask-for-approval", "untrusted"]))
+                .get().args,
+            ["--ask-for-approval", "untrusted"])
+    }
+
+    func testPiIsGivenTheProjectItWasPointedAt() throws {
+        // pi never asks "may I act?" — no sandbox, no per-tool prompt. It asks whether to load
+        // the project's settings, extensions and skills, and hangs when nobody answers.
+        // Declining would not block anything; it would start an agent silently missing the
+        // project it was spawned for, which is a quieter version of the bug being fixed.
+        XCTAssertEqual(try accept(request(command: "pi")).get().args, ["--approve"])
+        XCTAssertEqual(
+            try accept(request(command: "pi", args: ["-na"])).get().args, ["-na"],
+            "a caller that wants the other answer says so, where it is auditable")
+    }
+
+    func testNoPostureWithholdsCapabilityToFeelSafe() {
+        // The operator's principle, pinned: an approval prompt is theatre, and blocking belongs
+        // in hooks and sandboxes rather than in a spawn posture. A posture that hobbles an
+        // agent produces failures nobody watches, which is the whole of #179 — so no posture
+        // here may be a flag whose effect is "do less".
+        let withholding: Set<String> = ["--no-approve", "-na", "--sandbox", "read-only"]
+        for (command, posture) in SpoolUnattendedPolicy.postures {
+            XCTAssertTrue(
+                Set(posture.arguments).isDisjoint(with: withholding),
+                "\(command)'s posture takes capability away rather than removing a prompt")
+        }
     }
 
     func testEveryAgentHelmWillStartHasAnAnswerForAnEmptyPane() {

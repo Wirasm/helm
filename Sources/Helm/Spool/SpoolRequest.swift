@@ -194,11 +194,18 @@ enum SpoolPolicy {
 /// is the silent-failure shape this whole ladder exists to remove, and a default that produces
 /// it is the wrong default.
 ///
-/// **The rule.** *A question nobody will be there to answer must be answered in advance, with
-/// the narrowest answer that lets the agent work.* Narrowest matters: the point is an agent
-/// that runs, not an agent with every restraint removed, and the `cwd` in a request comes from
-/// an untrusted file. Where an agent's answer differs below, the rule is the same and the
-/// question is not.
+/// **The rule.** *A question nobody will be there to answer must be answered in advance, and
+/// answered so the agent can work.* Where an agent's answer differs below, the rule is the same
+/// and the question is not.
+///
+/// **The corollary, and the durable part: blocking belongs in hooks and sandboxes, not in a
+/// spawn posture.** An approval prompt is theatre — it stops nothing that a determined agent
+/// cannot do a moment later, and with no one at the pane it stops *everything* instead. Real
+/// enforcement is a thing that refuses without asking: a `PreToolUse` hook, a sandbox, a
+/// review gate at the PR. So a posture removes prompts and never withholds capability to feel
+/// safe. Withholding is the worse bug wearing the safer face: the agent starts, looks healthy,
+/// and is quietly missing what it was pointed at — a failure of exactly the shape #179 exists
+/// to remove, only harder to see, because there is no stalled pane to find.
 ///
 /// - **`claude` → `--dangerously-skip-permissions`.** This is the operator's standing choice
 ///   on this machine, not helm's invention: `/Users/rasmus/.local/bin/cls` is exactly
@@ -207,26 +214,43 @@ enum SpoolPolicy {
 ///   Claude agent" means, which they did not. Claude Code has no sandbox, so there is nothing
 ///   narrower to preserve: the flag removes prompts, and prompts are the whole failure.
 ///
-/// - **`codex` → `--ask-for-approval never`, and the sandbox is left alone.** codex asks too
-///   (its default policy escalates to a human mid-run), so it has the same problem — but
-///   unlike Claude Code it *has* a sandbox, and its default `workspace-write` is a real
-///   boundary that costs the agent nothing here, since the workspace is the `cwd` it was
-///   spawned for. `never` removes the prompt; failures outside the sandbox come back to the
-///   model as errors instead of to a human as a dialog. The operator's own codex convention
-///   (`cdxy` → `codex -p yolo`) goes further to `danger-full-access`, and that profile's own
-///   comment says *"only run in a trusted directory"* — which is precisely what helm cannot
-///   check about a directory named in a file it did not write. A request that wants it says so.
+/// - **`codex` → `-p yolo`, which is what `cdxy` is.** `/Users/rasmus/.local/bin/cdxy` is
+///   `exec codex -p yolo "$@"`, and `~/.codex/yolo.config.toml` is `approval_policy = "never"`
+///   with `sandbox_mode = "danger-full-access"`. So this is the operator's standing choice for
+///   codex, exactly as `--dangerously-skip-permissions` is his for claude, and the two lines
+///   are one decision rather than two.
 ///
-/// - **`pi` → `--no-approve`, which is the narrow answer in the other direction.** pi has no
-///   sandbox and no per-tool prompt, so it never asks "may I act?". It asks one thing, at
-///   startup and interactively only: *may I load project-local settings, extensions and skills
-///   out of this directory?* (`defaultProjectTrust` is `ask`.) It hangs identically when
-///   nobody answers. But nothing about "start an agent here" implies "and execute whatever
-///   code this directory carries" — and the directory came from an untrusted request — so
-///   `--approve` would be helm granting on the caller's behalf the one thing pi's prompt
-///   exists to withhold. Declining is the half of a trust question that grants nothing, and it
-///   still leaves the agent running. A caller that does want project trust writes `--arg -a`,
-///   where it is explicit and auditable in the request file.
+///   **The known cost, recorded rather than lost:** an earlier draft kept codex's
+///   `workspace-write` sandbox and removed only the prompt, on the argument that a sandbox
+///   blocks without asking and is therefore enforcement rather than theatre. The operator
+///   overruled it: a posture that leaves a restraint on is still a posture that withholds
+///   capability, and his gate is the pull request. Two further notes for whoever revisits
+///   this. First, the profile's own comment says *"only run in a trusted directory"*, and the
+///   `cwd` here comes from a request file — bounded by `SpoolPolicy`, not chosen by helm.
+///   Second, this makes helm's posture depend on a file outside the repo, which is the same
+///   objection that kept `cls` out of `allowedCommands`; the difference the operator accepted
+///   is that this is an argument to a pinned program rather than the program itself, so a
+///   missing profile is a bad codex run and not a different binary. The self-contained
+///   spelling, if that ever matters, is `--dangerously-bypass-approvals-and-sandbox`, which
+///   the profile's own comment calls equivalent.
+///
+/// - **`pi` → `--approve`.** pi has no sandbox and no per-tool prompt, so it never asks "may I
+///   act?". It asks one thing, at startup and interactively only: *may I load project-local
+///   settings, extensions and skills out of this directory?* (`defaultProjectTrust` is `ask`.)
+///   It hangs identically when nobody answers, and the only two answers are grant or decline.
+///
+///   `--no-approve` was the first choice here and was wrong, on the operator's own principle.
+///   It is neither theatre-removal nor enforcement: it withholds a capability, so a
+///   spool-spawned pi would run without the settings, extensions and skills of the very
+///   project it was pointed at — starting healthy and silently lacking its context. That is
+///   the quieter failure, and this posture exists to remove failures nobody watches.
+///
+///   **The known cost, recorded rather than lost:** the directory comes from a request file,
+///   so this does mean helm loads code from a `cwd` it did not choose. It is bounded rather
+///   than open — `SpoolPolicy` already decides which directories may be named at all, and the
+///   whole ladder assumes a caller that can write into the spool is already inside the trust
+///   boundary — and where a real block is wanted it belongs in a hook, not in a flag helm
+///   passes. A request that wants the other answer writes `--arg -na`.
 ///
 /// **The allowlist is untouched.** No `cls` here, and that was the option to reject rather than
 /// skip past: `cls` is a shell script on `PATH` that this repo does not define, cannot test and
@@ -248,13 +272,13 @@ enum SpoolUnattendedPolicy {
             arguments: ["--dangerously-skip-permissions"],
             settled: ["--dangerously-skip-permissions", "--permission-mode"]),
         "codex": Posture(
-            arguments: ["--ask-for-approval", "never"],
+            arguments: ["-p", "yolo"],
             settled: [
                 "-a", "--ask-for-approval", "--dangerously-bypass-approvals-and-sandbox",
                 "-p", "--profile",
             ]),
         "pi": Posture(
-            arguments: ["--no-approve"],
+            arguments: ["--approve"],
             settled: ["-a", "--approve", "-na", "--no-approve"]),
     ]
 
@@ -265,6 +289,13 @@ enum SpoolUnattendedPolicy {
     /// `claude --model opus` is one that never mentioned permissions, and dropping the posture
     /// for it would reinstate the exact silent hang being fixed, in the case hardest to notice.
     /// So the posture goes on unless a flag from the same family is already there.
+    ///
+    /// **`settled` is matched against `requested` alone, never against the composed line, and
+    /// that is load-bearing now that codex's posture is itself `-p yolo`.** `-p` is in codex's
+    /// `settled` set meaning *the request already chose a profile*; if the check ever ran over
+    /// the result instead, helm's own `-p` would answer its own question and every codex
+    /// posture would cancel itself. The order below — decide from `requested`, then prepend —
+    /// is what keeps those two `-p`s from being the same `-p`.
     static func arguments(for command: String, requested: [String]) -> [String] {
         guard let posture = postures[command] else { return requested }
         let named = Set(requested.map { String($0.prefix { $0 != "=" }) })
