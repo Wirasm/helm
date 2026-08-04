@@ -215,10 +215,15 @@ struct ChatOverlay: View {
 
     /// The composer's one effect. `performBindingAction` is public on
     /// `AppTerminalView`, so this costs no vendor patch — see `PtyText` for the
-    /// route and the escaping.
+    /// route, the escaping, and why the Return is a second write a beat later.
+    ///
+    /// The `Task` is not decoration: the two writes must not land in one `read()` on
+    /// the agent's side, so `PtyText.submit` sleeps between them. It hops the main
+    /// actor rather than blocking it, which is the same thing the composer's own
+    /// `submit` already assumes — the draft is cleared the moment `send` returns.
     private func send(_ message: String) {
-        guard let action = PtyText.submitAction(for: message) else { return }
-        session.hostView.performBindingAction(action)
+        let pty = session.hostView
+        Task { @MainActor in await PtyText.submit(message, to: pty) }
     }
 
     /// Paper fading to nothing; `solid` is the edge the paper is opaque at. The
