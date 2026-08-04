@@ -18,6 +18,7 @@ final class SpoolModelTests: XCTestCase {
     private var directory: SpoolDirectory!
     private var mailRoot: URL!
     private var spawner: FakeSpawner!
+    private var capturer: FakeCapturer!
 
     override func setUp() async throws {
         let base = FileManager.default.temporaryDirectory
@@ -27,6 +28,7 @@ final class SpoolModelTests: XCTestCase {
         try directory.prepare()
         try FileManager.default.createDirectory(at: mailRoot, withIntermediateDirectories: true)
         spawner = FakeSpawner()
+        capturer = FakeCapturer()
     }
 
     override func tearDown() async throws {
@@ -34,6 +36,7 @@ final class SpoolModelTests: XCTestCase {
         directory = nil
         mailRoot = nil
         spawner = nil
+        capturer = nil
     }
 
     // MARK: - Fixtures
@@ -45,6 +48,7 @@ final class SpoolModelTests: XCTestCase {
             directory: directory, mailRoot: mailRoot, isOff: isOff,
             shellDeadline: .seconds(5), claimDeadline: claimDeadline)
         model.attach(spawner: spawner)
+        model.attach(capturer: capturer)
         return model
     }
 
@@ -104,6 +108,19 @@ final class SpoolModelTests: XCTestCase {
         XCTAssertNil(directory.result(id: "r"), "no result may be written")
         XCTAssertEqual(
             directory.pending().count, 1, "and the request is still sitting there, unclaimed")
+    }
+
+    func testWithTheWatcherOffACaptureProducesNoPngAndNoResult() async throws {
+        // The same negative control, for #174's half of the channel. A capture that "worked"
+        // against a helm with the watcher switched off would mean the PNG came from somewhere
+        // else — which is exactly the confusion a probe is supposed to rule out.
+        let model = self.model(isOff: true)
+        try submit(#"{"id":"shot","kind":"capture"}"#, named: "shot.json")
+        model.start()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(capturer.captured, [], "nothing may be drawn")
+        XCTAssertNil(directory.result(id: "shot"), "no result may be written")
+        XCTAssertEqual(directory.pending().count, 1, "and the request is still sitting there")
     }
 
     func testTheModelKeepsTheBenchAdapterAlive() async throws {
@@ -252,6 +269,87 @@ final class SpoolModelTests: XCTestCase {
             "two windows must not both open a terminal for one request")
     }
 
+    // MARK: - Capture (#174)
+
+    func testACaptureAnswersWithThePngAndWhatIsInIt() async throws {
+        let model = self.model()
+        try submit(#"{"id":"shot","kind":"capture"}"#, named: "shot.json")
+        model.start()
+
+        let result = await awaitResult(id: "shot", is: .captured)
+        // The default destination is the spool's own `captures/`, resolved by the policy so
+        // nothing downstream re-derives it.
+        XCTAssertEqual(
+            capturer.captured, [directory.captures.appendingPathComponent("shot.png").path])
+        XCTAssertEqual(result?.capture?.path, capturer.captured.first)
+        XCTAssertEqual(spawner.opened, [], "a capture starts no agent")
+    }
+
+    func testTheResultSaysTerminalContentIsExcludedRatherThanLeavingItToBeAssumed() async throws {
+        // The acceptance criterion #174 spends most of its words on: *"a PNG with a blank
+        // terminal that does not announce itself is worse than no PNG"*. A caller must be able
+        // to read the answer rather than infer it from a picture.
+        capturer.terminalSurfaces = 3
+        let model = self.model()
+        try submit(#"{"id":"shot","kind":"capture"}"#, named: "shot.json")
+        model.start()
+
+        let result = await awaitResult(id: "shot", is: .captured)
+        XCTAssertEqual(result?.capture?.terminalContent, .excluded)
+        XCTAssertEqual(result?.capture?.terminalSurfaces, 3)
+
+        // And a window with no terminal in it says so differently: nothing is missing there.
+        capturer.terminalSurfaces = 0
+        try submit(#"{"id":"empty","kind":"capture"}"#, named: "empty.json")
+        model.drain()
+        let bench = await awaitResult(id: "empty", is: .captured)
+        XCTAssertEqual(bench?.capture?.terminalContent, .absent)
+    }
+
+    func testACaptureThatCannotBeDrawnFailsWithItsReasonRatherThanSilently() async throws {
+        // The negative case #174 asks for by name: a window that is not there is refused
+        // visibly. Every other spool request has this rule and a capture is not an exception.
+        capturer.refusal = "helm has no visible window to draw (0 window(s) exist)"
+        let model = self.model()
+        try submit(#"{"id":"shot","kind":"capture"}"#, named: "shot.json")
+        model.start()
+
+        let result = await awaitResult(id: "shot", is: .failed)
+        XCTAssertEqual(result?.reason?.contains("no visible window") == true, true)
+        XCTAssertNil(result?.capture, "a failure names no PNG, because there is none")
+    }
+
+    func testACaptureIsActedOnAtMostOnce() async throws {
+        // Exactly-once is a property of the channel, not of the spawn: two windows draining one
+        // spool must not write the same PNG twice, and a backstop rescan must not either.
+        let second = FakeCapturer()
+        let other = SpoolModel(
+            directory: directory, mailRoot: mailRoot, isOff: false,
+            shellDeadline: .seconds(5), claimDeadline: .seconds(3))
+        other.attach(spawner: FakeSpawner())
+        other.attach(capturer: second)
+
+        let model = self.model()
+        try submit(#"{"id":"shot","kind":"capture"}"#, named: "shot.json")
+        model.start()
+        other.start()
+        model.drain()
+        other.drain()
+
+        _ = await awaitResult(id: "shot", is: .captured)
+        XCTAssertEqual(capturer.captured.count + second.captured.count, 1)
+    }
+
+    func testAnUnknownKindIsRefusedByNameRatherThanTreatedAsASpawn() async throws {
+        let model = self.model()
+        try submit(#"{"id":"odd","kind":"teleport"}"#, named: "odd.json")
+        model.start()
+
+        let result = await awaitResult(id: "odd", is: .refused)
+        XCTAssertEqual(result?.reason?.contains("teleport") == true, true)
+        XCTAssertEqual(spawner.opened, [], "and nothing is started on the strength of a guess")
+    }
+
     func testARequestClaimedByAPreviousRunIsAnsweredRatherThanReRun() async throws {
         // The restart case. A claimed file is indistinguishable from one being worked on, so
         // re-running it is the double-open #54 forbids — it is answered instead.
@@ -298,5 +396,29 @@ private final class FakeSpawner: SpoolSpawning {
     func send(_ line: String, to terminal: UUID) {
         sent.append((line, terminal))
         if claimsOnSend { pids[terminal] = Self.agentPid }
+    }
+}
+
+/// A window that is not there. It records where it was asked to draw and reports whatever the
+/// test wants the view tree to have contained — which is how the `absent` / `excluded` answer
+/// is exercised without a display, a window server or a Metal device.
+@MainActor
+private final class FakeCapturer: SpoolCapturing {
+    var captured: [String] = []
+    var windows: [String?] = []
+    var terminalSurfaces = 0
+    var refusal: String?
+
+    func capture(to path: String, window: String?) -> Result<CaptureReport, SpoolRefusal> {
+        if let refusal { return .failure(SpoolRefusal(refusal)) }
+        captured.append(path)
+        windows.append(window)
+        return .success(
+            CaptureReport(
+                path: path, pixelWidth: 2560, pixelHeight: 1600, scale: 2, window: "helm",
+                terminalContent: WindowCapture.content(
+                    of: terminalSurfaces, missing: terminalSurfaces),
+                terminalSurfaces: terminalSurfaces,
+                terminalSurfacesExcluded: terminalSurfaces))
     }
 }

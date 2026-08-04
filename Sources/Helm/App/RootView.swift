@@ -66,6 +66,10 @@ struct RootView: View {
             spool.attach(
                 spawner: WorkbenchSpoolSpawner(
                     workbench: workbench, terminals: terminalManager, activate: openWorkspace))
+            // #174's capturer. It needs nothing from this view — it resolves helm's window from
+            // `NSApp` at capture time — so it is attached here only because this is where the
+            // spool is wired, and a second seam for one line would be worse.
+            spool.attach(capturer: AppWindowCapturer())
             spool.start()
         }
         // The context is written by `WorkspaceModel.observe`, which sinks BOTH the

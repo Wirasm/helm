@@ -1,6 +1,6 @@
 import Foundation
 
-/// What a caller asks helm to start: a directory, an agent, and the first thing to say to it.
+/// What a caller asks helm to do, as one of the kinds helm knows.
 ///
 /// **This is the request side of the only capability on the ladder that a headless agent can
 /// use.** Every other way of driving helm is GUI puppetry — `tools/helm-spawn.swift` needs an
@@ -13,12 +13,57 @@ import Foundation
 /// separate times. A file is also the seam every other integration here already uses: the
 /// session registry, the transcripts, the artifacts, the mailbox.
 ///
+/// **A kind rather than a second directory (#174).** Self-capture arrived asking for a request
+/// channel with exactly-once consumption and a result for every outcome, which is this one to
+/// the letter. #33's ruling — *"there is no control channel, and building one would be the
+/// mistake"* — is why a second one would have to be argued for rather than added; a second kind
+/// on the channel #54 already justified needs no new argument.
+///
 /// Decoded permissively in shape and judged strictly afterwards — see `SpoolPolicy`. Splitting
 /// those apart is what lets a malformed request be *refused with a reason* rather than dropped
 /// by a decoder, which is the silence this whole ladder exists to remove.
-struct SpoolRequest: Codable, Equatable {
-    /// The caller's own name for this request. It is what the result file is named after, so
-    /// the caller can wait on `results/<id>.json` without having to discover anything.
+enum SpoolRequest: Equatable {
+    case spawn(SpawnRequest)
+    case capture(CaptureRequest)
+    /// A `kind` helm does not know. **Kept rather than thrown away**: a decoder that threw here
+    /// would make "helm is older than this request" indistinguishable from "this file is not
+    /// JSON", and the caller would be told the wrong thing about what to fix.
+    case unrecognised(id: String, kind: String)
+
+    /// The caller's own name for this request, whatever kind it is. It is what the result file
+    /// is named after, so the caller can wait on `results/<id>.json` without discovering
+    /// anything.
+    var id: String {
+        switch self {
+        case .spawn(let request): request.id
+        case .capture(let request): request.id
+        case .unrecognised(let id, _): id
+        }
+    }
+}
+
+extension SpoolRequest: Decodable {
+    private enum Envelope: String, CodingKey { case id, kind }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: Envelope.self)
+        // Absent means `spawn`, because every request written before #174 omits it and those
+        // requests still mean what they meant.
+        let kind =
+            try container.decodeIfPresent(String.self, forKey: .kind) ?? SpawnRequest.kind
+        switch kind {
+        case SpawnRequest.kind: self = .spawn(try SpawnRequest(from: decoder))
+        case CaptureRequest.kind: self = .capture(try CaptureRequest(from: decoder))
+        default:
+            self = .unrecognised(id: try container.decode(String.self, forKey: .id), kind: kind)
+        }
+    }
+}
+
+/// Start an agent: a directory, an agent, and the first thing to say to it.
+struct SpawnRequest: Codable, Equatable {
+    static let kind = "spawn"
+
     let id: String
     /// Where the agent runs. Becomes the terminal's working directory, and the workspace helm
     /// opens for it.
@@ -53,6 +98,41 @@ struct SpoolRequest: Codable, Equatable {
     }
 }
 
+/// Ask helm to draw its own window (#174).
+///
+/// **Nothing about a machine's permissions appears here, and that is the feature.** There is no
+/// grant to name, no context to be the right one, and no rebuild that invalidates anything —
+/// helm drawing itself is not screen capture. See `WindowCapture`.
+struct CaptureRequest: Codable, Equatable {
+    static let kind = "capture"
+
+    let id: String
+    /// Where to put the PNG. Absolute, ending in `.png`, in a directory that already exists.
+    /// Omitted means the spool's own `captures/<id>.png`, which is always writable and always
+    /// findable from the result.
+    var path: String?
+    /// Which window, matched case-insensitively against its title. Needed only when helm has
+    /// more than one and none of them is key — otherwise the choice is unambiguous and helm
+    /// makes it. An ambiguous capture is **refused**, never guessed: the window titles are the
+    /// only thing telling an isolated instance from the operator's.
+    var window: String?
+
+    private enum CodingKeys: String, CodingKey { case id, path, window }
+
+    init(id: String, path: String? = nil, window: String? = nil) {
+        self.id = id
+        self.path = path
+        self.window = window
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        path = try container.decodeIfPresent(String.self, forKey: .path)
+        window = try container.decodeIfPresent(String.self, forKey: .window)
+    }
+}
+
 /// Why helm will not do what a request asked.
 ///
 /// A named type rather than a bare `String` because `Result`'s failure has to be an `Error` —
@@ -65,9 +145,14 @@ struct SpoolRefusal: Error, Equatable {
 
 /// A request that has passed every gate, and therefore the only thing helm will act on.
 ///
-/// A separate type rather than a validated flag, so that "has this been checked?" is answered
-/// by the compiler at every call site instead of by reading upwards.
-struct AcceptedSpoolRequest: Equatable {
+/// A separate type per kind rather than a validated flag, so that "has this been checked?" is
+/// answered by the compiler at every call site instead of by reading upwards.
+enum SpoolWork: Equatable {
+    case spawn(AcceptedSpawnRequest)
+    case capture(AcceptedCaptureRequest)
+}
+
+struct AcceptedSpawnRequest: Equatable {
     let id: String
     let cwd: String
     let command: String
@@ -78,6 +163,15 @@ struct AcceptedSpoolRequest: Equatable {
     /// about its name.
     let args: [String]
     let prompt: String?
+}
+
+struct AcceptedCaptureRequest: Equatable {
+    let id: String
+    /// **Resolved, never optional.** The default is applied here rather than at the edge, so
+    /// no call site downstream can re-derive it differently — and so the one place that decides
+    /// where a PNG lands is the one place that checked whether it may.
+    let path: String
+    let window: String?
 }
 
 /// Which requests helm will act on.
@@ -92,9 +186,19 @@ struct AcceptedSpoolRequest: Equatable {
 /// into a single argv element. `AGENTS.md` already names that set — *"Agent means a CLI agent
 /// already in use — Claude Code, pi, codex"* — and #54 exists to start agents, so a spool that
 /// can start `sh` is a spool that has stopped being about agents.
+///
+/// A capture starts nothing, so its gate is a different one: the only thing a caller controls
+/// is where a PNG lands, and the rules below are what stop that being anywhere at all.
 enum SpoolPolicy {
     /// The agents helm will start. Matched exactly: no paths, no arguments smuggled in, no
     /// case folding (these are real program names on a case-preserving filesystem).
+    ///
+    /// **This is the `spawn` kind's allowlist, and saying so is not pedantry now that there is
+    /// more than one kind (#174).** A capture has no command at all, so "every command the
+    /// spool accepts" and "every agent helm will start" stopped being the same sentence — and
+    /// `SpoolUnattendedPolicy.postures` is keyed on *this* set, not on that one. A future kind
+    /// that carries a command of its own would have to say whether it belongs here, rather than
+    /// inheriting an answer nobody meant to give it.
     static let allowedCommands: Set<String> = ["claude", "pi", "codex"]
 
     /// An id is a filename component — `results/<id>.json` — so it is gated as one. `..` and
@@ -109,17 +213,36 @@ enum SpoolPolicy {
     /// The verdict on one decoded request.
     ///
     /// `isDirectory` is injected rather than reached for, so every rule below is a test that
-    /// needs no filesystem. The one rule that genuinely needs disk — does `cwd` exist — is the
-    /// one thing that comes in through the closure.
+    /// needs no filesystem. The two rules that genuinely need disk — does `cwd` exist, does a
+    /// capture's destination directory exist — are the only things that come in through the
+    /// closure.
     static func accept(
         _ request: SpoolRequest,
+        captures: URL,
         isDirectory: (String) -> Bool
-    ) -> Result<AcceptedSpoolRequest, SpoolRefusal> {
+    ) -> Result<SpoolWork, SpoolRefusal> {
         guard request.id.range(of: idPattern, options: .regularExpression) != nil else {
             return .failure(
                 SpoolRefusal(
                     "id must match \(idPattern) — it names the result file, so it is a filename"))
         }
+        switch request {
+        case .spawn(let spawn):
+            return accept(spawn, isDirectory: isDirectory).map(SpoolWork.spawn)
+        case .capture(let capture):
+            return accept(capture, captures: captures, isDirectory: isDirectory)
+                .map(SpoolWork.capture)
+        case .unrecognised(_, let kind):
+            return .failure(
+                SpoolRefusal(
+                    "kind \"\(kind)\" is not one helm knows. Allowed: "
+                        + [SpawnRequest.kind, CaptureRequest.kind].joined(separator: ", ")))
+        }
+    }
+
+    private static func accept(
+        _ request: SpawnRequest, isDirectory: (String) -> Bool
+    ) -> Result<AcceptedSpawnRequest, SpoolRefusal> {
         guard allowedCommands.contains(request.command) else {
             return .failure(
                 SpoolRefusal(
@@ -164,7 +287,7 @@ enum SpoolPolicy {
             }
         }
         return .success(
-            AcceptedSpoolRequest(
+            AcceptedSpawnRequest(
                 id: request.id, cwd: cwd, command: request.command,
                 // Bounds above are judged on what the caller sent; the posture is helm's own
                 // and is added after, so a request cannot spend its argument budget on flags
@@ -174,6 +297,42 @@ enum SpoolPolicy {
                 // An empty prompt is no prompt: it would otherwise compose a line ending in
                 // `""`, which some agents read as an empty first turn.
                 prompt: request.prompt.flatMap { $0.isEmpty ? nil : $0 }))
+    }
+
+    /// **Where the PNG lands is the only thing a caller controls, so it is the only thing to
+    /// gate.** The default is inside the spool the caller already writes to, so the common case
+    /// asks for no permission at all; a named path has to be somewhere that already exists,
+    /// because helm creating directories on a caller's word is a different capability than the
+    /// one #174 asks for.
+    private static func accept(
+        _ request: CaptureRequest, captures: URL, isDirectory: (String) -> Bool
+    ) -> Result<AcceptedCaptureRequest, SpoolRefusal> {
+        var destination = captures.appendingPathComponent("\(request.id).png").path
+        if let raw = request.path?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            let path = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath).standardized
+            guard path.path.hasPrefix("/") else {
+                return .failure(
+                    SpoolRefusal("path must be an absolute path, got \"\(raw)\""))
+            }
+            // A `.png` name rather than any name, because the result promises a PNG and a
+            // caller that reads `capture.path` should not have to check what it got.
+            guard path.pathExtension.lowercased() == "png" else {
+                return .failure(SpoolRefusal("path must end in .png, got \"\(path.path)\""))
+            }
+            let parent = path.deletingLastPathComponent().path
+            guard isDirectory(parent) else {
+                return .failure(
+                    SpoolRefusal(
+                        "\"\(parent)\" is not a directory that exists — helm will not "
+                            + "create one to put a capture in"))
+            }
+            destination = path.path
+        }
+        let window = request.window?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .success(
+            AcceptedCaptureRequest(
+                id: request.id, path: destination,
+                window: window.flatMap { $0.isEmpty ? nil : $0 }))
     }
 }
 
@@ -318,7 +477,7 @@ enum SpoolUnattendedPolicy {
 /// There is no `cd`: the pane's working directory is already the request's `cwd`, because the
 /// workspace helm opened for it *is* that directory.
 enum SpoolLaunchLine {
-    static func compose(_ request: AcceptedSpoolRequest, promptPath: String?) -> String {
+    static func compose(_ request: AcceptedSpawnRequest, promptPath: String?) -> String {
         var parts = [quoted(request.command)]
         parts.append(contentsOf: request.args.map(quoted))
         if let promptPath {
