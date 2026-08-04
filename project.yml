@@ -56,6 +56,13 @@ targets:
       - path: Sources/Helm/Resources/ghostty
         type: folder
         buildPhase: resources
+      # The app icon. Lives outside Sources/ because it is a bundle concern only — the SPM
+      # path (`swift run helm`) has no bundle to put it in, so Package.swift does not know
+      # about it and does not need to. Committed rather than built: regenerating it needs
+      # rsvg-convert and iconutil, and the gate takes only the Swift toolchain and xcodegen.
+      # Edit Assets/icon/helm.svg and run Assets/icon/build-icon.sh to change it.
+      - path: Assets/helm.icns
+        buildPhase: resources
     dependencies:
       - package: libghostty-spm
         product: GhosttyTerminal
@@ -70,6 +77,9 @@ targets:
         NSPrincipalClass: NSApplication
         LSApplicationCategoryType: public.app-category.developer-tools
         CFBundleDisplayName: helm
+        # Names Assets/helm.icns, which the resources phase above copies into the bundle.
+        # No extension by convention; macOS appends .icns.
+        CFBundleIconFile: helm
         NSHumanReadableCopyright: ""
     settings:
       base:

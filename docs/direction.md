@@ -26,10 +26,20 @@ arrives last, with Archon.
 
 - **Workbench** — the middle. Where panes are organised. **Panes live here, full stop** — the
   bar is not a second place one can dock.
-- **Right bar** — a **rail of quick actions on things that are not your current work**
-  (#142), and its one tenant is Archon. Toggleable, remembered, **default hidden**. Nothing
-  else earned a slot, and Archon is ranked last, so helm has nothing either side of the bench
-  for the whole early route.
+- **Right bar** — a rail of **quick actions on things that are not your current work**.
+  Operating Archon, operating on worktrees, and whatever earns a line later. Toggleable,
+  remembered, **default hidden**; Archon is ranked last, so helm has nothing either side of
+  the bench for the whole early route.
+
+  This first said *not actions — ambient things you monitor*, with Archon's run list as its
+  one tenant. Dogfooding said otherwise: what you actually want from the run list is to
+  **start, approve and cancel** runs, and the second tenant to arrive is worktree cleanup,
+  which is nothing but a verb. Monitoring is what the rail shows you *so that* you can act.
+
+  **A tenant is one collapsed line that expands** — `Worktrees`, `Archon` — not a panel. That
+  shape is what makes a tenant nearly free when it is not in use, and it is why the rail can
+  hold things consulted rarely without earning its keep every minute. Build the rail that way
+  first; a run list that merely sits on the right is not one.
 
 The **artifact browser is a ⌘O popover**, not a bar tenant — a picker you summon, not
 something you watch. Copying an artifact's path is a context menu on its row, and the path is
@@ -41,8 +51,9 @@ should. It stays a deferral, not a rejection: dogfooding decides.
 
 There is **no left bar**. Every job proposed for one is taken — workspaces by the workspace
 bar, terminals by the tab strip, the file tree by the right bar — so it leaves the early
-route rather than being designed. Ideas exist for later (a list of open worktrees to open a
-terminal in, running Archon workflows), but they wait on dogfooding to prove a need.
+route rather than being designed. The two ideas parked here for later — *a list of open
+worktrees, running Archon workflows* — waited on dogfooding to prove a need, and it did:
+both are now tenants of the **right** rail, which is the shape that fits them.
 
 ## Primitives
 
@@ -112,6 +123,9 @@ The rail renders five things, and nothing else:
   Archon's electric blue, a failure its red, a completed run the brand teal. All of it is
   governed tokens held at helm's contrast floors, never hex in a view, and never Archon's
   charcoal chrome wholesale: *distinctly Archon's*, not *foreign*.
+- **Worktrees.** Archon runs in a linked worktree of your own checkout, so `git worktree list`
+  already shows its trees beside helm's own. helm lists them and offers cleanup; the verbs
+  route through `archon` for its trees and `git` for the rest, never around either.
 
 ## Sizing
 
