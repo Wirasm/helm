@@ -210,11 +210,33 @@ struct Workbench: Codable, Equatable {
         case let .row(columnID):
             guard let index = columns.firstIndex(where: { $0.id == columnID }) else { return }
             // A brand-new slot shows its only pane, which displaces nothing.
-            columns[index].slots.append(Slot(panes: [pane]))
+            columns[index].slots.append(
+                Slot(panes: [pane], height: Self.equalShare(joining: columns[index].slots.count)))
         case .column:
-            columns.append(Column(slots: [Slot(panes: [pane])]))
+            columns.append(
+                Column(
+                    slots: [Slot(panes: [pane])],
+                    width: Self.equalShare(joining: columns.count)))
         }
         normalize()
+    }
+
+    /// The fraction a newcomer arrives with so that `normalize()` lands an `n`-member stack
+    /// on `1/(n+1)` each — every existing member keeping its proportion to the others, and
+    /// none of them halved to make room.
+    ///
+    /// The `1` a `Slot` or `Column` is built with by default means *the whole stack*, which
+    /// after rebalancing is **half** of whatever was there. That is right for the first
+    /// canvas arriving beside a lone terminal — the dock, at 50/50 — and progressively wrong
+    /// after it: the third pane offered into a column takes half of the column and squeezes
+    /// the operator's two into a quarter each, the fourth leaves the oldest at an eighth.
+    /// A spool spawn is a row (#177), so that is now something that happens repeatedly and
+    /// unbidden, and shrinking the pane somebody is working in is its own kind of seizing.
+    ///
+    /// `insert` keeps the old sizing deliberately: it is the operator's own gesture, and a
+    /// canvas they ⌘-clicked open landing at half the bench is what #125 measured and shipped.
+    private static func equalShare(joining members: Int) -> Double {
+        members > 0 ? 1 / Double(members) : 1
     }
 
     /// Closes a pane, and reports whether it did. Generalises `TerminalManager.close`

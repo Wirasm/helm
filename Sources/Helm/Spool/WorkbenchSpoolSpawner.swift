@@ -31,11 +31,17 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
     /// **The request's `cwd` becomes a workspace.** That is what makes the rest fall out for
     /// free: the pane's working directory is the workspace path, so the launch line needs no
     /// `cd`; the session is grouped under that path, so `BoardModel.hostedPids` marks it with
-    /// nothing extra written for it (#36); and the operator gets a tab where the new agent is,
-    /// which is what they would have made by hand.
+    /// nothing extra written for it (#36); and the operator gets a pane where the new agent
+    /// is, which is what they would have made by hand.
     ///
     /// Switching the operator's view is the honest cost of a push channel, and #54 accepts it
     /// explicitly.
+    ///
+    /// **`spawnTerminal`, not `newTerminal`** — the two differ in exactly the two ways a
+    /// request from outside must (#177). ⌘N's rule is "a tab where you are looking", and
+    /// applied to a spool request that means a hidden tab on whatever had focus, canvas
+    /// included. A spawn gets a pane of its own, and takes neither the selection nor the
+    /// keyboard.
     func openTerminal(cwd: String) -> Result<UUID, SpoolRefusal> {
         let workspace = Workspace(path: cwd)
         if workbench.workspacePath != workspace.path {
@@ -45,7 +51,7 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
             return .failure(
                 SpoolRefusal("helm could not make \(workspace.path) the active workspace"))
         }
-        guard let session = workbench.newTerminal() else {
+        guard let session = workbench.spawnTerminal() else {
             return .failure(SpoolRefusal("helm could not open a terminal in \(workspace.path)"))
         }
         return .success(session.id)

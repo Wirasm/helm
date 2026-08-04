@@ -13,6 +13,19 @@ final class WorkbenchOfferTests: XCTestCase {
     private let tasks = CanvasSource.file("/tmp/tasks.md")
     private let report = CanvasSource.file("/tmp/report.md")
 
+    /// Element-wise, because `XCTAssertEqual`'s `accuracy:` overload is scalars only and
+    /// a fraction that is 1/3 never compares equal to 0.3333… exactly.
+    private func assertFractions(
+        _ actual: [Double], _ expected: [Double], _ message: String = "",
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertEqual(actual.count, expected.count, message, file: file, line: line)
+        for (index, pair) in zip(actual, expected).enumerated() {
+            XCTAssertEqual(
+                pair.0, pair.1, accuracy: 1e-9, "\(message) [\(index)]", file: file, line: line)
+        }
+    }
+
     // MARK: - What a push must not disturb
 
     func testAPushDoesNotChangeWhatTheSlotIsShowing() {
@@ -92,6 +105,54 @@ final class WorkbenchOfferTests: XCTestCase {
         XCTAssertEqual(bench.focusedSlot, before.focusedSlot)
         XCTAssertEqual(bench.focusedPane?.id, before.focusedPane?.id)
         XCTAssertEqual(bench.panes.count, before.panes.count, "and no second copy")
+    }
+
+    // MARK: - What it costs the panes already there (#177)
+
+    func testAnOfferedRowTakesAnEqualShareRatherThanHalfTheColumn() {
+        var bench = Workbench(terminal: UUID())
+        let column = bench.columns[0].id
+        bench.offer(Pane(content: .terminal(face: .terminal)), at: .row(in: column))
+
+        assertFractions(
+            bench.columns[0].slots.map(\.height), [0.5, 0.5],
+            "the first spawn splits the column in two")
+
+        bench.offer(Pane(content: .terminal(face: .terminal)), at: .row(in: column))
+
+        assertFractions(
+            bench.columns[0].slots.map(\.height), [1 / 3.0, 1 / 3.0, 1 / 3.0],
+            "and the second takes a third, not half — squeezing the pane the operator is "
+                + "working in is its own kind of seizing")
+    }
+
+    func testAnOfferedColumnTakesAnEqualShareToo() {
+        var bench = Workbench(terminal: UUID())
+        bench.offer(Pane(content: .canvas(plan)), at: .column)
+
+        assertFractions(
+            bench.columns.map(\.width), [0.5, 0.5],
+            "the first canvas is the dock, at half the bench — #125's measured behaviour")
+
+        bench.offer(Pane(content: .canvas(tasks)), at: .column)
+
+        assertFractions(bench.columns.map(\.width), [1 / 3.0, 1 / 3.0, 1 / 3.0])
+    }
+
+    func testAnOfferedRowKeepsTheProportionsTheOperatorDragged() {
+        var bench = Workbench(terminal: UUID())
+        let column = bench.columns[0].id
+        bench.offer(Pane(content: .terminal(face: .terminal)), at: .row(in: column))
+        let slots = bench.columns[0].slots.map(\.id)
+        bench.resizeSlot(slots[0], to: 0.8, against: slots[1])
+
+        bench.offer(Pane(content: .terminal(face: .terminal)), at: .row(in: column))
+
+        let heights = bench.columns[0].slots.map(\.height)
+        XCTAssertEqual(
+            heights[0] / heights[1], 4, accuracy: 1e-9,
+            "the two panes that were there keep their 80/20 to each other")
+        XCTAssertEqual(heights[2], 1 / 3.0, accuracy: 1e-9)
     }
 
     // MARK: - The contrast that makes the guarantee legible
