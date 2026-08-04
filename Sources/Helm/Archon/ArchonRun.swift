@@ -227,30 +227,6 @@ struct ArchonRunsResponse: Codable, Equatable, Sendable {
     /// answer for a project one; helm passes that on for the same reason.
     let scopeFallback: Bool
 
-    /// The collapsed status lines, in the order the rail shows them: the ones you act on
-    /// first, then the rest alphabetically so a status Archon adds later has a defined place
-    /// rather than a random one. `all` is dropped — it is a total, not a status.
-    static let statusOrder = ["running", "paused", "failed", "completed", "cancelled", "pending"]
-
-    var statusCounts: [ArchonStatusCount] {
-        counts
-            .filter { $0.key != "all" && $0.value > 0 }
-            .map { ArchonStatusCount(status: $0.key, count: $0.value) }
-            .sorted { left, right in
-                let leftRank =
-                    Self.statusOrder.firstIndex(of: left.status) ?? Self.statusOrder.count
-                let rightRank =
-                    Self.statusOrder.firstIndex(of: right.status) ?? Self.statusOrder.count
-                if leftRank != rightRank { return leftRank < rightRank }
-                return left.status < right.status
-            }
-    }
-}
-
-struct ArchonStatusCount: Equatable, Sendable, Identifiable {
-    var id: String { status }
-    let status: String
-    let count: Int
 }
 
 struct ArchonWorkflowListResponse: Codable, Equatable, Sendable {

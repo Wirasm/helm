@@ -63,8 +63,14 @@ struct ArchonRunOpener: Sendable {
     var open: @Sendable (ArchonRun) async -> Void
 
     static let live = ArchonRunOpener { run in
-        guard let url = await ArchonRunOpener.destination(for: run) else { return }
-        await MainActor.run { NSWorkspace.shared.open(url) }
+        guard let url = await ArchonRunOpener.destination(for: run),
+            // Through the same allowlist every other `NSWorkspace.open` in helm goes through.
+            // The URL below is not all helm's own: the pull request's comes back out of `gh`,
+            // and an external process's output reaching `open` unchecked is exactly what that
+            // policy exists to stop.
+            let validated = TerminalURLPolicy.validated(url.absoluteString)
+        else { return }
+        await MainActor.run { NSWorkspace.shared.open(validated) }
     }
 
     /// The pull request if there is one, else the branch it would be opened from.
