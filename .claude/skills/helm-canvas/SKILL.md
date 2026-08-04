@@ -18,16 +18,49 @@ rule, not a limitation to route around.
 
 ## How
 
-Write the file, then print an OSC 8 hyperlink to it:
+Write the file, then print an OSC 8 hyperlink to it **and the plain path on the line after**:
 
 ```bash
 printf '\e]8;;file://%s\e\\%s\e]8;;\e\\\n' "$ABSOLUTE_PATH" "$LINK_TEXT"
+printf '%s\n' "$ABSOLUTE_PATH"
 ```
 
 - The path must be **absolute** and the URL must be `file://`.
 - Only **`.md` `.markdown` `.mdown` `.html` `.htm`** open in a canvas. Anything else is handed to
   the system — helm decides by extension alone, without reading the file.
 - Artifacts go in this project's `~/.prp/<key>/` store, **never in the repo**.
+
+**Print the plain path too, and do not skip it.** ⌘-click does not currently reach helm from
+inside a TUI — the agent's own terminal UI captures the mouse before helm sees it (helm #124). The
+bare path is what the operator can actually act on today. Treat the hyperlink as the thing that
+will work once #124 lands, and the path as the thing that works now.
+
+## Check it before you offer it
+
+**For an `.html` artifact, look at it first.** You wrote it; you can render it. Nothing in helm has
+to help you, and you should not ask it to.
+
+This works because a canvas is **self-contained** — an `.html` artifact carries everything it
+needs, so the file you render is the page the operator sees. That is a helm rule rather than a
+coincidence, and it is what makes checking your own work possible at all.
+
+Render the file the way you would check any local page — a headless browser, a screenshot,
+whatever this environment already has — and look for:
+
+- **Did it render at all**, or is it a blank page? An unclosed tag is invisible in the source and
+  total on screen.
+- **Did the diagrams parse?** A malformed mermaid fence renders as an error box, not as a diagram.
+  You cannot tell from your own source that it failed.
+- **Is anything you intended missing** — a section that collapsed, a table that came out as text.
+
+Fix it, then offer it. Offering a broken page and letting the operator find it is the failure this
+step exists to prevent.
+
+**A markdown canvas cannot be checked this way, and you should not try.** For `.md`, **helm is the
+renderer**: it converts the markdown, renders the mermaid fences, and applies its own type scale.
+Opening the `.md` yourself shows you raw markdown, not the canvas. There is no way for you to see a
+markdown canvas as the operator sees it — so when the *appearance* is what matters, prefer `.html`,
+which you can verify.
 
 ## When to offer
 
@@ -46,6 +79,12 @@ their notes to a file *beside* the artifact rather than into it — precisely be
 the artifact and would clobber anything kept inside. That is helm's behaviour, not a convention
 you set up or go looking for: read the notes if they appear, and only ever write the artifact.
 
-**Mermaid node ids are not stable across renders yet** (helm #113). A diagram meant to be
-annotated will hand back an anchor that has already changed. Until that lands, prefer HTML with
-your own ids when the operator needs to point at parts of it.
+**A mermaid node can be annotated, but only in some diagram families.** helm hands back the
+identifier that appears in your ```mermaid fence — name a node `phase2` and the operator's mark
+comes back as `phase2`, which you can grep for and edit (helm #113).
+
+That holds for **flowchart, class, state and er** diagrams, and only those. `mindmap` and
+`sequenceDiagram` put no author-written identifier in the rendered output at all, so a mark on one
+degrades to quoted text with nothing to anchor to; `gitGraph` and `pie` produce no addressable
+nodes whatsoever. **If the operator needs to point at parts of a diagram, use a flowchart** — or
+HTML with your own ids.
