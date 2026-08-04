@@ -8,6 +8,7 @@ import Foundation
 /// ~/.helm/spool/claimed/    <id>.json          claimed — never read again
 /// ~/.helm/spool/results/    <id>.json          what helm did about it
 /// ~/.helm/spool/prompts/    <id>.txt           the prompt, 0600, read by the launch line
+/// ~/.helm/spool/captures/   <id>.png           helm's own window, drawn on request (#174)
 /// ```
 ///
 /// **A second helm must not eat the operator's requests.** Two helms is the *normal* state
@@ -32,6 +33,7 @@ struct SpoolDirectory: Equatable {
     var claimed: URL { root.appendingPathComponent("claimed") }
     var results: URL { root.appendingPathComponent("results") }
     var prompts: URL { root.appendingPathComponent("prompts") }
+    var captures: URL { root.appendingPathComponent("captures") }
 
     /// Where this process's spool is, from its environment alone. Pure, so the isolation rule
     /// above is a test rather than a claim.
@@ -65,10 +67,11 @@ struct SpoolDirectory: Equatable {
         return !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Make the four directories. 0700 throughout: a request is a command to run and a prompt
-    /// is the operator's words, and neither is anyone else's business on a shared machine.
+    /// Make the five directories. 0700 throughout: a request is a command to run, a prompt is
+    /// the operator's words and a capture is a picture of what they are looking at, and none of
+    /// those is anyone else's business on a shared machine.
     func prepare() throws {
-        for directory in [root, claimed, results, prompts] {
+        for directory in [root, claimed, results, prompts, captures] {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700])

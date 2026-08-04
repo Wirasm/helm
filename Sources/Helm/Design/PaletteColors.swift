@@ -7,18 +7,32 @@ import SwiftUI
 /// `Color` only a view can spend is exactly where the file boundary should be. The terminal
 /// theme crosses at the *other* edge, rendering the same tokens as ghostty config lines
 /// (`TerminalSession.terminalTheme`); neither side is the palette.
+extension Palette.Appearance {
+    /// Which of a token's two values an AppKit appearance is asking for.
+    ///
+    /// The one place that question is answered, so a surface AppKit resolves dynamically and a
+    /// surface helm draws itself (`WindowCapture`) cannot disagree about what "dark" means.
+    static func resolving(_ appearance: NSAppearance) -> Palette.Appearance {
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+    }
+}
+
 extension Palette.Token {
     /// A dynamic colour: AppKit re-resolves it whenever the drawing appearance changes, so
     /// `AppearanceOverride` re-themes every surface with no helm code and no observation.
     var color: Color {
-        Color(
-            nsColor: NSColor(name: nil) { appearance in
-                let value = self.value(
-                    in: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                        ? .dark : .light)
-                return NSColor(
-                    srgbRed: value.red, green: value.green, blue: value.blue, alpha: 1)
-            })
+        Color(nsColor: NSColor(name: nil) { self.nsColor(in: .resolving($0)) })
+    }
+
+    /// The token as an AppKit colour at one **fixed** appearance.
+    ///
+    /// Fixed rather than dynamic, unlike `color` above, and that is the point of it existing:
+    /// this is spent by code drawing into a bitmap, where there is no drawing appearance for
+    /// AppKit to re-resolve against. A dynamic colour there resolves against whatever happens
+    /// to be current and produces a light marker on a dark capture.
+    func nsColor(in appearance: Palette.Appearance) -> NSColor {
+        let value = value(in: appearance)
+        return NSColor(srgbRed: value.red, green: value.green, blue: value.blue, alpha: 1)
     }
 }
 

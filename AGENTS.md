@@ -64,15 +64,39 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   hosting their session.
 - **Never delete a test to make the gate green.** If its subject genuinely no longer
   exists, say which and why in the commit.
-- **You may or may not be able to see the UI — test, don't assume.** Screen Recording is a
-  TCC grant on the *invoking context*, not on agents as a category: some contexts have it,
-  none can grant it to themselves. The test is `swift tools/winshot.swift helm <out.png>`,
-  which exits nonzero when the grant is missing. `--list` needs no grant at all and
-  separates a real window from a crash, a zero-sized one or an off-screen one — but says
-  nothing about what is drawn. The accessibility tree is a dead end either way: helm's
-  centre is a Metal-layer NSView with no child elements to enumerate (verified against a
-  known-good build). A capture shows you pixels, not correctness — never report a surface
-  as verified on appearance alone without the operator.
+- **To see the UI, ask helm to draw itself: `swift tools/helm-capture.swift --out <p.png>`.**
+  **No TCC grant, no display, no keystrokes, no Accessibility** — an app rendering its own view
+  hierarchy is *drawing*, and TCC does not gate it. It is a spool request (`kind: "capture"`),
+  so it works with the screen locked and over ssh, exactly like `helm-spool`. The result names
+  the PNG and says what is in it; exit codes are 2 no answer, 3 refused, 4 could not draw.
+  **`terminalContent` is the field to read.** It is computed per capture, never assumed:
+  `included` (every terminal pane's cells are in the image), `excluded` (none are — their
+  regions carry a printed marker in the PNG itself), `partial`, or `absent` (no terminal in the
+  window). #174 was scoped expecting `excluded` always, because ghostty's surface is a
+  `CAMetalLayer` and Metal content does not come out of the layer tree — but the vendored
+  wrapper swaps that layer for an IOSurface-backed one once compositing starts
+  (`AppTerminalView+Lifecycle.swift:176`), and **that one does draw**. Measured, both ways: the
+  first build asked "is it a `CAMetalLayer`?" and reported `absent` about a capture full of
+  legible terminal text. So read the field rather than either assumption.
+  - **With two helms running, pass `--window <substring of the title>`.** An isolated instance
+    is titled `helm — <suite>`. Ambiguity is refused and the refusal lists the titles, so a
+    capture never quietly hands back a picture of the operator's session.
+  - A capture takes the backing scale of the display the window is on, and `scale` in the
+    result says which — 2 on the built-in retina panel, 1 on the ultrawide. Divide
+    `pixelWidth` by it to get the points a layout assertion would be written against.
+- **`winshot` is the outside-in path, and needs a grant you probably do not have.** Screen
+  Recording is a TCC grant on the *invoking context*, not on agents as a category: some
+  contexts have it, none can grant it to themselves, and helm is ad-hoc signed
+  (`project.yml`, `CODE_SIGN_IDENTITY: "-"`) so the operator's own grant does not reach an
+  agent's fresh binary. `swift tools/winshot.swift helm <out.png>` exits nonzero when it is
+  missing. `--list` needs no grant at all and separates a real window from a crash, a
+  zero-sized one or an off-screen one — but says nothing about what is drawn. Prefer
+  `helm-capture` for anything about helm's own surfaces; `winshot` is for what helm cannot
+  draw, such as another app.
+- **The accessibility tree is a dead end either way**: helm's centre is a Metal-layer NSView
+  with no child elements to enumerate (verified against a known-good build). And **a capture
+  shows you pixels, not correctness** — never report a surface as verified on appearance alone
+  without the operator.
 - **`winshot` matches owner names by substring**, so a second helm instance — a worktree
   build, say — is indistinguishable from the operator's. Check `--list` for how many are
   running before trusting a capture. It also matches *window titles*: an editor with

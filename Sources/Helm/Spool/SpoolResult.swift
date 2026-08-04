@@ -39,6 +39,11 @@ struct SpoolResult: Codable, Equatable {
         /// The agent claimed a mailbox. `pid`, `sessionId`, `handle` and `runtime` are real,
         /// and the caller can address it now.
         case ready
+        /// helm drew its own window and wrote a PNG (#174). **One write, not two** — unlike a
+        /// spawn there is nothing outstanding after it, because drawing is synchronous and
+        /// there is no second party to wait for. `capture` says what is in the image, including
+        /// what is not.
+        case captured
         /// The terminal is alive but no mailbox appeared before the deadline. Deliberately
         /// **not** a failure and deliberately not cleaned up: the agent may be running
         /// perfectly well without the mail hooks installed. It exists; it cannot be
@@ -73,6 +78,11 @@ struct SpoolResult: Codable, Equatable {
     /// Why, on any status that is not a plain success. Present on `refused`, `failed`,
     /// `abandoned` and `unclaimed`.
     var reason: String?
+    /// What a `captured` result produced — the PNG's path, and **whether terminal content is in
+    /// it**. A nested value rather than six more optional scalars on a type that is otherwise
+    /// entirely about spawning, and the reason it is not optional-per-field: `terminalContent`
+    /// only means anything alongside the path it describes.
+    var capture: CaptureReport?
     /// Seconds since the epoch, so a caller watching for the `started` → `ready` change has
     /// something that always differs between the two writes.
     var updatedAt: Double
@@ -80,7 +90,8 @@ struct SpoolResult: Codable, Equatable {
     init(
         id: String, status: Status, terminalId: String? = nil, pid: Int32? = nil,
         sessionId: String? = nil, handle: String? = nil, runtime: String? = nil,
-        reason: String? = nil, updatedAt: Double = Date().timeIntervalSince1970
+        reason: String? = nil, capture: CaptureReport? = nil,
+        updatedAt: Double = Date().timeIntervalSince1970
     ) {
         self.id = id
         self.status = status
@@ -90,6 +101,7 @@ struct SpoolResult: Codable, Equatable {
         self.handle = handle
         self.runtime = runtime
         self.reason = reason
+        self.capture = capture
         self.updatedAt = updatedAt
     }
 }

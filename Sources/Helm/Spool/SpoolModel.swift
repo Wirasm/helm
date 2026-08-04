@@ -19,6 +19,21 @@ protocol SpoolSpawning: AnyObject {
     func send(_ line: String, to terminal: UUID)
 }
 
+/// helm drawing its own window, as a seam — the same trade `SpoolSpawning` makes.
+///
+/// Everything on the far side needs a real `NSWindow` with a laid-out view tree; the deciding,
+/// refusing and result-writing on this side does not, and is reached from `swift test` with a
+/// capturer that has no window at all. That is also how the *refusal* paths get exercised,
+/// which are the ones a live run is least likely to hit by accident.
+@MainActor
+protocol SpoolCapturing: AnyObject {
+    /// Draw helm's own window into a PNG at `path`, or say why not.
+    ///
+    /// Synchronous, unlike a spawn: drawing has no second party to wait for, so there is one
+    /// write to the result file rather than two.
+    func capture(to path: String, window: String?) -> Result<CaptureReport, SpoolRefusal>
+}
+
 /// The spool: helm's one push channel, and the rung of #51 that works with the screen locked.
 ///
 /// **This is a deliberate reversal, and it is recorded as one.** #33 ruled *"there is no
@@ -53,6 +68,10 @@ final class SpoolModel: ObservableObject {
     /// request ever arrived. The spawner references nothing here, so there is no cycle to
     /// avoid; a weak reference bought nothing and cost the capability.
     private var spawner: (any SpoolSpawning)?
+    /// Held strongly for the same reason, and it is the same failure if it is not: an adapter
+    /// `RootView` builds inline is retained by nothing else, so a weak reference would be gone
+    /// before the first request and every capture would answer "helm has no window to draw".
+    private var capturer: (any SpoolCapturing)?
     private var watcher: SpoolWatcher?
 
     /// Requests acted on in this process, by result id — so a second window's `drain` and this
@@ -76,6 +95,10 @@ final class SpoolModel: ObservableObject {
 
     func attach(spawner: any SpoolSpawning) {
         self.spawner = spawner
+    }
+
+    func attach(capturer: any SpoolCapturing) {
+        self.capturer = capturer
     }
 
     /// Begin watching. Idempotent, and a no-op under `HELM_SPOOL_OFF`.
@@ -146,16 +169,22 @@ final class SpoolModel: ObservableObject {
                 refuse(
                     id: fallbackID,
                     reason: "the request file is not readable JSON of the form "
-                        + "{\"id\",\"cwd\",\"command\",\"args\",\"prompt\"}")
+                        + "{\"id\",\"kind\",…} — a spawn is "
+                        + "{\"id\",\"cwd\",\"command\",\"args\",\"prompt\"}, a capture is "
+                        + "{\"id\",\"kind\":\"capture\",\"path\",\"window\"}")
                 continue
             }
             guard !handled.contains(request.id) else { continue }
             handled.insert(request.id)
-            switch SpoolPolicy.accept(request, isDirectory: Self.isDirectory) {
+            switch SpoolPolicy.accept(
+                request, captures: directory.captures, isDirectory: Self.isDirectory)
+            {
             case .failure(let refusal):
                 refuse(id: request.id, reason: refusal.reason)
-            case .success(let accepted):
+            case .success(.spawn(let accepted)):
                 Task { await self.act(on: accepted) }
+            case .success(.capture(let accepted)):
+                act(on: accepted)
             }
         }
     }
@@ -179,8 +208,31 @@ final class SpoolModel: ObservableObject {
         NSLog("helm: spool request %@ refused — %@", id, reason)
     }
 
+    /// Draw helm's own window, then say what is in the PNG — **including what is not**.
+    ///
+    /// **Synchronous, and nothing here waits on a permission.** Screen Recording is a TCC grant
+    /// that cannot be granted from code and attaches to the invoking context, which is why
+    /// `winshot` fails for an agent even where the operator has granted it; helm rendering its
+    /// own view hierarchy is drawing, and is gated by none of that (#174, `WindowCapture`).
+    private func act(on request: AcceptedCaptureRequest) {
+        guard let capturer else {
+            answer(
+                request.id, .failed,
+                reason: "helm has no window to draw. It is running, and it answered this "
+                    + "request — so the capturer was never attached, which is a helm defect "
+                    + "rather than anything the caller can fix.")
+            return
+        }
+        switch capturer.capture(to: request.path, window: request.window) {
+        case .success(let report):
+            answer(request.id, .captured, capture: report)
+        case .failure(let refusal):
+            answer(request.id, .failed, reason: refusal.reason)
+        }
+    }
+
     /// Start the agent, then say what was started and how to reach it.
-    private func act(on request: AcceptedSpoolRequest) async {
+    private func act(on request: AcceptedSpawnRequest) async {
         guard let spawner else {
             answer(request.id, .failed, reason: "helm has no workbench to open a terminal in")
             return
@@ -262,15 +314,17 @@ final class SpoolModel: ObservableObject {
     private func answer(
         _ id: String, _ status: SpoolResult.Status, terminalId: UUID? = nil, pid: pid_t? = nil,
         sessionId: String? = nil, handle: String? = nil, runtime: String? = nil,
-        reason: String? = nil
+        reason: String? = nil, capture: CaptureReport? = nil
     ) {
         directory.write(
             SpoolResult(
                 id: id, status: status, terminalId: terminalId?.uuidString, pid: pid,
-                sessionId: sessionId, handle: handle, runtime: runtime, reason: reason))
+                sessionId: sessionId, handle: handle, runtime: runtime, reason: reason,
+                capture: capture))
         NSLog(
-            "helm: spool request %@ is %@%@", id, status.rawValue,
-            handle.map { " — reachable at \($0)" } ?? "")
+            "helm: spool request %@ is %@%@%@", id, status.rawValue,
+            handle.map { " — reachable at \($0)" } ?? "",
+            capture.map { " — \($0.path), terminal content \($0.terminalContent.rawValue)" } ?? "")
     }
 
     /// Re-ask `probe` until it answers or the deadline passes.
