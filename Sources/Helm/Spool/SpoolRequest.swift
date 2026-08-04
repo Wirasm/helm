@@ -192,6 +192,13 @@ struct AcceptedCaptureRequest: Equatable {
 enum SpoolPolicy {
     /// The agents helm will start. Matched exactly: no paths, no arguments smuggled in, no
     /// case folding (these are real program names on a case-preserving filesystem).
+    ///
+    /// **This is the `spawn` kind's allowlist, and saying so is not pedantry now that there is
+    /// more than one kind (#174).** A capture has no command at all, so "every command the
+    /// spool accepts" and "every agent helm will start" stopped being the same sentence — and
+    /// `SpoolUnattendedPolicy.postures` is keyed on *this* set, not on that one. A future kind
+    /// that carries a command of its own would have to say whether it belongs here, rather than
+    /// inheriting an answer nobody meant to give it.
     static let allowedCommands: Set<String> = ["claude", "pi", "codex"]
 
     /// An id is a filename component — `results/<id>.json` — so it is gated as one. `..` and

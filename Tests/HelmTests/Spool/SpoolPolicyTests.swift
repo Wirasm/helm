@@ -95,14 +95,14 @@ final class SpoolPolicyTests: XCTestCase {
         // The bug: a bare `claude` sits at a permission prompt in a pane nobody is watching, so
         // the spawn is indistinguishable from one that never happened. Measured — the pid had
         // no child and never created its worktree.
-        let accepted = try accept(request(command: "claude")).get()
+        let accepted = try accept(request(command: "claude"))
         XCTAssertEqual(accepted.args, ["--dangerously-skip-permissions"])
     }
 
     func testTheSpoolAndTheGuiPathAgreeAboutStartingAClaudeAgent() throws {
         // `helm-spawn` types `cls`, which is `claude --dangerously-skip-permissions`. Two spawn
         // paths that disagree about what "start a Claude agent" means is the defect.
-        let accepted = try accept(request(command: "claude")).get()
+        let accepted = try accept(request(command: "claude"))
         XCTAssertEqual(
             SpoolLaunchLine.compose(accepted, promptPath: nil),
             "'claude' '--dangerously-skip-permissions'")
@@ -111,7 +111,7 @@ final class SpoolPolicyTests: XCTestCase {
     func testThePostureGoesOnEvenWhenTheRequestBroughtUnrelatedArguments() throws {
         // "Passed no arguments" is not "thought about permissions". A request for
         // `claude --model opus` never mentioned them, and is the hardest hang to notice.
-        let accepted = try accept(request(command: "claude", args: ["--model", "opus"])).get()
+        let accepted = try accept(request(command: "claude", args: ["--model", "opus"]))
         XCTAssertEqual(
             accepted.args, ["--dangerously-skip-permissions", "--model", "opus"])
     }
@@ -124,7 +124,7 @@ final class SpoolPolicyTests: XCTestCase {
             ["--dangerously-skip-permissions"],
         ] {
             XCTAssertEqual(
-                try accept(request(command: "claude", args: args)).get().args, args,
+                try accept(request(command: "claude", args: args)).args, args,
                 "\(args) settles the question, so helm adds nothing")
         }
     }
@@ -133,7 +133,7 @@ final class SpoolPolicyTests: XCTestCase {
         // `cdxy` is `codex -p yolo`, and `~/.codex/yolo.config.toml` is approval_policy=never
         // with sandbox_mode=danger-full-access. The operator's standing choice for codex, the
         // same way `--dangerously-skip-permissions` is his for claude.
-        XCTAssertEqual(try accept(request(command: "codex")).get().args, ["-p", "yolo"])
+        XCTAssertEqual(try accept(request(command: "codex")).args, ["-p", "yolo"])
     }
 
     func testARequestThatChoseItsOwnCodexProfileKeepsIt() throws {
@@ -142,14 +142,14 @@ final class SpoolPolicyTests: XCTestCase {
         // the composed line. If that order ever inverted, helm's own `-p` would answer its own
         // question and every codex posture would silently cancel itself.
         XCTAssertEqual(
-            try accept(request(command: "codex", args: ["-p", "something-else"])).get().args,
+            try accept(request(command: "codex", args: ["-p", "something-else"])).args,
             ["-p", "something-else"])
         XCTAssertEqual(
-            try accept(request(command: "codex", args: ["--profile=read-only"])).get().args,
+            try accept(request(command: "codex", args: ["--profile=read-only"])).args,
             ["--profile=read-only"])
         XCTAssertEqual(
             try accept(request(command: "codex", args: ["--ask-for-approval", "untrusted"]))
-                .get().args,
+                .args,
             ["--ask-for-approval", "untrusted"])
     }
 
@@ -158,9 +158,9 @@ final class SpoolPolicyTests: XCTestCase {
         // the project's settings, extensions and skills, and hangs when nobody answers.
         // Declining would not block anything; it would start an agent silently missing the
         // project it was spawned for, which is a quieter version of the bug being fixed.
-        XCTAssertEqual(try accept(request(command: "pi")).get().args, ["--approve"])
+        XCTAssertEqual(try accept(request(command: "pi")).args, ["--approve"])
         XCTAssertEqual(
-            try accept(request(command: "pi", args: ["-na"])).get().args, ["-na"],
+            try accept(request(command: "pi", args: ["-na"])).args, ["-na"],
             "a caller that wants the other answer says so, where it is auditable")
     }
 
@@ -180,8 +180,32 @@ final class SpoolPolicyTests: XCTestCase {
     func testEveryAgentHelmWillStartHasAnAnswerForAnEmptyPane() {
         // The drift guard. An allowed command with no posture is a silent hang the day it is
         // added, which is the whole bug — so the two sets are one decision, not two.
+        //
+        // **Still a true invariant under the kinds split (#174), and worth saying why rather
+        // than leaving it to look like a coincidence.** `allowedCommands` gates
+        // `SpawnRequest.command` and nothing else: a capture carries no command, so it can
+        // neither widen this set nor need a posture. The two sets are one decision because
+        // both are about *starting an agent*, which is what the spawn kind is.
         XCTAssertEqual(
             Set(SpoolUnattendedPolicy.postures.keys), SpoolPolicy.allowedCommands)
+    }
+
+    func testAKindIsRoutedByItsKindRatherThanByTheFieldsItHappensToCarry() throws {
+        // **What the kinds split actually put at risk, and the one thing here that was not
+        // already covered.** `allowedCommands` is the only thing standing between a spool file
+        // and a login shell, and it is reached only down the spawn arm. A request that says
+        // `capture` while carrying a `command` must take the capture arm on the strength of its
+        // `kind` — if the envelope ever routed on "does it have a command?", this file would be
+        // a way to run `sh` that never passed the allowlist at all.
+        let smuggled = try JSONDecoder().decode(
+            SpoolRequest.self,
+            from: Data(#"{"id":"x","kind":"capture","command":"sh","cwd":"/tmp"}"#.utf8))
+        guard case .capture = try work(smuggled) else {
+            return XCTFail("a capture must stay a capture whatever else the file carries")
+        }
+        // And the reverse: the accepted capture has no command and no args to put a posture on,
+        // which the compiler enforces — `AcceptedCaptureRequest` has neither field.
+        XCTAssertEqual(try accepted(smuggled).path, "/tmp/spool/captures/x.png")
     }
 
     func testTheAllowlistIsNotWidenedIntoTheOperatorsShellScripts() {
