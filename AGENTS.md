@@ -109,6 +109,19 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   is what an ungated spool would actually be. `HELM_SPOOL_OFF=1` turns the watcher off, which
   is the negative control for any claim about it. A second instance gets its own spool
   automatically under `HELM_DEFAULTS_SUITE`.
+  - **helm answers the "nobody is at the pane" question for you, per agent, in
+    `SpoolUnattendedPolicy`.** A bare `claude` stops at a permission prompt, and a prompt in a
+    pane nobody is watching is indistinguishable from an agent that never started — measured on
+    the first real use of the spool (#179). So `claude` gets `--dangerously-skip-permissions`,
+    which is what `cls` is and what `helm-spawn` already types, so the two spawn paths now agree;
+    `codex` gets `--ask-for-approval never` and **keeps its sandbox**, because the prompt is the
+    failure and the sandbox is not; `pi` gets `--no-approve`, because its only prompt asks whether
+    to load code out of the request's `cwd` and declining is the half that grants nothing. A
+    request that names a flag from the same family gets exactly what it asked for and nothing
+    added. `allowedCommands` is untouched — `cls` is a script on `PATH` this repo cannot pin, and
+    naming the flag buys the same behaviour without handing the allowlist's meaning away. The
+    argument is written out in `Sources/Helm/Spool/SpoolRequest.swift`; read it before changing a
+    posture.
   - **The launch line is pasted and then submitted separately, and it has to be.** libghostty
     wraps *every* `sendText` in bracketed-paste markers when the shell has enabled mode 2004 —
     fish, zsh and bash all do — so a line ending in `\r` lands on the command line and simply

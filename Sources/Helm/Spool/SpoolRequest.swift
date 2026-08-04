@@ -26,7 +26,8 @@ struct SpoolRequest: Codable, Equatable {
     /// The program to run — a bare name, gated by `SpoolPolicy.allowedCommands`.
     let command: String
     /// Arguments for it. Quoted by helm when the line is composed, so a caller never has to
-    /// think about the shell.
+    /// think about the shell. helm prepends the agent's unattended posture to these unless
+    /// they settle it themselves — see `SpoolUnattendedPolicy`.
     var args: [String] = []
     /// The first thing said to the agent. Delivered through a file, never through the
     /// keyboard — see `SpoolLaunchLine`.
@@ -70,6 +71,11 @@ struct AcceptedSpoolRequest: Equatable {
     let id: String
     let cwd: String
     let command: String
+    /// **What will actually be on the command line**, not what the caller asked for: the
+    /// request's own arguments with the agent's unattended posture prepended where it was
+    /// missing (`SpoolUnattendedPolicy`). Resolving it here rather than in
+    /// `SpoolLaunchLine.compose` keeps composition a pure quoter and makes this type honest
+    /// about its name.
     let args: [String]
     let prompt: String?
 }
@@ -160,10 +166,110 @@ enum SpoolPolicy {
         return .success(
             AcceptedSpoolRequest(
                 id: request.id, cwd: cwd, command: request.command,
-                args: request.args,
+                // Bounds above are judged on what the caller sent; the posture is helm's own
+                // and is added after, so a request cannot spend its argument budget on flags
+                // helm was going to supply anyway.
+                args: SpoolUnattendedPolicy.arguments(
+                    for: request.command, requested: request.args),
                 // An empty prompt is no prompt: it would otherwise compose a line ending in
                 // `""`, which some agents read as an empty first turn.
                 prompt: request.prompt.flatMap { $0.isEmpty ? nil : $0 }))
+    }
+}
+
+/// How an agent is started when **nobody is at the pane** — a separate boundary from
+/// `SpoolPolicy`, and deliberately argued here rather than smuggled in as a flag (#179).
+///
+/// **The two boundaries.** `SpoolPolicy.allowedCommands` decides *what may run at all*: a
+/// request is a file, so that gate is what stands between anything that can write a file and a
+/// login shell with the operator's whole environment. This decides *what the agent may then do
+/// once it is running* — a question that only exists because the agent was allowed to start.
+/// Blurring them is how a security default gets made by accident, so they are two types.
+///
+/// **The failure this removes.** Every Claude agent the spool spawned stopped at a permission
+/// prompt and did nothing: a pid with no child, a mailbox handle nobody could use, and a
+/// worktree never created. A prompt assumes a human is looking at the pane. The spool's entire
+/// purpose is that nobody is — it works with the screen locked, headless and over ssh — so an
+/// agent that blocks on a dialog there is indistinguishable from one that never started. That
+/// is the silent-failure shape this whole ladder exists to remove, and a default that produces
+/// it is the wrong default.
+///
+/// **The rule.** *A question nobody will be there to answer must be answered in advance, with
+/// the narrowest answer that lets the agent work.* Narrowest matters: the point is an agent
+/// that runs, not an agent with every restraint removed, and the `cwd` in a request comes from
+/// an untrusted file. Where an agent's answer differs below, the rule is the same and the
+/// question is not.
+///
+/// - **`claude` → `--dangerously-skip-permissions`.** This is the operator's standing choice
+///   on this machine, not helm's invention: `/Users/rasmus/.local/bin/cls` is exactly
+///   `exec claude --dangerously-skip-permissions "$@"`, and `helm-spawn` — the GUI spawn path —
+///   already types `cls`. Matching it is what makes the two paths agree about what "start a
+///   Claude agent" means, which they did not. Claude Code has no sandbox, so there is nothing
+///   narrower to preserve: the flag removes prompts, and prompts are the whole failure.
+///
+/// - **`codex` → `--ask-for-approval never`, and the sandbox is left alone.** codex asks too
+///   (its default policy escalates to a human mid-run), so it has the same problem — but
+///   unlike Claude Code it *has* a sandbox, and its default `workspace-write` is a real
+///   boundary that costs the agent nothing here, since the workspace is the `cwd` it was
+///   spawned for. `never` removes the prompt; failures outside the sandbox come back to the
+///   model as errors instead of to a human as a dialog. The operator's own codex convention
+///   (`cdxy` → `codex -p yolo`) goes further to `danger-full-access`, and that profile's own
+///   comment says *"only run in a trusted directory"* — which is precisely what helm cannot
+///   check about a directory named in a file it did not write. A request that wants it says so.
+///
+/// - **`pi` → `--no-approve`, which is the narrow answer in the other direction.** pi has no
+///   sandbox and no per-tool prompt, so it never asks "may I act?". It asks one thing, at
+///   startup and interactively only: *may I load project-local settings, extensions and skills
+///   out of this directory?* (`defaultProjectTrust` is `ask`.) It hangs identically when
+///   nobody answers. But nothing about "start an agent here" implies "and execute whatever
+///   code this directory carries" — and the directory came from an untrusted request — so
+///   `--approve` would be helm granting on the caller's behalf the one thing pi's prompt
+///   exists to withhold. Declining is the half of a trust question that grants nothing, and it
+///   still leaves the agent running. A caller that does want project trust writes `--arg -a`,
+///   where it is explicit and auditable in the request file.
+///
+/// **The allowlist is untouched.** No `cls` here, and that was the option to reject rather than
+/// skip past: `cls` is a shell script on `PATH` that this repo does not define, cannot test and
+/// cannot pin, so allowing it would turn a list of programs helm starts into a list of names
+/// something else gets to define — and it buys nothing that naming the flag does not.
+enum SpoolUnattendedPolicy {
+    /// One agent's answer to "what happens when there is no human at the pane".
+    struct Posture: Equatable {
+        /// Prepended to the request's own arguments.
+        let arguments: [String]
+        /// Flags that mean *the caller has already decided*, so helm adds nothing. Matched on
+        /// the flag name alone, so `--permission-mode plan` and `--permission-mode=plan` both
+        /// count. This is the escape hatch, and it is the request's, not a helm setting.
+        let settled: Set<String>
+    }
+
+    static let postures: [String: Posture] = [
+        "claude": Posture(
+            arguments: ["--dangerously-skip-permissions"],
+            settled: ["--dangerously-skip-permissions", "--permission-mode"]),
+        "codex": Posture(
+            arguments: ["--ask-for-approval", "never"],
+            settled: [
+                "-a", "--ask-for-approval", "--dangerously-bypass-approvals-and-sandbox",
+                "-p", "--profile",
+            ]),
+        "pi": Posture(
+            arguments: ["--no-approve"],
+            settled: ["-a", "--approve", "-na", "--no-approve"]),
+    ]
+
+    /// The arguments helm will actually run, given what the request asked for.
+    ///
+    /// **Prepended rather than applied only to an empty `args`.** "The caller passed no
+    /// arguments" is not the same as "the caller thought about this": a request for
+    /// `claude --model opus` is one that never mentioned permissions, and dropping the posture
+    /// for it would reinstate the exact silent hang being fixed, in the case hardest to notice.
+    /// So the posture goes on unless a flag from the same family is already there.
+    static func arguments(for command: String, requested: [String]) -> [String] {
+        guard let posture = postures[command] else { return requested }
+        let named = Set(requested.map { String($0.prefix { $0 != "=" }) })
+        guard named.isDisjoint(with: posture.settled) else { return requested }
+        return posture.arguments + requested
     }
 }
 

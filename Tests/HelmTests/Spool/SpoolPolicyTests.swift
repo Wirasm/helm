@@ -70,6 +70,86 @@ final class SpoolPolicyTests: XCTestCase {
         XCTAssertNil(try accept(request(prompt: "")).get().prompt)
     }
 
+    // MARK: - Nobody is at the pane (#179)
+
+    func testAClaudeRequestThatSaysNothingAboutPermissionsStillProducesAWorkingAgent() throws {
+        // The bug: a bare `claude` sits at a permission prompt in a pane nobody is watching, so
+        // the spawn is indistinguishable from one that never happened. Measured — the pid had
+        // no child and never created its worktree.
+        let accepted = try accept(request(command: "claude")).get()
+        XCTAssertEqual(accepted.args, ["--dangerously-skip-permissions"])
+    }
+
+    func testTheSpoolAndTheGuiPathAgreeAboutStartingAClaudeAgent() throws {
+        // `helm-spawn` types `cls`, which is `claude --dangerously-skip-permissions`. Two spawn
+        // paths that disagree about what "start a Claude agent" means is the defect.
+        let accepted = try accept(request(command: "claude")).get()
+        XCTAssertEqual(
+            SpoolLaunchLine.compose(accepted, promptPath: nil),
+            "'claude' '--dangerously-skip-permissions'")
+    }
+
+    func testThePostureGoesOnEvenWhenTheRequestBroughtUnrelatedArguments() throws {
+        // "Passed no arguments" is not "thought about permissions". A request for
+        // `claude --model opus` never mentioned them, and is the hardest hang to notice.
+        let accepted = try accept(request(command: "claude", args: ["--model", "opus"])).get()
+        XCTAssertEqual(
+            accepted.args, ["--dangerously-skip-permissions", "--model", "opus"])
+    }
+
+    func testARequestThatHasDecidedForItselfIsLeftAlone() throws {
+        // The escape hatch is the request's own, and it is not a helm setting. Both spellings
+        // of a flag with a value count, and the flag helm would have added is not doubled.
+        for args in [
+            ["--permission-mode", "plan"], ["--permission-mode=plan"],
+            ["--dangerously-skip-permissions"],
+        ] {
+            XCTAssertEqual(
+                try accept(request(command: "claude", args: args)).get().args, args,
+                "\(args) settles the question, so helm adds nothing")
+        }
+    }
+
+    func testCodexIsUnblockedWithoutHelmRemovingItsSandbox() throws {
+        // codex escalates to a human mid-run, so it hangs the same way — but unlike Claude Code
+        // it has a sandbox, and its default `workspace-write` is the cwd the agent was spawned
+        // for. Removing the prompt is the fix; removing the sandbox is a grant helm is not
+        // making on behalf of a directory named in an untrusted file.
+        XCTAssertEqual(
+            try accept(request(command: "codex")).get().args, ["--ask-for-approval", "never"])
+        // The operator's own `cdxy` is `codex -p yolo` — a request may still ask for it.
+        XCTAssertEqual(
+            try accept(request(command: "codex", args: ["-p", "yolo"])).get().args,
+            ["-p", "yolo"])
+    }
+
+    func testPiDeclinesProjectTrustRatherThanGrantingIt() throws {
+        // pi never asks "may I act?" — it has no sandbox and no per-tool prompt. It asks
+        // whether to load settings, extensions and skills out of the directory, and hangs
+        // identically when nobody answers. Declining is the half that grants nothing.
+        XCTAssertEqual(try accept(request(command: "pi")).get().args, ["--no-approve"])
+        XCTAssertEqual(
+            try accept(request(command: "pi", args: ["-a"])).get().args, ["-a"],
+            "a caller that does want project trust says so, where it is auditable")
+    }
+
+    func testEveryAgentHelmWillStartHasAnAnswerForAnEmptyPane() {
+        // The drift guard. An allowed command with no posture is a silent hang the day it is
+        // added, which is the whole bug — so the two sets are one decision, not two.
+        XCTAssertEqual(
+            Set(SpoolUnattendedPolicy.postures.keys), SpoolPolicy.allowedCommands)
+    }
+
+    func testTheAllowlistIsNotWidenedIntoTheOperatorsShellScripts() {
+        // `cls` is `claude --dangerously-skip-permissions` on the operator's PATH, and naming
+        // it here would have been the easy fix. It is a script this repo does not define,
+        // cannot test and cannot pin — the flag is the same behaviour without handing the
+        // allowlist's meaning to something outside the repo.
+        for shim in ["cls", "cld", "ccc", "cdxy"] {
+            XCTAssertNotNil(refusal(request(command: shim)), "\(shim) is not a program helm pins")
+        }
+    }
+
     // MARK: - The launch line
 
     func testThePromptIsReadFromAFileRatherThanTypedOntoTheCommandLine() {

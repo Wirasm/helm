@@ -19,6 +19,11 @@
 // helm reads it out of `~/.helm/mail/*/owner.json`; it is never derived from cwd and session id
 // (see MailboxDirectory for why a derivation is silently wrong).
 //
+// helm adds the agent's unattended posture to `--arg` for you — `--dangerously-skip-permissions`
+// for claude, `--ask-for-approval never` for codex, `--no-approve` for pi — because a prompt in a
+// pane nobody is watching is a spawn that silently did nothing (#179). Naming a flag from the same
+// family yourself turns that off for the run; the reasoning is in `SpoolUnattendedPolicy`.
+//
 // A nonzero exit is the point: each refusal has its own code, and stderr says what happened.
 
 import Foundation
