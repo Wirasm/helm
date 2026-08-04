@@ -24,6 +24,25 @@ final class CanvasAnnotationTests: XCTestCase {
         XCTAssertEqual(annotation?.comment, "this ordering is wrong")
     }
 
+    func testAMermaidNodeAnchorsToItsFenceIdentifier() {
+        // What the bridge actually posts for a mermaid node: the walk-up finds the
+        // node's <g>, whose id is mostly renderer bookkeeping. The anchor keeps only
+        // the part that appears in the ```mermaid fence, so the agent can grep it (#113).
+        let annotation = decode(
+            ["id": "mermaid-0-flowchart-phase2-1", "text": "Phase 2: Ship"])
+
+        XCTAssertEqual(annotation?.anchor, .element(id: "phase2", text: "Phase 2: Ship"))
+    }
+
+    func testANonMermaidIDIsLeftExactlyAsAuthored() {
+        // The reduction must be invisible to every canvas that is not a diagram.
+        let annotation = decode(["id": "mermaid-flavoured-notes", "text": "a passage"])
+
+        XCTAssertEqual(
+            annotation?.anchor, .element(id: "mermaid-flavoured-notes", text: "a passage"),
+            "an id that merely starts with the word is still the agent's own")
+    }
+
     func testNoIDDegradesToAQuote() {
         let annotation = decode(["text": "the store move has to come first"])
 
@@ -97,8 +116,10 @@ final class CanvasAnnotationTests: XCTestCase {
 
     // MARK: - What is deliberately absent
 
-    /// #39 forbids screenshots in the payload, and the guarantee is structural: there is no
-    /// field here that could carry one, so a page sending image data has nowhere to put it.
+    /// #39 asks for no screenshots in the *payload*, and the guarantee is structural: there
+    /// is no field here that could carry one, so a page sending image data has nowhere to
+    /// put it. Nothing wider is meant by that — the rendered canvas is screenshotted
+    /// elsewhere, and that is how an agent validates what it wrote.
     func testNothingFromTheBodyIsCarriedBeyondTheAnchorAndComment() {
         let annotation = decode([
             "id": "phase-2", "text": "Phase 2", "screenshot": "data:image/png;base64,AAAA",

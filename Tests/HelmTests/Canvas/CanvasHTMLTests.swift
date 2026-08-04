@@ -49,6 +49,20 @@ final class CanvasHTMLTests: XCTestCase {
         XCTAssertTrue(page.contains("sequence: { useMaxWidth: false }"))
     }
 
+    func testBothMermaidCallSitesAskForDeterministicIDs() {
+        // Unset, mermaid seeds its id generator from Date.now(), so a node's DOM id
+        // changes on every render — and FileWatcher re-renders on every agent write,
+        // which is exactly when an annotation's anchor must still resolve (#113).
+        XCTAssertTrue(
+            CanvasHTML.documentPage(markdown: "x", theme: .light).contains(
+                "deterministicIds: true"),
+            "the markdown document page renders diagrams and must pin their ids")
+        XCTAssertTrue(
+            CanvasHTML.htmlArtifactInitScript(theme: .light).contains("deterministicIds: true"),
+            ".html artifacts render diagrams through the same renderer and drift the same "
+                + "way — fixing only one call site fixes half the canvases")
+    }
+
     func testDocumentPageCarriesTheme() {
         let dark = CanvasHTML.documentPage(markdown: "x", theme: .dark)
         XCTAssertTrue(dark.contains("theme: \"dark\""))

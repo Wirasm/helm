@@ -26,6 +26,14 @@ struct HelmApp: App {
         // into a test instance would take it from the build entitled to it (#86).
         DefaultsDomain.migrateLegacyDomainAtLaunch()
 
+        // Before any pty exists, because a pane's environment is built from this process's
+        // (#139). The session that launched helm exported its own `CLAUDE_*`/`PI_*` identity
+        // and helm has been handing it to every agent it hosts; the pane's own identity is
+        // `HELM_PANE`, set per-surface in `TerminalSession.init`. Here rather than in the
+        // Terminals slice's own setup because `unsetenv` is process-wide by nature — every
+        // child helm spawns is covered, not only the ptys.
+        PaneEnvironment.removeStaleIdentity()
+
         // One line on stderr when this is not the operator's helm, because from inside the
         // process an isolated instance looks entirely normal: it opens with an empty
         // workspace bar, which is indistinguishable from having lost one. The status bar and

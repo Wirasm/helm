@@ -297,20 +297,33 @@ final class ArchonCLITests: XCTestCase {
 
     // MARK: - What happens when it does not come back
 
+    /// **The timeout has to outlast the fake archon's own start-up, not merely the work.**
+    /// This raced at 300ms: the child is killed when the timeout fires whether or not it has
+    /// reached its first `printf`, so on a loaded machine `pid` was never written and
+    /// `assertChildIsGone` read a file that did not exist — surfacing as an `XCTUnwrap` on
+    /// `NSCocoaErrorDomain 260` rather than as the scheduling delay it was. The budget is
+    /// **not** dead slack to be trimmed back: it is what stops the deadline winning that race.
+    /// `waitForPid` proves the child really started, the way the cancellation test below
+    /// already did, but the wait alone would only improve the error message.
     func testAHungCallIsCutOffByTheDeadlineAndTheChildDies() async throws {
         let pidRecord = root.appendingPathComponent("pid")
         try installSleeper()
+        let budget = Duration.seconds(2)
+        // Built outside the `Task` so the closure captures only the client and the path —
+        // reaching the `cli(…)` helper from inside captures `self`, which is a `sending`
+        // violation. The cancellation test below is shaped this way for the same reason.
+        let client = cli(extraEnvironment: ["PID_RECORD": pidRecord.path], timeout: budget)
+        let workspacePath = workspace.path
 
         let started = ContinuousClock.now
+        let call = Task { try await client.runs(in: workspacePath) }
+        try await waitForPid(pidRecord)
+
         do {
-            _ = try await cli(
-                extraEnvironment: ["PID_RECORD": pidRecord.path], timeout: .milliseconds(300)
-            ).runs(in: workspace.path)
+            _ = try await call.value
             XCTFail("expected failure")
         } catch let error as ArchonCLIError {
-            guard case .timedOut = error.reason else {
-                return XCTFail("wrong reason: \(error.reason)")
-            }
+            XCTAssertEqual(error.reason, .timedOut(after: budget))
         }
 
         XCTAssertLessThan(

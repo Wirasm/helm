@@ -7,8 +7,15 @@ import Foundation
 /// `#phase-2` is directly editable rather than merely descriptive. It degrades to quoted
 /// text for a `.md` canvas or any section without an authored id.
 ///
-/// **No screenshot, ever** — #39 forbids it, and there is deliberately no field here that
-/// could carry one.
+/// **The anchor carries no image**, and there is deliberately no field here that could
+/// carry one: an anchor made of pixels is not something the agent can edit, which is the
+/// same reason the anchor is an id rather than a rect.
+///
+/// That is a fact about this payload and nothing wider. #39 asks only for "no screenshots
+/// in the payload", as one acceptance checkbox — helm has no rule against screenshots as
+/// such, and could not: a canvas is *validated* by screenshotting the rendered page, which
+/// is exactly why #39's own load-bearing constraint is that canvases stay self-contained
+/// rather than render as "a blank page in playwright".
 struct CanvasAnnotation: Equatable {
     enum Anchor: Equatable {
         case element(id: String, text: String)
@@ -46,7 +53,12 @@ extension CanvasAnnotation {
         guard let text = sanitizedText(payload["text"]) else { return nil }
 
         if let id = payload["id"] as? String, let valid = validID(id) {
-            return CanvasAnnotation(anchor: .element(id: valid, text: text), comment: comment)
+            // A mermaid node's id is mostly renderer bookkeeping, and only the fence
+            // identifier inside it survives the agent editing the diagram — so the
+            // anchor is reduced to that. Anything else, including an id the agent
+            // authored by hand, passes through untouched (#113).
+            let anchored = MermaidAnchor.sourceIdentifier(in: valid) ?? valid
+            return CanvasAnnotation(anchor: .element(id: anchored, text: text), comment: comment)
         }
         // The documented degradation, not a failure: markdown goes through `marked`
         // client-side and headings get no id unless the page adds one, so `.md` canvases
