@@ -544,12 +544,6 @@ final class WorkbenchTests: XCTestCase {
             Pane(content: .canvas(.url(URL(string: "http://localhost:3000")!))),
             at: .tab(in: bench.focusedSlot))
         bench.insert(Pane(content: .canvas(.empty)), at: .row(in: bench.columns[0].id))
-        // Both Archon addresses, because the name of this test is a claim about *every* kind
-        // and it was making it while covering two of the three.
-        bench.insert(
-            Pane(content: .archonRun(.run(id: "run-1", workflowName: "implement"))), at: .column)
-        bench.insert(
-            Pane(content: .archonRun(.runs(status: "failed"))), at: .tab(in: bench.focusedSlot))
         bench.resizeColumn(bench.columns[0].id, to: 0.7, against: bench.columns[1].id)
 
         let data = try JSONEncoder().encode(bench)

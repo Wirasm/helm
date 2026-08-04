@@ -3,6 +3,14 @@ import XCTest
 
 @testable import Helm
 
+/// The rail, after the reduction.
+///
+/// **A lot of this suite's subjects genuinely no longer exist**, and the ones that were merely
+/// *renamed* are rewritten to the property that replaced them rather than dropped:
+/// "running and paused both get lines" became "only running does", and "the subline is the
+/// current node's output preview" became "the subline is the current node's stage". What is
+/// gone entirely is the liveness state, the `approve`/`reject`/`abandon` verbs and the
+/// dismissal filter — see the commit message.
 final class ArchonRailModelTests: XCTestCase {
     private let workspace = "/tmp/project"
 
@@ -43,13 +51,12 @@ final class ArchonRailModelTests: XCTestCase {
 
     // MARK: - Polling
 
-    /// **Rewritten, not deleted.** This asserted "only `running` gets a line", which was #40's
-    /// first sketch and is no longer true: a paused run is stopped waiting for a person, and
-    /// answering that with a number is the actions gap the rail was reframed to close. The
-    /// property that replaced it is *running and paused get lines, and the collapsed counts
-    /// never say the same run twice.*
+    /// **Rewritten, not deleted.** This asserted that a paused run gets a line of its own, on
+    /// the argument that it is the one status blocked on the operator. The minimal rail gives
+    /// a line to `running` and a count to everything else including `paused` — which is also
+    /// what removed the approve/reject gate, since there is no longer a row to hang it on.
     @MainActor
-    func testRunningAndPausedGetLinesAndTheCountsDoNotRepeatThem() async throws {
+    func testOnlyRunningRunsGetALineAndTheCountsDoNotRepeatThem() async throws {
         let client = FakeArchonClient(
             runsResponse: .fixture(
                 runs: [
@@ -63,12 +70,11 @@ final class ArchonRailModelTests: XCTestCase {
 
         await model.refresh(in: workspace)
 
-        XCTAssertEqual(model.active.map(\.id), ["a", "c"])
+        XCTAssertEqual(model.running.map(\.id), ["a"])
         XCTAssertEqual(
-            model.statusCounts.map(\.status), ["failed", "completed"],
-            "the one running and the one paused run are lines above, so their counts are spent")
-        XCTAssertEqual(model.statusCounts.map(\.count), [2, 5])
-        XCTAssertEqual(model.liveness, .live)
+            model.statusCounts.map(\.status), ["paused", "failed", "completed"],
+            "the one running run is a line above, so its count is spent and paused is not")
+        XCTAssertEqual(model.statusCounts.map(\.count), [1, 2, 5])
     }
 
     /// Archon's `counts` are over the whole project while its `runs` array is the newest
@@ -85,28 +91,31 @@ final class ArchonRailModelTests: XCTestCase {
 
         await model.refresh(in: workspace)
 
-        XCTAssertEqual(model.active.map(\.id), ["a"])
+        XCTAssertEqual(model.running.map(\.id), ["a"])
         XCTAssertEqual(model.statusCounts, [ArchonStatusCount(status: "running", count: 2)])
     }
 
+    /// **Rewritten from `testTheSublineIsTheCurrentNodesPreview`.** The subline names the
+    /// *stage* now — `implement` — rather than an excerpt of what that stage wrote: the stage
+    /// is the thing that advances, and the writing is read in Archon's own UI.
     @MainActor
-    func testTheSublineIsTheCurrentNodesPreview() async throws {
+    func testTheSublineIsTheCurrentNodesStage() async throws {
         let client = FakeArchonClient(
             runsResponse: .fixture(runs: [.fixture(id: "a", status: "running")]))
         await client.setDetails([
             "a": .fixture(
                 id: "a",
                 nodes: [
-                    .fixture(nodeId: "plan", state: .completed, outputPreview: "old"),
-                    .fixture(nodeId: "implement", state: .running, outputPreview: "writing\ntests"),
+                    .fixture(nodeId: "plan", state: .completed),
+                    .fixture(nodeId: "implement", state: .running),
                 ])
         ])
         let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-preview"))
+            client: client, defaults: try isolatedDefaults("archon-rail-stage"))
 
         await model.refresh(in: workspace)
 
-        XCTAssertEqual(model.previews["a"], "writing tests")
+        XCTAssertEqual(model.stages["a"], "implement")
         let metrics = await client.metrics()
         XCTAssertEqual(metrics.detailRequests, ["a"], "only running runs cost a second process")
     }
@@ -124,32 +133,11 @@ final class ArchonRailModelTests: XCTestCase {
 
         await model.refresh(in: workspace)
 
-        XCTAssertEqual(model.active.map(\.id), ["a"])
-        XCTAssertNil(model.previews["a"])
-        XCTAssertEqual(model.liveness, .live)
+        XCTAssertEqual(model.running.map(\.id), ["a"])
+        XCTAssertNil(model.stages["a"])
     }
 
-    /// "No runs" and "cannot reach Archon" rendered identically before this. They are opposite
-    /// states: one means nothing is happening, the other means nothing in the rail works.
-    @MainActor
-    func testAnEmptyAnswerIsDistinctFromNoAnswer() async throws {
-        let client = FakeArchonClient()
-        let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-liveness"))
-
-        await model.refresh(in: workspace)
-        XCTAssertEqual(model.liveness, .live)
-        XCTAssertEqual(model.active, [])
-
-        await client.setFailure(.notInstalled())
-        await model.refresh(in: workspace)
-        guard case let .unreachable(reason) = model.liveness else {
-            return XCTFail("expected unreachable, got \(model.liveness)")
-        }
-        XCTAssertTrue(reason.contains("archon workflow runs"), reason)
-    }
-
-    /// The last known runs survive a failed poll: one hiccup must not make the list flap.
+    /// The last known runs survive a failed poll: one hiccup must not make the lines flap.
     @MainActor
     func testAFailedPollKeepsTheLastKnownRuns() async throws {
         let client = FakeArchonClient(
@@ -161,7 +149,7 @@ final class ArchonRailModelTests: XCTestCase {
         await client.setFailure(.notInstalled())
         await model.refresh(in: workspace)
 
-        XCTAssertEqual(model.active.map(\.id), ["a"])
+        XCTAssertEqual(model.running.map(\.id), ["a"])
     }
 
     @MainActor
@@ -174,8 +162,8 @@ final class ArchonRailModelTests: XCTestCase {
 
         await model.refresh(in: nil)
 
-        XCTAssertEqual(model.active, [])
-        XCTAssertEqual(model.liveness, .unknown)
+        XCTAssertEqual(model.running, [])
+        XCTAssertEqual(model.statusCounts, [])
         let metrics = await client.metrics()
         XCTAssertEqual(metrics.listCalls, 1, "no workspace, no project to ask about")
     }
@@ -210,7 +198,7 @@ final class ArchonRailModelTests: XCTestCase {
     // MARK: - Launching
 
     @MainActor
-    func testEnterLaunchesWhatTheGearHoldsAndClearsTheField() async throws {
+    func testSendLaunchesWhatTheSettingsHoldAndClearsTheField() async throws {
         let client = FakeArchonClient()
         let model = ArchonRailModel(
             client: client, defaults: try isolatedDefaults("archon-rail-launch"))
@@ -247,7 +235,7 @@ final class ArchonRailModelTests: XCTestCase {
 
         model.config = ArchonLaunchConfig(workflow: "  ", worktree: .automatic)
         await model.launch(in: workspace)
-        XCTAssertEqual(model.launchFailure, "Choose a workflow in the gear before launching.")
+        XCTAssertEqual(model.launchFailure, "Choose a workflow in the settings before launching.")
 
         model.config = ArchonLaunchConfig(workflow: "ship", worktree: .automatic)
         model.draft = "   \n "
@@ -257,17 +245,18 @@ final class ArchonRailModelTests: XCTestCase {
         model.draft = "do it"
         model.config = ArchonLaunchConfig(workflow: "ship", worktree: .branch(" "))
         await model.launch(in: workspace)
-        XCTAssertEqual(model.launchFailure, "Name the branch in the gear, or let Archon name it.")
+        XCTAssertEqual(
+            model.launchFailure, "Name the branch in the settings, or let Archon name it.")
 
         let metrics = await client.metrics()
         XCTAssertEqual(metrics.launchRequests, 0, "not one of these reached Archon")
         XCTAssertEqual(model.draft, "do it", "a rejected launch must not eat what was typed")
     }
 
-    /// Every rejection is about the draft or the gear, so touching either makes the sentence
-    /// under the field a statement about a state that no longer exists.
+    /// Every rejection is about the draft or the settings, so touching either makes the
+    /// sentence under the field a statement about a state that no longer exists.
     @MainActor
-    func testEditingTheDraftOrTheGearClearsTheLastRejection() async throws {
+    func testEditingTheDraftOrTheSettingsClearsTheLastRejection() async throws {
         let model = ArchonRailModel(
             client: FakeArchonClient(), defaults: try isolatedDefaults("archon-rail-clearing"))
         model.config = ArchonLaunchConfig(workflow: "", worktree: .automatic)
@@ -298,6 +287,8 @@ final class ArchonRailModelTests: XCTestCase {
         XCTAssertEqual(model.draft, "do it")
     }
 
+    /// **The one line of text the rail keeps that is not in its list**, and the reason it does:
+    /// a send button that silently does nothing is a worse defect than a sentence.
     @MainActor
     func testAFailedLaunchSurfacesArchonsOwnReason() async throws {
         let client = FakeArchonClient()
@@ -313,10 +304,10 @@ final class ArchonRailModelTests: XCTestCase {
             model.launchFailure, ArchonCLIError.notInstalled().localizedDescription)
     }
 
-    // MARK: - The gear
+    // MARK: - The settings
 
     @MainActor
-    func testTheGearRemembersItsConfigAcrossARelaunch() throws {
+    func testTheSettingsRememberTheirConfigAcrossARelaunch() throws {
         let defaults = try isolatedDefaults("archon-rail-config")
         let first = ArchonRailModel(client: FakeArchonClient(), defaults: defaults)
 
@@ -329,13 +320,13 @@ final class ArchonRailModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOpeningTheGearLoadsWorkflowsAndSeedsAnUnsetChoice() async throws {
+    func testOpeningTheSettingsLoadsWorkflowsAndSeedsAnUnsetChoice() async throws {
         let client = FakeArchonClient(
             workflowList: .init(
                 workflows: [.init(name: "ship", description: "Ship it", provider: nil, model: nil)],
                 errors: []))
         let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-gear"))
+            client: client, defaults: try isolatedDefaults("archon-rail-settings"))
 
         await model.loadWorkflows(in: workspace)
 
@@ -345,199 +336,13 @@ final class ArchonRailModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOpeningTheGearWithNoWorkspaceSaysSoRatherThanShowingNothing() async throws {
+    func testOpeningTheSettingsWithNoWorkspaceSaysSoRatherThanShowingNothing() async throws {
         let model = ArchonRailModel(
-            client: FakeArchonClient(), defaults: try isolatedDefaults("archon-rail-gear-empty"))
+            client: FakeArchonClient(),
+            defaults: try isolatedDefaults("archon-rail-settings-empty"))
 
         await model.loadWorkflows(in: nil)
 
         XCTAssertEqual(model.launchFailure, ArchonRailModel.noWorkspace)
-    }
-
-    // MARK: - Archon's own verbs
-
-    /// Abandon is terminal, so nothing is resumed after it — and the rail re-reads Archon
-    /// straight away rather than showing the run for another two seconds as if the click had
-    /// missed.
-    @MainActor
-    func testAbandonEndsTheRunAndResumesNothing() async throws {
-        let run = ArchonRun.fixture(id: "a", status: "running")
-        let client = FakeArchonClient(runsResponse: .fixture(runs: [run]))
-        let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-abandon"))
-        await model.refresh(in: workspace)
-
-        await model.act(.abandon, on: run, in: workspace)
-
-        let log = await client.actionLog()
-        XCTAssertEqual(log.map(\.action), [.abandon])
-        XCTAssertEqual(log.map(\.runID), ["a"])
-        let metrics = await client.metrics()
-        XCTAssertEqual(metrics.resumedRuns, [], "abandon ends a run; there is nothing to continue")
-        XCTAssertEqual(metrics.listCalls, 2, "the row must not linger after the verb succeeded")
-        XCTAssertNil(model.actionFailure)
-    }
-
-    /// **The half of `approve` that Archon does not do for you.** In `--json` mode approve
-    /// records the decision and returns without executing — it says so with `resumable: true` —
-    /// because executing would stream workflow output over the one-line JSON contract. A rail
-    /// that stopped there would leave the run sitting exactly where it was, which is a button
-    /// that lies by omission.
-    @MainActor
-    func testApproveRecordsTheDecisionAndThenActuallyContinuesTheRun() async throws {
-        let run = ArchonRun.fixture(id: "a", status: "paused")
-        let client = FakeArchonClient(runsResponse: .fixture(runs: [run]))
-        await client.setActionAcknowledgement(
-            .fixture(action: "approve", resumable: true))
-        let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-approve"))
-        await model.refresh(in: workspace)
-
-        await model.act(.approve(comment: nil), on: run, in: workspace)
-
-        let metrics = await client.metrics()
-        XCTAssertEqual(metrics.resumedRuns, ["a"])
-        XCTAssertNil(model.actionFailure)
-    }
-
-    /// A reject that Archon answers with `resumable: false` cancelled the run outright — there
-    /// is no rework pass to drive, and resuming it anyway would restart something the operator
-    /// just refused.
-    @MainActor
-    func testARejectThatCancelledTheRunIsNotResumed() async throws {
-        let run = ArchonRun.fixture(id: "a", status: "paused")
-        let client = FakeArchonClient(runsResponse: .fixture(runs: [run]))
-        await client.setActionAcknowledgement(
-            .fixture(action: "reject", cancelled: true, resumable: false))
-        let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-reject"))
-
-        await model.act(.reject(reason: nil), on: run, in: workspace)
-
-        let metrics = await client.metrics()
-        XCTAssertEqual(metrics.resumedRuns, [])
-    }
-
-    /// The decision is already recorded by the time the resume runs, so "approve failed" would
-    /// be the wrong sentence — the operator has to be told which half worked.
-    @MainActor
-    func testAFailedResumeSaysTheApprovalWasStillRecorded() async throws {
-        let run = ArchonRun.fixture(id: "a", status: "paused")
-        let client = FakeArchonClient(runsResponse: .fixture(runs: [run]))
-        await client.setActionAcknowledgement(.fixture(action: "approve", resumable: true))
-        await client.setResumeFailure(.notInstalled())
-        let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-approve-failure"))
-
-        await model.act(.approve(comment: nil), on: run, in: workspace)
-
-        let failure = try XCTUnwrap(model.actionFailure)
-        XCTAssertTrue(failure.hasPrefix("Approve recorded, but the run did not restart:"), failure)
-    }
-
-    /// `--json` mode catches its own failures, prints `{"ok": false}` and exits ZERO. Reporting
-    /// success off the exit status would tell the operator a run was abandoned that Archon
-    /// never found.
-    @MainActor
-    func testAVerbArchonRefusedIsReportedRatherThanCountedAsDone() async throws {
-        let run = ArchonRun.fixture(id: "a", status: "running")
-        let client = FakeArchonClient(runsResponse: .fixture(runs: [run]))
-        await client.setActionAcknowledgement(
-            .fixture(ok: false, action: "abandon", error: "Workflow run not found"))
-        let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-refused"))
-
-        await model.act(.abandon, on: run, in: workspace)
-
-        XCTAssertEqual(
-            model.actionFailure, "Archon refused to abandon this run: Workflow run not found")
-    }
-
-    // MARK: - Dismissing, which is not deleting
-
-    /// Dismissal drops the row **and** the count it came from, so the rail never shows a
-    /// dismissed run twice — once as a line and once as a number.
-    @MainActor
-    func testDismissingARunDropsItsLineAndItsCountWithoutTouchingArchon() async throws {
-        let run = ArchonRun.fixture(id: "a", status: "running")
-        let client = FakeArchonClient(
-            runsResponse: .fixture(runs: [run], counts: ["all": 1, "running": 1]))
-        let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-dismiss"))
-        await model.refresh(in: workspace)
-        XCTAssertEqual(model.active.map(\.id), ["a"])
-
-        model.dismiss(run, in: workspace)
-
-        XCTAssertEqual(model.active, [])
-        XCTAssertEqual(model.statusCounts, [], "a dismissed run must not come back as a number")
-        XCTAssertEqual(model.dismissedCount, 1)
-        let log = await client.actionLog()
-        XCTAssertTrue(log.isEmpty, "dismissal is helm's own filter — Archon is never told")
-    }
-
-    /// Bulk is the real case, and it has to ask Archon for the ids: the line's number comes
-    /// from `counts`, computed over the whole project, while the rows are the newest twenty.
-    /// Dismissing what happened to be on hand would take a line reading 128 to 108.
-    @MainActor
-    func testDismissingAStatusAsksForEveryRunInItRatherThanTheVisibleTwenty() async throws {
-        let completed = (1...3).map { ArchonRun.fixture(id: "c\($0)", status: "completed") }
-        let client = FakeArchonClient(
-            runsResponse: .fixture(runs: completed, counts: ["all": 3, "completed": 3]))
-        let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-dismiss-all"))
-        await model.refresh(in: workspace)
-        XCTAssertEqual(model.statusCounts.map(\.count), [3])
-
-        await model.dismissAll(status: "completed", in: workspace)
-
-        XCTAssertEqual(model.statusCounts, [])
-        XCTAssertEqual(model.dismissedCount, 3)
-        let metrics = await client.metrics()
-        XCTAssertEqual(metrics.statusFilters.last, "completed")
-        XCTAssertEqual(
-            metrics.limits.last, ArchonRailModel.bulkDismissLimit,
-            "'dismiss all' that dismisses the newest twenty of a hundred is not 'all'")
-    }
-
-    /// The way back. Dismissal is a view filter, and a filter with no undo is indistinguishable
-    /// from the deletion Archon does not offer and helm must not imply.
-    @MainActor
-    func testDismissalsSurviveARelaunchAndCanBeUndone() async throws {
-        let defaults = try isolatedDefaults("archon-rail-dismiss-persist")
-        let run = ArchonRun.fixture(id: "a", status: "running")
-        let response = ArchonRunsResponse.fixture(runs: [run], counts: ["all": 1, "running": 1])
-        let first = ArchonRailModel(
-            client: FakeArchonClient(runsResponse: response), defaults: defaults)
-        await first.refresh(in: workspace)
-        first.dismiss(run, in: workspace)
-
-        let second = ArchonRailModel(
-            client: FakeArchonClient(runsResponse: response), defaults: defaults)
-        await second.refresh(in: workspace)
-        XCTAssertEqual(second.active, [], "a dismissal that a relaunch forgets is not a dismissal")
-
-        second.restoreDismissed(in: workspace)
-
-        XCTAssertEqual(second.active.map(\.id), ["a"])
-        XCTAssertEqual(second.dismissedCount, 0)
-    }
-
-    /// Per workspace: dismissing a run in one project must not hide anything in another, and
-    /// the two projects' Archon histories have nothing to do with each other.
-    @MainActor
-    func testDismissalsAreScopedToOneWorkspace() async throws {
-        let defaults = try isolatedDefaults("archon-rail-dismiss-scope")
-        let run = ArchonRun.fixture(id: "a", status: "running")
-        let client = FakeArchonClient(
-            runsResponse: .fixture(runs: [run], counts: ["all": 1, "running": 1]))
-        let model = ArchonRailModel(client: client, defaults: defaults)
-        await model.refresh(in: workspace)
-        model.dismiss(run, in: workspace)
-        XCTAssertEqual(model.active, [])
-
-        await model.refresh(in: "/tmp/other-project")
-
-        XCTAssertEqual(model.active.map(\.id), ["a"])
     }
 }

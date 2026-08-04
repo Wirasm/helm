@@ -40,19 +40,13 @@ the app — several slots are visible at once, each with its own selected pane.
 _Avoid_: cell, tab group, split
 
 **pane**:
-A workbench tenant. Three types: **terminal**, **canvas**, and **run pane**.
+A workbench tenant. Two types: **terminal** and **canvas**.
 _Avoid_: view, widget, dock
-
-**run pane**:
-The pane type that resolves a persisted Archon address and renders it live — one run's
-compact, ordered node summaries, or every run with a given status. It does not render raw
-workflow events or control the run.
-_Avoid_: event log, Archon canvas, rail detail
 
 **face**:
 Which of a terminal pane's two presentations is drawn — the terminal, or the agent's
 writing over it. A property of the pane, so two terminals side by side can show different
-ones; a canvas and a run pane have none.
+ones; a canvas has none.
 _Avoid_: mode, view, tab
 
 **visible**:
@@ -79,33 +73,23 @@ _Avoid_: artifact pane, webview, browser, draw-on pane
 ### What helm looks like
 
 **rail**:
-The remembered, default-hidden strip to the right of the workbench: **quick actions on things
-that are not your current work**. Its one tenant is Archon — a prompt field that launches a
-detached workflow on Enter, a gear holding what Enter launches, one line per **active** run,
-and a count per other status. Everything worth reading opens as a pane on the bench; nothing
-is read in the rail, and it is not another place panes can dock.
+The remembered, default-hidden strip to the right of the workbench: **somewhere to start work
+that is not your current work**. Its one tenant is Archon, and it renders five things — a
+title, a field, a send button, one line per **running run**, and a count per other status.
+Nothing is read in the rail and nothing opens from it; run detail is read in Archon's own web
+UI. It is not another place panes can dock.
 _Avoid_: sidebar, pane dock, monitor rail, calling it a run list
 
-**active run**:
-A run the rail gives a line to: `running`, or `paused`. The second is not a detail — a paused
-run is stopped at an approval gate waiting on the operator, and answering that with a number
-is the gap the rail exists to close. Every other status is history and collapses to a count.
-_Avoid_: open run, live run (that word is the liveness mark's, and means the CLI answered)
+**running run**:
+The one status the rail gives a line to, with a subline naming the **stage** it is on. Every
+other status — including `paused` — is history or a gate, and collapses to a count.
+_Avoid_: active run (the word the rail used when `paused` had a row too), open run, live run
 
-**abandon**:
-Ending a run, in Archon. One of its four run-scoped verbs — `abandon`, `approve`, `reject`,
-`resume` — and a real, recorded state change: the run becomes `cancelled` everywhere Archon is
-read from.
-_Avoid_: cancel, kill, stop, clear
-
-**dismiss**:
-Stopping a run from appearing **in this rail, in this workspace, on this machine**. helm's own
-filter and nothing else — the run is still in `archon workflow runs`, still counted by every
-other Archon surface. Archon has no delete, archive or purge for a run, so a control that read
-as one would be a lie the operator finds a week later; the two words are never used for each
-other's job. Bounded and forgettable: a dismissed run coming back is the property, not a bug.
-_Avoid_: clear, delete, archive, remove, hide (in prose — the menu says "hide from this rail",
-which is what it does)
+**stage**:
+One node of a workflow run, named the way Archon names it — `parse-request`, `implement`,
+`validate`. What the rail's subline says, because it is the thing that advances.
+_Avoid_: step (that word is `current_step_name`'s, which Archon never populates for a DAG),
+node (right in Archon's own model, but the rail shows one at a time and not the fold)
 
 **palette**:
 helm's one table of colours, as values (`Palette.helm`). There is exactly one, and every

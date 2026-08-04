@@ -6,7 +6,7 @@ actor FakeArchonClient: ArchonClient {
     var runsResponse: ArchonRunsResponse
     var workflowList: ArchonWorkflowListResponse
     var detail: ArchonRun
-    /// Per-id detail, for the rail's preview fan-out. Falls back to `detail`.
+    /// Per-id detail, for the rail's stage fan-out. Falls back to `detail`.
     var details: [String: ArchonRun] = [:]
     var acknowledgement: ArchonLaunchAcknowledgement
     var failure: ArchonCLIError?
@@ -15,23 +15,12 @@ actor FakeArchonClient: ArchonClient {
     var detailFailure: ArchonCLIError?
     var delay: Duration?
 
-    /// The ack every verb answers with unless a test says otherwise.
-    var actionAcknowledgement: ArchonActionAcknowledgement = .fixture()
-    var resumeAcknowledgement: ArchonLaunchAcknowledgement = .fixture()
-    /// Fails only the resume that follows an approve or reject, which is the branch where the
-    /// decision is already recorded and cannot be taken back.
-    var resumeFailure: ArchonCLIError?
-
     private(set) var listCalls = 0
     private(set) var currentListCalls = 0
     private(set) var maximumListCalls = 0
-    private(set) var statusFilters: [String?] = []
-    private(set) var limits: [Int?] = []
     private(set) var detailRequests: [String] = []
     private(set) var workspacePaths: [String] = []
     private(set) var launchRequests: [ArchonLaunchRequest] = []
-    private(set) var actions: [(action: ArchonRunAction, runID: String)] = []
-    private(set) var resumedRuns: [String] = []
 
     init(
         runsResponse: ArchonRunsResponse = .fixture(),
@@ -53,47 +42,25 @@ actor FakeArchonClient: ArchonClient {
     func setAcknowledgement(_ acknowledgement: ArchonLaunchAcknowledgement) {
         self.acknowledgement = acknowledgement
     }
-    func setActionAcknowledgement(_ acknowledgement: ArchonActionAcknowledgement) {
-        actionAcknowledgement = acknowledgement
-    }
-    func setResumeFailure(_ failure: ArchonCLIError?) { resumeFailure = failure }
-    func setResumeAcknowledgement(_ acknowledgement: ArchonLaunchAcknowledgement) {
-        resumeAcknowledgement = acknowledgement
-    }
 
     func metrics() -> (
         listCalls: Int, maximumListCalls: Int, launchRequests: Int, detailRequests: [String],
-        statusFilters: [String?], workspacePaths: [String], limits: [Int?], resumedRuns: [String]
+        workspacePaths: [String]
     ) {
-        (
-            listCalls, maximumListCalls, launchRequests.count, detailRequests, statusFilters,
-            workspacePaths, limits, resumedRuns
-        )
+        (listCalls, maximumListCalls, launchRequests.count, detailRequests, workspacePaths)
     }
 
     func lastLaunch() -> ArchonLaunchRequest? { launchRequests.last }
-    func actionLog() -> [(action: ArchonRunAction, runID: String)] { actions }
 
-    func runs(
-        in workspacePath: String, status: String?, limit: Int?
-    ) async throws
-        -> ArchonRunsResponse
-    {
+    func runs(in workspacePath: String) async throws -> ArchonRunsResponse {
         listCalls += 1
         currentListCalls += 1
         maximumListCalls = max(maximumListCalls, currentListCalls)
-        statusFilters.append(status)
-        limits.append(limit)
         workspacePaths.append(workspacePath)
         if let delay { try? await Task.sleep(for: delay) }
         currentListCalls -= 1
         if let failure { throw failure }
-        guard let status else { return runsResponse }
-        // The CLI filters in the database; the fake filters the same way so a test can tell
-        // "asked for completed" from "got everything and hoped".
-        return ArchonRunsResponse(
-            runs: runsResponse.runs.filter { $0.status == status }, total: runsResponse.total,
-            counts: runsResponse.counts, scopeFallback: runsResponse.scopeFallback)
+        return runsResponse
     }
 
     func workflows(in workspacePath: String) async throws -> ArchonWorkflowListResponse {
@@ -115,23 +82,6 @@ actor FakeArchonClient: ArchonClient {
         if let failure { throw failure }
         return acknowledgement
     }
-
-    func act(
-        _ action: ArchonRunAction, on runID: String, in workspacePath: String
-    ) async throws
-        -> ArchonActionAcknowledgement
-    {
-        actions.append((action, runID))
-        workspacePaths.append(workspacePath)
-        if let failure { throw failure }
-        return actionAcknowledgement
-    }
-
-    func resume(_ run: ArchonRun) async throws -> ArchonLaunchAcknowledgement {
-        resumedRuns.append(run.id)
-        if let resumeFailure { throw resumeFailure }
-        return resumeAcknowledgement
-    }
 }
 
 extension ArchonRun {
@@ -144,18 +94,6 @@ extension ArchonRun {
             id: id, workflowName: workflowName, status: status, workingPath: workingPath,
             userMessage: userMessage, startedAt: nil, completedAt: nil,
             metadata: nil, nodes: nodes)
-    }
-}
-
-extension ArchonActionAcknowledgement {
-    static func fixture(
-        ok: Bool = true, action: String = "abandon", cancelled: Bool? = nil,
-        resumable: Bool? = nil, error: String? = nil
-    ) -> ArchonActionAcknowledgement {
-        ArchonActionAcknowledgement(
-            ok: ok, runId: "run-1", action: action, workflowName: "implement",
-            status: ok ? "cancelled" : nil, cancelled: cancelled, maxAttemptsReached: nil,
-            resumable: resumable, error: error)
     }
 }
 
@@ -180,6 +118,8 @@ extension ArchonNode {
 }
 
 extension ArchonLaunchAcknowledgement {
+    /// The exact field set `archon workflow run --detach --json` prints — read off its own
+    /// `writeJsonLine` call in `packages/cli/src/commands/workflow.ts`, not imagined.
     static func fixture(ok: Bool = true, detached: Bool = true) -> ArchonLaunchAcknowledgement {
         ArchonLaunchAcknowledgement(
             ok: ok, action: "run", detached: detached, workflow: "implement",

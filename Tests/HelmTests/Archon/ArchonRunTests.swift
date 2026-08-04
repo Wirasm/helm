@@ -74,11 +74,17 @@ final class ArchonRunTests: XCTestCase {
         XCTAssertNil(ArchonRun.fixture(nodes: []).currentNode)
     }
 
-    func testThePreviewIsFlattenedToOneLine() {
-        let node = ArchonNode.fixture(outputPreview: "I'll inspect\nthe   manifest\n\nthen build.")
-        XCTAssertEqual(node.previewLine, "I'll inspect the manifest then build.")
-        XCTAssertNil(ArchonNode.fixture(outputPreview: "   \n ").previewLine)
-        XCTAssertNil(ArchonNode.fixture(outputPreview: nil).previewLine)
+    /// **The tint mapping is Archon's status vocabulary, not its brand.** The console keeps
+    /// the two apart on purpose so a brand swap cannot change what a colour means, and the
+    /// easy mistake here is painting every Archon surface magenta.
+    func testStatusTintsFollowArchonsStatusVocabularyRatherThanItsBrand() {
+        XCTAssertEqual(ArchonRunsResponse.tint(for: "running"), .running)
+        XCTAssertEqual(ArchonRunsResponse.tint(for: "completed"), .success)
+        XCTAssertEqual(ArchonRunsResponse.tint(for: "failed"), .error)
+        XCTAssertEqual(ArchonRunsResponse.tint(for: "paused"), .warning)
+        XCTAssertEqual(
+            ArchonRunsResponse.tint(for: "waiting-on-new-archon"), .neutral,
+            "a status Archon adds later still gets a line, in the colour that claims nothing")
     }
 
     // MARK: - Shapes that must survive Archon changing
@@ -143,40 +149,6 @@ final class ArchonRunTests: XCTestCase {
             "`all` is a total, a zero is not worth a line, and an unknown status sorts last")
     }
 
-    // MARK: - What a pane persists
-
-    func testBothPaneAddressesRoundTrip() throws {
-        for reference in [
-            ArchonPaneRef.run(id: "r1", workflowName: "ship"), .runs(status: "failed"),
-        ] {
-            XCTAssertEqual(
-                try decoder().decode(ArchonPaneRef.self, from: JSONEncoder().encode(reference)),
-                reference)
-        }
-    }
-
-    /// A bench stored by the build before this one holds the bare shape. Rejecting it would
-    /// not cost that pane — `WorkspaceContextStore.load` decodes one dictionary for the whole
-    /// app, so a single unreadable pane returns `[:]` and takes **every** workspace's
-    /// arrangement with it.
-    func testTheAddressFromTheBuildBeforeThisOneStillDecodes() throws {
-        let stored = Data(#"{"id":"r1","workflowName":"ship"}"#.utf8)
-
-        XCTAssertEqual(
-            try decoder().decode(ArchonPaneRef.self, from: stored),
-            .run(id: "r1", workflowName: "ship"))
-    }
-
-    func testThePaneAddressIsStoredWithNamedKeysRatherThanPositions() throws {
-        let json = String(
-            decoding: try JSONEncoder().encode(ArchonPaneRef.runs(status: "failed")), as: UTF8.self)
-        XCTAssertTrue(json.contains("\"kind\":\"runs\""), json)
-        XCTAssertFalse(
-            json.contains("_0"),
-            "the synthesized shape uses positional keys, which break on any reordering of the "
-                + "cases and are unreadable in the stored blob")
-    }
-
     // MARK: - What Enter launches
 
     /// The pair this replaced could describe states that do not exist —
@@ -187,7 +159,7 @@ final class ArchonRunTests: XCTestCase {
         XCTAssertEqual(WorktreeChoice.branch("x").arguments, ["--branch", "x"])
     }
 
-    /// Adding a flag to the gear must not reset the operator's workflow choice, which is what
+    /// Adding a flag to the settings must not reset the operator's workflow choice, which is what
     /// synthesized decoding of a new property would do to every config stored before it.
     func testAConfigStoredBeforeAPropertyExistedStillLoads() throws {
         let stored = Data(#"{"workflow":"archon-fix-github-issue"}"#.utf8)

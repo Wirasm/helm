@@ -30,10 +30,7 @@ struct RootView: View {
                 if archonRail.isVisible {
                     Color.border.frame(width: 1)
                     ArchonRailView(
-                        model: archonRail,
-                        workspacePath: model.selectedWorkspaceRoot,
-                        canOpenRuns: workbench.bench != nil,
-                        openRun: { workbench.openRun($0) })
+                        model: archonRail, workspacePath: model.selectedWorkspaceRoot)
                 }
             }
             StatusBarView(model: model)

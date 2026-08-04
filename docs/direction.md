@@ -51,25 +51,18 @@ terminal in, running Archon workflows), but they wait on dogfooding to prove a n
   stack, each slot tabbed. A real window manager, but not a general tree — every arrangement
   worth having is columns-of-stacks, and depth-2 is a strict subset of the tree so nothing is
   foreclosed.
-- **Pane** — a workbench tenant. **Three types**, where this list said "two, and only two"
-  until Archon arrived.
+- **Pane** — a workbench tenant. **Two types, and only two.**
   - **Terminal** — the chat view is a second **face** on this, drawn over a terminal that
     stays mounted underneath, toggled with ⌘T. The face is a property of the pane, so two
     terminals side by side can show different ones.
   - **Canvas** — renders a markdown file, an HTML file, or a URL, and accepts annotation on
     it. Modular by source, extendable to further formats. This is `ArtifactPane` promoted,
     not new work — and the promotion has shipped, so it is `CanvasView` / `CanvasModel` now.
-  - **Run pane** — resolves one persisted Archon address and renders it live: a run's ordered
-    node summaries, or every run with a status.
 
-  **The third type is a decision, not a drift.** A run pane is not a terminal — no pty, no
-  face, nothing to type into. It is not a canvas either, on this list's own definition: a
-  canvas renders *a file or a URL* **and accepts annotation on it**, and neither half holds.
-  There is no file — the content is a process's state, re-fetched every two seconds — and an
-  annotation anchor has to survive a rewrite, where a run pane rewrites itself on every poll.
-  "Modular by source, extendable to further formats" means *formats*; a live process is not
-  one. Making it a canvas would have meant either a canvas that cannot be annotated or an
-  annotation that silently detaches, and both are worse than a third type.
+  A third type was built for Archon and then removed with the rail it served. The argument for
+  it is not preserved here: the operator reads run detail in Archon's own web UI, so there is
+  nothing left for a run pane to render, and a list of two is easier to defend than a list of
+  three with a footnote.
 
 Two corrections to what that list used to say, both from building it. The chat view is not
 a *swap*: the terminal view stays mounted under it, because one attached surface drives the
@@ -97,27 +90,28 @@ and no direct SQLite reads. **Input first**, which is the correction #40 made af
 list-first version was built and run: the same workflow is started over and over, so that has
 to cost zero clicks, and reading a finished run is rare and belongs on the bench.
 
-- A **prompt field** in the rail, always present. Type, press Enter, the workflow runs
-  detached.
-- A **gear** beneath it holding what Enter launches — the workflow and how it isolates. Built
-  to grow as the CLI does; ships without a model control.
-- **One line per active run** — `running` or `paused` — with a subline that follows the current
-  node. Every other status collapses to a count; clicking one opens that list as a **bench
-  pane**, which is also how a single run's node view opens. Nothing is read inside the rail.
-- **Archon's own verbs on a run**: `abandon` on any active one, `approve` and `reject` on a
-  paused one. `--json` mode records an approval without executing, so helm resumes the run
-  itself afterwards — the CLI's interactive form does the same, and a rail whose Approve left
-  the run parked would be a control that lies by omission.
-- **Dismissal, which is not deletion.** Archon has no delete, archive or purge for a run, so
-  "stop showing me this" can only be helm's own filter: per workspace, persisted, bounded, and
-  labelled as what it is. Reaching into Archon's SQLite to make it more than that is out.
-- A **liveness mark**, because there is no daemon: `archon` is invoked per poll, so "live"
-  means the last poll answered. Without it, "no runs" and "Archon cannot be reached" look
-  identical.
-- **It looks like Archon's console**, inside the palette rule rather than around it: density,
-  monospace run ids, tracked micro-labels — and two governed tokens carrying Archon's own
-  brand magenta and warning amber (`Palette.archonBrand`, `Palette.archonAttention`). Not hex
-  in a view, and not Archon's palette wholesale: *distinctly Archon's*, not *foreign*.
+**Minimal on purpose, and that is the second correction.** The full version of this was built,
+used, and cut back — *"too much bloat, I want to start simple"*. What is gone: run panes,
+finished-run rows, Archon's `approve`/`reject`/`abandon` verbs, helm's own dismissal filter,
+and the liveness mark. Run detail is read in Archon's own web UI, which is better at it than
+helm will ever be.
+
+The rail renders five things, and nothing else:
+
+- A **prompt field**, always present. Type, press Enter, the workflow runs detached.
+- A **send button** doing the same thing for the mouse.
+- **Settings** behind an icon, holding what a launch composes — the workflow and how it
+  isolates. Built to grow as the CLI does; ships without a model control.
+- **One line per running run**, with a subline naming the **stage** it is on and changing as
+  its nodes advance.
+- **One collapsed count per other status**, `paused` included. Clicking one does nothing: it
+  is a number, not a way in.
+- **It carries Archon's brand and Archon's status colours, and keeps them apart.** The brand is
+  the console's duotone — magenta → violet → teal, painted on the title and the send button,
+  because that gradient *is* the mark. Status is deliberately not brand: a running run is
+  Archon's electric blue, a failure its red, a completed run the brand teal. All of it is
+  governed tokens held at helm's contrast floors, never hex in a view, and never Archon's
+  charcoal chrome wholesale: *distinctly Archon's*, not *foreign*.
 
 ## Sizing
 

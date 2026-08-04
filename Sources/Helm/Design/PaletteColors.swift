@@ -37,6 +37,24 @@ extension Color {
     static let border = Palette.helm.border.color
     static let accent = Palette.helm.accent.color
     static let selection = Palette.helm.selection.color
-    static let archonBrand = Palette.helm.archonBrand.color
+    static let archonMagenta = Palette.helm.archonMagenta.color
+    static let archonViolet = Palette.helm.archonViolet.color
+    static let archonTeal = Palette.helm.archonTeal.color
+    static let archonRunning = Palette.helm.archonRunning.color
     static let archonAttention = Palette.helm.archonAttention.color
+    static let archonError = Palette.helm.archonError.color
+}
+
+extension ShapeStyle where Self == LinearGradient {
+    /// Archon's brand, as the one thing a view spends it through.
+    ///
+    /// 135° and three stops, because that is what the console's `--brand-gradient` is; a
+    /// `LinearGradient` rather than two so `.foregroundStyle` paints the title's glyphs and
+    /// the same value fills the send button. SwiftUI's unit space runs y-down, so 135° from
+    /// the CSS convention is top-leading → bottom-trailing here.
+    static var archonBrand: LinearGradient {
+        LinearGradient(
+            colors: [.archonMagenta, .archonViolet, .archonTeal],
+            startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
 }

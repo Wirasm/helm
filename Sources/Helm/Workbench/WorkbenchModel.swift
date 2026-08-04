@@ -38,7 +38,6 @@ final class WorkbenchModel: ObservableObject {
     private(set) var workspacePath: String?
 
     private let terminals: TerminalManager
-    private let archon: any ArchonClient
 
     /// One `CanvasModel` per canvas pane, keyed by pane id — the "N instances" #23 named.
     /// Dropped when its pane closes, which drops its `FileWatcher` and that watcher's open
@@ -51,16 +50,10 @@ final class WorkbenchModel: ObservableObject {
     /// stayed — a `FileWatcher` and its open descriptor per canvas, for the life of the
     /// process.
     private var canvases: [Pane.ID: CachedCanvas] = [:]
-    private var archonRuns: [Pane.ID: CachedArchonRun] = [:]
 
     private struct CachedCanvas {
         let workspacePath: String?
         let model: CanvasModel
-    }
-
-    private struct CachedArchonRun {
-        let workspacePath: String?
-        let model: ArchonRunPaneModel
     }
 
     /// `AnyCancellable`s rather than NotificationCenter tokens: they unsubscribe in their
@@ -71,9 +64,8 @@ final class WorkbenchModel: ObservableObject {
     /// Internal, not a `.shared`. `TerminalManager.shared` and `BoardModel.shared` are
     /// singletons because other slices reach them; nothing outside the workbench needs
     /// this one, and an injectable initialiser is what lets tests build isolated models.
-    init(terminals: TerminalManager, archon: any ArchonClient = ArchonCLI()) {
+    init(terminals: TerminalManager) {
         self.terminals = terminals
-        self.archon = archon
         subscribe()
     }
 
@@ -101,7 +93,6 @@ final class WorkbenchModel: ObservableObject {
         workspacePath = nil
         bench = nil
         canvases.removeAll()
-        archonRuns.removeAll()
         reconcileVisibility()
     }
 
@@ -118,9 +109,6 @@ final class WorkbenchModel: ObservableObject {
         for (id, cached) in canvases where cached.workspacePath == path {
             cached.model.close()
             canvases[id] = nil
-        }
-        for (id, cached) in archonRuns where cached.workspacePath == path {
-            archonRuns[id] = nil
         }
     }
 
@@ -166,24 +154,6 @@ final class WorkbenchModel: ObservableObject {
         // that workspace — the same association `TerminalManager` gets for free by
         // storing `workspacePath` on the session itself.
         canvases[pane.id] = CachedCanvas(workspacePath: workspacePath, model: model)
-        return model
-    }
-
-    /// Resolve a persisted Archon address to one live polling model per pane.
-    func archonRun(for pane: Pane) -> ArchonRunPaneModel {
-        if let existing = archonRuns[pane.id] { return existing.model }
-        let reference: ArchonPaneRef
-        if case let .archonRun(value) = pane.content {
-            reference = value
-        } else {
-            preconditionFailure("asked for an Archon model for a non-Archon pane")
-        }
-        // The workspace is stamped on the model as well as on the cache entry: every `archon`
-        // call resolves its project from a working directory, and by the time a pane is being
-        // polled the app's selection may have moved on.
-        let model = ArchonRunPaneModel(
-            reference: reference, workspacePath: workspacePath, client: archon)
-        archonRuns[pane.id] = CachedArchonRun(workspacePath: workspacePath, model: model)
         return model
     }
 
@@ -240,20 +210,6 @@ final class WorkbenchModel: ObservableObject {
         return pane.id
     }
 
-    /// nil when there is no bench to put it on, which is only true with no workspace open.
-    /// The rail disables its rows on the same condition rather than letting a click land
-    /// nowhere — see `ArchonRailView.canOpenRuns`.
-    @discardableResult
-    func openRun(_ reference: ArchonPaneRef) -> Pane.ID? {
-        guard var bench else { return nil }
-        let placement = bench.placement(forOpening: reference)
-        let pane = Pane(content: .archonRun(reference))
-        bench.insert(pane, at: placement)
-        commit(bench)
-        if case let .existing(open) = placement { return open }
-        return pane.id
-    }
-
     func close(_ pane: Pane.ID) {
         guard var bench, let closing = bench.pane(pane), bench.close(pane) else { return }
         commit(bench)
@@ -266,8 +222,6 @@ final class WorkbenchModel: ObservableObject {
         case .canvas:
             canvases[pane]?.model.close()
             canvases[pane] = nil
-        case .archonRun:
-            archonRuns[pane] = nil
         }
     }
 

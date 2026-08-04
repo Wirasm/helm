@@ -49,77 +49,6 @@ enum ArchonDate {
     }
 }
 
-// MARK: - What a pane is pointed at
-
-/// The stable address persisted by a workbench pane. Volatile run and node state is resolved
-/// from the CLI when the pane is visible.
-///
-/// **Two cases because the rail has two ways in.** A running run is a line you click to read
-/// its nodes; every other status is one collapsed count, and clicking *that* has to land
-/// somewhere. It lands on the bench, in a pane addressed by the status — which keeps the rail
-/// collapsed (#142's whole point) and is the only route to a finished run now that the rail
-/// no longer lists them.
-enum ArchonPaneRef: Equatable, Sendable {
-    /// One run's node fold. `workflowName` rides along so a tab has a title before the first
-    /// poll answers, and after Archon has forgotten the run entirely.
-    case run(id: String, workflowName: String)
-    /// Every run Archon reports with this status. A raw string for the same reason
-    /// `ArchonRun.status` is one.
-    case runs(status: String)
-
-    /// What the tab and the pane header say.
-    var title: String {
-        switch self {
-        case let .run(_, workflowName): workflowName
-        case let .runs(status): status
-        }
-    }
-}
-
-/// Hand-written with a string discriminator, for the reason `Pane.Content`'s encoder gives:
-/// the synthesized shape uses positional `_0` keys, which break on any reordering of the cases
-/// and are unreadable in the stored blob.
-extension ArchonPaneRef: Codable {
-    private enum CodingKeys: String, CodingKey { case kind, id, workflowName, status }
-    private enum Kind: String, Codable { case run, runs }
-
-    init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        // No discriminator means a bench stored by the build before this one, when the only
-        // Archon address was a bare `{id, workflowName}`. Read as a run rather than thrown on,
-        // because `WorkspaceContextStore.load` decodes one dictionary for the whole app: a
-        // single pane it cannot read returns `[:]`, and **every** workspace's arrangement goes
-        // with it, not just the one holding the pane.
-        guard let kind = try container.decodeIfPresent(Kind.self, forKey: .kind) else {
-            self = .run(
-                id: try container.decode(String.self, forKey: .id),
-                workflowName: try container.decode(String.self, forKey: .workflowName))
-            return
-        }
-        switch kind {
-        case .run:
-            self = .run(
-                id: try container.decode(String.self, forKey: .id),
-                workflowName: try container.decode(String.self, forKey: .workflowName))
-        case .runs:
-            self = .runs(status: try container.decode(String.self, forKey: .status))
-        }
-    }
-
-    func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case let .run(id, workflowName):
-            try container.encode(Kind.run, forKey: .kind)
-            try container.encode(id, forKey: .id)
-            try container.encode(workflowName, forKey: .workflowName)
-        case let .runs(status):
-            try container.encode(Kind.runs, forKey: .kind)
-            try container.encode(status, forKey: .status)
-        }
-    }
-}
-
 // MARK: - What the CLI says
 
 /// One row from `archon workflow runs --json`, and the superset returned by verbose
@@ -134,12 +63,9 @@ struct ArchonRun: Codable, Equatable, Sendable {
     let id: String
     let workflowName: String
     let status: String
-    /// **Load-bearing for `resume`, not decoration.** A run cut into a worktree records that
-    /// worktree here, and `--resume` resolves the run to continue by (workflow name, working
-    /// path) — so this is the directory the resume has to be invoked from.
+    /// Where the run is working — the worktree Archon cut for it, when it cut one.
     let workingPath: String?
-    /// The instruction the run was started with. `--resume` re-enters the workflow rather than
-    /// starting a new one, so it needs the original message back, not a fresh one.
+    /// The instruction the run was started with.
     let userMessage: String?
     let startedAt: Date?
     let completedAt: Date?
@@ -155,13 +81,9 @@ struct ArchonRun: Codable, Equatable, Sendable {
     /// shows, so what is on screen is what you would type.
     var shortID: String { String(id.prefix(8)) }
 
-    /// Whether this run is still helm's business: it is doing something, or it is waiting on
-    /// a person. Everything else is history and collapses to a count.
-    var isActive: Bool { ArchonRunStatus.active.contains(status) }
-
-    /// A run stopped at an approval gate — the one state where the rail is the *only* place
-    /// the operator would find out, and the reason `approve` and `reject` are here at all.
-    var isPaused: Bool { status == ArchonRunStatus.paused }
+    /// The one status that gets a line of its own. Everything else — including `paused` —
+    /// is a count, because the rail is a place to start work rather than a place to read it.
+    var isRunning: Bool { status == ArchonRunStatus.running }
 
     /// The node the subline animates: the one Archon says is running, else the last one it
     /// reported. **Last rather than first** — `nodes` arrives in DAG order, and a fan-out
@@ -193,9 +115,6 @@ struct ArchonRun: Codable, Equatable, Sendable {
 /// workflows, not runs.
 enum ArchonRunStatus {
     static let running = "running"
-    static let paused = "paused"
-    /// The two the rail gives a line to: one is working, one is waiting on you.
-    static let active = [running, paused]
 }
 
 struct ArchonNode: Codable, Equatable, Sendable {
@@ -234,10 +153,19 @@ struct ArchonNode: Codable, Equatable, Sendable {
         }
     }
 
+    /// The stage's name — `parse-request`, `implement`, `validate`. What the rail's subline
+    /// says, because it is the thing that *advances*.
+    ///
+    /// **Node keys are camelCase while the run's own are snake_case**, which is a real
+    /// asymmetry in Archon's output rather than a typo here — verified against
+    /// `workflow get --json --verbose` on 0.7.0, and captured in
+    /// `Tests/HelmTests/Archon/Fixtures/`.
     let nodeId: String
     let state: State
     let startedAt: Date?
     let durationMs: Int?
+    /// Archon's ~200-character excerpt of what the node wrote. Decoded because it is part of
+    /// a node; not rendered, because reading a run happens in Archon's own UI.
     let outputPreview: String?
     let error: String?
 }
@@ -391,4 +319,27 @@ struct ArchonLaunchRequest: Equatable, Sendable {
     let workflow: String
     let input: String
     let worktree: WorktreeChoice
+}
+
+extension ArchonRunsResponse {
+    /// The tint a collapsed count carries, and it is **Archon's status mapping, not its
+    /// brand**. The console keeps the two apart on purpose — *"status colours are kept
+    /// distinct from accent so brand swaps don't break meaning"* — so a failed run is red and
+    /// a completed one is the brand teal because teal is what `--success` points at, never
+    /// because everything Archon is magenta.
+    static func tint(for status: String) -> ArchonStatusTint {
+        switch status {
+        case "running": .running
+        case "completed": .success
+        case "failed": .error
+        case "paused": .warning
+        default: .neutral
+        }
+    }
+}
+
+/// Which token a status spends. An enum rather than a `Color` so the mapping is a value the
+/// tests can read, in the same spirit as `Palette` itself.
+enum ArchonStatusTint: Equatable, Sendable {
+    case running, success, error, warning, neutral
 }

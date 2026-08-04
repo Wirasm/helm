@@ -103,14 +103,6 @@ struct SlotTabStrip: View {
                 onSelect: { model.select(pane.id) },
                 onClose: { model.close(pane.id) }
             )
-        case let .archonRun(reference):
-            ArchonRunTab(
-                reference: reference,
-                isSelected: isSelected,
-                canClose: canClose,
-                onSelect: { model.select(pane.id) },
-                onClose: { model.close(pane.id) }
-            )
         }
     }
 

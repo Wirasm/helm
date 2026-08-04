@@ -92,28 +92,54 @@ final class PaletteTests: XCTestCase {
 
     // MARK: - Archon's voice
 
-    /// Pinned, for the reason the chat face's five are: these two exist so the Archon rail can
-    /// read as Archon's console, and moving one is a change to how that surface *identifies
-    /// itself*, not a tweak. They are Archon's own `--brand-magenta` and `--warning` hues —
-    /// `oklch(… 330)` and `oklch(… 85)`, in `packages/web/src/experiments/console/theme.css` —
-    /// converted to sRGB and held at the lightness helm's two appearances need.
-    func testTheArchonTokensAreArchonsHuesAtHelmsLightnesses() {
-        XCTAssertEqual(palette.archonBrand.light.hex, "#b200ad", "Archon's magenta, darkened")
-        XCTAssertEqual(palette.archonBrand.dark.hex, "#ed41dd")
+    /// The three stops of Archon's own duotone, pinned. **The brand is the gradient**, not a
+    /// magenta — its console says so — so moving one of these is a change to how the rail
+    /// identifies itself rather than a tweak. Archon authors them in oklch at
+    /// `packages/web/src/experiments/console/theme.css`:
+    /// `oklch(0.640 0.295 330)`, `oklch(0.560 0.215 305)`, `oklch(0.755 0.165 168)`.
+    ///
+    /// The dark values are Archon's own published hexes for magenta and teal; the violet is
+    /// the one stop lifted, because at its authored lightness it reads 3.22 on helm's dark
+    /// surface. Every light value is the same hue taken down until it clears the floor below.
+    func testTheBrandStopsAreArchonsDuotoneAtHelmsLightnesses() {
+        XCTAssertEqual(palette.archonMagenta.light.hex, "#b200ad", "Archon's magenta, darkened")
+        XCTAssertEqual(palette.archonMagenta.dark.hex, "#ed10ec", "Archon's own #ED10EC")
+        XCTAssertEqual(palette.archonViolet.light.hex, "#8a38ce")
+        XCTAssertEqual(palette.archonViolet.dark.hex, "#b266f9", "lifted from oklch(0.560)")
+        XCTAssertEqual(palette.archonTeal.light.hex, "#04795b", "the stop that moves furthest")
+        XCTAssertEqual(palette.archonTeal.dark.hex, "#06ce94", "Archon's own #06CE94")
+    }
+
+    /// The status hues, which are **deliberately not the brand**: Archon keeps them *"distinct
+    /// from accent so brand swaps don't break meaning"*, and a build that quietly folded one
+    /// into the magenta would make the rail's counts decorative.
+    func testTheStatusTokensAreArchonsStatusHues() {
+        XCTAssertEqual(palette.archonRunning.light.hex, "#0170b3", "Archon's electric blue")
+        XCTAssertEqual(palette.archonRunning.dark.hex, "#3dacfe")
         XCTAssertEqual(palette.archonAttention.light.hex, "#9d5f00", "Archon's amber, darkened")
         XCTAssertEqual(palette.archonAttention.dark.hex, "#e1a035")
+        XCTAssertEqual(palette.archonError.light.hex, "#c91f3f", "Archon's hot red, darkened")
+        XCTAssertEqual(palette.archonError.dark.hex, "#ff5166")
     }
 
     /// **Not the console's values to the digit, and this is the assertion that says why.**
-    /// Archon's magenta is authored against a charcoal console at hue 265 and lands at 3.76 on
-    /// helm's light surface; helm has a light appearance that Archon's console does not, and
-    /// both tokens carry small labels — a wordmark, a gate's verbs — so the bar is the body
-    /// floor of 4.5 rather than the non-text 3 that `accent` and `textFaint` are held to.
-    func testTheArchonTokensCarrySmallLabelsInBothAppearances() {
+    /// Archon's console is dark-only at hue 265; helm has a light appearance, and on it the
+    /// authored magenta lands at 3.75 and the authored teal at 1.92. Every one of these paints
+    /// small text — a tracked wordmark, a count numeral — so the bar is the body floor of 4.5
+    /// rather than the non-text 3 that `accent` and `textFaint` are held to.
+    ///
+    /// **This is also what makes the send button legible.** Its label is `Color.surface`
+    /// knocked out of the gradient, so "each stop against the surface" and "the label against
+    /// each stop" are the same measurement — one floor covers the title and the button both.
+    func testEveryArchonTokenCarriesSmallTextInBothAppearances() {
         for appearance in Palette.Appearance.allCases {
             for (name, token) in [
-                ("archonBrand", palette.archonBrand),
+                ("archonMagenta", palette.archonMagenta),
+                ("archonViolet", palette.archonViolet),
+                ("archonTeal", palette.archonTeal),
+                ("archonRunning", palette.archonRunning),
                 ("archonAttention", palette.archonAttention),
+                ("archonError", palette.archonError),
             ] {
                 let onSurface = contrast(token, on: palette.surface, in: appearance)
                 XCTAssertGreaterThanOrEqual(
@@ -126,18 +152,43 @@ final class PaletteTests: XCTestCase {
         }
     }
 
+    /// A gradient whose stops are indistinguishable is a flat fill with extra steps — and the
+    /// point of the duotone is that you can see it travel from magenta to teal.
+    func testTheBrandStopsAreVisiblyDifferentFromEachOther() {
+        for appearance in Palette.Appearance.allCases {
+            let stops = [palette.archonMagenta, palette.archonViolet, palette.archonTeal]
+            for (first, second) in zip(stops, stops.dropFirst()) {
+                XCTAssertGreaterThan(
+                    distance(first, second, in: appearance), 0.3, "in \(appearance)")
+            }
+        }
+    }
+
     /// `archonAttention` marks a run stopped waiting for a person; `accent` marks one that is
     /// live and fine. They are opposite claims, so a build that quietly retuned one into the
-    /// other would leave the rail saying nothing at all with a straight face.
-    func testAttentionAndAccentAreNotTheSameColour() {
+    /// other would leave the rail saying nothing at all with a straight face. The same holds
+    /// for `archonError` against the teal a completed count spends.
+    func testTheStatusColoursCannotBeMistakenForOneAnother() {
         for appearance in Palette.Appearance.allCases {
-            let attention = palette.archonAttention.value(in: appearance)
-            let accent = palette.accent.value(in: appearance)
-            let distance =
-                abs(attention.red - accent.red) + abs(attention.green - accent.green)
-                + abs(attention.blue - accent.blue)
-            XCTAssertGreaterThan(distance, 0.5, "in \(appearance)")
+            XCTAssertGreaterThan(
+                distance(palette.archonAttention, palette.accent, in: appearance), 0.5,
+                "attention vs accent in \(appearance)")
+            XCTAssertGreaterThan(
+                distance(palette.archonError, palette.archonTeal, in: appearance), 0.5,
+                "failed vs completed in \(appearance)")
+            XCTAssertGreaterThan(
+                distance(palette.archonRunning, palette.archonMagenta, in: appearance), 0.5,
+                "a running run is Archon's blue, never a shade of its wordmark, in \(appearance)")
         }
+    }
+
+    private func distance(
+        _ first: Palette.Token, _ second: Palette.Token, in appearance: Palette.Appearance
+    ) -> Double {
+        let one = first.value(in: appearance)
+        let other = second.value(in: appearance)
+        return abs(one.red - other.red) + abs(one.green - other.green)
+            + abs(one.blue - other.blue)
     }
 
     // MARK: - WCAG

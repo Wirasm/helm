@@ -9,8 +9,7 @@ import Foundation
 ///
 /// A value, not a tree of live objects: persistence, restore and equality come free,
 /// and every rule below is exercisable without a window, a pty or a webview. The
-/// live objects a pane *names* — a `TerminalSession`, `CanvasModel`, or
-/// `ArchonRunPaneModel` — are resolved
+/// live objects a pane *names* — a `TerminalSession` or a `CanvasModel` — are resolved
 /// at the edge by `WorkbenchModel`, which is the only thing here that needs a runtime.
 ///
 /// Invariants — re-established by `normalize()` after EVERY mutation:
@@ -129,10 +128,6 @@ struct Workbench: Codable, Equatable {
     /// opening a second copy of it.
     func pane(showing source: CanvasSource) -> Pane.ID? {
         panes.first { $0.content == .canvas(source) }?.id
-    }
-
-    func pane(showing reference: ArchonPaneRef) -> Pane.ID? {
-        panes.first { $0.content == .archonRun(reference) }?.id
     }
 
     /// Which face a slot's strip should offer, or nil when that slot's selected pane is a
@@ -533,7 +528,6 @@ struct Pane: Codable, Equatable, Identifiable {
     enum Content: Equatable {
         case terminal(face: TerminalFace)
         case canvas(CanvasSource)
-        case archonRun(ArchonPaneRef)
     }
 }
 
@@ -558,17 +552,21 @@ enum TerminalFace: String, Codable, Equatable {
 /// gives: the synthesized shape uses positional `_0` keys, which break on any reordering
 /// of the cases and are unreadable in the stored blob.
 extension Pane.Content: Codable {
-    private enum CodingKeys: String, CodingKey { case kind, source, run }
-    private enum Kind: String, Codable { case terminal, canvas, archonRun }
+    private enum CodingKeys: String, CodingKey { case kind, source }
+    private enum Kind: String, Codable { case terminal, canvas }
 
+    /// **A `kind` this build does not know throws, and `Slot` skips the pane.** The build
+    /// before this one had a third pane type and wrote `{"kind":"archonRun"}` into benches
+    /// that are still on disk; there is nothing here that could turn one into a terminal or
+    /// a canvas, and inventing one would be worse than losing it. What must NOT happen is
+    /// the throw reaching `WorkspaceContextStore.load`, which decodes one dictionary for the
+    /// whole app — see `Slot.init(from:)`, which is where that is stopped.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
         // The face is deliberately not read, because it is deliberately not written.
         case .terminal: self = .terminal(face: .terminal)
         case .canvas: self = .canvas(try container.decode(CanvasSource.self, forKey: .source))
-        case .archonRun:
-            self = .archonRun(try container.decode(ArchonPaneRef.self, forKey: .run))
         }
     }
 
@@ -585,10 +583,59 @@ extension Pane.Content: Codable {
         case let .canvas(source):
             try container.encode(Kind.canvas, forKey: .kind)
             try container.encode(source, forKey: .source)
-        case let .archonRun(reference):
-            try container.encode(Kind.archonRun, forKey: .kind)
-            try container.encode(reference, forKey: .run)
         }
+    }
+}
+
+extension Slot {
+    private enum CodingKeys: String, CodingKey { case id, panes, selected, height }
+
+    /// **A pane this build cannot read is SKIPPED, and the rest of the slot survives.**
+    ///
+    /// Removing a pane type is not a hypothetical: the build before this one had three and
+    /// wrote `{"kind":"archonRun"}` panes into benches that are still on disk. The
+    /// synthesized decoder would fail the whole `[Pane]` array on the first of them, which
+    /// fails the `Slot`, the `Column`, the `Workbench` — and then, one level up,
+    /// `WorkspaceContextStore.load` decodes `[String: WorkspaceContext]` in ONE call, so a
+    /// single unreadable pane in a single workspace would wipe **every** workspace's
+    /// arrangement. `WorkspaceContext` already stops the blast at one workspace; this stops
+    /// it at one pane.
+    ///
+    /// The wrapper is what makes it element-wise. An unkeyed container does **not** advance
+    /// its cursor when `decode` throws, so a hand-rolled `while !isAtEnd` loop with `try?`
+    /// spins forever on the first bad element; a `Decodable` that swallows internally always
+    /// succeeds, so the array decode advances normally and the failures come back as nils.
+    ///
+    /// What repairs the rest is already here: `normalize()` re-points a `selected` that named
+    /// the skipped pane, drops a slot left with none, and drops a column left with no slots.
+    /// A bench left with nothing at all throws from `Workbench.init(from:)`, which is that
+    /// workspace falling back to its terminals rather than every workspace losing its bench.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let stored = try container.decode([Skippable<Pane>].self, forKey: .panes)
+        let skipped = stored.count { $0.value == nil }
+        if skipped > 0 {
+            NSLog(
+                "helm: %d pane(s) of a saved slot were written by a build with pane types this "
+                    + "one does not have, and were skipped", skipped)
+        }
+        self.init(
+            id: try container.decode(UUID.self, forKey: .id),
+            panes: stored.compactMap(\.value),
+            selected: try container.decodeIfPresent(Pane.ID.self, forKey: .selected),
+            height: try container.decodeIfPresent(Double.self, forKey: .height) ?? 1)
+    }
+}
+
+/// One element of an array that is allowed to be unreadable, so the array is not.
+///
+/// Deliberately general and deliberately tiny: it holds no policy about *why* an element
+/// failed. The one caller decides that, and says so where it decides it.
+private struct Skippable<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: any Decoder) throws {
+        value = try? Value(from: decoder)
     }
 }
 

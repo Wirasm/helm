@@ -61,7 +61,7 @@ final class ArchonCLITests: XCTestCase {
                 + "printf '{\"runs\":[],\"total\":0,\"counts\":{},\"scopeFallback\":false}'\n")
 
         let response = try await cli(extraEnvironment: ["RECORD": record.path])
-            .runs(in: workspace.path, status: nil)
+            .runs(in: workspace.path)
 
         XCTAssertEqual(response.runs, [])
         XCTAssertTrue(
@@ -93,11 +93,8 @@ final class ArchonCLITests: XCTestCase {
         _ = try await client.run(id: "r1", in: workspace.path)
         XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nget\nr1\n--json\n--verbose\n")
 
-        _ = try await client.runs(in: workspace.path, status: "completed")
-        XCTAssertEqual(
-            try String(contentsOf: argsRecord),
-            "workflow\nruns\n--json\n--status\ncompleted\n",
-            "the status is filtered in Archon's database, not in the 20 rows it sends back")
+        _ = try await client.runs(in: workspace.path)
+        XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nruns\n--json\n")
 
         _ = try await client.launch(
             .init(
@@ -124,114 +121,6 @@ final class ArchonCLITests: XCTestCase {
             "no flag at all is a real choice: Archon mints the branch and cuts the worktree")
     }
 
-    /// The three run-scoped verbs, and the flags Archon reads them with. They are the only
-    /// commands helm issues that *change* something, so a wrong argument here is a wrong action
-    /// on the operator's run rather than a wrong list.
-    func testTheRunVerbsComposeArchonsOwnFlags() async throws {
-        let argsRecord = root.appendingPathComponent("args")
-        try install(
-            "printf '%s\\n' \"$@\" > \"$ARGS_RECORD\"\n"
-                + "printf '{\"ok\":true,\"runId\":\"r1\",\"action\":\"x\"}'\n")
-        let client = cli(extraEnvironment: ["ARGS_RECORD": argsRecord.path])
-
-        _ = try await client.act(.abandon, on: "r1", in: workspace.path)
-        XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nabandon\nr1\n--json\n")
-
-        _ = try await client.act(.approve(comment: nil), on: "r1", in: workspace.path)
-        XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\napprove\nr1\n--json\n")
-
-        _ = try await client.act(.approve(comment: "ship it"), on: "r1", in: workspace.path)
-        XCTAssertEqual(
-            try String(contentsOf: argsRecord),
-            "workflow\napprove\nr1\n--json\n--comment\nship it\n")
-
-        _ = try await client.act(.reject(reason: "wrong branch"), on: "r1", in: workspace.path)
-        XCTAssertEqual(
-            try String(contentsOf: argsRecord),
-            "workflow\nreject\nr1\n--json\n--reason\nwrong branch\n")
-    }
-
-    /// **`ok` is the contract, and the exit status is not.** In `--json` mode these commands
-    /// catch their own failures, print `{"ok": false, …}` and then exit ZERO — so a client that
-    /// trusted the status would report "abandoned" for a run that was never found.
-    func testARefusedVerbExitsZeroAndSaysSoInThePayload() async throws {
-        try install(
-            "printf '{\"ok\":false,\"runId\":\"r1\",\"action\":\"abandon\","
-                + "\"error\":\"Workflow run not found\"}'\n")
-
-        let acknowledgement = try await cli().act(.abandon, on: "r1", in: workspace.path)
-
-        XCTAssertFalse(acknowledgement.ok)
-        XCTAssertEqual(acknowledgement.error, "Workflow run not found")
-        XCTAssertFalse(acknowledgement.leavesRunResumable)
-    }
-
-    /// Resuming is `workflow run --resume`, **invoked in the run's own working path** — not
-    /// `workflow resume --json`, which is a control-plane acknowledgement that reports
-    /// `executed: false` and starts nothing. Archon resolves which run to continue through
-    /// `findResumableRun(workflowName, cwd)`, so the directory is the selector: pointed at the
-    /// workspace root instead, it would look for a run that was never there.
-    func testResumeRunsTheDetachedFormInTheRunsOwnWorktree() async throws {
-        let worktree = root.appendingPathComponent("worktree")
-        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
-        let argsRecord = root.appendingPathComponent("args")
-        try install(
-            "printf '%s\\n' \"$@\" > \"$ARGS_RECORD\"\nprintf 'here' > cwd-marker\n"
-                + "printf '{\"ok\":true,\"action\":\"run\",\"detached\":true,\"workflow\":\"ship\","
-                + "\"branch\":null,\"conversationId\":\"c\",\"logPath\":null}'\n")
-        let run = ArchonRun(
-            id: "r1", workflowName: "ship", status: "paused", workingPath: worktree.path,
-            userMessage: "do it", startedAt: nil, completedAt: nil, metadata: nil, nodes: nil)
-
-        let acknowledgement = try await cli(extraEnvironment: ["ARGS_RECORD": argsRecord.path])
-            .resume(run)
-
-        XCTAssertTrue(acknowledgement.ok)
-        XCTAssertEqual(
-            try String(contentsOf: argsRecord),
-            "workflow\nrun\nship\ndo it\n--resume\n--detach\n--json\n")
-        XCTAssertTrue(
-            FileManager.default.fileExists(
-                atPath: worktree.appendingPathComponent("cwd-marker").path),
-            "the run's working path is what --resume matches on")
-    }
-
-    /// A run with no working path has nowhere to be resumed, and refusing before spawning is
-    /// the difference between a sentence and Archon's "no resumable run found at ''".
-    func testResumeRefusesARunWithNoWorkingPath() async throws {
-        try install("printf '{}'\n")
-        let run = ArchonRun(
-            id: "r1", workflowName: "ship", status: "paused", workingPath: nil,
-            userMessage: "do it", startedAt: nil, completedAt: nil, metadata: nil, nodes: nil)
-
-        do {
-            _ = try await cli().resume(run)
-            XCTFail("expected a refusal")
-        } catch let error as ArchonCLIError {
-            guard case let .launchFailed(reason) = error.reason else {
-                return XCTFail("expected launchFailed, got \(error.reason)")
-            }
-            XCTAssertTrue(reason.contains("no working path"), reason)
-        }
-    }
-
-    /// The row cap is Archon's, not helm's: `workflow runs` answers with the newest twenty
-    /// whatever the count says. A bulk dismiss has to name every run in a status, so it is the
-    /// one caller that raises it.
-    func testTheRowLimitReachesTheCommandWhenAsked() async throws {
-        let argsRecord = root.appendingPathComponent("args")
-        try install(
-            "printf '%s\\n' \"$@\" > \"$ARGS_RECORD\"\n"
-                + "printf '{\"runs\":[],\"total\":0,\"counts\":{},\"scopeFallback\":false}'\n")
-
-        _ = try await cli(extraEnvironment: ["ARGS_RECORD": argsRecord.path])
-            .runs(in: workspace.path, status: "completed", limit: 500)
-
-        XCTAssertEqual(
-            try String(contentsOf: argsRecord),
-            "workflow\nruns\n--json\n--status\ncompleted\n--limit\n500\n")
-    }
-
     // MARK: - What a failure carries
 
     /// "archon is not installed" used to surface as a bare `nonzeroExit(127)`. Everything that
@@ -241,7 +130,7 @@ final class ArchonCLITests: XCTestCase {
         try install("printf 'Error: Not in a git repository.\\n' >&2\nexit 1\n")
 
         do {
-            _ = try await cli().runs(in: workspace.path, status: nil)
+            _ = try await cli().runs(in: workspace.path)
             XCTFail("expected failure")
         } catch let error as ArchonCLIError {
             XCTAssertEqual(error.command, "archon workflow runs --json")
@@ -259,7 +148,7 @@ final class ArchonCLITests: XCTestCase {
         )
 
         do {
-            _ = try await cli().runs(in: workspace.path, status: nil)
+            _ = try await cli().runs(in: workspace.path)
             XCTFail("expected failure")
         } catch let error as ArchonCLIError {
             guard case let .nonzeroExit(_, stderr) = error.reason else {
@@ -274,7 +163,7 @@ final class ArchonCLITests: XCTestCase {
     func testEmptyIsDistinctFromMalformedAndOnlyMalformedKeepsTheBytes() async throws {
         try install("exit 0\n")
         do {
-            _ = try await cli().runs(in: workspace.path, status: nil)
+            _ = try await cli().runs(in: workspace.path)
             XCTFail("expected failure")
         } catch let error as ArchonCLIError {
             XCTAssertEqual(error.reason, .emptyOutput)
@@ -283,7 +172,7 @@ final class ArchonCLITests: XCTestCase {
 
         try install("printf 'not json'\n")
         do {
-            _ = try await cli().runs(in: workspace.path, status: nil)
+            _ = try await cli().runs(in: workspace.path)
             XCTFail("expected failure")
         } catch let error as ArchonCLIError {
             guard case let .malformedJSON(_, capturedAt) = error.reason else {
@@ -306,7 +195,7 @@ final class ArchonCLITests: XCTestCase {
         do {
             _ = try await cli(
                 extraEnvironment: ["PID_RECORD": pidRecord.path], timeout: .milliseconds(300)
-            ).runs(in: workspace.path, status: nil)
+            ).runs(in: workspace.path)
             XCTFail("expected failure")
         } catch let error as ArchonCLIError {
             guard case .timedOut = error.reason else {
@@ -330,7 +219,7 @@ final class ArchonCLITests: XCTestCase {
         let client = cli(extraEnvironment: ["PID_RECORD": pidRecord.path])
         let workspacePath = workspace.path
 
-        let call = Task { try await client.runs(in: workspacePath, status: nil) }
+        let call = Task { try await client.runs(in: workspacePath) }
         try await waitForPid(pidRecord)
         call.cancel()
 

@@ -59,7 +59,7 @@ Sources/Helm/
 ├── Canvas/       rendering a markdown/HTML file or a URL — the pane and its webviews
 ├── Artifacts/    finding artifacts: store discovery, the ⌘O browser, store resolution
 ├── Board/        which workspace has an agent that wants you, without opening it
-├── Archon/       the `archon` CLI boundary, the rail's input and lines, and run panes
+├── Archon/       the `archon` CLI boundary, and the rail that spends it
 ├── Design/       the palette every surface spends, and the chrome plane it sits on
 ├── StatusBar/    the keys you can press right now, and where you are
 └── Shared/       the few things no single feature owns
