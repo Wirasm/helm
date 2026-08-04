@@ -81,9 +81,17 @@ struct ArchonRun: Codable, Equatable, Sendable {
     /// shows, so what is on screen is what you would type.
     var shortID: String { String(id.prefix(8)) }
 
-    /// The one status that gets a line of its own. Everything else — including `paused` —
-    /// is a count, because the rail is a place to start work rather than a place to read it.
+    /// The one status that gets a live line of its own.
     var isRunning: Bool { status == ArchonRunStatus.running }
+
+    /// The two statuses that put a run in the inbox.
+    ///
+    /// **`cancelled` is deliberately absent**: the operator ended it themselves, so it is not
+    /// news, and it produced nothing to be handed. `paused` is not finished at all — see the
+    /// note on `ArchonRailModel`, which is where that gap is recorded.
+    var isFinished: Bool {
+        status == ArchonRunStatus.completed || status == ArchonRunStatus.failed
+    }
 
     /// The node the subline animates: the one Archon says is running, else the last one it
     /// reported. **Last rather than first** — `nodes` arrives in DAG order, and a fan-out
@@ -115,6 +123,8 @@ struct ArchonRun: Codable, Equatable, Sendable {
 /// workflows, not runs.
 enum ArchonRunStatus {
     static let running = "running"
+    static let completed = "completed"
+    static let failed = "failed"
 }
 
 struct ArchonNode: Codable, Equatable, Sendable {

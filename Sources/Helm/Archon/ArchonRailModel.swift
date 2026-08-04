@@ -12,11 +12,18 @@ import Foundation
 /// button, one line per **running** run with a subline naming its current stage, and one
 /// collapsed count per other status. Run detail is read in Archon's own web UI.
 ///
-/// **A status that is not `running` gets a number, including `paused`.** That is a real
-/// reversal — the previous build gave a paused run its own row on the argument that it is the
-/// one state blocked on the operator — and it is what removes the approve/reject gate with it.
-/// A rail that cannot show you *which* run is parked has nowhere honest to put a button that
-/// unparks one.
+/// **The bottom of the rail is an inbox, not a ledger.** It was a tally — `3 COMPLETED`,
+/// `1 FAILED` — and a tally is the wrong signal twice over. It cannot be acted on, and it could
+/// be wrong by two orders of magnitude without saying so: Archon answers a git worktree with
+/// every run on the machine (`scopeFallback`, measured at 1 against 128), and a bare number
+/// gives the operator no way to notice. A finished run now gets one dismissible line that opens
+/// what it produced. Clearing one removes it **from helm only**, which is honest here in a way
+/// it was not before, because a list of runs you have not cleared never claimed to be history.
+///
+/// **`paused` has no surface at all now, and that is a real subtraction.** It had a number; the
+/// numbers are gone, and a paused run is not finished so it does not reach the inbox. Giving it
+/// a row means putting Archon's approve/reject verbs back, which this rail removed on purpose —
+/// so it is left visibly missing rather than quietly half-solved.
 @MainActor
 final class ArchonRailModel: ObservableObject {
     static let visibilityKey = "archonRailVisible"
@@ -42,11 +49,11 @@ final class ArchonRailModel: ObservableObject {
         }
     }
 
-    /// The runs that get a line. Only `running` — see the note on the type.
+    /// The runs that get a live line. Only `running` — see the note on the type.
     @Published private(set) var running: [ArchonRun] = []
-    /// The collapsed lines, already adjusted for what is on screen above them, so the two
-    /// never say the same run twice.
-    @Published private(set) var statusCounts: [ArchonStatusCount] = []
+    /// Finished runs the operator has not cleared, newest first. Bounded by what Archon
+    /// returns — its `runs` array is capped at 20 — so this is the recent post, not an archive.
+    @Published private(set) var finished: [ArchonRun] = []
     /// Run id → the stage its subline names. Absent for a run whose detail call failed.
     @Published private(set) var stages: [String: String] = [:]
     @Published private(set) var isRefreshing = false
@@ -62,11 +69,26 @@ final class ArchonRailModel: ObservableObject {
 
     private let client: any ArchonClient
     private let defaults: UserDefaults
+    private let opener: ArchonRunOpener
+    /// Not `@Published`: nothing renders the dismissals themselves, only their effect on
+    /// `finished`, and publishing a store the view never reads would invalidate it for nothing.
+    private var dismissals: ArchonInboxDismissals
     private var commands: Set<AnyCancellable> = []
 
-    init(client: any ArchonClient = ArchonCLI(), defaults: UserDefaults = DefaultsDomain.store) {
+    init(
+        client: any ArchonClient = ArchonCLI(), defaults: UserDefaults = DefaultsDomain.store,
+        opener: ArchonRunOpener = .live
+    ) {
         self.client = client
         self.defaults = defaults
+        self.opener = opener
+        // Pruned on the way in rather than on a timer: it is the only moment the store is
+        // certain to be read, and an age-out that only runs while helm is open is exactly as
+        // good as one that runs on launch.
+        var loaded = ArchonInboxDismissals.load(from: defaults)
+        loaded.prune(now: Date())
+        dismissals = loaded
+        loaded.save(to: defaults)
         isVisible = defaults.bool(forKey: Self.visibilityKey)
         config =
             defaults.data(forKey: Self.configKey)
@@ -103,7 +125,7 @@ final class ArchonRailModel: ObservableObject {
     func refresh(in workspacePath: String?) async {
         guard let workspacePath else {
             running = []
-            statusCounts = []
+            finished = []
             stages = [:]
             return
         }
@@ -116,7 +138,7 @@ final class ArchonRailModel: ObservableObject {
         defer { isRefreshing = false }
         do {
             let response = try await client.runs(in: workspacePath)
-            apply(response)
+            apply(response, in: workspacePath)
             await refreshStages(in: workspacePath)
         } catch is CancellationError {
             return
@@ -131,20 +153,37 @@ final class ArchonRailModel: ObservableObject {
 
     /// The two published lists, derived from Archon's last answer.
     ///
-    /// **The count arithmetic is the whole point.** Archon's `counts` are over the entire
-    /// project while its `runs` array is the newest twenty, so the two are about different
-    /// sets by design. A collapsed line therefore has to say *what is not already a line above
-    /// it* — subtract the runs shown, and clamp, because a negative count is a number no
-    /// operator should ever be shown.
-    private func apply(_ response: ArchonRunsResponse) {
+    /// **Both come from `runs`, and `counts` is now ignored entirely.** They were always about
+    /// different sets — `counts` spans the project (or the machine, under `scopeFallback`)
+    /// while `runs` is the newest twenty — and the arithmetic that reconciled them existed only
+    /// to keep a tally honest. There is no tally left to keep honest.
+    private func apply(_ response: ArchonRunsResponse, in workspacePath: String) {
         running = response.runs.filter(\.isRunning)
-        let shown = running.count
-        statusCounts = response.statusCounts.compactMap { line in
-            let remaining =
-                line.status == ArchonRunStatus.running ? line.count - shown : line.count
-            guard remaining > 0 else { return nil }
-            return ArchonStatusCount(status: line.status, count: remaining)
-        }
+        finished =
+            response.runs
+            .filter { $0.isFinished && !dismissals.contains($0.id, in: workspacePath) }
+            .sorted { left, right in
+                // `completed_at` is what the operator means by "the last one to finish", and a
+                // run missing it sorts last rather than crashing the comparison.
+                (left.completedAt ?? .distantPast) > (right.completedAt ?? .distantPast)
+            }
+    }
+
+    /// Clear one finished run. **From helm only** — Archon's record is untouched, which is
+    /// exactly why this list must never present itself as history.
+    func dismiss(_ run: ArchonRun, in workspacePath: String?) {
+        guard let workspacePath else { return }
+        dismissals.dismiss(run.id, in: workspacePath, now: Date())
+        dismissals.save(to: defaults)
+        finished.removeAll { $0.id == run.id }
+    }
+
+    /// Open what a finished run produced — its pull request, or the branch it would come from.
+    /// Resolved on click and never on the poll, so an inbox of twenty costs nothing until one
+    /// of them is asked about.
+    func open(_ run: ArchonRun) {
+        let opener = self.opener
+        Task { await opener.open(run) }
     }
 
     /// One extra `archon` per running run, per poll — issued concurrently, so they cost latency
