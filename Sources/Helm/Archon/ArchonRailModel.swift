@@ -66,6 +66,7 @@ final class ArchonRailModel: ObservableObject {
     @Published private(set) var workflows: [ArchonWorkflow] = []
     @Published private(set) var workflowLoadErrors: [ArchonWorkflowLoadError] = []
     @Published private(set) var isLoadingWorkflows = false
+    let worktrees: WorktreesRailModel
 
     private let client: any ArchonClient
     private let defaults: UserDefaults
@@ -76,10 +77,13 @@ final class ArchonRailModel: ObservableObject {
     private var commands: Set<AnyCancellable> = []
 
     init(
-        client: any ArchonClient = ArchonCLI(), defaults: UserDefaults = DefaultsDomain.store,
+        client: any ArchonClient = ArchonCLI(),
+        worktreeClient: any WorktreeClient = WorktreeCLI(),
+        defaults: UserDefaults = DefaultsDomain.store,
         opener: ArchonRunOpener = .live
     ) {
         self.client = client
+        worktrees = WorktreesRailModel(worktreeClient: worktreeClient, archonClient: client)
         self.defaults = defaults
         self.opener = opener
         // Pruned on the way in rather than on a timer: it is the only moment the store is

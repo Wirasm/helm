@@ -123,9 +123,14 @@ The rail renders five things, and nothing else:
   Archon's electric blue, a failure its red, a completed run the brand teal. All of it is
   governed tokens held at helm's contrast floors, never hex in a view, and never Archon's
   charcoal chrome wholesale: *distinctly Archon's*, not *foreign*.
-- **Worktrees.** Archon runs in a linked worktree of your own checkout, so `git worktree list`
-  already shows its trees beside helm's own. helm lists them and offers cleanup; the verbs
-  route through `archon` for its trees and `git` for the rest, never around either.
+- **Worktrees.** A second, collapsed tenant reads `git worktree list --porcelain` only when
+  expanded, then shows every record with owner kind, local disk size, directory activity and
+  reachability from the repository's resolved remote default branch. That reachability is Git's
+  “merged”, not pull-request state; if the base cannot be resolved the row stays unknown and is
+  not cleanable. Confirmed cleanup routes through `archon complete <branch>` for recognised
+  Archon branches and guarded `git worktree remove <path>` for the rest, without force flags.
+  Clean All serialises those same visible, eligible routes. It never uses Archon's global cleanup,
+  reads Archon's database or HTTP API, inventories unrelated repositories, or becomes a file tree.
 
 ## Sizing
 

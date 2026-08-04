@@ -74,11 +74,23 @@ _Avoid_: artifact pane, webview, browser, draw-on pane
 
 **rail**:
 The remembered, default-hidden strip to the right of the workbench: **somewhere to start work
-that is not your current work**. Its one tenant is Archon, and it renders five things — a
+that is not your current work**. It holds the Archon and Worktrees tenants. Archon renders a
 title, a field, a send button, one line per **running run**, and a count per other status.
-Nothing is read in the rail and nothing opens from it; run detail is read in Archon's own web
-UI. It is not another place panes can dock.
+Worktrees is one collapsed line until requested, then becomes a per-repository ledger of every
+record from `git worktree list --porcelain`: branch and owner kind, local disk size and directory
+activity, and reachability from the resolved remote default branch. It does not poll. Cleanup is
+confirmed and owner-routed through `archon complete` or guarded `git worktree remove`, never force.
+Nothing opens from the rail; run detail is read in Archon's own web UI. It is not another place
+panes can dock, a file tree, or a cross-repository inventory.
 _Avoid_: sidebar, pane dock, monitor rail, calling it a run list
+
+**Worktrees**:
+The rail's on-demand, per-repository ledger of linked Git worktrees. Git porcelain is the shared
+discovery source for hand-made and Archon-owned trees. “Merged” means Git reachability from an
+explicit resolved remote default branch, not pull-request state; an unknown base is never
+cleanable. helm does not read Archon's database or HTTP API, call global `archon isolation
+cleanup`, inventory unrelated repositories, or automatically force deletion.
+_Avoid_: worktree pane, worktree sidebar, file tree, disk dashboard
 
 **running run**:
 The one status the rail gives a line to, with a subline naming the **stage** it is on. Every
