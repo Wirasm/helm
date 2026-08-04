@@ -25,7 +25,7 @@ final class WorkbenchRestoreTests: XCTestCase {
             bench.columns[0].slots[0].selected, second, "and the selected one is still selected")
         XCTAssertEqual(
             bench.columns[1].slots[0].panes.map(\.content),
-            [.canvas(.file(path: "/tmp/plan.md"))])
+            [.canvas(.file("/tmp/plan.md"))])
         XCTAssertEqual(
             bench.focusedSlot, bench.columns[0].slots[0].id,
             "the operator was working in their terminal, not in the dock")
@@ -54,7 +54,7 @@ final class WorkbenchRestoreTests: XCTestCase {
 
         let bench = try XCTUnwrap(Workbench.migrating(from: context))
 
-        XCTAssertEqual(bench.canvasPanes.map(\.content), [.canvas(.file(path: "/tmp/report.html"))])
+        XCTAssertEqual(bench.canvasPanes.map(\.content), [.canvas(.file("/tmp/report.html"))])
     }
 
     func testEveryMigratedTerminalComesBackOnTheTerminalFace() throws {
@@ -216,7 +216,7 @@ final class WorkbenchRestoreTests: XCTestCase {
         workspaces.open(workspace)
         workbench.activate(workspacePath: workspace.path)
 
-        let file = try XCTUnwrap(workbench.open(.file(path: "/tmp/pr-84-review.md")))
+        let file = try XCTUnwrap(workbench.open(.file("/tmp/pr-84-review.md")))
         let page = try XCTUnwrap(workbench.open(.empty))
         workbench.canvas(for: try XCTUnwrap(workbench.bench?.pane(page)))
             .submitAddress("https://example.com")
@@ -233,7 +233,7 @@ final class WorkbenchRestoreTests: XCTestCase {
             WorkspaceContextStore.load(from: defaults)[workspace.path]?.workbench,
             "no bench was persisted at all")
         XCTAssertEqual(
-            restored.pane(file)?.content, .canvas(.file(path: "/tmp/pr-84-review.md")),
+            restored.pane(file)?.content, .canvas(.file("/tmp/pr-84-review.md")),
             "the file canvas comes back to its file")
         XCTAssertEqual(
             restored.pane(page)?.content, .canvas(.url(URL(string: "https://example.com")!)),

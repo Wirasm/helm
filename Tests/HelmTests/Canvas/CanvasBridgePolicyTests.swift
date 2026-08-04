@@ -5,7 +5,7 @@ import XCTest
 /// #33's second constraint: an arbitrary website cannot post into helm.
 final class CanvasBridgePolicyTests: XCTestCase {
     func testOnlyAFileSourceCarriesTheBridge() {
-        XCTAssertTrue(CanvasBridgePolicy.installsBridge(for: .file(path: "/tmp/plan.md")))
+        XCTAssertTrue(CanvasBridgePolicy.installsBridge(for: .file("/tmp/plan.md")))
         XCTAssertFalse(
             CanvasBridgePolicy.installsBridge(for: .url(URL(string: "https://example.com")!)),
             "a message handler on a webview that loads arbitrary websites lets any page "

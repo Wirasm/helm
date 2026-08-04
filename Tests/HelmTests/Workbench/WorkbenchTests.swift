@@ -16,7 +16,7 @@ final class WorkbenchTests: XCTestCase {
     }
 
     private func canvas(_ path: String) -> Pane {
-        Pane(content: .canvas(.file(path: path)))
+        Pane(content: .canvas(.file(path)))
     }
 
     /// The four invariants, as an assertion. Used both directly and by the scripted

@@ -4,9 +4,9 @@ import WebKit
 // SECURITY: the WKWebViews in this file render LOCAL artifacts only — markdown
 // documents converted client-side, and local .html files opened explicitly by
 // the user. No remote content is ever loaded: the navigation delegate cancels
-// anything that is not the initially loaded local content, and the only
+// anything that is not this artifact's own helm-canvas:// origin, and the only
 // JavaScript that runs is the vendored marked + mermaid (docs/VENDORED.md)
-// plus the inline scripts from CanvasHTML — which now include the ANNOTATION
+// plus the inline scripts from CanvasHTML — which include the ANNOTATION
 // BRIDGE, a script message handler the page can post to.
 //
 // The bridge is why `CanvasBridgePolicy` exists and why this file is separate
@@ -16,6 +16,12 @@ import WebKit
 // controller is a property of the configuration, so one shared instance would
 // share every registered script and handler with every webview, which is
 // exactly how the bridge would reach the URL source by accident.
+//
+// ADDRESSING (#108): each artifact is served on its own `helm-canvas://<host>`
+// origin by `CanvasSchemeHandler`, so a message carries which canvas sent it
+// (`CanvasAddress.accepts`). The bridge lives in a NAMED CONTENT WORLD, so the
+// page's own JavaScript cannot see `window.webkit.messageHandlers` at all —
+// only helm's injected script, which runs in that same world, can post.
 
 // MARK: - Markdown artifact (one webview per document)
 
@@ -24,6 +30,8 @@ import WebKit
 /// fences. Magnification is on — pinch/⌘-scroll zooms the whole document.
 /// `generation` bumps on external file change to force a plain reload.
 struct MarkdownCanvasView: View {
+    /// The artifact this page is, which is what gives it an addressable origin.
+    let url: URL
     let markdown: String
     let generation: Int
     /// What the operator selected on the page, for the comment field to anchor to.
@@ -33,6 +41,7 @@ struct MarkdownCanvasView: View {
 
     var body: some View {
         MarkdownCanvasWebView(
+            url: url,
             markdown: markdown,
             generation: generation,
             theme: colorScheme == .dark ? .dark : .light,
@@ -42,13 +51,16 @@ struct MarkdownCanvasView: View {
 }
 
 private struct MarkdownCanvasWebView: NSViewRepresentable {
+    let url: URL
     let markdown: String
     let generation: Int
     let theme: CanvasTheme
     let onSelection: (CanvasSelection) -> Void
 
+    private var path: StandardizedPath { StandardizedPath(url) }
+
     func makeCoordinator() -> CanvasFileCoordinator {
-        CanvasFileCoordinator(onAnnotation: onSelection)
+        CanvasFileCoordinator(host: CanvasAddress.host(for: path), onAnnotation: onSelection)
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -62,11 +74,21 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
                     source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true)
             )
         }
-        context.coordinator.installBridge(on: configuration.userContentController)
+        // The page is generated, not on disk, so the handler serves whatever the
+        // coordinator last staged — which is what keeps a theme flip and a file change
+        // rendering the current document rather than the one this view was built with.
+        let coordinator = context.coordinator
+        configuration.setURLSchemeHandler(
+            CanvasSchemeHandler(artifact: URL(fileURLWithPath: path.value)) {
+                [weak coordinator] in coordinator?.stagedDocument
+            },
+            forURLScheme: CanvasAddress.scheme
+        )
+        coordinator.installBridge(on: configuration.userContentController)
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
+        webView.navigationDelegate = coordinator
         webView.allowsMagnification = true
-        load(webView, coordinator: context.coordinator)
+        load(webView, coordinator: coordinator)
         return webView
     }
 
@@ -85,20 +107,21 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
         let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(markdown)"
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
-        webView.loadHTMLString(
-            CanvasHTML.documentPage(markdown: markdown, theme: theme),
-            baseURL: nil
-        )
+        coordinator.stagedDocument = Data(
+            CanvasHTML.documentPage(markdown: markdown, theme: theme).utf8)
+        guard let address = CanvasAddress.url(for: path) else { return }
+        webView.load(URLRequest(url: address, cachePolicy: .reloadIgnoringLocalCacheData))
     }
 }
 
 // MARK: - Full-pane .html artifact
 
 /// The escape hatch for .html artifacts: the whole pane is one WKWebView
-/// loading the local file (read access limited to the file's directory).
-/// The vendored mermaid.js + an init script are injected so
-/// `<pre class="mermaid">` blocks render without the page shipping its own
-/// renderer. `generation` bumps on external file change to force a reload.
+/// serving the local file from its own origin (siblings in the artifact's
+/// directory resolve; nothing outside it does). The vendored mermaid.js + an
+/// init script are injected so `<pre class="mermaid">` blocks render without
+/// the page shipping its own renderer. `generation` bumps on external file
+/// change to force a reload.
 struct HTMLCanvasView: View {
     let url: URL
     let generation: Int
@@ -122,12 +145,23 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     let theme: CanvasTheme
     let onSelection: (CanvasSelection) -> Void
 
+    private var path: StandardizedPath { StandardizedPath(url) }
+
     func makeCoordinator() -> CanvasFileCoordinator {
-        CanvasFileCoordinator(onAnnotation: onSelection)
+        CanvasFileCoordinator(host: CanvasAddress.host(for: path), onAnnotation: onSelection)
     }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        let artifact = URL(fileURLWithPath: path.value)
+        // Read straight from disk per request: the artifact IS the document here, and a
+        // reload is meant to show what the agent just wrote.
+        configuration.setURLSchemeHandler(
+            CanvasSchemeHandler(artifact: artifact) {
+                try? Data(contentsOf: artifact)
+            },
+            forURLScheme: CanvasAddress.scheme
+        )
         context.coordinator.installBridge(on: configuration.userContentController)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -148,7 +182,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     /// changes. Scripts are re-armed per load so a theme flip re-renders the
     /// page's diagrams in the matching mermaid theme.
     private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
-        let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(url.path)"
+        let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(path.value)"
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
 
@@ -174,9 +208,8 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
             )
         }
         coordinator.addAnnotationScript(to: controller)
-        // Local file access only: read access is limited to the artifact's
-        // own directory (for its relative images/CSS), nothing beyond.
-        webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        guard let address = CanvasAddress.url(for: path) else { return }
+        webView.load(URLRequest(url: address, cachePolicy: .reloadIgnoringLocalCacheData))
     }
 }
 
@@ -184,23 +217,43 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
 
 /// Navigation policy for both artifact web views, plus the annotation bridge's plumbing —
 /// and nothing but plumbing. What the page sent is validated by `CanvasAnnotation.decode`,
-/// which is pure and testable; a `WKScriptMessage` is not.
+/// and *who sent it* by `CanvasAddress.accepts`; both are pure and testable, where a
+/// `WKScriptMessage` is not.
 ///
-/// Local-only enforcement lives here: any navigation that is not local content (the
-/// document's about:blank HTML string, the artifact's file: URL) is cancelled — a link in
-/// a document or an .html page's remote reference goes nowhere.
+/// Local-only enforcement lives here: any navigation that is not this artifact's own
+/// `helm-canvas://` origin is cancelled — a link in a document or an .html page's remote
+/// reference goes nowhere.
 @MainActor
 final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    /// The world helm's own script and the bridge share, and no page script can reach.
+    ///
+    /// `add(_:name:)` without a world registers into the **page content world**, where any
+    /// script in the document — including one an artifact fetched, or an injected
+    /// `<script>` — can post to the handler. Naming a world scopes both halves: helm's
+    /// annotation script is injected `in:` it and the handler is registered
+    /// `contentWorld:` it, so a page's own JS sees no `helmCanvas` at all.
+    static let bridgeWorld = WKContentWorld.world(name: "helm-canvas-bridge")
+
     var loadedKey: String?
+    /// The generated document the scheme handler should serve on the next request. Only
+    /// the markdown canvas stages one; the .html canvas reads its artifact from disk.
+    var stagedDocument: Data?
+
+    /// Which canvas this coordinator belongs to. A message whose origin is not this host
+    /// is not this canvas's message.
+    private let host: String
     private let onAnnotation: (CanvasSelection) -> Void
     private lazy var proxy = WeakScriptMessageProxy(self)
 
-    init(onAnnotation: @escaping (CanvasSelection) -> Void) {
+    init(host: String, onAnnotation: @escaping (CanvasSelection) -> Void) {
+        self.host = host
         self.onAnnotation = onAnnotation
     }
 
     func installBridge(on controller: WKUserContentController) {
-        controller.add(proxy, name: CanvasBridgePolicy.handlerName)
+        controller.add(
+            proxy, contentWorld: CanvasFileCoordinator.bridgeWorld,
+            name: CanvasBridgePolicy.handlerName)
         addAnnotationScript(to: controller)
     }
 
@@ -209,18 +262,21 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
             WKUserScript(
                 source: CanvasHTML.annotationScript(),
                 injectionTime: .atDocumentEnd,
-                forMainFrameOnly: true
+                forMainFrameOnly: true,
+                in: CanvasFileCoordinator.bridgeWorld
             )
         )
     }
 
     /// Called from `dismantleNSView`, and that is the only place it can work from.
-    /// `add(_:name:)` retains the handler **strongly** and the controller is reachable
-    /// from the webview, so relying on the handler's own `deinit` cannot work — the cycle
-    /// is precisely what stops `deinit` firing. The weak proxy and this call are both
-    /// needed; neither alone is reliable.
+    /// `add(_:contentWorld:name:)` retains the handler **strongly** and the controller is
+    /// reachable from the webview, so relying on the handler's own `deinit` cannot work —
+    /// the cycle is precisely what stops `deinit` firing. The weak proxy and this call are
+    /// both needed; neither alone is reliable.
     func removeBridge(from controller: WKUserContentController) {
-        controller.removeScriptMessageHandler(forName: CanvasBridgePolicy.handlerName)
+        controller.removeScriptMessageHandler(
+            forName: CanvasBridgePolicy.handlerName, contentWorld: CanvasFileCoordinator.bridgeWorld
+        )
     }
 
     func webView(
@@ -229,7 +285,7 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
         decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
     ) {
         let url = navigationAction.request.url
-        if let url, url.isFileURL || url.absoluteString == "about:blank" {
+        if let url, url.scheme == CanvasAddress.scheme || url.absoluteString == "about:blank" {
             decisionHandler(.allow)
         } else {
             decisionHandler(.cancel)
@@ -243,6 +299,14 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
         _ controller: WKUserContentController, didReceive message: WKScriptMessage
     ) {
         MainActor.assumeIsolated {
+            let frame = message.frameInfo
+            guard
+                CanvasAddress.accepts(
+                    isMainFrame: frame.isMainFrame,
+                    originScheme: frame.securityOrigin.protocol,
+                    originHost: frame.securityOrigin.host,
+                    expectedHost: host)
+            else { return }
             guard let selection = CanvasSelection(message.body) else { return }
             onAnnotation(selection)
         }

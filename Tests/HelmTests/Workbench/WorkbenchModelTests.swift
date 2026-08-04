@@ -70,8 +70,8 @@ final class WorkbenchModelTests: XCTestCase {
 
     func testACanvasPaneResolvesToOneModelPerPaneAndTheSameOneOnReAsk() {
         let (model, _) = mounted()
-        let first = Pane(content: .canvas(.file(path: "/tmp/a.md")))
-        let second = Pane(content: .canvas(.file(path: "/tmp/b.md")))
+        let first = Pane(content: .canvas(.file("/tmp/a.md")))
+        let second = Pane(content: .canvas(.file("/tmp/b.md")))
 
         let firstCanvas = model.canvas(for: first)
 
@@ -84,7 +84,7 @@ final class WorkbenchModelTests: XCTestCase {
 
     func testClosingACanvasPaneDropsItsModel() throws {
         let (model, _) = mounted()
-        let id = try XCTUnwrap(model.open(.file(path: "/tmp/a.md")))
+        let id = try XCTUnwrap(model.open(.file("/tmp/a.md")))
         let pane = try XCTUnwrap(model.bench?.pane(id))
         let canvas = model.canvas(for: pane)
 
@@ -103,7 +103,7 @@ final class WorkbenchModelTests: XCTestCase {
     /// descriptor with it, for the life of the process.
     func testClosingAWorkspaceDropsTheCanvasesItOwned() throws {
         let (model, _) = mounted()
-        let id = try XCTUnwrap(model.open(.file(path: "/tmp/a.md")))
+        let id = try XCTUnwrap(model.open(.file("/tmp/a.md")))
         let pane = try XCTUnwrap(model.bench?.pane(id))
         let canvas = model.canvas(for: pane)
 
@@ -123,12 +123,12 @@ final class WorkbenchModelTests: XCTestCase {
     /// teardown existed, the bench was not consulted at all.
     func testClosingABackgroundWorkspaceDropsItsCanvasesAndLeavesTheLiveOneAlone() throws {
         let (model, _) = mounted()
-        let parkedID = try XCTUnwrap(model.open(.file(path: "/tmp/a.md")))
+        let parkedID = try XCTUnwrap(model.open(.file("/tmp/a.md")))
         let parked = try XCTUnwrap(model.bench?.pane(parkedID))
         let parkedCanvas = model.canvas(for: parked)
 
         model.activate(workspacePath: other)
-        let liveID = try XCTUnwrap(model.open(.file(path: "/tmp/b.md")))
+        let liveID = try XCTUnwrap(model.open(.file("/tmp/b.md")))
         let live = try XCTUnwrap(model.bench?.pane(liveID))
         let liveCanvas = model.canvas(for: live)
 
@@ -146,7 +146,7 @@ final class WorkbenchModelTests: XCTestCase {
     /// gets the same webview back instead of reloading the page.
     func testSwitchingAwayAndBackKeepsTheSameCanvas() throws {
         let (model, _) = mounted()
-        let id = try XCTUnwrap(model.open(.file(path: "/tmp/a.md")))
+        let id = try XCTUnwrap(model.open(.file("/tmp/a.md")))
         let pane = try XCTUnwrap(model.bench?.pane(id))
         let canvas = model.canvas(for: pane)
         let bench = try XCTUnwrap(model.bench)
@@ -161,7 +161,7 @@ final class WorkbenchModelTests: XCTestCase {
 
     func testAnAlreadyOpenSourceIsSelectedRatherThanDuplicated() throws {
         let (model, _) = mounted()
-        let source = CanvasSource.file(path: "/tmp/plan.md")
+        let source = CanvasSource.file("/tmp/plan.md")
         let first = try XCTUnwrap(model.open(source))
 
         let again = model.open(source)
@@ -342,7 +342,7 @@ final class WorkbenchModelTests: XCTestCase {
     /// keep running; what this pins is that nothing claims to be visible.
     func testASlotShowingACanvasLeavesItsTerminalTabsInvisible() throws {
         let terminal = UUID()
-        let canvas = Pane(content: .canvas(.file(path: "/tmp/a.md")))
+        let canvas = Pane(content: .canvas(.file("/tmp/a.md")))
         let restored = Workbench(
             panes: [Pane(id: terminal, content: .terminal(face: .terminal)), canvas],
             selecting: canvas.id)
@@ -421,7 +421,7 @@ final class WorkbenchModelTests: XCTestCase {
     /// legitimately close the terminal.
     func testTheLastTerminalCanCloseWhenACanvasSurvivesIt() throws {
         let (model, manager) = mounted()
-        model.open(.file(path: "/tmp/a.md"))
+        model.open(.file("/tmp/a.md"))
         let terminal = try XCTUnwrap(model.bench?.terminalPaneIDs.first)
 
         model.close(terminal)

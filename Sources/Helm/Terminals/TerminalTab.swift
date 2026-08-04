@@ -174,7 +174,7 @@ struct CanvasTab: View {
     /// tells two open canvases apart.
     private var label: String {
         switch source {
-        case let .file(path): (path as NSString).lastPathComponent
+        case let .file(path): (path.value as NSString).lastPathComponent
         case let .url(url): url.host() ?? url.absoluteString
         case .empty: "New canvas"
         }

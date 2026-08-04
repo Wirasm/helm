@@ -78,7 +78,7 @@ struct Workbench: Codable, Equatable {
         // recover here, and inventing one would reintroduce exactly the bug it refused.
         if let path = context.openArtifactPath {
             bench.insert(
-                Pane(content: .canvas(.file(URL(fileURLWithPath: path)))), at: .column)
+                Pane(content: .canvas(.file(path))), at: .column)
             // The operator was looking at their terminal, not at the dock.
             bench.focus(bench.columns[0].slots[0].id)
         }
