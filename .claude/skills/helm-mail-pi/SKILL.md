@@ -48,12 +48,18 @@ to the wrong agent is equally silent.
 
 ## Which one is you
 
-Not from the environment. helm used to pass its launching session's `CLAUDE_*` and `PI_*` variables
-into every pane it spawns — which is how a pi in a pane came to print `CLAUDECODE=1` next to
-`PI_CODING_AGENT=true`. **helm strips them now (#139)**, so `$PI_SESSION_ID` in a pane is either
-your own or absent, and a helm built before the fix still hands you somebody else's. `$HELM_PANE`
-is the one thing helm publishes (#94): the uuid of the pane, which outlives any one agent in it, so
-it is not a handle either. Walk your own process ancestry:
+**Not from the environment, because a session id does not yield a handle.** `deriveHandle` takes
+the last 4 characters of the id, widens to 6, 8 and then the whole thing when a live process holds
+the shorter form, and skips all of it when `HELM_MAIL_HANDLE` is pinned — so no amount of correct
+identity tells you your mailbox name. Only the claim on disk does.
+
+The environment is also where **you** are the case that got bitten. helm passed its launching
+session's variables into every pane it spawned, and a pi overwrites none of the `CLAUDE_*` ones —
+which is how a pi in a pane came to print `CLAUDECODE=1` next to `PI_CODING_AGENT=true`, and why
+anything asking *"am I inside Claude Code?"* got a yes. **helm strips them now (#139)**; a helm
+built before that fix still hands them to you. `$HELM_PANE` is the one thing helm publishes (#94):
+the uuid of the pane, which outlives any one agent in it, so it is not a handle either. Walk your
+own process ancestry:
 
 ```bash
 p=$$; while [ "$p" -gt 1 ]; do

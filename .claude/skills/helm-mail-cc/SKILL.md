@@ -47,16 +47,24 @@ to the wrong agent is equally silent.
 
 ## Which one is you
 
-A handle is `<basename of your cwd>-<last 4 of your session id>`, so two agents in one directory
-differ only in the suffix — which makes guessing from the name alone a coin flip.
+A handle is `<basename of your cwd>-<tail of your session id>` — the last **4** characters of the
+id when that is free, widened to 6, then 8, then the whole id when a live process already holds the
+shorter form (`deriveHandle`, `hooks/helm-mail.mjs`). Collisions are the normal case here rather
+than the exception, because agents share directories: two in one worktree differ only in a suffix
+whose *width* you cannot predict. `HELM_MAIL_HANDLE` short-circuits the derivation entirely, so a
+pinned session's handle need not look like this at all.
 
-Not from the environment either. helm used to pass its launching session's `CLAUDE_*` variables
-into every pane it spawns, so `$CLAUDE_CODE_SESSION_ID` was very often somebody else's — measured
-at the pty, not theoretical. **helm strips them now (#139)**, which makes the variable absent in a
-bare pane and otherwise whatever the agent running there set for itself. Neither is a reliable
-answer to *which mailbox is mine*, and a helm built before the fix still hands you the launcher's,
-so the walk below is right in all three cases: it asks the runtime which session is in your
-process, where the variable is at best a copy of that.
+**Which is the reason to read `owner.json` rather than compute anything: a session id does not
+yield a handle.** Knowing exactly which session you are still leaves the name of your mailbox as
+something only the claim on disk can tell you.
+
+`$CLAUDE_CODE_SESSION_ID` is a red herring rather than a trap, and it is worth saying which.
+Measured inside a helm pane, it is **your own** session: Claude Code sets it for the processes it
+spawns, overriding whatever the pane's shell was carrying. It simply does not name a mailbox.
+Where helm's leak bites is everywhere Claude Code is not there to overwrite it — a **pi** pane,
+which sets no `CLAUDE_*` of its own and so read the launching session's outright; the pane's bare
+shell before any agent starts; the subprocesses helm runs itself. **helm strips them now (#139)**,
+and a helm built before that fix still hands all three the launcher's identity.
 
 helm does publish one thing, and it is not this: **`$HELM_PANE`** is the uuid of the pane you are
 running in (#94). It names the pane, which outlives you — several agents run in one pane over its
