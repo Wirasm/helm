@@ -73,10 +73,12 @@ struct TerminalPaneView: View {
     /// two cannot drift and a dead shell never announces itself by changing weight.
     private func fallback(title: String, detail: String) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: "terminal").font(.system(size: 44)).foregroundStyle(.secondary)
+            Image(systemName: "terminal").font(.system(size: 44)).foregroundStyle(Color.textMuted)
             Text(title).font(.title3)
-            Text(detail).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                .textSelection(.enabled)
+            Text(detail).font(.callout).foregroundStyle(Color.textMuted).multilineTextAlignment(
+                .center
+            )
+            .textSelection(.enabled)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)

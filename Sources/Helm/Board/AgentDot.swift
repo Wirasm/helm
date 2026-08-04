@@ -14,8 +14,8 @@ import SwiftUI
 /// selecting a workspace shows you one of its N terminals and says nothing about
 /// the others.
 ///
-/// Orange is helm's one attention colour — the same one the terminal bell uses. The
-/// altitude differs, the meaning does not.
+/// `Color.attention` is helm's one waiting-on-you colour — the same one the terminal
+/// bell and Archon's approval gate spend. The altitude differs, the meaning does not.
 struct AgentDot: View {
     let presence: AgentPresence?
 
@@ -25,13 +25,13 @@ struct AgentDot: View {
             EmptyView()
         case .working:
             Circle()
-                .fill(.tertiary)
+                .fill(Color.textFaint)
                 .frame(width: 5, height: 5)
                 .help("An agent is working here")
                 .accessibilityLabel("Agent working")
         case .notWorking:
             Circle()
-                .fill(.orange)
+                .fill(Color.attention)
                 .frame(width: 5, height: 5)
                 .help("An agent here has stopped — it is your turn")
                 .accessibilityLabel("Agent needs you")

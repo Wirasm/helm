@@ -79,6 +79,29 @@ final class KeyHintTests: XCTestCase {
             KeyHints.visible(terminalFocused: true, in: rows).first?.keys, "⌘1 ⌘2 ⌘4")
     }
 
+    // MARK: - One command's keys, for surfaces outside the bar
+
+    /// **The bug this exists to make impossible.** The empty bench said `⌘⇧O` and the
+    /// workspace bar's `+` tooltip said the same, while the status bar an inch below said
+    /// `⇧⌘O` — one window, three surfaces, two answers about one key (#149). The bar was
+    /// right, because that is the order every menu on the machine prints. Nothing outside
+    /// this file may type a glyph now; it asks here, and gets the bar's answer by
+    /// construction.
+    func testABindingRendersTheSameGlyphsTheBarShows() {
+        XCTAssertEqual(KeyGlyph.binding(for: .helmOpenWorkspace), "⇧⌘O")
+        XCTAssertEqual(
+            KeyGlyph.binding(for: .helmOpenWorkspace), keys("folder", terminalFocused: true),
+            "the empty bench and the status bar must not be able to disagree")
+        XCTAssertEqual(KeyGlyph.binding(for: .helmNewTerminal), "⌘N")
+        XCTAssertEqual(KeyGlyph.binding(for: .helmToggleRail), "⇧⌘R")
+    }
+
+    /// A command nothing binds gets nil rather than a plausible-looking string, so a caller
+    /// can decline to advertise a key instead of naming one that does not fire.
+    func testAnUnboundCommandHasNoGlyphs() {
+        XCTAssertNil(KeyGlyph.binding(for: Notification.Name("helm.nothing.binds.this")))
+    }
+
     // MARK: - Drift
 
     /// **The guard that makes this a helper and not a second keymap.** Every command the

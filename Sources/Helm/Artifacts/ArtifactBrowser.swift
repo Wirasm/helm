@@ -70,7 +70,7 @@ struct ArtifactBrowser: View {
                         if listing.files.isEmpty {
                             Text("No artifacts in this project yet.")
                                 .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color.textMuted)
                                 .padding(8)
                         }
                     }
@@ -129,7 +129,7 @@ struct ArtifactBrowser: View {
             HStack(spacing: 6) {
                 Image(systemName: "doc.text")
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textMuted)
                     .frame(width: 14)
                 Text(file.relativePath)
                     .font(.system(size: 12))
@@ -174,11 +174,11 @@ struct ArtifactBrowser: View {
             HStack(spacing: 6) {
                 Image(systemName: "folder")
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textMuted)
                     .frame(width: 14)
                 Text("Browse…")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textMuted)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
@@ -193,7 +193,7 @@ struct ArtifactBrowser: View {
             "No artifact stores found — agents write artifacts to ~/.prp/<project>/ (plans, research, reviews) and they show up here."
         )
         .font(.system(size: 11))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color.textMuted)
         .fixedSize(horizontal: false, vertical: true)
         .padding(12)
     }

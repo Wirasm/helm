@@ -113,7 +113,7 @@ struct ArchonRailView: View {
             if let failure = model.actionFailure ?? model.launchFailure {
                 Text(failure)
                     .font(.caption2)
-                    .foregroundStyle(Color.archonError)
+                    .foregroundStyle(Color.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -146,7 +146,7 @@ struct ArchonRailView: View {
     private static func tint(of decision: ArchonGateDecision) -> Color {
         switch decision {
         case .approve: .accent
-        case .reject: .archonAttention
+        case .reject: .attention
         }
     }
 
@@ -376,7 +376,7 @@ struct ArchonRailView: View {
                 // Running breathes; a gate holds still and waits. Two shapes as well as two
                 // colours, so the states are told apart without relying on hue.
                 RoundedRectangle(cornerRadius: 1)
-                    .fill(Color.archonAttention)
+                    .fill(Color.attention)
                     .frame(width: 6, height: 6)
                 Text(run.workflowName)
                     .font(.system(size: 11.5, weight: .medium))
@@ -422,7 +422,7 @@ struct ArchonRailView: View {
         let busy = model.busyRuns.contains(run.id)
         return HStack(spacing: 6) {
             verb("APPROVE", tint: .accent) { choose(.approve, on: run) }
-            verb("REJECT", tint: .archonAttention) { choose(.reject, on: run) }
+            verb("REJECT", tint: .attention) { choose(.reject, on: run) }
             if busy { ProgressView().controlSize(.small) }
             Spacer()
         }
@@ -569,8 +569,8 @@ struct ArchonRailView: View {
         switch tint {
         case .running: .archonRunning
         case .success: .archonTeal
-        case .error: .archonError
-        case .warning: .archonAttention
+        case .error: .danger
+        case .warning: .attention
         case .neutral: .textMuted
         }
     }

@@ -163,7 +163,7 @@ struct CanvasAddressBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "globe")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.textMuted)
             TextField("localhost:3000", text: $typed)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
@@ -175,7 +175,7 @@ struct CanvasAddressBar: View {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.textMuted)
             .disabled(page.url == nil)
             .help("Reload")
             Button {
@@ -184,7 +184,7 @@ struct CanvasAddressBar: View {
                 Image(systemName: "xmark.circle")
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.textMuted)
             .help("Close canvas")
         }
         .padding(.horizontal, 10)

@@ -30,8 +30,13 @@ struct WorkspaceBar: View {
                 }
             }
             Button(action: openWorkspace) { Image(systemName: "plus") }
-                .buttonStyle(.plain).foregroundStyle(.secondary)
-                .help("Open workspace (⌘⇧O)")
+                .buttonStyle(.plain).foregroundStyle(Color.textMuted)
+                // Rendered from the map rather than typed. This tooltip said ⌘⇧O while the
+                // status bar said ⇧⌘O — macOS prints modifiers ⌃⌥⇧⌘, so the bar was right
+                // and one window disagreed with itself about one key (#149).
+                .help(
+                    KeyGlyph.binding(for: .helmOpenWorkspace).map { "Open workspace (\($0))" }
+                        ?? "Open workspace")
             Spacer(minLength: 8)
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
@@ -52,11 +57,11 @@ struct WorkspaceBar: View {
             select(workspace)
         } label: {
             HStack(spacing: 5) {
-                Text("⌃\(index + 1)").foregroundStyle(.secondary)
+                Text("⌃\(index + 1)").foregroundStyle(Color.textMuted)
                 AgentDot(presence: board.presence[workspace.path])
                 Text(workspace.name).fontWeight(isSelected ? .semibold : .regular)
                 if let branch = model.contexts[workspace.path]?.branch {
-                    Text(branch).foregroundStyle(.secondary).lineLimit(1)
+                    Text(branch).foregroundStyle(Color.textMuted).lineLimit(1)
                 }
             }
             .font(.system(size: 11.5))

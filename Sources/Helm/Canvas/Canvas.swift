@@ -491,10 +491,10 @@ struct CanvasView: View {
                 Spacer()
             }
             .font(.system(size: 11))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.textMuted)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(.quaternary)
+            .background(Color.surfaceRaised)
             Divider()
         }
     }
@@ -522,17 +522,17 @@ struct CanvasView: View {
                     Spacer()
                 }
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.textMuted)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(.quaternary)
+                .background(Color.surfaceRaised)
                 Divider()
             }
             if let url = page.url {
                 URLCanvasView(model: model, url: url, generation: page.generation)
             } else {
                 Text("Type a URL — localhost:3000")
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color.textFaint)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -559,7 +559,7 @@ struct CanvasView: View {
             }
         case let .notice(message):
             Text(message)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.textMuted)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(16)
         }
@@ -568,7 +568,7 @@ struct CanvasView: View {
     private func header(for document: CanvasModel.Document) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "doc.text")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.textMuted)
             Text(document.url.lastPathComponent)
                 .font(.system(size: 12, weight: .medium))
                 .lineLimit(1)
@@ -585,7 +585,7 @@ struct CanvasView: View {
                         .font(.system(size: 11))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.textMuted)
                 .help("The comments written beside this canvas")
                 .popover(isPresented: $showingNotes, arrowEdge: .bottom) {
                     CanvasNotesList(model: model, post: post)
@@ -597,7 +597,7 @@ struct CanvasView: View {
                 Image(systemName: "magnifyingglass.circle")
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.textMuted)
             .help("Reveal in Finder")
             Button {
                 model.close()
@@ -605,7 +605,7 @@ struct CanvasView: View {
                 Image(systemName: "xmark.circle")
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.textMuted)
             .help("Close artifact")
         }
         .padding(.horizontal, 10)

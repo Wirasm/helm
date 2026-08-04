@@ -35,7 +35,7 @@ struct ChatTicker: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 9)
-            .background(.regularMaterial, in: Capsule())
+            .background(Color.surfaceRaised, in: Capsule())
             .overlay(Capsule().strokeBorder(Color.textMuted.opacity(0.22), lineWidth: 1))
             .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
         }
