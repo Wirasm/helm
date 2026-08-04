@@ -129,10 +129,14 @@ final class TerminalSession: ObservableObject, Identifiable {
         view.controller = controller
         // .exec runs the user's passwd shell ($SHELL) as a login shell — `command` is
         // deliberately left unset, which is exactly the default-terminal behavior we want.
+        //
+        // The env carries this pane's own id (#94). It is set here, before the surface is
+        // created on first attach, so the uuid is baked into the child at spawn and survives
+        // everything that does not respawn it — a move between containers included.
         view.configuration = TerminalSurfaceOptions(
             backend: backend,
             workingDirectory: workspacePath,
-            envVars: Self.childEnvironment
+            envVars: PaneEnvironment.forPane(id)
         )
         hostView = view
 
@@ -180,25 +184,6 @@ final class TerminalSession: ObservableObject, Identifiable {
             terminalConfiguration: sessionOverrides
         )
     }
-
-    /// The environment every pty child gets on top of the ones it inherits.
-    ///
-    /// **Truecolor, declared instead of inherited.** `term` is pinned to
-    /// `xterm-256color` (see `sessionOverrides`) because the embedded xcframework ships no
-    /// terminfo, and a great many programs read that name alone as "256 colours, no more".
-    /// pi and ghostty got 24-bit output here anyway, but only by accident: something in
-    /// helm's own environment — `GHOSTTY_RESOURCES_DIR`, set for shell integration — was
-    /// being inherited by the child and read as a ghostty tell. That is a coincidence one
-    /// refactor away from ending, and its failure is silent: every colour in the palette
-    /// would quietly snap to the nearest of 256 with nothing logged and nothing to see
-    /// except that helm looks slightly wrong. Saying it outright costs two strings.
-    ///
-    /// `TERM_PROGRAM` is the same statement in the other vocabulary — the variable ghostty
-    /// itself exports, and the one a program asks when `TERM` has been overridden.
-    static let childEnvironment: [String: String] = [
-        "COLORTERM": "truecolor",
-        "TERM_PROGRAM": "ghostty",
-    ]
 
     /// What helm applies AFTER any base config (ghostty's last-value-wins
     /// rule) — the things helm must win, plus the one thing the human set

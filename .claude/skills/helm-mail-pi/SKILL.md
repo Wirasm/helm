@@ -48,9 +48,12 @@ to the wrong agent is equally silent.
 
 ## Which one is you
 
-Not from the environment. **helm passes its launching session's `CLAUDE_*` variables into every pane
-it spawns**, so `$CLAUDE_CODE_SESSION_ID` in a helm-hosted agent is somebody else's session. Walk
-your own process ancestry instead:
+Not from the environment. helm used to pass its launching session's `CLAUDE_*` and `PI_*` variables
+into every pane it spawns — which is how a pi in a pane came to print `CLAUDECODE=1` next to
+`PI_CODING_AGENT=true`. **helm strips them now (#139)**, so `$PI_SESSION_ID` in a pane is either
+your own or absent, and a helm built before the fix still hands you somebody else's. `$HELM_PANE`
+is the one thing helm publishes (#94): the uuid of the pane, which outlives any one agent in it, so
+it is not a handle either. Walk your own process ancestry:
 
 ```bash
 p=$$; while [ "$p" -gt 1 ]; do

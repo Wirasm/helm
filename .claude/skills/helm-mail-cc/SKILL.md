@@ -50,9 +50,17 @@ to the wrong agent is equally silent.
 A handle is `<basename of your cwd>-<last 4 of your session id>`, so two agents in one directory
 differ only in the suffix — which makes guessing from the name alone a coin flip.
 
-Not from the environment either. **helm passes its launching session's `CLAUDE_*` variables into
-every pane it spawns**, so `$CLAUDE_CODE_SESSION_ID` is very often somebody else's session —
-measured, not theoretical.
+Not from the environment either. helm used to pass its launching session's `CLAUDE_*` variables
+into every pane it spawns, so `$CLAUDE_CODE_SESSION_ID` was very often somebody else's — measured
+at the pty, not theoretical. **helm strips them now (#139)**, which makes the variable absent in a
+bare pane and otherwise whatever the agent running there set for itself. Neither is a reliable
+answer to *which mailbox is mine*, and a helm built before the fix still hands you the launcher's,
+so the walk below is right in all three cases: it asks the runtime which session is in your
+process, where the variable is at best a copy of that.
+
+helm does publish one thing, and it is not this: **`$HELM_PANE`** is the uuid of the pane you are
+running in (#94). It names the pane, which outlives you — several agents run in one pane over its
+life — so it is not a handle and not a session id.
 
 Walk your ancestry to your own Claude Code process, ask the runtime which session is in it, then
 match that against the mailboxes:
