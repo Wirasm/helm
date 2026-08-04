@@ -37,6 +37,19 @@ bash .claude/skills/pi-extensions/scripts/test.sh
 bash hooks/test.sh
 ```
 
+**If you touched `.claude/skills/helm-canvas/`, run its gate:**
+
+```
+bash .claude/skills/helm-canvas/test.sh
+```
+
+`push.sh` is how an agent puts an artifact on the bench, and it is the third mechanism to hold
+that job — the first two shipped broken. Both were verified from a shell the operator typed into,
+where they worked, and both were silent from an agent's tool call, where they did not: a ⌘-click
+the TUI eats before helm sees it (#124), then a bare `printf` whose stdout the harness captures
+(#184). Its gate needs bash and `ps`, which is why it is not in the Swift gate. **What no gate can
+prove is that a pane appeared — run it against a live helm before believing it.**
+
 `hooks/` is the **Claude Code** half of the mailbox — `claude-session-start` claims a mailbox so
 a session can be addressed, `claude-user-prompt-submit` delivers waiting mail by writing the notice
 to **stdout**, which Claude Code feeds to the model as context for the turn about to run. Delivery

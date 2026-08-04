@@ -19,27 +19,34 @@ not ask for it, and may be mid-thought in another pane. Bringing it forward stay
 
 ## How
 
-Write the file, then print helm's canvas sequence:
+Write the file, then run:
 
 ```bash
-printf '\033]777;notify;helm.canvas;%s\033\\' "$ABSOLUTE_PATH"
-printf '%s\n' "$ABSOLUTE_PATH"
+~/.claude/skills/helm-canvas/push.sh /absolute/path/to/artifact.md
 ```
 
-- The path must be **absolute**. A relative path is refused rather than guessed at — helm cannot
-  know which directory you meant.
-- Only **`.md` `.markdown` `.mdown` `.html` `.htm`** are renderable. Anything else is refused, and
-  helm tells the operator why.
+- The path must be **absolute**, and the file must exist.
+- Only **`.md` `.markdown` `.mdown` `.html` `.htm`** are renderable.
 - Artifacts go in this project's `~/.prp/<key>/` store, **never in the repo**.
-- It is a plain `printf`, so it works from a script, a `Makefile` or a bare shell — nothing about
-  it is agent-specific.
+- **Read the exit code.** Every refusal has its own — `3` not absolute, `4` no such file, `5` an
+  extension helm has no renderer for, `6` no terminal it could reach. Each says on stderr what to
+  do about it. Zero means it was delivered.
 
-**Both lines, every time.** The second prints the path as text, which the operator often wants to
-copy and is what they can act on if the pane is not where they are looking.
+**Do not hand-roll the `printf` yourself.** The push is an escape sequence, and an escape sequence
+only does anything if it reaches the terminal helm is parsing — which your tool call's stdout is
+not. Your harness captures it, and you have no controlling terminal at all: measured from a Claude
+Code tool call, `tty` is `??`, the session is `0`, and `/dev/tty` will not open. A bare `printf`
+comes back to you as text, the operator sees nothing, and nothing anywhere reports an error
+(helm #184). `push.sh` exists to find a pty you can actually write to, and to refuse out loud when
+there is none.
 
-**Do not print an OSC 8 hyperlink and expect a ⌘-click to work.** It does not reach helm from
-inside a TUI — your own terminal UI captures the mouse first (helm #124). That was the old
-instruction and it was wrong in its main case.
+It works the same from a shell the operator typed into, from a `Makefile`, or from a script — that
+path was never broken, and the script does not change it.
+
+**Do not print an OSC 8 hyperlink and expect a ⌘-click to work either.** It does not reach helm
+from inside a TUI — your own terminal UI captures the mouse first (helm #124). That was the
+instruction before this one, and it was wrong in the same way: fine from a shell, silent from an
+agent.
 
 ## Check it before you offer it
 
@@ -73,7 +80,7 @@ which you can verify.
 Offer something worth *looking at*: a plan, a review, a report, a diagram, an interactive page.
 
 Do not offer a three-line answer — say it. Offering everything is as useless as offering nothing,
-and the operator learns to ignore the links.
+and the operator learns to ignore what you put in front of them.
 
 If you are about to paste something long into the terminal, that is the signal to write a file
 and offer it instead.
