@@ -17,6 +17,20 @@ struct SplitLayout: Equatable {
     /// layout.
     static let dividerThickness: CGFloat = 1
 
+    /// How wide the divider is to *grab*, as opposed to how wide it is to look at. The
+    /// overlay carrying it does not take part in layout, so it overhangs
+    /// `(dividerGrab - dividerThickness) / 2` into the member on each side — which is the
+    /// point of it: the line stays a hairline while the target is wide enough to hit
+    /// without aiming.
+    ///
+    /// **It lives here rather than on `SplitDivider` because a second slice depends on
+    /// it.** `PaneClickReporter` reads a mouse-down that lands in a slot as *focus this
+    /// slot*, and the overhang means a mouse-down aimed at a divider lands inside the
+    /// neighbour's rectangle — so reaching for a divider would move the keyboard to a pane
+    /// the operator never clicked, which is #152 reopened through the resize handle. The
+    /// reporter yields this band, and it can only do that if the number has one home.
+    static let dividerGrab: CGFloat = 9
+
     /// The stack's full extent along its axis.
     let extent: CGFloat
     /// How many members share it — a count, and named so it cannot be misread as
@@ -160,8 +174,6 @@ private struct SplitDivider: View {
     /// True for exactly as long as this divider owns a pushed cursor. See `pop()`.
     @State private var pushedCursor = false
 
-    private static let grab: CGFloat = 9
-
     private var isHorizontal: Bool { axis == .horizontal }
 
     var body: some View {
@@ -169,7 +181,7 @@ private struct SplitDivider: View {
         // gives: a system separator is one more colour from one more source.
         fixed(Color.border, to: SplitLayout.dividerThickness)
             .overlay {
-                fixed(Color.clear, to: Self.grab)
+                fixed(Color.clear, to: SplitLayout.dividerGrab)
                     .contentShape(Rectangle())
                     .onHover { $0 ? push() : pop() }
                     // **Not belt and braces — the only thing that balances the common

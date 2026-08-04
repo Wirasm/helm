@@ -31,6 +31,18 @@ struct ChatComposer: View {
     /// measured reason (#29) not to loosen it. Offering text is exactly as safe as the
     /// operator typing it.
     @Binding var prefill: String?
+    /// Whether the pane this composer is drawn over is the bench's focused one.
+    ///
+    /// **This is what makes the reading face typable.** `focused` used to be set in exactly one
+    /// place — the `onChange(of: prefill)` below — so the field claimed the keyboard only when a
+    /// ⌘-clicked link offered it text. Opening the face otherwise left the operator's typing
+    /// going to the *shell underneath*, invisible under this overlay, which is worse than
+    /// nothing focused at all (#152).
+    ///
+    /// Acted on at its edges rather than on its value, the same discipline
+    /// `FocusClaimingTerminalView.claimsKeyboard` keeps and for the same reason: a re-render
+    /// must not snatch the keyboard back from somewhere the operator has since moved it.
+    let holdsKeyboard: Bool
 
     @State private var draft = ""
     @FocusState private var focused: Bool
@@ -65,6 +77,16 @@ struct ChatComposer: View {
             draft = draft.isEmpty ? offered : draft + "\n\n" + offered
             prefill = nil
             focused = true
+        }
+        // Opening the reading face puts the cursor here. `onAppear` is the face being swapped
+        // in by ⌘T or restored at launch; `onChange` is focus arriving at a pane that was
+        // already showing it — ⌘⌥arrow, or a click on another slot and back.
+        .onAppear { if holdsKeyboard { focused = true } }
+        .onChange(of: holdsKeyboard) { _, holds in
+            // The `false` edge is deliberately not handled. Whatever took focus away —
+            // another pane's grid, another composer — has already claimed the keyboard, and
+            // resigning here as well would be a second view fighting over the same handoff.
+            if holds { focused = true }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)

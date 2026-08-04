@@ -240,8 +240,17 @@ final class WorkbenchModel: ObservableObject {
         select(slot.panes[index].id)
     }
 
+    /// Make a slot the one commands target.
+    ///
+    /// **A slot that is already focused commits nothing**, and that guard is load-bearing now
+    /// rather than tidy. Every click on a pane's body reaches here (#152), and `commit` runs
+    /// `reconcileVisibility` and drives `WorkspaceModel.observe`'s save — so without it, typing
+    /// in the pane you are already in would write the whole workspace context to `UserDefaults`
+    /// on every click. It also settles the feedback question: a no-op commit would re-render the
+    /// bench, and re-renders are what `FocusClaimingTerminalView`'s edge-triggered claim exists
+    /// to survive.
     func focus(_ slot: Slot.ID) {
-        guard var bench else { return }
+        guard var bench, bench.focusedSlot != slot else { return }
         bench.focus(slot)
         commit(bench)
     }

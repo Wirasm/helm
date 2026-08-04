@@ -26,7 +26,7 @@ enum Keymap {
                     terminalFocused: terminalFocused
                 )
             else { return event }
-            NotificationCenter.default.post(name: shortcut.notification, object: shortcut.object)
+            shortcut.post()
             return nil
         }
     }

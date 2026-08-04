@@ -22,8 +22,9 @@ struct TerminalPaneView: View {
     /// reintroduces exactly that stall; keep the `ZStack`.
     let face: TerminalFace
     /// Whether this pane is the bench's focused one — which is helm saying the keyboard
-    /// belongs here. Read off the bench by `WorkbenchView` and passed straight through;
-    /// the pane makes no decision about it.
+    /// belongs here. Read off the bench by `WorkbenchView` and passed straight through; which
+    /// of this pane's two faces the keyboard then goes to is decided below, where the face is
+    /// already a rendering concern.
     let holdsKeyboard: Bool
 
     var body: some View {
@@ -31,12 +32,26 @@ struct TerminalPaneView: View {
             switch session.status {
             case .starting, .running:
                 ZStack {
-                    GhosttyHostView(view: session.hostView, holdsKeyboard: holdsKeyboard)
-                        .id(session.id)
+                    // **The grid claims the keyboard only on the terminal face.** It used to
+                    // claim on both, deliberately, because the composer focused itself only on
+                    // an offered prefill and a face-aware claim would have left *nothing*
+                    // holding the keyboard on the chat face — #96 again, one pane over. The
+                    // composer takes it for itself now (#152), so the two halves swap cleanly:
+                    // ⌘T onto the chat face drops this claim without a fight, and ⌘T back is a
+                    // `false → true` edge that hands the shell its keyboard again. Without the
+                    // face here that edge never fires, and typing goes on reaching a composer
+                    // the operator can no longer see.
+                    GhosttyHostView(
+                        view: session.hostView, holdsKeyboard: holdsKeyboard && face == .terminal
+                    )
+                    .id(session.id)
                     // Keyed on the session: swapping tabs while reading must
                     // build a fresh model against the new terminal's agent, not
                     // reuse one pointed at the old pty.
-                    if face == .chat { ChatOverlay(session: session).id(session.id) }
+                    if face == .chat {
+                        ChatOverlay(session: session, holdsKeyboard: holdsKeyboard)
+                            .id(session.id)
+                    }
                 }
             case let .failed(message): fallback(title: "ghostty init failed", detail: message)
             case .exited:

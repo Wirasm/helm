@@ -10,11 +10,10 @@ struct HelmCommands: View {
     var body: some View {
         ForEach(Array(Shortcut.all.enumerated()), id: \.offset) { _, shortcut in
             if let menu = shortcut.menu {
-                Button(menu.title) {
-                    NotificationCenter.default.post(
-                        name: shortcut.notification, object: shortcut.payload)
-                }
-                .keyboardShortcut(menu.key, modifiers: menu.modifiers)
+                // `Shortcut.post()` pairs the notification with its object — see that
+                // method for why this file must not assemble one itself (#152).
+                Button(menu.title) { shortcut.post() }
+                    .keyboardShortcut(menu.key, modifiers: menu.modifiers)
             }
         }
     }
