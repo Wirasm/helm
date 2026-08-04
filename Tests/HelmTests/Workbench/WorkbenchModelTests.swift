@@ -295,6 +295,42 @@ final class WorkbenchModelTests: XCTestCase {
         XCTAssertEqual(model.bench, restored, "showing a canvas its own source is not a move")
     }
 
+    // MARK: - A spawn from outside (#177)
+
+    func testASpawnedTerminalGetsAPaneOfItsOwnRatherThanATabOnTheCanvas() throws {
+        let (model, _) = mounted()
+        model.open(.file("/tmp/plan.md"))  // the operator ⌘-clicks a link and reads it
+        let canvasSlot = try XCTUnwrap(model.bench?.focusedSlot)
+
+        let spawned = try XCTUnwrap(model.spawnTerminal())
+
+        let bench = try XCTUnwrap(model.bench)
+        let slot = try XCTUnwrap(bench.slot(for: spawned.id))
+        XCTAssertNotEqual(
+            slot.id, canvasSlot, "the agent stacked onto the canvas being read (#177)")
+        XCTAssertEqual(slot.panes.map(\.id), [spawned.id], "a pane of its own, not a tab")
+        XCTAssertTrue(
+            spawned.isVisible,
+            "a spawn nobody is watching has to be the thing that is visible")
+    }
+
+    func testASpawnDoesNotMoveFocusOrChangeWhatASlotIsShowing() throws {
+        let (model, _) = mounted()
+        model.newTerminal()  // a second tab, so there is a selection a spawn could disturb
+        let focused = try XCTUnwrap(model.bench?.focusedSlot)
+        let reading = try XCTUnwrap(model.bench?.focusedPane?.id)
+
+        model.spawnTerminal()
+
+        XCTAssertEqual(
+            model.bench?.focusedSlot, focused,
+            "focus is what every bench command acts on, and the keyboard follows it — a "
+                + "spawn that takes it while the operator is typing is worse than a hidden tab")
+        XCTAssertEqual(
+            model.bench?.focusedPane?.id, reading,
+            "and the pane they were typing in is still the one on screen")
+    }
+
     // MARK: - Visibility
 
     func testVisibilityIsPushedOntoExactlyTheOnScreenPanes() throws {

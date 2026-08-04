@@ -201,6 +201,29 @@ final class WorkbenchModel: ObservableObject {
         return session
     }
 
+    /// A terminal helm was asked to open **from outside** — the spool's spawn (#54), which is
+    /// the same tenant `newTerminal` makes and two different decisions about it.
+    ///
+    /// Where it lands is `Workbench.placementForSpawnedTerminal()`'s — a pane of its own,
+    /// decided by the bench rather than by whatever the operator last clicked. That it
+    /// *appears* rather than seizing is `Workbench.offer(_:at:)`'s (#125): `selected` and
+    /// `focusedSlot` are both left exactly as they were, so the keyboard stays in the pane
+    /// the operator is typing in. A spawn nobody asked for that takes the keyboard is worse
+    /// than one in an odd slot.
+    ///
+    /// Returns the session for the same reason `newTerminal` does: the spool has to write
+    /// its id into `results/<id>.json` and then send the launch line to that exact pane.
+    @discardableResult
+    func spawnTerminal() -> TerminalSession? {
+        guard let path = workspacePath, var bench else { return nil }
+        let session = terminals.newTerminal(in: path)
+        bench.offer(
+            Pane(id: session.id, content: .terminal(face: .terminal)),
+            at: bench.placementForSpawnedTerminal())
+        commit(bench)
+        return session
+    }
+
     /// Where an offered canvas lands is `Workbench.placement(forOpening:)`'s decision, not
     /// this method's. Returns the pane actually showing the source — which for an
     /// already-open one is the pane that was there, not a second copy.
