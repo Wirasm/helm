@@ -11,8 +11,9 @@
 # It works from a shell the operator typed into, which is exactly how it was tested and
 # why it shipped wrong. Twice, counting the ⌘-click it replaced (#124, #166).
 #
-# So: resolve a pty we can actually write to, refuse loudly when there is none, and check
-# the path before emitting rather than letting helm refuse it after.
+# So: resolve a pty we can actually write to, refuse loudly when there is none, check the
+# path before emitting rather than letting helm refuse it after — and never report success
+# for a write that did not happen, which is the whole guarantee this script sells.
 #
 # Usage:  push.sh /absolute/path/to/artifact.md
 #
@@ -22,7 +23,8 @@
 #   3  path is not absolute
 #   4  no such file
 #   5  helm has no renderer for that extension
-#   6  no reachable terminal — nothing was emitted
+#   6  no reachable terminal, or the write to it failed — nothing was emitted
+#   7  path contains control characters
 
 set -uo pipefail
 
@@ -42,6 +44,17 @@ case "$artifact" in
     *) die 3 "path must be absolute — helm cannot know which directory you meant: $artifact" ;;
 esac
 
+# A path is bytes, and only NUL and `/` are forbidden in one — so a filename may legally
+# contain ESC. Splicing that into an OSC string hands the terminal a second, unrelated
+# sequence: the parser ends the OSC at the embedded ESC and then executes whatever follows
+# as its own command (`ESC ] 0 ; … BEL` retitles the window; OSC 52 writes the clipboard).
+# ghostty's "splits on the first two semicolons" only describes what happens AFTER a
+# well-formed sequence is parsed, so it is no defence here at all. Refuse rather than strip:
+# a mangled path that half-works is worse than a clear no.
+if printf '%s' "$artifact" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    die 7 "path contains control characters, refusing to emit it into a terminal"
+fi
+
 [ -f "$artifact" ] || die 4 "no such file: $artifact"
 
 # Take the extension off the BASENAME, not the path: `${artifact##*.}` on a dotless name
@@ -52,6 +65,11 @@ case "$base" in
     *.*) ext=${base##*.} ;;
     *) ext="" ;;
 esac
+# Mirrors `RenderableFile.isRenderable` in Sources/Helm/Shared/RenderableFile.swift, which
+# is what helm itself checks. Keep the two lists in step by hand — the same convention
+# AGENTS.md documents for hooks/helm-mail.mjs and its pi twin. Drift here can only refuse
+# something helm would have rendered, never the reverse, which is why the duplicate is
+# worth having: the alternative is emitting and learning about it from a banner.
 case "$ext" in
     md | markdown | mdown | html | htm) ;;
     *) die 5 "helm renders .md .markdown .mdown .html .htm — not: ${ext:-(no extension)}" ;;
@@ -59,16 +77,11 @@ esac
 
 # Where can we actually write bytes the terminal will parse?
 #
-# Order matters. If stdout is already a terminal we are being run from a real shell and
-# must not go hunting — that is the operator's own invocation and it already works.
-# Otherwise walk up the process tree: the harness's shell is detached, but the agent
-# process one or more hops up still owns the pty helm gave it.
+# Walk up the process tree: the harness's shell is detached, but the agent process one or
+# more hops up still owns the pty helm gave it. Ancestors only, bounded at pid 1, and every
+# candidate still has to pass a real writability check — so this cannot wander into an
+# unrelated session's terminal.
 resolve_sink() {
-    if [ -t 1 ]; then
-        printf '/dev/stdout\n'
-        return 0
-    fi
-
     local pid parent tty
     pid=$$
     while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
@@ -88,19 +101,32 @@ resolve_sink() {
     return 1
 }
 
-if ! sink=$(resolve_sink); then
+# `[ -t 1 ]` has to be asked HERE, in the main body. Inside `$(...)` fd 1 is the pipe bash
+# uses to capture the output, never the caller's stdout — so the same test inside
+# resolve_sink is unconditionally false and the branch would be dead code wearing a
+# comment that claims otherwise.
+if [ -t 1 ]; then
+    # The operator's own invocation from a real shell. That path was never broken; do not
+    # go hunting for a terminal when we are already sitting in one.
+    sink=/dev/stdout
+elif ! sink=$(resolve_sink); then
     die 6 "no writable terminal in this process tree — nothing was emitted. \
 You are probably not running inside a helm terminal; open the artifact with ⌘O instead, \
 or hand the operator this path: $artifact"
 fi
 
 # OSC 777 — the only sequence ghostty both parses from OUTPUT and lets carry arbitrary
-# text. Title is the discriminator, body the payload; ghostty splits on the first two
-# semicolons only, so a path containing ';' survives intact.
+# text. Title is the discriminator, body the payload.
 #
 # In a terminal that is NOT helm this degrades to an ordinary desktop notification rather
 # than doing nothing, which is the right failure: the operator still sees the path.
-printf '\033]777;notify;%s;%s\033\\' "$MARKER" "$artifact" >"$sink"
+#
+# The status IS checked. `-w` proved a permission bit at check time, not that an open and
+# write will succeed now — the reading end can be gone, and the whole point of this script
+# is that "nothing happened" must never be reported as success.
+if ! printf '\033]777;notify;%s;%s\033\\' "$MARKER" "$artifact" >"$sink"; then
+    die 6 "resolved $sink but the write failed — nothing was emitted: $artifact"
+fi
 
 # The path as text, on the agent's own stdout, so it is in the transcript the operator
 # reads even when the pane is not where they are looking — and so #168's copy affordance

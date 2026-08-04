@@ -28,9 +28,10 @@ Write the file, then run:
 - The path must be **absolute**, and the file must exist.
 - Only **`.md` `.markdown` `.mdown` `.html` `.htm`** are renderable.
 - Artifacts go in this project's `~/.prp/<key>/` store, **never in the repo**.
-- **Read the exit code.** Every refusal has its own — `3` not absolute, `4` no such file, `5` an
-  extension helm has no renderer for, `6` no terminal it could reach. Each says on stderr what to
-  do about it. Zero means it was delivered.
+- **Read the exit code.** Every refusal has its own — `2` wrong number of arguments, `3` not
+  absolute, `4` no such file, `5` an extension helm has no renderer for, `6` no terminal it could
+  reach *or the write to it failed*, `7` the path contains control characters. Each says on stderr
+  what to do about it. **Zero means the bytes reached a terminal**, not merely that the script ran.
 
 **Do not hand-roll the `printf` yourself.** The push is an escape sequence, and an escape sequence
 only does anything if it reaches the terminal helm is parsing — which your tool call's stdout is
