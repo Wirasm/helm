@@ -36,6 +36,36 @@ import Foundation
 /// Pure on purpose, in the style of `TerminalURLPolicy` and `TerminalLinkRoute` — a ghostty
 /// callback cannot be constructed in a test, so the decision lives where `swift test`
 /// reaches it.
+/// What travels on `.helmPushCanvasFile`.
+///
+/// The workspace is not decoration. A push fires from terminal **output**, so it can come
+/// from a session in a workspace the operator parked hours ago — where a ⌘-click could only
+/// ever come from a pane they were looking at. Without this, a background build in workspace
+/// B lands its report on workspace A's bench.
+struct CanvasPushRequest: Equatable {
+    let artifact: URL
+    let workspacePath: String
+}
+
+/// Collapses a burst of refusals to one.
+///
+/// The refusal path deliberately bypasses `TerminalNotificationGate`, which is otherwise the
+/// only thing between a foreground visible pane and unlimited banners. `while true; do
+/// printf '…helm.canvas;not-a-path…'; done` would otherwise flood Notification Center from a
+/// pane the operator is actively looking at — something that was impossible before this
+/// channel existed. One refusal per window per session is enough to tell an agent it is
+/// doing something wrong.
+struct RefusalThrottle {
+    static let window: TimeInterval = 10
+    private var lastDelivered: Date?
+
+    mutating func allows(at now: Date) -> Bool {
+        if let lastDelivered, now.timeIntervalSince(lastDelivered) < Self.window { return false }
+        lastDelivered = now
+        return true
+    }
+}
+
 enum CanvasPush {
     /// The reserved notification title that means "this is not a notification".
     ///

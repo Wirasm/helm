@@ -1,6 +1,6 @@
 ---
 name: helm-canvas
-description: Offer an artifact to the operator as a helm canvas — a rendered markdown or HTML file they open with ⌘-click. Use after writing a plan, report, review, diagram, or interactive page that is worth looking at rather than reading in a terminal; when the operator says "open it in the canvas", "show me that", "render this", "put it on screen"; when about to paste something long into the terminal instead; or via /helm-canvas.
+description: Put an artifact in front of the operator as a helm canvas — a rendered markdown or HTML file that appears as a tab beside their terminal. Use after writing a plan, report, review, diagram, or interactive page that is worth looking at rather than reading in a terminal; when the operator says "open it in the canvas", "show me that", "render this", "put it on screen"; when about to paste something long into the terminal instead; or via /helm-canvas.
 ---
 
 # Offer a canvas
@@ -23,6 +23,7 @@ Write the file, then print helm's canvas sequence:
 
 ```bash
 printf '\033]777;notify;helm.canvas;%s\033\\' "$ABSOLUTE_PATH"
+printf '%s\n' "$ABSOLUTE_PATH"
 ```
 
 - The path must be **absolute**. A relative path is refused rather than guessed at — helm cannot
@@ -33,12 +34,8 @@ printf '\033]777;notify;helm.canvas;%s\033\\' "$ABSOLUTE_PATH"
 - It is a plain `printf`, so it works from a script, a `Makefile` or a bare shell — nothing about
   it is agent-specific.
 
-**Also print the path as text.** The operator often wants to copy it, and it is what they can act
-on if the pane is not where they are looking.
-
-```bash
-printf '%s\n' "$ABSOLUTE_PATH"
-```
+**Both lines, every time.** The second prints the path as text, which the operator often wants to
+copy and is what they can act on if the pane is not where they are looking.
 
 **Do not print an OSC 8 hyperlink and expect a ⌘-click to work.** It does not reach helm from
 inside a TUI — your own terminal UI captures the mouse first (helm #124). That was the old

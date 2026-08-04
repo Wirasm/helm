@@ -153,6 +153,10 @@ struct Workbench: Codable, Equatable {
 
     /// Put a pane where `Placement` says. Selecting an already-open pane is a placement
     /// too (`.existing`), so "open this" is one call whether or not it is already here.
+    ///
+    /// **Shares its shape with `offer(_:at:)` on purpose, not by oversight.** The two
+    /// switches are deliberately parallel and independently auditable; read that method's
+    /// doc comment and `WorkbenchOfferTests` before merging them behind a flag.
     mutating func insert(_ pane: Pane, at placement: Placement) {
         switch placement {
         case let .existing(id):

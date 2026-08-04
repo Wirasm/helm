@@ -112,3 +112,53 @@ final class CanvasPushTests: XCTestCase {
         }
     }
 }
+
+/// The refusal path deliberately bypasses `TerminalNotificationGate`, so it needs its own
+/// answer to the thing that gate exists to prevent.
+final class RefusalThrottleTests: XCTestCase {
+    private let start = Date(timeIntervalSince1970: 1_000_000)
+
+    func testTheFirstRefusalIsDelivered() {
+        var throttle = RefusalThrottle()
+        XCTAssertTrue(throttle.allows(at: start))
+    }
+
+    func testABurstCollapsesToOne() {
+        // `while true; do printf '…helm.canvas;not-a-path…'; done` from a pane the operator
+        // is looking at. Before the throttle this reached Notification Center every time.
+        var throttle = RefusalThrottle()
+        XCTAssertTrue(throttle.allows(at: start))
+
+        let delivered = (1...500).filter {
+            throttle.allows(at: start.addingTimeInterval(Double($0) * 0.001))
+        }
+
+        XCTAssertTrue(delivered.isEmpty, "500 refusals in half a second must produce no banners")
+    }
+
+    func testAlaterRefusalIsDeliveredAgain() {
+        var throttle = RefusalThrottle()
+        _ = throttle.allows(at: start)
+
+        XCTAssertFalse(throttle.allows(at: start.addingTimeInterval(RefusalThrottle.window - 0.1)))
+        XCTAssertTrue(
+            throttle.allows(at: start.addingTimeInterval(RefusalThrottle.window + 0.1)),
+            "an agent that gets it wrong again later still has to be told")
+    }
+}
+
+/// A push is triggered by OUTPUT, so it can arrive from a session in a workspace the
+/// operator parked long ago — where a ⌘-click could only come from a pane they were looking
+/// at. The workspace has to travel with it.
+final class CanvasPushRequestTests: XCTestCase {
+    func testTheRequestCarriesTheWorkspaceThatAskedForIt() {
+        let request = CanvasPushRequest(
+            artifact: URL(fileURLWithPath: "/tmp/report.md"), workspacePath: "/work/b")
+
+        XCTAssertEqual(request.workspacePath, "/work/b")
+        XCTAssertNotEqual(
+            request, CanvasPushRequest(artifact: request.artifact, workspacePath: "/work/a"),
+            "two workspaces asking for the same artifact are not the same request — this is "
+                + "what stops a parked workspace's build landing on the active bench")
+    }
+}

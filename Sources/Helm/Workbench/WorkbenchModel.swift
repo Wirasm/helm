@@ -409,9 +409,13 @@ final class WorkbenchModel: ObservableObject {
             guard let url = note.object as? URL else { return }
             model.open(.file(url))
         }
+        // Scoped to the workspace whose terminal asked. A push comes from OUTPUT, so it
+        // can arrive from a session the operator parked long ago — and this model is the
+        // active workspace's, whichever that now is.
         subscribe(to: .helmPushCanvasFile) { model, note in
-            guard let url = note.object as? URL else { return }
-            model.offer(.file(url))
+            guard let request = note.object as? CanvasPushRequest else { return }
+            guard request.workspacePath == model.workspacePath else { return }
+            model.offer(.file(request.artifact))
         }
         // ⌘L carries no payload and means "show me the address field"; a URL payload
         // means "open this", which is what a ⌘-clicked http link posts.

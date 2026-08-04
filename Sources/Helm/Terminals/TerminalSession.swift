@@ -61,6 +61,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// The workspace that groups this session in the frame. The manager remains
     /// the owner of every session and the one shared ghostty controller.
     let workspacePath: String
+    /// Bypassing the notification gate is safe only if a burst cannot flood it.
+    private var refusalThrottle = RefusalThrottle()
 
     @Published private(set) var status: Status = .starting
     /// Terminal title (OSC 0/2 from the shell).
@@ -578,7 +580,9 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     func terminalDidRequestDesktopNotification(title: String, body: String) {
         switch CanvasPush.classify(title: title, body: body) {
         case let .open(url):
-            NotificationCenter.default.post(name: .helmPushCanvasFile, object: url)
+            NotificationCenter.default.post(
+                name: .helmPushCanvasFile,
+                object: CanvasPushRequest(artifact: url, workspacePath: workspacePath))
             return
         case let .refused(why):
             // Ungated on purpose. The gate below suppresses *ambient* notifications while
@@ -586,6 +590,7 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
             // the refusal of something an agent explicitly asked for. A silent refusal is
             // indistinguishable from a channel that does not work, which is #124's whole
             // failure mode.
+            guard refusalThrottle.allows(at: Date()) else { return }
             TerminalNotifier.shared.deliver(title: displayTitle, body: why)
             return
         case .notAPush:
