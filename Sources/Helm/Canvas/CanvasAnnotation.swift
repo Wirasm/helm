@@ -46,7 +46,12 @@ extension CanvasAnnotation {
         guard let text = sanitizedText(payload["text"]) else { return nil }
 
         if let id = payload["id"] as? String, let valid = validID(id) {
-            return CanvasAnnotation(anchor: .element(id: valid, text: text), comment: comment)
+            // A mermaid node's id is mostly renderer bookkeeping, and only the fence
+            // identifier inside it survives the agent editing the diagram — so the
+            // anchor is reduced to that. Anything else, including an id the agent
+            // authored by hand, passes through untouched (#113).
+            let anchored = MermaidAnchor.sourceIdentifier(in: valid) ?? valid
+            return CanvasAnnotation(anchor: .element(id: anchored, text: text), comment: comment)
         }
         // The documented degradation, not a failure: markdown goes through `marked`
         // client-side and headings get no id unless the page adds one, so `.md` canvases

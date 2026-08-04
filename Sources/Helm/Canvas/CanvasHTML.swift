@@ -33,6 +33,13 @@ enum CanvasHTML {
     ///    own block; overall fit is the window's/zoom's job, not per-diagram
     ///    machinery.
     ///
+    /// `deterministicIds: true` is load-bearing, not tidiness. Left unset, mermaid
+    /// seeds its id generator from `Date.now()` (`InitIDGenerator`), so every render
+    /// gives a node a different DOM id — and `FileWatcher` re-renders on each agent
+    /// write. An annotation would anchor to `#mermaid-1785839165688-flowchart-phase2-1`,
+    /// which is stale before the operator finishes typing the comment. See
+    /// `MermaidAnchor` for the other half: reducing that id to the fence identifier.
+    ///
     /// The CSS is the document type scale (15px body, 760px measure centered,
     /// 24/19/16 heading scale) over CSS system colors, so the page follows the
     /// pane's light/dark appearance via `color-scheme`.
@@ -64,6 +71,7 @@ enum CanvasHTML {
             mermaid.initialize({
               startOnLoad: false,
               securityLevel: "strict",
+              deterministicIds: true,
               theme: "\(theme.rawValue)",
               \(useMaxWidthOverrides)
             });
@@ -145,6 +153,7 @@ enum CanvasHTML {
           mermaid.initialize({
             startOnLoad: false,
             securityLevel: "strict",
+            deterministicIds: true,
             theme: "\(theme.rawValue)"
           });
           mermaid.run();
