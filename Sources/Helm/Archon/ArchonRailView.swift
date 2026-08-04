@@ -33,8 +33,9 @@ struct ArchonRailView: View {
     let workspacePath: String?
 
     @FocusState private var composerFocused: Bool
-    /// The finished row under the pointer, so only that row shows its dismiss control.
-    @State private var hovered: String?
+    /// The finished row under the pointer, so only that row shows its dismiss control. The rule
+    /// lives in `ArchonRowReveal` rather than in the `.onHover` closure — see #180.
+    @State private var reveal = ArchonRowReveal()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -578,12 +579,30 @@ struct ArchonRailView: View {
             }
             .buttonStyle(.plain)
             // Revealed on hover: the row is read far more often than it is cleared, and a
-            // permanent × on every line turns a list into a form.
-            .opacity(hovered == run.id ? 1 : 0)
+            // permanent × on every line turns a list into a form. **Hidden here means gone,
+            // not faint** — SwiftUI drops a fully transparent view from hit testing, so the
+            // reveal below is what makes this button clickable at all. `ArchonRowReveal` has
+            // the measurement.
+            .opacity(reveal.dismissOpacity(for: run.id))
             .help("Clear from helm — Archon keeps its own record")
         }
         .padding(.vertical, 4)
-        .onHover { inside in hovered = inside ? run.id : (hovered == run.id ? nil : hovered) }
+        // **The row's own hit region, and it must be spelled out here rather than inherited.**
+        // Without it the region an `.onHover` on this `HStack` gets is the *union of whatever
+        // children happen to be in it* — the leading button and the id — and the gaps are not
+        // in it: the 7pt spacings, the 4pt padding bands, and the whole trailing area beside a
+        // 14×14 control on a two-line row. Measured for #180 by clicking a grid over the row:
+        // **474 of 1242 points, 38%, reached no view at all**. Clicks rather than hovers
+        // because synthetic hover events do not reach SwiftUI at all — but `.contentShape`
+        // defaults to `ContentShapeKinds.interaction`, which is one region serving both, so a
+        // point no click reaches is a point hover reports `false` for. That included the ×'s
+        // own rectangle, so approaching the × hid it, and hiding it made it un-hittable — the
+        // control could not be reached by aiming at it. With this line nothing is dead.
+        //
+        // Keep it above `.onHover`, and keep it whatever else this row gains: it is the only
+        // thing standing between a fourth control and exactly this defect again.
+        .contentShape(Rectangle())
+        .onHover { inside in reveal.update(inside: inside, for: run.id) }
     }
 
     private static func colour(of tint: ArchonStatusTint) -> Color {
