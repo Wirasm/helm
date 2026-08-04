@@ -128,25 +128,22 @@ final class ArchonRunTests: XCTestCase {
         XCTAssertNotNil(try decoder().decode(ArchonRun.self, from: data).startedAt)
     }
 
-    /// A status Archon adds later gets a line without a helm change, and a defined place in
-    /// the order rather than wherever the dictionary put it.
-    func testCollapsedStatusesAreOrderedAndDropTheTotal() {
+    /// **Deleted rather than rewritten, and this is the one case AGENTS.md allows.** It
+    /// asserted the ordering of the collapsed count lines — `all` dropped, zeroes dropped, an
+    /// unknown status sorted last. There are no collapsed count lines any more, so
+    /// `statusCounts`, `ArchonStatusCount` and `statusOrder` went with them; keeping the test
+    /// would have meant keeping production code nothing reads, alive only to be tested.
+    ///
+    /// `counts` itself is still decoded — it is part of Archon's payload and cheap to carry —
+    /// and `testTheRunsResponseDecodesTheCapturedFixture` still covers that.
+    func testTheCountsDictionaryIsStillDecoded() throws {
         let response = ArchonRunsResponse(
             runs: [], total: 12,
-            counts: [
-                "all": 12, "completed": 4, "running": 1, "queued": 2, "failed": 3, "paused": 0,
-            ],
+            counts: ["all": 12, "completed": 4, "running": 1],
             scopeFallback: false)
 
-        XCTAssertEqual(
-            response.statusCounts,
-            [
-                ArchonStatusCount(status: "running", count: 1),
-                ArchonStatusCount(status: "failed", count: 3),
-                ArchonStatusCount(status: "completed", count: 4),
-                ArchonStatusCount(status: "queued", count: 2),
-            ],
-            "`all` is a total, a zero is not worth a line, and an unknown status sorts last")
+        XCTAssertEqual(response.counts["completed"], 4)
+        XCTAssertEqual(response.total, 12)
     }
 
     // MARK: - What Enter launches

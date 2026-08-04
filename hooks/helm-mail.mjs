@@ -199,6 +199,11 @@ function howToReply(me, root) {
 		"watch YOU arm can, because being notified is itself the wake. Without one, mail sent",
 		"while you are idle waits until the operator next speaks to you.",
 		`  watch: ${path.join(root, me)}/*.json   (ignore owner.json; move what you read into read/)`,
+		"  Monitor, persistent: true, no timeout_ms — persistent already means 'until this",
+		"  session ends', and a number beside it is the hour your watch quietly stopped.",
+		"  Monitor is a deferred tool: ToolSearch select:Monitor before the first call.",
+		"Armed, the watch takes every message before this notice can, so this is the last time",
+		"you are told any of the above. /helm-mail-cc has the rest.",
 	];
 }
 
@@ -220,7 +225,35 @@ function consume(dir, names) {
 }
 
 /**
- * Remove mailboxes whose owner is dead and whose queue is empty. A dead agent must stop being
+ * Is this mailbox's owner gone? Two ways to be gone, and only the first is obvious.
+ *
+ * The pid is dead — the ordinary case, an agent that exited.
+ *
+ * Or the pid is ALIVE and running somebody else. `/clear` starts a fresh session inside the same
+ * process: the new session claims a new handle and abandons the old one, but the old owner's pid
+ * is still that live process. A liveness check calls the corpse healthy, so the mailbox is
+ * immortal — and it stays in every listing, where `kill -0` reports it live and a sender picks it.
+ * Mail put there is never read and never bounces. Measured 2026-08-04: `helm-7274` and
+ * `helm-4831` both claimed pid 14832, five seconds apart, and the ghost outlived every claim after.
+ *
+ * Claude Code settles it. `<config>/sessions/<pid>.json` is one row per pid, REWRITTEN IN PLACE
+ * when a session restarts in that process, so it names the session running there *now* — a
+ * different id means this mailbox's owner is gone. Read by filename rather than by scanning,
+ * because "the session in pid X" has to be one answer for this to decide anything.
+ *
+ * Silence is never evidence: no row, no session id, or a runtime that has no such registry leaves
+ * the mailbox alone. Reaping a live agent's mailbox is far worse than keeping a dead one.
+ */
+function ownerGone(owner) {
+	if (!pidAlive(owner.pid)) return true;
+	if (owner.runtime !== "claude" || !owner.sessionId) return false;
+	const row = readJson(path.join(claudeSessionsDir(), `${owner.pid}.json`));
+	if (row?.pid !== owner.pid || !row?.sessionId) return false;
+	return row.sessionId !== owner.sessionId;
+}
+
+/**
+ * Remove mailboxes whose owner is gone and whose queue is empty. A dead agent must stop being
  * addressable, or a sender picks it out of a listing and nobody ever reads the message.
  * Conservative: mail waiting keeps a mailbox alive, and an unreadable owner is left alone.
  */
@@ -230,7 +263,7 @@ function reap(root, mine) {
 		const dir = path.join(root, handle);
 		const owner = readJson(path.join(dir, OWNER_FILE));
 		if (!owner || typeof owner.pid !== "number") continue;
-		if (pidAlive(owner.pid)) continue;
+		if (!ownerGone(owner)) continue;
 		if (queued(dir).length > 0) continue;
 		try {
 			fs.rmSync(dir, { recursive: true, force: true });

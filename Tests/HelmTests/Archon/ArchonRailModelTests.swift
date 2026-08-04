@@ -51,18 +51,23 @@ final class ArchonRailModelTests: XCTestCase {
 
     // MARK: - Polling
 
-    /// **Rewritten, not deleted.** This asserted that a paused run gets a line of its own, on
-    /// the argument that it is the one status blocked on the operator. The minimal rail gives
-    /// a line to `running` and a count to everything else including `paused` — which is also
-    /// what removed the approve/reject gate, since there is no longer a row to hang it on.
+    /// **Rewritten twice, not deleted.** It first asserted that a paused run gets its own line;
+    /// the minimal rail gave it a count instead. Now the counts are gone too, so what it
+    /// asserts is the split that replaced them: `running` gets a live line, `completed` and
+    /// `failed` go to the inbox, and everything else gets nothing at all.
+    ///
+    /// **`paused` getting nothing is the deliberate hole**, recorded on `ArchonRailModel`: it
+    /// had only a number, and a row for it means putting the approve/reject verbs back.
     @MainActor
-    func testOnlyRunningRunsGetALineAndTheCountsDoNotRepeatThem() async throws {
+    func testRunningRunsGetALineAndFinishedRunsGetAnInboxRow() async throws {
         let client = FakeArchonClient(
             runsResponse: .fixture(
                 runs: [
                     .fixture(id: "a", status: "running"),
                     .fixture(id: "b", status: "completed"),
                     .fixture(id: "c", status: "paused"),
+                    .fixture(id: "d", status: "failed"),
+                    .fixture(id: "e", status: "cancelled"),
                 ],
                 counts: ["all": 9, "running": 1, "completed": 5, "paused": 1, "failed": 2]))
         let model = ArchonRailModel(
@@ -72,27 +77,127 @@ final class ArchonRailModelTests: XCTestCase {
 
         XCTAssertEqual(model.running.map(\.id), ["a"])
         XCTAssertEqual(
-            model.statusCounts.map(\.status), ["paused", "failed", "completed"],
-            "the one running run is a line above, so its count is spent and paused is not")
-        XCTAssertEqual(model.statusCounts.map(\.count), [1, 2, 5])
+            Set(model.finished.map(\.id)), ["b", "d"],
+            "completed and failed are the inbox; cancelled produced nothing and paused is not finished"
+        )
     }
 
-    /// Archon's `counts` are over the whole project while its `runs` array is the newest
-    /// twenty, so a status can hold more runs than the rail can show. The remainder has to
-    /// stay on the collapsed line rather than vanishing with the row.
+    /// **Rewritten, not deleted.** This asserted that a status holding more runs than the rail
+    /// could show left its remainder on a collapsed count line. There is no collapsed line any
+    /// more, so what survives of its subject is the opposite guarantee: `counts` is not read at
+    /// all, and cannot put a run on screen that `runs` did not carry.
     @MainActor
-    func testARunWithNoRowLeavesItsRemainderOnTheCollapsedLine() async throws {
+    func testCountsNoLongerReachTheRail() async throws {
         let client = FakeArchonClient(
             runsResponse: .fixture(
                 runs: [.fixture(id: "a", status: "running")],
-                counts: ["all": 4, "running": 3]))
+                counts: ["all": 128, "running": 3, "completed": 97, "failed": 28]))
         let model = ArchonRailModel(
             client: client, defaults: try isolatedDefaults("archon-rail-remainder"))
 
         await model.refresh(in: workspace)
 
         XCTAssertEqual(model.running.map(\.id), ["a"])
-        XCTAssertEqual(model.statusCounts, [ArchonStatusCount(status: "running", count: 2)])
+        XCTAssertEqual(
+            model.finished, [],
+            "97 completed in the counts, none in runs — a count can no longer invent a row")
+    }
+
+    /// Newest first, by `completed_at`. A run missing it sorts last rather than breaking the
+    /// comparison.
+    @MainActor
+    func testTheInboxIsNewestFirst() async throws {
+        let base = Date(timeIntervalSince1970: 1_785_800_000)
+        let client = FakeArchonClient(
+            runsResponse: .fixture(
+                runs: [
+                    .fixture(id: "old", status: "completed", completedAt: base),
+                    .fixture(id: "undated", status: "completed", completedAt: nil),
+                    .fixture(
+                        id: "new", status: "completed", completedAt: base.addingTimeInterval(600)),
+                ]))
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-inbox-order"))
+
+        await model.refresh(in: workspace)
+
+        XCTAssertEqual(model.finished.map(\.id), ["new", "old", "undated"])
+    }
+
+    /// Clearing is helm-only and survives the next poll — otherwise the row returns two seconds
+    /// later and the gesture means nothing.
+    @MainActor
+    func testAClearedRunStaysGoneAcrossTheNextPoll() async throws {
+        let client = FakeArchonClient(
+            runsResponse: .fixture(
+                runs: [
+                    .fixture(id: "b", status: "completed"),
+                    .fixture(id: "d", status: "failed"),
+                ]))
+        let defaults = try isolatedDefaults("archon-rail-dismiss")
+        let model = ArchonRailModel(client: client, defaults: defaults)
+        await model.refresh(in: workspace)
+
+        model.dismiss(try XCTUnwrap(model.finished.first { $0.id == "b" }), in: workspace)
+        XCTAssertEqual(model.finished.map(\.id), ["d"])
+
+        await model.refresh(in: workspace)
+
+        XCTAssertEqual(model.finished.map(\.id), ["d"], "Archon still reports it; helm does not")
+    }
+
+    /// And survives a relaunch, which is the whole reason it is persisted rather than held in
+    /// memory: quitting must not undo the clearing.
+    @MainActor
+    func testAClearedRunSurvivesARelaunch() async throws {
+        let client = FakeArchonClient(
+            runsResponse: .fixture(runs: [.fixture(id: "b", status: "completed")]))
+        let defaults = try isolatedDefaults("archon-rail-dismiss-relaunch")
+        let first = ArchonRailModel(client: client, defaults: defaults)
+        await first.refresh(in: workspace)
+        first.dismiss(try XCTUnwrap(first.finished.first), in: workspace)
+
+        let second = ArchonRailModel(client: client, defaults: defaults)
+        await second.refresh(in: workspace)
+
+        XCTAssertEqual(second.finished, [])
+    }
+
+    /// A run cleared in one workspace is not cleared in another — the store is keyed by
+    /// workspace, and two projects' inboxes are separate.
+    @MainActor
+    func testClearingIsScopedToTheWorkspace() async throws {
+        let client = FakeArchonClient(
+            runsResponse: .fixture(runs: [.fixture(id: "b", status: "completed")]))
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-dismiss-scope"))
+        await model.refresh(in: workspace)
+        model.dismiss(try XCTUnwrap(model.finished.first), in: workspace)
+
+        await model.refresh(in: "/tmp/other-project")
+
+        XCTAssertEqual(model.finished.map(\.id), ["b"])
+    }
+
+    /// Clicking a finished row asks the opener for that run, and nothing spawns during a poll.
+    @MainActor
+    func testOpeningAFinishedRunAsksTheOpenerOnceForThatRun() async throws {
+        let opened = OpenedRuns()
+        let client = FakeArchonClient(
+            runsResponse: .fixture(runs: [.fixture(id: "b", status: "completed")]))
+        let model = ArchonRailModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-open"),
+            opener: ArchonRunOpener { run in await opened.record(run.id) })
+
+        await model.refresh(in: workspace)
+        let duringPoll = await opened.ids
+        XCTAssertEqual(duringPoll, [], "a poll resolves nothing — it is lazy on click")
+
+        model.open(try XCTUnwrap(model.finished.first))
+        try await Task.sleep(for: .milliseconds(50))
+
+        let afterClick = await opened.ids
+        XCTAssertEqual(afterClick, ["b"])
     }
 
     /// **Rewritten from `testTheSublineIsTheCurrentNodesPreview`.** The subline names the
@@ -163,7 +268,7 @@ final class ArchonRailModelTests: XCTestCase {
         await model.refresh(in: nil)
 
         XCTAssertEqual(model.running, [])
-        XCTAssertEqual(model.statusCounts, [])
+        XCTAssertEqual(model.finished, [])
         let metrics = await client.metrics()
         XCTAssertEqual(metrics.listCalls, 1, "no workspace, no project to ask about")
     }
@@ -345,4 +450,11 @@ final class ArchonRailModelTests: XCTestCase {
 
         XCTAssertEqual(model.launchFailure, ArchonRailModel.noWorkspace)
     }
+}
+
+/// Records what the rail asked to open, so the click can be asserted without spawning `gh`.
+private actor OpenedRuns {
+    private(set) var ids: [String] = []
+
+    func record(_ id: String) { ids.append(id) }
 }

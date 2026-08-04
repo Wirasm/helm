@@ -98,11 +98,11 @@ extension ArchonRun {
     static func fixture(
         id: String = "run-1", workflowName: String = "implement", status: String = "running",
         workingPath: String? = "/tmp/project", userMessage: String? = "do the thing",
-        nodes: [ArchonNode]? = []
+        completedAt: Date? = nil, nodes: [ArchonNode]? = []
     ) -> ArchonRun {
         ArchonRun(
             id: id, workflowName: workflowName, status: status, workingPath: workingPath,
-            userMessage: userMessage, startedAt: nil, completedAt: nil,
+            userMessage: userMessage, startedAt: nil, completedAt: completedAt,
             metadata: nil, nodes: nodes)
     }
 }

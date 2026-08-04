@@ -307,6 +307,13 @@ function queued(dir: string): string[] {
  * Deliberately conservative: an unreadable or pid-less owner.json is left alone, and a
  * mailbox holding mail is never removed even when its owner is dead — that mail is still
  * evidence, and the handle may be re-claimed.
+ *
+ * **Asymmetric with the Claude hook on purpose, and not an omission.** `hooks/helm-mail.mjs`
+ * also reaps a mailbox whose pid is *alive* but now runs a different session — `/clear` starts a
+ * fresh Claude Code session inside the same process and abandons the old handle. It can decide
+ * that because Claude Code publishes `<config>/sessions/<pid>.json`, one row per pid, saying which
+ * session is in that process now. pi has no such registry, and a pi session id does not change
+ * under a live process, so there is nothing here to detect and nothing to mirror.
  */
 function reap(root: string, mine: string): number {
 	let removed = 0;

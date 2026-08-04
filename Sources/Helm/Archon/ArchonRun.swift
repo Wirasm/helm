@@ -81,9 +81,17 @@ struct ArchonRun: Codable, Equatable, Sendable {
     /// shows, so what is on screen is what you would type.
     var shortID: String { String(id.prefix(8)) }
 
-    /// The one status that gets a line of its own. Everything else — including `paused` —
-    /// is a count, because the rail is a place to start work rather than a place to read it.
+    /// The one status that gets a live line of its own.
     var isRunning: Bool { status == ArchonRunStatus.running }
+
+    /// The two statuses that put a run in the inbox.
+    ///
+    /// **`cancelled` is deliberately absent**: the operator ended it themselves, so it is not
+    /// news, and it produced nothing to be handed. `paused` is not finished at all — see the
+    /// note on `ArchonRailModel`, which is where that gap is recorded.
+    var isFinished: Bool {
+        status == ArchonRunStatus.completed || status == ArchonRunStatus.failed
+    }
 
     /// The node the subline animates: the one Archon says is running, else the last one it
     /// reported. **Last rather than first** — `nodes` arrives in DAG order, and a fan-out
@@ -115,6 +123,8 @@ struct ArchonRun: Codable, Equatable, Sendable {
 /// workflows, not runs.
 enum ArchonRunStatus {
     static let running = "running"
+    static let completed = "completed"
+    static let failed = "failed"
 }
 
 struct ArchonNode: Codable, Equatable, Sendable {
@@ -217,30 +227,6 @@ struct ArchonRunsResponse: Codable, Equatable, Sendable {
     /// answer for a project one; helm passes that on for the same reason.
     let scopeFallback: Bool
 
-    /// The collapsed status lines, in the order the rail shows them: the ones you act on
-    /// first, then the rest alphabetically so a status Archon adds later has a defined place
-    /// rather than a random one. `all` is dropped — it is a total, not a status.
-    static let statusOrder = ["running", "paused", "failed", "completed", "cancelled", "pending"]
-
-    var statusCounts: [ArchonStatusCount] {
-        counts
-            .filter { $0.key != "all" && $0.value > 0 }
-            .map { ArchonStatusCount(status: $0.key, count: $0.value) }
-            .sorted { left, right in
-                let leftRank =
-                    Self.statusOrder.firstIndex(of: left.status) ?? Self.statusOrder.count
-                let rightRank =
-                    Self.statusOrder.firstIndex(of: right.status) ?? Self.statusOrder.count
-                if leftRank != rightRank { return leftRank < rightRank }
-                return left.status < right.status
-            }
-    }
-}
-
-struct ArchonStatusCount: Equatable, Sendable, Identifiable {
-    var id: String { status }
-    let status: String
-    let count: Int
 }
 
 struct ArchonWorkflowListResponse: Codable, Equatable, Sendable {
