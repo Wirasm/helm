@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    helm's app icon: a ship's wheel whose hub is a workbench pane.
+
+    Two decisions this file exists to record.
+
+    NO INNER SPOKES. A real helm has them and they are the first thing to die — by 32px they
+    merge into a filled disc and the mark becomes a blob. Rim, handles and hub keep a HOLE in
+    the middle all the way down to 16px, which is what stops it turning to mush in the Dock
+    and the menu bar. Every other variant tried filled in.
+
+    THE HUB IS A PANE, NOT A BOSS. A wheel is generic; a wheel with a slot at its centre is
+    helm's. It costs nothing small — the hub is solid either way — and it is the one detail
+    that makes this mark not-a-stock-helm.
+
+    Ink is Rasmus Widing brand peach (#fab387) on helm's dark surface (#1C1E21). Geometry is
+    the macOS Big Sur icon grid: the rounded rect is 824 of 1024, corner radius 185.
+
+    Regenerate the .icns with Assets/icon/build-icon.sh after editing this file.
+  -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#1C1E21"/>
+
+  <!-- Rim -->
+  <circle cx="512" cy="512" r="188" fill="none" stroke="#fab387" stroke-width="76"/>
+
+  <!-- Six handles, breaking the rim. The handles are what say "helm" rather than "gear". -->
+  <g stroke="#fab387" stroke-width="72" stroke-linecap="round">
+    <line x1="512.0" y1="324.0" x2="512.0" y2="220.0"/>
+    <line x1="674.8" y1="418.0" x2="764.9" y2="366.0"/>
+    <line x1="674.8" y1="606.0" x2="764.9" y2="658.0"/>
+    <line x1="512.0" y1="700.0" x2="512.0" y2="804.0"/>
+    <line x1="349.2" y1="606.0" x2="259.1" y2="658.0"/>
+    <line x1="349.2" y1="418.0" x2="259.1" y2="366.0"/>
+  </g>
+  <g fill="#fab387">
+    <circle cx="512.0" cy="206.0" r="52"/>
+    <circle cx="777.0" cy="359.0" r="52"/>
+    <circle cx="777.0" cy="665.0" r="52"/>
+    <circle cx="512.0" cy="818.0" r="52"/>
+    <circle cx="247.0" cy="665.0" r="52"/>
+    <circle cx="247.0" cy="359.0" r="52"/>
+  </g>
+
+  <!-- The hub: a pane. -->
+  <rect x="446" y="460" width="132" height="104" rx="26" fill="#fab387"/>
+</svg>
