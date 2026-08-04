@@ -163,7 +163,24 @@ struct ArchonRailView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 4)
-            Text(String(reply.runID.prefix(8)))
+            // The armed line gets the affordance too. It is the same id in the same place in
+            // the same monospace, and an id that copies on three rows and not the fourth is
+            // the inconsistency #169 was filed about rather than a saving — this is also the
+            // run you are most likely to want the handle for, being the one you are about to
+            // answer.
+            runID(reply.runID)
+        }
+    }
+
+    /// **The trailing short id, and the one thing in the rail you can take out of it.**
+    ///
+    /// Every run row renders eight characters of a 32-character id, so the click copies
+    /// `run.id` and not what is drawn — `CopyableLabel`'s note has the argument, and
+    /// `ArchonRun.shortID(of:)` is the single definition of the shortening so the label here
+    /// cannot drift from the one the rows draw.
+    private func runID(_ id: String) -> some View {
+        CopyableLabel(value: id, hint: "Click to copy the run id — \(id)") {
+            Text(ArchonRun.shortID(of: id))
                 .font(.system(size: 9.5, design: .monospaced))
                 .foregroundStyle(Color.textFaint)
         }
@@ -384,9 +401,7 @@ struct ArchonRailView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
-                Text(run.shortID)
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundStyle(Color.textFaint)
+                runID(run.id)
             }
             VStack(alignment: .leading, spacing: 2) {
                 if let repository = ArchonRunLink.parse(workingPath: run.workingPath)?.repository {
@@ -472,10 +487,8 @@ struct ArchonRailView: View {
                 Spacer(minLength: 4)
                 // The short id, in monospace, because it is the handle every Archon surface
                 // uses — `archon workflow get <short-id>` resolves a prefix — and a console
-                // shows you the thing you would type.
-                Text(run.shortID)
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundStyle(Color.textFaint)
+                // shows you the thing you would type. Clicking it takes the full one.
+                runID(run.id)
             }
             if let stage = model.stages[run.id] {
                 Text(stage)
@@ -510,7 +523,11 @@ struct ArchonRailView: View {
     /// the row says whose it is.
     private func finishedLine(_ run: ArchonRun) -> some View {
         let link = ArchonRunLink.parse(workingPath: run.workingPath)
-        return HStack(spacing: 7) {
+        // **`.top`, because the id and the × belong to the first line.** They used to be
+        // centred over a two-line block; the id has moved out of the button (see below) and
+        // aligning the trailing pair to the top is what keeps it exactly where it was drawn,
+        // level with the run's name, with no offset to hand-tune.
+        return HStack(alignment: .top, spacing: 7) {
             Button {
                 model.open(run)
             } label: {
@@ -525,9 +542,6 @@ struct ArchonRailView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer(minLength: 4)
-                        Text(run.shortID)
-                            .font(.system(size: 9.5, design: .monospaced))
-                            .foregroundStyle(Color.textFaint)
                     }
                     if let link {
                         Text(link.repository)
@@ -545,6 +559,13 @@ struct ArchonRailView: View {
             .buttonStyle(.plain)
             .disabled(link == nil)
             .help(link.map { "Open the pull request for \($0.branch)" } ?? "")
+
+            // **Outside the button, and it has to be.** A `Button`'s label is not a place
+            // controls live — the button consumes the click — so an id nested inside this row
+            // could not be copied without also opening a pull request in a browser. It is the
+            // one row in the rail that is itself pressable, and the id is the one part of it
+            // that now does something else.
+            runID(run.id)
 
             Button {
                 model.dismiss(run, in: workspacePath)

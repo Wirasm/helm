@@ -145,12 +145,15 @@ struct ArtifactBrowser: View {
         // Pasting an artifact's path into an agent's context is one of the most
         // frequent things done in helm, and it has no cheap route today: artifacts
         // moved out of the repo into ~/.prp, which put them outside every editor
-        // that had a "copy path" on them. The path is tilde-absolute because ~/.prp
-        // sits outside any repo, so there is nothing for it to be relative to —
-        // and it is the form prp's own docs use.
+        // that had a "copy path" on them.
+        //
+        // It used to abbreviate with `~` — the form prp's own docs use — and that made
+        // helm's third copy-a-path surface its second answer to the same question. #168
+        // settled it as absolute for every one of them; `Pasteboard.path(of:)` carries
+        // the reasoning.
         .contextMenu {
             Button("Copy Path") {
-                Pasteboard.copy((file.url.path as NSString).abbreviatingWithTildeInPath)
+                Pasteboard.copy(Pasteboard.path(of: file.url))
             }
             // The other half of the same problem. ~/.prp is outside every repo, so an
             // artifact is not reachable from an editor's file tree either — reading one

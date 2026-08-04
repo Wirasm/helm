@@ -569,11 +569,19 @@ struct CanvasView: View {
         HStack(spacing: 8) {
             Image(systemName: "doc.text")
                 .foregroundStyle(Color.textMuted)
-            Text(document.url.lastPathComponent)
-                .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(document.url.path)
+            // **The name is the handle to the file, so it hands the file over.** What you
+            // most often want from an open canvas is where it is — to pass to an agent, to
+            // paste into a shell — and the path was already here as a tooltip, which is a
+            // thing you can read and not take. The tooltip stays and the click is added.
+            CopyableLabel(
+                value: Pasteboard.path(of: document.url),
+                hint: "Click to copy \(Pasteboard.path(of: document.url))"
+            ) {
+                Text(document.url.lastPathComponent)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             Spacer()
             // Attention as state on an existing element, never a popup: a count on the
             // header, not a badge that pops.
