@@ -31,11 +31,15 @@ final class WorktreeCLITests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func client() -> WorktreeCLI {
-        WorktreeCLI(
-            environment: [
-                "WORKSPACE": workspace.path, "LINKED": linked.path, "CALLS": calls.path,
-            ], gitExecutable: git.path, duExecutable: du.path)
+    private func client(
+        extraEnvironment: [String: String] = [:], timeout: Duration = WorktreeCLI.defaultTimeout
+    ) -> WorktreeCLI {
+        var environment = [
+            "WORKSPACE": workspace.path, "LINKED": linked.path, "CALLS": calls.path,
+        ]
+        environment.merge(extraEnvironment) { _, new in new }
+        return WorktreeCLI(
+            environment: environment, gitExecutable: git.path, duExecutable: du.path, timeout: timeout)
     }
 
     func testListsWithPorcelainAndEnrichesAgainstAnExplicitRemoteDefault() async throws {
@@ -116,5 +120,60 @@ final class WorktreeCLITests: XCTestCase {
             XCTAssertEqual(status, 7)
             XCTAssertEqual(stderr.count, WorktreeCLI.errorSnippetLimit + 1)
         }
+    }
+
+    func testHungListTimesOutAndTerminatesItsGitChild() async throws {
+        let pidRecord = root.appendingPathComponent("git-pid")
+        try install("printf '%s' \"$$\" > \"$PID_RECORD\"\nexec /bin/sleep 999\n", at: git)
+        try install("exit 0\n", at: du)
+
+        do {
+            _ = try await client(
+                extraEnvironment: ["PID_RECORD": pidRecord.path], timeout: .milliseconds(300)
+            ).worktrees(in: workspace.path)
+            XCTFail("expected timeout")
+        } catch let error as WorktreeCLIError {
+            XCTAssertEqual(error.reason, .timedOut(after: .milliseconds(300)))
+        }
+        try assertChildIsGone(pidRecord)
+    }
+
+    func testCancellingListTerminatesItsGitChild() async throws {
+        let pidRecord = root.appendingPathComponent("git-pid")
+        try install("printf '%s' \"$$\" > \"$PID_RECORD\"\nexec /bin/sleep 999\n", at: git)
+        try install("exit 0\n", at: du)
+        let client = client(extraEnvironment: ["PID_RECORD": pidRecord.path])
+        let workspacePath = workspace.path
+        let call = Task { try await client.worktrees(in: workspacePath) }
+        try await waitForPid(pidRecord)
+        call.cancel()
+
+        do {
+            _ = try await call.value
+            XCTFail("expected cancellation")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
+        try assertChildIsGone(pidRecord)
+    }
+
+    private func waitForPid(_ record: URL) async throws {
+        for _ in 0..<250 {
+            if let text = try? String(contentsOf: record, encoding: .utf8), Int32(text) != nil {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("the fake git never started")
+    }
+
+    private func assertChildIsGone(_ record: URL) throws {
+        let pid = try XCTUnwrap(Int32(try String(contentsOf: record, encoding: .utf8)))
+        for _ in 0..<250 {
+            if kill(pid, 0) != 0 { return }
+            usleep(20_000)
+        }
+        XCTFail("pid \(pid) survived")
     }
 }

@@ -35,6 +35,16 @@ final class WorktreeTests: XCTestCase {
         XCTAssertTrue(records[3].isBare)
     }
 
+    func testRejectsPorcelainRecordWithoutAWorktreePath() {
+        XCTAssertThrowsError(try WorktreeCLI.parsePorcelain("HEAD deadbeef\n")) { error in
+            XCTAssertEqual(
+                error as? WorktreeCLIError,
+                WorktreeCLIError(
+                    command: "git worktree list --porcelain",
+                    reason: .malformedOutput("record has no worktree path")))
+        }
+    }
+
     func testRecognisesOnlyDocumentedArchonBranchFamilies() {
         for branch in [
             "archon/task-123", "archon/issue-141", "archon/pr-9", "archon/review-9",
