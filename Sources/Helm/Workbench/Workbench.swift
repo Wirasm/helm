@@ -176,6 +176,43 @@ struct Workbench: Codable, Equatable {
         normalize()
     }
 
+    /// Put a pane on the bench **without selecting it and without moving focus** — an
+    /// agent's push (#125), as against `insert`, which is the operator asking.
+    ///
+    /// *Appear, don't seize.* #33 ruled against a control channel because *"it's not helm's
+    /// job to decide for me how to organize"*, and the harm it names is real — but it is
+    /// about **when**, not whether. taskade measured the same thing before they added
+    /// presence: users called agent-driven change *"unsettling"*, and their rule is that
+    /// human operations always process before agent operations. So a pushed artifact
+    /// arrives as a tab you can reach, never as a pane that replaces what you were reading.
+    ///
+    /// The two things that must not move are `selected` — what a slot is showing — and
+    /// `focusedSlot`, which is what every bench-level command acts on. Leaving both alone
+    /// is also what keeps the keyboard where it was: `claimsKeyboard` only acts on a
+    /// `false → true` edge, and nothing claims first responder for a canvas.
+    ///
+    /// Safe against `normalize()` by construction: it only repairs `selected` when the
+    /// current value names no pane the slot holds, and never steers it toward a newly
+    /// appended one.
+    mutating func offer(_ pane: Pane, at placement: Placement) {
+        switch placement {
+        case .existing:
+            // Already here. Pulling it forward would be the seizing this exists to avoid —
+            // and an agent re-offering the artifact it just rewrote is the common case.
+            return
+        case let .tab(slotID):
+            guard let address = address(ofSlot: slotID) else { return }
+            columns[address.column].slots[address.slot].panes.append(pane)
+        case let .row(columnID):
+            guard let index = columns.firstIndex(where: { $0.id == columnID }) else { return }
+            // A brand-new slot shows its only pane, which displaces nothing.
+            columns[index].slots.append(Slot(panes: [pane]))
+        case .column:
+            columns.append(Column(slots: [Slot(panes: [pane])]))
+        }
+        normalize()
+    }
+
     /// Closes a pane, and reports whether it did. Generalises `TerminalManager.close`
     /// one level: closing the selected pane selects the neighbour **at the closed
     /// position**, an emptied slot goes, an emptied column goes, and the bench's last

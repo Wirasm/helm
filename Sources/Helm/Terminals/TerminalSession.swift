@@ -572,7 +572,26 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// the background or the pane is off screen; title is the tab's, body is
     /// the message (OSC 9 carries only a body — fall back to the sequence's
     /// title so neither form delivers an empty banner).
+    /// Also helm's canvas-push channel. See `CanvasPush` for why this sequence and not one
+    /// of helm's own: helm never sees OSC *sequences*, only ghostty's *parsed actions*, and
+    /// this is the only action that both fires on output and carries arbitrary text.
     func terminalDidRequestDesktopNotification(title: String, body: String) {
+        switch CanvasPush.classify(title: title, body: body) {
+        case let .open(url):
+            NotificationCenter.default.post(name: .helmPushCanvasFile, object: url)
+            return
+        case let .refused(why):
+            // Ungated on purpose. The gate below suppresses *ambient* notifications while
+            // you are already looking at the pane — right for "build finished", wrong for
+            // the refusal of something an agent explicitly asked for. A silent refusal is
+            // indistinguishable from a channel that does not work, which is #124's whole
+            // failure mode.
+            TerminalNotifier.shared.deliver(title: displayTitle, body: why)
+            return
+        case .notAPush:
+            break
+        }
+
         guard
             TerminalNotificationGate.shouldDeliver(
                 appIsActive: NSApp.isActive,
