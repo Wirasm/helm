@@ -1,0 +1,188 @@
+{
+  "runs": [
+    {
+      "id": "082676c1e8cba90a2ad212e3b00946b0",
+      "conversation_id": "5648593f91bb9d6c3e1e49b3669d768a",
+      "codebase_id": "4c569057c7e7990dee047199b25030e5",
+      "workflow_name": "auto2",
+      "user_message": "go",
+      "status": "paused",
+      "current_step_index": null,
+      "metadata": {
+        "isolation": "container",
+        "isolation_env_id": "bb9923f3215eb3b8cf0240c25d29db6a",
+        "approval": {
+          "nodeId": "__writeback__",
+          "message": "**Container run finished \u2014 review the changes before they touch the live folder.**\n\n1 change(s): 1 added, 0 modified, 0 deleted, 0 symlink(s):\n  + `autofile.txt`\n\nApprove to APPLY these changes to the live folder, or reject to discard them.",
+          "type": "writeback"
+        },
+        "pending_writeback": {
+          "envId": "bb9923f3215eb3b8cf0240c25d29db6a",
+          "summary": {
+            "added": [
+              "autofile.txt"
+            ],
+            "modified": [],
+            "deleted": [],
+            "symlinks": [],
+            "skipped": [],
+            "truncated": false,
+            "totalCount": 1
+          }
+        }
+      },
+      "parent_conversation_id": null,
+      "started_at": "2026-07-17 12:42:37",
+      "completed_at": null,
+      "last_activity_at": "2026-07-17 12:42:37",
+      "working_path": "/private/tmp/r3auto2",
+      "user_id": "342ba40edcc5e14ec3c88f456c6fa862",
+      "parent_run_id": null,
+      "output_root": null,
+      "platform_type": "cli",
+      "worker_platform_id": "cli-1784292156791-i4tpu2",
+      "parent_platform_id": null,
+      "codebase_name": "r3auto2",
+      "current_step_name": null,
+      "total_steps": null,
+      "current_step_status": null,
+      "agents_completed": 0,
+      "agents_failed": 0,
+      "agents_total": null
+    },
+    {
+      "id": "8b6229fa6830e199889235eed9d38ac3",
+      "conversation_id": "bbb095e038cad43852718940ad20afb2",
+      "codebase_id": null,
+      "workflow_name": "smoke-2074",
+      "user_message": "smoke",
+      "status": "paused",
+      "current_step_index": null,
+      "metadata": {
+        "approval": {
+          "nodeId": "validate-like",
+          "message": "\u2705 Completion signal detected (`SMOKE_VALIDATED`).\n\n> Validation passed.\nSMOKE_VALIDATED\n\nReview the validation result.",
+          "type": "interactive_loop",
+          "iteration": 1,
+          "sessionId": "ebfb126f-4c7f-4bbb-bb95-384edc4436b0",
+          "completionSignaled": true,
+          "signaledOutput": "Validation passed.\nSMOKE_VALIDATED",
+          "resolved": "approved"
+        },
+        "loop_user_input": "Approved",
+        "loop_feedback_given": false
+      },
+      "parent_conversation_id": null,
+      "started_at": "2026-07-15 11:13:50",
+      "completed_at": null,
+      "last_activity_at": "2026-07-15 11:13:50",
+      "working_path": "/Users/rasmus/Projects/cole/Archon/.claude/worktrees/agent-a2a4753384e91c749",
+      "user_id": "342ba40edcc5e14ec3c88f456c6fa862",
+      "parent_run_id": null,
+      "output_root": null,
+      "platform_type": "cli",
+      "worker_platform_id": "cli-1784114030594-r615aw",
+      "parent_platform_id": null,
+      "codebase_name": null,
+      "current_step_name": null,
+      "total_steps": null,
+      "current_step_status": null,
+      "agents_completed": 0,
+      "agents_failed": 0,
+      "agents_total": null
+    },
+    {
+      "id": "2f4c6b12eafc677ab46b78d16f655009",
+      "conversation_id": "ca37276f73e1bc3b0ca1f42901c6b70f",
+      "codebase_id": "21615a5d45c7124aa60b8fbfc07c3b38",
+      "workflow_name": "smoke-gated",
+      "user_message": "run the smoke test",
+      "status": "failed",
+      "current_step_index": null,
+      "metadata": {
+        "isolation": "container",
+        "isolation_env_id": "92dc5d567c11a1c8e42d2ff02a3cb2df",
+        "approval": {
+          "message": "Review before continuing to node 2",
+          "nodeId": "gate",
+          "type": "approval",
+          "resolved": "approved"
+        },
+        "approval_response": "approved",
+        "rejection_reason": "",
+        "rejection_count": 0,
+        "error": "Failed to inspect the overlay diff: /usr/local/bin/entrypoint.sh: line 26: ARCHON_WORKSPACE_PATH: ARCHON_WORKSPACE_PATH must be set"
+      },
+      "parent_conversation_id": null,
+      "started_at": "2026-07-17 10:00:34",
+      "completed_at": "2026-07-17 10:00:34",
+      "last_activity_at": "2026-07-17 10:00:34",
+      "working_path": "/private/tmp/archon-smoke-ops",
+      "user_id": "342ba40edcc5e14ec3c88f456c6fa862",
+      "parent_run_id": null,
+      "output_root": null,
+      "platform_type": "cli",
+      "worker_platform_id": "cli-1784282403041-cr6ktw",
+      "parent_platform_id": null,
+      "codebase_name": "archon-smoke-ops",
+      "current_step_name": null,
+      "total_steps": null,
+      "current_step_status": null,
+      "agents_completed": 0,
+      "agents_failed": 0,
+      "agents_total": null
+    },
+    {
+      "id": "e40b6bb90ac4cfa6743bbbec52459d72",
+      "conversation_id": "584af42c364b899b3119d3176ebbd4a7",
+      "codebase_id": "02681672aefba361fea387ed508b4f59",
+      "workflow_name": "smoke-2074",
+      "user_message": "smoke",
+      "status": "completed",
+      "current_step_index": null,
+      "metadata": {
+        "approval": {
+          "nodeId": "validate-like",
+          "message": "\u2705 Completion signal detected (`SMOKE_VALIDATED`).\n\n> Validation passed.\nSMOKE_VALIDATED\n\nReview the validation result.",
+          "type": "interactive_loop",
+          "iteration": 1,
+          "sessionId": "45facf99-4ca9-444c-8b34-f3034971cfe1",
+          "completionSignaled": true,
+          "signaledOutput": "Validation passed.\nSMOKE_VALIDATED",
+          "resolved": "approved"
+        },
+        "loop_user_input": "Approved",
+        "loop_feedback_given": false,
+        "node_counts": {
+          "completed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "total": 2
+        }
+      },
+      "parent_conversation_id": null,
+      "started_at": "2026-07-15 11:16:10",
+      "completed_at": "2026-07-15 11:16:10",
+      "last_activity_at": "2026-07-15 11:16:10",
+      "working_path": "/private/tmp/archon-2126-smoke",
+      "user_id": "342ba40edcc5e14ec3c88f456c6fa862",
+      "parent_run_id": null,
+      "output_root": null,
+      "platform_type": "cli",
+      "worker_platform_id": "cli-1784114153922-0b9jsf",
+      "parent_platform_id": null,
+      "codebase_name": "cole/Archon",
+      "current_step_name": null,
+      "total_steps": null,
+      "current_step_status": null,
+      "agents_completed": 0,
+      "agents_failed": 0,
+      "agents_total": null
+    }
+  ],
+  "total": 4,
+  "counts": {
+    "all": 4
+  },
+  "scopeFallback": true
+}

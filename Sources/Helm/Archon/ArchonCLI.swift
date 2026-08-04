@@ -13,6 +13,10 @@ protocol ArchonClient: Sendable {
     func run(id: String, in workspacePath: String) async throws -> ArchonRun
     func launch(_ request: ArchonLaunchRequest) async throws -> ArchonLaunchAcknowledgement
     func complete(branch: String, in workspacePath: String) async throws
+    func decide(
+        _ decision: ArchonGateDecision, text: String?, on runID: String, in workspacePath: String
+    ) async throws -> ArchonActionAcknowledgement
+    func resume(_ run: ArchonRun) async throws -> ArchonLaunchAcknowledgement
 }
 
 /// A failed `archon` call, with enough in it to act on.
@@ -142,6 +146,50 @@ struct ArchonCLI: ArchonClient, Sendable {
             throw ArchonCLIError(
                 command: Self.command(arguments), reason: .actionRejected(text))
         }
+    }
+
+    /// Answer one gate. **Recording the decision is all this does** — see `resume(_:)`.
+    func decide(
+        _ decision: ArchonGateDecision, text: String?, on runID: String, in workspacePath: String
+    ) async throws -> ArchonActionAcknowledgement {
+        try await decode(
+            ArchonActionAcknowledgement.self,
+            arguments: decision.arguments(for: runID, text: text), in: workspacePath)
+    }
+
+    /// Actually continue a parked run — **and note which command this is not.**
+    ///
+    /// `archon workflow resume <id> --json` looks like the answer and is not: it is a
+    /// control-plane acknowledgement that reports the run is resumable and then returns
+    /// `executed: false`, because executing streams the workflow's output to stdout and would
+    /// corrupt the one-line JSON contract. A button wired to it does nothing at all, quietly,
+    /// which is the worst kind of control to ship.
+    ///
+    /// The form that runs is `workflow run <name> <message> --resume --detach --json`, which is
+    /// `launch` with one extra flag — so it detaches, and helm gets back the same
+    /// acknowledgement it already understands. It is also the same call the CLI's own
+    /// interactive `approve` makes after recording an approval.
+    ///
+    /// **The working directory selects the run, so it is the run's own, not the workspace's.**
+    /// `--resume` resolves through `findResumableRun(workflowName, cwd)` — Archon matches a
+    /// resumable run by workflow name *and* `working_path` — so invoking from the workspace
+    /// root would look for a run that was never there. A run cut into a worktree carries that
+    /// worktree in `workingPath`, which is exactly what this passes.
+    func resume(_ run: ArchonRun) async throws -> ArchonLaunchAcknowledgement {
+        guard let workingPath = run.workingPath, !workingPath.isEmpty else {
+            throw ArchonCLIError(
+                command: "archon workflow run \(run.workflowName) --resume",
+                reason: .launchFailed(
+                    "This run has no working path recorded, so there is nowhere to resume it."))
+        }
+        // The original instruction, not a new one: `--resume` skips the completed nodes and
+        // re-enters the workflow, so the run needs the message it was started with.
+        let arguments = [
+            "workflow", "run", run.workflowName, run.userMessage ?? "", "--resume", "--detach",
+            "--json",
+        ]
+        return try await decode(
+            ArchonLaunchAcknowledgement.self, arguments: arguments, in: workingPath)
     }
 
     /// `~/.bun/bin` ahead of the inherited `PATH`: Archon is installed as a bun global, and a
