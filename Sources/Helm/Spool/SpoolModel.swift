@@ -1,0 +1,292 @@
+import Foundation
+
+/// What helm does with an accepted request, as a seam.
+///
+/// **The whole point of the seam is that the watcher half is reachable from `swift test`.**
+/// #54 asks for it in as many words, and three defects in two days came from logic trapped in
+/// a `View`. Everything on the other side of this protocol needs a window, a ghostty surface
+/// and a real pty; everything on this side — claiming, refusing, timing out, resolving a
+/// handle, writing a result — does not, and is tested without any of them.
+@MainActor
+protocol SpoolSpawning: AnyObject {
+    /// Open a terminal running a login shell in `cwd`, and return the pane's id. Synchronous:
+    /// the session exists the moment it is made, long before its surface attaches.
+    func openTerminal(cwd: String) -> Result<UUID, SpoolRefusal>
+    /// The pty's foreground pid — nil until the surface exists and has a process under it.
+    func foregroundPid(of terminal: UUID) -> pid_t?
+    /// Write bytes into that pty. Not a keystroke: it goes to *this* surface directly, so it
+    /// cannot land in whatever pane happens to hold the keyboard (#96).
+    func send(_ line: String, to terminal: UUID)
+}
+
+/// The spool: helm's one push channel, and the rung of #51 that works with the screen locked.
+///
+/// **This is a deliberate reversal, and it is recorded as one.** #33 ruled *"there is no
+/// control channel, and building one would be the mistake"* — a pane appearing unbidden is
+/// helm rearranging the bench on an agent's word. That rule's own justification was *"it's not
+/// helm's job to decide for me how to organize"*, and here the operator is explicitly asking
+/// for agents to spawn agents, so the justification does not apply. The ruling stands
+/// everywhere else: a ⌘-clicked link is still an offer, and nothing else in helm pushes.
+///
+/// **helm grows a watcher, not an API.** Nothing here is callable. A file appears, helm acts,
+/// helm writes a file back.
+@MainActor
+final class SpoolModel: ObservableObject {
+    /// How often a pid is re-read while waiting for something to happen to it. A pid has no
+    /// event source, so this genuinely is a poll — unlike the directory, which is watched.
+    static let pollInterval: Duration = .milliseconds(200)
+
+    private let directory: SpoolDirectory
+    private let mailRoot: URL
+    private let isOff: Bool
+    /// How long a freshly created terminal has to produce a login shell. Generous, because a
+    /// deadline that can expire before the child is scheduled is the exact flake shape #157
+    /// and PR #155 both had.
+    private let shellDeadline: Duration
+    /// How long the agent has to claim a mailbox. Longer still: this covers a whole agent
+    /// start-up plus its `SessionStart` hook.
+    private let claimDeadline: Duration
+
+    /// Held **strongly**, and that is deliberate. It was `weak` first, and the whole feature
+    /// failed on the first live request with `failed: helm has no workbench to open a terminal
+    /// in` — nothing else retained the adapter `RootView` builds, so it was gone before a
+    /// request ever arrived. The spawner references nothing here, so there is no cycle to
+    /// avoid; a weak reference bought nothing and cost the capability.
+    private var spawner: (any SpoolSpawning)?
+    private var watcher: SpoolWatcher?
+
+    /// Requests acted on in this process, by result id — so a second window's `drain` and this
+    /// one's backstop cannot both answer the same request. Between *processes* the rename is
+    /// what decides; this is the cheaper in-process half of the same rule.
+    private var handled: Set<String> = []
+
+    init(
+        directory: SpoolDirectory = .resolve(),
+        mailRoot: URL = MailboxDirectory.resolve(),
+        isOff: Bool = SpoolDirectory.isOff(),
+        shellDeadline: Duration = .seconds(20),
+        claimDeadline: Duration = .seconds(90)
+    ) {
+        self.directory = directory
+        self.mailRoot = mailRoot
+        self.isOff = isOff
+        self.shellDeadline = shellDeadline
+        self.claimDeadline = claimDeadline
+    }
+
+    func attach(spawner: any SpoolSpawning) {
+        self.spawner = spawner
+    }
+
+    /// Begin watching. Idempotent, and a no-op under `HELM_SPOOL_OFF`.
+    ///
+    /// **The off switch is the negative control**, not a preference: a probe that has not been
+    /// shown to fail proves nothing, so "with the watcher disabled, a request produces no
+    /// terminal and no result" is the run that gives every other claim here its meaning.
+    func start() {
+        guard !isOff else {
+            NSLog(
+                "helm: %@ is set — the spool is not watched, and requests will pile up unread",
+                SpoolDirectory.offVariable)
+            return
+        }
+        guard watcher == nil else { return }
+        do {
+            try directory.prepare()
+        } catch {
+            NSLog(
+                "helm: could not prepare the spool at %@: %@ — nothing will be watched",
+                directory.root.path, String(describing: error))
+            return
+        }
+        answerAbandoned()
+        let watcher = SpoolWatcher(directory: directory.root) { [weak self] in self?.drain() }
+        self.watcher = watcher
+        watcher.start()
+        NSLog("helm: watching the spool at %@", directory.root.path)
+    }
+
+    func stop() {
+        watcher?.stop()
+        watcher = nil
+    }
+
+    /// A request claimed by a previous run that never got an answer, because helm stopped
+    /// between the rename and the result.
+    ///
+    /// **It is answered, not re-run.** Re-running is the double-open #54 forbids — "a restart
+    /// mid-spawn must not double-open" — and it is the one failure mode a claim-by-rename
+    /// cannot see, since from the outside a claimed file looks exactly like one being worked
+    /// on. So the caller is told why nothing happened, which beats it waiting on a file that
+    /// was never coming.
+    private func answerAbandoned() {
+        for id in directory.abandoned() where !handled.contains(id) {
+            handled.insert(id)
+            directory.write(
+                SpoolResult(
+                    id: id, status: .abandoned,
+                    reason:
+                        "helm stopped while this request was in flight. It was NOT re-run: a "
+                        + "request is acted on at most once, so a restart must not double-open. "
+                        + "Send it again if you still want it."))
+            NSLog("helm: spool request %@ was abandoned by a restart", id)
+        }
+    }
+
+    /// One pass over the spool: claim what is there, and answer everything claimed.
+    ///
+    /// Every path writes a result. A refused or malformed request that writes nothing is
+    /// indistinguishable from helm not running, which is the silence this ladder exists to
+    /// remove.
+    func drain() {
+        for url in directory.pending() {
+            guard let claimed = directory.claim(url) else { continue }
+            let fallbackID = claimed.deletingPathExtension().lastPathComponent
+            guard let request = directory.request(at: claimed) else {
+                refuse(
+                    id: fallbackID,
+                    reason: "the request file is not readable JSON of the form "
+                        + "{\"id\",\"cwd\",\"command\",\"args\",\"prompt\"}")
+                continue
+            }
+            guard !handled.contains(request.id) else { continue }
+            handled.insert(request.id)
+            switch SpoolPolicy.accept(request, isDirectory: Self.isDirectory) {
+            case .failure(let refusal):
+                refuse(id: request.id, reason: refusal.reason)
+            case .success(let accepted):
+                Task { await self.act(on: accepted) }
+            }
+        }
+    }
+
+    private static func isDirectory(_ path: String) -> Bool {
+        var directory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: path, isDirectory: &directory)
+        return exists && directory.boolValue
+    }
+
+    private func refuse(id: String, reason: String) {
+        // An id that is not a filename cannot name a result file, so there is nowhere to put
+        // the answer. The log is all that is left, and it says so rather than pretending.
+        guard id.range(of: SpoolPolicy.idPattern, options: .regularExpression) != nil else {
+            NSLog(
+                "helm: spool request refused and UNANSWERABLE (id %@ is not a filename): %@",
+                id, reason)
+            return
+        }
+        directory.write(SpoolResult(id: id, status: .refused, reason: reason))
+        NSLog("helm: spool request %@ refused — %@", id, reason)
+    }
+
+    /// Start the agent, then say what was started and how to reach it.
+    private func act(on request: AcceptedSpoolRequest) async {
+        guard let spawner else {
+            answer(request.id, .failed, reason: "helm has no workbench to open a terminal in")
+            return
+        }
+        var promptPath: String?
+        if let prompt = request.prompt {
+            // Before the terminal, so a write failure costs nothing rather than leaving a
+            // stray shell behind.
+            guard let staged = directory.stagePrompt(prompt, for: request.id) else {
+                answer(request.id, .failed, reason: "helm could not stage the prompt on disk")
+                return
+            }
+            promptPath = staged
+        }
+
+        let terminal: UUID
+        switch spawner.openTerminal(cwd: request.cwd) {
+        case .failure(let refusal):
+            answer(request.id, .failed, reason: refusal.reason)
+            return
+        case .success(let id):
+            terminal = id
+        }
+
+        // **Waited on, never slept for.** A login shell exists exactly when the pty has a
+        // foreground process, and that is observable — so this is the pane's own answer to
+        // "am I ready", not a guess at how long a surface takes to attach.
+        guard
+            let shell = await poll(
+                until: shellDeadline, for: { spawner.foregroundPid(of: terminal) })
+        else {
+            answer(
+                request.id, .failed, terminalId: terminal,
+                reason:
+                    "a terminal was opened in helm but its shell never started within "
+                    + "\(shellDeadline). Nothing was sent to it; it is sitting at an empty prompt.")
+            return
+        }
+
+        // The line, not the line plus a Return: how a line is *submitted* is the adapter's
+        // business, and it is not one write (see `WorkbenchSpoolSpawner.send`).
+        spawner.send(SpoolLaunchLine.compose(request, promptPath: promptPath), to: terminal)
+        answer(request.id, .started, terminalId: terminal)
+
+        // **One wait with one budget, for two observables.** The pty's foreground pid moving
+        // off the login shell is the pty saying the line actually ran; the mailbox appearing
+        // is the agent saying it can be addressed. Waiting for them in sequence would spend
+        // the deadline twice and make the worst case a caller sees twice as long as the number
+        // this file names.
+        let resolved = await poll(
+            until: claimDeadline,
+            for: { [mailRoot] () -> (agent: pid_t?, owner: MailboxOwner)? in
+                let foreground = spawner.foregroundPid(of: terminal)
+                guard
+                    let owner = MailboxDirectory.owner(
+                        in: MailboxDirectory.owners(in: mailRoot),
+                        foregroundPid: foreground, shellPid: shell)
+                else { return nil }
+                return (foreground == shell ? nil : foreground, owner)
+            })
+
+        guard let resolved else {
+            answer(
+                request.id, .unclaimed, terminalId: terminal,
+                pid: spawner.foregroundPid(of: terminal),
+                reason:
+                    "the terminal is alive but no mailbox appeared under \(mailRoot.path) within "
+                    + "\(claimDeadline), so this agent cannot be addressed. Either it is not "
+                    + "running the helm-mail hook/extension, or the command never started — "
+                    + "look at the pane.")
+            return
+        }
+        answer(
+            request.id, .ready, terminalId: terminal, pid: resolved.agent ?? resolved.owner.pid,
+            sessionId: resolved.owner.sessionId, handle: resolved.owner.handle,
+            runtime: resolved.owner.runtime)
+    }
+
+    private func answer(
+        _ id: String, _ status: SpoolResult.Status, terminalId: UUID? = nil, pid: pid_t? = nil,
+        sessionId: String? = nil, handle: String? = nil, runtime: String? = nil,
+        reason: String? = nil
+    ) {
+        directory.write(
+            SpoolResult(
+                id: id, status: status, terminalId: terminalId?.uuidString, pid: pid,
+                sessionId: sessionId, handle: handle, runtime: runtime, reason: reason))
+        NSLog(
+            "helm: spool request %@ is %@%@", id, status.rawValue,
+            handle.map { " — reachable at \($0)" } ?? "")
+    }
+
+    /// Re-ask `probe` until it answers or the deadline passes.
+    ///
+    /// Bounded by a **budget** rather than an attempt count, so a slow machine buys more
+    /// attempts instead of failing earlier — which is what both flaky process-spawning tests
+    /// in this repo actually got wrong.
+    private func poll<Value>(
+        until deadline: Duration, for probe: @MainActor () -> Value?
+    ) async -> Value? {
+        let expiry = ContinuousClock.now.advanced(by: deadline)
+        while ContinuousClock.now < expiry {
+            if let value = probe() { return value }
+            try? await Task.sleep(for: Self.pollInterval)
+            if Task.isCancelled { return nil }
+        }
+        return probe()
+    }
+}
