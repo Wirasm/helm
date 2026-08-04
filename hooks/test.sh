@@ -233,6 +233,61 @@ done
 	ok "five deliveries in a row all land — no cap, because pre-turn delivery spends nothing" ||
 	bad "deliver: only $delivered of 5 landed; something is still capping"
 
+# ── reap ─────────────────────────────────────────────────────────────────────────────────
+
+# A mailbox is a corpse when its pid is dead — and ALSO when its pid is alive but now runs a
+# different session. `/clear` starts a fresh session inside the same process, so the abandoned
+# handle keeps pointing at a live pid: `kill -0` calls it healthy and it never gets reaped, while
+# every listing still offers it to senders. Measured on 2026-08-04, helm-7274 and helm-4831 both
+# claiming pid 14832 five seconds apart.
+root=$(fresh)
+
+# One row per pid, named for the pid — the shape Claude Code actually writes, and rewritten in
+# place when a session restarts in that process. That filename is load-bearing: "which session is
+# in pid X" has to have exactly one answer for the reaper to decide anything. The rows seeded at
+# the top of this file are deliberately named otherwise, so they exercise the by-session-id scan
+# `ownerPid` does without also answering this question.
+printf '{"pid":%s,"sessionId":"aaaa-bbbb-cccc-1234","cwd":"/tmp","status":"idle"}\n' "$$" \
+	>"$CLAUDE_HOME/sessions/$$.json"
+
+# A mailbox owned by THIS live pid under some other session id.
+abandoned() {
+	mkdir -p "$root/$1/read"
+	printf '{"handle":"%s","runtime":"%s","pid":%s,"sessionId":"%s","cwd":"/tmp/cleared","claimedAt":1}\n' \
+		"$1" "$2" "$$" "$3" >"$root/$1/owner.json"
+}
+abandoned cleared-7274 claude 67c14fd2-6741-42d6-b9ef-41fd20ce7274
+abandoned holding-8888 claude 88888888-8888-8888-8888-888888888888
+seed "$root/holding-8888" "peer-9" "unread" "still evidence" >/dev/null
+abandoned pi-still-live pi 019fc838-89ad-7846-8687-b3be6461ce5f
+
+# A pid that is genuinely gone, which is the ordinary case and must keep working.
+(exit 0) &
+gone_pid=$!
+wait "$gone_pid" 2>/dev/null
+mkdir -p "$root/exited-4242/read"
+printf '{"handle":"exited-4242","runtime":"claude","pid":%s,"sessionId":"dead-1","cwd":"/tmp/x","claimedAt":1}\n' \
+	"$gone_pid" >"$root/exited-4242/owner.json"
+
+run "$root" claude-session-start '{"session_id":"aaaa-bbbb-cccc-1234","cwd":"/tmp/cleared"}'
+[ -d "$root/cleared-7274" ] &&
+	bad "reap: the mailbox /clear abandoned survived — live pid, but the pid runs another session now" ||
+	ok "a mailbox whose LIVE pid now runs a different session is reaped (the /clear ghost)"
+[ -d "$root/exited-4242" ] &&
+	bad "reap: a mailbox whose pid is genuinely dead was left behind" ||
+	ok "a mailbox whose pid is dead is still reaped"
+
+# The two ways this rule could do real harm, which are both worse than keeping a ghost.
+[ -d "$root/holding-8888" ] &&
+	ok "an abandoned mailbox still HOLDING mail is kept — that mail is evidence" ||
+	bad "reap: deleted an abandoned mailbox that had unread mail in it"
+[ -d "$root/pi-still-live" ] &&
+	ok "a pi mailbox is never judged by Claude Code's registry — pi has no such thing" ||
+	bad "reap: reaped a live pi agent's mailbox by reading a registry that cannot describe it"
+[ -d "$root/$(handle_of "$root")" ] && [ "$(ls "$root" | wc -l | tr -d ' ')" = 3 ] &&
+	ok "the claiming session's own mailbox survives its own reap" ||
+	bad "reap: left $(ls "$root" | tr '\n' ' ')"
+
 # ── the contract that must never break ───────────────────────────────────────────────────
 
 root=$(fresh)
