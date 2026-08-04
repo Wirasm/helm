@@ -121,6 +121,88 @@ final class ArchonCLITests: XCTestCase {
             "no flag at all is a real choice: Archon mints the branch and cuts the worktree")
     }
 
+    /// **The one new call whose working directory is not the workspace, and the reason it is
+    /// not.** `--resume` resolves through `findResumableRun(workflowName, cwd)` — Archon matches
+    /// a resumable run by workflow name *and* `working_path` — so a run cut into a worktree is
+    /// only findable from inside that worktree. Invoked from the workspace root it would look
+    /// for a run that was never there and fail with "no resumable run found", which reads like a
+    /// broken approval rather than a wrong directory.
+    ///
+    /// The message is the run's original one: `--resume` skips the completed nodes and re-enters
+    /// the workflow, so it needs the instruction it started with rather than a new one.
+    func testResumeRunsInTheRunsOwnWorkingPathWithItsOriginalMessage() async throws {
+        let argsRecord = root.appendingPathComponent("resume-args")
+        try install(
+            "printf 'here' > cwd-marker\n"
+                + "printf '%s\\n' \"$@\" > \"$ARGS_RECORD\"\n"
+                + "printf '{\"ok\":true,\"action\":\"run\",\"detached\":true,\"workflow\":\"ship\","
+                + "\"branch\":null,\"conversationId\":\"c\",\"logPath\":null}'\n")
+        let worktree = root.appendingPathComponent("run-worktree")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        let run = ArchonRun.fixture(
+            workflowName: "ship", status: "paused", workingPath: worktree.path,
+            userMessage: "fix gh issue 40")
+
+        let acknowledgement = try await cli(extraEnvironment: ["ARGS_RECORD": argsRecord.path])
+            .resume(run)
+
+        XCTAssertTrue(acknowledgement.ok)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: worktree.appendingPathComponent("cwd-marker").path),
+            "the child runs in the RUN's worktree, not the workspace — that is what --resume matches on"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: workspace.appendingPathComponent("cwd-marker").path))
+        XCTAssertEqual(
+            try String(contentsOf: argsRecord, encoding: .utf8),
+            "workflow\nrun\nship\nfix gh issue 40\n--resume\n--detach\n--json\n")
+    }
+
+    /// A run with no `working_path` has nowhere to be resumed, and the refusal says that rather
+    /// than spawning a child in whatever directory happened to be current.
+    func testResumeRefusesARunWithNowhereToRunIt() async throws {
+        try install("printf 'should not run' > \"$ROOT/ran\"\n")
+
+        for workingPath in [nil, ""] {
+            do {
+                _ = try await cli(extraEnvironment: ["ROOT": root.path])
+                    .resume(.fixture(status: "paused", workingPath: workingPath))
+                XCTFail("expected a refusal for workingPath \(String(describing: workingPath))")
+            } catch let error as ArchonCLIError {
+                guard case let .launchFailed(reason) = error.reason else {
+                    return XCTFail("expected .launchFailed, got \(error.reason)")
+                }
+                XCTAssertTrue(reason.contains("nowhere to resume"))
+            }
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: root.appendingPathComponent("ran").path),
+            "it refuses before spawning anything")
+    }
+
+    /// The gate verbs, as they reach the process. `--json` on both, and the text as a flag
+    /// rather than a positional so a reason beginning with a dash survives.
+    func testTheGateVerbsComposeTheirPublishedArguments() async throws {
+        let argsRecord = root.appendingPathComponent("gate-args")
+        try install(
+            "printf '%s\\n' \"$@\" > \"$ARGS_RECORD\"\n"
+                + "printf '{\"ok\":true,\"runId\":\"r1\",\"action\":\"a\",\"resumable\":true}'\n")
+        let client = cli(extraEnvironment: ["ARGS_RECORD": argsRecord.path])
+
+        _ = try await client.decide(.approve, text: nil, on: "r1", in: workspace.path)
+        XCTAssertEqual(
+            try String(contentsOf: argsRecord), "workflow\napprove\nr1\n--json\n")
+
+        _ = try await client.decide(
+            .reject, text: "--tests are red", on: "r1", in: workspace.path)
+        XCTAssertEqual(
+            try String(contentsOf: argsRecord),
+            "workflow\nreject\nr1\n--json\n--reason\n--tests are red\n",
+            "one argv element, so a leading dash is the reason's text and not a flag helm invented")
+    }
+
     func testCompleteUsesTheWorkspaceAndExactUnforcedArguments() async throws {
         let argsRecord = root.appendingPathComponent("complete-args")
         try install(

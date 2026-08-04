@@ -118,9 +118,9 @@ final class ArchonGateTests: XCTestCase {
 
     // MARK: - Whether the answer needs words
 
-    /// **Reject always collects a reason**: it is fed to the `on_reject` rework prompt, and a
-    /// rework told only that it failed is the same defect as approving blind.
-    func testRejectAlwaysCollectsAReason() {
+    /// **Reject collects a reason**: it becomes the `on_reject` rework prompt, and a rework told
+    /// only that it failed is the same defect as approving blind.
+    func testRejectCollectsAReason() {
         for gate in [
             ArchonGate.fixture(),
             ArchonGate.fixture(type: .interactiveLoop),
@@ -130,11 +130,20 @@ final class ArchonGateTests: XCTestCase {
         }
     }
 
+    /// **A writeback gate reads nothing in either direction, so neither verb asks.** Its reject
+    /// branch writes `{decision: 'rejected', gate: 'writeback'}` and never touches `reason` —
+    /// rejecting one means *discard this container's diff*. It is also the commonest gate there
+    /// is, so a composer round-trip here would have made the ordinary case the slow one.
+    func testAWritebackGateAsksForNothingEitherWay() {
+        let gate = ArchonGate.fixture(type: .writeback)
+        XCTAssertFalse(gate.needsText(for: .approve))
+        XCTAssertFalse(gate.needsText(for: .reject))
+    }
+
     /// A plain gate's comment reaches an audit event nobody reads, so demanding a sentence for
     /// it would be a second click that buys nothing.
     func testAPlainApprovalSendsWithoutAsking() {
         XCTAssertFalse(ArchonGate.fixture().needsText(for: .approve))
-        XCTAssertFalse(ArchonGate.fixture(type: .writeback).needsText(for: .approve))
     }
 
     /// `captureResponse` stores the comment as `$nodeId.output`, so a blind approve writes the

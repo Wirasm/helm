@@ -363,6 +363,13 @@ struct ArchonRailView: View {
     /// from Archon rather than a guard: a gate already resolved, or one belonging to a
     /// `workflow:` sub-run, is answered by a call Archon throws on. The row says why instead,
     /// because "no buttons" is an observation and the reason is what you act on.
+    ///
+    /// **It also names its `owner/repo`, and this is the one row where that is not optional.**
+    /// Archon answers a git worktree with every run on the machine (`scopeFallback`), so the
+    /// gate above may well belong to a different project — and the inbox row already carries the
+    /// repo for exactly that reason. Here the stake is higher than opening the wrong pull
+    /// request: these buttons approve or reject somebody's work, and "an unfamiliar entry is
+    /// self-evidently unfamiliar" is only true if the row says whose it is.
     private func gatedLine(_ run: ArchonRun) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 7) {
@@ -381,12 +388,21 @@ struct ArchonRailView: View {
                     .font(.system(size: 9.5, design: .monospaced))
                     .foregroundStyle(Color.textFaint)
             }
-            Text(Self.detail(of: run))
-                .font(.system(size: 9.5))
-                .foregroundStyle(Color.textFaint)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, 13)
+            VStack(alignment: .leading, spacing: 2) {
+                if let repository = ArchonRunLink.parse(workingPath: run.workingPath)?.repository {
+                    Text(repository)
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(Color.textFaint)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                Text(Self.detail(of: run))
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Color.textFaint)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.leading, 13)
             if run.isAwaitingDecision { verbs(for: run) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

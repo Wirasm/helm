@@ -582,6 +582,103 @@ final class ArchonRailModelTests: XCTestCase {
             "Approve recorded, but Archon did not restart the run. Resume it from a terminal.")
     }
 
+    /// The other half of the resume failure: not `ok: false` but the call throwing outright —
+    /// archon missing, the deadline killing it, or `resume`'s own "nowhere to run it" refusal.
+    /// Still a recorded approval, so still not "approve failed".
+    @MainActor
+    func testAResumeThatThrowsStillSaysTheApprovalWasRecorded() async throws {
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [.paused()]))
+        await client.setResumeFailure(.notInstalled())
+        let (model, _) = try await gatedModel("archon-gate-resume-throws", client: client)
+
+        await model.choose(.approve, on: model.gated[0], in: workspace)
+
+        let failure = try XCTUnwrap(model.actionFailure)
+        XCTAssertTrue(
+            failure.hasPrefix("Approve recorded, but the run did not restart: "),
+            "the decision landed; only the restart did not — got \(failure)")
+        XCTAssertTrue(failure.contains("archon"), "and it carries Archon's own reason")
+    }
+
+    /// A rejection that cancelled the run answers `resumable: false`, and there is genuinely
+    /// nothing left to drive — resuming anyway would be a call against a cancelled run.
+    @MainActor
+    func testARejectionThatCancelsTheRunResumesNothingAndReportsNothing() async throws {
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [.paused()]))
+        await client.setDecision(
+            .fixture(action: "reject", resumable: false, cancelled: true))
+        let (model, _) = try await gatedModel("archon-gate-cancelled", client: client)
+
+        await model.choose(.reject, on: model.gated[0], in: workspace)
+        model.replyText = "three strikes"
+        await model.sendReply(in: workspace)
+
+        let calls = await client.gateCalls()
+        XCTAssertEqual(calls.decisions.count, 1)
+        XCTAssertEqual(calls.resumes, [], "cancelled runs have nothing to resume")
+        XCTAssertNil(model.actionFailure)
+    }
+
+    /// The decision call *throwing* rather than refusing — a different path from `ok: false`,
+    /// and the one a missing `archon` or a hung child takes.
+    @MainActor
+    func testADecisionCallThatThrowsSurfacesArchonsOwnReason() async throws {
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [.paused()]))
+        await client.setDecisionFailure(.notInstalled())
+        let (model, _) = try await gatedModel("archon-gate-throws", client: client)
+
+        await model.choose(.approve, on: model.gated[0], in: workspace)
+
+        let calls = await client.gateCalls()
+        XCTAssertEqual(
+            model.actionFailure, ArchonCLIError.notInstalled().localizedDescription)
+        XCTAssertEqual(calls.resumes, [], "nothing was recorded, so there is nothing to follow")
+    }
+
+    /// **A double-press must not become a double-approve**, which Archon throws on: the second
+    /// decision finds the gate already resolved. `busyRuns` is inserted synchronously before the
+    /// first `await`, so the second press is refused before it can reach the client.
+    @MainActor
+    func testASecondPressWhileTheFirstIsInFlightIsRefused() async throws {
+        let client = FakeArchonClient(runsResponse: .fixture(runs: [.paused()]))
+        await client.setDelay(.milliseconds(50))
+        let (model, _) = try await gatedModel("archon-gate-double-press", client: client)
+        let run = model.gated[0]
+
+        // `path` hoisted out of `self` for the reason `testRefreshesNeverOverlap` does it: an
+        // `async let` that touches a test-case property sends `self` across an isolation
+        // boundary, which Swift 6 rejects.
+        let path = workspace
+        async let first: Void = model.choose(.approve, on: run, in: path)
+        async let second: Void = model.choose(.approve, on: run, in: path)
+        _ = await (first, second)
+
+        let calls = await client.gateCalls()
+        XCTAssertEqual(calls.decisions.count, 1, "the second press found the run already busy")
+    }
+
+    /// The `Set` rather than a flag, earning itself: answering one gate must not disable the
+    /// other, and a spinner over the whole rail would say the wrong thing about it.
+    @MainActor
+    func testTwoGatesAreAnsweredIndependently() async throws {
+        let client = FakeArchonClient(
+            runsResponse: .fixture(runs: [.paused(id: "a"), .paused(id: "b")]))
+        let (model, _) = try await gatedModel("archon-gate-two", client: client)
+        XCTAssertEqual(model.gated.map(\.id), ["a", "b"])
+
+        await model.choose(.reject, on: model.gated[0], in: workspace)
+        XCTAssertEqual(model.reply?.runID, "a")
+
+        // Arming the second replaces the first rather than queuing it — one composer, one gate.
+        await model.choose(.reject, on: model.gated[1], in: workspace)
+        XCTAssertEqual(model.reply?.runID, "b")
+        model.replyText = "not this one either"
+        await model.sendReply(in: workspace)
+
+        let calls = await client.gateCalls()
+        XCTAssertEqual(calls.decisions.map(\.runID), ["b"], "only the armed gate was answered")
+    }
+
     /// A gate answered anywhere else — Archon's own UI, a terminal — takes the composer back
     /// with it. Leaving it armed would offer Send against a decision already made.
     @MainActor

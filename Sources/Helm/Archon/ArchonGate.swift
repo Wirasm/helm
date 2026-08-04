@@ -94,20 +94,31 @@ struct ArchonGate: Equatable, Sendable {
 
     /// Whether a decision on this gate should collect text before it is sent.
     ///
-    /// **Reject always does.** The reason is fed to the `on_reject` rework prompt, and a rework
-    /// pass told only that it failed is the same defect as approving blind.
+    /// **The rule is one line: text is collected exactly when Archon reads it.** Anything else
+    /// is a click that buys nothing, which is what #147 cut the rail back for.
     ///
-    /// **Approve does only when the text is load-bearing**, which Archon says outright:
-    /// `captureResponse` makes the comment the node's output, and an `interactiveLoop` gate
+    /// **Reject, for every gate but `writeback`.** The reason becomes the `on_reject` rework
+    /// prompt, and a rework told only that it failed is the same defect as approving blind. A
+    /// `writeback` rejection is the exception and not by omission: its branch in
+    /// `rejectWorkflow` writes `{decision: 'rejected', gate: 'writeback'}` and **never touches
+    /// `reason`** — rejecting one means *discard this container's diff*, so there is nothing to
+    /// say and nowhere for it to go. That matters more than it sounds: `writeback` is the
+    /// commonest gate there is (7 of the 12 real rows on this machine), so charging it a
+    /// composer round-trip would have made the ordinary case the slow one.
+    ///
+    /// **Approve, only when the text is load-bearing**, which Archon says outright:
+    /// `captureResponse` makes the comment the node's own output, and an `interactiveLoop` gate
     /// discriminates finalize-from-iterate on whether a comment was given at all
-    /// (`loop_feedback_given`, Archon #2074). Everywhere else the comment lands in an audit
-    /// event and nothing reads it, so demanding a sentence for it would be a click that buys
-    /// nothing.
+    /// (`loop_feedback_given`, Archon #2074). Everywhere else it lands in an audit event nothing
+    /// reads.
     func needsText(for decision: ArchonGateDecision) -> Bool {
+        if case .writeback = type { return false }
         switch decision {
-        case .reject: true
+        case .reject: return true
         case .approve:
-            if captureResponse { true } else if case .interactiveLoop = type { true } else { false }
+            if captureResponse { return true }
+            if case .interactiveLoop = type { return true }
+            return false
         }
     }
 }
