@@ -167,7 +167,13 @@ enum CanvasHTML {
     ///
     /// On `mouseup` it reads the selection, walks up from
     /// `range.commonAncestorContainer` to the nearest ancestor carrying an `id`, and posts
-    /// `{ id, text, rect }`. Selecting nothing posts nothing.
+    /// `{ id, text, rect }`.
+    ///
+    /// A `mouseup` that left **nothing** selected posts `{ cleared: true }` instead of
+    /// nothing at all — that is the operator clicking away from a selection they had, and
+    /// it is what lets the comment field close the way every popover does (#165). It costs
+    /// one message per click on the page and no state in it; the model decides what a
+    /// cleared report means.
     ///
     /// **The script is helm's, not the canvas's, and the canvas must render correctly
     /// without it.** A page that depended on a helm-injected global would render in helm
@@ -184,11 +190,12 @@ enum CanvasHTML {
         (function () {
           if (!window.webkit || !window.webkit.messageHandlers
               || !window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName)) { return; }
+          var bridge = window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName);
           document.addEventListener("mouseup", function () {
             var selection = document.getSelection();
-            if (!selection || selection.isCollapsed || selection.rangeCount === 0) { return; }
-            var text = String(selection).trim();
-            if (!text) { return; }
+            var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
+            var text = empty ? "" : String(selection).trim();
+            if (!text) { bridge.postMessage({ cleared: true }); return; }
             var range = selection.getRangeAt(0);
             var node = range.commonAncestorContainer;
             if (node.nodeType === 3) { node = node.parentNode; }
@@ -198,7 +205,7 @@ enum CanvasHTML {
               node = node.parentNode;
             }
             var rect = range.getBoundingClientRect();
-            window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName).postMessage({
+            bridge.postMessage({
               id: id,
               text: text,
               rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }

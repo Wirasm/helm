@@ -133,6 +133,20 @@ final class CanvasHTMLTests: XCTestCase {
         XCTAssertTrue(script.contains("getSelection"), script)
     }
 
+    /// #165: a click that selected nothing has to be *reported*, not swallowed. It is the
+    /// canvas's own click-elsewhere-to-dismiss, and the only one of the comment field's
+    /// exits that does not go through the keyboard at all.
+    func testTheAnnotationScriptReportsAClickThatSelectedNothing() {
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(
+            script.contains("postMessage({ cleared: true })"),
+            "an empty selection posts a dismissal, which is what closes the comment field")
+        XCTAssertFalse(
+            script.contains("if (!text) { return; }"),
+            "returning on an empty selection is the bug — the field then had no way out")
+    }
+
     /// **The canvas must render correctly without it.** A page that depended on a
     /// helm-injected global would render in helm and be a blank page in `playwright-cli`,
     /// so the agent would validate a different artifact from the one it is shown (#33).

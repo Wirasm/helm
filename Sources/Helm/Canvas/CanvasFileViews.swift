@@ -34,8 +34,9 @@ struct MarkdownCanvasView: View {
     let url: URL
     let markdown: String
     let generation: Int
-    /// What the operator selected on the page, for the comment field to anchor to.
-    let onSelection: (CanvasSelection) -> Void
+    /// What the operator selected on the page, for the comment field to anchor to — and
+    /// when they clicked away and selected nothing, which is what takes the field down.
+    let onSelection: (CanvasPageSelection) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -55,7 +56,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
     let markdown: String
     let generation: Int
     let theme: CanvasTheme
-    let onSelection: (CanvasSelection) -> Void
+    let onSelection: (CanvasPageSelection) -> Void
 
     private var path: StandardizedPath { StandardizedPath(url) }
 
@@ -125,7 +126,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
 struct HTMLCanvasView: View {
     let url: URL
     let generation: Int
-    let onSelection: (CanvasSelection) -> Void
+    let onSelection: (CanvasPageSelection) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -143,7 +144,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     let url: URL
     let generation: Int
     let theme: CanvasTheme
-    let onSelection: (CanvasSelection) -> Void
+    let onSelection: (CanvasPageSelection) -> Void
 
     private var path: StandardizedPath { StandardizedPath(url) }
 
@@ -242,10 +243,10 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// Which canvas this coordinator belongs to. A message whose origin is not this host
     /// is not this canvas's message.
     private let host: String
-    private let onAnnotation: (CanvasSelection) -> Void
+    private let onAnnotation: (CanvasPageSelection) -> Void
     private lazy var proxy = WeakScriptMessageProxy(self)
 
-    init(host: String, onAnnotation: @escaping (CanvasSelection) -> Void) {
+    init(host: String, onAnnotation: @escaping (CanvasPageSelection) -> Void) {
         self.host = host
         self.onAnnotation = onAnnotation
     }
@@ -307,8 +308,8 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
                     originHost: frame.securityOrigin.host,
                     expectedHost: host)
             else { return }
-            guard let selection = CanvasSelection(message.body) else { return }
-            onAnnotation(selection)
+            guard let report = CanvasPageSelection(message.body) else { return }
+            onAnnotation(report)
         }
     }
 }
@@ -336,6 +337,33 @@ struct CanvasSelection {
         }
         rect = CGRect(
             x: number("x"), y: number("y"), width: number("width"), height: number("height"))
+    }
+}
+
+/// Everything the annotation bridge can say: there is a selection to comment on, or there
+/// is not one any more — a click on the page that left nothing selected.
+///
+/// **A body that decodes to neither is dropped, not treated as `.cleared`.** A dismissal is
+/// something the operator did; a payload helm does not recognise is a bug or an impostor,
+/// and letting the second stand in for the first would make a malformed message close a
+/// field the operator was typing in. A selection must carry text for the same reason in
+/// reverse — a report with none would put an empty comment field over the page.
+enum CanvasPageSelection {
+    case selected(CanvasSelection)
+    case cleared
+
+    init?(_ body: Any) {
+        guard let payload = body as? [String: Any] else { return nil }
+        if payload["cleared"] as? Bool == true {
+            self = .cleared
+        } else if let text = payload["text"] as? String,
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            let selection = CanvasSelection(payload)
+        {
+            self = .selected(selection)
+        } else {
+            return nil
+        }
     }
 }
 

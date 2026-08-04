@@ -223,13 +223,36 @@ final class CanvasModel: ObservableObject {
         showing = nil
     }
 
-    func pageDidSelect(_ selection: CanvasSelection) {
-        self.selection = selection
-        notesFailure = nil
+    /// What the page's annotation bridge said. A selection puts the comment field over it;
+    /// a cleared report — a click on the page that left nothing selected — takes it away,
+    /// which is the click-elsewhere-to-dismiss every popover has.
+    func pageDidReport(_ report: CanvasPageSelection) {
+        switch report {
+        case let .selected(selection):
+            self.selection = selection
+            notesFailure = nil
+        case .cleared:
+            dismissSelection()
+        }
     }
 
+    /// Abandon the annotation in flight: the field's ✕, Escape while it has focus, or a
+    /// click on the page that selected nothing.
+    ///
+    /// **Focus leaving the canvas is deliberately not one of these.** The annotation loop is
+    /// canvas → terminal → canvas: reading what the agent said about a passage and coming
+    /// back to comment on it is the ordinary path, and dropping the selection — with the
+    /// half-typed comment in the field — at exactly that moment would delete work the
+    /// operator was in the middle of. So a selection survives a trip to another pane, and
+    /// what makes that safe is that **every dismissal above is reachable with a mouse**.
+    /// #165 was the other arrangement: one exit, on the responder chain, gone the instant
+    /// focus moved, leaving a box that could not be closed at all.
     func dismissSelection() {
         selection = nil
+        // The strip explains why the field is still up. Once it is gone the message points
+        // at nothing — and "try selecting the text again" names a selection that no longer
+        // exists.
+        notesFailure = nil
     }
 
     /// Validation is `CanvasAnnotation.decode`'s, and writing is `CanvasNotes.append`'s.
@@ -544,11 +567,11 @@ struct CanvasView: View {
         case let .markdown(markdown):
             MarkdownCanvasView(
                 url: document.url, markdown: markdown, generation: document.generation,
-                onSelection: model.pageDidSelect)
+                onSelection: model.pageDidReport)
         case .web:
             HTMLCanvasView(
                 url: document.url, generation: document.generation,
-                onSelection: model.pageDidSelect)
+                onSelection: model.pageDidReport)
         case let .plainText(text):
             ScrollView {
                 Text(text)
