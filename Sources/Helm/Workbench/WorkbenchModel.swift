@@ -215,6 +215,23 @@ final class WorkbenchModel: ObservableObject {
         return pane.id
     }
 
+    /// An agent putting an artifact on the bench. Same placement rules as `open`, but it
+    /// **appears** rather than seizing — see `Workbench.offer(_:at:)` (#125).
+    ///
+    /// An artifact already on the bench is left exactly where it is: the common case is an
+    /// agent re-offering the file it just rewrote, and `FileWatcher` has already re-rendered
+    /// that pane. Pulling it forward would be the interruption this whole path avoids.
+    @discardableResult
+    func offer(_ source: CanvasSource) -> Pane.ID? {
+        guard var bench else { return nil }
+        let placement = bench.placement(forOpening: source)
+        if case let .existing(open) = placement { return open }
+        let pane = Pane(content: .canvas(source))
+        bench.offer(pane, at: placement)
+        commit(bench)
+        return pane.id
+    }
+
     func close(_ pane: Pane.ID) {
         guard var bench, let closing = bench.pane(pane), bench.close(pane) else { return }
         commit(bench)
@@ -396,6 +413,14 @@ final class WorkbenchModel: ObservableObject {
         subscribe(to: .helmOpenCanvasFile) { model, note in
             guard let url = note.object as? URL else { return }
             model.open(.file(url))
+        }
+        // Scoped to the workspace whose terminal asked. A push comes from OUTPUT, so it
+        // can arrive from a session the operator parked long ago — and this model is the
+        // active workspace's, whichever that now is.
+        subscribe(to: .helmPushCanvasFile) { model, note in
+            guard let request = note.object as? CanvasPushRequest else { return }
+            guard request.workspacePath == model.workspacePath else { return }
+            model.offer(.file(request.artifact))
         }
         // ⌘L carries no payload and means "show me the address field"; a URL payload
         // means "open this", which is what a ⌘-clicked http link posts.

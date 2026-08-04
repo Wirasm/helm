@@ -1,6 +1,6 @@
 ---
 name: helm-canvas
-description: Offer an artifact to the operator as a helm canvas — a rendered markdown or HTML file they open with ⌘-click. Use after writing a plan, report, review, diagram, or interactive page that is worth looking at rather than reading in a terminal; when the operator says "open it in the canvas", "show me that", "render this", "put it on screen"; when about to paste something long into the terminal instead; or via /helm-canvas.
+description: Put an artifact in front of the operator as a helm canvas — a rendered markdown or HTML file that appears as a tab beside their terminal. Use after writing a plan, report, review, diagram, or interactive page that is worth looking at rather than reading in a terminal; when the operator says "open it in the canvas", "show me that", "render this", "put it on screen"; when about to paste something long into the terminal instead; or via /helm-canvas.
 ---
 
 # Offer a canvas
@@ -11,29 +11,35 @@ still be in helm. Nothing in the current project needs to know about it, and you
 there. Do not go looking.
 
 helm renders a markdown or HTML file as a **canvas** — a pane beside the terminal. You put
-something there by writing a file and printing a link to it. The operator ⌘-clicks the link.
+something there by writing a file and asking helm to show it.
 
-**You cannot open a canvas yourself, and must not try.** You offer; they decide. That is helm's
-rule, not a limitation to route around.
+**It appears; it does not seize.** The artifact arrives as a tab the operator can reach. It does
+not take the keyboard and does not replace whatever they are currently reading — because they did
+not ask for it, and may be mid-thought in another pane. Bringing it forward stays their action.
 
 ## How
 
-Write the file, then print an OSC 8 hyperlink to it **and the plain path on the line after**:
+Write the file, then print helm's canvas sequence:
 
 ```bash
-printf '\e]8;;file://%s\e\\%s\e]8;;\e\\\n' "$ABSOLUTE_PATH" "$LINK_TEXT"
+printf '\033]777;notify;helm.canvas;%s\033\\' "$ABSOLUTE_PATH"
 printf '%s\n' "$ABSOLUTE_PATH"
 ```
 
-- The path must be **absolute** and the URL must be `file://`.
-- Only **`.md` `.markdown` `.mdown` `.html` `.htm`** open in a canvas. Anything else is handed to
-  the system — helm decides by extension alone, without reading the file.
+- The path must be **absolute**. A relative path is refused rather than guessed at — helm cannot
+  know which directory you meant.
+- Only **`.md` `.markdown` `.mdown` `.html` `.htm`** are renderable. Anything else is refused, and
+  helm tells the operator why.
 - Artifacts go in this project's `~/.prp/<key>/` store, **never in the repo**.
+- It is a plain `printf`, so it works from a script, a `Makefile` or a bare shell — nothing about
+  it is agent-specific.
 
-**Print the plain path too, and do not skip it.** ⌘-click does not currently reach helm from
-inside a TUI — the agent's own terminal UI captures the mouse before helm sees it (helm #124). The
-bare path is what the operator can actually act on today. Treat the hyperlink as the thing that
-will work once #124 lands, and the path as the thing that works now.
+**Both lines, every time.** The second prints the path as text, which the operator often wants to
+copy and is what they can act on if the pane is not where they are looking.
+
+**Do not print an OSC 8 hyperlink and expect a ⌘-click to work.** It does not reach helm from
+inside a TUI — your own terminal UI captures the mouse first (helm #124). That was the old
+instruction and it was wrong in its main case.
 
 ## Check it before you offer it
 

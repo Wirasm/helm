@@ -2,8 +2,8 @@ import SwiftUI
 import WebKit
 
 // SECURITY: the WKWebViews in this file render LOCAL artifacts only — markdown
-// documents converted client-side, and local .html files opened explicitly by
-// the user. No remote content is ever loaded: the navigation delegate cancels
+// documents converted client-side, and local .html files. No remote content is
+// ever loaded: the navigation delegate cancels
 // anything that is not this artifact's own helm-canvas:// origin, and the only
 // JavaScript that runs is the vendored marked + mermaid (docs/VENDORED.md)
 // plus the inline scripts from CanvasHTML — which include the ANNOTATION
@@ -16,6 +16,22 @@ import WebKit
 // controller is a property of the configuration, so one shared instance would
 // share every registered script and handler with every webview, which is
 // exactly how the bridge would reach the URL source by accident.
+//
+// "OPENED EXPLICITLY BY THE USER" IS NO LONGER TRUE, and that is deliberate
+// (#125). An agent can push an artifact by printing OSC 777, and if the bench has
+// no canvas slot yet that push lands in a new column — where the slot's only pane
+// is its selection, so the page renders, and an .html artifact runs its JS, with
+// no click. A push into an EXISTING canvas slot stays inert until the operator
+// selects the tab; only the first one renders unattended.
+//
+// Weighed rather than inherited: any program writing to the pty can trigger it,
+// including a remote ssh session — but it can only name a path that already
+// exists on this machine, which the operator could already open with ⌘O, and
+// helm's threat model is a single-operator local app with no attacker. The bridge
+// is not reachable from that page either: it lives in a named content world
+// (below), so the artifact's own JS cannot post to helm. What changed is that a
+// click is no longer required, and "appear, don't seize" is about focus and
+// selection rather than about rendering.
 //
 // ADDRESSING (#108): each artifact is served on its own `helm-canvas://<host>`
 // origin by `CanvasSchemeHandler`, so a message carries which canvas sent it

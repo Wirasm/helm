@@ -13,6 +13,11 @@ extension Notification.Name {
     /// render in the canvas. Distinct from `helmOpenArtifact`, which is the
     /// payload-less ⌘O that summons the picker.
     static let helmOpenCanvasFile = Notification.Name("helmOpenCanvasFile")
+    /// An agent pushing an artifact onto the bench — object is the `file:` URL. Distinct
+    /// from `helmOpenCanvasFile`, which is the operator asking: a push **appears** as a
+    /// tab without selecting it or moving focus, because the operator did not ask for it
+    /// and may be mid-thought in another pane (#125).
+    static let helmPushCanvasFile = Notification.Name("helmPushCanvasFile")
     /// The canvas takes a URL. Object is the URL to open, or nil — which is ⌘L,
     /// meaning "show me the address field", whether the canvas is open or not.
     ///
