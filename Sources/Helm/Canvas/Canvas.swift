@@ -197,7 +197,7 @@ final class CanvasModel: ObservableObject {
     /// resolve-at-the-edge, and how a restored pane gets back what it was showing.
     func show(_ source: CanvasSource) {
         switch source {
-        case let .file(path): open(URL(fileURLWithPath: path))
+        case let .file(path): open(URL(fileURLWithPath: path.value))
         case let .url(url): openURL(url)
         case .empty: focusAddress()
         }
@@ -543,7 +543,7 @@ struct CanvasView: View {
         switch document.content {
         case let .markdown(markdown):
             MarkdownCanvasView(
-                markdown: markdown, generation: document.generation,
+                url: document.url, markdown: markdown, generation: document.generation,
                 onSelection: model.pageDidSelect)
         case .web:
             HTMLCanvasView(

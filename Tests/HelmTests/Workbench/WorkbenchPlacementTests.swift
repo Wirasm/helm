@@ -5,8 +5,8 @@ import XCTest
 /// The closed set of three (#33), plus the zeroth answer that keeps ⌘-clicking the same
 /// link twice from opening two copies.
 final class WorkbenchPlacementTests: XCTestCase {
-    private let plan = CanvasSource.file(path: "/tmp/plan.md")
-    private let tasks = CanvasSource.file(path: "/tmp/tasks.md")
+    private let plan = CanvasSource.file("/tmp/plan.md")
+    private let tasks = CanvasSource.file("/tmp/tasks.md")
 
     private func terminal() -> Pane { Pane(content: .terminal(face: .terminal)) }
 
