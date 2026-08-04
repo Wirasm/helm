@@ -8,8 +8,8 @@ import XCTest
 /// never a system default"* — and #149 is what it costs when only a reviewer is holding it:
 /// the **empty bench**, the first surface anyone sees, was a `ContentUnavailableView` styled
 /// entirely by AppKit, and `AgentDot` had been shipping SwiftUI's `.orange` since the palette
-/// landed. Both were noticed by eye, months apart, and the sweep that followed found thirty
-/// more across nine files. Reviewer attention had every chance and did not catch one of them.
+/// landed. Both were noticed by eye, months apart, and the sweep that followed found **47
+/// more across fourteen files**. Reviewer attention had every chance and caught two of 49.
 ///
 /// **Scanning the sources is unusual for a unit test, and deliberate here** — the same
 /// argument `IsolatedDefaultsTests` makes for its own scan: it is the only mechanism that
@@ -27,16 +27,15 @@ final class PaletteRuleTests: XCTestCase {
             .appendingPathComponent("Sources/Helm")
     }
 
+    /// **The only exemption, and it is the rule's subject rather than a hole in it.**
     /// `Design/` is where a colour is allowed to be a literal, because that is what a palette
     /// is: `Palette.swift` writes the hexes, `PaletteColors.swift` is the one `Color(nsColor:)`
     /// in the module, and `AnsiPalette.swift` names ANSI slots `red`, `green`, `black`.
-    /// Exempting the palette from the palette rule is not a hole — it is the rule's subject.
     ///
-    /// `App/Appearance.swift` is exempt for a reason that expires: #113 owns that file while
-    /// this lands, so its one `.foregroundStyle(.secondary)` — the last violation in the
-    /// module — was left alone rather than fought over. **Delete this entry and the one line
-    /// it protects once #113 is merged.**
-    private let exempt = ["Design/", "App/Appearance.swift"]
+    /// Everything else under `Sources/Helm` is scanned. Keep it that way — a second entry here
+    /// is a surface that has stopped reading as one application, and the reason it was added
+    /// will outlive whoever added it.
+    private let exempt = ["Design/"]
 
     /// A system `ShapeStyle` where helm should have named a token.
     ///

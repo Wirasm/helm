@@ -59,7 +59,7 @@ struct AppearanceMenu: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color.textMuted)
         .help("Appearance")
     }
 }
