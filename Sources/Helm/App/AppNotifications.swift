@@ -53,6 +53,8 @@ extension Notification.Name {
     static let helmMoveFocus = Notification.Name("helmMoveFocus")
     /// A canvas's `Post`: prefill a composer with text. Object is a `ComposeRequest`.
     static let helmComposeText = Notification.Name("helmComposeText")
+    /// ⇧⌘R — show or hide the remembered Archon monitor rail.
+    static let helmToggleRail = Notification.Name("helmToggleRail")
 }
 
 /// Text offered to one pane's composer.

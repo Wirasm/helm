@@ -97,7 +97,18 @@ let package = Package(
         .testTarget(
             name: "HelmTests",
             dependencies: ["Helm"],
-            path: "Tests/HelmTests"
+            path: "Tests/HelmTests",
+            resources: [
+                // Real `archon --json` output, captured rather than typed. This PR shipped a
+                // decoder built from an imagined payload shape, with fixtures written from the
+                // same imagination — 514 tests green while the feature could not display a
+                // single run. A literal in a test file can drift with the decoder; a captured
+                // file cannot, because nobody edits it to make a test pass.
+                //
+                // Not mirrored in project.yml: its Helm target has `testTargets: []`, so the
+                // .app build never sees Tests/ at all.
+                .copy("Archon/Fixtures")
+            ]
         ),
     ]
 )

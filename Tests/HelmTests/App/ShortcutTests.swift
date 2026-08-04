@@ -95,6 +95,10 @@ final class ShortcutTests: XCTestCase {
                 + "applied, so this arrives uppercase")
     }
 
+    func testShiftCommandRTogglesTheArchonRail() {
+        XCTAssertEqual(match("r", [.command, .shift])?.notification, .helmToggleRail)
+    }
+
     /// ⌘W is unavailable — SwiftUI's `WindowGroup` binds it to close-window — so the pane
     /// close is ⌘⌥W.
     func testClosePaneAvoidsTheWindowClose() {

@@ -72,6 +72,25 @@ _Avoid_: artifact pane, webview, browser, draw-on pane
 
 ### What helm looks like
 
+**rail**:
+The remembered, default-hidden strip to the right of the workbench: **somewhere to start work
+that is not your current work**. Its one tenant is Archon, and it renders five things — a
+title, a field, a send button, one line per **running run**, and a count per other status.
+Nothing is read in the rail and nothing opens from it; run detail is read in Archon's own web
+UI. It is not another place panes can dock.
+_Avoid_: sidebar, pane dock, monitor rail, calling it a run list
+
+**running run**:
+The one status the rail gives a line to, with a subline naming the **stage** it is on. Every
+other status — including `paused` — is history or a gate, and collapses to a count.
+_Avoid_: active run (the word the rail used when `paused` had a row too), open run, live run
+
+**stage**:
+One node of a workflow run, named the way Archon names it — `parse-request`, `implement`,
+`validate`. What the rail's subline says, because it is the thing that advances.
+_Avoid_: step (that word is `current_step_name`'s, which Archon never populates for a DAG),
+node (right in Archon's own model, but the rail shows one at a time and not the fold)
+
 **palette**:
 helm's one table of colours, as values (`Palette.helm`). There is exactly one, and every
 surface spends it — the chrome as SwiftUI `Color`s, the terminal as ghostty config lines.

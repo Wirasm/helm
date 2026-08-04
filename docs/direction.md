@@ -70,6 +70,11 @@ both are now tenants of the **right** rail, which is the shape that fits them.
     it. Modular by source, extendable to further formats. This is `ArtifactPane` promoted,
     not new work — and the promotion has shipped, so it is `CanvasView` / `CanvasModel` now.
 
+  A third type was built for Archon and then removed with the rail it served. The argument for
+  it is not preserved here: the operator reads run detail in Archon's own web UI, so there is
+  nothing left for a run pane to render, and a list of two is easier to defend than a list of
+  three with a footnote.
+
 Two corrections to what that list used to say, both from building it. The chat view is not
 a *swap*: the terminal view stays mounted under it, because one attached surface drives the
 ghostty runtime for every surface on it. And it does not cost the bench *nothing* — it
@@ -91,15 +96,33 @@ and a calmer view for focus.
 
 ## Archon surface
 
-Not an API client — the CLI's `--json` and the file tree. Two pieces:
+Not an API client — the `archon` CLI's `--json`, captured through a temporary file. No HTTP
+and no direct SQLite reads. **Input first**, which is the correction #40 made after the
+list-first version was built and run: the same workflow is started over and over, so that has
+to cost zero clicks, and reading a finished run is rare and belongs on the bench.
 
-- A **run list** in the rail — background `--detach` runs with key metadata. Clicking one
-  opens a curated node view as a **bench pane**, not inside the rail. Measured: the node fold
-  is ~3 KB for a nine-node run, so per-run detail is cheap enough to poll, not just the list.
-- A **launcher** summoned from a `+` at the head of that list: a form composing the CLI
-  command from workflow, input, and flags. Ships without a model control. It must pass
-  `--cwd` explicitly — the CLI resolves the repo from the working directory, so a run started
-  against the wrong one looks entirely normal until its output makes no sense.
+**Minimal on purpose, and that is the second correction.** The full version of this was built,
+used, and cut back — *"too much bloat, I want to start simple"*. What is gone: run panes,
+finished-run rows, Archon's `approve`/`reject`/`abandon` verbs, helm's own dismissal filter,
+and the liveness mark. Run detail is read in Archon's own web UI, which is better at it than
+helm will ever be.
+
+The rail renders five things, and nothing else:
+
+- A **prompt field**, always present. Type, press Enter, the workflow runs detached.
+- A **send button** doing the same thing for the mouse.
+- **Settings** behind an icon, holding what a launch composes — the workflow and how it
+  isolates. Built to grow as the CLI does; ships without a model control.
+- **One line per running run**, with a subline naming the **stage** it is on and changing as
+  its nodes advance.
+- **One collapsed count per other status**, `paused` included. Clicking one does nothing: it
+  is a number, not a way in.
+- **It carries Archon's brand and Archon's status colours, and keeps them apart.** The brand is
+  the console's duotone — magenta → violet → teal, painted on the title and the send button,
+  because that gradient *is* the mark. Status is deliberately not brand: a running run is
+  Archon's electric blue, a failure its red, a completed run the brand teal. All of it is
+  governed tokens held at helm's contrast floors, never hex in a view, and never Archon's
+  charcoal chrome wholesale: *distinctly Archon's*, not *foreign*.
 - **Worktrees.** Archon runs in a linked worktree of your own checkout, so `git worktree list`
   already shows its trees beside helm's own. helm lists them and offers cleanup; the verbs
   route through `archon` for its trees and `git` for the rest, never around either.

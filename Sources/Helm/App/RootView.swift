@@ -17,6 +17,7 @@ struct RootView: View {
     /// `BoardModel.shared` are singletons because other slices reach them, and nothing
     /// outside the workbench reaches this one.
     @StateObject private var workbench = WorkbenchModel(terminals: .shared)
+    @StateObject private var archonRail = ArchonRailModel()
     @ObservedObject private var terminalManager = TerminalManager.shared
 
     var body: some View {
@@ -24,7 +25,14 @@ struct RootView: View {
             WorkspaceBar(
                 model: model, select: switchWorkspace, open: openWorkspace,
                 close: closeWorkspace)
-            WorkbenchView(model: workbench, workspaceRoot: model.selectedWorkspaceRoot)
+            HStack(spacing: 0) {
+                WorkbenchView(model: workbench, workspaceRoot: model.selectedWorkspaceRoot)
+                if archonRail.isVisible {
+                    Color.border.frame(width: 1)
+                    ArchonRailView(
+                        model: archonRail, workspacePath: model.selectedWorkspaceRoot)
+                }
+            }
             StatusBarView(model: model)
         }
         // The base plane, and it has to be painted: `translucentWindow` makes the window

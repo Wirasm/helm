@@ -49,6 +49,7 @@ final class KeyHintTests: XCTestCase {
         XCTAssertEqual(keys("folder", terminalFocused: true), "⇧⌘O")
         XCTAssertEqual(keys("pane", terminalFocused: true), "⌘1–9")
         XCTAssertEqual(keys("focus", terminalFocused: true), "⌥⌘↑↓←→")
+        XCTAssertEqual(keys("archon", terminalFocused: true), "⇧⌘R")
     }
 
     func testModifiersRenderInTheCanonicalMenuOrder() {

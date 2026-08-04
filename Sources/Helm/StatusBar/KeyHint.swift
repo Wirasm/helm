@@ -42,6 +42,7 @@ enum KeyHintCatalog {
         (.helmSelectWorkspace, "workspace"),
         (.helmCycleWorkspace, "cycle"),
         (.helmOpenWorkspace, "folder"),
+        (.helmToggleRail, "archon"),
     ]
 
     /// Left off the bar on purpose.

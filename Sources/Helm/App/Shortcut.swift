@@ -175,6 +175,9 @@ extension Shortcut {
             Shortcut(
                 .character("l"), .command, posts: .helmOpenCanvasURL,
                 menu: .init(title: "Open URL…", key: "l", modifiers: .command)),
+            Shortcut(
+                .character("r"), [.command, .shift], posts: .helmToggleRail,
+                menu: .init(title: "Toggle Archon Rail", key: "r", modifiers: [.command, .shift])),
             // ⌘⇧D before ⌘D: `match` returns the FIRST row whose modifier set compares
             // equal, and while these two cannot collide (the sets differ), keeping the
             // more-specific one first is the habit that stops the next pair colliding.
