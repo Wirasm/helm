@@ -4,9 +4,13 @@ import SwiftUI
 ///
 /// **Five things render, top to bottom, and nothing else**: the Archon title, the field you
 /// type in, the button that sends it, one line per running run with a subline naming the stage
-/// it is on, and one collapsed count per other status. No headers, no hints, no empty-state
-/// prose, no footers, no liveness word. The version this replaces had all of them and the
-/// verdict was *"too much bloat"*.
+/// it is on, and one line per finished run you have not cleared. No headers, no hints, no
+/// empty-state prose, no footers, no liveness word. The version this replaces had all of them
+/// and the verdict was *"too much bloat"*.
+///
+/// The fifth was a collapsed count per status and is now a row per run, because a count is the
+/// one thing here that could not be acted on — and, under `scopeFallback`, could be wrong by
+/// two orders of magnitude with nothing on screen to say so.
 ///
 /// **The brand is the duotone, not a magenta.** Archon's console says so itself — *"the duotone
 /// magenta → violet → teal gradient drawn from the shield logo is THE brand"* — and defines two
@@ -24,6 +28,8 @@ struct ArchonRailView: View {
     let workspacePath: String?
 
     @FocusState private var composerFocused: Bool
+    /// The finished row under the pointer, so only that row shows its dismiss control.
+    @State private var hovered: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -232,12 +238,12 @@ struct ArchonRailView: View {
                 ForEach(model.running, id: \.id) { run in
                     runningLine(run)
                 }
-                if !model.running.isEmpty, !model.statusCounts.isEmpty {
+                if !model.running.isEmpty, !model.finished.isEmpty {
                     Color.border.frame(height: 1).padding(.vertical, 6)
                 }
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(model.statusCounts) { count in
-                        countLine(count)
+                    ForEach(model.finished, id: \.id) { run in
+                        finishedLine(run)
                     }
                 }
             }
@@ -251,8 +257,9 @@ struct ArchonRailView: View {
     /// the stage's name** — `implement`, `validate` — rather than an excerpt of what it wrote:
     /// the stage is the thing that advances, and the writing is read in Archon's own UI.
     ///
-    /// Not a button. There is nowhere for a click to go now that a run does not open as a
-    /// pane, and a row that looks pressable and is not is worse than one that plainly is not.
+    /// Not a button, unlike the finished row below it. A run still in flight has produced
+    /// nothing to open, and a row that looks pressable and is not is worse than one that
+    /// plainly is not.
     private func runningLine(_ run: ArchonRun) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 7) {
@@ -292,21 +299,70 @@ struct ArchonRailView: View {
         .padding(.vertical, 5)
     }
 
-    /// A label and a count. **Clicking it does nothing** — there is no pane to open and no
-    /// expansion to show, so there is no chevron either. It is a number.
-    private func countLine(_ count: ArchonStatusCount) -> some View {
-        HStack(spacing: 8) {
-            Text("\(count.count)")
-                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Self.colour(of: ArchonRunsResponse.tint(for: count.status)))
-                .frame(minWidth: 26, alignment: .trailing)
-            Text(count.status.uppercased())
-                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                .tracking(0.9)
-                .foregroundStyle(Color.textFaint)
-            Spacer()
+    /// One finished run, and the one row in the rail that **is** a button: clicking it opens
+    /// what the run produced. It mirrors `runningLine`'s geometry deliberately — same dot, same
+    /// name, same trailing short id, same subline slot — so the live work and the finished work
+    /// read as one list rather than two widgets.
+    ///
+    /// The subline names the run's `owner/repo`. That is not decoration: Archon answers a git
+    /// worktree with every run on the machine, so the row above this one may well belong to a
+    /// different project, and "an unfamiliar entry is self-evidently unfamiliar" is only true if
+    /// the row says whose it is.
+    private func finishedLine(_ run: ArchonRun) -> some View {
+        let link = ArchonRunLink.parse(workingPath: run.workingPath)
+        return HStack(spacing: 7) {
+            Button {
+                model.open(run)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(Self.colour(of: ArchonRunsResponse.tint(for: run.status)))
+                            .frame(width: 6, height: 6)
+                        Text(run.workflowName)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(Color.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Text(run.shortID)
+                            .font(.system(size: 9.5, design: .monospaced))
+                            .foregroundStyle(Color.textFaint)
+                    }
+                    if let link {
+                        Text(link.repository)
+                            .font(.system(size: 9.5, design: .monospaced))
+                            .foregroundStyle(Color.textFaint)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                            .padding(.leading, 13)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // A run with no worktree has nowhere to send you, so the row stays a row.
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(link == nil)
+            .help(link.map { "Open the pull request for \($0.branch)" } ?? "")
+
+            Button {
+                model.dismiss(run, in: workspacePath)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(Color.textFaint)
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // Revealed on hover: the row is read far more often than it is cleared, and a
+            // permanent × on every line turns a list into a form.
+            .opacity(hovered == run.id ? 1 : 0)
+            .help("Clear from helm — Archon keeps its own record")
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
+        .onHover { inside in hovered = inside ? run.id : (hovered == run.id ? nil : hovered) }
     }
 
     private static func colour(of tint: ArchonStatusTint) -> Color {
