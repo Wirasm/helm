@@ -37,6 +37,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
 
         try bench.clickPane(inSlot: other)
 
+        Eventually.holds { bench.workbench.bench?.focusedSlot == other }
         XCTAssertEqual(
             bench.workbench.bench?.focusedSlot, other,
             "clicking a pane's body left the bench pointed at the slot it was already on")
@@ -55,8 +56,10 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
             bench.workbench.bench?.focusedSlot, first, "the fixture should start on the first slot")
 
         try bench.clickPane(inSlot: second)
+        Eventually.holds { bench.workbench.bench?.focusedSlot == second }
         bench.command(.helmSplitDown)
 
+        Eventually.holds { bench.workbench.bench?.columns.first?.slots.count == 3 }
         let order = try XCTUnwrap(bench.workbench.bench?.columns.first?.slots.map(\.id))
         XCTAssertEqual(order.count, 3, "⌘⇧D did not add a slot")
         XCTAssertEqual(
@@ -78,8 +81,10 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
             bench.workbench.bench?.panes.map(\.id).first { $0 != untouched })
 
         try bench.clickPane(inSlot: try bench.slot(holding: clicked))
+        Eventually.holds { bench.workbench.bench?.focusedPane?.id == clicked }
         bench.command(.helmToggleChat)
 
+        Eventually.holds { bench.workbench.bench?.pane(clicked)?.content == .terminal(face: .chat) }
         XCTAssertEqual(
             bench.workbench.bench?.pane(clicked)?.content, .terminal(face: .chat),
             "⌘T did not reach the pane that was clicked")
@@ -99,13 +104,13 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
         let clicked = try XCTUnwrap(bench.workbench.bench?.panes.map(\.id).first { $0 != before })
 
         try bench.clickPane(inSlot: try bench.slot(holding: clicked))
+        let target = try bench.pty(of: clicked)
+        let previous = try bench.pty(of: before)
         bench.type("x")
 
-        XCTAssertTrue(
-            try bench.pty(of: clicked).received.contains("x"),
-            "the clicked terminal received nothing")
+        XCTAssertTrue(target.received("x"), "the clicked terminal received nothing")
         XCTAssertFalse(
-            try bench.pty(of: before).received.contains("x"),
+            previous.received.contains("x"),
             "the keystroke went to the terminal that was focused before the click")
     }
 
@@ -222,7 +227,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
         let row = try XCTUnwrap(Shortcut.all.first { $0.direction == .down })
 
         row.post()
-        bench.settle()
+        Eventually.holds { bench.workbench.bench?.focusedSlot != before }
 
         XCTAssertNotEqual(
             bench.workbench.bench?.focusedSlot, before,
@@ -288,14 +293,12 @@ private final class Bench {
         workbench.deactivate()
     }
 
-    /// Let AppKit, SwiftUI and ghostty catch up. Surfaces spawn on attach and the wrapper ticks
-    /// the runtime off a display link, so this is a real wait rather than a hop.
-    func settle(_ seconds: TimeInterval = 0.6) {
-        let deadline = Date().addingTimeInterval(seconds)
-        while Date() < deadline {
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
-        }
-    }
+    /// Let AppKit, SwiftUI and ghostty run for a moment.
+    ///
+    /// **Not how anything is waited for** — see the same note on `TerminalKeyboardTests`'
+    /// harness. The fixed 0.6s this used to be is what #192 turned out to be measuring instead
+    /// of what it meant to measure; claims wait on their own observable now.
+    func settle() { Eventually.pump() }
 
     func slot(holding pane: Pane.ID) throws -> Slot.ID {
         try XCTUnwrap(workbench.bench?.slot(for: pane)?.id, "no slot holds pane \(pane)")
@@ -351,7 +354,8 @@ private final class Bench {
             }
             window.sendEvent(event)
         }
-        settle(0.3)
+        // The byte's journey is waited for at the pty, by `Pty.received(_:)`, not budgeted here.
+        settle()
     }
 
     /// ANSI US virtual key codes. ghostty translates the physical key, so a wrong code
@@ -382,8 +386,16 @@ private final class Bench {
                 nil
             }
         let memory = try XCTUnwrap(backend, "session \(pane) is not on an in-memory backend")
-        return try XCTUnwrap(
+        let pty = try XCTUnwrap(
             ptys.all.first { $0.session === memory }, "no pty registered for \(pane)")
+        // The surface is the precondition for the one test here that types. Without this, a
+        // ghostty that refused to build a surface reads as "the click did not route" — the
+        // #192 ambiguity, one suite over.
+        let budget: TimeInterval = 5
+        guard Eventually.holds(within: budget, { memory.hasSurface }) else {
+            throw MissingTerminalSurface(pane: pane, waited: budget)
+        }
+        return pty
     }
 
     /// Two slots stacked in one column, focus put back on the first — so "focused" and "mounted

@@ -27,13 +27,13 @@ final class TerminalKeyboardTests: XCTestCase {
         let helm = HelmWindow(terminals: 1)
         defer { helm.close() }
 
-        XCTAssertEqual(helm.window.firstResponder as? NSView, helm.session(0).hostView)
-
-        helm.type("x")
+        helm.expectKeyboard(on: helm.session(0).hostView)
 
         let pty = try helm.pty(0)
+        helm.type("x")
+
         XCTAssertTrue(
-            pty.received.contains("x"),
+            pty.received("x"),
             "the keystroke never reached the shell; pty saw \(pty.debugDescription)")
     }
 
@@ -46,15 +46,16 @@ final class TerminalKeyboardTests: XCTestCase {
         helm.command(.helmNewTerminal)
 
         XCTAssertEqual(helm.terminals.sessions.count, 2)
-        XCTAssertEqual(
-            helm.window.firstResponder as? NSView, helm.session(1).hostView,
-            "the new terminal did not take the keyboard")
+        helm.expectKeyboard(
+            on: helm.session(1).hostView, "the new terminal did not take the keyboard")
 
+        let arriving = try helm.pty(1)
+        let existing = try helm.pty(0)
         helm.type("y")
 
-        XCTAssertTrue(try helm.pty(1).received.contains("y"), "⌘N's terminal received nothing")
+        XCTAssertTrue(arriving.received("y"), "⌘N's terminal received nothing")
         XCTAssertFalse(
-            try helm.pty(0).received.contains("y"), "the keystroke went to the wrong terminal")
+            existing.received.contains("y"), "the keystroke went to the wrong terminal")
     }
 
     /// ⌘1–9. The pane comes back from the same slot, so nothing is created — the other
@@ -66,14 +67,15 @@ final class TerminalKeyboardTests: XCTestCase {
         helm.command(.helmNewTerminal)
         helm.command(.helmSelectTerminal, 0)
 
-        XCTAssertEqual(
-            helm.window.firstResponder as? NSView, helm.session(0).hostView,
-            "the selected terminal did not take the keyboard")
+        helm.expectKeyboard(
+            on: helm.session(0).hostView, "the selected terminal did not take the keyboard")
 
+        let selected = try helm.pty(0)
+        let other = try helm.pty(1)
         helm.type("z")
 
-        XCTAssertTrue(try helm.pty(0).received.contains("z"))
-        XCTAssertFalse(try helm.pty(1).received.contains("z"))
+        XCTAssertTrue(selected.received("z"))
+        XCTAssertFalse(other.received.contains("z"))
     }
 
     // MARK: - Which terminal, when there is more than one on screen
@@ -88,14 +90,15 @@ final class TerminalKeyboardTests: XCTestCase {
         let background = try XCTUnwrap(
             helm.workbench.bench?.panes.map(\.id).first { $0 != focused })
 
-        XCTAssertEqual(
-            helm.window.firstResponder as? NSView, helm.view(of: focused),
-            "the focused slot's terminal should hold the keyboard")
+        helm.expectKeyboard(
+            on: helm.view(of: focused), "the focused slot's terminal should hold the keyboard")
 
+        let front = try helm.pty(of: focused)
+        let behind = try helm.pty(of: background)
         helm.type("q")
 
-        XCTAssertTrue(try helm.pty(of: focused).received.contains("q"))
-        XCTAssertFalse(try helm.pty(of: background).received.contains("q"))
+        XCTAssertTrue(front.received("q"))
+        XCTAssertFalse(behind.received.contains("q"))
     }
 
     /// ⌘⌥↓ moves focus to another slot without remounting anything, so there is no window
@@ -110,9 +113,10 @@ final class TerminalKeyboardTests: XCTestCase {
         let second = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
         XCTAssertNotEqual(first, second, "the bench did not move focus; the test proves nothing")
 
-        XCTAssertEqual(helm.window.firstResponder as? NSView, helm.view(of: second))
+        helm.expectKeyboard(on: helm.view(of: second))
+        let arriving = try helm.pty(of: second)
         helm.type("w")
-        XCTAssertTrue(try helm.pty(of: second).received.contains("w"))
+        XCTAssertTrue(arriving.received("w"))
     }
 
     // MARK: - What the terminal must NOT do
@@ -165,8 +169,8 @@ final class TerminalKeyboardTests: XCTestCase {
         // The positive control: the same machinery, asked a question it must answer.
         helm.command(.helmMoveFocus, Workbench.Direction.down.rawValue)
 
-        XCTAssertEqual(
-            helm.window.firstResponder as? NSView, helm.view(of: elsewhere),
+        helm.expectKeyboard(
+            on: helm.view(of: elsewhere),
             "focus moved and no terminal took the keyboard — the redraw half proves nothing")
     }
 
@@ -182,10 +186,11 @@ final class TerminalKeyboardTests: XCTestCase {
 
         let survivor = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
         XCTAssertNotEqual(closing, survivor, "nothing closed; the test proves nothing")
-        XCTAssertEqual(helm.window.firstResponder as? NSView, helm.view(of: survivor))
+        helm.expectKeyboard(on: helm.view(of: survivor))
 
+        let inherited = try helm.pty(of: survivor)
         helm.type("x")
-        XCTAssertTrue(try helm.pty(of: survivor).received.contains("x"))
+        XCTAssertTrue(inherited.received("x"))
     }
 
     /// Switching workspaces unmounts one workspace's panes and mounts another's — the fourth
@@ -196,12 +201,13 @@ final class TerminalKeyboardTests: XCTestCase {
 
         let arriving = helm.openAnotherWorkspace()
 
-        XCTAssertEqual(
-            helm.window.firstResponder as? NSView, helm.view(of: arriving),
+        helm.expectKeyboard(
+            on: helm.view(of: arriving),
             "the terminal mounted by a workspace switch never took the keyboard")
 
+        let pty = try helm.pty(of: arriving)
         helm.type("z")
-        XCTAssertTrue(try helm.pty(of: arriving).received.contains("z"))
+        XCTAssertTrue(pty.received("z"))
     }
 
     /// **The chat face gives its composer the keyboard, and ⌘T gives it back to the shell.**
@@ -226,6 +232,7 @@ final class TerminalKeyboardTests: XCTestCase {
         let helm = HelmWindow(terminals: 1, layout: .oneSlotReadingChat)
         defer { helm.close() }
 
+        Eventually.holds { helm.window.firstResponder is NSTextView }
         XCTAssertNotEqual(
             helm.window.firstResponder as? NSView, helm.session(0).hostView,
             "the grid holds the keyboard on the reading face; the composer is untypable and "
@@ -235,19 +242,24 @@ final class TerminalKeyboardTests: XCTestCase {
             "nothing that edits text holds the keyboard — the composer did not claim it, which "
                 + "is #96 on the chat face rather than a fix for it")
 
+        let pty = try helm.pty(0)
         helm.type("q")
-        XCTAssertFalse(
-            try helm.pty(0).received.contains("q"),
-            "a keystroke meant for the composer reached the pty")
 
         // Back to the grid: the same pane, the other face.
         helm.command(.helmToggleChat)
 
-        XCTAssertEqual(
-            helm.window.firstResponder as? NSView, helm.session(0).hostView,
+        helm.expectKeyboard(
+            on: helm.session(0).hostView,
             "⌘T returned to the terminal and nothing handed the shell its keyboard back")
         helm.type("z")
-        XCTAssertTrue(try helm.pty(0).received.contains("z"))
+        XCTAssertTrue(pty.received("z"))
+        // **Checked here rather than straight after the `q`, and that is stronger, not
+        // laxer.** A leaked keystroke arrives on ghostty's own schedule, so reading the pty a
+        // moment after typing asks before the wrong answer could have shown up — the negative
+        // passes for free on a busy machine. By the time `z` has arrived the whole pipeline has
+        // demonstrably run, so a `q` that leaked is certainly here to be seen.
+        XCTAssertFalse(
+            pty.received.contains("q"), "a keystroke meant for the composer reached the pty")
     }
 
     // MARK: - The mechanism #96 turned on
@@ -262,12 +274,13 @@ final class TerminalKeyboardTests: XCTestCase {
         let helm = HelmWindow(terminals: 1, attach: .afterTheHop)
         defer { helm.close() }
 
-        XCTAssertEqual(
-            helm.window.firstResponder as? NSView, helm.session(0).hostView,
+        helm.expectKeyboard(
+            on: helm.session(0).hostView,
             "a view put in its window after SwiftUI's update never claimed the keyboard")
 
+        let pty = try helm.pty(0)
         helm.type("k")
-        XCTAssertTrue(try helm.pty(0).received.contains("k"))
+        XCTAssertTrue(pty.received("k"))
     }
 }
 
@@ -357,14 +370,15 @@ private final class HelmWindow {
         workbench.deactivate()
     }
 
-    /// Let AppKit, SwiftUI and ghostty catch up. Surfaces spawn on attach and the wrapper
-    /// ticks the runtime off a display link, so this is a real wait rather than a hop.
-    func settle(_ seconds: TimeInterval = 0.6) {
-        let deadline = Date().addingTimeInterval(seconds)
-        while Date() < deadline {
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
-        }
-    }
+    /// Let AppKit, SwiftUI and ghostty run for a moment.
+    ///
+    /// **Deliberately no longer how anything is waited for.** It used to be a fixed 0.6s (0.3s
+    /// after a keystroke), which is a bet that the machine is as fast today as it was when the
+    /// number was picked — and #192 is that bet lost. Every claim this suite makes now waits on
+    /// its own observable with a generous ceiling (`Eventually`), so this is only what it says:
+    /// a chance for the hierarchy to run before a *negative* claim, which has no edge to wait
+    /// for by definition.
+    func settle() { Eventually.pump() }
 
     func session(_ index: Int) -> TerminalSession { terminals.sessions[index] }
 
@@ -372,6 +386,20 @@ private final class HelmWindow {
 
     func view(of pane: Pane.ID) -> NSView? {
         terminals.sessions.first { $0.id == pane }?.hostView
+    }
+
+    /// **The keyboard is on `view` — waited for, not sampled.**
+    ///
+    /// Every route into a terminal taking the keyboard is asynchronous somewhere: SwiftUI's
+    /// update, AppKit handing the view its window, the bench committing a focus change. Reading
+    /// `firstResponder` a fixed moment later asks the question before the answer exists on any
+    /// machine slower than the one the number was chosen on.
+    func expectKeyboard(
+        on view: NSView?, _ message: @autoclosure () -> String = "",
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        Eventually.holds { self.window.firstResponder === view }
+        XCTAssertEqual(window.firstResponder as? NSView, view, message(), file: file, line: line)
     }
 
     /// The pty behind a pane, matched on the in-memory session's **identity**.
@@ -390,8 +418,17 @@ private final class HelmWindow {
                 nil
             }
         let memory = try XCTUnwrap(backend, "session \(pane) is not on an in-memory backend")
-        return try XCTUnwrap(
+        let pty = try XCTUnwrap(
             ptys.all.first { $0.session === memory }, "no pty registered for \(pane)")
+        // **The one precondition every keystroke assertion in this file rests on**, checked
+        // here because this accessor is the single door all of them go through. A surface that
+        // never came up and a keyboard that went to the wrong pane are the same red without
+        // it — see `MissingTerminalSurface`, and #192, which that ambiguity cost two days.
+        let budget: TimeInterval = 5
+        guard Eventually.holds(within: budget, { memory.hasSurface }) else {
+            throw MissingTerminalSurface(pane: pane, waited: budget)
+        }
+        return pty
     }
 
     /// Post one of helm's commands the way the menu does, and let it land.
@@ -431,7 +468,10 @@ private final class HelmWindow {
             }
             window.sendEvent(event)
         }
-        settle(0.3)
+        // No budget for the byte's journey here — `Pty.received(_:)` waits for arrival at the
+        // pty it is asked about. The short pump is for the *negative* claims only, so that
+        // "it did not reach this pty" has had a fair chance to be wrong.
+        settle()
     }
 
     /// ANSI US virtual key codes for the handful of letters these tests type. ghostty
