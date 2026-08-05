@@ -44,6 +44,15 @@ struct SpoolResult: Codable, Equatable {
         /// there is no second party to wait for. `capture` says what is in the image, including
         /// what is not.
         case captured
+        /// The pane is off the bench and its pty is gone (#176). **One write**, like
+        /// `captured` and unlike a spawn: closing is synchronous and there is no second party
+        /// to wait for. `terminalId` is the pane that went and `pid` is what was in it.
+        ///
+        /// A close that was **refused** is `refused`, not this — a pane the operator is in, a
+        /// pane with live work and no `force`, a uuid helm holds no pane for. That is the
+        /// distinction #176 asks for by name: a teardown that silently did nothing is
+        /// indistinguishable from helm not running.
+        case closed
         /// The terminal is alive but no mailbox appeared before the deadline. Deliberately
         /// **not** a failure and deliberately not cleaned up: the agent may be running
         /// perfectly well without the mail hooks installed. It exists; it cannot be
@@ -66,6 +75,10 @@ struct SpoolResult: Codable, Equatable {
     /// child reads as `HELM_PANE` (`PaneEnvironment`).
     var terminalId: String?
     /// The pty's foreground pid once the agent is running. helm knows this authoritatively.
+    ///
+    /// On a `closed` result it is what was in the pane at the moment it went — the login shell
+    /// when the pane was idle, the program that was running when `force` was used. That is the
+    /// honest answer to *"what did I just destroy"*, and it costs no new field.
     var pid: Int32?
     /// The agent's own id for its session, read out of `owner.json` — never guessed at.
     var sessionId: String?

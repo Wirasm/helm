@@ -25,6 +25,7 @@ import Foundation
 enum SpoolRequest: Equatable {
     case spawn(SpawnRequest)
     case capture(CaptureRequest)
+    case close(CloseRequest)
     /// A `kind` helm does not know. **Kept rather than thrown away**: a decoder that threw here
     /// would make "helm is older than this request" indistinguishable from "this file is not
     /// JSON", and the caller would be told the wrong thing about what to fix.
@@ -37,9 +38,15 @@ enum SpoolRequest: Equatable {
         switch self {
         case .spawn(let request): request.id
         case .capture(let request): request.id
+        case .close(let request): request.id
         case .unrecognised(let id, _): id
         }
     }
+
+    /// Every kind helm knows, for the refusal that lists them — one list rather than a
+    /// literal spelled out at each site that has to name them, which is how a third kind
+    /// would otherwise arrive with a refusal message that still says there are two.
+    static let kinds = [SpawnRequest.kind, CaptureRequest.kind, CloseRequest.kind]
 }
 
 extension SpoolRequest: Decodable {
@@ -54,6 +61,7 @@ extension SpoolRequest: Decodable {
         switch kind {
         case SpawnRequest.kind: self = .spawn(try SpawnRequest(from: decoder))
         case CaptureRequest.kind: self = .capture(try CaptureRequest(from: decoder))
+        case CloseRequest.kind: self = .close(try CloseRequest(from: decoder))
         default:
             self = .unrecognised(id: try container.decode(String.self, forKey: .id), kind: kind)
         }
@@ -133,6 +141,65 @@ struct CaptureRequest: Codable, Equatable {
     }
 }
 
+/// Close a pane helm is holding open (#176).
+///
+/// **The spool created and never destroyed.** Five spawned teammates were five panes only the
+/// operator could clean up, by hand, one at a time — and the asymmetry got worse exactly as
+/// the capability got used. This is the inverse of `SpawnRequest`, and the interesting part
+/// was never removal: it is *what may be removed, and who says so*. Those rules are
+/// `SpoolClosePolicy`'s, because they are about the live bench rather than about this file.
+///
+/// **Naming the pane is the whole gate on who may ask, and no trust model was invented for
+/// it.** A `terminal` is a uuid a caller has only two honest ways to know: it came back in the
+/// `terminalId` of a spawn's own result, or it is the pane the caller is *running inside* and
+/// reads as `HELM_PANE` (`PaneEnvironment`). Both are "what it opened" or "where it is", which
+/// is the scoping #176 asks about, expressed as knowledge rather than as identity.
+///
+/// **helm deliberately does NOT check that it spawned the pane itself, and that was the
+/// question to settle rather than assume.** Three reasons, in order of weight. It buys no
+/// safety: the whole ladder already assumes that anything able to write into the spool is
+/// inside the trust boundary (`SpoolUnattendedPolicy` says so at length), so a
+/// did-I-spawn-this ledger only removes capability — and *"a posture never withholds
+/// capability"* is the operator's ruling from #179. It would not survive a restart: a pane is
+/// persisted and restored, an in-process memory of having spawned it is not, so the rule would
+/// silently mean something different after a relaunch. And it forbids the two cases that are
+/// obviously legitimate — an agent closing the pane it is *itself* running in, which nothing
+/// spawned via the spool, and a coordinator tidying up a teammate another agent started.
+struct CloseRequest: Codable, Equatable {
+    static let kind = "close"
+
+    let id: String
+    /// The pane to close: `TerminalSession.id`, which is the same uuid a spawn's result
+    /// reports as `terminalId` and the pane's own child reads as `HELM_PANE`.
+    let terminal: String
+    /// The caller saying *"yes, I know something is running in there"*.
+    ///
+    /// **The explicit thing #176 asks for, rather than a refusal.** A pane with a live process
+    /// refuses by default, because an agent tidying up must not be able to destroy work by
+    /// accident — but refusing outright would withhold the capability in its main case, since
+    /// a spawned agent that has just finished *is* the live process in its own pane. So the
+    /// default is safe and the caller can say otherwise; what it cannot do is say otherwise
+    /// without saying it.
+    ///
+    /// It does **not** override the focus rule. See `SpoolClosePolicy`.
+    var force: Bool = false
+
+    private enum CodingKeys: String, CodingKey { case id, terminal, force }
+
+    init(id: String, terminal: String, force: Bool = false) {
+        self.id = id
+        self.terminal = terminal
+        self.force = force
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        terminal = try container.decode(String.self, forKey: .terminal)
+        force = try container.decodeIfPresent(Bool.self, forKey: .force) ?? false
+    }
+}
+
 /// Why helm will not do what a request asked.
 ///
 /// A named type rather than a bare `String` because `Result`'s failure has to be an `Error` —
@@ -150,6 +217,7 @@ struct SpoolRefusal: Error, Equatable {
 enum SpoolWork: Equatable {
     case spawn(AcceptedSpawnRequest)
     case capture(AcceptedCaptureRequest)
+    case close(AcceptedCloseRequest)
 }
 
 struct AcceptedSpawnRequest: Equatable {
@@ -172,6 +240,16 @@ struct AcceptedCaptureRequest: Equatable {
     /// where a PNG lands is the one place that checked whether it may.
     let path: String
     let window: String?
+}
+
+struct AcceptedCloseRequest: Equatable {
+    let id: String
+    /// **A real `UUID`, not the string that was in the file.** Parsing it here is what makes
+    /// "that is not a pane id" a refusal with a reason instead of a lookup that quietly
+    /// matches nothing — the two are indistinguishable to a caller, and one of them is a typo
+    /// it could fix.
+    let terminal: UUID
+    let force: Bool
 }
 
 /// Which requests helm will act on.
@@ -232,11 +310,13 @@ enum SpoolPolicy {
         case .capture(let capture):
             return accept(capture, captures: captures, isDirectory: isDirectory)
                 .map(SpoolWork.capture)
+        case .close(let close):
+            return accept(close).map(SpoolWork.close)
         case .unrecognised(_, let kind):
             return .failure(
                 SpoolRefusal(
                     "kind \"\(kind)\" is not one helm knows. Allowed: "
-                        + [SpawnRequest.kind, CaptureRequest.kind].joined(separator: ", ")))
+                        + SpoolRequest.kinds.joined(separator: ", ")))
         }
     }
 
@@ -333,6 +413,151 @@ enum SpoolPolicy {
             AcceptedCaptureRequest(
                 id: request.id, path: destination,
                 window: window.flatMap { $0.isEmpty ? nil : $0 }))
+    }
+
+    /// **A close carries no command, no path and no cwd, so there is nothing here for the
+    /// gates above to bite on.** What a caller controls is one uuid and one boolean, and the
+    /// only thing this layer can say about them is whether the uuid is a uuid. Everything that
+    /// actually decides whether the pane may go needs the live bench and is
+    /// `SpoolClosePolicy`'s — kept apart so this one stays pure and so a refusal about a pane
+    /// is never mistaken for a refusal about a file.
+    private static func accept(
+        _ request: CloseRequest
+    ) -> Result<AcceptedCloseRequest, SpoolRefusal> {
+        guard
+            let terminal = UUID(
+                uuidString: request.terminal.trimmingCharacters(in: .whitespacesAndNewlines))
+        else {
+            return .failure(
+                SpoolRefusal(
+                    "terminal \"\(request.terminal)\" is not a pane id. It is the `terminalId` "
+                        + "of the spawn's own result, or the `HELM_PANE` of the pane you are "
+                        + "running in — a uuid either way"))
+        }
+        return .success(
+            AcceptedCloseRequest(id: request.id, terminal: terminal, force: request.force))
+    }
+}
+
+/// What helm can see about one pane at the moment a close is decided.
+///
+/// A value rather than the pane itself, for `AGENTS.md`'s reason — *prefer values over live
+/// objects at a seam*. Every rule in `SpoolClosePolicy` is then a test that needs no bench, no
+/// ghostty surface and no pty, which is the same trade `SpoolSpawning` makes and the reason
+/// #54 asked for the seam in the first place.
+struct SpoolPaneState: Equatable {
+    /// False when the uuid names a canvas pane. A canvas is not what #176 is about, and
+    /// closing one on a request meant for a terminal would be a silent wrong answer.
+    let holdsTerminal: Bool
+    /// The pane the operator's keyboard is in: the focused slot's selected pane.
+    let holdsKeyboard: Bool
+    /// The pty's foreground process group leader (`tcgetpgrp`), or nil when the surface has
+    /// no process at all. The login shell at an idle prompt; the running program otherwise.
+    let foreground: pid_t?
+    /// `getppid(foreground)`. Nil when it could not be asked.
+    let foregroundParent: pid_t?
+    /// `getsid(foreground)` — the pty session's leader. Nil when it could not be asked.
+    let sessionLeader: pid_t?
+
+    /// Whether something is running in the pane beyond its own login shell.
+    ///
+    /// **The rule is that the login shell is a *child* of the pty's session leader, and a job
+    /// the shell runs is not.** libghostty spawns one `/usr/bin/login` per pane; `login`
+    /// becomes the session leader and forks the login shell as its only child, so at an idle
+    /// prompt the foreground process group leader is that shell — parent equal to the session
+    /// leader. Run something and the foreground becomes a child of the *shell*, one level
+    /// deeper, and the comparison fails. So this needs two cheap syscalls and no process-table
+    /// walk, no shell-name list, and no memory of what the pane looked like earlier.
+    ///
+    /// **Measured live, 2026-08-05, because the obvious rule is wrong.** `getsid(fg) == fg`
+    /// looks like the same test and is not: the session leader is `login`, never the shell, so
+    /// it reports *every* idle pane as busy. Both panes of a live isolated helm read
+    /// `helm(42210) → /usr/bin/login → -fish`, with `getsid(fish) == login`. It is also the
+    /// layout `tools/helm-spawn.swift` has depended on since #51 — *"one `login` per terminal"*,
+    /// and the shell is the single child of it.
+    ///
+    /// **If libghostty ever exec'd the shell in place of `login`, the shell would become the
+    /// session leader and this would read an idle pane as busy** — a refusal that `force`
+    /// answers, rather than a pane destroyed. That is the direction to fail in, and it is why
+    /// the rule is phrased as *prove idle* rather than *prove busy*.
+    ///
+    /// **Unknown counts as busy** for the same reason: if the syscalls cannot answer, helm does
+    /// not know whether it would be destroying work, and a caller that wants it gone anyway can
+    /// say `force`.
+    var isBusy: Bool {
+        guard foreground != nil else { return false }
+        guard let foregroundParent, let sessionLeader else { return true }
+        return foregroundParent != sessionLeader
+    }
+}
+
+/// Whether a pane may actually be closed — the half of #176 that is the whole of #176.
+///
+/// **Separate from `SpoolPolicy` because it judges the bench, not the file.** `SpoolPolicy`
+/// answers *"is this request well formed and is that a program I will start"* from the request
+/// alone. Everything here is about state that did not exist when the request was written and
+/// may have changed since: what the pane holds, where the operator is looking, what is running.
+///
+/// Ordered, and the order is the design:
+///
+/// 1. **The operator is never closed out from under.** #125's rule for arrivals is *appear,
+///    don't seize*; its destructive counterpart is *never remove what someone is looking at*,
+///    and helm knows which slot has focus. `force` does **not** override this one, deliberately:
+///    force is the caller asserting about work *it* owns, and where the operator's eyes are is
+///    not something a file on disk gets a say in. The operator has ⌘W.
+///
+///    **It is the focused pane, not every visible one, and that is a real choice.** Under a
+///    bench every slot's selected pane is on screen, and #177 lands a spawn in a slot of its
+///    own — where it is immediately that slot's selection. A "never close anything visible"
+///    rule would therefore refuse *every* teardown of *every* spawned pane, which is not care,
+///    it is the capability withheld. So the rule is the keyboard: the one pane the operator is
+///    actually working in.
+///
+/// 2. **A pane hosting live work refuses unless the caller says otherwise.** See
+///    `CloseRequest.force`. Second rather than first so that a forced request against the
+///    operator's own pane still refuses on rule 1.
+///
+/// **What is deliberately not here: the worktree and the branch.** #176 asks whether teardown
+/// reaches them, and the answer is that it stops at the pane. #141 already shipped that rail,
+/// and its safety *is* an operator confirming a modal against eligibility rules
+/// (`Worktree.cleanupRoute` — merged, not main, not locked, not detached). A spool request has
+/// nobody at the pane by construction, so routing to that rail from here could only mean
+/// raising a dialog no one will answer — the silent hang of #179 — or skipping the
+/// confirmation, which is not *routing to* the rail's safety but *removing* it. The two also
+/// have different lifetimes: a worktree outlives the pane that worked in it, and a branch is
+/// cleaned when its PR lands, not when a terminal closes. Stopping here is also the strongest
+/// possible guarantee that unmerged work is never destroyed — helm runs no git at all. If a
+/// headless worktree cleanup is wanted later, the honest shape is its own kind routed through
+/// `WorktreeCLI` with the rail's eligibility rules, not a flag on this one.
+enum SpoolClosePolicy {
+    /// nil when the pane may go; the reason when it may not.
+    static func refusal(for request: AcceptedCloseRequest, pane: SpoolPaneState?) -> SpoolRefusal? {
+        guard let pane else {
+            return SpoolRefusal(
+                "helm has no pane \(request.terminal.uuidString). It may have been closed "
+                    + "already, or it belongs to a different helm — an instance under "
+                    + "HELM_DEFAULTS_SUITE watches its own spool and holds its own panes")
+        }
+        guard pane.holdsTerminal else {
+            return SpoolRefusal(
+                "pane \(request.terminal.uuidString) holds a canvas, not a terminal. A close "
+                    + "names the `terminalId` of a spawn, or the pane you are running in")
+        }
+        guard !pane.holdsKeyboard else {
+            return SpoolRefusal(
+                "the operator is working in pane \(request.terminal.uuidString) — it is the "
+                    + "focused slot's selected pane, and helm does not close what someone is "
+                    + "looking at. `force` does not override this; ask them, or wait until "
+                    + "they are somewhere else")
+        }
+        guard !pane.isBusy || request.force else {
+            let running = pane.foreground.map { "pid \($0)" } ?? "something"
+            return SpoolRefusal(
+                "\(running) is running in pane \(request.terminal.uuidString) and would be "
+                    + "killed with it, losing whatever it had not written down. Send the "
+                    + "request again with \"force\": true if you mean it")
+        }
+        return nil
     }
 }
 
