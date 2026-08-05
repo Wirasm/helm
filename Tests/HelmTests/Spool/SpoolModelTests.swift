@@ -19,6 +19,7 @@ final class SpoolModelTests: XCTestCase {
     private var mailRoot: URL!
     private var spawner: FakeSpawner!
     private var capturer: FakeCapturer!
+    private var closer: FakeCloser!
 
     override func setUp() async throws {
         let base = FileManager.default.temporaryDirectory
@@ -29,6 +30,7 @@ final class SpoolModelTests: XCTestCase {
         try FileManager.default.createDirectory(at: mailRoot, withIntermediateDirectories: true)
         spawner = FakeSpawner()
         capturer = FakeCapturer()
+        closer = FakeCloser()
     }
 
     override func tearDown() async throws {
@@ -37,6 +39,7 @@ final class SpoolModelTests: XCTestCase {
         mailRoot = nil
         spawner = nil
         capturer = nil
+        closer = nil
     }
 
     // MARK: - Fixtures
@@ -49,6 +52,7 @@ final class SpoolModelTests: XCTestCase {
             shellDeadline: .seconds(5), claimDeadline: claimDeadline)
         model.attach(spawner: spawner)
         model.attach(capturer: capturer)
+        model.attach(closer: closer)
         return model
     }
 
@@ -67,6 +71,10 @@ final class SpoolModelTests: XCTestCase {
         let cwd = FileManager.default.temporaryDirectory.path
         let promptField = prompt.map { ",\"prompt\":\"\($0)\"" } ?? ""
         return #"{"id":"\#(id)","cwd":"\#(cwd)","command":"\#(command)"\#(promptField)}"#
+    }
+
+    private func close(id: String = "bye", force: Bool = false) -> String {
+        #"{"id":"\#(id)","kind":"close","terminal":"\#(closer.terminal.uuidString)","force":\#(force)}"#
     }
 
     private func mailbox(_ handle: String, pid: pid_t, sessionId: String) throws {
@@ -350,6 +358,125 @@ final class SpoolModelTests: XCTestCase {
         XCTAssertEqual(spawner.opened, [], "and nothing is started on the strength of a guess")
     }
 
+    // MARK: - Close (#176)
+
+    func testWithTheWatcherOffACloseTouchesNothing() async throws {
+        // The negative control, for the destructive kind. A pane that vanished while the
+        // watcher was off would have to have been closed by something else.
+        let model = self.model(isOff: true)
+        try submit(close(), named: "bye.json")
+        model.start()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(closer.closed, [], "no pane may be closed")
+        XCTAssertNil(directory.result(id: "bye"), "no result may be written")
+        XCTAssertEqual(directory.pending().count, 1, "and the request is still sitting there")
+    }
+
+    func testAnIdlePaneIsClosedAndTheResultNamesItAndWhatWasInIt() async throws {
+        let model = self.model()
+        try submit(close(), named: "bye.json")
+        model.start()
+
+        let result = await awaitResult(id: "bye", is: .closed)
+        XCTAssertEqual(closer.closed, [closer.terminal])
+        XCTAssertEqual(result?.terminalId, closer.terminal.uuidString)
+        // What was in the pane when it went — the login shell here, because it was idle.
+        XCTAssertEqual(result?.pid, FakeCloser.shellPid)
+        XCTAssertEqual(spawner.opened, [], "a close starts nothing")
+    }
+
+    func testAPaneTheOperatorIsInIsRefusedAndStaysOnTheBench() async throws {
+        // The acceptance criterion in as many words: *a pane the operator is focused on is
+        // never closed out from under them*. And it is a REFUSAL, with a reason — a teardown
+        // that silently did nothing is indistinguishable from helm not running.
+        closer.state = SpoolPaneState(
+            holdsTerminal: true, holdsKeyboard: true, foreground: FakeCloser.shellPid,
+            foregroundParent: FakeCloser.loginPid, sessionLeader: FakeCloser.loginPid)
+        let model = self.model()
+        try submit(close(force: true), named: "bye.json")
+        model.start()
+
+        let result = await awaitResult(id: "bye", is: .refused)
+        XCTAssertEqual(result?.reason?.contains("operator") == true, true)
+        XCTAssertEqual(closer.closed, [], "the pane is still there")
+    }
+
+    func testALivePaneIsRefusedUntilTheRequestSaysForce() async throws {
+        closer.state = SpoolPaneState(
+            holdsTerminal: true, holdsKeyboard: false, foreground: FakeCloser.agentPid,
+            foregroundParent: FakeCloser.shellPid, sessionLeader: FakeCloser.loginPid)
+        let model = self.model()
+        try submit(close(), named: "bye.json")
+        model.start()
+
+        let refused = await awaitResult(id: "bye", is: .refused)
+        XCTAssertEqual(refused?.reason?.contains("force") == true, true)
+        XCTAssertEqual(closer.closed, [])
+
+        // Said explicitly, the same pane goes — and the result names the pid that went with it.
+        try submit(close(id: "bye2", force: true), named: "bye2.json")
+        model.drain()
+        let closed = await awaitResult(id: "bye2", is: .closed)
+        XCTAssertEqual(closer.closed, [closer.terminal])
+        XCTAssertEqual(closed?.pid, FakeCloser.agentPid)
+    }
+
+    func testAPaneHelmDoesNotHaveIsRefusedRatherThanIgnored() async throws {
+        closer.state = nil
+        let model = self.model()
+        try submit(close(), named: "bye.json")
+        model.start()
+
+        let result = await awaitResult(id: "bye", is: .refused)
+        XCTAssertEqual(result?.reason?.contains(closer.terminal.uuidString) == true, true)
+    }
+
+    func testABenchThatWillNotLetGoIsReportedRatherThanCalledAClose() async throws {
+        // `Workbench.canClose` refuses the bench's last pane. Answering `closed` about a pane
+        // still sitting there would be a lie the caller has no way to check.
+        closer.refuses = true
+        let model = self.model()
+        try submit(close(), named: "bye.json")
+        model.start()
+
+        let result = await awaitResult(id: "bye", is: .refused)
+        XCTAssertEqual(result?.reason?.contains("last pane") == true, true)
+    }
+
+    func testACloseWithNoBenchAttachedIsAHelmDefectAndSaysSo() async throws {
+        // `failed`, not `refused`: there is nothing the caller can do about it, and the two
+        // are different exit codes on the way out.
+        let model = SpoolModel(
+            directory: directory, mailRoot: mailRoot, isOff: false,
+            shellDeadline: .seconds(5), claimDeadline: .seconds(3))
+        try submit(close(), named: "bye.json")
+        model.start()
+
+        let result = await awaitResult(id: "bye", is: .failed)
+        XCTAssertEqual(result?.reason?.contains("helm defect") == true, true)
+    }
+
+    func testACloseIsActedOnAtMostOnce() async throws {
+        // Exactly-once matters most for the destructive kind: two windows draining one spool
+        // must not both try to tear the same pane down.
+        let second = FakeCloser()
+        second.terminal = closer.terminal
+        let other = SpoolModel(
+            directory: directory, mailRoot: mailRoot, isOff: false,
+            shellDeadline: .seconds(5), claimDeadline: .seconds(3))
+        other.attach(closer: second)
+
+        let model = self.model()
+        try submit(close(), named: "bye.json")
+        model.start()
+        other.start()
+        model.drain()
+        other.drain()
+
+        _ = await awaitResult(id: "bye", is: .closed)
+        XCTAssertEqual(closer.closed.count + second.closed.count, 1)
+    }
+
     func testARequestClaimedByAPreviousRunIsAnsweredRatherThanReRun() async throws {
         // The restart case. A claimed file is indistinguishable from one being worked on, so
         // re-running it is the double-open #54 forbids — it is answered instead.
@@ -396,6 +523,38 @@ private final class FakeSpawner: SpoolSpawning {
     func send(_ line: String, to terminal: UUID) {
         sent.append((line, terminal))
         if claimsOnSend { pids[terminal] = Self.agentPid }
+    }
+}
+
+/// A bench that is not there, from the teardown side: it reports whatever state the test wants
+/// one pane to be in, and remembers what it was asked to close.
+///
+/// The pane state is a *value*, so every rule #176 argues for is exercised here without a
+/// bench, a surface, a pty or a `getsid` — which is exactly the split `SpoolClosing` exists to
+/// make.
+@MainActor
+private final class FakeCloser: SpoolClosing {
+    /// The pty layout every helm pane really has: `login` is the session leader and forks
+    /// the login shell as its only child.
+    static let loginPid: pid_t = 92000
+    static let shellPid: pid_t = 92001
+    static let agentPid: pid_t = 92002
+
+    var terminal = UUID()
+    /// An idle terminal nobody is looking at, unless a test says otherwise.
+    var state: SpoolPaneState? = SpoolPaneState(
+        holdsTerminal: true, holdsKeyboard: false, foreground: shellPid,
+        foregroundParent: loginPid, sessionLeader: loginPid)
+    /// The bench refusing to let go — `Workbench.canClose` and its last pane.
+    var refuses = false
+    var closed: [UUID] = []
+
+    func pane(_ id: UUID) -> SpoolPaneState? { id == terminal ? state : nil }
+
+    func close(_ id: UUID) -> Bool {
+        guard id == terminal, !refuses else { return false }
+        closed.append(id)
+        return true
     }
 }
 

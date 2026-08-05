@@ -322,4 +322,63 @@ final class SpoolPolicyTests: XCTestCase {
             SpoolRequest.self, from: Data(#"{"id":"x","kind":"capture"}"#.utf8))
         XCTAssertEqual(request, .capture(CaptureRequest(id: "x")))
     }
+
+    // MARK: - Close (#176)
+
+    func testACloseNamesAPaneAndDefaultsToNotForcing() throws {
+        // `force` absent means false, and it has to: a request that forgot to mention it is a
+        // request that never thought about destroying live work, which is the case the default
+        // exists for.
+        let request = try JSONDecoder().decode(
+            SpoolRequest.self,
+            from: Data(
+                #"{"id":"x","kind":"close","terminal":"1E5B7B1C-0000-4000-8000-00000000ABCD"}"#
+                    .utf8))
+        XCTAssertEqual(
+            request,
+            .close(CloseRequest(id: "x", terminal: "1E5B7B1C-0000-4000-8000-00000000ABCD")))
+        guard case .close(let accepted) = try work(request) else {
+            return XCTFail("expected a close")
+        }
+        XCTAssertEqual(accepted.terminal.uuidString, "1E5B7B1C-0000-4000-8000-00000000ABCD")
+        XCTAssertFalse(accepted.force)
+    }
+
+    func testATerminalThatIsNotAUuidIsRefusedRatherThanMatchingNothing() {
+        // The two are indistinguishable to a caller — "helm closed nothing" — and exactly one
+        // of them is a typo it could fix.
+        for terminal in ["", "not-a-uuid", "1E5B7B1C-0000-4000-8000", "  "] {
+            XCTAssertNotNil(
+                refusal(.close(CloseRequest(id: "x", terminal: terminal))),
+                "\(terminal) must be refused as a pane id")
+        }
+    }
+
+    func testACloseIsRoutedByItsKindAndCarriesNoCommandOfItsOwn() throws {
+        // The same pinning `capture` gets, and #176 is the kind that most needs it: it is the
+        // destructive one, and a `close` that could take the spawn arm on the strength of a
+        // stray `command` would be a file that both starts `sh` and never met `allowedCommands`.
+        let smuggled = try JSONDecoder().decode(
+            SpoolRequest.self,
+            from: Data(
+                #"{"id":"x","kind":"close","terminal":"1E5B7B1C-0000-4000-8000-00000000ABCD","command":"sh","cwd":"/tmp"}"#
+                    .utf8))
+        guard case .close(let accepted) = try work(smuggled) else {
+            return XCTFail("a close must stay a close whatever else the file carries")
+        }
+        // And there is nowhere for a command to survive to: `AcceptedCloseRequest` has no such
+        // field, which the compiler enforces rather than this assertion.
+        XCTAssertEqual(accepted.terminal.uuidString, "1E5B7B1C-0000-4000-8000-00000000ABCD")
+    }
+
+    func testEveryKindHelmKnowsIsNamedInTheRefusalForTheOnesItDoesNot() throws {
+        // A third kind arriving with a refusal message that still says there are two is the
+        // drift this list exists to stop.
+        let unknown = try JSONDecoder().decode(
+            SpoolRequest.self, from: Data(#"{"id":"x","kind":"teleport"}"#.utf8))
+        let reason = try XCTUnwrap(refusal(unknown))
+        for kind in SpoolRequest.kinds {
+            XCTAssertTrue(reason.contains(kind), "\(kind) must be named as an allowed kind")
+        }
+    }
 }

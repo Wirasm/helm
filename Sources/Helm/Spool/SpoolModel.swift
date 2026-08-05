@@ -34,6 +34,24 @@ protocol SpoolCapturing: AnyObject {
     func capture(to path: String, window: String?) -> Result<CaptureReport, SpoolRefusal>
 }
 
+/// Taking a pane off the bench, as a seam — the inverse of `SpoolSpawning` and the same trade.
+///
+/// **Two calls rather than one, and the split is where the design lives.** `pane` reports what
+/// helm can see; `close` does the deed. Everything between them — the operator's focus, live
+/// work, `force` — is `SpoolClosePolicy`'s and is decided on this side of the protocol, so
+/// every rule #176 argues for is reachable from `swift test` with no bench, no surface and no
+/// pty. An adapter that decided for itself would put the one part worth testing on the far
+/// side of the one seam a test cannot cross.
+@MainActor
+protocol SpoolClosing: AnyObject {
+    /// What helm can see about one pane right now, or nil when no pane has that id.
+    func pane(_ id: UUID) -> SpoolPaneState?
+    /// Take it off the bench and drop its pty. Reports whether the pane is actually gone —
+    /// the bench refuses its own last pane (`Workbench.canClose`), and a caller told "closed"
+    /// about a pane that is still there is the silence this ladder exists to remove.
+    func close(_ id: UUID) -> Bool
+}
+
 /// The spool: helm's one push channel, and the rung of #51 that works with the screen locked.
 ///
 /// **This is a deliberate reversal, and it is recorded as one.** #33 ruled *"there is no
@@ -72,6 +90,11 @@ final class SpoolModel: ObservableObject {
     /// `RootView` builds inline is retained by nothing else, so a weak reference would be gone
     /// before the first request and every capture would answer "helm has no window to draw".
     private var capturer: (any SpoolCapturing)?
+    /// Held strongly for the same reason as the two above, and it is the same failure if it is
+    /// not: an adapter `RootView` builds inline is retained by nothing else, so a weak
+    /// reference would be gone before the first request and every close would answer "helm has
+    /// no bench".
+    private var closer: (any SpoolClosing)?
     private var watcher: SpoolWatcher?
 
     /// Requests acted on in this process, by result id — so a second window's `drain` and this
@@ -99,6 +122,10 @@ final class SpoolModel: ObservableObject {
 
     func attach(capturer: any SpoolCapturing) {
         self.capturer = capturer
+    }
+
+    func attach(closer: any SpoolClosing) {
+        self.closer = closer
     }
 
     /// Begin watching. Idempotent, and a no-op under `HELM_SPOOL_OFF`.
@@ -171,7 +198,8 @@ final class SpoolModel: ObservableObject {
                     reason: "the request file is not readable JSON of the form "
                         + "{\"id\",\"kind\",…} — a spawn is "
                         + "{\"id\",\"cwd\",\"command\",\"args\",\"prompt\"}, a capture is "
-                        + "{\"id\",\"kind\":\"capture\",\"path\",\"window\"}")
+                        + "{\"id\",\"kind\":\"capture\",\"path\",\"window\"}, a close is "
+                        + "{\"id\",\"kind\":\"close\",\"terminal\",\"force\"}")
                 continue
             }
             guard !handled.contains(request.id) else { continue }
@@ -184,6 +212,8 @@ final class SpoolModel: ObservableObject {
             case .success(.spawn(let accepted)):
                 Task { await self.act(on: accepted) }
             case .success(.capture(let accepted)):
+                act(on: accepted)
+            case .success(.close(let accepted)):
                 act(on: accepted)
             }
         }
@@ -229,6 +259,43 @@ final class SpoolModel: ObservableObject {
         case .failure(let refusal):
             answer(request.id, .failed, reason: refusal.reason)
         }
+    }
+
+    /// Take a pane off the bench, or say why not (#176).
+    ///
+    /// **Synchronous, like a capture and unlike a spawn.** There is no second party: the pane
+    /// is gone the moment the bench lets go of it, so there is nothing outstanding to wait for
+    /// and one write rather than two.
+    ///
+    /// **Every path here writes a result, and the refusals are `refused` rather than
+    /// `failed`.** They are decisions, not breakages — the caller can read the reason and do
+    /// something about it (wait for the operator to move, send `force`, use the right uuid),
+    /// which is a different thing from helm being unable to act. `failed` is kept for the one
+    /// case that genuinely is helm's own defect.
+    private func act(on request: AcceptedCloseRequest) {
+        guard let closer else {
+            answer(
+                request.id, .failed,
+                reason: "helm has no bench to close a pane on. It is running, and it answered "
+                    + "this request — so the closer was never attached, which is a helm defect "
+                    + "rather than anything the caller can fix.")
+            return
+        }
+        let pane = closer.pane(request.terminal)
+        if let refusal = SpoolClosePolicy.refusal(for: request, pane: pane) {
+            refuse(id: request.id, reason: refusal.reason)
+            return
+        }
+        guard closer.close(request.terminal) else {
+            refuse(
+                id: request.id,
+                reason: "helm's bench would not let pane \(request.terminal.uuidString) go. It "
+                    + "is the last pane there is, and a helm with nothing in it is not a state "
+                    + "worth being able to reach (Workbench.canClose)")
+            return
+        }
+        answer(
+            request.id, .closed, terminalId: request.terminal, pid: pane?.foreground)
     }
 
     /// Start the agent, then say what was started and how to reach it.

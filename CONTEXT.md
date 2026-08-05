@@ -168,10 +168,19 @@ instance's state.
 _Avoid_: queue, inbox (the mailbox is the inbox), API, control channel
 
 **request**:
-One file in the spool: `{id, cwd, command, args, prompt}`. Acted on **at most once** — claimed
-by rename into `claimed/`, which is a graveyard and never re-read, so a restart mid-spawn
-cannot double-open. Only the agents in `SpoolPolicy.allowedCommands` may be named.
+One file in the spool, of one **kind**: a `spawn` (`{id, cwd, command, args, prompt}`), a
+`capture` (`{id, kind, path, window}`) or a `close` (`{id, kind, terminal, force}`). Acted on
+**at most once** — claimed by rename into `claimed/`, which is a graveyard and never re-read,
+so a restart mid-spawn cannot double-open. Only the agents in `SpoolPolicy.allowedCommands` may
+be named, and only by a spawn.
 _Avoid_: job, task, command (the `command` is a field of it)
+
+**teardown**:
+Closing a pane through the spool — the inverse of a spawn, and it stops at the **pane**. helm
+refuses a pane with live work unless the request says `force`, and refuses the pane the
+operator is working in whatever the request says. Worktrees and branches are not teardown's:
+that is #141's rail, which confirms with the operator and never deletes unmerged work.
+_Avoid_: kill, destroy, cleanup (cleanup is the worktree rail's word)
 
 **result**:
 What helm writes back at `spool/results/<id>.json`, and the half that makes the spool a

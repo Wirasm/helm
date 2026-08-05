@@ -211,6 +211,28 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     sits there. Measured, and it cost the first live run: a terminal opened, a shell ran, and
     no agent ever started. `WorkbenchSpoolSpawner.send` pastes, then sends Return as a
     `text:` binding action.
+- **To close a pane again, `swift tools/helm-close.swift <terminal-uuid> [--force]`.** The
+  inverse of `helm-spool`, needing what it needs — nothing: a file appears, helm acts, helm
+  writes a file back (#176). The uuid is a spawn result's `terminalId`, or the `HELM_PANE` of
+  the pane you are running in; those are the two ways to know one, and **knowing it is the
+  scoping**. helm deliberately does *not* check that it spawned the pane for you: that would
+  buy no safety (anything that can write into the spool is already inside the trust boundary),
+  would not survive a restart (the pane is persisted, an in-process memory of spawning it is
+  not), and would forbid the two legitimate cases — an agent closing the pane it is itself in,
+  and a coordinator tidying up a teammate. `CloseRequest` argues it in full.
+  - **Two refusals, and they are not the same refusal.** A pane with a **live process** refuses
+    unless you pass `--force`, because closing it kills whatever was running and loses what it
+    had not written down — "is anything running" is `getsid(foreground) == foreground`, the
+    pty's session leader being its own foreground meaning an idle prompt. The pane the
+    **operator is working in** refuses *and `--force` does not override it*: force is a caller
+    asserting about work it owns, and where the operator's eyes are is not something a file on
+    disk gets a say in. Both are `refused` results with a reason, exit 3.
+  - **It stops at the pane — no worktree, no branch, no git at all.** #141's rail already owns
+    that, and its safety *is* an operator confirming a modal against eligibility rules; a spool
+    request has nobody at the pane by construction, so reaching that rail from here could only
+    mean a dialog no one will answer or a confirmation skipped. That is the strongest possible
+    guarantee that unmerged work is never destroyed. `SpoolClosePolicy`'s header has the
+    argument and the shape a later worktree kind would have to take.
 - **`helm-spawn` is the GUI path, and still there** — `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`
   (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
   type `cls`, wait, type the prompt, submit — with every step waiting on something observable

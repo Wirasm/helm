@@ -70,6 +70,10 @@ struct RootView: View {
             // `NSApp` at capture time — so it is attached here only because this is where the
             // spool is wired, and a second seam for one line would be worse.
             spool.attach(capturer: AppWindowCapturer())
+            // #176's teardown. Same two objects the spawner takes and no `activate`: closing a
+            // pane never opens a workspace, so it needs nothing from this view at all.
+            spool.attach(
+                closer: WorkbenchSpoolCloser(workbench: workbench, terminals: terminalManager))
             spool.start()
         }
         // The context is written by `WorkspaceModel.observe`, which sinks BOTH the
