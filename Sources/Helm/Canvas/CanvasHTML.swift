@@ -179,7 +179,7 @@ enum CanvasHTML {
     static func setMarkTool(_ tool: CanvasMarkTool) -> String {
         """
         window.\(markToolGlobal) = \(jsString(tool.token));
-        if (window.__helmWipeMark) { window.__helmWipeMark(); }
+        if (window.__helmAbandonMark) { window.__helmAbandonMark(); }
         """
     }
 
@@ -278,11 +278,20 @@ enum CanvasHTML {
           // The ink. helm's own chrome, marked as such so an agent reading the DOM can tell
           // it from what it authored, and inert so the page can never come to need it.
           var paper = null, ink = null, stroke = [], from = null;
+          // Has this mark been POSTED? Until it has, the ink is an in-flight gesture and
+          // anything that interrupts may throw it away. Once posted it is the comment
+          // field's subject, and only Swift — closing that field — may take it down.
+          var committed = false;
 
           function sheet() {
             if (paper) { return paper; }
             paper = document.createElementNS("http://www.w3.org/2000/svg", "svg");
             paper.setAttribute("data-helm-mark", "");
+            // Sized once, from the document as it is now. A late-loading image or a window
+            // resize can therefore leave the ink adrift from what it circled — accepted,
+            // because the ANCHOR is an id or a quote and never these pixels. The ink is a
+            // reminder of what you marked, not the record of it.
+            //
             // ABSOLUTE over the whole document, not fixed over the viewport. A mark is
             // glued to what it was drawn around: scroll away and it travels off screen with
             // its subject, scroll back and it is still there. Fixed positioning would leave
@@ -347,17 +356,24 @@ enum CanvasHTML {
 
           function wipe() {
             if (paper && paper.parentNode) { paper.parentNode.removeChild(paper); }
-            paper = null; ink = null; stroke = []; from = null;
+            paper = null; ink = null; stroke = []; from = null; committed = false;
           }
 
+          // Throw away an in-flight gesture, and ONLY an in-flight one.
+          //
           // A drag released outside the document — over helm's own header, another pane —
           // never fires mouseup here, and the ink would sit at max z-index until the next
-          // stroke. Both of these end it.
-          window.addEventListener("blur", wipe);
-          document.addEventListener("mouseleave", wipe);
-          // Called from Swift when the tool changes, so putting a tool down also drops
-          // whatever was half-drawn with it.
+          // stroke. But `blur` also fires when the comment field takes the keyboard, which
+          // it does the instant it appears: an unconditional wipe there erases the mark
+          // before the operator has looked at it, which is the whole feature.
+          function abandon() { if (!committed) { wipe(); } }
+
+          window.addEventListener("blur", abandon);
+          document.addEventListener("mouseleave", abandon);
+          // Swift closing the comment field — the only thing allowed to remove a posted mark.
           window.__helmWipeMark = wipe;
+          // A tool change, which must not disturb a mark already awaiting its comment.
+          window.__helmAbandonMark = abandon;
 
           function pathFrom(points) {
             var d = "M" + points[0].x + " " + points[0].y;
@@ -452,6 +468,7 @@ enum CanvasHTML {
               // A tap draws nothing on its way, so it needs a mark of its own — otherwise
               // the one gesture with no travel is also the one with no visible subject.
               ring(e.pageX, e.pageY);
+              committed = true;
               bridge.postMessage({
                 mark: "point", id: at.id, text: at.text, rect: viewportRect(box)
               });
@@ -462,6 +479,7 @@ enum CanvasHTML {
               draw(pathFrom([drawn[0], { x: e.pageX, y: e.pageY }]), true);
               var end = targetAt(e.clientX, e.clientY);
               // Either end may be empty — an arrow into blank space is "add a node here".
+              committed = true;
               bridge.postMessage({
                 mark: "relation", from: startTarget, to: end, rect: viewportRect(box)
               });
@@ -472,6 +490,7 @@ enum CanvasHTML {
               draw(pathFrom(drawn), false);
               // What the loop encircles. Posted even when empty, so decode refuses it
               // visibly — silence is indistinguishable from the stroke never registering.
+              committed = true;
               bridge.postMessage({
                 mark: "enclosure", targets: targetsInside(drawn), rect: viewportRect(box)
               });

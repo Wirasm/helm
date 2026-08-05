@@ -128,6 +128,12 @@ final class CanvasModel: ObservableObject {
     /// indistinguishable from a dead click, and because the operator has to know their
     /// clipboard just changed under them.
     @Published private(set) var notesNotice: String?
+    private var noticeTask: Task<Void, Never>?
+
+    /// Whether the page should still be holding a mark — a comment is in flight. Named here
+    /// rather than recomputed at each call site, since it is the one fact `showsMark` asks
+    /// the page about.
+    var showsMark: Bool { selection != nil }
 
     @Published private(set) var selection: CanvasSelection?
 
@@ -217,6 +223,9 @@ final class CanvasModel: ObservableObject {
         showing = .file(Document(url: url, content: Self.load(url)))
         selection = nil
         notesFailure = nil
+        // A receipt names the file it was written to. Carried onto a different canvas it is
+        // a true sentence about the wrong document, which is worse than no sentence.
+        notesNotice = nil
         refreshNotes()
         // Reload on every external change. Watcher lifetime == document
         // lifetime; opening another file replaces it.
@@ -268,11 +277,15 @@ final class CanvasModel: ObservableObject {
     /// problem: the message is a receipt, not something to dismiss.
     private func announce(_ message: String) {
         notesNotice = message
-        let stamp = message
-        Task { [weak self] in
+        // Cancel the previous timer rather than comparing the message. The receipt names the
+        // sidecar, so two comments on one file produce byte-identical text — and the first
+        // timer would then clear the second one's notice early, which is the ordinary
+        // workflow of commenting twice in a row.
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(4))
-            guard let self, notesNotice == stamp else { return }
-            notesNotice = nil
+            guard !Task.isCancelled else { return }
+            self?.notesNotice = nil
         }
     }
 
@@ -601,18 +614,7 @@ struct CanvasView: View {
     private func urlContent(for page: CanvasModel.Page) -> some View {
         VStack(spacing: 0) {
             if let failure = page.failure {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle")
-                    Text(failure)
-                        .lineLimit(2)
-                    Spacer()
-                }
-                .font(.system(size: 11))
-                .foregroundStyle(Color.textMuted)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.surfaceRaised)
-                Divider()
+                noticeStrip(failure, symbol: "exclamationmark.triangle")
             }
             if let url = page.url {
                 URLCanvasView(model: model, url: url, generation: page.generation)
@@ -630,12 +632,12 @@ struct CanvasView: View {
         case let .markdown(markdown):
             MarkdownCanvasView(
                 url: document.url, markdown: markdown, generation: document.generation,
-                markTool: model.markTool, showsMark: model.selection != nil,
+                markTool: model.markTool, showsMark: model.showsMark,
                 onSelection: model.pageDidReport)
         case .web:
             HTMLCanvasView(
                 url: document.url, generation: document.generation,
-                markTool: model.markTool, showsMark: model.selection != nil,
+                markTool: model.markTool, showsMark: model.showsMark,
                 onSelection: model.pageDidReport)
         case let .plainText(text):
             ScrollView {

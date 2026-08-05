@@ -173,17 +173,28 @@ final class CanvasHTMLTests: XCTestCase {
     }
 
     func testAnAbandonedStrokeCanBeCleanedUpFromOutsideTheDocument() {
+        // Still the subject it always was — a drag released over helm's own header never
+        // fires mouseup here. What changed is that it may only discard an IN-FLIGHT stroke:
+        // `blur` also fires when the comment field takes the keyboard, and wiping there
+        // erased the mark before the operator had seen it.
         let script = CanvasHTML.annotationScript()
 
-        XCTAssertTrue(script.contains("addEventListener(\"blur\", wipe)"))
+        XCTAssertTrue(script.contains("addEventListener(\"blur\", abandon)"))
         XCTAssertTrue(script.contains("mouseleave"))
-        XCTAssertTrue(
-            script.contains("window.__helmWipeMark = wipe"),
-            "putting a tool down must also drop what was half-drawn with it")
+        XCTAssertTrue(script.contains("window.__helmWipeMark = wipe"))
+        XCTAssertTrue(script.contains("window.__helmAbandonMark = abandon"))
     }
 
-    func testSettingTheToolAlsoWipes() {
-        XCTAssertTrue(CanvasHTML.setMarkTool(.select).contains("__helmWipeMark"))
+    func testSettingTheToolDropsHalfDrawnWorkButNotACommittedMark() {
+        // It used to wipe unconditionally. That was right when ink was transient and wrong
+        // the moment it started outliving the gesture: switching tools with a comment open
+        // erased the mark and left the field anchored to nothing.
+        let set = CanvasHTML.setMarkTool(.select)
+
+        XCTAssertTrue(set.contains("__helmAbandonMark"))
+        XCTAssertFalse(
+            set.contains("__helmWipeMark"),
+            "a tool change may not remove a mark that is already awaiting its comment")
     }
 
     func testTheMarkIsDrawnInDocumentCoordinatesSoItScrollsWithItsSubject() {
@@ -224,6 +235,34 @@ final class CanvasHTMLTests: XCTestCase {
         XCTAssertTrue(
             CanvasHTML.annotationScript().contains("function ring("),
             "point is the one gesture with no travel, so it needs a mark of its own")
+    }
+
+    func testAPostedMarkSurvivesEverythingExceptSwiftTakingItDown() {
+        // Two ways a completed mark used to vanish before the operator saw it: the comment
+        // field autofocusing (which blurs the webview) and switching tools. Both called the
+        // same unconditional wipe as an abandoned drag.
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(script.contains("var committed = false"))
+        XCTAssertTrue(
+            script.contains("function abandon() { if (!committed) { wipe(); } }"),
+            "blur and mouseleave may only discard an in-flight gesture")
+        XCTAssertTrue(script.contains("addEventListener(\"blur\", abandon)"))
+        XCTAssertTrue(script.contains("mouseleave\", abandon"))
+        XCTAssertTrue(
+            CanvasHTML.setMarkTool(.arrow).contains("__helmAbandonMark"),
+            "changing tools must not disturb a mark already awaiting its comment")
+        XCTAssertTrue(
+            CanvasHTML.clearMarkScript().contains("__helmWipeMark"),
+            "only Swift closing the field takes a posted mark down")
+    }
+
+    func testEveryPostedMarkCommitsItself() {
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertEqual(
+            script.components(separatedBy: "committed = true;").count - 1, 3,
+            "point, relation and enclosure each commit before posting")
     }
 
     // MARK: Vendored scripts

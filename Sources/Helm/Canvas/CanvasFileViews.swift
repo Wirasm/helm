@@ -52,8 +52,14 @@ struct MarkdownCanvasView: View {
     let generation: Int
     /// What the operator is holding, pushed into the page on change.
     let markTool: CanvasMarkTool
-    /// Whether a mark is still awaiting a comment. False takes the ink down — the mark is
-    /// the comment field's subject, so it lives exactly as long as the field does.
+    /// Whether a mark is still awaiting a comment. False takes the ink down.
+    ///
+    /// The ink lives as long as the comment field, with one honest exception: an agent
+    /// rewriting the artifact reloads the document and takes the ink with it, while the
+    /// field stays open. That is deliberate — the ANCHOR is an id or a quote and was decoded
+    /// the moment the mark was posted, so the comment is still correct and still worth
+    /// writing. Dismissing the field to keep the invariant tidy would throw away what the
+    /// operator had already typed, to protect a reminder rather than a record.
     let showsMark: Bool
     /// What the operator selected on the page, for the comment field to anchor to — and
     /// when they clicked away and selected nothing, which is what takes the field down.
@@ -135,7 +141,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
         let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(markdown)"
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
-        coordinator.forgetPushedTool()
+        coordinator.forgetPushedState()
         coordinator.stagedDocument = Data(
             CanvasHTML.documentPage(markdown: markdown, theme: theme).utf8)
         guard let address = CanvasAddress.url(for: path) else { return }
@@ -222,7 +228,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
         let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(path.value)"
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
-        coordinator.forgetPushedTool()
+        coordinator.forgetPushedState()
 
         let controller = webView.configuration.userContentController
         // `removeAllUserScripts` takes the annotation script with it, so it is re-added
@@ -301,12 +307,18 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// annotation script lives in a named world (#164) whose `window` is a different object
     /// — so the plain overload sets the global somewhere the script cannot see it and the
     /// tool stays `select` forever. The toolbar highlights, and nothing else happens.
+    /// Everything helm says to the page goes through the named world, never the page's own.
+    /// Stated once here rather than left as a fact a reader has to notice by comparing two
+    /// call sites — getting it wrong made #190's whole feature silently inert.
+    private func evaluate(_ script: String, in webView: WKWebView) {
+        webView.evaluateJavaScript(
+            script, in: nil, in: Self.bridgeWorld, completionHandler: { _ in })
+    }
+
     func pushTool(_ tool: CanvasMarkTool, to webView: WKWebView) {
         guard pushedTool != tool else { return }
         pushedTool = tool
-        webView.evaluateJavaScript(
-            CanvasHTML.setMarkTool(tool), in: nil, in: Self.bridgeWorld,
-            completionHandler: { _ in })
+        evaluate(CanvasHTML.setMarkTool(tool), in: webView)
     }
 
     /// Take the ink down when the comment field closes — submitted or dismissed. Pushed
@@ -316,16 +328,14 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
         guard markShown != shows else { return }
         markShown = shows
         guard !shows else { return }
-        webView.evaluateJavaScript(
-            CanvasHTML.clearMarkScript(), in: nil, in: Self.bridgeWorld,
-            completionHandler: { _ in })
+        evaluate(CanvasHTML.clearMarkScript(), in: webView)
     }
 
     /// A load destroys the JS context, so whatever the page was told is gone with it.
     /// Without this the guard above sees "no change" and never re-pushes — the tool silently
     /// reverts to `select` on the next agent write, which is the ordinary way a canvas
     /// updates.
-    func forgetPushedTool() {
+    func forgetPushedState() {
         pushedTool = nil
         markShown = false
     }
