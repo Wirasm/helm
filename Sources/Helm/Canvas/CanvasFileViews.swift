@@ -52,6 +52,9 @@ struct MarkdownCanvasView: View {
     let generation: Int
     /// What the operator is holding, pushed into the page on change.
     let markTool: CanvasMarkTool
+    /// Whether a mark is still awaiting a comment. False takes the ink down — the mark is
+    /// the comment field's subject, so it lives exactly as long as the field does.
+    let showsMark: Bool
     /// What the operator selected on the page, for the comment field to anchor to — and
     /// when they clicked away and selected nothing, which is what takes the field down.
     let onSelection: (CanvasPageSelection) -> Void
@@ -64,6 +67,7 @@ struct MarkdownCanvasView: View {
             markdown: markdown,
             generation: generation,
             markTool: markTool,
+            showsMark: showsMark,
             theme: colorScheme == .dark ? .dark : .light,
             onSelection: onSelection
         )
@@ -75,6 +79,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
     let markdown: String
     let generation: Int
     let markTool: CanvasMarkTool
+    let showsMark: Bool
     let theme: CanvasTheme
     let onSelection: (CanvasPageSelection) -> Void
 
@@ -120,6 +125,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         load(webView, coordinator: context.coordinator)
         context.coordinator.pushTool(markTool, to: webView)
+        context.coordinator.showMark(showsMark, in: webView)
     }
 
     /// Loads only when the (theme, generation, content) triple actually
@@ -149,6 +155,7 @@ struct HTMLCanvasView: View {
     let url: URL
     let generation: Int
     let markTool: CanvasMarkTool
+    let showsMark: Bool
     let onSelection: (CanvasPageSelection) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -158,6 +165,7 @@ struct HTMLCanvasView: View {
             url: url,
             generation: generation,
             markTool: markTool,
+            showsMark: showsMark,
             theme: colorScheme == .dark ? .dark : .light,
             onSelection: onSelection
         )
@@ -168,6 +176,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     let url: URL
     let generation: Int
     let markTool: CanvasMarkTool
+    let showsMark: Bool
     let theme: CanvasTheme
     let onSelection: (CanvasPageSelection) -> Void
 
@@ -203,6 +212,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         load(webView, coordinator: context.coordinator)
         context.coordinator.pushTool(markTool, to: webView)
+        context.coordinator.showMark(showsMark, in: webView)
     }
 
     /// (Re)loads when the file, its generation (external change), or the theme
@@ -269,6 +279,8 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// tools would throw away the scroll position, and a canvas is something you are part-way
     /// down when you decide to mark it.
     private(set) var pushedTool: CanvasMarkTool?
+    /// Whether the page currently holds a mark. Starts false: a fresh document has no ink.
+    private var markShown = false
     /// The generated document the scheme handler should serve on the next request. Only
     /// the markdown canvas stages one; the .html canvas reads its artifact from disk.
     var stagedDocument: Data?
@@ -297,11 +309,26 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
             completionHandler: { _ in })
     }
 
+    /// Take the ink down when the comment field closes — submitted or dismissed. Pushed
+    /// only on the transition, so an ordinary SwiftUI re-render never wipes a mark the
+    /// operator is still looking at.
+    func showMark(_ shows: Bool, in webView: WKWebView) {
+        guard markShown != shows else { return }
+        markShown = shows
+        guard !shows else { return }
+        webView.evaluateJavaScript(
+            CanvasHTML.clearMarkScript(), in: nil, in: Self.bridgeWorld,
+            completionHandler: { _ in })
+    }
+
     /// A load destroys the JS context, so whatever the page was told is gone with it.
     /// Without this the guard above sees "no change" and never re-pushes — the tool silently
     /// reverts to `select` on the next agent write, which is the ordinary way a canvas
     /// updates.
-    func forgetPushedTool() { pushedTool = nil }
+    func forgetPushedTool() {
+        pushedTool = nil
+        markShown = false
+    }
 
     func installBridge(on controller: WKUserContentController) {
         controller.add(

@@ -124,6 +124,11 @@ final class CanvasModel: ObservableObject {
     /// `.select` on a SwiftUI churn would look like the canvas ignoring the picker.
     @Published private(set) var markTool: CanvasMarkTool = .select
 
+    /// A transient "that worked" line. Separate from `notesFailure` because a silent copy is
+    /// indistinguishable from a dead click, and because the operator has to know their
+    /// clipboard just changed under them.
+    @Published private(set) var notesNotice: String?
+
     @Published private(set) var selection: CanvasSelection?
 
     /// Every note in this canvas's sidecar, by heading. Re-read from the file rather than
@@ -259,6 +264,18 @@ final class CanvasModel: ObservableObject {
         markTool = markTool == tool ? .select : tool
     }
 
+    /// Show a notice and take it away again. The timer is deliberately not the operator's
+    /// problem: the message is a receipt, not something to dismiss.
+    private func announce(_ message: String) {
+        notesNotice = message
+        let stamp = message
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, notesNotice == stamp else { return }
+            notesNotice = nil
+        }
+    }
+
     func dismissSelection() {
         selection = nil
         // The strip explains why the field is still up. Once it is gone the message points
@@ -277,8 +294,15 @@ final class CanvasModel: ObservableObject {
         }
         do {
             try CanvasNotes.append(annotation, for: canvas, at: Date())
+            // Written first, copied second. The sidecar is the memory; the clipboard is a
+            // convenience, and a copy that succeeded while the write failed would be a note
+            // the operator believes they made and cannot find.
+            Pasteboard.copy(CanvasNotes.clipboardEntry(annotation, for: canvas))
             self.selection = nil
             notesFailure = nil
+            announce(
+                "Written to \(CanvasNotes.sidecarURL(for: canvas).lastPathComponent) "
+                    + "and copied — paste it to an agent")
             refreshNotes()
         } catch {
             // A canvas opened through Browse… can live anywhere, including somewhere not
@@ -492,7 +516,9 @@ struct CanvasView: View {
                 }
                 Divider()
                 if let failure = model.notesFailure {
-                    noticeStrip(failure)
+                    noticeStrip(failure, symbol: "exclamationmark.triangle")
+                } else if let notice = model.notesNotice {
+                    noticeStrip(notice, symbol: "checkmark.circle")
                 }
                 content(for: showing)
                     // The comment field is drawn over the page rather than beside it, so
@@ -518,10 +544,10 @@ struct CanvasView: View {
         }
     }
 
-    private func noticeStrip(_ message: String) -> some View {
+    private func noticeStrip(_ message: String, symbol: String) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle")
+                Image(systemName: symbol)
                 Text(message).lineLimit(2)
                 Spacer()
             }
@@ -604,11 +630,13 @@ struct CanvasView: View {
         case let .markdown(markdown):
             MarkdownCanvasView(
                 url: document.url, markdown: markdown, generation: document.generation,
-                markTool: model.markTool, onSelection: model.pageDidReport)
+                markTool: model.markTool, showsMark: model.selection != nil,
+                onSelection: model.pageDidReport)
         case .web:
             HTMLCanvasView(
                 url: document.url, generation: document.generation,
-                markTool: model.markTool, onSelection: model.pageDidReport)
+                markTool: model.markTool, showsMark: model.selection != nil,
+                onSelection: model.pageDidReport)
         case let .plainText(text):
             ScrollView {
                 Text(text)

@@ -169,6 +169,12 @@ enum CanvasHTML {
     /// part-way down when you decide to mark it.
     static let markToolGlobal = "__helmMarkTool"
 
+    /// Take the mark down. Called when the comment field closes, submitted or dismissed —
+    /// the ink is that field's subject and lives exactly as long as it does.
+    static func clearMarkScript() -> String {
+        "if (window.__helmWipeMark) { window.__helmWipeMark(); }"
+    }
+
     /// One statement, so `CanvasFileViews` has no JS of its own to get wrong.
     static func setMarkTool(_ tool: CanvasMarkTool) -> String {
         """
@@ -255,7 +261,10 @@ enum CanvasHTML {
               if (nodes[i].closest("[data-helm-mark]")) { continue; }
               var r = nodes[i].getBoundingClientRect();
               if (!r.width && !r.height) { continue; }
-              if (!inside(poly, r.left + r.width / 2, r.top + r.height / 2)) { continue; }
+              // getBoundingClientRect is viewport-relative; the stroke is page-relative.
+              var cx = r.left + r.width / 2 + window.scrollX;
+              var cy = r.top + r.height / 2 + window.scrollY;
+              if (!inside(poly, cx, cy)) { continue; }
               var t = resolve(nodes[i]);
               if (!t) { continue; }
               var key = (t.id || "") + "\\u0000" + t.text;
@@ -274,8 +283,14 @@ enum CanvasHTML {
             if (paper) { return paper; }
             paper = document.createElementNS("http://www.w3.org/2000/svg", "svg");
             paper.setAttribute("data-helm-mark", "");
+            // ABSOLUTE over the whole document, not fixed over the viewport. A mark is
+            // glued to what it was drawn around: scroll away and it travels off screen with
+            // its subject, scroll back and it is still there. Fixed positioning would leave
+            // it hanging over whatever scrolled underneath, which is a mark that lies.
             paper.style.cssText =
-              "position:fixed;left:0;top:0;width:100vw;height:100vh;" +
+              "position:absolute;left:0;top:0;" +
+              "width:" + document.documentElement.scrollWidth + "px;" +
+              "height:" + document.documentElement.scrollHeight + "px;" +
               "pointer-events:none;z-index:2147483647;overflow:visible";
             // The arrowhead `marker-end` points at. An unresolvable url() is IGNORED rather
             // than erroring, so without this the arrow tool silently drew a bare line — the
@@ -319,6 +334,17 @@ enum CanvasHTML {
             ink.setAttribute("d", d);
           }
 
+          function ring(x, y) {
+            var svg = sheet();
+            var dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", "13");
+            dot.setAttribute("fill", "none");
+            dot.setAttribute("stroke", "currentColor");
+            dot.setAttribute("stroke-width", "2.5");
+            dot.setAttribute("opacity", "0.85");
+            svg.appendChild(dot);
+          }
+
           function wipe() {
             if (paper && paper.parentNode) { paper.parentNode.removeChild(paper); }
             paper = null; ink = null; stroke = []; from = null;
@@ -341,6 +367,16 @@ enum CanvasHTML {
             return d;
           }
 
+          // The stroke is in PAGE coordinates so it scrolls with its subject. The rect that
+          // travels to Swift is not: it places the comment field on screen, so it has to be
+          // viewport-relative or the field lands off screen the moment the page is scrolled.
+          function viewportRect(box) {
+            return {
+              x: box.x - window.scrollX, y: box.y - window.scrollY,
+              width: box.width, height: box.height
+            };
+          }
+
           function bounds(points) {
             var l = Infinity, r = -Infinity, t = Infinity, b = -Infinity;
             for (var i = 0; i < points.length; i++) {
@@ -359,7 +395,8 @@ enum CanvasHTML {
             if (e.button !== 0) { return; }
             e.preventDefault();
             wipe();
-            stroke = [{ x: e.clientX, y: e.clientY }];
+            // Page coordinates, so the stroke means the same thing after a scroll.
+            stroke = [{ x: e.pageX, y: e.pageY }];
             from = targetAt(e.clientX, e.clientY);
           }, true);
 
@@ -367,7 +404,7 @@ enum CanvasHTML {
             if (!stroke.length) { return; }
             var t = tool();
             if (t === "point") { return; }
-            stroke.push({ x: e.clientX, y: e.clientY });
+            stroke.push({ x: e.pageX, y: e.pageY });
             if (t === "arrow") {
               draw(pathFrom([stroke[0], stroke[stroke.length - 1]]), true);
             } else {
@@ -401,31 +438,42 @@ enum CanvasHTML {
             }
 
             if (!stroke.length) { return; }
-            var start = stroke[0], startTarget = from;
-            var box = bounds(stroke.concat([{ x: e.clientX, y: e.clientY }]));
+            var startTarget = from;
+            var box = bounds(stroke.concat([{ x: e.pageX, y: e.pageY }]));
             var drawn = stroke.slice();
-            wipe();
+            // The ink STAYS. It is the comment field's subject, and a field floating with
+            // nothing on screen saying what it is about is the gap this closes. Swift takes
+            // it down when the field closes; a new stroke replaces it.
             stroke = []; from = null;
 
             if (t === "point") {
               var at = targetAt(e.clientX, e.clientY);
-              if (!at) { bridge.postMessage({ cleared: true }); return; }
-              bridge.postMessage({ mark: "point", id: at.id, text: at.text, rect: box });
+              if (!at) { wipe(); bridge.postMessage({ cleared: true }); return; }
+              // A tap draws nothing on its way, so it needs a mark of its own — otherwise
+              // the one gesture with no travel is also the one with no visible subject.
+              ring(e.pageX, e.pageY);
+              bridge.postMessage({
+                mark: "point", id: at.id, text: at.text, rect: viewportRect(box)
+              });
               return;
             }
 
             if (t === "arrow") {
+              draw(pathFrom([drawn[0], { x: e.pageX, y: e.pageY }]), true);
               var end = targetAt(e.clientX, e.clientY);
               // Either end may be empty — an arrow into blank space is "add a node here".
-              bridge.postMessage({ mark: "relation", from: startTarget, to: end, rect: box });
+              bridge.postMessage({
+                mark: "relation", from: startTarget, to: end, rect: viewportRect(box)
+              });
               return;
             }
 
             if (t === "freehand") {
+              draw(pathFrom(drawn), false);
               // What the loop encircles. Posted even when empty, so decode refuses it
               // visibly — silence is indistinguishable from the stroke never registering.
               bridge.postMessage({
-                mark: "enclosure", targets: targetsInside(drawn), rect: box
+                mark: "enclosure", targets: targetsInside(drawn), rect: viewportRect(box)
               });
               return;
             }

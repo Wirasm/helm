@@ -186,6 +186,46 @@ final class CanvasHTMLTests: XCTestCase {
         XCTAssertTrue(CanvasHTML.setMarkTool(.select).contains("__helmWipeMark"))
     }
 
+    func testTheMarkIsDrawnInDocumentCoordinatesSoItScrollsWithItsSubject() {
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(
+            script.contains("position:absolute"),
+            "fixed positioning would leave the ink over whatever scrolled underneath")
+        XCTAssertTrue(script.contains("e.pageX"), "points are page-relative, not viewport")
+        XCTAssertTrue(
+            script.contains("window.scrollX"),
+            "and element rects are converted before being tested against the stroke")
+    }
+
+    func testTheInkSurvivesTheGestureAndIsTakenDownFromSwift() {
+        // The mark is the comment field's subject and lives exactly as long as it does.
+        let script = CanvasHTML.annotationScript()
+        let mouseup = script.components(separatedBy: "mouseup").last ?? ""
+
+        XCTAssertFalse(
+            mouseup.contains("wipe();\n            stroke = []"),
+            "releasing must not erase the mark the operator is about to comment on")
+        XCTAssertTrue(CanvasHTML.clearMarkScript().contains("__helmWipeMark"))
+    }
+
+    func testTheRectThatPlacesTheCommentFieldStaysViewportRelative() {
+        // The stroke moved to page coordinates so it scrolls with its subject. The rect did
+        // not, and must not: it positions the field on screen, so page coordinates would put
+        // it off screen the moment the canvas is scrolled.
+        let script = CanvasHTML.annotationScript()
+
+        XCTAssertTrue(script.contains("function viewportRect("))
+        XCTAssertFalse(
+            script.contains("rect: box }"), "every posted rect goes through the conversion")
+    }
+
+    func testATapLeavesSomethingVisible() {
+        XCTAssertTrue(
+            CanvasHTML.annotationScript().contains("function ring("),
+            "point is the one gesture with no travel, so it needs a mark of its own")
+    }
+
     // MARK: Vendored scripts
 
     func testVendoredScriptsAreBundledAndExposeTheirGlobals() {

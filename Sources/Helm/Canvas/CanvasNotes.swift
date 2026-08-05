@@ -70,6 +70,30 @@ enum CanvasNotes {
         }
     }
 
+    /// What goes on the clipboard when a comment is written, so it can be pasted straight
+    /// into an agent that helm cannot reach.
+    ///
+    /// **The same line the sidecar writes, plus the path** — not a second format. The heading
+    /// already carries the gesture and what it covered, because that is how an anchor
+    /// renders; inventing a leaner shape here would drop the mark type (an arrow would read
+    /// as one anchor) and the covered text (which is how an agent verifies it resolved to
+    /// the right thing). Byte-identical to the file means a paste and the sidecar can never
+    /// disagree.
+    ///
+    /// **One comment, never the accumulation.** Pasting every note is the same as pasting the
+    /// file, and the canvas header already copies the path for that. And no image: an anchor
+    /// made of pixels is not something an agent can edit, which is the whole reason it is an
+    /// id. That is a fact about this payload and not a rule about screenshots (#39).
+    static func clipboardEntry(_ annotation: CanvasAnnotation, for canvas: URL) -> String {
+        """
+        canvas: \(canvas.path)
+
+        \(describe(annotation.mark))
+
+        \(annotation.comment)
+        """
+    }
+
     /// **Append, never rewrite.** The sidecar is the memory; a rewrite would lose earlier
     /// notes and race the operator, who may have the file open.
     ///
