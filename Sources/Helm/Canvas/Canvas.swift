@@ -124,6 +124,17 @@ final class CanvasModel: ObservableObject {
     /// `.select` on a SwiftUI churn would look like the canvas ignoring the picker.
     @Published private(set) var markTool: CanvasMarkTool = .select
 
+    /// A transient "that worked" line. Separate from `notesFailure` because a silent copy is
+    /// indistinguishable from a dead click, and because the operator has to know their
+    /// clipboard just changed under them.
+    @Published private(set) var notesNotice: String?
+    private var noticeTask: Task<Void, Never>?
+
+    /// Whether the page should still be holding a mark — a comment is in flight. Named here
+    /// rather than recomputed at each call site, since it is the one fact `showsMark` asks
+    /// the page about.
+    var showsMark: Bool { selection != nil }
+
     @Published private(set) var selection: CanvasSelection?
 
     /// Every note in this canvas's sidecar, by heading. Re-read from the file rather than
@@ -212,6 +223,9 @@ final class CanvasModel: ObservableObject {
         showing = .file(Document(url: url, content: Self.load(url)))
         selection = nil
         notesFailure = nil
+        // A receipt names the file it was written to. Carried onto a different canvas it is
+        // a true sentence about the wrong document, which is worse than no sentence.
+        notesNotice = nil
         refreshNotes()
         // Reload on every external change. Watcher lifetime == document
         // lifetime; opening another file replaces it.
@@ -259,6 +273,22 @@ final class CanvasModel: ObservableObject {
         markTool = markTool == tool ? .select : tool
     }
 
+    /// Show a notice and take it away again. The timer is deliberately not the operator's
+    /// problem: the message is a receipt, not something to dismiss.
+    private func announce(_ message: String) {
+        notesNotice = message
+        // Cancel the previous timer rather than comparing the message. The receipt names the
+        // sidecar, so two comments on one file produce byte-identical text — and the first
+        // timer would then clear the second one's notice early, which is the ordinary
+        // workflow of commenting twice in a row.
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            self?.notesNotice = nil
+        }
+    }
+
     func dismissSelection() {
         selection = nil
         // The strip explains why the field is still up. Once it is gone the message points
@@ -277,8 +307,15 @@ final class CanvasModel: ObservableObject {
         }
         do {
             try CanvasNotes.append(annotation, for: canvas, at: Date())
+            // Written first, copied second. The sidecar is the memory; the clipboard is a
+            // convenience, and a copy that succeeded while the write failed would be a note
+            // the operator believes they made and cannot find.
+            Pasteboard.copy(CanvasNotes.clipboardEntry(annotation, for: canvas))
             self.selection = nil
             notesFailure = nil
+            announce(
+                "Written to \(CanvasNotes.sidecarURL(for: canvas).lastPathComponent) "
+                    + "and copied — paste it to an agent")
             refreshNotes()
         } catch {
             // A canvas opened through Browse… can live anywhere, including somewhere not
@@ -492,7 +529,9 @@ struct CanvasView: View {
                 }
                 Divider()
                 if let failure = model.notesFailure {
-                    noticeStrip(failure)
+                    noticeStrip(failure, symbol: "exclamationmark.triangle")
+                } else if let notice = model.notesNotice {
+                    noticeStrip(notice, symbol: "checkmark.circle")
                 }
                 content(for: showing)
                     // The comment field is drawn over the page rather than beside it, so
@@ -518,10 +557,10 @@ struct CanvasView: View {
         }
     }
 
-    private func noticeStrip(_ message: String) -> some View {
+    private func noticeStrip(_ message: String, symbol: String) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle")
+                Image(systemName: symbol)
                 Text(message).lineLimit(2)
                 Spacer()
             }
@@ -575,18 +614,7 @@ struct CanvasView: View {
     private func urlContent(for page: CanvasModel.Page) -> some View {
         VStack(spacing: 0) {
             if let failure = page.failure {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle")
-                    Text(failure)
-                        .lineLimit(2)
-                    Spacer()
-                }
-                .font(.system(size: 11))
-                .foregroundStyle(Color.textMuted)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.surfaceRaised)
-                Divider()
+                noticeStrip(failure, symbol: "exclamationmark.triangle")
             }
             if let url = page.url {
                 URLCanvasView(model: model, url: url, generation: page.generation)
@@ -604,11 +632,13 @@ struct CanvasView: View {
         case let .markdown(markdown):
             MarkdownCanvasView(
                 url: document.url, markdown: markdown, generation: document.generation,
-                markTool: model.markTool, onSelection: model.pageDidReport)
+                markTool: model.markTool, showsMark: model.showsMark,
+                onSelection: model.pageDidReport)
         case .web:
             HTMLCanvasView(
                 url: document.url, generation: document.generation,
-                markTool: model.markTool, onSelection: model.pageDidReport)
+                markTool: model.markTool, showsMark: model.showsMark,
+                onSelection: model.pageDidReport)
         case let .plainText(text):
             ScrollView {
                 Text(text)
