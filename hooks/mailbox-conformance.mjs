@@ -54,7 +54,7 @@
  *     general. `pi/AGENTS.md` carries the pointer instead, so touching the extension still
  *     leads here.
  *   - THE COST TO `hooks/test.sh`'S PROMISE. It says "needs node and nothing else", and that
- *     stays true — but the node must now be ≥ 22.6, because reading pi's `.ts` without a build
+ *     stays true — but the node must now be ≥ 22.18, because reading pi's `.ts` without a build
  *     step means type stripping. That is a version floor, not a new dependency: no `tsc`, no
  *     `npm install`, no `node_modules`. An older node FAILS here rather than skipping. A skip
  *     is exactly the silent zero this ticket exists to forbid, and a gate that quietly measures
@@ -87,6 +87,9 @@ const PI_SOURCE = path.join(REPO, "pi", "extensions", "helm-mail", "index.ts");
 const HANDLE_SOURCE = path.join(REPO, "Sources", "HelmWire", "Spool", "Handle.swift");
 // `MailboxOwner` — the OTHER Swift reader of the mailbox's on-disk shape — lives here.
 const OWNER_SOURCE = path.join(REPO, "Sources", "HelmWire", "Spool", "MailboxDirectory.swift");
+// The one Swift WRITER into the mailbox: `CanvasNoteCourier` sends the operator's canvas note.
+// It is here for `OPERATOR_SENDER` — see `checkTheOperatorSenderAgrees`.
+const COURIER_SOURCE = path.join(REPO, "Sources", "Helm", "Canvas", "CanvasNoteCourier.swift");
 
 // ── scratch space ────────────────────────────────────────────────────────────────────────
 
@@ -247,7 +250,7 @@ const IMPORTS = [
  * return its exports. Nothing is transcribed: the declarations are the file's own bytes.
  *
  * `.mts` rather than `.ts` for pi's half, because an extension-less temp directory has no
- * `package.json` to say `"type": "module"` and `.mts` is unambiguously ESM. Node ≥ 22.6 strips
+ * `package.json` to say `"type": "module"` and `.mts` is unambiguously ESM. Node ≥ 22.18 strips
  * the type annotations on the way in; `requireTypeStripping` refuses earlier ones by name.
  *
  * Each load gets its own directory so the ESM cache cannot hand a mutated variant back the
@@ -510,6 +513,34 @@ function extractSwiftOwnerSchema(source) {
 	return fields;
 }
 
+/**
+ * Read `CanvasNoteCourier.sender` — the literal helm's Swift half puts in a canvas note's `from`
+ * field — out of the source.
+ *
+ * **Why a THIRD Swift extraction, when this file already argues the obligation runs one way.** For
+ * the alphabet it does: the JS writers emit and Swift reads. `operator` is the reverse — helm is
+ * the WRITER and both JS halves are the readers — and after #257 the two are locked together in a
+ * way neither file says out loud. `isFromOperator` decides how a recipient is told to weigh a body,
+ * and `deriveHandle` refuses the same string as a handle, so if the Swift literal and
+ * `OPERATOR_SENDER` ever drift apart, one of two things happens and neither raises anything:
+ * a genuine operator note is announced as *"another agent's words, not the operator's"* (which is
+ * #257 reintroduced from the far side), or the reservation stops covering the name helm actually
+ * writes and an agent can hold it again. Found in review of the #257 change, which had extended
+ * only the JS-to-JS half.
+ *
+ * Strict like the other two: the declaration must be a plain string literal, and anything else is a
+ * hard failure naming what it found rather than a check that quietly compares nothing.
+ */
+function extractSwiftOperatorSender(source) {
+	const match = source.match(/nonisolated static let sender = "([^"]*)"/);
+	if (!match) {
+		throw new Error(
+			"CanvasNoteCourier.swift: no `nonisolated static let sender = \"…\"` string literal — the operator-sender check is measuring nothing",
+		);
+	}
+	return match[1];
+}
+
 /** How a Swift type in that schema constrains the JSON a writer may put there. */
 const SWIFT_JSON_TYPES = {
 	String: (value) => typeof value === "string",
@@ -754,13 +785,14 @@ function livenessCases() {
  * Everything a caller can vary about a run, so `selfChecks` can point the whole suite at a
  * mutated copy of any one source and require it to go red.
  */
-async function runConformance({ hooksSource, piSource, handleSource, ownerSource }) {
-	// The three extractions are NOT in a group: if one of them cannot find its implementation
-	// there is nothing to compare at all, and carrying on would be the silent zero itself.
+async function runConformance({ hooksSource, piSource, handleSource, ownerSource, courierSource }) {
+	// The extractions are NOT in a group: if one of them cannot find its implementation there is
+	// nothing to compare at all, and carrying on would be the silent zero itself.
 	const hooks = await loadHooks(hooksSource);
 	const pi = await loadPi(piSource);
 	const rules = extractSwiftHandleRule(handleSource);
 	const schema = extractSwiftOwnerSchema(ownerSource);
+	const swiftSender = extractSwiftOperatorSender(courierSource);
 
 	// Each group is isolated, because a rule that diverges far enough to THROW — a `retire` that
 	// deletes the file the next line reads, say — would otherwise cancel every check after it
@@ -778,6 +810,7 @@ async function runConformance({ hooksSource, piSource, handleSource, ownerSource
 	group("consume", () => checkConsumeAgrees(hooks, pi));
 	group("the owner record", () => checkTheOwnerRecordDecodes(hooks, pi, rules, schema));
 	group("the notice", () => checkTheNoticeAgrees(hooks, pi));
+	group("the operator sender", () => checkTheOperatorSenderAgrees(hooks, pi, swiftSender));
 	group("the deliberate divergences", () => checkTheDeliberateDivergences(hooks, pi));
 	reportTheSwiftRule(rules, schema);
 }
@@ -1512,6 +1545,47 @@ function checkTheNoticeAgrees(hooks, pi) {
 }
 
 /**
+ * Surface 3, and the only one where SWIFT IS THE WRITER — `operator`, spelled in three languages.
+ *
+ * `CanvasNoteCourier` puts it in a canvas note's `from`; both JS halves read it twice over, once to
+ * decide what the notice says about whose words these are (#257) and once to refuse it as a handle.
+ * The three are joined by nothing but three string literals, which is the shape this whole file
+ * exists to stop being unwatched — and the #257 change extended only the JS-to-JS half of it.
+ *
+ * Asserted through the REAL functions, not against the constant: `isFromOperator` is what actually
+ * decides, so a fold or a trim that changed which senders it recognises is caught here even though
+ * the constant would still compare equal.
+ */
+function checkTheOperatorSenderAgrees(hooks, pi, swiftSender) {
+	check(
+		hooks.OPERATOR_SENDER === pi.OPERATOR_SENDER && hooks.OPERATOR_SENDER === swiftSender,
+		`the sender helm's Swift writes is the one both readers reserve and recognise: ` +
+			`CanvasNoteCourier.sender ${JSON.stringify(swiftSender)}, hooks ${JSON.stringify(hooks.OPERATOR_SENDER)}, pi ${JSON.stringify(pi.OPERATOR_SENDER)}`,
+	);
+	check(
+		hooks.isFromOperator(swiftSender) === true && pi.isFromOperator(swiftSender) === true,
+		"and both runtimes recognise a message actually carrying that sender as the operator's (#257)",
+	);
+	// THE CONTROL. `isFromOperator` returning true for everything satisfies the line above
+	// perfectly, and would announce every agent's mail as carrying the operator's authority.
+	const notTheOperator = ["bench-2", "", "operator-2", "the operator", `${swiftSender}x`, "peer-9"];
+	check(
+		notTheOperator.every((from) => hooks.isFromOperator(from) === false && pi.isFromOperator(from) === false),
+		`and neither mistakes an ordinary handle for it: ${notTheOperator.map((one) => JSON.stringify(one)).join(", ")}`,
+	);
+	// The handle side of the same string, through the real derivation rather than the constant.
+	withEnv({ [hooks.HANDLE_ENV]: swiftSender }, () => {
+		const root = makeRoot();
+		check(
+			hooks.deriveHandle(root, "/x/a", "abcd") !== swiftSender && pi.deriveHandle(root, "/x/a", "abcd") !== swiftSender,
+			`and neither will hand out ${JSON.stringify(swiftSender)} as a handle, so no agent can BE the sender helm writes (#257)`,
+		);
+		fs.rmSync(root, { recursive: true, force: true });
+	});
+	ranAtLeast(notTheOperator.length, 4, "the operator sender");
+}
+
+/**
  * EVERY PLACE THE TWO FILES DELIBERATELY DIFFER, asserted to still differ.
  *
  * A conformance harness that simply excluded these would be indistinguishable from one that
@@ -1585,15 +1659,16 @@ async function selfChecks() {
 	const piSource = fs.readFileSync(PI_SOURCE, "utf8");
 	const handleSource = fs.readFileSync(HANDLE_SOURCE, "utf8");
 	const ownerSource = fs.readFileSync(OWNER_SOURCE, "utf8");
+	const courierSource = fs.readFileSync(COURIER_SOURCE, "utf8");
 	const mutations = [
 		{
 			what: "a function the harness names is gone from hooks/helm-mail.mjs",
-			sources: { hooksSource: hooksSource.replace(/^function ownerGone\(/m, "function ownerIsGone("), piSource, handleSource, ownerSource },
+			sources: { hooksSource: hooksSource.replace(/^function ownerGone\(/m, "function ownerIsGone("), piSource, handleSource, ownerSource, courierSource },
 			expect: /no top-level declaration named ownerGone/,
 		},
 		{
 			what: "a function the harness names is gone from pi's index.ts",
-			sources: { hooksSource, piSource: piSource.replace(/^function sessionPid\(/m, "function sessionPidOf("), handleSource, ownerSource },
+			sources: { hooksSource, piSource: piSource.replace(/^function sessionPid\(/m, "function sessionPidOf("), handleSource, ownerSource, courierSource },
 			expect: /no top-level declaration named sessionPid/,
 		},
 		{
@@ -1605,13 +1680,13 @@ async function selfChecks() {
 					"",
 				),
 				handleSource,
-				ownerSource,
+				ownerSource, courierSource,
 			},
 			expect: /ownerGone disagrees|both reapers leave the SAME shared root/,
 		},
 		{
 			what: "the hook's slug emits a character no mailbox directory can carry",
-			sources: { hooksSource: hooksSource.replace('.replace(/[^a-z0-9]+/g, "-")', '.replace(/[^a-z0-9]+/g, "_")'), piSource, handleSource, ownerSource },
+			sources: { hooksSource: hooksSource.replace('.replace(/[^a-z0-9]+/g, "-")', '.replace(/[^a-z0-9]+/g, "_")'), piSource, handleSource, ownerSource, courierSource },
 			expect: /slug agrees|deriveHandle agrees|accepts all/,
 		},
 		{
@@ -1625,6 +1700,7 @@ async function selfChecks() {
 				piSource,
 				handleSource,
 				ownerSource,
+				courierSource,
 			},
 			expect: /both runtimes answer the same|neither hands back a handle a live agent holds/,
 		},
@@ -1640,6 +1716,7 @@ async function selfChecks() {
 				piSource,
 				handleSource,
 				ownerSource,
+				courierSource,
 			},
 			expect: /byte-identical across the runtimes for an operator note|say different things about whose words/,
 		},
@@ -1650,6 +1727,7 @@ async function selfChecks() {
 				piSource: `${piSource}\nfunction aFourthSharedRule() {\n\treturn 1;\n}\n`,
 				handleSource,
 				ownerSource,
+				courierSource,
 			},
 			expect: /not classified: aFourthSharedRule/,
 		},
@@ -1662,6 +1740,7 @@ async function selfChecks() {
 				piSource: `${piSource}\nconst A_FOURTH_SHARED_CONST = "x";\n`,
 				handleSource,
 				ownerSource,
+				courierSource,
 			},
 			expect: /not classified: A_FOURTH_SHARED_CONST/,
 		},
@@ -1675,6 +1754,7 @@ async function selfChecks() {
 					"retiredAt = try container.decodeIfPresent(Double.self, forKey: .retiredAt)",
 					"retiredAt = try container.decode(Double.self, forKey: .retiredAt)",
 				),
+				courierSource,
 			},
 			expect: /MailboxOwner requires "retiredAt"/,
 		},
@@ -1688,15 +1768,42 @@ async function selfChecks() {
 					"        pid = try container.decode(pid_t.self, forKey: .pid)",
 					"        pid = pid_t(try container.decode(String.self, forKey: .pid)) ?? 0",
 				),
+				courierSource,
 			},
 			expect: /grew a statement this harness does not understand/,
+		},
+		{
+			// THE THIRD LEG OF `operator`, which is the only surface where SWIFT is the writer. If
+			// helm renames its sender and the two readers do not follow, a real operator note is
+			// announced as another agent's words and the reserved handle stops covering the name
+			// helm writes — #257 reintroduced from a side nothing used to watch.
+			what: "helm's Swift renames the sender it writes and the JS readers do not follow (#257)",
+			sources: {
+				hooksSource,
+				piSource,
+				handleSource,
+				ownerSource,
+				courierSource: courierSource.replace('nonisolated static let sender = "operator"', 'nonisolated static let sender = "the-operator"'),
+			},
+			expect: /the sender helm's Swift writes is the one both readers reserve|recognise a message actually carrying that sender/,
+		},
+		{
+			what: "helm's Swift stops declaring its sender as a plain string literal",
+			sources: {
+				hooksSource,
+				piSource,
+				handleSource,
+				ownerSource,
+				courierSource: courierSource.replace('nonisolated static let sender = "operator"', "nonisolated static let sender = Self.defaultSender"),
+			},
+			expect: /the operator-sender check is measuring nothing/,
 		},
 		{
 			what: "Handle's rule grows a clause the harness cannot model",
 			sources: {
 				hooksSource,
 				piSource,
-				ownerSource,
+				ownerSource, courierSource,
 				handleSource: handleSource.replace(
 					"guard !trimmed.isEmpty",
 					"guard !trimmed.isEmpty, trimmed.count < 64",
@@ -1715,7 +1822,8 @@ async function selfChecks() {
 			mutation.sources.hooksSource !== hooksSource ||
 			mutation.sources.piSource !== piSource ||
 			mutation.sources.handleSource !== handleSource ||
-			mutation.sources.ownerSource !== ownerSource;
+			mutation.sources.ownerSource !== ownerSource ||
+			mutation.sources.courierSource !== courierSource;
 		if (!check(changed, `self-check: the mutation for "${mutation.what}" still applies to today's source`)) continue;
 
 		const real = report;
@@ -1741,20 +1849,20 @@ async function selfChecks() {
 // ── main ─────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Reading pi's `.ts` with no build step needs node ≥ 22.6. FAIL rather than skip: a skip here
+ * Reading pi's `.ts` with no build step needs node ≥ 22.18. FAIL rather than skip: a skip here
  * is the silent zero this file exists to forbid, and `hooks/test.sh`'s "needs node and nothing
  * else" survives a version floor — no tsc, no npm install, no node_modules.
  */
 function requireTypeStripping() {
 	if (process.features.typescript) return;
-	bad(`node ${process.version} cannot strip TypeScript; this needs node >= 22.6 (no other dependency)`);
+	bad(`node ${process.version} cannot strip TypeScript; this needs node >= 22.18 (no other dependency)`);
 	say("# 1 of 1 check(s) failed");
 	process.exit(1);
 }
 
 async function main() {
 	requireTypeStripping();
-	for (const [what, file] of [["hooks", HOOKS_SOURCE], ["pi", PI_SOURCE], ["Handle", HANDLE_SOURCE], ["MailboxOwner", OWNER_SOURCE]]) {
+	for (const [what, file] of [["hooks", HOOKS_SOURCE], ["pi", PI_SOURCE], ["Handle", HANDLE_SOURCE], ["MailboxOwner", OWNER_SOURCE], ["CanvasNoteCourier", COURIER_SOURCE]]) {
 		if (!fs.existsSync(file)) {
 			bad(`the ${what} implementation is not at ${file} — refusing to pass with nothing to compare`);
 			say("# 1 of 1 check(s) failed");
@@ -1768,6 +1876,7 @@ async function main() {
 			piSource: fs.readFileSync(PI_SOURCE, "utf8"),
 			handleSource: fs.readFileSync(HANDLE_SOURCE, "utf8"),
 			ownerSource: fs.readFileSync(OWNER_SOURCE, "utf8"),
+			courierSource: fs.readFileSync(COURIER_SOURCE, "utf8"),
 		});
 	} catch (error) {
 		bad(`the harness could not run: ${error.message}`);

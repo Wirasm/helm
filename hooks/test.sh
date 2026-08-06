@@ -7,7 +7,7 @@
 # Needs node and nothing else. NOT part of the Swift gate, for the reason `pi/`'s gate is not:
 # a Swift contributor should never need a JS toolchain to go green.
 #
-# Since #246 that node must be >= 22.6, because the last section runs
+# Since #246 that node must be >= 22.18, because the last section runs
 # `hooks/mailbox-conformance.mjs`, which reads pi's `.ts` half with no build step. Still node
 # and nothing else — no tsc, no npm install, no node_modules — but a version floor rather than
 # an unconstrained "any node".
@@ -589,7 +589,7 @@ run "$root" claude-user-prompt-submit '{"session_id":"aaaa-bbbb-cccc-1234","cwd"
 # it needs node and nothing else, and its own header has the full argument for that home.
 #
 # Its node floor is higher than this file's: reading pi's `.ts` with no build step means type
-# stripping, so node >= 22.6. It FAILS on an older one rather than skipping — a skip would be a
+# stripping, so node >= 22.18. It FAILS on an older one rather than skipping — a skip would be a
 # gate that passes with nothing to compare, which is the failure mode it exists to prevent.
 printf '\n'
 if node "$HOOKS/mailbox-conformance.mjs"; then
