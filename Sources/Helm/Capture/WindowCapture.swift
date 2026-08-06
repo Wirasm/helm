@@ -119,6 +119,13 @@ enum WindowCapture {
     /// and drawing it would produce a blank pane that looks exactly like a real empty one.
     /// Asking what the layer actually holds is the only form of this question that cannot be
     /// wrong in either direction.
+    /// **`@MainActor` because `NSView.layer` is, and an older toolchain says so.** This built
+    /// clean on Swift 6.2.3 / macOS 26 and failed on the CI runner's older compiler with
+    /// *"main actor-isolated property 'layer' can not be referenced from a nonisolated context"*.
+    /// The isolation was always required — every caller is already on the main actor, and a
+    /// capture is a view-tree read — it was simply not enforced here yet. Annotating it is
+    /// stating the truth, not appeasing a compiler.
+    @MainActor
     static func isReproducible(_ view: NSView) -> Bool {
         guard let layer = view.layer else { return false }
         if layer is CAMetalLayer { return false }
@@ -131,6 +138,9 @@ enum WindowCapture {
     /// region reads as an empty terminal — a plausible, wrong answer, which is the shape this
     /// codebase keeps removing. A flat fill would read the same way, so the marker carries its
     /// sentence.
+    /// `@MainActor` for the same reason as `isReproducible`: it reads `view.bounds` and
+    /// `view.isFlipped`, both main-actor-isolated, and every caller is already there.
+    @MainActor
     private static func mark(
         _ regions: [NSRect], in rep: NSBitmapImageRep, of view: NSView, scale: Double,
         appearance: Palette.Appearance
