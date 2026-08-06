@@ -83,6 +83,29 @@ const HOOKS_SOURCE = path.join(REPO, "hooks", "helm-mail.mjs");
 const PI_SOURCE = path.join(REPO, "pi", "extensions", "helm-mail", "index.ts");
 const HANDLE_SOURCE = path.join(REPO, "Sources", "HelmWire", "Spool", "Handle.swift");
 
+// ── scratch space ────────────────────────────────────────────────────────────────────────
+
+/**
+ * The only place this file is allowed to write, and it is swept at exit.
+ *
+ * Each group tidies up after itself, but a group that THROWS mid-way does not — and a group
+ * throwing is a supported outcome here, not an impossible one. Everything goes under
+ * `os.tmpdir()`: nothing here ever resolves `mailRoot()` for a write, so the operator's real
+ * `~/.helm/mail` — where live agents address each other — is unreachable by construction rather
+ * than by care. That distinction is #133, paid for once already in pi's gate.
+ */
+const scratchDirectories = [];
+
+function scratch(prefix) {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+	scratchDirectories.push(dir);
+	return dir;
+}
+
+process.on("exit", () => {
+	for (const dir of scratchDirectories) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 // ── output ───────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -179,16 +202,15 @@ const IMPORTS = [
  * unmutated module — which is exactly the failure that would make `selfChecks` pass for free.
  */
 async function loadDecls({ source, file, names, extension }) {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mail-conformance-"));
+	const dir = scratch("helm-mail-conformance-");
 	const parts = names.map((name) => extractDecl(source, file, name));
 	const body = `${IMPORTS}\n\n${parts.join("\n\n")}\n\nexport { ${names.join(", ")} };\n`;
 	const out = path.join(dir, `lifted${extension}`);
 	fs.writeFileSync(out, body, "utf8");
-	try {
-		return await import(pathToFileURL(out).href);
-	} finally {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
+	// Swept by `scratch`'s exit handler rather than here: `extractDecl` above throws for a
+	// missing declaration, which is a supported outcome and skipped a `finally` on this line
+	// every time — measured as a dozen empty temp directories per run.
+	return await import(pathToFileURL(out).href);
 }
 
 /** Everything both halves are asked to agree about, and everything those need to run. */
@@ -363,7 +385,7 @@ const FOREIGN_LIVE_PID = 1;
 
 /** A registry directory of Claude Code session rows, `<config>/sessions/<pid>.json`. */
 function makeRegistry(rows) {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mail-registry-"));
+	const dir = scratch("helm-mail-registry-");
 	fs.mkdirSync(path.join(dir, "sessions"), { recursive: true });
 	for (const row of rows) {
 		fs.writeFileSync(
@@ -375,7 +397,7 @@ function makeRegistry(rows) {
 }
 
 function makeRoot() {
-	return fs.mkdtempSync(path.join(os.tmpdir(), "helm-mail-root-"));
+	return scratch("helm-mail-root-");
 }
 
 function writeOwner(root, handle, owner) {
@@ -521,22 +543,36 @@ function livenessCases() {
  * mutated copy of any one source and require it to go red.
  */
 async function runConformance({ hooksSource, piSource, handleSource }) {
+	// The three extractions are NOT in a group: if one of them cannot find its implementation
+	// there is nothing to compare at all, and carrying on would be the silent zero itself.
 	const hooks = await loadHooks(hooksSource);
 	const pi = await loadPi(piSource);
 	const rules = extractSwiftHandleRule(handleSource);
 
-	checkTheConstantsAgree(hooks, pi);
-	checkSlugAndTailAgree(hooks, pi);
-	checkDerivationAgrees(hooks, pi);
-	checkSwiftAcceptsWhatTheWritersEmit(hooks, pi, rules);
-	checkSessionPidAgrees(hooks, pi);
-	checkLivenessAgrees(hooks, pi);
-	checkHeldByAnotherAgrees(hooks, pi);
-	checkRetireAgrees(hooks, pi);
-	checkReapAgrees(hooks, pi);
-	checkTheNoticeAgrees(hooks, pi);
-	checkTheDeliberateDivergences(hooks, pi);
+	// Each group is isolated, because a rule that diverges far enough to THROW — a `retire` that
+	// deletes the file the next line reads, say — would otherwise cancel every check after it
+	// and report a smaller, quieter failure than the truth.
+	group("constants", () => checkTheConstantsAgree(hooks, pi));
+	group("slug/tail", () => checkSlugAndTailAgree(hooks, pi));
+	group("deriveHandle", () => checkDerivationAgrees(hooks, pi));
+	group("the handle alphabet", () => checkSwiftAcceptsWhatTheWritersEmit(hooks, pi, rules));
+	group("sessionPid", () => checkSessionPidAgrees(hooks, pi));
+	group("ownerGone", () => checkLivenessAgrees(hooks, pi));
+	group("heldByAnother", () => checkHeldByAnotherAgrees(hooks, pi));
+	group("retire", () => checkRetireAgrees(hooks, pi));
+	group("reap", () => checkReapAgrees(hooks, pi));
+	group("the notice", () => checkTheNoticeAgrees(hooks, pi));
+	group("the deliberate divergences", () => checkTheDeliberateDivergences(hooks, pi));
 	reportTheSwiftRule(rules);
+}
+
+/** Run one check group. A throw is that group's failure and nobody else's. */
+function group(what, run) {
+	try {
+		run();
+	} catch (error) {
+		bad(`${what}: the group threw rather than reporting — ${error.message}`);
+	}
 }
 
 /** The on-disk shape's names and the bounds on another agent's text — #127's numbers. */
@@ -549,7 +585,18 @@ function checkTheConstantsAgree(hooks, pi) {
 			`${name} agrees across the runtimes (hooks ${JSON.stringify(hooks[name])}, pi ${JSON.stringify(pi[name])})`,
 		);
 	}
-	ranAtLeast(ran, 7, "constants");
+	// Where the whole convention lives, which is the one constant that is computed. Both the
+	// override and the default: a divergence in the default would put the two runtimes in
+	// different mailrooms, which no other check here could see.
+	const previous = process.env[hooks.ROOT_ENV];
+	process.env[hooks.ROOT_ENV] = "/tmp/some-root/";
+	ran += 1;
+	check(hooks.mailRoot() === pi.mailRoot() && hooks.mailRoot() === "/tmp/some-root", `${hooks.ROOT_ENV} resolves identically and is normalised in both`);
+	delete process.env[hooks.ROOT_ENV];
+	ran += 1;
+	check(hooks.mailRoot() === pi.mailRoot() && hooks.mailRoot() === path.join(os.homedir(), ".helm", "mail"), "and unset, both fall back to ~/.helm/mail");
+	if (previous !== undefined) process.env[hooks.ROOT_ENV] = previous;
+	ranAtLeast(ran, 9, "constants");
 }
 
 function checkSlugAndTailAgree(hooks, pi) {
@@ -1091,6 +1138,16 @@ async function selfChecks() {
 	];
 
 	for (const mutation of mutations) {
+		// A mutation that no longer matches its source is a no-op, and a no-op mutation makes its
+		// self-check pass for exactly the wrong reason. Caught here rather than left to look like
+		// a harness that has lost its teeth. (It fires for real: mutating the hook's `slug` is a
+		// no-op if pi's has already been mutated the same way, which is how this was measured.)
+		const changed =
+			mutation.sources.hooksSource !== hooksSource ||
+			mutation.sources.piSource !== piSource ||
+			mutation.sources.handleSource !== handleSource;
+		if (!check(changed, `self-check: the mutation for "${mutation.what}" still applies to today's source`)) continue;
+
 		const real = report;
 		report = newReport(true);
 		let thrown;
@@ -1144,7 +1201,12 @@ async function main() {
 	} catch (error) {
 		bad(`the harness could not run: ${error.message}`);
 	}
-	await selfChecks();
+
+	// Only when the real sources are clean. A mutation of an already-drifted source proves
+	// nothing, and running them anyway buries the real failure under five derived ones — which
+	// is what it did the first time this was measured.
+	if (report.failures === 0) await selfChecks();
+	else say(`# skipping the self-checks: ${report.failures} real failure(s) above, and a mutation of a drifted source proves nothing`);
 
 	// The last silent-zero guard, and the crudest: a suite that returned early somewhere above
 	// still reports "ok" on every line it did reach. This is the floor it cannot get under.
