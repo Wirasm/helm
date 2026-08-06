@@ -265,10 +265,16 @@ final class CanvasModel: ObservableObject {
         // a true sentence about the wrong document, which is worse than no sentence.
         notesNotice = nil
         refreshNotes()
-        // Reload on every external change. Watcher lifetime == document
+        // Reload on every external change to **this file**. Watcher lifetime == document
         // lifetime; opening another file replaces it.
+        //
+        // **One url, and that is the whole of it.** A sibling the page fetches — `app.js`,
+        // `data.json` — is not this file, so rewriting one fires nothing here and the pane
+        // keeps rendering what it already had. That is not an oversight to fix by widening
+        // the watch: see `refresh()` below, and `WorkbenchModel.offer` (#261), for what a
+        // sibling edit does reach the pane through.
         watcher = FileWatcher(url: url) { [weak self] in
-            self?.reload()
+            self?.refresh()
         }
     }
 
@@ -422,7 +428,23 @@ final class CanvasModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    private func reload() {
+    /// Render this file again — and, because a canvas is a page on a real origin, everything
+    /// beside it that the page goes on to fetch.
+    ///
+    /// **Two callers, and they know two different things.** The `FileWatcher` above knows the
+    /// artifact changed. `WorkbenchModel.offer` knows an agent pushed this artifact again,
+    /// which is the only signal helm gets that a *sibling* changed — nothing watches those
+    /// (#261). Neither can tell the other's case apart from a no-op, so both simply ask for a
+    /// render and the cost of an unnecessary one is argued where the second call site is.
+    ///
+    /// Nothing but the generation is guaranteed to move. `Content` is recomputed, but for an
+    /// `.html` artifact it is `.web` either way and for a markdown one it is often the same
+    /// string — so the counter is what the views key their reload on, and it is what makes
+    /// "the bytes on disk changed under an unchanged path" expressible at all.
+    ///
+    /// A `.url` canvas is deliberately not reachable here: it has no file to re-read, and
+    /// `reloadPage()` is the address bar's equivalent.
+    func refresh() {
         guard case let .file(previous) = showing else { return }
         showing = .file(
             Document(

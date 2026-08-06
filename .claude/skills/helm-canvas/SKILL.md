@@ -133,20 +133,22 @@ the options that work.
 **Sibling `fetch` reports a real status** — 200 for bytes, 404 for a sibling that is not there, 403
 for one the boundary refuses — so `res.ok` and `res.status` mean what they mean (helm #201).
 
-**Editing ONLY a sibling changes nothing on screen, and pushing again does not fix it.** helm
-watches the **artifact**, not its siblings, so rewriting `app.js` fires no reload. And a re-push of
-a canvas that is already open is a deliberate no-op — it leaves the pane where it is rather than
-seizing your attention, on the assumption that the file watcher already re-rendered it, which is
-true of the artifact and false of everything beside it (helm #261).
+**Editing ONLY a sibling changes nothing on screen until you push again.** helm watches the
+**artifact**, not its siblings, so rewriting `app.js` fires no reload by itself.
 
-**So touch the artifact.** Rewriting the `.html` — even by one byte — is what reloads the pane, and
-the reload refetches the siblings with it.
+**Pushing the same path again is what refreshes it** (helm #261). The pane re-renders where it
+already is — no tab switch, no focus move, nothing pulled forward — and the reload refetches every
+sibling with it. Rewriting the artifact works too and always did, but you no longer have to touch a
+file you did not change.
 
-**When a reload does happen, the sibling you get is the current one.** Nothing is served stale:
+It costs the page's **scroll position**, so push again when something changed rather than on a
+timer.
+
+**The sibling you get is the current one, so never write a cache-buster.** Nothing is served stale:
 measured six ways, including a plain `fetch` and an ES module `import` across a full
-quit-and-relaunch of the real app (helm #228). `./app.js?v=2` appears in older canvases as a
-cache-buster and was never one — it worked because editing the import URL edits the **artifact**,
-which is the thing helm was watching all along.
+quit-and-relaunch of the real app (helm #228). `./app.js?v=2` appears in older canvases and was
+never busting a cache — it worked because editing the import URL edits the **artifact**, which was
+the only file helm watched. Pushing again is the supported way, and it needs no edit at all.
 
 A live page is a different question again — all of this is about what a *reload* fetches, not about
 pushing data into a page that is already open.

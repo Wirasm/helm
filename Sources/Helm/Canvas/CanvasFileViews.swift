@@ -178,21 +178,28 @@ struct HTMLCanvasView: View {
     }
 }
 
-private struct HTMLCanvasWebView: NSViewRepresentable {
-    let url: URL
-    let generation: Int
-    let markTool: CanvasMarkTool
-    let showsMark: Bool
-    let theme: CanvasTheme
-    let onSelection: (CanvasPageSelection) -> Void
-
-    private var path: StandardizedPath { StandardizedPath(url) }
-
-    func makeCoordinator() -> CanvasFileCoordinator {
-        CanvasFileCoordinator(host: CanvasAddress.host(for: path), onAnnotation: onSelection)
-    }
-
-    func makeNSView(context: Context) -> WKWebView {
+/// How a `.html` canvas's webview is built, and when it reloads. The two decisions
+/// `HTMLCanvasWebView` below hands to SwiftUI — named here so that something which is not
+/// SwiftUI can make them too.
+///
+/// **Split out for #261, and the bug is the argument.** A sibling-only edit reached the page
+/// through nothing at all: `WorkbenchModel.offer` declined to refresh an open pane, and the
+/// pane's own `FileWatcher` was never watching the sibling. Each half was covered on its own
+/// and the join was not — #216's shape exactly — and the join cannot be driven through an
+/// `NSViewRepresentable`, because `NSViewRepresentableContext` has no public initializer. So
+/// what a test needs is here and the representable calls it. A test that stood up its own
+/// `WKWebViewConfiguration` and its own reload rule would be a second spelling of both, and
+/// would agree with the bug rather than catch it.
+@MainActor
+enum HTMLCanvasPage {
+    /// A webview on the artifact's own `helm-canvas://` origin, with the annotation bridge
+    /// installed and `coordinator` as its navigation delegate. Loads nothing by itself —
+    /// `load` is the only thing that navigates.
+    static func makeWebView(
+        for path: StandardizedPath, coordinator: CanvasFileCoordinator
+    )
+        -> WKWebView
+    {
         let configuration = WKWebViewConfiguration()
         let artifact = URL(fileURLWithPath: path.value)
         // Read straight from disk per request: the artifact IS the document here, and a
@@ -203,28 +210,25 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
             },
             forURLScheme: CanvasAddress.scheme
         )
-        context.coordinator.installBridge(on: configuration.userContentController)
+        coordinator.installBridge(on: configuration.userContentController)
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
+        webView.navigationDelegate = coordinator
         webView.allowsMagnification = true
-        load(webView, coordinator: context.coordinator)
         return webView
-    }
-
-    static func dismantleNSView(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
-        coordinator.removeBridge(from: webView.configuration.userContentController)
-    }
-
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        load(webView, coordinator: context.coordinator)
-        context.coordinator.pushTool(markTool, to: webView)
-        context.coordinator.showMark(showsMark, in: webView)
     }
 
     /// (Re)loads when the file, its generation (external change), or the theme
     /// changes. Scripts are re-armed per load so a theme flip re-renders the
     /// page's diagrams in the matching mermaid theme.
-    private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
+    ///
+    /// **`generation` is the only thing that can say "the same path, different bytes"**, which
+    /// is why a sibling edit has to reach `CanvasModel` before it can reach here: the path is
+    /// unchanged and the theme is unchanged, so a bench that refreshes nothing leaves this
+    /// function with no change to see and no reason to navigate (#261).
+    static func load(
+        _ webView: WKWebView, path: StandardizedPath, generation: Int, theme: CanvasTheme,
+        coordinator: CanvasFileCoordinator
+    ) {
         let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(path.value)"
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
@@ -254,6 +258,42 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
         coordinator.addAnnotationScript(to: controller)
         guard let address = CanvasAddress.url(for: path) else { return }
         webView.load(URLRequest(url: address, cachePolicy: .reloadIgnoringLocalCacheData))
+    }
+}
+
+private struct HTMLCanvasWebView: NSViewRepresentable {
+    let url: URL
+    let generation: Int
+    let markTool: CanvasMarkTool
+    let showsMark: Bool
+    let theme: CanvasTheme
+    let onSelection: (CanvasPageSelection) -> Void
+
+    private var path: StandardizedPath { StandardizedPath(url) }
+
+    func makeCoordinator() -> CanvasFileCoordinator {
+        CanvasFileCoordinator(host: CanvasAddress.host(for: path), onAnnotation: onSelection)
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let webView = HTMLCanvasPage.makeWebView(for: path, coordinator: context.coordinator)
+        load(webView, coordinator: context.coordinator)
+        return webView
+    }
+
+    static func dismantleNSView(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
+        coordinator.removeBridge(from: webView.configuration.userContentController)
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        load(webView, coordinator: context.coordinator)
+        context.coordinator.pushTool(markTool, to: webView)
+        context.coordinator.showMark(showsMark, in: webView)
+    }
+
+    private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
+        HTMLCanvasPage.load(
+            webView, path: path, generation: generation, theme: theme, coordinator: coordinator)
     }
 }
 
