@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 /// The agent-readable projection of helm's current bench.
 ///

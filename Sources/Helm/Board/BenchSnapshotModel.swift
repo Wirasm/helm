@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import HelmWire
 import SwiftUI
 
 /// Publishes the current bench as a small atomically replaced JSON document.

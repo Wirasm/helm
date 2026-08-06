@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 /// What helm does with an accepted request, as a seam.
 ///
@@ -356,7 +357,12 @@ final class SpoolModel: ObservableObject {
                 guard
                     let owner = MailboxDirectory.owner(
                         in: MailboxDirectory.owners(in: mailRoot),
-                        foregroundPid: foreground, shellPid: shell)
+                        foregroundPid: foreground, shellPid: shell,
+                        // `MailboxDirectory` no longer defaults this (#221): it lives in
+                        // `HelmWire`, which depends on nothing in `Helm`, and `AgentLocator`
+                        // is `Helm`-only. This is the one call site that used to lean on the
+                        // default.
+                        ancestors: { AgentLocator.ancestors(of: $0) })
                 else { return nil }
                 return (foreground == shell ? nil : foreground, owner)
             })

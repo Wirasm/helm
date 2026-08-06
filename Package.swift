@@ -39,12 +39,36 @@ let package = Package(
         .package(url: "https://github.com/krzysztofzablocki/Inject.git", exact: "1.6.0"),
     ],
     targets: [
+        // What crosses the spool's process boundary (#221) — request and result types, and the
+        // directory-resolution rules a caller must not guess at. No AppKit, no `@MainActor`,
+        // nothing app-shaped. Only `Helm` depends on it — `tools/helm-spool.swift`,
+        // `helm-close.swift` and `helm-capture.swift` do NOT, and that is not the oversight
+        // #221 first took it for. An `import HelmWire` needs a resolved package: `swift run`
+        // demands the gitignored, unpatched `vendor/libghostty-spm` even though HelmSpool's own
+        // dependency graph never touches it, and it needs the caller's cwd to *be* this package,
+        // which breaks the premise `AGENTS.md` opens with — helm hosts an agent in whatever repo
+        // the operator is in, not in this one. A single-file `swift tools/…swift` script has
+        // neither requirement, which is the runtime boundary `AGENTS.md`'s own rule carves out:
+        // the wire format and the directory-resolution rules are typed once here and spelled
+        // out once more in `tools/*.swift`, on purpose.
+        // `Tests/HelmTests/Spool/SpoolWireConformanceTests.swift` runs each script as a real
+        // subprocess and checks both directions of the wire format (decodes the request it
+        // wrote; checks its exit code and stderr against a real result for every `Status`) plus
+        // the `HELM_DEFAULTS_SUITE` half of directory resolution, so a drift anywhere in that
+        // surface fails a test rather than shipping silently — except the bare default
+        // resolution, which resolves to the operator's live spool and cannot be safely
+        // exercised by a test; see that file's own header.
+        .target(
+            name: "HelmWire",
+            path: "Sources/HelmWire"
+        ),
         // The spike runs as a plain SPM executable (`swift run helm`) for fast iteration.
         // Graduation to a real .app bundle (XcodeGen + entitlements) happens after the
         // libghostty embed is proven — see docs/SPIKE.md.
         .executableTarget(
             name: "Helm",
             dependencies: [
+                "HelmWire",
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),
                 .product(name: "InjectionNext", package: "InjectionNext"),
                 .product(name: "Inject", package: "Inject"),
@@ -102,7 +126,7 @@ let package = Package(
         // Non-GUI smoke: ghostty_init + config load + app create, no window.
         .testTarget(
             name: "HelmTests",
-            dependencies: ["Helm"],
+            dependencies: ["Helm", "HelmWire"],
             path: "Tests/HelmTests",
             resources: [
                 // Real `archon --json` output, captured rather than typed. This PR shipped a

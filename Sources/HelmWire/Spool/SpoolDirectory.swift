@@ -18,26 +18,37 @@ import Foundation
 /// in the wrong window, which is the disaster `HELM_DEFAULTS_SUITE` exists to prevent, one
 /// directory over. So the suite moves the spool too, automatically, rather than by
 /// remembering: `HELM_DEFAULTS_SUITE=helm-bench` watches `~/.helm/spool-helm-bench`.
-struct SpoolDirectory: Equatable {
+///
+/// **Lives in `HelmWire` (#221)** — `Helm`'s own `SpoolModel` and `SpoolWatcher` resolve their
+/// spool through this rather than restating it. `resolve` is also "the three resolution rules a
+/// CLI must not guess at" that `AGENTS.md` documents for `tools/helm-spool.swift`,
+/// `helm-close.swift` and `helm-capture.swift` — those three cannot `import HelmWire` (see
+/// `AGENTS.md`'s "Why the spool is a script, and must stay one") and so still reimplement this
+/// exact function by hand, each carrying a comment pointing back here for the reasoning.
+package struct SpoolDirectory: Equatable {
     /// Points helm's spool somewhere else outright. For tests, and for a caller that wants to
     /// address one specific instance. Mirrors `HELM_MAIL_DIR`, which the mail hooks honour.
-    static let directoryVariable = "HELM_SPOOL_DIR"
+    package static let directoryVariable = "HELM_SPOOL_DIR"
 
     /// Switches the watcher off without switching helm off. The negative control for every
     /// claim this slice makes: with this set, a request must produce no terminal and no
     /// result. Mirrors `HELM_MAIL_OFF`.
-    static let offVariable = "HELM_SPOOL_OFF"
+    package static let offVariable = "HELM_SPOOL_OFF"
 
-    let root: URL
+    package let root: URL
 
-    var claimed: URL { root.appendingPathComponent("claimed") }
-    var results: URL { root.appendingPathComponent("results") }
-    var prompts: URL { root.appendingPathComponent("prompts") }
-    var captures: URL { root.appendingPathComponent("captures") }
+    package var claimed: URL { root.appendingPathComponent("claimed") }
+    package var results: URL { root.appendingPathComponent("results") }
+    package var prompts: URL { root.appendingPathComponent("prompts") }
+    package var captures: URL { root.appendingPathComponent("captures") }
+
+    package init(root: URL) {
+        self.root = root
+    }
 
     /// Where this process's spool is, from its environment alone. Pure, so the isolation rule
     /// above is a test rather than a claim.
-    static func resolve(
+    package static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> SpoolDirectory {
@@ -50,10 +61,12 @@ struct SpoolDirectory: Equatable {
         }
         let base = home.appendingPathComponent(".helm")
         // The same parser the defaults domain uses, so there is one answer to "is this the
-        // operator's helm?" rather than two that can drift. `.refused` never gets this far —
-        // `DefaultsDomain.resolve` stops the launch — and falling back to the shared spool for
-        // it would be the silent-isolation bug rebuilt, so it is spelled out.
-        switch DefaultsDomain.override(in: environment) {
+        // operator's helm?" rather than two that can drift. `.refused` never gets this far in
+        // a running helm — `DefaultsDomain.resolve` stops the launch — and falling back to the
+        // shared spool for it would be the silent-isolation bug rebuilt, so it is spelled out.
+        // A standalone CLI has no launch to stop, so it treats `.refused` the same as `.none`
+        // — see `DefaultsSuite.Override.refused`.
+        switch DefaultsSuite.override(in: environment) {
         case .suite(let name):
             return SpoolDirectory(root: base.appendingPathComponent("spool-\(name)"))
         case .none, .refused:
@@ -61,8 +74,9 @@ struct SpoolDirectory: Equatable {
         }
     }
 
-    static func isOff(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool
-    {
+    package static func isOff(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
         guard let raw = environment[offVariable] else { return false }
         return !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -70,7 +84,7 @@ struct SpoolDirectory: Equatable {
     /// Make the five directories. 0700 throughout: a request is a command to run, a prompt is
     /// the operator's words and a capture is a picture of what they are looking at, and none of
     /// those is anyone else's business on a shared machine.
-    func prepare() throws {
+    package func prepare() throws {
         for directory in [root, claimed, results, prompts, captures] {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true,
@@ -80,7 +94,7 @@ struct SpoolDirectory: Equatable {
 
     /// Requests waiting, oldest name first. Only the top level: `claimed/`, `results/` and
     /// `prompts/` are directories and are skipped by the extension test.
-    func pending() -> [URL] {
+    package func pending() -> [URL] {
         guard
             let entries = try? FileManager.default.contentsOfDirectory(
                 at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
@@ -98,20 +112,20 @@ struct SpoolDirectory: Equatable {
     /// Nothing ever reads `claimed/` back as work. That is the other half of exactly-once, and
     /// the half a restart tests: re-running a claimed request after a crash is the double-open
     /// #54 forbids, so the graveyard is a graveyard.
-    func claim(_ request: URL) -> URL? {
+    package func claim(_ request: URL) -> URL? {
         let destination = claimed.appendingPathComponent(request.lastPathComponent)
         guard rename(request.path, destination.path) == 0 else { return nil }
         return destination
     }
 
-    func request(at url: URL) -> SpoolRequest? {
+    package func request(at url: URL) -> SpoolRequest? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(SpoolRequest.self, from: data)
     }
 
     /// Write the result, atomically, so a caller watching the file never reads half of one.
     @discardableResult
-    func write(_ result: SpoolResult) -> Bool {
+    package func write(_ result: SpoolResult) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(result) else { return false }
@@ -127,7 +141,7 @@ struct SpoolDirectory: Equatable {
         }
     }
 
-    func result(id: String) -> SpoolResult? {
+    package func result(id: String) -> SpoolResult? {
         let url = results.appendingPathComponent("\(id).json")
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(SpoolResult.self, from: data)
@@ -135,7 +149,7 @@ struct SpoolDirectory: Equatable {
 
     /// Stage a prompt where the launch line can read it. 0600, and written before anything is
     /// sent to the pty so a write failure costs a refusal rather than a half-typed line.
-    func stagePrompt(_ text: String, for id: String) -> String? {
+    package func stagePrompt(_ text: String, for id: String) -> String? {
         let url = prompts.appendingPathComponent("\(id).txt")
         do {
             try text.write(to: url, atomically: true, encoding: .utf8)
@@ -151,7 +165,7 @@ struct SpoolDirectory: Equatable {
     /// Requests that were claimed and never answered — helm stopped between the rename and the
     /// result. Returns their ids so the caller can be told, which is the alternative to leaving
     /// it waiting on a file that is never coming.
-    func abandoned() -> [String] {
+    package func abandoned() -> [String] {
         guard
             let entries = try? FileManager.default.contentsOfDirectory(
                 at: claimed, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])

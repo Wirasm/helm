@@ -4,12 +4,20 @@ import Foundation
 ///
 /// Written by the agent's own side of the mailbox (`hooks/helm-mail.mjs` for Claude Code,
 /// `pi/extensions/helm-mail/index.ts` for pi), never by helm. helm only reads it.
-struct MailboxOwner: Decodable, Equatable {
-    let handle: String
-    let runtime: String?
-    let pid: pid_t
-    let sessionId: String?
-    let cwd: String?
+package struct MailboxOwner: Decodable, Equatable {
+    package let handle: String
+    package let runtime: String?
+    package let pid: pid_t
+    package let sessionId: String?
+    package let cwd: String?
+
+    package init(handle: String, runtime: String?, pid: pid_t, sessionId: String?, cwd: String?) {
+        self.handle = handle
+        self.runtime = runtime
+        self.pid = pid
+        self.sessionId = sessionId
+        self.cwd = cwd
+    }
 }
 
 /// `~/.helm/mail` — the address book, read by pid.
@@ -36,12 +44,19 @@ struct MailboxOwner: Decodable, Equatable {
 /// resolved at width 4 and none collided. A derivation would have been right every time in
 /// testing and wrong the first time two session ids happened to end in the same four
 /// characters. Reading the file is the only correct resolution, so it is the only one here.
-enum MailboxDirectory {
+///
+/// **Lives in `HelmWire` (#221)** — `owner(in:foregroundPid:shellPid:ancestors:)` used to
+/// default `ancestors` to `AgentLocator.ancestors(of:)`, but `AgentLocator` is `Helm`-only
+/// (`Chat/AgentLocator.swift`, used by `ChatModel` too) and this library depends on nothing in
+/// `Helm` — the dependency graph only runs the other way. So the default is gone and the one
+/// caller across the module boundary, `SpoolModel.swift`, passes `{ AgentLocator.ancestors(of: $0) }`
+/// explicitly; the tests that used to lean on the default do the same with a stand-in closure.
+package enum MailboxDirectory {
     /// Where the mail lives. `HELM_MAIL_DIR` is honoured because both mail implementations
     /// honour it — a test that redirects one and not the other is testing nothing.
-    static let directoryVariable = "HELM_MAIL_DIR"
+    package static let directoryVariable = "HELM_MAIL_DIR"
 
-    static func resolve(
+    package static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
@@ -57,7 +72,7 @@ enum MailboxDirectory {
     /// Every readable owner under `root`. A missing directory, an unreadable file or a
     /// malformed one yields absence rather than an error — the same rule `AgentRegistry`
     /// follows, and for the same reason: one bad file costs its own row and nothing else.
-    static func owners(in root: URL) -> [MailboxOwner] {
+    package static func owners(in root: URL) -> [MailboxOwner] {
         guard
             let entries = try? FileManager.default.contentsOfDirectory(
                 at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
@@ -81,11 +96,12 @@ enum MailboxDirectory {
     /// registry; this is the same rule against the mailbox.
     ///
     /// Pure, and the ancestry is a closure, so the rule is a test that spawns nothing.
-    static func owner(
+    /// **No default** — see the type's own header for why.
+    package static func owner(
         in owners: [MailboxOwner],
         foregroundPid: pid_t?,
         shellPid: pid_t?,
-        ancestors: (pid_t) -> [pid_t] = { AgentLocator.ancestors(of: $0) }
+        ancestors: (pid_t) -> [pid_t]
     ) -> MailboxOwner? {
         if let foregroundPid, let direct = owners.first(where: { $0.pid == foregroundPid }) {
             return direct

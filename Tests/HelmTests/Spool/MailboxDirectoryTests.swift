@@ -1,3 +1,4 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -35,11 +36,21 @@ final class MailboxDirectoryTests: XCTestCase {
         try mailbox("sild-2dd3", runtime: "pi", pid: 22001, sessionId: "…-2dd3")
         let owners = MailboxDirectory.owners(in: root)
 
-        let claude = MailboxDirectory.owner(in: owners, foregroundPid: 14832, shellPid: 1)
+        // `ancestors` is never called on a direct pid hit, so a closure that would fail the
+        // test if it ran is the honest stand-in for "not needed here" (#221: `HelmWire` has no
+        // default to lean on, since `AgentLocator` is `Helm`-only).
+        let unreachable: (pid_t) -> [pid_t] = { _ in
+            XCTFail("no wrapper here")
+            return []
+        }
+
+        let claude = MailboxDirectory.owner(
+            in: owners, foregroundPid: 14832, shellPid: 1, ancestors: unreachable)
         XCTAssertEqual(claude?.handle, "helm-4831")
         XCTAssertEqual(claude?.runtime, "claude")
 
-        let pi = MailboxDirectory.owner(in: owners, foregroundPid: 22001, shellPid: 1)
+        let pi = MailboxDirectory.owner(
+            in: owners, foregroundPid: 22001, shellPid: 1, ancestors: unreachable)
         XCTAssertEqual(pi?.handle, "sild-2dd3")
         XCTAssertEqual(pi?.sessionId, "…-2dd3")
     }

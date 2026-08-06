@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 // MARK: - WorkspacePath
 
@@ -21,20 +22,25 @@ import Foundation
 /// leak; the other ~47 sites passing a bare `String` between verticals — never routed
 /// through `Workspace` at all — were.
 ///
-/// **Normalization is `Workspace.normalized`'s, not reinvented here.** An earlier draft of
-/// this type built on `URL.standardizedFileURL`, which resolves `.`/`..` but does NOT expand
-/// `~` — a different function from `Workspace.normalized`'s tilde-expand-plus-trailing-slash-
-/// trim, and one that would have silently changed a persisted `~/Projects/foo` into a
-/// literal `~` directory on the next launch, and re-normalized every `BenchSnapshot` and
-/// `WorkspaceContext` path to a different string. `Workspace.normalized` deliberately does
-/// NOT resolve symlinks either — the path the operator chose is the path helm shows and
-/// filters on. `WorkspacePath` delegates to it rather than copying its body, so there is one
-/// spelling of "normalized" and not two that can drift apart. (`Workspace.normalized` stays
-/// a free `String -> String` function rather than folding entirely into this type because
-/// `Spool/SpoolRequest.swift` and `DefaultsDomain`'s migration call it directly and are out
-/// of scope here — #221.) A later `HelmWire.FilesystemPath.normalized` (#225) is where this
-/// logic is headed; until then, this is the one place outside `Workspace` itself that calls
-/// `Workspace.normalized`, and it is meant to be the LAST such duplication, not a new one.
+/// **Normalization is `HelmWire.FilesystemPath.normalized`'s, called directly rather than
+/// through `Workspace.normalized`.** An earlier draft of this type called `Workspace
+/// .normalized`, which itself only delegates to `FilesystemPath.normalized` (#221) — a working
+/// chain, but an indirect one: it stated "this agrees with `Workspace`" where the thing that
+/// actually has to agree is the spool's own `SpoolPolicy.accept`, which normalizes a spawn's
+/// `cwd` through `FilesystemPath.normalized` directly and never touches `Workspace` at all.
+/// Calling the shared layer directly says what is actually true — `WorkspacePath` is a thin
+/// wrapper over the wire-layer normalizer, not a dependent of `Workspace`'s — and it is one
+/// fewer link for a future edit to quietly break. `WorkspacePathSpoolAgreementTests` proves the
+/// two call sites still agree, rather than leaving that as a fact about which functions happen
+/// to call which other functions.
+///
+/// An even earlier draft built on `URL.standardizedFileURL`, which resolves `.`/`..` but does
+/// NOT expand `~` — a different function from `FilesystemPath.normalized`'s
+/// tilde-expand-plus-trailing-slash-trim, and one that would have silently changed a persisted
+/// `~/Projects/foo` into a literal `~` directory on the next launch, and re-normalized every
+/// `BenchSnapshot` and `WorkspaceContext` path to a different string. `FilesystemPath
+/// .normalized` deliberately does NOT resolve symlinks either — the path the operator chose is
+/// the path helm shows and filters on.
 ///
 /// **A distinct type from `StandardizedPath`, deliberately not a reuse.** A workspace is a
 /// directory and a canvas source is a file; keeping them apart means one cannot be passed
@@ -49,7 +55,7 @@ struct WorkspacePath: Equatable, Hashable, Codable, Sendable {
     let value: String
 
     init(_ path: String) {
-        value = Workspace.normalized(path)
+        value = FilesystemPath.normalized(path)
     }
 
     init(_ url: URL) {

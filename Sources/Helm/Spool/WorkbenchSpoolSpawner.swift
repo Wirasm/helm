@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 /// The spool's edge: turns an accepted request into a real pane on the real bench.
 ///

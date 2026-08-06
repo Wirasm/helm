@@ -1,4 +1,5 @@
 import AppKit
+import HelmWire
 
 /// The capture's edge: picks which of helm's windows to draw, and hands it to `WindowCapture`.
 ///
