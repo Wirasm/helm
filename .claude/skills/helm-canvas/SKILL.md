@@ -133,14 +133,23 @@ the options that work.
 **Sibling `fetch` reports a real status** — 200 for bytes, 404 for a sibling that is not there, 403
 for one the boundary refuses — so `res.ok` and `res.status` mean what they mean (helm #201).
 
-**A sibling you edit is refetched, so do not cache-bust.** Editing `app.js` and pushing again
-reaches the page, a sibling you create after the page first asked for it is found on the next load,
-and both survive quitting helm. **Measured, six ways** — a plain `fetch` and an ES module `import`,
-across a full quit-and-relaunch of the real app, and three configurations of a live `WKWebView`
-(helm #228). `./app.js?v=2` appears in older canvases as the workaround; it is not needed.
+**Editing ONLY a sibling changes nothing on screen, and pushing again does not fix it.** helm
+watches the **artifact**, not its siblings, so rewriting `app.js` fires no reload. And a re-push of
+a canvas that is already open is a deliberate no-op — it leaves the pane where it is rather than
+seizing your attention, on the assumption that the file watcher already re-rendered it, which is
+true of the artifact and false of everything beside it (helm #261).
 
-A live page is a different question — this is about what a *reload* fetches, not about pushing data
-into a page that is already open.
+**So touch the artifact.** Rewriting the `.html` — even by one byte — is what reloads the pane, and
+the reload refetches the siblings with it.
+
+**When a reload does happen, the sibling you get is the current one.** Nothing is served stale:
+measured six ways, including a plain `fetch` and an ES module `import` across a full
+quit-and-relaunch of the real app (helm #228). `./app.js?v=2` appears in older canvases as a
+cache-buster and was never one — it worked because editing the import URL edits the **artifact**,
+which is the thing helm was watching all along.
+
+A live page is a different question again — all of this is about what a *reload* fetches, not about
+pushing data into a page that is already open.
 
 **htmx blanks a canvas under its own defaults.** Its history handling calls `history.replaceState()`
 after a swap, which a bare `WKWebView` ignores and helm does not — the page comes out empty, and

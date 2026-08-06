@@ -57,12 +57,16 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// Edit a sibling, load again in a fresh webview, and the page sees the new bytes.
+    /// Edit a sibling, load again in a **fresh webview on the same origin**, and the page sees the
+    /// new bytes. Not a reload — a second `WKWebView`, because the cache that #228 blamed lives in
+    /// the `WKWebsiteDataStore` that every webview shares, and a reload in the same one is the
+    /// weaker case. The name says which; an earlier one said "OnReload" and was wrong about its
+    /// own body, in a file whose whole value is saying exactly what was measured.
     ///
     /// **Passes with the fix and without it** — see the type's header for the three ways that
     /// was measured. It is a control: it fails if serving a sibling ever breaks, or if some
     /// future caching scheme makes one genuinely stale in-process.
-    func testAnEditedSiblingReachesThePageOnReload() async throws {
+    func testAnEditedSiblingReachesASecondWebViewOnTheSameOrigin() async throws {
         try #"{"version":"v1"}"#.write(to: sibling, atomically: true, encoding: .utf8)
         try Self.pageThatReportsItsSibling.write(to: artifact, atomically: true, encoding: .utf8)
 
