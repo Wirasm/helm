@@ -83,7 +83,8 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     /// A bench whose canvas notes go to `mailRoot`, and whose panes report the pids this test
     /// chose. `foregroundPid` is the seam `BenchSnapshotModel` already takes for this reason;
     /// `ancestors` is stubbed empty, which makes every pane its own login shell — the direct-hit
-    /// branch of `MailboxDirectory.owner`, and the only one a test can state without a process
+    /// branch of `AddressBook.owner(foregroundPid:shellPid:ancestors:)`, and the only one a test can
+    /// state without a process
     /// tree to walk.
     private func mounted() -> (WorkbenchModel, TerminalManager) {
         let manager = TerminalManager()
