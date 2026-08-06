@@ -165,6 +165,34 @@ function withCapturedStderr(run) {
 }
 
 /**
+ * Run something with these environment variables set — `undefined` meaning unset — and put the
+ * environment back afterwards, whatever happens.
+ *
+ * Restoration in a `finally` is not tidiness here. Every rule under test reads its environment
+ * at CALL time (`mailRoot` reads `HELM_MAIL_DIR`, `deriveHandle` reads `HELM_MAIL_HANDLE`,
+ * `claudeSessionsDir` reads `CLAUDE_CONFIG_DIR`), the groups are isolated because a group
+ * throwing is a supported outcome, and a group that threw mid-way used to leave
+ * `CLAUDE_CONFIG_DIR` pointing at a temp registry it had already deleted — which every later
+ * group would then read as "no registry at all" and report as agreement.
+ */
+function withEnv(values, run) {
+	const before = new Map();
+	for (const [name, value] of Object.entries(values)) {
+		before.set(name, process.env[name]);
+		if (value === undefined) delete process.env[name];
+		else process.env[name] = value;
+	}
+	try {
+		return run();
+	} finally {
+		for (const [name, value] of before) {
+			if (value === undefined) delete process.env[name];
+			else process.env[name] = value;
+		}
+	}
+}
+
+/**
  * Every failure this file can produce goes through `bad`, so a group that decides it has
  * nothing to compare must say so as a failure rather than return quietly. Used at the end of
  * every check group.
@@ -671,14 +699,15 @@ function checkTheConstantsAgree(hooks, pi) {
 	// Where the whole convention lives, which is the one constant that is computed. Both the
 	// override and the default: a divergence in the default would put the two runtimes in
 	// different mailrooms, which no other check here could see.
-	const previous = process.env[hooks.ROOT_ENV];
-	process.env[hooks.ROOT_ENV] = "/tmp/some-root/";
 	ran += 1;
-	check(hooks.mailRoot() === pi.mailRoot() && hooks.mailRoot() === "/tmp/some-root", `${hooks.ROOT_ENV} resolves identically and is normalised in both`);
-	delete process.env[hooks.ROOT_ENV];
+	withEnv({ [hooks.ROOT_ENV]: "/tmp/some-root/" }, () =>
+		check(hooks.mailRoot() === pi.mailRoot() && hooks.mailRoot() === "/tmp/some-root", `${hooks.ROOT_ENV} resolves identically and is normalised in both`),
+	);
 	ran += 1;
-	check(hooks.mailRoot() === pi.mailRoot() && hooks.mailRoot() === path.join(os.homedir(), ".helm", "mail"), "and unset, both fall back to ~/.helm/mail");
-	if (previous !== undefined) process.env[hooks.ROOT_ENV] = previous;
+	// Read only — `mailRoot()` resolves a path and nothing here writes to it. See `scratch`.
+	withEnv({ [hooks.ROOT_ENV]: undefined }, () =>
+		check(hooks.mailRoot() === pi.mailRoot() && hooks.mailRoot() === path.join(os.homedir(), ".helm", "mail"), "and unset, both fall back to ~/.helm/mail"),
+	);
 	ranAtLeast(ran, 9, "constants");
 }
 
@@ -718,9 +747,7 @@ function checkSlugAndTailAgree(hooks, pi) {
  *     case runs against a root that widens at most to the full id.
  */
 function checkDerivationAgrees(hooks, pi) {
-	const previous = process.env[hooks.HANDLE_ENV];
-	delete process.env[hooks.HANDLE_ENV];
-	try {
+	withEnv({ [hooks.HANDLE_ENV]: undefined }, () => {
 		const empty = makeRoot();
 		const inputs = [...EDGE_INPUTS, ...fuzzInputs(2000)].filter((one) => one.sessionId !== "");
 		let drift = 0;
@@ -774,9 +801,7 @@ function checkDerivationAgrees(hooks, pi) {
 		);
 		fs.rmSync(retiredRoot, { recursive: true, force: true });
 		ranAtLeast(inputs.length, 1000, "deriveHandle");
-	} finally {
-		if (previous !== undefined) process.env[hooks.HANDLE_ENV] = previous;
-	}
+	});
 }
 
 /**
@@ -787,9 +812,7 @@ function checkDerivationAgrees(hooks, pi) {
  * argument one turn worse.
  */
 function checkSwiftAcceptsWhatTheWritersEmit(hooks, pi, rules) {
-	const previous = process.env[hooks.HANDLE_ENV];
-	delete process.env[hooks.HANDLE_ENV];
-	try {
+	withEnv({ [hooks.HANDLE_ENV]: undefined }, () => {
 		const root = makeRoot();
 		const inputs = [...EDGE_INPUTS, ...fuzzInputs(5000)];
 		const emitted = new Set();
@@ -799,11 +822,11 @@ function checkSwiftAcceptsWhatTheWritersEmit(hooks, pi, rules) {
 		}
 		// `HELM_MAIL_HANDLE` is the other way a handle reaches disk, and it is slugged too.
 		for (const pinned of ["Alice", "my agent", "owner_1234", "  padded  ", "ÉLAN", "…"]) {
-			process.env[hooks.HANDLE_ENV] = pinned;
-			emitted.add(hooks.deriveHandle(root, "/x/a", "abcd"));
-			emitted.add(pi.deriveHandle(root, "/x/a", "abcd"));
+			withEnv({ [hooks.HANDLE_ENV]: pinned }, () => {
+				emitted.add(hooks.deriveHandle(root, "/x/a", "abcd"));
+				emitted.add(pi.deriveHandle(root, "/x/a", "abcd"));
+			});
 		}
-		delete process.env[hooks.HANDLE_ENV];
 		fs.rmSync(root, { recursive: true, force: true });
 
 		const refused = [];
@@ -818,9 +841,7 @@ function checkSwiftAcceptsWhatTheWritersEmit(hooks, pi, rules) {
 				(refused.length ? ` — refused ${refused.length}: ${refused.slice(0, 5).join(", ")}` : ""),
 		);
 		ranAtLeast(emitted.size, 50, "the handle alphabet");
-	} finally {
-		if (previous !== undefined) process.env[hooks.HANDLE_ENV] = previous;
-	}
+	});
 }
 
 function checkSessionPidAgrees(hooks, pi) {
@@ -840,51 +861,46 @@ function checkSessionPidAgrees(hooks, pi) {
 		},
 		{ what: "rows for other sessions only", rows: [{ name: `${live}`, pid: live, sessionId: "other" }], ask: "s" },
 	];
-	const previous = process.env.CLAUDE_CONFIG_DIR;
 	let drift = 0;
 	for (const one of cases) {
 		const registry = makeRegistry(one.rows);
-		process.env.CLAUDE_CONFIG_DIR = registry;
-		const a = hooks.sessionPid(one.ask);
-		const b = pi.sessionPid(one.ask);
-		if (a !== b) {
-			drift += 1;
-			bad(`sessionPid disagrees on ${one.what}: hooks ${a}, pi ${b}`);
-		}
+		withEnv({ CLAUDE_CONFIG_DIR: registry }, () => {
+			const a = hooks.sessionPid(one.ask);
+			const b = pi.sessionPid(one.ask);
+			if (a !== b) {
+				drift += 1;
+				bad(`sessionPid disagrees on ${one.what}: hooks ${a}, pi ${b}`);
+			}
+		});
 		fs.rmSync(registry, { recursive: true, force: true });
 	}
-	if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-	else process.env.CLAUDE_CONFIG_DIR = previous;
 	check(drift === 0, `sessionPid agrees across the runtimes on all ${cases.length} registry shapes`);
 	// A registry that never answers would satisfy the line above; this is the control that stops it.
 	const registry = makeRegistry([{ name: `${live}`, pid: live, sessionId: "s" }]);
-	process.env.CLAUDE_CONFIG_DIR = registry;
-	check(hooks.sessionPid("s") === live && pi.sessionPid("s") === live, "and it is not agreeing by always answering undefined");
+	withEnv({ CLAUDE_CONFIG_DIR: registry }, () =>
+		check(hooks.sessionPid("s") === live && pi.sessionPid("s") === live, "and it is not agreeing by always answering undefined"),
+	);
 	fs.rmSync(registry, { recursive: true, force: true });
-	if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-	else process.env.CLAUDE_CONFIG_DIR = previous;
 	ranAtLeast(cases.length, 5, "sessionPid");
 }
 
 function checkLivenessAgrees(hooks, pi) {
 	const cases = livenessCases();
-	const previous = process.env.CLAUDE_CONFIG_DIR;
 	let drift = 0;
 	const verdicts = [];
 	for (const one of cases) {
 		const registry = makeRegistry(one.rows);
-		process.env.CLAUDE_CONFIG_DIR = registry;
-		const a = hooks.ownerGone(one.owner);
-		const b = pi.ownerGone(one.owner);
-		verdicts.push(a);
-		if (a !== b) {
-			drift += 1;
-			bad(`ownerGone disagrees — ${one.what}: hooks says ${a ? "gone" : "alive"}, pi says ${b ? "gone" : "alive"}`);
-		}
+		withEnv({ CLAUDE_CONFIG_DIR: registry }, () => {
+			const a = hooks.ownerGone(one.owner);
+			const b = pi.ownerGone(one.owner);
+			verdicts.push(a);
+			if (a !== b) {
+				drift += 1;
+				bad(`ownerGone disagrees — ${one.what}: hooks says ${a ? "gone" : "alive"}, pi says ${b ? "gone" : "alive"}`);
+			}
+		});
 		fs.rmSync(registry, { recursive: true, force: true });
 	}
-	if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-	else process.env.CLAUDE_CONFIG_DIR = previous;
 	check(drift === 0, `ownerGone agrees across the runtimes on all ${cases.length} liveness cases, including the three #236 turned on`);
 	// THE CONTROL. An `ownerGone` that always answered the same way — or two of them that did —
 	// would satisfy every line above. Both verdicts have to be reachable for the matrix to mean
@@ -1017,20 +1033,18 @@ function checkReapAgrees(hooks, pi) {
 		return out;
 	};
 
-	const previous = process.env.CLAUDE_CONFIG_DIR;
 	const registry = makeRegistry(rows);
-	process.env.CLAUDE_CONFIG_DIR = registry;
 	const after = {};
-	for (const [label, module] of [["hooks", hooks], ["pi", pi]]) {
-		const root = makeRoot();
-		seed(root);
-		module.reap(root, "mine-8888");
-		after[label] = describe(root);
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	withEnv({ CLAUDE_CONFIG_DIR: registry }, () => {
+		for (const [label, module] of [["hooks", hooks], ["pi", pi]]) {
+			const root = makeRoot();
+			seed(root);
+			module.reap(root, "mine-8888");
+			after[label] = describe(root);
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 	fs.rmSync(registry, { recursive: true, force: true });
-	if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-	else process.env.CLAUDE_CONFIG_DIR = previous;
 
 	check(
 		JSON.stringify(after.hooks) === JSON.stringify(after.pi),
@@ -1159,9 +1173,7 @@ function checkTheNoticeAgrees(hooks, pi) {
  * Three of the four were found by this harness on its first run and were written down nowhere.
  */
 function checkTheDeliberateDivergences(hooks, pi) {
-	const previous = process.env[hooks.HANDLE_ENV];
-	delete process.env[hooks.HANDLE_ENV];
-	try {
+	withEnv({ [hooks.HANDLE_ENV]: undefined }, () => {
 		const root = makeRoot();
 		check(
 			hooks.deriveHandle(root, "/x/a", "") !== pi.deriveHandle(root, "/x/a", ""),
@@ -1203,9 +1215,7 @@ function checkTheDeliberateDivergences(hooks, pi) {
 			"howToReply differs: the hook must teach a Claude Code agent to arm its own watch, which pi's live event loop does for it",
 		);
 		ranAtLeast(4, 4, "the deliberate divergences");
-	} finally {
-		if (previous !== undefined) process.env[hooks.HANDLE_ENV] = previous;
-	}
+	});
 }
 
 /** Say what was actually enforced, so a weakened rule is visible in the output, not only in a diff. */
