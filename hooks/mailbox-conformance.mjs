@@ -1450,15 +1450,40 @@ function checkTheNoticeAgrees(hooks, pi) {
 			`and a forged subject cannot manufacture structure in either, for ${what}: 1 header line, ${taken.length} sender lines (#127)`,
 		);
 	}
-	// THE CONTROL ON THE THREE ABOVE. Two runtimes that both stopped reading the sender agree with
-	// each other perfectly — and that is exactly what #257 found shipped.
+	// THE CONTROL ON THE THREE ABOVE, and it is asserted against `whoseWords` ITSELF rather than
+	// against the whole shared prefix. The first cut compared the prefixes and was worthless:
+	// three batches of different sizes have different `from` lines, so "the three differ" held
+	// even with both runtimes ignoring the sender entirely — measured by reverting the fix, which
+	// is the only reason it was caught. This asks the one function whose whole job is the answer.
+	const verdicts = new Map();
+	for (const [what, taken] of Object.entries(batches)) {
+		const a = hooks.whoseWords(taken).join("\n");
+		const b = pi.whoseWords(taken).join("\n");
+		ran += 1;
+		check(a === b, `and the sentence weighing the bodies is byte-identical across the runtimes for ${what}`);
+		verdicts.set(what, a);
+	}
 	check(
-		new Set(shapes.values()).size === 3,
-		`and the three say different things about whose words they are — an operator note is not agent mail (#257)`,
+		new Set(verdicts.values()).size === 3,
+		`and the three verdicts differ from one another — an operator note is not agent mail (#257)`,
 	);
 	check(
-		!shapes.get("an operator note").includes("another agent's words") && shapes.get("agent mail").includes("another agent's words"),
+		!verdicts.get("an operator note").includes("another agent's words") && verdicts.get("agent mail").includes("another agent's words"),
 		"specifically: #29's warning is on agent mail and off an operator note, in both runtimes (#257)",
+	);
+	// And it is the SENDER that decides, not the batch size — the one confound the fixtures have,
+	// since the operator batch is the only single-message one.
+	const oneAgent = [fromAgents[0]];
+	check(
+		hooks.whoseWords(oneAgent).join("\n") === verdicts.get("agent mail") &&
+			hooks.whoseWords([...fromOperator, ...fromOperator]).join("\n") === verdicts.get("an operator note"),
+		"and it is the sender that decides rather than the number of messages (#257)",
+	);
+	// `shapes` is what proves the verdict actually reaches the assembled notice, rather than being
+	// computed by a function nobody calls.
+	check(
+		[...shapes.entries()].every(([what, prefix]) => prefix.includes(verdicts.get(what))),
+		"and each verdict is really in the notice the agent is handed, not only in the function",
 	);
 	ranAtLeast(ran, 4, "the notice");
 }
