@@ -58,28 +58,43 @@
   // the page #208 was found on, for a loop around one node: that node covers 1.00, the <svg>
   // around it 0.08, the <article> around that 0.02.
   //
-  // It SUBSUMES the centre test rather than sitting beside it, so nothing was given up by
-  // dropping it. For any convex loop, coverage above one half implies the centre is inside — a
-  // half-plane holding more than half of a rectangle holds its centre, and a loop that excluded
-  // the centre could be separated from it by one. The odd sample grid keeps that exact rather
-  // than marginal: 24/49 and 25/49 straddle one half and nothing lands on it. And a grazed
-  // neighbour is rejected harder than before, by covering almost none of itself rather than by
-  // where its centre happened to be.
-  var coverageRequired = 0.5;
+  // **That guarantee does not depend on the stroke's shape**, which is what makes it a fix
+  // rather than a heuristic. An element's coverage is bounded above by the loop's own interior
+  // area divided by the element's, so an element far larger than the loop cannot qualify
+  // however the loop is drawn — on the page above that ceiling was 1.4%.
+  //
+  // **What dropping the centre test gave up, stated exactly.** For a CONVEX stroke, covering
+  // more than half of a rectangle implies containing its centre: a half-plane holding more than
+  // half of a rectangle holds its centre, and a stroke excluding the centre could be separated
+  // from it by one. There the centre test was implied and dropping it changes nothing. But a
+  // freehand stroke is NOT guaranteed convex — a hand dipping around an indent draws a concave
+  // one, and `inside` accepts any path at all. Measured: a horseshoe notched across the mid-row
+  // of a 100x100 box covers 0.918 of it while its centre falls in the notch. So for a concave
+  // stroke this WIDENS what a loop selects, taking something the centre test would have
+  // rejected. That is what the rule says on its face — the loop does cover most of it — and it
+  // cannot let an ancestor back in, because the bound above holds whatever the shape.
+  //
+  // A grazed neighbour is rejected harder than before either way, by covering almost none of
+  // itself rather than by where its centre happened to be.
+  //
+  // The grid is sample DENSITY and carries no invariant: "more than half" is counted in
+  // integers below, so the comparison is exact at any density and a tie — exactly half —
+  // is rejected. Nothing here has to be kept odd, or kept anything.
+  var grid = 7;
 
-  // What fraction of `box` the loop covers, sampling a grid of cell centres. Sampled rather
-  // than clipped: the stroke is a freehand path of any shape, and exact polygon clipping is a
+  // How many of `box`'s sample points the loop contains, on a grid of cell centres. Sampled
+  // rather than clipped: the stroke is a path of any shape, and exact polygon clipping is a
   // great deal of code to move a decision whose two sides measure an order of magnitude apart.
-  function coverage(poly, box) {
-    var n = 7, hits = 0;
-    for (var i = 0; i < n; i++) {
-      for (var j = 0; j < n; j++) {
-        var x = box.x + (box.width * (i + 0.5)) / n;
-        var y = box.y + (box.height * (j + 0.5)) / n;
+  function covered(poly, box) {
+    var hits = 0;
+    for (var i = 0; i < grid; i++) {
+      for (var j = 0; j < grid; j++) {
+        var x = box.x + (box.width * (i + 0.5)) / grid;
+        var y = box.y + (box.height * (j + 0.5)) / grid;
         if (inside(poly, x, y)) { hits++; }
       }
     }
-    return hits / (n * n);
+    return hits;
   }
 
   function targetsInside(poly) {
@@ -94,7 +109,9 @@
         x: r.left + window.scrollX, y: r.top + window.scrollY,
         width: r.width, height: r.height
       };
-      if (coverage(poly, box) < coverageRequired) { continue; }
+      // More than half, in integers: one half is not a tuning parameter, it is the number the
+      // convex argument above needs, so it is spelled as a comparison rather than a constant.
+      if (2 * covered(poly, box) <= grid * grid) { continue; }
       var t = resolve(nodes[i]);
       if (!t) { continue; }
       var key = (t.id || "") + "\u0000" + t.text;

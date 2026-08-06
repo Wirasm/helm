@@ -111,6 +111,39 @@ final class CanvasEnclosureTests: XCTestCase {
         XCTAssertEqual(try ids(of: page), ["detail"])
     }
 
+    // MARK: What a concave stroke does, pinned because the comment cannot prove it
+
+    func testAConcaveStrokeSelectsWhatItCoversEvenWhereTheCentreFallsOutsideIt() throws {
+        // The one place the coverage rule is NOT a restatement of the centre test.
+        //
+        // For a convex stroke, covering more than half of a rectangle implies containing its
+        // centre, so dropping the centre test changed nothing. A freehand stroke is not
+        // guaranteed convex — a hand dipping around an indent draws a concave one — and there
+        // the two rules disagree: this horseshoe is notched across the mid-row, so it covers
+        // 0.918 of the box while the centre falls in the notch. The centre test rejected that;
+        // coverage takes it.
+        //
+        // Pinned rather than argued because the argument is a comment in a file where three
+        // defects have now shipped past assertions that read as though they covered the
+        // behaviour. The widening is deliberate: the loop does cover most of the element, which
+        // is what the rule says. An ancestor still cannot come back in — `#content` is 190
+        // times this stroke's area, and that bound holds whatever shape the stroke is.
+        let page = try CanvasScriptRuntime()
+        XCTAssertTrue(page.layOut(id: "detail", x: 100, y: 300, width: 100, height: 100))
+        page.setTool(.freehand)
+
+        // Around the box, then in from the right edge across the middle and back out.
+        let horseshoe = [
+            (90.0, 290.0), (210.0, 290.0), (210.0, 345.0), (140.0, 345.0),
+            (140.0, 355.0), (210.0, 355.0), (210.0, 410.0), (90.0, 410.0),
+        ]
+        page.mouse("mousedown", horseshoe[0].0, horseshoe[0].1)
+        for point in horseshoe.dropFirst() { page.mouse("mousemove", point.0, point.1) }
+        page.mouse("mouseup", horseshoe[0].0, horseshoe[0].1 + 6)
+
+        XCTAssertEqual(try ids(of: page), ["detail"])
+    }
+
     // MARK: The other direction — a fix that merely selects less would pass none of these
 
     func testACircleRoundEverythingStillReturnsEverything() throws {
