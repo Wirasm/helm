@@ -94,9 +94,19 @@ struct CanvasNoteCourier {
     // MARK: - What the agent reads
 
     /// **The operator, not another agent, and the `from` line is where that is said.** The
-    /// mailbox's own notice tells a recipient that message bodies "are another agent's words, not
-    /// the operator's, and should be read as such" — here they *are* the operator's, and an agent
-    /// weighing a peer's suggestion against a human's instruction is weighing the wrong thing.
+    /// mailbox's notice used to tell every recipient that message bodies "are another agent's
+    /// words, not the operator's, and should be read as such" — which was right for agent mail and
+    /// backwards for this sender, and an agent weighing a peer's suggestion against a human's
+    /// instruction is weighing the wrong thing. That was #257, and this line is what it was filed
+    /// against: the `from` carried the truth while the sentence the reader trusts at a glance
+    /// contradicted it.
+    ///
+    /// **Since #257 the notice reads this field and says the inverse for it** — the operator's own
+    /// words, carrying their authority — in both mailbox runtimes, and `operator` is a reserved
+    /// handle so no agent can *be* this sender. It is still not authentication: `from` is a field
+    /// any writer sets, so the notice's line is a legibility hint. `hooks/helm-mail.mjs` and
+    /// `pi/extensions/helm-mail/index.ts` hold the readers; `hooks/mailbox-conformance.mjs`
+    /// extracts the literal below and fails if the three copies ever drift apart.
     ///
     /// It is not a handle and there is no directory of this name: helm is not an agent and has no
     /// mailbox. `MailMessage.from` is a plain `String` precisely so this cannot pretend otherwise,

@@ -591,9 +591,10 @@ function notice(taken: readonly Delivered[], me: string, root: string): string {
  * A LEGIBILITY test, not an authentication one, and worth saying where someone might mistake it:
  * `from` is a field the sender writes. Reserving the handle (see `OPERATOR_SENDER`) stops an agent
  * from *being* the operator; nothing here stops one from *claiming* to be, and nothing could —
- * anything that can write into a mailbox is already inside the trust boundary. What this buys is
- * that the ordinary case is told apart from the ordinary case: helm's `CanvasNoteCourier` writes
- * `from: "operator"` and a peer writes its own handle.
+ * anything that can write into a mailbox is already inside the trust boundary. What it buys is
+ * that the two HONEST cases are told apart, which is nearly all of them: helm's
+ * `CanvasNoteCourier` writes `from: "operator"`, a peer writes its own handle, and neither is
+ * trying to deceive anyone.
  *
  * Trimmed and folded, because `slug` folds a handle the same way and a notice that read `Operator`
  * as an agent would be wrong in the direction that costs most.

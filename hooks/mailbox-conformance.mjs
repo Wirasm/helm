@@ -12,7 +12,7 @@
  * `SpoolWireConformanceTests` is the worked example for the spool. This is the mailbox's, and
  * until now the mailbox had none — while #236 widened its duplicate by three functions
  * (`sessionPid`, `ownerGone`, `retire`) and #239 added a third spelling of the handle alphabet
- * in Swift. Two surfaces:
+ * in Swift. Three surfaces:
  *
  *   1. LIVENESS AND RETIRE, `hooks/helm-mail.mjs` ↔ `pi/extensions/helm-mail/index.ts`.
  *      Not a hypothetical: the bug #236 fixed WAS two liveness rules disagreeing, twelve lines
@@ -27,6 +27,14 @@
  *      Swift must accept what they produce, unchanged. The failure is asymmetric and worth
  *      stating: a Swift rule stricter than the writers' means helm starts refusing owner files
  *      a live agent just wrote.
+ *
+ *   3. THE OPERATOR SENDER, `Sources/Helm/Canvas/CanvasNoteCourier.swift` ↔ both readers — the
+ *      one surface where SWIFT IS THE WRITER, which is why it needs saying separately. helm puts
+ *      `operator` in a canvas note's `from`; since #257 both JS halves read that string twice
+ *      over, once to decide what the notice says about whose words these are and once to refuse
+ *      it as a handle. Drift either way is silent and neither way is harmless: a genuine operator
+ *      note announced as another agent's words, or the reservation no longer covering the name
+ *      helm actually writes. Added with #262/#257; the first cut compared only the JS pair.
  *
  * EXTRACT, DO NOT RESTATE. Every rule under test is pulled out of the real source and
  * EXECUTED — the JavaScript by lifting the named declarations verbatim into a temp module and
