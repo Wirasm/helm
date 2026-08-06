@@ -33,6 +33,21 @@ enum CanvasHTML {
     ///    own block; overall fit is the window's/zoom's job, not per-diagram
     ///    machinery.
     ///
+    /// `data-helm-frame` on the wrapper is load-bearing too, and it is helm marking its own
+    /// chrome so the annotation script can tell it from the artifact — the same job
+    /// `data-helm-mark` does for the ink. `#content` is helm's id, written here and present in
+    /// no operator's `.md` file, so an annotation naming it is a grep that finds nothing; the
+    /// script drops it for that reason (#215).
+    ///
+    /// **It has to be a marker rather than a test on the id, because the script does not only
+    /// meet this page.** An `.html` artifact is read straight from disk (`CanvasFileViews`,
+    /// "the artifact IS the document here") and never passes through here, yet gets the same
+    /// annotation script — and `<body><div id="content">` is one of the commonest wrappers in
+    /// hand-written HTML. Recognising helm's frame by its id and position would therefore
+    /// discard an id the agent really did write and really could grep for, silently and
+    /// indistinguishably from a block that has none. An attribute helm writes cannot be wrong
+    /// in either direction.
+    ///
     /// `deterministicIds: true` is load-bearing, not tidiness. Left unset, mermaid
     /// seeds its id generator from `Date.now()` (`InitIDGenerator`), so every render
     /// gives a node a different DOM id — and `FileWatcher` re-renders on each agent
@@ -54,7 +69,7 @@ enum CanvasHTML {
         </style>
         </head>
         <body>
-        <article id="content"></article>
+        <article id="content" data-helm-frame></article>
         <script>
         (function () {
           var source = \(jsString(markdown));
@@ -216,13 +231,24 @@ enum CanvasHTML {
     ///
     /// **What crosses the seam is now a convention, and that is the cost of the move.** While
     /// this was one string there was nothing for the two halves to disagree about; there is
-    /// now. Two constants are spelled out in the `.js` rather than interpolated —
-    /// `CanvasBridgePolicy.handlerName` and `markToolGlobal`, both compile-time — and the
-    /// message shape is agreed with `CanvasAnnotation.decode` by nothing the compiler can see.
-    /// `CanvasAnnotationScriptTests` is what holds them together: it asserts the file still
-    /// names both constants, and it feeds what the running script posts straight into the real
-    /// `decode`. That is a gate, not a contract — JavaScript cannot compile against a Swift
-    /// type — so it is stated here rather than assumed.
+    /// now. **Three** strings are spelled out in the `.js` rather than interpolated —
+    /// `CanvasBridgePolicy.handlerName`, `markToolGlobal`, and the `data-helm-frame` attribute
+    /// `documentPage` writes above — and the message shape is agreed with
+    /// `CanvasAnnotation.decode` by nothing the compiler can see.
+    ///
+    /// Two suites hold them together. `CanvasAnnotationScriptTests` asserts the file still
+    /// names the first two, and feeds what the running script posts straight into the real
+    /// `decode`; `CanvasAnchorTests` asserts that the page this file generates and the script
+    /// that reads it still agree on the frame marker. Those are gates, not contracts —
+    /// JavaScript cannot compile against a Swift type — so it is stated here rather than
+    /// assumed.
+    ///
+    /// **A marker is a string across the seam and so is an id, so why is one better?** Because
+    /// a marker is only ever wrong when this file and the script disagree, which a test can
+    /// see. Recognising the frame by its *id* is wrong whenever an agent happens to use the
+    /// same id, which no test of this seam can see — the artifact is not helm's to inspect.
+    /// That is the whole of the #215 follow-up, and it is the reason to add a string here
+    /// rather than remove one.
     ///
     /// Empty when the resource is missing, degrading exactly as a missing vendored script
     /// does: an empty user script installs no listeners, the page renders, and nothing marks.

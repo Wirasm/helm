@@ -139,6 +139,39 @@ final class CanvasAnchorTests: XCTestCase {
             "and what comes back instead is what the operator circled")
     }
 
+    /// **The other side of the wrapper rule, and the case the first cut got wrong.**
+    ///
+    /// This script does not only meet the page helm generates. An `.html` artifact is read
+    /// straight from disk — `CanvasFileViews.makeNSView`, "the artifact IS the document here" —
+    /// never passes through `CanvasHTML.documentPage`, and gets the same annotation script
+    /// injected (`CanvasFileViews.swift:254`). So an agent writing `<body><div id="content">`,
+    /// which is among the commonest wrappers in hand-written HTML, meets the same code.
+    ///
+    /// That id **is** in the agent's file and **is** greppable, so it is a real anchor. The
+    /// first `helmFrame` recognised helm's own wrapper by its id and its position under the
+    /// body, which is true of this one too — it discarded the agent's id silently, and
+    /// indistinguishably from a block that has none.
+    ///
+    /// The fixture here is byte-identical to every other test in this file except for helm's
+    /// marker, which is the point: nothing about the DOM can tell these apart, so only
+    /// something helm wrote can.
+    func testAnIDTheAgentWroteIsAnAnchorEvenWhenItIsSpelledLikeHelmsOwn() throws {
+        let page = try CanvasScriptRuntime()
+        page.asHTMLArtifact()
+        page.setTool(.point)
+
+        page.tap(at: Self.first.at)
+
+        let message = try XCTUnwrap(page.lastPosted)
+        XCTAssertEqual(
+            message["id"] as? String, "content",
+            "an .html artifact is the agent's own, so its wrapper id is a real anchor")
+        XCTAssertEqual(message["text"] as? String, Self.first.text, "and the text is unchanged")
+        XCTAssertEqual(
+            try mark(page), .point(.element(id: "content", text: Self.first.text)),
+            "which the real decoder must see as an element, not a quote")
+    }
+
     // MARK: Multiplicity, which the text fix resolves on its own
 
     /// `Mark.enclosure` exists to carry several things and could not. The dedupe key at
@@ -197,28 +230,35 @@ final class CanvasAnchorTests: XCTestCase {
 
     // MARK: The gate that keeps the two halves in step
 
-    /// The script spells `content` out rather than interpolating it, exactly as it spells out
-    /// the handler name and the tool global — JavaScript cannot compile against a Swift
-    /// constant. So this reads both halves: the page `CanvasHTML.documentPage` generates, and
-    /// the script's own test for it. Rename the wrapper and this fails, rather than marking
-    /// quietly going back to reporting `#content`.
-    func testTheScriptAndTheGeneratedPageStillAgreeOnHelmsWrapper() throws {
+    /// The script spells `data-helm-frame` out rather than interpolating it, exactly as it
+    /// spells out the handler name and the tool global — JavaScript cannot compile against a
+    /// Swift constant. So this reads both halves: the page `CanvasHTML.documentPage` generates
+    /// and the script that reads it. Drop the marker from either side and this fails, rather
+    /// than marking quietly going back to reporting `#content`.
+    ///
+    /// **The negative assertions are the #215 follow-up, pinned.** A marker is only ever wrong
+    /// when these two files disagree, which is what the positive assertions catch. Recognising
+    /// helm's frame by its id or its position under `<body>` is wrong whenever an agent uses
+    /// the same wrapper — which nothing about this seam can catch, because the artifact is not
+    /// helm's to inspect. So the guess is forbidden by name.
+    func testTheScriptAndTheGeneratedPageStillAgreeOnHelmsWrapper() {
         let page = CanvasHTML.documentPage(markdown: "# Hi\n\nA paragraph.", theme: .light)
         let script = CanvasHTML.annotationScript()
 
-        let openBody = try XCTUnwrap(page.range(of: "<body>"))
-        let wrapper = try XCTUnwrap(
-            page.range(of: "<article id=\"content\">"),
-            "the script recognises helm's wrapper by this exact id")
         XCTAssertTrue(
-            page[openBody.upperBound..<wrapper.lowerBound].allSatisfy(\.isWhitespace),
-            "and by it being a direct child of <body>, which is the other half of the test")
+            page.contains("<article id=\"content\" data-helm-frame>"),
+            "helm must mark its own wrapper, or the script cannot tell it from an artifact's")
         XCTAssertTrue(
-            script.contains("node.id === \"content\""),
-            "the script must still know which id is helm's own")
-        XCTAssertTrue(
-            script.contains("node.parentNode === document.body"),
-            "an authored `id=\"content\"` deeper in a .html artifact is still a real anchor")
+            script.contains("getAttribute(\"data-helm-frame\")"),
+            "and the script must read the marker helm writes")
+        XCTAssertFalse(
+            script.contains("=== \"content\""),
+            "recognising the frame by its id discards an agent's own `id=\"content\"`")
+        // `nameFor`'s walk legitimately reads `up !== document.body`, which has two `=` and so
+        // cannot match the three below — the guess is the identity test, not the boundary one.
+        XCTAssertFalse(
+            script.contains("=== document.body"),
+            "and recognising it by its position under <body> does the same")
     }
 
     // MARK: -

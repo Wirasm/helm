@@ -56,6 +56,13 @@
       : null;
   };
 
+  Element.prototype.removeAttribute = function (name) {
+    delete this.attributes[name];
+    if (name === "id") {
+      this.id = "";
+    }
+  };
+
   Element.prototype.appendChild = function (child) {
     child.parentNode = this;
     this.childNodes.push(child);
@@ -240,6 +247,11 @@
   // `body` is deliberately NOT laid out, so a point outside `#content` hits nothing at all:
   // that is "an arrow into blank space", which is a mark helm has to be able to make.
   var content = node("article", "content", "", box(0, 0, 760, 1800));
+  // helm's own chrome, marked the way `CanvasHTML.documentPage` marks it. The marker is the
+  // ONLY thing that distinguishes this from an agent-authored `<div id="content">` at the top
+  // of an `.html` artifact — see `asHTMLArtifact` below, which is that same page with the
+  // marker taken off.
+  content.setAttribute("data-helm-frame", "");
   body.appendChild(content);
   content.appendChild(node("h1", "title", "The Plan", box(20, 20, 700, 40)));
   content.appendChild(node("p", "intro", "Why this exists", box(20, 80, 700, 60)));
@@ -405,6 +417,16 @@
         el.ownText = text;
       }
       return el !== null;
+    },
+    // The same DOM, minus helm's frame marker — which is what an `.html` ARTIFACT is.
+    //
+    // helm reads those straight from disk and never generates them, so every element in one is
+    // the agent's, including a wrapper that happens to use the same landmark id helm's own page
+    // does. That sameness is the entire point: the first cut of `helmFrame` told the two apart
+    // by id and position, which cannot tell them apart at all, and so it discarded an id the
+    // agent wrote and could grep for.
+    asHTMLArtifact: function () {
+      content.removeAttribute("data-helm-frame");
     },
     select: function (id, text) {
       selectWithin(find(id), text);

@@ -5,25 +5,38 @@
   if (!window.__helmMarkTool) { window.__helmMarkTool = "select"; }
   function tool() { return window.__helmMarkTool || "select"; }
 
-  // helm's own document wrapper, and the one id on a canvas that helm rather than the
-  // agent wrote. `CanvasHTML.documentPage` puts every rendered markdown artifact inside
-  // `<article id="content">` — so `content` is in helm's Swift and in NO operator's `.md`
-  // file. An anchor naming it is a grep that finds nothing, printed in exactly the form
-  // that means "grep for this", which is #215's second half: a degradation that announced
-  // itself would be fine, and this one asserts.
+  // helm's own document wrapper — helm's chrome, marked as such by the Swift that writes it,
+  // exactly as the ink layer is.
   //
-  // The same judgement `MermaidAnchor.isRenderGenerated` makes on the Swift side, for the
-  // same reason — an id minted by a renderer rather than authored is not an anchor.
+  // `CanvasHTML.documentPage` puts every rendered markdown artifact inside
+  // `<article id="content" data-helm-frame>`, so `#content` is an id helm wrote and no
+  // operator's `.md` file contains. An anchor naming it is a grep that finds nothing, printed
+  // in exactly the form that means "grep for this", which is #215's second half: a degradation
+  // that announced itself would be fine, and this one asserts.
+  //
+  // The same judgement `MermaidAnchor.isRenderGenerated` makes on the Swift side, for the same
+  // reason — an id minted by the renderer rather than authored is not an anchor.
+  //
+  // **Why a marker and not a look at the wrapper itself.** The first cut recognised the frame
+  // by its id and its position directly under the body, which is true by construction of the
+  // page above — and equally true of an agent-authored wrapper using the same landmark id,
+  // which is among the commonest in hand-written HTML. **This script does not only meet helm's
+  // generated page**: an `.html` artifact is read straight from disk (`CanvasFileViews`, "the
+  // artifact IS the document here"), never passes through `documentPage`, and gets this same
+  // script — so that guess silently discarded an id the agent really did write and really
+  // could grep for, and did it indistinguishably from a block that has no id at all. An
+  // attribute helm itself writes cannot be wrong in either direction.
   //
   // Spelled out here rather than interpolated, exactly like the handler name and the tool
-  // global above, and held to `CanvasHTML.documentPage` by `CanvasAnchorTests`
-  // (`testTheScriptAndTheGeneratedPageStillAgreeOnHelmsWrapper`) for the same reason:
-  // JavaScript cannot compile against a Swift constant, so the gate is a test that reads
-  // both halves. Matched on the id and its position, never on `tagName` —
-  // a browser reports `ARTICLE` where a stub reports `article`, and a comparison that
-  // holds in the harness and not in WebKit is the failure this suite exists to prevent.
+  // global above, and held to `CanvasHTML.documentPage` by
+  // `CanvasAnchorTests.testTheScriptAndTheGeneratedPageStillAgreeOnHelmsWrapper`: JavaScript
+  // cannot compile against a Swift constant, so the gate is a test that reads both halves.
+  //
+  // An attribute and never `tagName` — a browser reports `ARTICLE` where the test stub reports
+  // `article`, and a comparison that holds in the harness and not in WebKit is the failure
+  // that suite exists to prevent.
   function helmFrame(node) {
-    return node.id === "content" && node.parentNode === document.body;
+    return node.getAttribute("data-helm-frame") !== null;
   }
 
   // What the operator marked, and what it can be NAMED by — two questions, and #215 was
