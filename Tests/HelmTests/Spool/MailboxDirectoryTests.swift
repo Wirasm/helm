@@ -85,6 +85,33 @@ final class MailboxDirectoryTests: XCTestCase {
         XCTAssertEqual(MailboxDirectory.owners(in: root).map(\.handle), ["good-1111"])
     }
 
+    /// **The one field `Handle` exists to protect enters Swift from JavaScript.** `owner.json`
+    /// has exactly two writers — `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts`
+    /// — and neither is Swift, so this decode is the only place Swift gets to say no to a
+    /// malformed one. An empty or whitespace-only handle addresses nobody, and `owners(in:)`'s
+    /// own header already promises "a malformed file costs its own row and nothing else" for
+    /// unreadable JSON; an empty handle is malformed by that same rule, not a different one.
+    /// Uses raw JSON (not the `mailbox(_:...)` helper) so the directory name and the `handle`
+    /// field can differ — an empty *handle* is the thing under test, not an empty directory.
+    func testAnOwnerWithAnEmptyOrWhitespaceHandleCostsItsOwnRowAndNothingElse() throws {
+        try mailbox("good-3333", runtime: "claude", pid: 33, sessionId: "…-3333")
+
+        let empty = root.appendingPathComponent("empty-handle")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        try #"{"handle":"","runtime":"claude","pid":34,"sessionId":"…-empty","cwd":"/tmp"}"#
+            .write(
+                to: empty.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
+
+        let whitespace = root.appendingPathComponent("whitespace-handle")
+        try FileManager.default.createDirectory(at: whitespace, withIntermediateDirectories: true)
+        try #"{"handle":"   ","runtime":"claude","pid":35,"sessionId":"…-ws","cwd":"/tmp"}"#
+            .write(
+                to: whitespace.appendingPathComponent("owner.json"), atomically: true,
+                encoding: .utf8)
+
+        XCTAssertEqual(MailboxDirectory.owners(in: root).map(\.handle), ["good-3333"])
+    }
+
     func testAMissingMailRootIsAbsenceRatherThanAnError() {
         XCTAssertEqual(
             MailboxDirectory.owners(in: root.appendingPathComponent("nope")).count, 0)

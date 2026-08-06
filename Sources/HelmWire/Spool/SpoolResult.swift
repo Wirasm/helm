@@ -82,8 +82,10 @@ package struct SpoolResult: Codable, Equatable {
     package let id: String
     package var status: Status
     /// `TerminalSession.id` — the same uuid the pane is persisted under, and the same one the
-    /// child reads as `HELM_PANE` (`PaneEnvironment`).
-    package var terminalId: String?
+    /// child reads as `HELM_PANE` (`PaneEnvironment`). A `TerminalID` rather than a `UUID`
+    /// directly, so it carries its own bare-string wire shape instead of the `.uuidString`
+    /// every call site used to write out by hand — see `TerminalID`.
+    package var terminalId: TerminalID?
     /// The pty's foreground pid once the agent is running. helm knows this authoritatively.
     ///
     /// On a `closed` result it is what was in the pane at the moment it went — the login shell
@@ -93,8 +95,9 @@ package struct SpoolResult: Codable, Equatable {
     /// The agent's own id for its session, read out of `owner.json` — never guessed at.
     package var sessionId: String?
     /// The mailbox address, so the caller's next move ("now tell it something") needs no
-    /// lookup of its own. **Read, never derived** — see `MailboxDirectory`.
-    package var handle: String?
+    /// lookup of its own. **Read, never derived** — see `Handle`, whose own constructors are
+    /// what make that a compiler-enforced fact here rather than only an argument in a comment.
+    package var handle: Handle?
     /// `claude` or `pi`, as the mailbox reports it. One lookup answers for both runtimes,
     /// where the Claude session registry answers for only one.
     package var runtime: String?
@@ -111,8 +114,8 @@ package struct SpoolResult: Codable, Equatable {
     package var updatedAt: Double
 
     package init(
-        id: String, status: Status, terminalId: String? = nil, pid: Int32? = nil,
-        sessionId: String? = nil, handle: String? = nil, runtime: String? = nil,
+        id: String, status: Status, terminalId: TerminalID? = nil, pid: Int32? = nil,
+        sessionId: String? = nil, handle: Handle? = nil, runtime: String? = nil,
         reason: String? = nil, capture: CaptureReport? = nil,
         updatedAt: Double = Date().timeIntervalSince1970
     ) {

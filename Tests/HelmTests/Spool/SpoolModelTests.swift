@@ -187,7 +187,7 @@ final class SpoolModelTests: XCTestCase {
 
         let ready = await awaitResult(is: .ready)
         XCTAssertEqual(spawner.opened, [FileManager.default.temporaryDirectory.path])
-        XCTAssertEqual(ready?.terminalId, spawner.terminal.uuidString)
+        XCTAssertEqual(ready?.terminalId?.uuidString, spawner.terminal.uuidString)
 
         // The line went to *this* surface — not through the keyboard, not at whatever pane
         // held focus. And the prompt is read from a file, so it never touches word splitting.
@@ -211,7 +211,7 @@ final class SpoolModelTests: XCTestCase {
         model.start()
 
         let ready = await awaitResult(is: .ready)
-        XCTAssertEqual(ready?.handle, "helm-4831")
+        XCTAssertEqual(ready?.handle?.value, "helm-4831")
         XCTAssertEqual(ready?.sessionId, "52256761-dd8f-4831")
         XCTAssertEqual(ready?.runtime, "claude")
         XCTAssertEqual(ready?.pid, FakeSpawner.agentPid)
@@ -234,7 +234,7 @@ final class SpoolModelTests: XCTestCase {
         spawner.pids[spawner.terminal] = FakeSpawner.agentPid
         try mailbox("late-0001", pid: FakeSpawner.agentPid, sessionId: "late")
         let ready = await awaitResult(is: .ready)
-        XCTAssertEqual(ready?.handle, "late-0001")
+        XCTAssertEqual(ready?.handle?.value, "late-0001")
         XCTAssertGreaterThan(
             ready?.updatedAt ?? 0, started?.updatedAt ?? 0,
             "the caller can see the second write")
@@ -380,7 +380,7 @@ final class SpoolModelTests: XCTestCase {
 
         let result = await awaitResult(id: "bye", is: .closed)
         XCTAssertEqual(closer.closed, [closer.terminal])
-        XCTAssertEqual(result?.terminalId, closer.terminal.uuidString)
+        XCTAssertEqual(result?.terminalId?.uuidString, closer.terminal.uuidString)
         // What was in the pane when it went — the login shell here, because it was idle.
         XCTAssertEqual(result?.pid, FakeCloser.shellPid)
         XCTAssertEqual(spawner.opened, [], "a close starts nothing")

@@ -274,14 +274,14 @@ package struct AcceptedCaptureRequest: Equatable {
 
 package struct AcceptedCloseRequest: Equatable {
     package let id: String
-    /// **A real `UUID`, not the string that was in the file.** Parsing it here is what makes
-    /// "that is not a pane id" a refusal with a reason instead of a lookup that quietly
+    /// **A real `TerminalID`, not the string that was in the file.** Parsing it here is what
+    /// makes "that is not a pane id" a refusal with a reason instead of a lookup that quietly
     /// matches nothing — the two are indistinguishable to a caller, and one of them is a typo
-    /// it could fix.
-    package let terminal: UUID
+    /// it could fix. See `TerminalID` for why this is a newtype rather than a bare `UUID`.
+    package let terminal: TerminalID
     package let force: Bool
 
-    package init(id: String, terminal: UUID, force: Bool) {
+    package init(id: String, terminal: TerminalID, force: Bool) {
         self.id = id
         self.terminal = terminal
         self.force = force
@@ -460,10 +460,7 @@ package enum SpoolPolicy {
     private static func accept(
         _ request: CloseRequest
     ) -> Result<AcceptedCloseRequest, SpoolRefusal> {
-        guard
-            let terminal = UUID(
-                uuidString: request.terminal.trimmingCharacters(in: .whitespacesAndNewlines))
-        else {
+        guard let terminal = TerminalID(validating: request.terminal) else {
             return .failure(
                 SpoolRefusal(
                     "terminal \"\(request.terminal)\" is not a pane id. It is the `terminalId` "

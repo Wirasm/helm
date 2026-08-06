@@ -99,11 +99,13 @@ final class SpoolDirectoryTests: XCTestCase {
     func testAResultRoundTrips() {
         directory.write(
             SpoolResult(
-                id: "r", status: .ready, terminalId: "E621E1F8-C36C-495A-93FC-0C247A3E6E5F",
-                pid: 4242, sessionId: "f9e4639d", handle: "helm-48c4", runtime: "claude"))
+                id: "r", status: .ready,
+                terminalId: TerminalID(validating: "E621E1F8-C36C-495A-93FC-0C247A3E6E5F"),
+                pid: 4242, sessionId: "f9e4639d", handle: Handle(validating: "helm-48c4"),
+                runtime: "claude"))
         let read = directory.result(id: "r")
         XCTAssertEqual(read?.status, .ready)
-        XCTAssertEqual(read?.handle, "helm-48c4")
+        XCTAssertEqual(read?.handle?.value, "helm-48c4")
         XCTAssertEqual(read?.pid, 4242)
     }
 

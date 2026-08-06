@@ -282,12 +282,15 @@ final class SpoolModel: ObservableObject {
                     + "rather than anything the caller can fix.")
             return
         }
-        let pane = closer.pane(request.terminal)
+        // `SpoolClosing` is the app-side seam (`SpoolSpawning`'s twin) and stays `UUID`-typed —
+        // `TerminalID` is the wire's currency, not the live bench's, and `WorkbenchSpoolCloser`
+        // is out of scope for this change. `.uuid` is the one place that boundary is crossed.
+        let pane = closer.pane(request.terminal.uuid)
         if let refusal = SpoolClosePolicy.refusal(for: request, pane: pane) {
             refuse(id: request.id, reason: refusal.reason)
             return
         }
-        guard closer.close(request.terminal) else {
+        guard closer.close(request.terminal.uuid) else {
             refuse(
                 id: request.id,
                 reason: "helm's bench would not let pane \(request.terminal.uuidString) go. It "
@@ -333,7 +336,7 @@ final class SpoolModel: ObservableObject {
                 until: shellDeadline, for: { spawner.foregroundPid(of: terminal) })
         else {
             answer(
-                request.id, .failed, terminalId: terminal,
+                request.id, .failed, terminalId: TerminalID(terminal),
                 reason:
                     "a terminal was opened in helm but its shell never started within "
                     + "\(shellDeadline). Nothing was sent to it; it is sitting at an empty prompt.")
@@ -343,7 +346,7 @@ final class SpoolModel: ObservableObject {
         // The line, not the line plus a Return: how a line is *submitted* is the adapter's
         // business, and it is not one write (see `WorkbenchSpoolSpawner.send`).
         spawner.send(SpoolLaunchLine.compose(request, promptPath: promptPath), to: terminal)
-        answer(request.id, .started, terminalId: terminal)
+        answer(request.id, .started, terminalId: TerminalID(terminal))
 
         // **One wait with one budget, for two observables.** The pty's foreground pid moving
         // off the login shell is the pty saying the line actually ran; the mailbox appearing
@@ -369,7 +372,7 @@ final class SpoolModel: ObservableObject {
 
         guard let resolved else {
             answer(
-                request.id, .unclaimed, terminalId: terminal,
+                request.id, .unclaimed, terminalId: TerminalID(terminal),
                 pid: spawner.foregroundPid(of: terminal),
                 reason:
                     "the terminal is alive but no mailbox appeared under \(mailRoot.path) within "
@@ -379,24 +382,26 @@ final class SpoolModel: ObservableObject {
             return
         }
         answer(
-            request.id, .ready, terminalId: terminal, pid: resolved.agent ?? resolved.owner.pid,
-            sessionId: resolved.owner.sessionId, handle: resolved.owner.handle,
-            runtime: resolved.owner.runtime)
+            request.id, .ready, terminalId: TerminalID(terminal),
+            pid: resolved.agent ?? resolved.owner.pid, sessionId: resolved.owner.sessionId,
+            // The blessed path: a `Handle` read out of the owner record `MailboxDirectory`
+            // just resolved, never built from `cwd`/session id by hand. See `Handle`.
+            handle: Handle(readingFrom: resolved.owner), runtime: resolved.owner.runtime)
     }
 
     private func answer(
-        _ id: String, _ status: SpoolResult.Status, terminalId: UUID? = nil, pid: pid_t? = nil,
-        sessionId: String? = nil, handle: String? = nil, runtime: String? = nil,
-        reason: String? = nil, capture: CaptureReport? = nil
+        _ id: String, _ status: SpoolResult.Status, terminalId: TerminalID? = nil,
+        pid: pid_t? = nil, sessionId: String? = nil, handle: Handle? = nil,
+        runtime: String? = nil, reason: String? = nil, capture: CaptureReport? = nil
     ) {
         directory.write(
             SpoolResult(
-                id: id, status: status, terminalId: terminalId?.uuidString, pid: pid,
+                id: id, status: status, terminalId: terminalId, pid: pid,
                 sessionId: sessionId, handle: handle, runtime: runtime, reason: reason,
                 capture: capture))
         NSLog(
             "helm: spool request %@ is %@%@%@", id, status.rawValue,
-            handle.map { " — reachable at \($0)" } ?? "",
+            handle.map { " — reachable at \($0.value)" } ?? "",
             capture.map { " — \($0.path), terminal content \($0.terminalContent.rawValue)" } ?? "")
     }
 
