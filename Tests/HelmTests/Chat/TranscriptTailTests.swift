@@ -162,7 +162,7 @@ final class TranscriptTailTests: XCTestCase {
 
     /// The same rewrite carrying pi's own header line, and differing from it only
     /// in the middle: `version` 2 → 3 is what the pre-v3 migration changes, and it
-    /// sits 26 bytes in. Measured over the 2,281 pi sessions on this machine, the
+    /// sits at byte 28. Measured over the 2,281 pi sessions on this machine, the
     /// header line runs 126–334 bytes (median 156), so the head window reaches all
     /// of it; Claude Code's first record has a median of 2,376 bytes and carries
     /// `sessionId`, `uuid` and `timestamp` inside the first 512.

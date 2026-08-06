@@ -44,8 +44,11 @@ struct TranscriptTail {
     struct Batch {
         /// Complete JSONL lines, in file order.
         var lines: [Data] = []
-        /// The file was replaced or truncated — everything read before this
-        /// batch is stale and the caller must start its own state over.
+        /// The file was replaced, truncated, or rewritten where it stood —
+        /// everything read before this batch is stale and the caller must start
+        /// its own state over. **All three, deliberately collapsed into one
+        /// flag**: nothing downstream needs to tell them apart, because the
+        /// answer to every one of them is the same full reparse.
         var didReset = false
     }
 
