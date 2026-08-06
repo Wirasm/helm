@@ -335,10 +335,19 @@ const SHARED_NAMES = [
 
 /**
  * Hooks-only helpers `claim` calls, lifted so it can run: `mineIn` finds the mailbox this
- * session already owns, `ownerPid` decides what pid to record. pi's `claim` is handed both
- * answers by its caller, which is the signature difference — see `checkTheOwnerRecordDecodes`.
+ * session already owns, `ownerRecord` decides what pid to record and whether to mark it
+ * provisional. pi's `claim` is handed those answers by its caller, which is the signature
+ * difference — see `checkTheOwnerRecordDecodes`.
+ *
+ * **This list is a set of names in another file, and it went stale the day it shipped.** #247
+ * renamed `ownerPid` to `ownerRecord` on one branch while this list was written on another;
+ * neither was an ancestor of the other, git merged both with no textual conflict, and
+ * `development` shipped a gate that could not run. The extraction guard is what caught it —
+ * it refused with *"no top-level declaration named ownerPid — the harness is measuring
+ * nothing"* rather than passing with nothing to compare. Keep that guard: it is the only
+ * thing standing between a renamed function and a suite that silently measures zero.
  */
-const HOOKS_EXTRA_NAMES = ["mineIn", "ownerPid"];
+const HOOKS_EXTRA_NAMES = ["mineIn", "ownerRecord"];
 
 /**
  * pi-only helpers the shared rules above call, lifted so those rules can run at all: `warn` for
@@ -1223,9 +1232,26 @@ function checkTheOwnerRecordDecodes(hooks, pi, rules, schema) {
 		written.pi = JSON.parse(fs.readFileSync(path.join(piRoot, piHandle, "owner.json"), "utf8"));
 	});
 
+	// `pidIsProvisional` is written by the hook and NOT by pi, deliberately (#247). The hook
+	// marks a claim whose pid it had to guess, because `SessionStart` can beat Claude Code's own
+	// `<pid>.json` write; pi has no such registry to lose a race with, so it has no question to
+	// answer and writing the field would be inventing one. pi's `Owner` interface declares it so
+	// a row round-trips unharmed, and #247's PR argues both halves. Named here rather than left
+	// as an unexplained asymmetry — the whole value of this suite is that a difference is either
+	// a failure or a recorded decision, never an unremarked one.
+	const HOOKS_ONLY_FIELDS = ["pidIsProvisional"];
+	const shared = (record) =>
+		Object.keys(record)
+			.filter((key) => !HOOKS_ONLY_FIELDS.includes(key))
+			.sort()
+			.join();
 	check(
-		Object.keys(written.hooks).sort().join() === Object.keys(written.pi).sort().join(),
-		`both claims write the same key set: ${Object.keys(written.hooks).sort().join(", ")}`,
+		shared(written.hooks) === shared(written.pi),
+		`both claims write the same key set apart from the hook-only ${HOOKS_ONLY_FIELDS.join(", ")}: ${shared(written.hooks)}`,
+	);
+	check(
+		HOOKS_ONLY_FIELDS.every((key) => written.pi[key] === undefined),
+		`pi writes none of the hook-only fields (${HOOKS_ONLY_FIELDS.join(", ")}) — if it starts, this is a decision to record, not a drift to absorb`,
 	);
 
 	let refused = 0;
@@ -1259,7 +1285,14 @@ function checkTheOwnerRecordDecodes(hooks, pi, rules, schema) {
 	// Extra keys are FINE — Swift ignores them — and `claimedAt` is exactly that, written by both
 	// and decoded by nobody. Named rather than left as an unexplained asymmetry in the counts.
 	const extra = Object.keys(written.hooks).filter((key) => !schema.some((field) => field.key === key));
-	check(extra.join() === "claimedAt", `the only field the writers emit and Swift ignores is claimedAt (found: ${extra.join(", ") || "none"})`);
+	// `pidIsProvisional` joins `claimedAt` here for a different reason and both are fine: Swift
+	// resolves an owner through its SESSION since #247, so whether the recorded pid was a guess
+	// is a question it never has to ask. The hook reads its own mark and repairs it on the next
+	// prompt; nothing downstream needs it.
+	check(
+		extra.sort().join() === "claimedAt,pidIsProvisional",
+		`the fields the writers emit and Swift ignores are claimedAt and pidIsProvisional (found: ${extra.sort().join(", ") || "none"})`,
+	);
 	ranAtLeast(schema.length, 6, "the owner record");
 }
 
