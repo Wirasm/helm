@@ -290,7 +290,12 @@ const SHARED_NAMES = [
 	"howToReply",
 ];
 
-/** pi's `reap` reports through `warn`; the hook's swallows. Lifted so `reap` can run. */
+/**
+ * pi-only helpers the shared rules above call, lifted so those rules can run at all: `warn` for
+ * `reap` and `consume`, `sanitizeSubject`/`sanitizeFrom` for `notice`. The hook spells the same
+ * two sanitizers inline as `oneLine(…)` calls, which is why they are not in `SHARED_NAMES` —
+ * and why the notice check compares the OUTPUT rather than the functions.
+ */
 const PI_EXTRA_NAMES = ["warn", "sanitizeSubject", "sanitizeFrom"];
 
 async function loadHooks(source = fs.readFileSync(HOOKS_SOURCE, "utf8")) {
