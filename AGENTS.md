@@ -211,6 +211,15 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     sits there. Measured, and it cost the first live run: a terminal opened, a shell ran, and
     no agent ever started. `WorkbenchSpoolSpawner.send` pastes, then sends Return as a
     `text:` binding action.
+- **To read the bench without a display, read helm's snapshot** —
+  `~/.helm/bench/snapshot.json`, or `~/.helm/bench-<suite>/snapshot.json` under
+  `HELM_DEFAULTS_SUITE`; `HELM_BENCH_DIR` explicitly overrides that root. It is private
+  (`0700` directory, `0600` file), atomically replaced JSON *report*, never a restore format.
+  Check `format == "helm.bench-snapshot"`, support its advertised `version`, and check
+  `writtenAt` before acting. Match a spool result's `terminalId` to a terminal pane's `id`;
+  `isVisible` says it is on screen and `isFocused` says it has the keyboard. Parked workspaces
+  preserve arrangement and terminal identity but cannot claim visibility or focus. Read on
+  demand—do not watch the file inode across replacements.
 - **To close a pane again, `swift tools/helm-close.swift <terminal-uuid> [--force]`.** The
   inverse of `helm-spool`, needing what it needs — nothing: a file appears, helm acts, helm
   writes a file back (#176). The uuid is a spawn result's `terminalId`, or the `HELM_PANE` of

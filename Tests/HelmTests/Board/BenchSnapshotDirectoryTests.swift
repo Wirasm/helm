@@ -50,17 +50,64 @@ final class BenchSnapshotDirectoryTests: XCTestCase {
         XCTAssertEqual(permissions(directory.snapshot), 0o600)
     }
 
-    func testEveryReadAcrossRepeatedAtomicReplacementsIsComplete() throws {
-        for second in 0..<200 {
-            let value = BenchSnapshot(
-                writtenAt: Date(timeIntervalSince1970: TimeInterval(second)), workspaces: [])
-            XCTAssertTrue(directory.write(value))
-            XCTAssertEqual(directory.read(), value)
+    func testConcurrentReadersOnlyObserveCompleteSnapshots() {
+        let directory = directory!
+        let failures = Atomic()
+        let start = DispatchGroup()
+        let finished = DispatchGroup()
+        start.enter()
+
+        for _ in 0..<4 {
+            finished.enter()
+            DispatchQueue.global().async { [directory] in
+                start.wait()
+                defer { finished.leave() }
+                for _ in 0..<250 {
+                    if FileManager.default.fileExists(atPath: directory.snapshot.path),
+                        directory.read() == nil
+                    {
+                        failures.increment()
+                    }
+                }
+            }
         }
+
+        finished.enter()
+        DispatchQueue.global().async { [directory] in
+            start.leave()
+            defer { finished.leave() }
+            for second in 0..<250 {
+                let value = BenchSnapshot(
+                    writtenAt: Date(timeIntervalSince1970: TimeInterval(second)), workspaces: [])
+                if !directory.write(value) {
+                    failures.increment()
+                }
+            }
+        }
+
+        finished.wait()
+        XCTAssertEqual(failures.value, 0)
     }
 
     private func permissions(_ url: URL) -> Int? {
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         return (attributes?[.posixPermissions] as? NSNumber)?.intValue
+    }
+}
+
+private final class Atomic: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
 }

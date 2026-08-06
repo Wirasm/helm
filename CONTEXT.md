@@ -167,6 +167,13 @@ Under `HELM_DEFAULTS_SUITE=<name>` it moves to `~/.helm/spool-<name>` with the r
 instance's state.
 _Avoid_: queue, inbox (the mailbox is the inbox), API, control channel
 
+**bench snapshot**:
+A versioned, atomically replaced JSON report at `~/.helm/bench/snapshot.json` that lets an
+agent read mounted and parked workspaces, workbench arrangement, pane/session identity,
+visibility, focus and freshness without a display or request round trip. It is a projection,
+not persistence and never a control channel; the **spool** remains the push channel.
+_Avoid_: bench API, layout database, restore file
+
 **request**:
 One file in the spool, of one **kind**: a `spawn` (`{id, cwd, command, args, prompt}`), a
 `capture` (`{id, kind, path, window}`) or a `close` (`{id, kind, terminal, force}`). Acted on

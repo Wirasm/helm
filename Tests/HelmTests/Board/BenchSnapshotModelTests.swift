@@ -20,6 +20,7 @@ final class BenchSnapshotModelTests: XCTestCase {
     }
 
     private func fixture(
+        refreshInterval: Duration = .seconds(60),
         now: @escaping () -> Date = Date.init,
         foregroundPid: @escaping (TerminalSession) -> pid_t? = { _ in nil },
         writer: BenchSnapshotModel.Writer? = nil
@@ -32,7 +33,7 @@ final class BenchSnapshotModelTests: XCTestCase {
         let model = BenchSnapshotModel(
             directory: BenchSnapshotDirectory(root: root),
             mailboxRoot: root.appendingPathComponent("mail"),
-            refreshInterval: .seconds(60),
+            refreshInterval: refreshInterval,
             now: now,
             foregroundPid: foregroundPid,
             writer: writer)
@@ -143,5 +144,24 @@ final class BenchSnapshotModelTests: XCTestCase {
         workspaces.select(nil)
         for _ in 0..<4 { await Task.yield() }
         XCTAssertEqual(attempts, 2)
+    }
+
+    func testPeriodicRefreshPublishesWithoutAModelChangeAndStops() async throws {
+        var writes: [BenchSnapshot] = []
+        let (model, workspaces, workbench, terminals) = fixture(
+            refreshInterval: .milliseconds(5),
+            writer: {
+                writes.append($0)
+                return true
+            })
+        model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
+
+        try await Task.sleep(for: .milliseconds(25))
+        XCTAssertGreaterThanOrEqual(writes.count, 2)
+
+        model.stop()
+        let writesAfterStop = writes.count
+        try await Task.sleep(for: .milliseconds(15))
+        XCTAssertEqual(writes.count, writesAfterStop)
     }
 }

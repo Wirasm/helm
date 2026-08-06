@@ -26,6 +26,10 @@ struct RootView: View {
     @StateObject private var benchSnapshot = BenchSnapshotModel()
     @ObservedObject private var terminalManager = TerminalManager.shared
 
+    init(benchSnapshot: BenchSnapshotModel = BenchSnapshotModel()) {
+        _benchSnapshot = StateObject(wrappedValue: benchSnapshot)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             WorkspaceBar(
