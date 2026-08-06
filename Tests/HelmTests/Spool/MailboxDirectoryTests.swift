@@ -269,6 +269,36 @@ final class MailboxDirectoryTests: XCTestCase {
         XCTAssertEqual(MailboxDirectory.owners(in: root).map(\.handle), ["good-3333"])
     }
 
+    /// **What #239 costs an `owner.json` already on disk, proved rather than promised.** The
+    /// character rule is enforced on the decode route too, so a file carrying a handle outside
+    /// `[a-z0-9-]` now fails to decode where it used to succeed. This is the test that says what
+    /// that costs: its own row, and nothing else — `owners(in:)`'s `compactMap { try? … }` is
+    /// what makes a throw an absence rather than a crash, exactly as it already does for JSON
+    /// that will not parse at all.
+    ///
+    /// No writer can produce these — both slug to `[a-z0-9-]` before writing, which is why the
+    /// rule was safe to add (`Handle`'s header has the measurement). A hand-edited file, or one
+    /// from a writer that does not exist, is what this covers.
+    ///
+    /// Uses raw JSON rather than the `mailbox(_:...)` helper so the directory name and the
+    /// `handle` field can differ — the unaddressable *handle* is the thing under test.
+    func testAnOwnerOutsideTheWritersAlphabetCostsItsOwnRowAndNothingElse() throws {
+        try mailbox("good-4444", runtime: "claude", pid: 44, sessionId: "…-4444")
+
+        for (directory, handle) in [("upper-case", "Alice"), ("has-space", "my agent")] {
+            let dir = root.appendingPathComponent(directory)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try #"{"handle":"\#(handle)","runtime":"claude","pid":45,"cwd":"/tmp"}"#
+                .write(
+                    to: dir.appendingPathComponent("owner.json"), atomically: true,
+                    encoding: .utf8)
+        }
+
+        XCTAssertEqual(
+            MailboxDirectory.owners(in: root).map(\.handle), ["good-4444"],
+            "a handle no mailbox can be named by costs its own row; the readable one survives")
+    }
+
     func testAMissingMailRootIsAbsenceRatherThanAnError() {
         XCTAssertEqual(
             MailboxDirectory.owners(in: root.appendingPathComponent("nope")).count, 0)

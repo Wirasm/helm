@@ -70,13 +70,16 @@ package struct MailboxOwner: Decodable, Equatable {
     /// **Validated on the way in, not just decoded.** `owner.json` has exactly two writers —
     /// `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts` — and neither is Swift, so
     /// this decode is the one place Swift gets to refuse a malformed file rather than silently
-    /// building a `MailboxOwner` nothing can address. An empty or whitespace-only `handle` is
-    /// exactly that kind of malformed: `MailboxDirectory.owners(in:)`'s own header already
-    /// promises "a missing directory, an unreadable file or a malformed one yields absence
-    /// rather than an error… one bad file costs its own row and nothing else" for JSON that
-    /// fails to parse at all, and its `compactMap { try? decoder.decode(…) }` is what turns a
-    /// thrown error here into that same promise rather than a crash — an empty handle is
-    /// malformed by the same rule, not a different one.
+    /// building a `MailboxOwner` nothing can address. An empty handle is exactly that kind of
+    /// malformed, and since #239 so is one outside `[a-z0-9-]` — the alphabet those two writers'
+    /// `slug` can emit, so neither can produce a file this refuses (`Handle`'s header has the
+    /// measurement, and why the rule is deliberately looser than what they actually emit).
+    /// `MailboxDirectory.owners(in:)`'s own header already promises "a missing directory, an
+    /// unreadable file or a malformed one yields absence rather than an error… one bad file costs
+    /// its own row and nothing else" for JSON that fails to parse at all, and its
+    /// `compactMap { try? decoder.decode(…) }` is what turns a thrown error here into that same
+    /// promise rather than a crash — an unaddressable handle is malformed by the same rule, not a
+    /// different one.
     ///
     /// **It calls `Handle(validating:)` rather than restating it, and that is the fix #233
     /// finished.** #231 closed this hole by copying the trim-and-reject in here, which bought
@@ -90,7 +93,9 @@ package struct MailboxOwner: Decodable, Equatable {
         guard let validated = Handle(validating: raw) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .handle, in: container,
-                debugDescription: "handle must not be empty or whitespace-only")
+                debugDescription:
+                    "handle must be non-empty and drawn from [a-z0-9-] — the alphabet both "
+                    + "owner.json writers' slug emits")
         }
         handle = validated.value
         runtime = try container.decodeIfPresent(String.self, forKey: .runtime)

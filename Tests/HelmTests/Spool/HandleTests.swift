@@ -32,21 +32,104 @@ final class HandleTests: XCTestCase {
         }
     }
 
-    /// **A control, and it must pass: `validating:` is not a typo catcher and does not claim to
-    /// be.** Every candidate here names a directory that does not exist, and every one is
-    /// accepted, because both writers of the address scheme slug harder than this rule does
-    /// (`hooks/helm-mail.mjs:66`, `pi/extensions/helm-mail/index.ts:178` — lowercase, collapse
-    /// `[^a-z0-9]+`). Tightening to match is a behaviour change that would also start rejecting
-    /// already-written files, since every route shares this rule now; it is deferred to its own
-    /// issue with the `helm-mail-cc` case in scope. This test exists so that deferral is
-    /// *recorded* rather than assumed, and so whoever picks it up sees exactly which inputs
-    /// change meaning.
-    func testValidatingDoesNotEnforceTheWritersCharacterRuleAndSaysSo() throws {
+    /// **The record of #239, and it used to say the opposite.** These same three candidates were
+    /// asserted *accepted* here — the test was the deliberate record of the gap, kept so whoever
+    /// closed it would see exactly which inputs change meaning. They are the inputs that changed.
+    ///
+    /// Every one names a directory that does not exist and never will, because both writers of
+    /// the address scheme slug harder than the old rule did — `slug` in `hooks/helm-mail.mjs` and
+    /// in `pi/extensions/helm-mail/index.ts` lowercases and collapses `[^a-z0-9]+` to `-`. Since
+    /// #239 `validating:` enforces that alphabet, and every route shares the rule, so this is a
+    /// behaviour change on all three of them. `Handle`'s header carries the decision and the two
+    /// options it turned down.
+    func testValidatingEnforcesTheWritersCharacterRuleSoAHandleCanNameADirectory() throws {
         for candidate in ["Alice", "my agent", "owner_1234"] {
+            XCTAssertNil(
+                Handle(validating: candidate),
+                "\(candidate.debugDescription) cannot name a mailbox directory — both owner.json "
+                    + "writers would have slugged it — so it must not become a Handle")
+        }
+    }
+
+    /// **The case collision, which is the one with a reported cost.** The macOS default
+    /// filesystem folds case, so `Alice` and `alice` are two agents to a sender and one directory
+    /// to the disk; the doc comment on `slug` in `pi/extensions/helm-mail/index.ts` records that
+    /// as having already lost someone their mail. The refusal is what closes it — and the second
+    /// half of this test is
+    /// the part that matters, because a rule that lowercased instead would also make the first
+    /// half pass while quietly handing `Alice`'s mail to a different real agent.
+    func testValidatingRefusesUppercaseRatherThanFoldingItOntoAnotherAgent() throws {
+        XCTAssertNil(Handle(validating: "Alice"), "Alice cannot name a directory the writers make")
+        XCTAssertEqual(
+            Handle(validating: "alice")?.value, "alice", "and the lowercase one is still fine")
+        XCTAssertNotEqual(
+            Handle(validating: "Alice")?.value, "alice",
+            "refused, never normalised — silently answering with a different agent's address is "
+                + "the failure MailboxDirectory's header forbids for derivation")
+    }
+
+    /// **The control that stops the rule overshooting.** Every candidate must survive: refusing
+    /// one would make helm unable to read a mailbox it created.
+    ///
+    /// **These are real outputs, obtained by running the real code.** `slug`, `tail`,
+    /// `heldByAnother` and `deriveHandle` were lifted verbatim out of the writers by
+    /// brace-matching the file text and executed — not transcribed from reading them. The first
+    /// draft of this test did transcribe them, got `tail` wrong (it strips edge dashes; the draft
+    /// assumed it did not), and pinned `helm--678` here as a reachable handle. It is not
+    /// reachable — the real answer is `helm-678` — and `Handle`'s header now says so. Re-derive
+    /// rather than re-read if this list ever needs another entry.
+    ///
+    /// **And from *both* writers, which is why one entry below is new.** That first
+    /// re-measurement ran `hooks/helm-mail.mjs` only, while everything it was cited in support of
+    /// said "the writers". They are not the same function: where every candidate handle is held,
+    /// `hooks` returns `<where>-<full>` and `pi/extensions/helm-mail/index.ts` returns
+    /// `<where>-<full>-<process.pid>`. That shape is reachable, is a handle helm must be able to
+    /// read, and no `hooks` run could ever have produced it.
+    func testEveryHandleTheWritersCanEmitIsStillAccepted() throws {
+        let corpus = [
+            "helm-4831",  // the ordinary shape: <cwd basename>-<tail of session id>
+            "agentic-coding-course-c9db",  // a multi-word basename, slugged
+            "agent",  // slug's own fallback when a component reduces to nothing
+            // deriveHandle("/x/helm", "12345-678"): tail(full, 4) slices "-678" and strips the
+            // leading dash. The one entry where tail() itself does the stripping — and the case
+            // the draft got wrong, having assumed it did not.
+            "helm-678",
+            "agent-gent",  // deriveHandle("/x/---", "---") — both components hit slug's fallback
+            // deriveHandle("/x/a", "-b-"): slug("-b-") is already "b", so full.length is 1, no
+            // width in [4, 6, 8] is smaller, and tail() is never called at all. The dashes went
+            // to slug's own edge-strip. Traced by executing it — an earlier comment here credited
+            // tail, which is this file's own cautionary tale repeated one size smaller.
+            "a-b",
+            "helm-f9e4639d-1111-2222-3333-444455556666",  // the full-session-id candidate
+            "helm-12345-678-44347",  // pi's exhaustion fallback — it appends process.pid
+            "0",  // a basename that is only digits
+        ]
+        for candidate in corpus {
+            XCTAssertEqual(
+                Handle(validating: candidate)?.value, candidate,
+                "\(candidate.debugDescription) is a handle deriveHandle can produce; refusing it "
+                    + "would make helm unable to read a mailbox it created")
+        }
+    }
+
+    /// **The margin, recorded so it reads as a choice rather than an oversight.** The writers can
+    /// only emit `[a-z0-9]+(-[a-z0-9]+)*` — no edge dash, no `--`, measured over 225,702 fuzzed
+    /// derivations of the real `hooks` `deriveHandle` and 238,202 of pi's, none outside it. This
+    /// rule is looser than that on purpose: it refuses characters and says nothing about where
+    /// dashes fall, so it depends on one property of the far side instead of three. `Handle`'s
+    /// header has the argument, and the reason it matters — that measurement was taken once and
+    /// no *test* runs the real writers against this rule, so the boundary is unwatched and the
+    /// cheaper dependency is the safer one.
+    ///
+    /// If a later change *does* constrain dash placement, this test is what should be deleted to
+    /// say so — deliberately, with the header updated in the same commit.
+    func testTheRuleIsLooserThanWhatTheWritersEmitAndThatIsDeliberate() throws {
+        for candidate in ["helm--678", "-helm", "helm-"] {
             XCTAssertNotNil(
                 Handle(validating: candidate),
-                "\(candidate.debugDescription) is refused now — that is a deliberate behaviour "
-                    + "change, so update this test and Handle(validating:)'s header together")
+                "\(candidate.debugDescription) is accepted on purpose: no writer emits it, but "
+                    + "refusing it would couple this rule to how deriveHandle composes tail(), "
+                    + "not just to the characters slug() emits")
         }
     }
 
@@ -125,6 +208,31 @@ final class HandleTests: XCTestCase {
             XCTAssertThrowsError(
                 try JSONDecoder().decode(Handle.self, from: Data("\"\(escaped)\"".utf8)),
                 "the Handle decode route must refuse \(unescaped.debugDescription)")
+        }
+    }
+
+    /// **The same agreement for #239's half of the rule.** Kept separate from the
+    /// whitespace test above rather than folded into its candidate list, because the two refusals
+    /// have different reasons and a single list would stop saying which: those candidates address
+    /// nobody because they are *blank*, these because they are outside the alphabet the writers
+    /// emit. If decode ever stopped calling `validating:`, the third assertion here is what
+    /// notices — and that is the route whose stricter behaviour is the actual cost of #239, since
+    /// it is the one that reads files off disk.
+    func testEveryRouteRefusesTheSameUnaddressableHandle() throws {
+        for candidate in ["Alice", "my agent", "owner_1234", "helm_4831", "héllo", "UPPER"] {
+            XCTAssertNil(
+                Handle(validating: candidate),
+                "the caller-named route must refuse \(candidate.debugDescription)")
+
+            let owner = Data(
+                #"{"handle":"\#(candidate)","runtime":"claude","pid":4242,"cwd":"/tmp"}"#.utf8)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(MailboxOwner.self, from: owner),
+                "the owner.json route must refuse \(candidate.debugDescription)")
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(Handle.self, from: Data("\"\(candidate)\"".utf8)),
+                "the Handle decode route must refuse \(candidate.debugDescription)")
         }
     }
 
