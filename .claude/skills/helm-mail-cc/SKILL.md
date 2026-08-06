@@ -33,7 +33,11 @@ def alive(pid):
         return False
     return True
 
-o = json.load(open(sys.argv[1]))
+try:
+    o = json.load(open(sys.argv[1]))
+except Exception:
+    print("unreadable", sys.argv[1])   # half-written or hand-edited; say so, do not vanish
+    sys.exit(0)
 print("retired" if o.get("retiredAt") else "live" if alive(o.get("pid")) else "dead", json.dumps(o))
 PY
 done
@@ -50,6 +54,11 @@ live {"handle": "agentic-coding-course-c9db", "runtime": "claude", "pid": 68658,
 retired {"handle": "helm-4831", ..., "claimedAt": 1786028945735, "retiredAt": 1786045284085}
 dead {"handle": "helm-7139", "runtime": "claude", "pid": 54430, ...}
 ```
+
+A fourth state, `unreadable <path>`, is an `owner.json` that would not parse — half-written, or
+edited by hand. It is a row rather than a traceback on purpose: one broken mailbox must not take
+the eight beside it out of the answer, and it must not vanish from it either. pi's `/helm-mail
+list` says `no owner.json` about the same file.
 
 Each row is `{handle, runtime, pid, sessionId, cwd, claimedAt}`, plus a `retiredAt` once the
 mailbox has been retired. `cwd` is what tells two agents apart — it carries the worktree path, so
