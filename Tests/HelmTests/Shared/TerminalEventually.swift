@@ -78,12 +78,23 @@ struct MissingTerminalSurface: Error, CustomStringConvertible {
         THIS IS NOT A FOCUS BUG AND PROBABLY NOT YOUR DIFF. ghostty_surface_new refused to \
         create the surface. It says why in the unified log, which outlives the test run:
 
-            log show --last 30m --style compact \
-        --predicate 'subsystem == "com.mitchellh.ghostty"'
+            /usr/bin/log show --last 30m --style compact \
+        --predicate 'subsystem == "com.mitchellh.ghostty" OR subsystem == "com.apple.corevideo"'
 
-        Look for `embedded_window: error initializing surface`. If it is there, every \
+        The absolute path is load-bearing: `log` is a zsh builtin, so a bare `log show` under \
+        zsh answers "too many arguments" and, through a pipe, exits 0 with no output — which \
+        reads as an empty log and is not one (#249).
+
+        Look for `embedded_window: error initializing surface`, and for the CoreVideo line a \
+        millisecond before it: `CVDisplayLinkCreateWithCGDisplays error -6661 due to invalid \
+        display count (0)`. That pair is every display asleep, not memory — `error.OutOfMemory` \
+        is ghostty's misleading name for a failed display link (#253). If it is there, every \
         keystroke assertion in this suite will fail for that reason alone, on any tree, \
         including trees that were green an hour ago — measured in #192.
+
+        If the log window has rolled and says nothing, run the control instead: revert to \
+        origin/development, grep to confirm the revert landed, rebuild, and see the same \
+        failures on the pristine base.
         """
     }
 }
