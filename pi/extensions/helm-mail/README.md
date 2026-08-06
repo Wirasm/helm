@@ -54,17 +54,38 @@ a person would. `owner.json` carries the cwd, so *"the one in the auth worktree"
 ~/.helm/mail/                        ($HELM_MAIL_DIR overrides the root)
   helm-a3f9/
     owner.json                       {handle, runtime, pid, sessionId, cwd, claimedAt}
+                                     plus retiredAt once its owner is gone
     1785753688503-9f2a1c.json        a waiting message
     read/
       1785753612001-3ab77e.json      consumed, kept as the record
 ```
 
-**A dead agent's empty mailbox is reaped** on the next claim. A mailbox that only grows is the
-defect helm already paid for twice ([#46](https://github.com/Wirasm/helm/issues/46)'s 1,514
-leaked domains, [#91](https://github.com/Wirasm/helm/issues/91)'s 17 terminal ids against 2 live
-shells) — and a dead agent must stop being *addressable*, or a sender picks it out of a listing
-and nobody ever reads the message. Reaping is conservative: a mailbox still holding mail is kept
-even when its owner is dead, and an owner file that cannot be read is left alone.
+**A dead agent's empty mailbox is retired** on the next claim, and on its own way out. A mailbox
+that only grows is the defect helm already paid for twice
+([#46](https://github.com/Wirasm/helm/issues/46)'s 1,514 leaked domains,
+[#91](https://github.com/Wirasm/helm/issues/91)'s 17 terminal ids against 2 live shells) — and a
+dead agent must stop being *addressable*, or a sender picks it out of a listing and nobody ever
+reads the message. Reaping is conservative: a mailbox still holding mail is left live even when its
+owner is dead, and an owner file that cannot be read is left alone.
+
+**Retired, never deleted** — [#236](https://github.com/Wirasm/helm/issues/236). `retiredAt` is
+written into `owner.json` and the directory stays where it is. Deleting cost three things the goal
+never asked for: `read/`, which is the only durable record of what agents said to each other; an
+in-flight send, because a sender's `.tmp-<id>` does not count as queued mail and the directory
+could vanish mid-write; and the difference between *"this agent existed and is gone"* and *"this
+handle never existed"*, which is exactly what a sender holding an old handle needs told apart.
+`/helm-mail list` marks a retired mailbox `[retired]`, and a send to one is refused with a reason.
+
+A retired mailbox costs **no** handle width — it is free to take, like any dead owner's. And a
+session that comes back re-claims its own, archive intact, because a mailbox is found by session
+id rather than by pid.
+
+**Liveness is decided from the session, not from the pid.** `owner.json` records a pid when the
+session starts and is never rewritten, so a helm restart brings every agent back under a *new* pid
+and leaves a corpse in every owner file. For a `runtime: "claude"` mailbox the answer is Claude
+Code's own registry — `<config>/sessions/<pid>.json` — which this extension reads even though pi
+has no such registry of its own, because pi's reaper sweeps the shared root and judges Claude
+Code's mailboxes too. Reading the pid alone deleted a running agent's mailbox on 2026-08-06.
 
 ## Sending from a Claude Code agent
 
@@ -94,7 +115,7 @@ and is not built here.
 
 | Surface | Name | Notes |
 |---|---|---|
-| Event handler | `session_start` | Claims the handle, reaps dead mailboxes, reports. |
+| Event handler | `session_start` | Claims the handle, retires dead mailboxes, reports. |
 | Event handler | `agent_settled` | The drain. This is rung 4 for pi. |
 | Command | `/helm-mail` | `status` · `list` · `read` · `send <handle> <message>` |
 

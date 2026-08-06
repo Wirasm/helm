@@ -29,6 +29,49 @@ final class MailboxDirectoryTests: XCTestCase {
         .write(to: dir.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
     }
 
+    private func retiredMailbox(_ handle: String, pid: Int, sessionId: String) throws {
+        let dir = root.appendingPathComponent(handle)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try """
+        {"handle":"\(handle)","runtime":"claude","pid":\(pid),
+         "sessionId":"\(sessionId)","cwd":"/tmp","claimedAt":1785831967319,
+         "retiredAt":1786040000000}
+        """
+        .write(to: dir.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
+    }
+
+    /// #236: a retired mailbox keeps its `owner.json` forever, so helm has to stop joining to it.
+    ///
+    /// Before #236 this was true for free — a gone owner's file was deleted, so no row existed to
+    /// match. Now the row survives with its last-known pid, and macOS reuses pids. The day one is
+    /// handed to an unrelated live terminal, the join would answer with a dead agent's handle and
+    /// say nothing about it.
+    func testARetiredMailboxIsNeverJoinedEvenWhenItsPidComesBack() throws {
+        try retiredMailbox("helm-4831", pid: 14832, sessionId: "…-4831")
+        try mailbox("sild-2dd3", runtime: "pi", pid: 22001, sessionId: "…-2dd3")
+
+        let owners = MailboxDirectory.owners(in: root)
+        XCTAssertEqual(owners.map(\.handle), ["sild-2dd3"], "a retired owner was still addressable")
+
+        // The hazard, staged: pid 14832 is alive again and belongs to someone else entirely.
+        let reused = MailboxDirectory.owner(
+            in: owners, foregroundPid: 14832, shellPid: 1, ancestors: { _ in [] })
+        XCTAssertNil(reused, "a reused pid matched a RETIRED mailbox — #236's join hazard")
+    }
+
+    /// The control: retirement must cost only the retired row. A fix that returned nothing at all
+    /// would satisfy the assertion above and break every live lookup.
+    func testAnOwnerWithNoRetiredAtIsStillAddressable() throws {
+        try mailbox("helm-4831", runtime: "claude", pid: 14832, sessionId: "…-4831")
+        let owners = MailboxDirectory.owners(in: root)
+        XCTAssertEqual(owners.count, 1, "a live owner was dropped alongside the retired ones")
+        XCTAssertNil(owners.first?.retiredAt)
+        XCTAssertEqual(
+            MailboxDirectory.owner(
+                in: owners, foregroundPid: 14832, shellPid: 1, ancestors: { _ in [] })?.handle,
+            "helm-4831")
+    }
+
     func testOneJoinOnPidAnswersForBothRuntimes() throws {
         // The Claude session registry publishes no row for pi at all. `owner.json` does, with
         // the same fields — so this replaces "a source of truth plus a degradation path".
