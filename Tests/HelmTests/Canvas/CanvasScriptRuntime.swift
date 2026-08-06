@@ -1,6 +1,5 @@
 import Foundation
 import JavaScriptCore
-import XCTest
 
 @testable import Helm
 
@@ -72,6 +71,8 @@ final class CanvasScriptRuntime {
     func scroll(x: Double, y: Double) { call("scrollTo", x, y) }
 
     /// Page coordinates, which is what the operator's hand means and what the stroke stores.
+    /// Returns whether the script called `preventDefault()` — the page taking the pointer over
+    /// from the browser, which it may only do for a gesture it is actually going to draw.
     @discardableResult
     func mouse(_ type: String, _ x: Double, _ y: Double, button: Int = 0) -> Bool {
         call("mouse", type, x, y, button)?.toBool() ?? false
@@ -121,9 +122,7 @@ final class CanvasScriptRuntime {
     /// Every message the page posted, in order, exactly as `WKScriptMessage.body` would
     /// present it: `NSDictionary`/`NSString`/`NSNumber` bridged out of JavaScriptCore.
     var posted: [[String: Any]] {
-        let raw =
-            context.objectForKeyedSubscript("__helm")?
-            .objectForKeyedSubscript("posted")?.toArray() ?? []
+        let raw = helm?.objectForKeyedSubscript("posted")?.toArray() ?? []
         return raw.compactMap { $0 as? [String: Any] }
     }
 
@@ -178,9 +177,10 @@ final class CanvasScriptRuntime {
 
     // MARK: -
 
+    private var helm: JSValue? { context.objectForKeyedSubscript("__helm") }
+
     @discardableResult
     private func call(_ name: String, _ arguments: Any...) -> JSValue? {
-        context.objectForKeyedSubscript("__helm")?
-            .objectForKeyedSubscript(name)?.call(withArguments: arguments)
+        helm?.objectForKeyedSubscript(name)?.call(withArguments: arguments)
     }
 }

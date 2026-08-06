@@ -106,12 +106,18 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         let page = try CanvasScriptRuntime()
         page.setTool(.freehand)
 
-        page.mouse("mousedown", 100, 40, button: 2)
+        XCTAssertFalse(
+            page.mouse("mousedown", 100, 40, button: 2),
+            "the default must survive, or the page's own context menu never opens")
         page.mouse("mousemove", 200, 200)
         page.mouse("mouseup", 200, 200)
 
         XCTAssertTrue(page.posted.isEmpty)
         XCTAssertFalse(page.hasMarkLayer, "and nothing was drawn on the way")
+
+        XCTAssertTrue(
+            page.mouse("mousedown", 100, 40),
+            "while a primary press does take the pointer, or the drag selects text instead")
     }
 
     // MARK: Text selection, which predates every tool
