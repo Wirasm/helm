@@ -206,9 +206,21 @@ case "$OUT" in *rename*) teaches=$((teaches + 1)) ;; esac
 # The wake, and the half only this runtime needs told. A pi extension is a live event loop and
 # watches its own mailbox; a hook is a process at a fixed moment and cannot. So the Claude Code
 # agent has to arm the watch itself, and the only place it can learn that is here.
+# The WHOLE command, not just the directory. This assertion used to stop at `$root/$handle`, so
+# everything after the handle was unpinned and could have been any string at all — which is how a
+# `*.json` glob sat in the notice unnoticed. zsh and fish both treat an unmatched glob as a FATAL
+# error (measured: exit 1 and exit 124), so a glob-armed watch dies the moment it matches nothing.
+# `owner.json` normally matches and hides this — until the mailbox is gone, which is what the
+# deletion this PR removes used to do. Same spelling as the one /helm-mail-cc hands out (#237).
 case "$OUT" in
-*"watch: $root/$handle"*) ok "the notice tells the agent to watch its own mailbox, and where" ;;
+*"watch: find \"$root/$handle\" -maxdepth 1 -name '*.json' ! -name 'owner.json' -type f"*)
+	ok "the notice hands out a watch command that survives an empty mailbox" ;;
 *) bad "deliver: the notice does not say how to stay reachable while idle:\n$OUT" ;;
+esac
+case "$OUT" in
+*"watch: $root/$handle/*.json"*)
+	bad "deliver: the notice still hands out the bare glob — it is fatal under zsh and fish" ;;
+*) ok "and it is not the bare glob, which dies on an empty mailbox" ;;
 esac
 case "$OUT" in
 *"re-arm"*) ok "it says to re-arm, so a watch that ends does not leave the agent dark" ;;
