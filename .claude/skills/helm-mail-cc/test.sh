@@ -164,11 +164,151 @@ done
 
 # The control for the two above: it must still print the rows when there ARE mailboxes. A listing
 # that survives an empty root by listing nothing ever would pass the checks above and fail this.
+#
+# The owner here is VALID JSON missing an optional field — the shape every mailbox claimed before
+# `retiredAt` existed has, and the shape a fragment has. It must come out as a row saying `dead`,
+# because a mailbox with no pid is a mailbox nobody can be shown to be listening to. Genuinely
+# unparseable JSON is a different case and is checked separately, below.
 mkdir -p "$tmp/emptyroot/a-1111"
 printf '{"handle":"a-1111"}\n' >"$tmp/emptyroot/a-1111/owner.json"
 printf '%s\n' "$(extract_block "$cc" '^## Who is reachable')" | sed "s|~/.helm/mail|$tmp/emptyroot|g" >"$tmp/listing.zsh"
 check "and still prints a mailbox that is there" \
-    '{"handle":"a-1111"}' "$(zsh "$tmp/listing.zsh" 2>/dev/null)"
+    'dead {"handle": "a-1111"}' "$(zsh "$tmp/listing.zsh" 2>/dev/null)"
+
+printf '\nretired mailboxes in the documented listing (both skills)\n'
+
+# #236 changed a dead mailbox from DELETED to RETIRED: reaping rewrites `owner.json` with a
+# `retiredAt` and leaves the directory and its `read/` where they are. Both skills went on
+# teaching `kill -0 <pid>` as THE liveness test, which cannot see that — a retired owner's pid
+# may well still be alive (the `/clear` ghost's is, and the kernel reuses pids), so the pid alone
+# calls a mailbox nobody is listening to perfectly healthy. That is #248, and an agent following
+# the documented procedure sends into it and gets silence.
+#
+# So the listing is run against all four corners of retired × pid-alive, and the ORDER of the two
+# checks is what `retired-live` and `retired-dead` pin down. Executed rather than grepped for the
+# same reason as everything else in this file: a grep proves the word `retiredAt` is in the doc,
+# not that the snippet beside it acts on the field.
+#
+# The owner.json files are written here rather than by `hooks/helm-mail.mjs`, because this gate
+# needs only bash, zsh and python3 and adding node to it would make every contributor need node —
+# see the header, and AGENTS.md on the Swift gate for the same rule. The shape they copy is
+# `writeAtomic`'s payload in `hooks/helm-mail.mjs` and `Owner` in
+# `pi/extensions/helm-mail/index.ts`, checked by hand against a mailbox the real hook had
+# actually retired. THIS IS A THIRD SITE for that shape and neither of the other two names it:
+# if either grows a field the listing's verdict depends on, `owner_file` below is where this gate
+# has to learn it. What it depends on today is `pid` and `retiredAt`, and nothing else.
+
+# One pid that is certainly alive and one that is certainly dead, both established by this run —
+# so neither is a guess about what the machine happens to be doing at the time. `$$` is this
+# script, which is alive for as long as there is anyone to ask; the other is a child that has
+# already been reaped, and macOS hands out pids sequentially, so it will not come back during
+# the second this takes.
+live_pid=$$
+(exit 0) &
+dead_pid=$!
+wait "$dead_pid" 2>/dev/null
+
+# <root> <handle> <pid> <retiredAt, or empty for a live claim>
+owner_file() {
+    mkdir -p "$1/$2"
+    python3 -c '
+import json, sys
+o = {"handle": sys.argv[1], "runtime": "claude", "pid": int(sys.argv[2]),
+     "sessionId": "s-" + sys.argv[1], "cwd": "/tmp/w/" + sys.argv[1], "claimedAt": 1786028945735}
+if sys.argv[3]:
+    o["retiredAt"] = int(sys.argv[3])
+json.dump(o, open(sys.argv[4], "w"), indent=2)' "$2" "$3" "$4" "$1/$2/owner.json"
+}
+owner_file "$tmp/states" boxlive "$live_pid" ""
+owner_file "$tmp/states" boxdead "$dead_pid" ""
+owner_file "$tmp/states" boxretlive "$live_pid" 1786045284085
+owner_file "$tmp/states" boxretdead "$dead_pid" 1786045284086
+
+# The state the listing put in front of the word `{`, for one handle. Anchored on the quotes so
+# `boxlive` cannot match `s-boxlive` or `/tmp/w/boxlive` on some other row's line.
+state_of() { printf '%s\n' "$2" | grep -F "\"$1\"" | awk '{print $1}'; }
+
+for f in "$cc" "$pi"; do
+    name=$(basename "$(dirname "$f")")
+    printf '%s\n' "$(extract_block "$f" '^## Who is reachable')" | sed "s|~/.helm/mail|$tmp/states|g" >"$tmp/listing.zsh"
+    out=$(zsh "$tmp/listing.zsh" 2>/dev/null)
+
+    # The acceptance criterion of #248. The pid is alive, so anything asking the pid first says
+    # `live` about a mailbox that will never be read again.
+    check "$name marks a retired mailbox whose pid is still alive as retired" \
+        retired "$(state_of boxretlive "$out")"
+    # And the order, from the other side: with a dead pid both fields point the same way, so a
+    # `dead` here means the pid was reached first and `retiredAt` was never asked.
+    check "$name marks a retired mailbox whose pid is dead as retired, not dead" \
+        retired "$(state_of boxretdead "$out")"
+
+    # CONTROL — must pass either way, and fails if the fix overshoots by calling everything
+    # retired. A listing that marked every row retired would satisfy both checks above.
+    check "$name still marks a live mailbox live" live "$(state_of boxlive "$out")"
+    # CONTROL — the pid check must SURVIVE. Reaping only runs when some agent starts a session,
+    # so an idle machine keeps dead owners with no `retiredAt` on them, and `retiredAt` alone
+    # would call this one live.
+    check "$name still marks a dead pid with no retiredAt as dead" dead "$(state_of boxdead "$out")"
+    # CONTROL — retired rows are SHOWN, not filtered out. Hiding them throws away the whole
+    # argument for retiring instead of deleting: a sender holding an old handle learns "that
+    # agent is gone" rather than "no such handle".
+    check "$name shows all four mailboxes, retired ones included" 4 \
+        "$(printf '%s\n' "$out" | grep -c '"handle"')"
+done
+
+printf '\nan owner.json that will not parse (both skills)\n'
+
+# The listing PARSES owner.json now, where `-exec cat` never did, so a half-written or hand-edited
+# file is a case the old form did not have. Unguarded it is a python traceback on stderr and NO row
+# at all — the mailbox silently leaves the answer to "who is reachable", which is the worst of the
+# three possible behaviours. It must be a row that says so, the way pi's `peers()` prints
+# `no owner.json` rather than dropping the handle.
+mkdir -p "$tmp/broken/torn-0001"
+printf '{"handle":"torn-0001","runtime":"clau' >"$tmp/broken/torn-0001/owner.json"
+owner_file "$tmp/broken" intact-0002 "$live_pid" ""
+
+for f in "$cc" "$pi"; do
+    name=$(basename "$(dirname "$f")")
+    printf '%s\n' "$(extract_block "$f" '^## Who is reachable')" | sed "s|~/.helm/mail|$tmp/broken|g" >"$tmp/listing.zsh"
+    out=$(zsh "$tmp/listing.zsh" 2>/dev/null)
+    check "$name reports an unparseable owner.json instead of dropping it" \
+        unreadable "$(printf '%s\n' "$out" | grep -F torn-0001 | awk '{print $1}')"
+    # CONTROL — must pass either way, and is what says the check above is not satisfied by a
+    # listing that has simply died. One bad mailbox must not cost the good ones.
+    check "$name still lists the mailbox beside it" live "$(state_of intact-0002 "$out")"
+done
+
+printf '\nthe documented send into a RETIRED mailbox (both skills)\n'
+
+# The new paragraph in both Sending sections claims the `||` guard cannot see a retired mailbox:
+# the directory is deliberately still there, so the rename succeeds and reports success while
+# nobody will ever read the file. Everything else in this gate is executed rather than asserted,
+# and that claim should not be the exception — it is the precise reason #248 matters.
+#
+# So this is a TRIPWIRE rather than a bug hunt: it passes today and it is meant to. It goes red the
+# day the documented send grows a `retiredAt` check of its own — at which point the paragraph
+# beside it is wrong and has to change with it.
+for f in "$cc" "$pi"; do
+    name=$(basename "$(dirname "$f")")
+    box="sendret-$name"
+    owner_file "$tmp/sendroot" "$box" "$live_pid" 1786045284085
+
+    # `<your handle>` and the example `TO=` are what a reader replaces. Left in place, `<your
+    # handle>` is a redirection under zsh and the send would die for a reason that has nothing to
+    # do with the property under test — the same trap the Arm block guards against above.
+    printf '%s\n' "$(extract_block "$f" '^## Sending')" |
+        sed -e "s|^TO=.*|TO=$box; FROM=gate-0000|" -e "s|~/.helm/mail|$tmp/sendroot|g" >"$tmp/send.zsh"
+    if grep -q "^TO=$box; FROM=gate-0000\$" "$tmp/send.zsh"; then
+        ok "$name — the send block's TO/FROM line is where the reader substitutes"
+    else
+        bad "$name — could not point the send block at a temp box; the TO= line changed shape"
+    fi
+
+    sent=$(zsh "$tmp/send.zsh" 2>/dev/null)
+    check "$name — the send REPORTS SUCCESS into a retired mailbox" "" "$sent"
+    check "$name — and the message really did land there, unread" 1 \
+        "$(find "$tmp/sendroot/$box" -maxdepth 1 -name '*.json' ! -name owner.json -type f | wc -l | tr -d ' ')"
+done
 
 printf '\nthe documented send (both skills)\n'
 
