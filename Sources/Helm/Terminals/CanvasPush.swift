@@ -45,6 +45,14 @@ import Foundation
 struct CanvasPushRequest: Equatable {
     let artifact: URL
     let workspacePath: WorkspacePath
+    /// The terminal whose output asked — so a mark the operator later makes on this canvas can
+    /// be routed back to the agent that put it there (#205).
+    ///
+    /// **The identity is in scope at exactly one moment and this is it.** The classification runs
+    /// on a `TerminalSession`, which knows its own pane id, its pid and therefore its mailbox;
+    /// one hop later there is a canvas on a bench and nothing left saying where it came from.
+    /// That drop is #210's second seam, and carrying the value costs one field.
+    let origin: CanvasOrigin
 }
 
 /// Collapses a burst of refusals to one.

@@ -582,7 +582,11 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
         switch CanvasPush.classify(title: title, body: body) {
         case let .open(url):
             HelmCommand.pushCanvasFile(
-                CanvasPushRequest(artifact: url, workspacePath: workspacePath)
+                CanvasPushRequest(
+                    artifact: url, workspacePath: workspacePath,
+                    // This session is the agent that asked, and this is the only place that is
+                    // known — see `CanvasPushRequest.origin`.
+                    origin: CanvasOrigin(terminal: id))
             ).post()
             return
         case let .refused(why):
