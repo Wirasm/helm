@@ -23,6 +23,7 @@ struct RootView: View {
     /// what stops two of them acting on one request — the same mechanism that already has to
     /// hold between two helm *processes*.
     @StateObject private var spool = SpoolModel()
+    @StateObject private var benchSnapshot = BenchSnapshotModel()
     @ObservedObject private var terminalManager = TerminalManager.shared
 
     var body: some View {
@@ -53,6 +54,8 @@ struct RootView: View {
         .task {
             model.observe(terminals: terminalManager, workbench: workbench)
             activateSelectedWorkspace()
+            benchSnapshot.start(
+                workspaces: model, workbench: workbench, terminals: terminalManager)
             // `--artifact <path>` (`LaunchOptions.artifactPath`) — a launch seam for
             // driving helm into a given state without keystroke injection. It opens into
             // whichever pane placement chooses, exactly like a ⌘-clicked link.
@@ -76,6 +79,7 @@ struct RootView: View {
                 closer: WorkbenchSpoolCloser(workbench: workbench, terminals: terminalManager))
             spool.start()
         }
+        .onDisappear { benchSnapshot.stop() }
         // The context is written by `WorkspaceModel.observe`, which sinks BOTH the
         // manager's and the bench's `objectWillChange`. It lives on the model rather than
         // here for the reason that file records at length: two earlier attempts in this
