@@ -21,9 +21,9 @@ import Foundation
 ///
 /// Encodes as a bare string through a single-value container, exactly like `WorkspacePath` —
 /// `SpoolResult.terminalId` is read by three standalone scripts as `json["terminalId"] as?
-/// String`, and that shape must not change. (`BenchSnapshot.OwnerRecord` carries an unrelated
-/// `handle` field of its own and is out of scope for this type — see #227, running
-/// concurrently in that file.)
+/// String`, and that shape must not change. (`BenchSnapshot.OwnerRecord.handle` is a `Handle`
+/// since #233, not the unrelated bare `String` this note used to describe — a sibling newtype
+/// with the same wire obligation, still not this type's business.)
 package struct TerminalID: Codable, Equatable, Hashable, Sendable {
     package let uuid: UUID
 

@@ -41,19 +41,23 @@ package struct MailboxOwner: Decodable, Equatable {
     /// rather than an error… one bad file costs its own row and nothing else" for JSON that
     /// fails to parse at all, and its `compactMap { try? decoder.decode(…) }` is what turns a
     /// thrown error here into that same promise rather than a crash — an empty handle is
-    /// malformed by the same rule, not a different one. Trimmed as well as checked, so
-    /// `handle` is never stored with the leading/trailing whitespace a hand-edited file might
-    /// carry — the same normalization `Handle(validating:)` applies to a caller-named one.
+    /// malformed by the same rule, not a different one.
+    ///
+    /// **It calls `Handle(validating:)` rather than restating it, and that is the fix #233
+    /// finished.** #231 closed this hole by copying the trim-and-reject in here, which bought
+    /// the behaviour and left two hand-maintained spellings of one rule with only a comment
+    /// asking them to agree — the same defect one size smaller, and one that had already shipped
+    /// once between these very routes (`9863944`). Trimming comes with the call, so `handle` is
+    /// still never stored with the whitespace a hand-edited file might carry.
     package init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let raw = try container.decode(String.self, forKey: .handle)
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        guard let validated = Handle(validating: raw) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .handle, in: container,
                 debugDescription: "handle must not be empty or whitespace-only")
         }
-        handle = trimmed
+        handle = validated.value
         runtime = try container.decodeIfPresent(String.self, forKey: .runtime)
         pid = try container.decode(pid_t.self, forKey: .pid)
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
