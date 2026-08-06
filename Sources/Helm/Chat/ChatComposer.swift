@@ -62,6 +62,7 @@ struct ChatComposer: View {
                 .foregroundStyle(Color.textPrimary)
                 .focused($focused)
                 .onSubmit(submit)
+                .onKeyPress(.return, phases: .down, action: startALine)
 
             Button(action: submit) {
                 Image(systemName: "arrow.up.circle.fill")
@@ -120,6 +121,29 @@ struct ChatComposer: View {
             return "The agent is waiting on a prompt — answer it in the terminal (⌘T)"
         case .shell: return "A command is running — it can be messaged when it stops"
         }
+    }
+
+    /// **Enter sends, Shift+Enter starts a line** — and the second half has to be said,
+    /// because AppKit does not know it.
+    ///
+    /// `StandardKeyBinding.dict` binds `\r` to `insertNewline:` and `~\r` (Option-Return)
+    /// to `insertNewlineIgnoringFieldEditor:`, and it has **no entry for Shift-Return at
+    /// all**: shift does not change the character a Return produces, so a shifted Return
+    /// resolves through the plain one and `.onSubmit` fires. Shift+Enter therefore *sent*
+    /// the draft, and the second line the operator was part-way through typing never
+    /// existed (#119). Every agent TUI helm talks to spells the newline this way, so the
+    /// muscle memory arrives with the operator.
+    ///
+    /// Returning `.ignored` for everything else is what keeps this from being a second
+    /// route around `submit` — plain Enter still travels `.onSubmit`, and ⌥Return still
+    /// reaches AppKit's own binding, which inserts **at the caret** where this appends at
+    /// the end. That difference is real and is the price of a `TextField` bound to a
+    /// `String`: SwiftUI exposes no selection to insert into. It is visible the moment it
+    /// happens rather than silent, and ⌥Return is the exact key for the mid-sentence case.
+    private func startALine(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.contains(.shift) else { return .ignored }
+        draft += "\n"
+        return .handled
     }
 
     private func submit() {
