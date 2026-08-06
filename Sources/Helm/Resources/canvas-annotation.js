@@ -43,8 +43,60 @@
     return yes;
   }
 
-  // Everything the loop encircles, by CENTRE rather than by any overlap: a stroke
-  // that grazes a neighbour did not mean the neighbour.
+  // Everything the loop encircles — an element is a target when the loop covers most of IT.
+  //
+  // Not "the loop contains its centre", which is the rule this replaces and the defect in
+  // #208. Centre-testing is a good defence against a SIBLING the stroke grazed, and no defence
+  // at all against an ANCESTOR: <article id="content"> wraps the whole page, so its centre IS
+  // the page's centre, and every loop drawn near the middle of a document also returned the
+  // entire document — listed first, in document order, with a 400-character quote of mermaid's
+  // injected CSS behind it.
+  //
+  // Coverage is asymmetric, and that asymmetry is the whole fix: an element larger than the
+  // loop cannot have most of itself inside the loop, wherever its centre falls. A container the
+  // operator really did circle still qualifies, because then the loop is around it. Measured on
+  // the page #208 was found on, for a loop around one node: that node covers 1.00, the <svg>
+  // around it 0.08, the <article> around that 0.02.
+  //
+  // **That guarantee does not depend on the stroke's shape**, which is what makes it a fix
+  // rather than a heuristic. An element's coverage is bounded above by the loop's own interior
+  // area divided by the element's, so an element far larger than the loop cannot qualify
+  // however the loop is drawn — on the page above that ceiling was 1.4%.
+  //
+  // **What dropping the centre test gave up, stated exactly.** For a CONVEX stroke, covering
+  // more than half of a rectangle implies containing its centre: a half-plane holding more than
+  // half of a rectangle holds its centre, and a stroke excluding the centre could be separated
+  // from it by one. There the centre test was implied and dropping it changes nothing. But a
+  // freehand stroke is NOT guaranteed convex — a hand dipping around an indent draws a concave
+  // one, and `inside` accepts any path at all. Measured: a horseshoe notched across the mid-row
+  // of a 100x100 box covers 0.918 of it while its centre falls in the notch. So for a concave
+  // stroke this WIDENS what a loop selects, taking something the centre test would have
+  // rejected. That is what the rule says on its face — the loop does cover most of it — and it
+  // cannot let an ancestor back in, because the bound above holds whatever the shape.
+  //
+  // A grazed neighbour is rejected harder than before either way, by covering almost none of
+  // itself rather than by where its centre happened to be.
+  //
+  // The grid is sample DENSITY and carries no invariant: "more than half" is counted in
+  // integers below, so the comparison is exact at any density and a tie — exactly half —
+  // is rejected. Nothing here has to be kept odd, or kept anything.
+  var grid = 7;
+
+  // How many of `box`'s sample points the loop contains, on a grid of cell centres. Sampled
+  // rather than clipped: the stroke is a path of any shape, and exact polygon clipping is a
+  // great deal of code to move a decision whose two sides measure an order of magnitude apart.
+  function covered(poly, box) {
+    var hits = 0;
+    for (var i = 0; i < grid; i++) {
+      for (var j = 0; j < grid; j++) {
+        var x = box.x + (box.width * (i + 0.5)) / grid;
+        var y = box.y + (box.height * (j + 0.5)) / grid;
+        if (inside(poly, x, y)) { hits++; }
+      }
+    }
+    return hits;
+  }
+
   function targetsInside(poly) {
     var seen = {}, found = [];
     var nodes = document.querySelectorAll("[id], p, li, td, th, h1, h2, h3");
@@ -53,9 +105,13 @@
       var r = nodes[i].getBoundingClientRect();
       if (!r.width && !r.height) { continue; }
       // getBoundingClientRect is viewport-relative; the stroke is page-relative.
-      var cx = r.left + r.width / 2 + window.scrollX;
-      var cy = r.top + r.height / 2 + window.scrollY;
-      if (!inside(poly, cx, cy)) { continue; }
+      var box = {
+        x: r.left + window.scrollX, y: r.top + window.scrollY,
+        width: r.width, height: r.height
+      };
+      // More than half, in integers: one half is not a tuning parameter, it is the number the
+      // convex argument above needs, so it is spelled as a comparison rather than a constant.
+      if (2 * covered(poly, box) <= grid * grid) { continue; }
       var t = resolve(nodes[i]);
       if (!t) { continue; }
       var key = (t.id || "") + "\u0000" + t.text;
