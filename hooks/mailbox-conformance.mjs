@@ -425,7 +425,21 @@ function splitTopLevel(text) {
 	return out;
 }
 
-/** Run the extracted rule. Returns what Swift's failable initializer would return. */
+/**
+ * Run the extracted rule. Returns what Swift's failable initializer would return.
+ *
+ * THE ONE PLACE THIS FILE MODELS RATHER THAN EXECUTES, and the limit is worth naming: the
+ * *values* are the source's own — the alphabet is its `Set` literal, the clause list is its
+ * guard — but the three clause SHAPES are spelled out here in JavaScript. That is why
+ * `extractSwiftHandleRule` refuses a clause it does not recognise instead of ignoring it: the
+ * model can only stay honest if a rule outside it is a red gate. Nothing short of running
+ * Swift would remove the gap, and running Swift is what puts this in the Swift gate, which is
+ * the one place it cannot go.
+ *
+ * `\s` for `.whitespacesAndNewlines` is the closest JavaScript has and is not identical at the
+ * Unicode margins. It does not matter for the corpus this is run against — every handle either
+ * writer emits has already been through a `slug` that keeps only `[a-z0-9-]`.
+ */
 function swiftValidate(rules, candidate) {
 	let value = candidate;
 	for (const rule of rules) {
