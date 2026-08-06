@@ -14,8 +14,20 @@
   // in exactly the form that means "grep for this", which is #215's second half: a degradation
   // that announced itself would be fine, and this one asserts.
   //
-  // The same judgement `MermaidAnchor.isRenderGenerated` makes on the Swift side, for the same
-  // reason — an id minted by the renderer rather than authored is not an anchor.
+  // The same *kind* of judgement `MermaidAnchor.isRenderGenerated` makes on the Swift side —
+  // an id minted rather than authored is not an anchor — but **not a second enforcement of
+  // this one, and Swift cannot be given one.** `isRenderGenerated` only knows ids shaped
+  // `mermaid-<digits>`; nothing in `CanvasAnnotation.decode` refuses `content`, and nothing
+  // should, because by the time the payload is a string the two cases are identical.
+  // `testAnIDTheAgentWroteIsAnAnchorEvenWhenItIsSpelledLikeHelmsOwn` pins that: an `.html`
+  // artifact's own `id="content"` is a real, greppable anchor and must decode as one. What
+  // separates them is which element carried `data-helm-frame`, and that fact lives only in
+  // the DOM — it does not cross the bridge. So this is the sole enforcement by necessity
+  // rather than by choice, and the far side could only refuse if the payload *told* it,
+  // which is #109/#210's discriminator and deliberately not in this change.
+  //
+  // `MermaidAnchor` states the same ceiling for its own case: `sequenceDiagram` emits
+  // `actor0` with no prefix, "helm cannot tell, and does not guess."
   //
   // **Why a marker and not a look at the wrapper itself.** The first cut recognised the frame
   // by its id and its position directly under the body, which is true by construction of the
