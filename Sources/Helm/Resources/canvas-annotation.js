@@ -16,9 +16,10 @@
   // same reason — an id minted by a renderer rather than authored is not an anchor.
   //
   // Spelled out here rather than interpolated, exactly like the handler name and the tool
-  // global above, and held to `CanvasHTML.documentPage` by `CanvasAnnotationScriptTests`
-  // for the same reason: JavaScript cannot compile against a Swift constant, so the gate
-  // is a test that reads both. Matched on the id and its position, never on `tagName` —
+  // global above, and held to `CanvasHTML.documentPage` by `CanvasAnchorTests`
+  // (`testTheScriptAndTheGeneratedPageStillAgreeOnHelmsWrapper`) for the same reason:
+  // JavaScript cannot compile against a Swift constant, so the gate is a test that reads
+  // both halves. Matched on the id and its position, never on `tagName` —
   // a browser reports `ARTICLE` where a stub reports `article`, and a comparison that
   // holds in the harness and not in WebKit is the failure this suite exists to prevent.
   function helmFrame(node) {
@@ -53,13 +54,20 @@
     return null;
   }
 
+  // The element a gesture is really about. A Range's `commonAncestorContainer` is very often
+  // a TEXT node — it is whatever the highlight happens to sit inside — and a text node carries
+  // no id and is not what a mark names, so step up to the element holding it. Null for a node
+  // detached from the document, which is why both callers check before dereferencing; reading
+  // `.textContent` off that null used to throw.
+  function elementFor(node) {
+    return node && node.nodeType === 3 ? node.parentNode : node;
+  }
+
   // ONE resolver, used by every tool — #112 asks for the draw-time hit test and any later
   // re-resolution to share a code path, because inconsistent resolution between capture and
   // action is its own bug class. So this changes what all four marks report, not one.
   function resolve(node) {
-    if (!node) { return null; }
-    if (node.nodeType === 3) { node = node.parentNode; }
-    // A text node detached from the document. Reading `.textContent` off null threw.
+    node = elementFor(node);
     if (!node) { return null; }
     var text = (node.textContent || "").trim().slice(0, 400);
     if (!text) { return null; }
@@ -330,8 +338,7 @@
       var text = empty ? "" : String(selection).trim();
       if (!text) { bridge.postMessage({ cleared: true }); return; }
       var range = selection.getRangeAt(0);
-      var node = range.commonAncestorContainer;
-      if (node && node.nodeType === 3) { node = node.parentNode; }
+      var node = elementFor(range.commonAncestorContainer);
       var id = node ? nameFor(node) : null;
       var r = range.getBoundingClientRect();
       bridge.postMessage({
