@@ -261,32 +261,104 @@ abandoned holding-8888 claude 88888888-8888-8888-8888-888888888888
 seed "$root/holding-8888" "peer-9" "unread" "still evidence" >/dev/null
 abandoned pi-still-live pi 019fc838-89ad-7846-8687-b3be6461ce5f
 
-# A pid that is genuinely gone, which is the ordinary case and must keep working.
+# A pid that is genuinely gone, which is the ordinary case and must keep working. Carrying an
+# archived message, because `read/` is what deletion used to take with it.
 (exit 0) &
 gone_pid=$!
 wait "$gone_pid" 2>/dev/null
 mkdir -p "$root/exited-4242/read"
 printf '{"handle":"exited-4242","runtime":"claude","pid":%s,"sessionId":"dead-1","cwd":"/tmp/x","claimedAt":1}\n' \
 	"$gone_pid" >"$root/exited-4242/owner.json"
+printf '{"id":"archived-1","from":"peer-1","to":"exited-4242","subject":"already read","body":"b","sentAt":1}\n' \
+	>"$root/exited-4242/read/archived-1.json"
+
+# #236, and the whole of it: a LIVE agent whose recorded pid is stale. `owner.json` takes a pid
+# at SessionStart and is never rewritten, so a helm restart brings every agent back in the same
+# session under a NEW pid and leaves a corpse in every owner file. The registry row seeded at the
+# top of this file carries this session id at a live pid, and it is the ONLY thing that tells this
+# mailbox apart from exited-4242 above. Deciding on the pid alone deleted a running agent's
+# mailbox on 2026-08-06: helm-4831 recorded 13104, dead, while the agent ran at 74011.
+mkdir -p "$root/restarted-9531/read"
+printf '{"handle":"restarted-9531","runtime":"claude","pid":%s,"sessionId":"019fc78b-f108-7c69-b602-1d44f7639531","cwd":"/tmp/restarted","claimedAt":1}\n' \
+	"$gone_pid" >"$root/restarted-9531/owner.json"
 
 run "$root" claude-session-start '{"session_id":"aaaa-bbbb-cccc-1234","cwd":"/tmp/cleared"}'
-[ -d "$root/cleared-7274" ] &&
-	bad "reap: the mailbox /clear abandoned survived — live pid, but the pid runs another session now" ||
-	ok "a mailbox whose LIVE pid now runs a different session is reaped (the /clear ghost)"
-[ -d "$root/exited-4242" ] &&
-	bad "reap: a mailbox whose pid is genuinely dead was left behind" ||
-	ok "a mailbox whose pid is dead is still reaped"
+
+# Retired, not deleted: `owner.json` says so and the directory is still there.
+retired() { grep -q '"retiredAt"' "$root/$1/owner.json" 2>/dev/null; }
+
+# THESE TWO ARE THE OVERSHOOT CONTROL. Retiring nothing at all satisfies every "a live agent
+# survived" assertion below — only these fail for it, so they are what stops the fix from being
+# "stop reaping". A dead agent must still stop being addressable.
+retired cleared-7274 &&
+	ok "a mailbox whose LIVE pid now runs a different session is retired (the /clear ghost)" ||
+	bad "reap: the /clear ghost was not retired — a sender still picks it out of a listing"
+retired exited-4242 &&
+	ok "a mailbox whose pid is dead is still retired" ||
+	bad "reap: a mailbox whose pid is genuinely dead was left addressable"
+
+# ...and retiring is not deleting. `read/` is the only durable record of what agents said to
+# each other, and rmSync took it with the mailbox.
+[ -f "$root/exited-4242/read/archived-1.json" ] &&
+	ok "a retired mailbox keeps its directory and its read/ archive (#236)" ||
+	bad "reap: the read/ archive was destroyed along with the mailbox"
+
+# The defect that cost a live agent its mailbox. Three outcomes, told apart on purpose: deleted
+# is the 2026-08-06 incident, retired is the same misjudgement made non-destructive, and left
+# alone is correct.
+if [ ! -d "$root/restarted-9531" ]; then
+	bad "reap: DELETED a live agent's mailbox — its pid is stale, but its session is alive (#236)"
+elif retired restarted-9531; then
+	bad "reap: retired a LIVE agent — pid $gone_pid is stale, but the registry has its session at $$ (#236)"
+else
+	ok "a live agent whose recorded pid is stale is left alone — the session decides, not the pid (#236)"
+fi
 
 # The two ways this rule could do real harm, which are both worse than keeping a ghost.
-[ -d "$root/holding-8888" ] &&
-	ok "an abandoned mailbox still HOLDING mail is kept — that mail is evidence" ||
-	bad "reap: deleted an abandoned mailbox that had unread mail in it"
-[ -d "$root/pi-still-live" ] &&
-	ok "a pi mailbox is never judged by Claude Code's registry — pi has no such thing" ||
-	bad "reap: reaped a live pi agent's mailbox by reading a registry that cannot describe it"
-[ -d "$root/$(handle_of "$root")" ] && [ "$(ls "$root" | wc -l | tr -d ' ')" = 3 ] &&
-	ok "the claiming session's own mailbox survives its own reap" ||
+retired holding-8888 &&
+	bad "reap: retired an abandoned mailbox that had unread mail in it" ||
+	ok "an abandoned mailbox still HOLDING mail is left live — that mail is evidence"
+retired pi-still-live &&
+	bad "reap: reaped a live pi agent's mailbox by reading a registry that cannot describe it" ||
+	ok "a pi mailbox is never judged by Claude Code's registry — pi has no such thing"
+[ -d "$root/$(handle_of "$root")" ] && [ "$(ls "$root" | wc -l | tr -d ' ')" = 6 ] &&
+	ok "the claiming session's own mailbox survives its own reap, and nothing was deleted" ||
 	bad "reap: left $(ls "$root" | tr '\n' ' ')"
+
+# A retired mailbox must not squat on its handle. This is the `/clear` ghost again — its pid is
+# ALIVE, so `heldByAnother`'s pid check calls the corpse a holder — and it is the case deletion
+# used to solve as a side effect. `019fc78b…9531` derives `collide-9531` in this directory.
+root=$(fresh)
+mkdir -p "$root/collide-9531/read"
+printf '{"handle":"collide-9531","runtime":"claude","pid":%s,"sessionId":"someone-else","cwd":"/tmp/collide","claimedAt":1,"retiredAt":1}\n' \
+	"$$" >"$root/collide-9531/owner.json"
+run "$root" claude-session-start '{"session_id":"019fc78b-f108-7c69-b602-1d44f7639531","cwd":"/tmp/collide"}'
+[ "$(ls "$root" | wc -l | tr -d ' ')" = 1 ] && [ -d "$root/collide-9531" ] &&
+	ok "a retired mailbox does not hold its handle — the next session takes it, no widening (#236)" ||
+	bad "claim: widened around a RETIRED mailbox: $(ls "$root" | tr '\n' ' ')"
+grep -q '"retiredAt"' "$root/collide-9531/owner.json" &&
+	bad "claim: took a retired handle and left it marked retired" ||
+	ok "claiming a retired handle clears the retirement rather than merging into it"
+
+# The gain retiring buys that deleting could not: an agent that comes back walks into its OWN
+# mailbox, archive intact, because `mineIn` matches on session id and never looks at the pid.
+# Every agent resumed after a helm restart would have done this instead of getting a fresh box.
+root=$(fresh)
+mkdir -p "$root/returning-7777/read"
+printf '{"handle":"returning-7777","runtime":"claude","pid":%s,"sessionId":"aaaa-bbbb-cccc-1234","cwd":"/tmp/returning","claimedAt":1,"retiredAt":1}\n' \
+	"$gone_pid" >"$root/returning-7777/owner.json"
+printf '{"id":"kept-1","from":"peer-2","to":"returning-7777","subject":"from before","body":"b","sentAt":1}\n' \
+	>"$root/returning-7777/read/kept-1.json"
+run "$root" claude-session-start '{"session_id":"aaaa-bbbb-cccc-1234","cwd":"/tmp/somewhere-else"}'
+[ "$(ls "$root" | wc -l | tr -d ' ')" = 1 ] && [ -d "$root/returning-7777" ] &&
+	ok "a returning session re-claims its RETIRED mailbox by session id, not by deriving (#236)" ||
+	bad "claim: a returning session got a new mailbox instead of its own: $(ls "$root" | tr '\n' ' ')"
+[ -f "$root/returning-7777/read/kept-1.json" ] &&
+	ok "and its read/ archive is still there when it gets back" ||
+	bad "claim: the archive was gone when the session returned"
+grep -q '"retiredAt"' "$root/returning-7777/owner.json" &&
+	bad "claim: the re-claimed mailbox is still marked retired" ||
+	ok "coming back clears the retirement — the mailbox is live again"
 
 # ── the contract that must never break ───────────────────────────────────────────────────
 

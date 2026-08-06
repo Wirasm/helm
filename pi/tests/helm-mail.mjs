@@ -122,7 +122,62 @@ function freshRoot() {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mail-test-"));
 	roots.push(root);
 	process.env.HELM_MAIL_DIR = root;
+	// An EMPTY Claude Code session registry by default, and this is a hermeticity fix rather than
+	// a convenience — #236. The reaper now consults `<CLAUDE_CONFIG_DIR>/sessions` to decide
+	// whether a claude-owned mailbox is really gone, so without this every test would read the
+	// operator's live `~/.claude/sessions` and its verdicts would depend on who is running agents
+	// on this machine right now. `claudeRegistry()` fills it in for the tests that want rows.
+	process.env.CLAUDE_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mail-claude-"));
+	roots.push(process.env.CLAUDE_CONFIG_DIR);
+	fs.mkdirSync(path.join(process.env.CLAUDE_CONFIG_DIR, "sessions"), { recursive: true });
 	return root;
+}
+
+/**
+ * Seed Claude Code's session registry — `<config>/sessions/<pid>.json`, one row per pid, named
+ * for the pid the way Claude Code writes them.
+ *
+ * pi has no registry of its own, which is what the old asymmetry comment argued from. It reads
+ * this one anyway, because pi's reaper sweeps the shared root and judges Claude Code's mailboxes
+ * too — see #236.
+ */
+function claudeRegistry(rows) {
+	const sessions = path.join(process.env.CLAUDE_CONFIG_DIR, "sessions");
+	for (const { pid, sessionId } of rows) {
+		fs.writeFileSync(path.join(sessions, `${pid}.json`), JSON.stringify({ pid, sessionId, cwd: "/tmp", status: "idle" }));
+	}
+}
+
+/**
+ * Did the reaper retire this mailbox? Retired means present on disk and no longer addressable.
+ *
+ * A missing `owner.json` reads as NOT retired rather than throwing, so a run against a build that
+ * still deletes fails on the assertion that says so — `check(fs.existsSync(dir), …)` — instead of
+ * on an ENOENT stack from this helper, which says the same thing far less clearly.
+ */
+function isRetired(dir) {
+	try {
+		return Boolean(JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8")).retiredAt);
+	} catch {
+		return false;
+	}
+}
+
+/** An owner.json written by hand, the way a mailbox on disk actually looks. */
+function seedOwner(root, handle, fields) {
+	const dir = path.join(root, handle);
+	fs.mkdirSync(path.join(dir, "read"), { recursive: true });
+	fs.writeFileSync(
+		path.join(dir, "owner.json"),
+		JSON.stringify({ handle, runtime: "pi", pid: 4194303, sessionId: "x", cwd: "/tmp", claimedAt: 1, ...fields }),
+	);
+	return dir;
+}
+
+/** Put a message straight into `read/`, so a test can prove the archive outlives its owner. */
+function archive(dir, id = "archived-1") {
+	fs.writeFileSync(path.join(dir, "read", `${id}.json`), JSON.stringify({ id, from: "peer", to: "x", subject: "s", body: "b", sentAt: 1 }));
+	return path.join(dir, "read", `${id}.json`);
 }
 
 /**
@@ -523,64 +578,107 @@ await test("a pi with no sendUserMessage delivers normally — it is not used an
 
 // Reaping used to run only on CLAIM, so a machine where nobody starts a session kept its
 // corpses — and a corpse is addressable, which makes mail to it silently unread.
-await test("a session that shuts down takes its own empty mailbox with it", () => {
+await test("a session that shuts down retires its own mailbox, archive and all", () => {
 	const s = started();
 	check(fs.existsSync(s.dir), "precondition: expected a mailbox");
+	const kept = archive(s.dir);
 	s.record.handlers.get("session_shutdown")({ type: "session_shutdown" }, s.ctx);
-	check(!fs.existsSync(s.dir), "a clean session left its mailbox behind for someone to address");
+	check(fs.existsSync(s.dir), "shutdown DELETED its own mailbox — read/ went with it (#236)");
+	check(isRetired(s.dir), "a clean session left its mailbox live for someone to address");
+	check(fs.existsSync(kept), "shutdown destroyed the read/ archive (#236)");
 });
 
 // The other half of the same rule: mail outlives the agent it was sent to. Deleting the box
 // would destroy an unread message and the record that it ever arrived.
-await test("a session that shuts down HOLDING mail leaves the mailbox alone", () => {
+await test("a session that shuts down HOLDING mail keeps the mail and retires anyway", () => {
 	const s = started();
 	s.idle.value = false; // do not let the wake consume it out from under the test
 	deliver(s.root, s.handle, { subject: "never read" });
 	s.record.handlers.get("session_shutdown")({ type: "session_shutdown" }, s.ctx);
 	check(fs.existsSync(s.dir), "shutdown destroyed a mailbox that still held unread mail");
 	check(queuedIn(s.dir).length === 1, "the unread message did not survive shutdown");
+	// Retired even so, unlike `reap`'s queue check: a shutting-down session is not an inference
+	// about liveness, it is the session saying it is gone. The mail survives either way.
+	check(isRetired(s.dir), "a session that said it was leaving stayed addressable");
 });
 
-await test("a dead agent's empty mailbox is reaped, so a sender cannot address a corpse", () => {
+await test("a dead agent's empty mailbox is retired, not deleted, and keeps its archive", () => {
 	const root = freshRoot();
-	const dead = path.join(root, "dead-9999");
-	fs.mkdirSync(path.join(dead, "read"), { recursive: true });
 	// pid 2^22 is above every real pid on macOS and Linux, so it is reliably not running.
-	fs.writeFileSync(
-		path.join(dead, "owner.json"),
-		JSON.stringify({ handle: "dead-9999", runtime: "pi", pid: 4194303, sessionId: "x", cwd: "/tmp", claimedAt: 1 }),
-	);
+	const dead = seedOwner(root, "dead-9999", { pid: 4194303 });
+	const kept = archive(dead);
 	started({ root });
-	check(!fs.existsSync(dead), "a dead, empty mailbox survived the reaper");
+	check(fs.existsSync(dead), "a dead mailbox was DELETED — read/ went with it (#236)");
+	check(isRetired(dead), "a dead, empty mailbox is still addressable — the reaper did nothing");
+	check(fs.existsSync(kept), "the read/ archive was destroyed with its dead mailbox (#236)");
 });
 
-await test("a dead agent's mailbox is KEPT while it still holds mail", () => {
+await test("a dead agent's mailbox is KEPT live while it still holds mail", () => {
 	const root = freshRoot();
-	const dead = path.join(root, "dead-8888");
-	fs.mkdirSync(path.join(dead, "read"), { recursive: true });
-	fs.writeFileSync(
-		path.join(dead, "owner.json"),
-		JSON.stringify({ handle: "dead-8888", runtime: "pi", pid: 4194303, sessionId: "x", cwd: "/tmp", claimedAt: 1 }),
-	);
+	const dead = seedOwner(root, "dead-8888", { pid: 4194303 });
 	deliver(root, "dead-8888");
 	started({ root });
 	check(fs.existsSync(dead), "unread mail was destroyed with its dead mailbox");
+	check(!isRetired(dead), "retired a mailbox that still holds mail; the queue check is gone");
 });
 
 await test("a live agent's mailbox and a corrupt owner.json are both left alone", () => {
 	const root = freshRoot();
-	const live = path.join(root, "live-7777");
-	fs.mkdirSync(path.join(live, "read"), { recursive: true });
-	fs.writeFileSync(
-		path.join(live, "owner.json"),
-		JSON.stringify({ handle: "live-7777", runtime: "pi", pid: process.pid, sessionId: "x", cwd: "/tmp", claimedAt: 1 }),
-	);
+	const live = seedOwner(root, "live-7777", { pid: process.pid });
 	const corrupt = path.join(root, "corrupt-6666");
 	fs.mkdirSync(path.join(corrupt, "read"), { recursive: true });
 	fs.writeFileSync(path.join(corrupt, "owner.json"), "{ not json");
 	started({ root });
-	check(fs.existsSync(live), "reaped a mailbox whose owner is alive");
+	check(fs.existsSync(live) && !isRetired(live), "reaped a mailbox whose owner is alive");
 	check(fs.existsSync(corrupt), "reaped a mailbox it could not read — reaping must be conservative");
+});
+
+// ── #236: pi's reaper judges CLAUDE CODE's mailboxes too ─────────────────────────────────
+//
+// This file used to decide on `pidAlive(owner.pid)` alone and argued the asymmetry was
+// deliberate: pi has no session registry, and a pi session id does not change under a live
+// process. True of pi's OWN owners, and irrelevant to the claude ones it also sweeps — a claude
+// `owner.json` records its pid at SessionStart and is never rewritten, so a helm restart leaves
+// a corpse in every one of them while the agents run on under new pids.
+
+await test("pi does not retire a live Claude Code agent whose recorded pid is stale (#236)", () => {
+	const root = freshRoot();
+	// The registry says session `cc-live` is alive at a pid that really is running. owner.json
+	// still remembers the pid it had before the restart, and that pid is long gone.
+	claudeRegistry([{ pid: process.pid, sessionId: "cc-live" }]);
+	const restarted = seedOwner(root, "restarted-4831", { runtime: "claude", pid: 4194303, sessionId: "cc-live" });
+	started({ root });
+	check(fs.existsSync(restarted), "pi DELETED a live Claude Code agent's mailbox (#236)");
+	check(!isRetired(restarted), "pi retired a live Claude Code agent — it read the pid, not the session (#236)");
+});
+
+// THE OVERSHOOT CONTROL for the test above. "Never retire anything" satisfies it; only these two
+// fail for that, so they are what keeps the reaper doing its job.
+await test("pi still retires a Claude Code /clear ghost — live pid, different session (#236)", () => {
+	const root = freshRoot();
+	// One row per pid, so the pid this ghost remembers now reports a DIFFERENT session.
+	claudeRegistry([{ pid: process.pid, sessionId: "the-new-session" }]);
+	const ghost = seedOwner(root, "cleared-7274", { runtime: "claude", pid: process.pid, sessionId: "the-abandoned-one" });
+	started({ root });
+	check(isRetired(ghost), "the /clear ghost stayed addressable — a sender still picks it");
+});
+
+await test("pi still retires a Claude Code agent whose session is nowhere in the registry", () => {
+	const root = freshRoot();
+	const gone = seedOwner(root, "exited-4242", { runtime: "claude", pid: 4194303, sessionId: "no-such-session" });
+	started({ root });
+	check(isRetired(gone), "a genuinely dead claude mailbox was left addressable");
+});
+
+await test("a retired mailbox does not hold its handle — the next session takes it (#236)", () => {
+	const root = freshRoot();
+	// `process.ppid` is alive and is NOT us, so `heldByAnother`'s pid check would call this a
+	// holder. Retirement has to be asked first, or the ghost squats on the handle forever —
+	// deleting used to free it as a side effect.
+	seedOwner(root, "helm-mail-test-cwd-1111", { pid: process.ppid, sessionId: "someone-else", retiredAt: 1 });
+	const s = started({ root });
+	check(s.handle === "helm-mail-test-cwd-1111", `widened around a RETIRED mailbox: got ${s.handle}`);
+	check(!isRetired(s.dir), "claimed a retired handle and left it marked retired");
 });
 
 // ── the command ──────────────────────────────────────────────────────────────────────────
@@ -613,6 +711,33 @@ await test("/helm-mail send to a handle with no mailbox refuses and says so", as
 		(c.messages[0] ?? "").includes("could not send"),
 		`a send to a nonexistent mailbox did not refuse visibly: ${c.messages[0]}`,
 	);
+});
+
+// Telling "existed and is gone" apart from "never existed" is most of what retiring buys over
+// deleting — #236. A sender holding a handle from an earlier message gets the right one of those
+// two, instead of writing into a live-looking directory and waiting forever for an answer.
+await test("/helm-mail send to a RETIRED mailbox refuses, and differently from an absent one", async () => {
+	const root = freshRoot();
+	seedOwner(root, "retired-5150", { retiredAt: 1 });
+	const s = started({ root });
+	const c = recordingCtx();
+	await s.record.commands.get("helm-mail").handler("send retired-5150 are you there", c.ctx);
+	const said = c.messages[0] ?? "";
+	check(said.includes("retired"), `a send to a retired mailbox did not say it had retired: ${said}`);
+	const box = path.join(root, "retired-5150");
+	check(fs.existsSync(box) && queuedIn(box).length === 0, "the message was written into a retired mailbox");
+});
+
+await test("/helm-mail list marks a retired mailbox as retired, not as live (#236)", async () => {
+	const root = freshRoot();
+	// A retired owner whose pid is still ALIVE — the `/clear` ghost's shape. Reading the pid
+	// alone lists it as a perfectly healthy peer, which is exactly how mail goes unread.
+	seedOwner(root, "retired-7274", { pid: process.ppid, retiredAt: 1 });
+	const s = started({ root });
+	const c = recordingCtx();
+	await s.record.commands.get("helm-mail").handler("list", c.ctx);
+	const row = (c.messages[0] ?? "").split("\n").find((line) => line.includes("retired-7274")) ?? "";
+	check(row.includes("[retired]"), `a retired mailbox was listed as live: ${row}`);
 });
 
 await test("/helm-mail list names every mailbox with the cwd that tells them apart", async () => {

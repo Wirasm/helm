@@ -122,9 +122,19 @@ function queued(dir) {
 	}
 }
 
+/**
+ * A retired mailbox never holds a handle, and that first line is load-bearing rather than tidy.
+ *
+ * Retiring replaced deleting (#236), and deleting freed the handle as a side effect. The
+ * `/clear` ghost is the case that notices: its pid is ALIVE — the process runs a different
+ * session now — so the `pidAlive` below would call a corpse a holder, and every colliding
+ * session would widen around a mailbox nobody will ever read. Retirement is a stronger
+ * statement than any pid check, so it is asked first.
+ */
 function heldByAnother(root, handle, mine) {
 	const owner = readJson(path.join(root, handle, OWNER_FILE));
 	if (!owner || typeof owner.pid !== "number") return false;
+	if (owner.retiredAt) return false;
 	if (owner.sessionId && owner.sessionId === mine) return false;
 	return pidAlive(owner.pid);
 }
@@ -243,8 +253,23 @@ function consume(dir, names) {
  *
  * Silence is never evidence: no row, no session id, or a runtime that has no such registry leaves
  * the mailbox alone. Reaping a live agent's mailbox is far worse than keeping a dead one.
+ *
+ * AND A STALE PID IS SILENCE, WHICH IS WHY THE SESSION IS ASKED FIRST — #236. `owner.json`
+ * records a pid at SessionStart and is never rewritten, so a helm restart brings every agent
+ * back in the same session under a NEW pid and leaves a corpse in every owner file. Read pid
+ * first, a live agent is indistinguishable from a dead one, and on 2026-08-06 that deleted a
+ * running agent's mailbox: `helm-4831` recorded 13104, dead, while the agent ran at 74011.
+ *
+ * `sessionPid` is the same registry lookup `ownerPid` makes to decide what to record, asked here
+ * to decide whether a recorded pid still means anything. One rule, one implementation — the file
+ * used to hold two that disagreed, and the destructive one was the weaker.
+ *
+ * It does NOT take `ownerPid`'s `process.ppid` fallback. That fallback answers "what should I
+ * write for myself", where a guess beats nothing; here a guess would be an answer manufactured
+ * out of silence, which is the whole defect.
  */
 function ownerGone(owner) {
+	if (owner.runtime === "claude" && owner.sessionId && sessionPid(owner.sessionId)) return false;
 	if (!pidAlive(owner.pid)) return true;
 	if (owner.runtime !== "claude" || !owner.sessionId) return false;
 	const row = readJson(path.join(claudeSessionsDir(), `${owner.pid}.json`));
@@ -253,9 +278,30 @@ function ownerGone(owner) {
 }
 
 /**
- * Remove mailboxes whose owner is gone and whose queue is empty. A dead agent must stop being
+ * Stop a dead owner being addressable WITHOUT destroying anything — #236.
+ *
+ * `rmSync` was the old answer and it cost three things the goal never asked for: `read/`, which
+ * is the only durable record of what agents said to each other; an in-flight send, because
+ * `queued()` does not count a sender's `.tmp-<id>` and the directory could vanish mid-write; and
+ * the difference between "this agent existed and is gone" and "this handle never existed", which
+ * is exactly what a sender holding an old handle needs told apart.
+ *
+ * A rewritten owner file buys the whole goal instead: a listing can say retired, a sender can be
+ * refused with a reason, and `mineIn` still finds the mailbox by session id — so an agent that
+ * comes back walks into its own archive rather than a fresh empty box.
+ */
+function retire(dir, owner) {
+	writeAtomic(path.join(dir, OWNER_FILE), { ...owner, retiredAt: Date.now() });
+}
+
+/**
+ * Retire mailboxes whose owner is gone and whose queue is empty. A dead agent must stop being
  * addressable, or a sender picks it out of a listing and nobody ever reads the message.
- * Conservative: mail waiting keeps a mailbox alive, and an unreadable owner is left alone.
+ * Conservative: mail waiting keeps a mailbox live, and an unreadable owner is left alone.
+ *
+ * The queue check is KEPT even though nothing is destroyed any more. Its original job — never
+ * `rmSync` over waiting mail — is gone, but it costs nothing now and is a second margin behind
+ * a liveness verdict that has been wrong before.
  */
 function reap(root, mine) {
 	for (const handle of allHandles(root)) {
@@ -263,12 +309,13 @@ function reap(root, mine) {
 		const dir = path.join(root, handle);
 		const owner = readJson(path.join(dir, OWNER_FILE));
 		if (!owner || typeof owner.pid !== "number") continue;
+		if (owner.retiredAt) continue;
 		if (!ownerGone(owner)) continue;
 		if (queued(dir).length > 0) continue;
 		try {
-			fs.rmSync(dir, { recursive: true, force: true });
+			retire(dir, owner);
 		} catch {
-			// Someone else's mailbox we could not remove. Not worth failing a hook over.
+			// Someone else's mailbox we could not rewrite. Not worth failing a hook over.
 		}
 	}
 }
@@ -311,7 +358,18 @@ function claudeSessionsDir() {
 	return path.join(base, "sessions");
 }
 
-function ownerPid(sessionId) {
+/**
+ * The live pid running this session, per Claude Code's own registry — or undefined.
+ *
+ * Scanned by session id rather than read by filename, because the question is "where is this
+ * session now", and after a restart it is somewhere it has never been before. That is the
+ * opposite of `ownerGone`'s `<pid>.json` read, which asks "which session is in THIS process"
+ * and must be answered by exactly one row.
+ *
+ * Undefined is the honest answer to no row, and both callers need it to stay that way: one
+ * substitutes a fallback of its own, the other must treat it as silence. See #236.
+ */
+function sessionPid(sessionId) {
 	const dir = claudeSessionsDir();
 	let names = [];
 	try {
@@ -323,7 +381,11 @@ function ownerPid(sessionId) {
 		const row = readJson(path.join(dir, name));
 		if (row?.sessionId === sessionId && Number.isInteger(row.pid) && pidAlive(row.pid)) return row.pid;
 	}
-	return process.ppid;
+	return undefined;
+}
+
+function ownerPid(sessionId) {
+	return sessionPid(sessionId) ?? process.ppid;
 }
 
 function claim(root, sessionId, cwd) {

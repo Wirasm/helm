@@ -105,6 +105,19 @@ interface Owner {
 	sessionId: string;
 	cwd: string;
 	claimedAt: number;
+	/**
+	 * Set when this mailbox's owner was judged gone — #236. Present means retired: the directory
+	 * and its `read/` archive are still here, but nobody is listening. Absent means live.
+	 * Optional because every mailbox claimed before this existed has no such field, and a missing
+	 * one has to keep meaning "live".
+	 */
+	retiredAt?: number;
+}
+
+/** One row of Claude Code's session registry, `<config>/sessions/<pid>.json`. */
+interface SessionRow {
+	pid: number;
+	sessionId: string;
 }
 
 interface Message {
@@ -206,10 +219,18 @@ function tail(id: string, width: number): string {
 /**
  * A mailbox held right now by someone else. A dead owner's handle is free to take — that is
  * what makes a widened handle temporary rather than a permanent scar on the address space.
+ *
+ * A RETIRED owner's handle is free too, and that line is load-bearing rather than tidy — #236.
+ * Retiring replaced deleting, and deleting freed the handle as a side effect. The `/clear` ghost
+ * is the case that notices: its pid is ALIVE, because the process runs a different session now,
+ * so the `pidAlive` below would call a corpse a holder and every colliding session would widen
+ * around a mailbox nobody will ever read. Retirement is a stronger statement than any pid check,
+ * so it is asked first.
  */
 function heldByAnother(root: string, handle: string): boolean {
 	const owner = readJson<Owner>(path.join(root, handle, OWNER_FILE));
 	if (!owner || typeof owner.pid !== "number") return false;
+	if (owner.retiredAt) return false;
 	if (owner.pid === process.pid) return false;
 	return pidAlive(owner.pid);
 }
@@ -296,8 +317,74 @@ function queued(dir: string): string[] {
 	}
 }
 
+/** Claude Code's session registry. pi has no such thing of its own; it can still read this one. */
+function claudeSessionsDir(): string {
+	const configured = process.env.CLAUDE_CONFIG_DIR;
+	const base = configured && configured.trim() ? path.resolve(configured.trim()) : path.join(os.homedir(), ".claude");
+	return path.join(base, "sessions");
+}
+
 /**
- * Delete mailboxes whose owner is gone and whose queue is empty.
+ * The live pid running this Claude Code session, or undefined. Scanned by session id rather than
+ * read by filename, because the question is "where is this session NOW" and after a restart it is
+ * somewhere it has never been before. Undefined is the honest answer to no row, and must stay
+ * undefined rather than become a guess. Keep in step with `sessionPid` in `hooks/helm-mail.mjs`.
+ */
+function sessionPid(sessionId: string): number | undefined {
+	const dir = claudeSessionsDir();
+	let names: string[] = [];
+	try {
+		names = fs.readdirSync(dir).filter((name) => name.endsWith(".json"));
+	} catch {
+		names = [];
+	}
+	for (const name of names) {
+		const row = readJson<SessionRow>(path.join(dir, name));
+		if (row?.sessionId === sessionId && Number.isInteger(row.pid) && pidAlive(row.pid)) return row.pid;
+	}
+	return undefined;
+}
+
+/**
+ * Is this mailbox's owner gone? The same rule as `ownerGone` in `hooks/helm-mail.mjs`, and it has
+ * to be the same rule: both reapers sweep the SAME root and judge each other's mailboxes.
+ *
+ * That is the correction #236 forced here. This file used to decide on `pidAlive(owner.pid)` alone
+ * and argued the asymmetry was deliberate — pi has no session registry, and a pi session id does
+ * not change under a live process. True of pi's OWN owners, and irrelevant to the `runtime:
+ * "claude"` ones it also reaps: `owner.json` records a pid at SessionStart and is never rewritten,
+ * so a helm restart leaves a corpse in every Claude owner file while the agents run on under new
+ * pids. A pi session starting was enough to destroy a live Claude Code agent's mailbox.
+ *
+ * For pi's own owners the pid really is the whole answer — it is `process.pid` of the live
+ * extension process, which cannot outlive the session.
+ */
+function ownerGone(owner: Owner): boolean {
+	if (owner.runtime === "claude" && owner.sessionId && sessionPid(owner.sessionId)) return false;
+	if (!pidAlive(owner.pid)) return true;
+	if (owner.runtime !== "claude" || !owner.sessionId) return false;
+	// The `/clear` ghost: a live pid that now runs a different session. One row per pid, read by
+	// filename, because "which session is in THIS process" must have exactly one answer.
+	const row = readJson<SessionRow>(path.join(claudeSessionsDir(), `${owner.pid}.json`));
+	if (row?.pid !== owner.pid || !row?.sessionId) return false;
+	return row.sessionId !== owner.sessionId;
+}
+
+/**
+ * Stop a dead owner being addressable WITHOUT destroying anything — #236.
+ *
+ * `rmSync` was the old answer and it cost three things the goal never asked for: `read/`, the only
+ * durable record of what agents said to each other; an in-flight send, because `queued()` cannot
+ * see a sender's `.tmp-<id>` and the directory could vanish mid-write; and the difference between
+ * "this agent existed and is gone" and "this handle never existed", which is exactly what a sender
+ * holding an old handle needs told apart.
+ */
+function retire(dir: string, owner: Owner): void {
+	writeAtomic(path.join(dir, OWNER_FILE), { ...owner, retiredAt: Date.now() });
+}
+
+/**
+ * Retire mailboxes whose owner is gone and whose queue is empty.
  *
  * Not housekeeping — a mailbox that only ever grows is the defect helm already paid for
  * twice (#46's 1,514 leaked domains, #91's 17 terminal ids against 2 live shells). A dead
@@ -305,33 +392,29 @@ function queued(dir: string): string[] {
  * message is never read by anyone.
  *
  * Deliberately conservative: an unreadable or pid-less owner.json is left alone, and a
- * mailbox holding mail is never removed even when its owner is dead — that mail is still
- * evidence, and the handle may be re-claimed.
- *
- * **Asymmetric with the Claude hook on purpose, and not an omission.** `hooks/helm-mail.mjs`
- * also reaps a mailbox whose pid is *alive* but now runs a different session — `/clear` starts a
- * fresh Claude Code session inside the same process and abandons the old handle. It can decide
- * that because Claude Code publishes `<config>/sessions/<pid>.json`, one row per pid, saying which
- * session is in that process now. pi has no such registry, and a pi session id does not change
- * under a live process, so there is nothing here to detect and nothing to mirror.
+ * mailbox holding mail is left live even when its owner is dead — that mail is still
+ * evidence, and the handle may be re-claimed. The queue check no longer protects anything from
+ * destruction, since nothing is destroyed; it stays as a second margin behind a liveness verdict
+ * that has been wrong before.
  */
 function reap(root: string, mine: string): number {
-	let removed = 0;
+	let retired = 0;
 	for (const handle of allHandles(root)) {
 		if (handle === mine) continue;
 		const dir = path.join(root, handle);
 		const owner = readJson<Owner>(path.join(dir, OWNER_FILE));
 		if (!owner || typeof owner.pid !== "number") continue;
-		if (pidAlive(owner.pid)) continue;
+		if (owner.retiredAt) continue;
+		if (!ownerGone(owner)) continue;
 		if (queued(dir).length > 0) continue;
 		try {
-			fs.rmSync(dir, { recursive: true, force: true });
-			removed += 1;
+			retire(dir, owner);
+			retired += 1;
 		} catch (error) {
-			warn(`could not reap the dead mailbox ${handle}`, error);
+			warn(`could not retire the dead mailbox ${handle}`, error);
 		}
 	}
-	return removed;
+	return retired;
 }
 
 /** Take this handle, and say so on disk so a sender can find us. */
@@ -380,6 +463,14 @@ function sanitizeFrom(from: string): string {
 function send(root: string, to: string, from: string, subject: string, body: string): Message {
 	const dir = path.join(root, to);
 	if (!fs.existsSync(dir)) throw new Error(`no mailbox for "${to}" — run /${NAME} list to see who is reachable`);
+	// A retired mailbox is refused, and refused DIFFERENTLY from one that never existed — #236.
+	// Telling those two apart is most of what retiring buys over deleting: a sender holding a
+	// handle from an earlier message learns the agent is gone, instead of writing into a
+	// live-looking directory and waiting forever for a reply.
+	const owner = readJson<Owner>(path.join(dir, OWNER_FILE));
+	if (owner?.retiredAt) {
+		throw new Error(`"${to}" has retired — that agent is gone and will not read this. Its archive is still in ${dir}`);
+	}
 	const message: Message = {
 		id: `${Date.now()}-${randomBytes(3).toString("hex")}`,
 		from,
@@ -485,7 +576,10 @@ function peers(root: string, mine: string): string[] {
 			rows.push(`  ${handle} — no owner.json${mark}`);
 			continue;
 		}
-		const alive = pidAlive(owner.pid) ? "" : " [dead]";
+		// `[retired]` is asked before the pid, and says something the pid cannot — #236. A retired
+		// owner's pid may well still be alive (the `/clear` ghost's is), so reading the pid alone
+		// would list a mailbox nobody is listening to as a perfectly healthy peer.
+		const alive = owner.retiredAt ? " [retired]" : pidAlive(owner.pid) ? "" : " [dead]";
 		const mail = waiting > 0 ? `, ${waiting} waiting` : "";
 		rows.push(`  ${handle} — ${owner.runtime}, pid ${owner.pid}${alive}, ${owner.cwd}${mail}${mark}`);
 	}
@@ -705,8 +799,15 @@ function install(pi: ExtensionAPI): void {
 
 		// Reap on the way out as well as on the way in. Reaping used to happen only when some
 		// agent CLAIMED, so a machine where nobody starts a session keeps its corpses — and a
-		// corpse is addressable, which means mail sent to it is silently never read. This does
-		// not touch a dead mailbox that still holds mail; that one is kept on purpose.
+		// corpse is addressable, which means mail sent to it is silently never read.
+		//
+		// RETIRE, never delete — #236. This used to `rmSync` its own directory, taking `read/` with
+		// it and racing any sender mid-write, exactly like the reaper above did.
+		//
+		// And unconditionally, where `reap` still checks the queue first: there the owner is
+		// INFERRED gone and the queue is a margin against a wrong inference, while here the session
+		// is saying so itself, which is the most reliable liveness signal in the system. Waiting
+		// mail is preserved either way, and is found again if this session ever comes back.
 		step("session_shutdown handler", () =>
 			pi.on("session_shutdown", () => {
 				try {
@@ -716,9 +817,10 @@ function install(pi: ExtensionAPI): void {
 					// Shutting down; a watcher that will not close is not worth a message.
 				}
 				try {
-					if (claimed && queued(claimed.dir).length === 0) fs.rmSync(claimed.dir, { recursive: true, force: true });
+					const owner = claimed ? readJson<Owner>(path.join(claimed.dir, OWNER_FILE)) : undefined;
+					if (claimed && owner) retire(claimed.dir, owner);
 				} catch {
-					// Best effort. The next claim by anyone reaps it instead.
+					// Best effort. The next claim by anyone retires it instead.
 				}
 			}),
 		);
