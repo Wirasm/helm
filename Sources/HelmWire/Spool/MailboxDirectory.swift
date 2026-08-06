@@ -11,15 +11,19 @@ package struct MailboxOwner: Decodable, Equatable {
     package let sessionId: String?
     package let cwd: String?
 
-    /// **`package`-visible and unvalidated, on purpose — this is a fixture constructor, not a
-    /// second route off disk.** It exists for test code across the module boundary
-    /// (`Tests/HelmTests/Board/BenchSnapshotTests.swift` builds owner records directly to drive
-    /// `OwnerRecord`) and for `MailboxDirectory`'s own suite. Nothing in `Sources/` calls it —
-    /// the one thing that reaches into `Helm`/`HelmWire` production code is `init(from:)` below,
-    /// which is where the validation lives. Read `Handle`'s header before assuming this
-    /// initializer proves anything about where a `MailboxOwner` came from.
-    package init(handle: String, runtime: String?, pid: pid_t, sessionId: String?, cwd: String?) {
-        self.handle = handle
+    /// **A `package`-visible fixture constructor, not a second route off disk — and since #233
+    /// not a second route past the validation either.** It exists for test code across the
+    /// module boundary (`Tests/HelmTests/Board/BenchSnapshotTests.swift` builds owner records
+    /// directly to drive `OwnerRecord`); nothing in `Sources/` calls it.
+    ///
+    /// It takes a `Handle` rather than a raw `String` because `init(from:)` below closed only
+    /// the untrusted-input half: a malformed `owner.json` costs its own row, but in-package
+    /// Swift could still hand-construct an owner nothing can address, and `Handle(readingFrom:)`
+    /// would copy that verbatim. That was left carried by a comment on `Handle`, which is
+    /// accurate right up until someone stops reading it. A caller that genuinely wants a
+    /// specific handle now writes `Handle(validating: "…")!` and says so out loud.
+    package init(handle: Handle, runtime: String?, pid: pid_t, sessionId: String?, cwd: String?) {
+        self.handle = handle.value
         self.runtime = runtime
         self.pid = pid
         self.sessionId = sessionId

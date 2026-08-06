@@ -17,16 +17,11 @@ import Foundation
 /// - `readingFrom:`, which pulls one out of a `MailboxOwner`. Every production call site
 ///   (`SpoolModel.act(on: AcceptedSpawnRequest)`, on a `ready` result) reaches this with a
 ///   `MailboxOwner` that came from `MailboxDirectory.owners(in:)` decoding an `owner.json` off
-///   disk. **This is not a compiler-enforced fact, and the type does not claim it is one**:
-///   `MailboxOwner` also has a `package`-visible memberwise initializer taking a raw `String`,
-///   kept for fixture construction in test code across the module boundary (see its own header).
-///   Nothing in `Sources/` calls it — `readingFrom:` is the blessed path by convention, made
-///   *mostly* enforceable by the fact that decoding is the only route production code takes, and
-///   fully enforceable is what `init(from:)` below buys: whichever route builds a
-///   `MailboxOwner`, decoding is the one that validates, so a `Handle(readingFrom:)` sourced from
-///   a real `owner.json` cannot be empty or whitespace-only. A `Handle` built from a
-///   *hand-constructed* `MailboxOwner` can still be anything that owner's `handle` field is —
-///   the same honesty `validating:` already asks of a caller-named string.
+///   disk. **Both routes into a `MailboxOwner` are closed, so this one cannot launder a handle
+///   that never went through the other two** (#233): `init(from:)` trims and throws on an empty
+///   or whitespace-only handle, and the `package`-visible memberwise initializer — the fixture
+///   constructor test code uses across the module boundary — takes a `Handle` rather than a raw
+///   `String`. Whichever route built the owner, its `handle` came through this type.
 /// - `validating:`, for the one legitimate case where a caller *names* a recipient rather than
 ///   reading one that already claimed a mailbox — a real case (`helm-mail-cc` sends by handle),
 ///   even though that particular caller is JavaScript and out of this type's reach today.

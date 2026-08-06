@@ -242,14 +242,24 @@ struct BenchSnapshot: Codable, Equatable {
     }
 
     struct OwnerRecord: Codable, Equatable {
-        let handle: String
+        /// A `Handle`, and read off the owner rather than copied out of it (#233). This was a
+        /// second, untyped spelling of the concept `Handle` exists to carry, one file over from
+        /// it and with no runtime boundary to make the duplicate honest — this file already
+        /// imports `HelmWire`, and `init` below already has a `MailboxOwner` in hand, which is
+        /// exactly `Handle(readingFrom:)`'s signature.
+        ///
+        /// The same wire obligation as `WorkspaceRecord.path` above comes with it: agents
+        /// outside the process read this field, so `Handle` has to keep encoding it as the bare
+        /// string it always was — a single-value container, proven by `BenchSnapshotTests
+        /// .testOwnerRecordHandleEncodesAsABareStringUnchangedByHandle` rather than assumed.
+        let handle: Handle
         let runtime: String?
         let pid: pid_t
         let sessionId: String?
         let cwd: String?
 
         init(_ owner: MailboxOwner) {
-            handle = owner.handle
+            handle = Handle(readingFrom: owner)
             runtime = owner.runtime
             pid = owner.pid
             sessionId = owner.sessionId
