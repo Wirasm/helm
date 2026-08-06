@@ -39,6 +39,22 @@ make the repo go green.
 
 Nothing in it calls a model, so it is free to run.
 
+**If you touched `extensions/helm-mail/`, that gate is not enough — also run:**
+
+```bash
+bash hooks/test.sh
+```
+
+`helm-mail` is one convention written three times: this extension, `hooks/helm-mail.mjs` for
+Claude Code, and `Sources/HelmWire/Spool/Handle.swift` for the handles helm reads back. The two
+JavaScript halves **reap each other's mailboxes** — pi's reaper sweeps the shared root and judges
+Claude Code's owners, and the hook does the same in reverse — so a divergence between them is one
+runtime destroying the other runtime's agents, which is what #236 was. `hooks/mailbox-conformance
+.mjs` (#246) lifts the rules out of all three sources and executes them against one fixture set;
+`hooks/test.sh` is where it runs, and its header argues that home. It needs node >= 22.6 and
+nothing else — it reads this extension's `.ts` by type stripping, with no build step, so it does
+not need pi's `npm install` at all.
+
 **It is hermetic, and it now proves that rather than claiming it.** Two harnesses start a real pi,
 which loads a real extension, which writes real files — helm-mail claims a mailbox, and the gate
 used to claim it in the operator's own `~/.helm/mail`, where live agents address each other
