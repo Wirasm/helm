@@ -96,7 +96,7 @@ final class BenchSnapshotTests: XCTestCase {
         XCTAssertNil(value.workspaces[0].columns[0].slots[0].panes[0].terminal?.owner)
     }
 
-    func testParkedWorkspaceIsPersistedButNeverClaimsLiveVisibility() throws {
+    func testParkedWorkspaceKeepsLiveTerminalIdentityButNeverClaimsVisibility() throws {
         let first = Workspace(path: "/tmp/bench-snapshot-live")
         let parked = Workspace(path: "/tmp/bench-snapshot-parked")
         let terminals = TerminalManager()
@@ -104,9 +104,8 @@ final class BenchSnapshotTests: XCTestCase {
         let workspaces = WorkspaceModel(defaults: try defaults())
 
         workspaces.open(parked)
-        let parkedBench = Workbench(
-            panes: [Pane(content: .canvas(.url(URL(string: "https://example.com")!)))])
-        workbench.activate(workspacePath: parked.path, restoring: parkedBench)
+        workbench.activate(workspacePath: parked.path)
+        let parkedTerminal = try XCTUnwrap(terminals.sessions(for: parked.path).first)
         workspaces.saveContext(terminalManager: terminals, workbench: workbench)
 
         workspaces.open(first)
@@ -116,8 +115,12 @@ final class BenchSnapshotTests: XCTestCase {
             workspaces: workspaces,
             workbench: workbench,
             terminals: terminals,
-            owners: []
-        ) { _ in nil }
+            owners: [
+                MailboxOwner(
+                    handle: "parked-agent", runtime: "codex", pid: 4242,
+                    sessionId: "session", cwd: parked.path)
+            ]
+        ) { session in session.id == parkedTerminal.id ? 4242 : nil }
 
         let parkedRecord = try XCTUnwrap(value.workspaces.first { $0.path == parked.path })
         let pane = try XCTUnwrap(parkedRecord.columns.first?.slots.first?.panes.first)
@@ -125,6 +128,9 @@ final class BenchSnapshotTests: XCTestCase {
         XCTAssertTrue(pane.isSelected, "the persisted selection is still useful arrangement")
         XCTAssertFalse(pane.isVisible, "a parked selection is not on screen")
         XCTAssertFalse(pane.isFocused, "parked focusedSlot is only persisted arrangement")
+        XCTAssertTrue(pane.terminal?.isLive == true)
+        XCTAssertEqual(pane.terminal?.sessionId, parkedTerminal.id)
+        XCTAssertEqual(pane.terminal?.owner?.handle, "parked-agent")
     }
 
     func testSchemaAndIsoDateRoundTrip() throws {

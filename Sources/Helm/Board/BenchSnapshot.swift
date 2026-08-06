@@ -44,7 +44,7 @@ struct BenchSnapshot: Codable, Equatable {
                     workspace: workspace,
                     state: mounted ? .mounted : .parked,
                     bench: bench,
-                    sessions: mounted ? terminals.sessions(for: workspace.path) : [],
+                    sessions: terminals.sessions(for: workspace.path),
                     owners: owners,
                     foregroundPid: foregroundPid)
             })
