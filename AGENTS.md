@@ -245,12 +245,17 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   - **No toolchain state.** No resolved dependencies, no `.build/`, no vendored framework. A
     machine that has never built helm can still drive it.
 
-  **So the spool's wire format is duplicated between `tools/*.swift` and `HelmWire`, and that
-  duplication is honest** — the same carve-out as `pi/` and `hooks/`, for the same reason: a
-  runtime boundary makes sharing impossible. What is *not* optional is that it be **detectable**,
-  which is what `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) is for: it runs the real
-  script against a temp `HELM_SPOOL_DIR` and decodes what it writes with the real request type,
-  so the two sides cannot drift silently.
+  **So the spool's wire format and its directory-resolution rules are both duplicated between
+  `tools/*.swift` and `HelmWire`, and that duplication is honest** — the same carve-out as
+  `pi/` and `hooks/`, for the same reason: a runtime boundary makes sharing impossible. What is
+  *not* optional is that it be **detectable**, which is what `SpoolWireConformanceTests`
+  (`Tests/HelmTests/Spool/`) is for: it runs each real script as a subprocess and checks both
+  directions — the request it writes, decoded with the real type, and its exit code and stderr
+  against a real `SpoolResult` for **every** `Status` case, not a sample — plus the
+  `HELM_DEFAULTS_SUITE` half of directory resolution against a real, disposable suite. The one
+  branch it cannot reach is the bare default (no override, no suite), which resolves to the
+  operator's actual `~/.helm/spool` and cannot be redirected — the test file's own header has
+  the measurement. Everything else it does reach fails a test rather than shipping silently.
 - **To read the bench without a display, read helm's snapshot** —
   `~/.helm/bench/snapshot.json`, or `~/.helm/bench-<suite>/snapshot.json` under
   `HELM_DEFAULTS_SUITE`; `HELM_BENCH_DIR` explicitly overrides that root. It is private
@@ -383,13 +388,17 @@ whole reason the spool is a script rather than an SPM target — see "Why the sp
 and must stay one", above, for what #221 measured when it tried the other way. So the format is
 typed once in `HelmWire` and spelled out once more in `tools/helm-spool.swift`/`helm-close.swift`/
 `helm-capture.swift`, on purpose. A duplicate is honest only when a runtime boundary makes
-sharing impossible, and that is now three, not two: the mailbox's wire format, written twice in
-Swift and TypeScript/JavaScript because `pi/` and `hooks/` are separate processes `HelmWire`
-cannot reach; and the spool's own, written twice in `HelmWire` and in `tools/*.swift`, for the
-reasons just given. Neither is left to drift unnoticed — `SpoolWireConformanceTests`
-(`Tests/HelmTests/Spool/`) runs each spool script as a real subprocess and decodes what it writes
-with the real request type, so a drift between `HelmWire` and `tools/` fails a test rather than
-shipping silently. `focus.swift`, `winshot.swift`, `ticklog.swift` and `helm-spawn.swift` stay
+sharing impossible, and two wire formats now earn that carve-out: the mailbox's, written twice
+— in Swift (`hooks/`) and TypeScript/JavaScript (`pi/`), both separate processes `HelmWire`
+cannot reach — and the spool's own, written twice — once in `HelmWire`, once by hand across the
+three scripts, for the reasons just given. Neither is left to drift unnoticed by nothing at all
+— `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) runs each spool script as a real
+subprocess and checks both directions of the spool format (the request it writes and, against
+every `SpoolResult.Status`, its exit code and stderr) plus the `HELM_DEFAULTS_SUITE` branch of
+directory resolution, so a drift anywhere in that surface fails a test rather than shipping
+silently. The one branch it cannot reach is the bare default resolution, which the test file's
+own header explains — it resolves to the operator's live spool, and a test does not get to write
+there. `focus.swift`, `winshot.swift`, `ticklog.swift` and `helm-spawn.swift` stay
 standalone scripts too, for a simpler reason — none of them touch the spool's wire format at all.
 
 **A payload that can grow a second kind carries a discriminator from the first one.**

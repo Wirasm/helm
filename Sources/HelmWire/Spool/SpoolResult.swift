@@ -39,7 +39,10 @@ package struct SpoolResult: Codable, Equatable {
     /// The third answer — the caller resolves the handle — is the one this type exists to
     /// avoid: it puts the `~/.helm/mail` scan back into every caller, and a caller that gets
     /// it wrong gets it silently wrong (see `MailboxDirectory`).
-    package enum Status: String, Codable {
+    /// `CaseIterable` so `SpoolWireConformanceTests` can iterate every case rather than a
+    /// sample: a new case added here without a matching switch arm in that test's exhaustive
+    /// `expectation(for:)` is a compile error there, not a gap nobody notices.
+    package enum Status: String, Codable, CaseIterable {
         /// A terminal exists in helm and the launch line has been written into its pty. No
         /// handle yet — the agent has not claimed a mailbox.
         case started

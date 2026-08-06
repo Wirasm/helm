@@ -10,7 +10,9 @@ import QuartzCore
 /// itself, which needs `NSView`/`CALayer` and has no business in a library only `Helm` depends
 /// on. `tools/helm-capture.swift` still reads the result back as a raw dictionary — it cannot
 /// `import HelmWire` either, for the reasons `AGENTS.md`'s "Why the spool is a script, and must
-/// stay one" gives — and `SpoolWireConformanceTests` is what watches its *request* side instead.
+/// stay one" gives — and `SpoolWireConformanceTests` watches both its request and its result
+/// handling, the latter by writing a real `SpoolResult` for every `Status` and checking the
+/// script's exit code and stderr against it.
 ///
 /// **This is drawing, not screen capture, and that is the whole point of #174.** Screen
 /// Recording is a TCC grant: un-grantable from code, keyed on the code signature, and attached

@@ -49,10 +49,15 @@ let package = Package(
         // which breaks the premise `AGENTS.md` opens with — helm hosts an agent in whatever repo
         // the operator is in, not in this one. A single-file `swift tools/…swift` script has
         // neither requirement, which is the runtime boundary `AGENTS.md`'s own rule carves out:
-        // the wire format is typed once here and spelled out once more in `tools/*.swift`, on
-        // purpose. `Tests/HelmTests/Spool/SpoolWireConformanceTests.swift` runs each script as a
-        // real subprocess and decodes what it wrote with these same types, so a drift between
-        // the two fails a test rather than shipping silently.
+        // the wire format and the directory-resolution rules are typed once here and spelled
+        // out once more in `tools/*.swift`, on purpose.
+        // `Tests/HelmTests/Spool/SpoolWireConformanceTests.swift` runs each script as a real
+        // subprocess and checks both directions of the wire format (decodes the request it
+        // wrote; checks its exit code and stderr against a real result for every `Status`) plus
+        // the `HELM_DEFAULTS_SUITE` half of directory resolution, so a drift anywhere in that
+        // surface fails a test rather than shipping silently — except the bare default
+        // resolution, which resolves to the operator's live spool and cannot be safely
+        // exercised by a test; see that file's own header.
         .target(
             name: "HelmWire",
             path: "Sources/HelmWire"
