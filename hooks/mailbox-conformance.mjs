@@ -143,6 +143,25 @@ function check(condition, message) {
 }
 
 /**
+ * Run something and hand back what it wrote to stderr alongside its result.
+ *
+ * Only one check needs this and it needs it as its SUBJECT rather than as tidying: pi's lifted
+ * code warns through `console.error` where the hook's stays silent, and "the hook writes nothing
+ * to stderr" is a rule of `hooks/test.sh` worth asserting here too. Restored in a `finally`, so
+ * a throwing group cannot leave the harness unable to report.
+ */
+function withCapturedStderr(run) {
+	const lines = [];
+	const real = console.error;
+	console.error = (...parts) => lines.push(parts.map(String).join(" "));
+	try {
+		return [run(), lines];
+	} finally {
+		console.error = real;
+	}
+}
+
+/**
  * Every failure this file can produce goes through `bad`, so a group that decides it has
  * nothing to compare must say so as a failure rather than return quietly. Used at the end of
  * every check group.
@@ -213,6 +232,31 @@ async function loadDecls({ source, file, names, extension }) {
 	return await import(pathToFileURL(out).href);
 }
 
+/** Every top-level function a source declares. Generics are erased by the `\b` — pi has `readJson<T>`. */
+function topLevelFunctionNames(source) {
+	return source
+		.split("\n")
+		.map((line) => line.match(/^(?:export )?(?:async )?function ([A-Za-z0-9_]+)\b/))
+		.filter(Boolean)
+		.map((match) => match[1]);
+}
+
+/**
+ * The functions BOTH mailbox files declare that this harness deliberately does not compare, and
+ * why. Every other name in the intersection must be in `SHARED_NAMES`, which is what
+ * `checkTheSharedSurfaceIsCovered` enforces.
+ *
+ * WITHOUT THAT ENFORCEMENT `SHARED_NAMES` WOULD BE A KEEP-IN-SYNC LIST — the shape this whole
+ * ticket exists to remove, reintroduced by its own fix. A fourth rule added to both files and
+ * not to that list would be silently uncovered, and the gate would stay green saying so.
+ */
+const DELIBERATELY_UNSHARED = {
+	claim:
+		"different signatures and different jobs: the hook derives its own handle and reaps on the way in, " +
+		"pi is handed one and does not reap, and each writes its own `runtime`. The parts they DO share — " +
+		"deriveHandle, reap, writeAtomic, the owner record's shape — are each compared on their own above.",
+};
+
 /** Everything both halves are asked to agree about, and everything those need to run. */
 const SHARED_NAMES = [
 	"NAME",
@@ -237,6 +281,7 @@ const SHARED_NAMES = [
 	"reap",
 	"heldByAnother",
 	"deriveHandle",
+	"consume",
 	"oneLine",
 	"notice",
 	"howToReply",
@@ -552,6 +597,7 @@ async function runConformance({ hooksSource, piSource, handleSource }) {
 	// Each group is isolated, because a rule that diverges far enough to THROW — a `retire` that
 	// deletes the file the next line reads, say — would otherwise cancel every check after it
 	// and report a smaller, quieter failure than the truth.
+	group("the shared surface", () => checkTheSharedSurfaceIsCovered(hooksSource, piSource));
 	group("constants", () => checkTheConstantsAgree(hooks, pi));
 	group("slug/tail", () => checkSlugAndTailAgree(hooks, pi));
 	group("deriveHandle", () => checkDerivationAgrees(hooks, pi));
@@ -561,6 +607,7 @@ async function runConformance({ hooksSource, piSource, handleSource }) {
 	group("heldByAnother", () => checkHeldByAnotherAgrees(hooks, pi));
 	group("retire", () => checkRetireAgrees(hooks, pi));
 	group("reap", () => checkReapAgrees(hooks, pi));
+	group("consume", () => checkConsumeAgrees(hooks, pi));
 	group("the notice", () => checkTheNoticeAgrees(hooks, pi));
 	group("the deliberate divergences", () => checkTheDeliberateDivergences(hooks, pi));
 	reportTheSwiftRule(rules);
@@ -573,6 +620,34 @@ function group(what, run) {
 	} catch (error) {
 		bad(`${what}: the group threw rather than reporting — ${error.message}`);
 	}
+}
+
+/**
+ * THE CHECK THAT KEEPS `SHARED_NAMES` FROM BECOMING THE DEFECT IT FIXES.
+ *
+ * A hand-written list of what to compare is a hand-maintained list: add a fourth rule to both
+ * mailbox files, forget the list, and the gate stays green while covering nothing new. So the
+ * list is not trusted — the intersection of the two files' own top-level functions is computed,
+ * and every name in it must be either compared (`SHARED_NAMES`) or excused by name and reason
+ * (`DELIBERATELY_UNSHARED`). A new shared function is a red gate until someone classifies it.
+ *
+ * `consume` was found by exactly this: a rule in both files, and the first draft of this harness
+ * did not compare it.
+ */
+function checkTheSharedSurfaceIsCovered(hooksSource, piSource) {
+	const inHooks = topLevelFunctionNames(hooksSource);
+	const inPi = new Set(topLevelFunctionNames(piSource));
+	const shared = inHooks.filter((name) => inPi.has(name));
+	const covered = new Set([...SHARED_NAMES, ...PI_EXTRA_NAMES, ...Object.keys(DELIBERATELY_UNSHARED)]);
+	const uncovered = shared.filter((name) => !covered.has(name));
+	check(
+		uncovered.length === 0,
+		`every function both mailbox files declare is compared or excused by name (${shared.length} shared)` +
+			(uncovered.length ? ` — not classified: ${uncovered.join(", ")}` : ""),
+	);
+	// The control. An intersection of zero satisfies the line above, and an intersection of zero
+	// is what a renamed or moved implementation looks like from here.
+	ranAtLeast(shared.length, 15, "the shared surface");
 }
 
 /** The on-disk shape's names and the bounds on another agent's text — #127's numbers. */
@@ -974,6 +1049,60 @@ function checkReapAgrees(hooks, pi) {
 }
 
 /**
+ * `consume` is what makes a message arrive EXACTLY ONCE — the rename into `read/` is the
+ * consume, so a crash leaves every message in exactly one of the two directories and two
+ * readers cannot both win one. Written in both files; found uncovered by
+ * `checkTheSharedSurfaceIsCovered`, which is the point of that check.
+ *
+ * The returned `file` is the other half and is deliberately the PATH, never `message.id`: the id
+ * is a field the sender wrote and is free to disagree with the name it was stored under, so a
+ * notice built from it points at a file that does not exist (#127).
+ */
+function checkConsumeAgrees(hooks, pi) {
+	const describe = (module) => {
+		const root = makeRoot();
+		fs.mkdirSync(path.join(root, "box", "read"), { recursive: true });
+		writeMessage(root, "box", "1-first");
+		writeMessage(root, "box", "2-second");
+		fs.writeFileSync(path.join(root, "box", "3-unreadable.json"), "{ not json");
+		// `message.id` deliberately disagreeing with the filename it is stored under.
+		fs.writeFileSync(
+			path.join(root, "box", "4-mislabelled.json"),
+			`${JSON.stringify({ id: "a-different-id", from: "peer", to: "box", subject: "s", body: "b", sentAt: 1 })}\n`,
+		);
+		const dir = path.join(root, "box");
+		const names = ["1-first.json", "2-second.json", "3-unreadable.json", "4-mislabelled.json", "5-never-existed.json"];
+		const taken = module.consume(dir, names);
+		return {
+			files: taken.map((one) => path.relative(root, one.file)),
+			froms: taken.map((one) => one.message.from),
+			left: fs.readdirSync(dir).filter((name) => name.endsWith(".json")).sort(),
+			archived: fs.readdirSync(path.join(dir, "read")).sort(),
+			// Consuming twice must take nothing the second time — the rename is what makes it once.
+			again: module.consume(dir, names).length,
+		};
+	};
+	const [fromHooks, hooksSaid] = withCapturedStderr(() => describe(hooks));
+	const [fromPi, piSaid] = withCapturedStderr(() => describe(pi));
+	check(JSON.stringify(fromHooks) === JSON.stringify(fromPi), "consume behaves identically in both runtimes, including an unreadable message and one that vanished");
+	// The one place they differ, captured rather than hidden — and it is a rule of the hook's own
+	// gate: a Claude Code hook must write NOTHING to stderr, because stdout is the whole delivery
+	// channel and a hook that chatters is a hook that has said something it cannot take back. pi
+	// has a terminal to warn into and uses it.
+	check(
+		hooksSaid.length === 0 && piSaid.some((line) => line.includes("unreadable")),
+		`consume's only divergence is reporting: the hook stays silent (${hooksSaid.length} lines), pi warns (${piSaid.length})`,
+	);
+	check(fromHooks.left.length === 0 && fromHooks.archived.length === 4, "everything nameable moved into read/ and nothing was deleted");
+	check(fromHooks.again === 0, "consuming the same names twice takes nothing the second time — the rename is the consume");
+	check(
+		fromHooks.files.every((file) => file.startsWith("box/read/")) && fromHooks.files.includes("box/read/4-mislabelled.json"),
+		"the path handed back is where the file IS, not what the sender's own id claimed (#127)",
+	);
+	ranAtLeast(fromHooks.archived.length, 4, "consume");
+}
+
+/**
  * The notice's shared half, which is a SECURITY property (#127) written in two places: every
  * field of another agent's message is bounded and collapsed to one line, so a subject with
  * newlines in it cannot forge whole lines of the notice.
@@ -1122,6 +1251,15 @@ async function selfChecks() {
 			what: "the hook's slug emits a character no mailbox directory can carry",
 			sources: { hooksSource: hooksSource.replace('.replace(/[^a-z0-9]+/g, "-")', '.replace(/[^a-z0-9]+/g, "_")'), piSource, handleSource },
 			expect: /slug agrees|deriveHandle agrees|accepts all/,
+		},
+		{
+			what: "a fourth rule is added to both mailbox files and nobody tells this harness",
+			sources: {
+				hooksSource: `${hooksSource}\nfunction aFourthSharedRule() {\n\treturn 1;\n}\n`,
+				piSource: `${piSource}\nfunction aFourthSharedRule() {\n\treturn 1;\n}\n`,
+				handleSource,
+			},
+			expect: /not classified: aFourthSharedRule/,
 		},
 		{
 			what: "Handle's rule grows a clause the harness cannot model",
