@@ -43,6 +43,24 @@ probability**, not by construction — so the claim also looks: if the handle is
 **live** process, it takes 6 characters, then 8, then the whole id. A dead owner's handle is free,
 so a widened handle is temporary rather than a permanent scar on the address space.
 
+**And when even the whole id is held, the claim appends its own pid rather than taking the last
+rung anyway.** That state means two live processes reporting one session id, which should not
+happen — but "should not happen" is not a reason to hand back a name the check just called taken.
+`hooks/helm-mail.mjs` did exactly that until
+[#262](https://github.com/Wirasm/helm/issues/262): it returned `<where>-<full>`, the last candidate
+on its own list, and its claim then overwrote a live agent's `owner.json`. The displaced agent kept
+running, still believing it was addressable, while mail addressed to it was delivered — correctly
+formatted — into somebody else's mailbox. Nothing bounced. Both halves now spell this arm the same
+way, and `hooks/mailbox-conformance.mjs` compares it.
+
+**`operator` is reserved.** It is the sender helm's own `CanvasNoteCourier` writes for a canvas
+note, and the notice weighs a body by it (below), so a session holding that handle would have every
+ordinary reply it sends read as the operator speaking. A derived handle always carries a `-`, so
+`HELM_MAIL_HANDLE` is the only way to ask for the name — and a pin to it is refused rather than
+honoured, in both runtimes. That closes the ordinary case and not the adversarial one: `from` is a
+field the sender writes and nothing authenticates it, so the notice's line is a legibility hint and
+never a credential.
+
 Handles are folded to lower case. That is not cosmetic: on a case-insensitive filesystem — the
 macOS default — `Alice` and `alice` are two agents to a sender and one directory to the disk, so
 the second claim silently takes the first one's mail. kild hit this and documented it.
@@ -133,6 +151,13 @@ would put those words in the operator's voice — indistinguishable, at the poin
 an instruction the human typed. [#29](https://github.com/Wirasm/helm/issues/29) measured what
 that costs when prose landed in a live permission prompt and its `y` approved a network command.
 The agent reads the file with its own tools, where it lands as a file.
+
+The sentence telling the reader how to *weigh* the body depends on the sender —
+[#257](https://github.com/Wirasm/helm/issues/257). Agent mail keeps the warning above, word for
+word, because it is right for most mail. A note `from: operator` gets the inverse: it is the
+person's own words and carries their authority. Told otherwise, an agent discounts a genuine
+operator instruction *because the notice said to*, which is a failure that leaves no trace
+anywhere. A batch carrying both says which is which rather than picking one verdict.
 
 **A wake cap of 3.** Waking a session spends the owner's money, and two agents replying to each
 other wake each other until it runs out. At the cap the extension goes quiet and says so on
