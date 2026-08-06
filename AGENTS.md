@@ -329,6 +329,38 @@ presentation. Attaching it to the view means it is dead in exactly the state it 
 value and resolve it to the live object at the edge. Persistence, restore and equality then
 come free, where a tree of protocol existentials would need a hand-rolled type registry.
 
+**And the value must live where both sides of the seam can reach it.** A type on one side and a
+comment on the other is not a contract — it is a contract plus a bug waiting for whoever writes
+the far half from memory. #210 caught four of these in the canvas; they are not a canvas habit.
+`Notification.object` is `Any?`, so the keymap and the menu posted different objects for the same
+row and four View ▸ Focus commands were silent no-ops from the day they were split out (#152).
+`tools/*.swift` hand-rolls the spool's JSON as `["id": id, "kind": "close", …]` because there is
+no library target to import `SpoolRequest` from — the format is typed on one side and spelled out
+on the other. The mailbox's wire format is written **three** times, in Swift, TypeScript and
+JavaScript, and this file can only *ask* that they be kept in step. The cure is not more
+discipline. It is putting the type where both sides compile against it; a duplicate is honest
+only when a runtime boundary makes sharing impossible, which is why `pi/` and `hooks/` are one
+and `tools/` is not.
+
+**A payload that can grow a second kind carries a discriminator from the first one.**
+`SpoolRequest`'s `{id, kind}` envelope and `Pane.Content`'s string `kind` cost one field each and
+buy a decoder that can refuse what it does not understand — `Pane.Content` throws on a `kind` this
+build never heard of, and `Slot` drops that pane rather than guessing. The canvas bridge's
+`{id, text, rect}` has no such field, and adding one once a second kind exists is a migration
+rather than a field (#109). Anything read **outside** the process says so in its header too:
+`BenchSnapshot` carries `format`, `version` and `writtenAt`, so a reader that predates a change
+fails loudly instead of misreading it.
+
+**An invariant with a comment explaining it wants a type carrying it.** `StandardizedPath` is the
+worked example: "standardize every path on the way in" was a doc comment asking callers to prefer
+a helper, and `WorkbenchTests` took the shortcut anyway (#88) — the explicit `init` is what made
+the unstandardized value unconstructable. The same invariant is still loose elsewhere.
+`workspacePath` is a raw `String` in 48 places across Archon, Terminals, Workbench, Worktrees and
+Canvas, and it is the key a push is routed on (`WorkbenchModel.swift`). `MailboxDirectory` spends
+twenty lines arguing that a handle is *read, never derived* — and a handle is a `String`. A
+`terminalId` is a `UUID` in the app, a `String` across the spool, and a `UUID` again on the way
+back. Prefer a newtype the day the comment gets written, not the day it is disbelieved.
+
 **Colour is a palette token, never a literal and never a system default.** Every surface
 spends `Design/Palette.swift` — views through `Color.surface`/`.textMuted`/…, the terminal
 through the same tokens rendered as ghostty config lines. A `Color(nsColor:)`, a `.bar`, or a
