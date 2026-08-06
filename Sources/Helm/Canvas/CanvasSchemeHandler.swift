@@ -53,6 +53,31 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// is the string the initializer wants in order to hand WebKit a status.
     private static let httpVersion = "HTTP/1.1"
 
+    /// **Nothing served here may be cached, and a sibling is the reason (#228).**
+    ///
+    /// `CanvasFileViews` loads the document itself with `.reloadIgnoringLocalCacheData`, so an
+    /// agent editing `report.html` always sees its own bytes — which is exactly why this went
+    /// unnoticed. A **sibling** is a subresource the page fetches, not the navigation, so that
+    /// policy never reaches it: `app.js` comes from WebKit's on-disk cache in the
+    /// `WKWebsiteDataStore`, and that **survives quitting and relaunching helm**. Measured on
+    /// #111's trackpad leg — an edited `spike.js` did not reach the page across a full relaunch,
+    /// and only appeared once the import was rewritten to `./spike.js?v=2`.
+    ///
+    /// That is the worst shape a bug can take here. It is silent; it points the wrong way, since
+    /// the natural reading is "my change did not work" and the next move is to edit a file that
+    /// is not being executed; and the one remedy anyone would try — relaunching — rules out the
+    /// real cause. It costs an agent more than a human: a human eventually opens the inspector,
+    /// while an agent re-reads its own correct source and cannot see which bytes the page got.
+    ///
+    /// **`no-store` rather than revalidation or an mtime key**, because there is nothing here
+    /// for caching to buy. Every response is a local file read inside one directory — no
+    /// network, no latency to amortize, no server to spare. An ETag or an mtime-keyed cache
+    /// would be a second mechanism that can itself be wrong, bought at the price of a `read(2)`.
+    /// Siblings-are-served is the primitive the `helm-canvas` skill tells agents to build on —
+    /// #200's whole conclusion is *put the library bytes beside the artifact* — so freshness
+    /// there has to be unconditional rather than clever.
+    private static let cacheControl = "no-store"
+
     /// The artifact's own directory — nothing outside it is served.
     private let directory: URL
     /// The artifact's file name, which is the one path that maps to `document`.
@@ -123,6 +148,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
                 headerFields: [
                     "Content-Type": "\(mimeType); charset=utf-8",
                     "Content-Length": String(data.count),
+                    "Cache-Control": Self.cacheControl,
                 ])
         else { return fail(task, .badServerResponse) }
         task.didReceive(response)

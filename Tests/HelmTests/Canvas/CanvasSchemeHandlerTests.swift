@@ -71,6 +71,9 @@ final class CanvasSchemeHandlerTests: XCTestCase {
         var contentType: String? {
             (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")
         }
+        var cacheControl: String? {
+            (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Cache-Control")
+        }
     }
 
     private func handler(document: @escaping @MainActor () -> Data?) -> CanvasSchemeHandler {
@@ -115,6 +118,44 @@ final class CanvasSchemeHandlerTests: XCTestCase {
         let task = try request("/scene.json")
 
         XCTAssertEqual(task.contentType, "application/json; charset=utf-8")
+    }
+
+    // MARK: - Freshness (#228)
+
+    /// **The one that fails without the fix.** A sibling is a subresource, so
+    /// `CanvasFileViews`'s `.reloadIgnoringLocalCacheData` — which keeps the *artifact* fresh —
+    /// never reaches it, and WebKit's on-disk cache survives quitting helm. Asserted over the
+    /// response, because the alternative is opening a page and squinting at it.
+    func testASiblingIsServedWithNoStoreSoAnEditReachesThePage() throws {
+        let task = try request("/scene.json")
+
+        XCTAssertEqual(
+            task.cacheControl, "no-store",
+            "without this WebKit caches the sibling on disk across a relaunch, and the page "
+                + "runs yesterday's script with no error anywhere")
+    }
+
+    /// The document is served through the same `respond`, so it gets the same header. It is
+    /// already loaded with `.reloadIgnoringLocalCacheData`, which is why this is belt and
+    /// braces rather than the fix — but a reader comparing the two responses should not find
+    /// them disagreeing about caching.
+    func testTheDocumentSaysTheSameThingAboutCaching() throws {
+        let task = try request("/plan.html")
+
+        XCTAssertEqual(task.cacheControl, "no-store")
+    }
+
+    /// **A control, and it must pass either way.** `no-store` is one more header field on a
+    /// response that already had two, and the failure mode of adding one is clobbering the
+    /// others — `HTTPURLResponse` takes a dictionary, so a mistyped literal silently replaces
+    /// rather than appends. This fails if the freshness fix overshoots; it says nothing about
+    /// whether the fix is present.
+    func testAddingTheCacheHeaderLeavesTheOthersIntact() throws {
+        let task = try request("/scene.json")
+
+        XCTAssertEqual(task.status, 200)
+        XCTAssertEqual(task.contentType, "application/json; charset=utf-8")
+        XCTAssertEqual(String(data: task.body, encoding: .utf8), #"{"scene":"ok"}"#)
     }
 
     func testABinarySiblingKeepsItsOwnType() throws {
