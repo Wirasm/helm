@@ -86,6 +86,37 @@ and the operator learns to ignore what you put in front of them.
 If you are about to paste something long into the terminal, that is the signal to write a file
 and offer it instead.
 
+**A canvas earns its format only when the reader can do something scrolling cannot.** If the sole
+control is scroll, it should have been markdown. Ask what question the page lets the reader answer
+that a document does not — filter to the rows that are theirs, tick off what they have done, fold
+away the part they have read, search 35 items for one word. A page whose only listeners are
+scroll, touch and reduced-motion is ambience: carefully made, and it reads as a wall.
+
+## If it needs a library
+
+**Put the bytes beside the artifact at authoring time. Never `<script src="https://cdn…">`.** A
+canvas renders with no click, so a page that fetches and executes remote code at render time is a
+materially different proposition from one that cannot — and an unpinned CDN build renders
+differently, or not at all, in six months.
+
+`curl` is the build step. Nearly every library worth putting in a canvas ships a browser-ready
+file — a UMD/IIFE bundle, or ESM with no dependencies — so fetch that into the artifact's directory
+and `<script src="./lib.min.js">` it. Measured across fifteen candidates, fifteen were reachable
+that way (helm #200).
+
+Two things that look like shortcuts and are not:
+
+- **Vendoring a library's ESM *source* only works if the library ships browser-ready ESM.** It
+  worked for `@quickdrawjs/core`, which has no dependencies and writes its imports with file
+  extensions. It fails outright for an ordinary TypeScript-compiled package, whose `import
+  './thing'` no browser resolves. When that happens, `bun add x && bun build entry.js --outfile
+  lib.js --minify --target browser` bundles it in about 1.5 s, unattended, and fails loudly with a
+  nonzero exit when the network is not there.
+- **Do not reach for htmx.** It was rebuilt against a real artifact and came out *longer* than
+  plain JS — its model is fetching a fragment from a server, and a canvas has no server. Every
+  control worth having (search, anything derived from `localStorage`) has to be hand-written
+  anyway, and htmx's default history handling renders a helm canvas blank (helm #200).
+
 ## Two things that will bite
 
 **Do not write into a canvas the operator has marked up.** When they annotate one, helm writes
