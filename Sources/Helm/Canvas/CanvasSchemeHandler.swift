@@ -53,42 +53,6 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// is the string the initializer wants in order to hand WebKit a status.
     private static let httpVersion = "HTTP/1.1"
 
-    /// **Nothing served here may be cached, and a sibling is the reason (#228).**
-    ///
-    /// `CanvasFileViews` loads the document itself with `.reloadIgnoringLocalCacheData`, so an
-    /// agent editing `report.html` always sees its own bytes — which is exactly why this went
-    /// unnoticed. A **sibling** is a subresource the page fetches, not the navigation, so that
-    /// policy never reaches it: `app.js` comes from WebKit's on-disk cache in the
-    /// `WKWebsiteDataStore`, and that **survives quitting and relaunching helm**. Measured on
-    /// #111's trackpad leg — an edited `spike.js` did not reach the page across a full relaunch,
-    /// and only appeared once the import was rewritten to `./spike.js?v=2`.
-    ///
-    /// That is the worst shape a bug can take here. It is silent; it points the wrong way, since
-    /// the natural reading is "my change did not work" and the next move is to edit a file that
-    /// is not being executed; and the one remedy anyone would try — relaunching — rules out the
-    /// real cause. It costs an agent more than a human: a human eventually opens the inspector,
-    /// while an agent re-reads its own correct source and cannot see which bytes the page got.
-    ///
-    /// **`no-store` rather than revalidation or an mtime key**, because there is nothing here
-    /// for caching to buy. Every response is a local file read inside one directory — no
-    /// network, no latency to amortize, no server to spare. An ETag or an mtime-keyed cache
-    /// would be a second mechanism that can itself be wrong, bought at the price of a `read(2)`.
-    /// Siblings-are-served is the primitive the `helm-canvas` skill tells agents to build on —
-    /// #200's whole conclusion is *put the library bytes beside the artifact* — so freshness
-    /// there has to be unconditional rather than clever.
-    ///
-    /// **What is measured and what is not, because this file's other WebKit claims say which
-    /// and this one must too.** The *bug* is measured — #111's relaunch, and the `?v=2` that
-    /// worked. That WebKit honours `no-store` from a `WKURLSchemeHandler`'s `HTTPURLResponse`
-    /// is **reasoned from HTTP semantics, not measured here**: the tests below assert the
-    /// header is on the response, which is a different claim. `respond` and `refuse` above
-    /// each say "measured with real, loadable JavaScript served twice" because their claims
-    /// needed a live `WKWebView` to settle, and no unit test can settle this one either — it
-    /// wants an edit-reload-refetch against a real page. Until someone runs that, this is a
-    /// well-founded fix rather than a confirmed one, and #228 should be closed on the
-    /// measurement rather than on the reasoning.
-    private static let cacheControl = "no-store"
-
     /// The artifact's own directory — nothing outside it is served.
     private let directory: URL
     /// The artifact's file name, which is the one path that maps to `document`.
@@ -159,7 +123,6 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
                 headerFields: [
                     "Content-Type": "\(mimeType); charset=utf-8",
                     "Content-Length": String(data.count),
-                    "Cache-Control": Self.cacheControl,
                 ])
         else { return fail(task, .badServerResponse) }
         task.didReceive(response)
@@ -179,29 +142,11 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// twice — 200 gives `onload` and runs it, 404 gives `onerror` and does not — and
     /// `import()` of a missing module still throws even when the 404 carries valid module
     /// source. The body is empty regardless; there is nothing to render or execute.
-    ///
-    /// **A refusal is no more cacheable than a success (#228).** A cached negative outlives the
-    /// thing that caused it and reproduces this ticket's exact shape one status code over: the
-    /// page keeps failing to load something that is now there, silently, and the natural reading
-    /// is again "my change did not work".
-    ///
-    /// The 404 is the obvious one — an agent referencing a sibling it has not written yet is an
-    /// ordinary sequence rather than an exotic one. **But only one of the two 403 routes is
-    /// genuinely fixed.** A literal traversal is decided lexically by `standardizedFileURL`, so
-    /// that path is refused every time whatever is on disk; `CanvasFileBoundary`'s symlink check
-    /// resolves through `resolvingSymlinksInPath()`, so replacing an escaping symlink with a
-    /// real file inside the directory flips the same path 403 → 200. That is the same drift the
-    /// 404 has. Both statuses go through here and both get the header, so the code was already
-    /// right — this note exists because the first version of it argued 403 was safe, and being
-    /// right for a reason that is only half true is how the next person justifies removing it.
     private func refuse(_ task: any WKURLSchemeTask, url: URL, status: Int) {
         guard
             let response = HTTPURLResponse(
                 url: url, statusCode: status, httpVersion: Self.httpVersion,
-                headerFields: [
-                    "Content-Length": "0",
-                    "Cache-Control": Self.cacheControl,
-                ])
+                headerFields: ["Content-Length": "0"])
         else { return fail(task, .badServerResponse) }
         task.didReceive(response)
         task.didFinish()

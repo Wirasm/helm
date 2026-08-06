@@ -6,32 +6,33 @@ import XCTest
 /// A **real** `WKWebView` on a **real** `helm-canvas://` origin, serving through the **real**
 /// handler: edit a sibling on disk, load again, read what the page got.
 ///
-/// **BOTH TESTS HERE PASS WITHOUT THE FIX, AND THAT IS THE MEASUREMENT — not an oversight.**
-/// They were written to settle the one claim `CanvasSchemeHandlerTests` cannot make (it asserts
-/// the header is on the response, which would pass in a build where WebKit ignored the header
-/// entirely), and they failed to settle it in the direction anyone expected. With
-/// `Cache-Control` reverted to `origin/development`, measured three ways:
+/// **These were written to prove a fix, and instead disproved the bug — #228 is closed as not
+/// reproducible, and this file is what closed it.**
+///
+/// The ticket said a canvas served a stale sibling from WebKit's on-disk cache, surviving a helm
+/// relaunch, and that `./app.js?v=2` was the only way through. A `Cache-Control: no-store` fix
+/// was written, reviewed by three agents, and found sound. It was never merged, because with it
+/// reverted these measured, three ways:
 ///
 /// - reload in the same webview → fresh bytes
 /// - a second webview sharing the persistent `WKWebsiteDataStore` → fresh bytes
 /// - two separate processes against a **stable** origin → fresh bytes
 ///
-/// So `swift test` cannot reproduce #228. The likeliest reason is that these responses carry
-/// no `Last-Modified` and no `Date`, so there is nothing for WebKit's heuristic freshness to
-/// work from and the sibling may never have been cacheable here at all; the other candidate is
-/// that an unbundled test process has no app container and its `.default()` store does not
-/// persist the way `Helm.app`'s does. **Both are untested guesses and neither is in this file
-/// as a claim.**
+/// The first attempt at the third one was wrong and is worth recording: `CanvasAddress.host`
+/// hashes the artifact's **path**, so a temp directory per run gives every run a different
+/// origin and nothing is ever cached for the same host twice. A harness that cannot reach the
+/// cache proves nothing about it. Fixed to a stable path — still fresh.
 ///
-/// What that leaves, stated plainly: **#228 was measured against the real app across a real
-/// relaunch, and the fix is reasoned rather than measured.** These tests are worth keeping as a
-/// *control* — they prove the header does not break serving, that a sibling loads end-to-end
-/// through live WebKit, and that a 404 does not stick — and they would catch a future change
-/// that made siblings genuinely stale in-process. They are **not** evidence that `no-store` is
-/// what fixes the reported bug, and nothing here should be read as saying so.
+/// Then the real thing, which is where the ticket was found: `Helm.app` built from this repo,
+/// launched under `HELM_DEFAULTS_SUITE`, a canvas pushed, the sibling edited, **helm quit and
+/// relaunched**. Fresh with the fix, fresh without it, and fresh without it for an ES module
+/// `import` — the shape #228 actually reported. Six ways, no staleness.
 ///
-/// The experiment that would settle it needs `Helm.app` itself, quit and relaunched, which is
-/// where #228 was found.
+/// **So these do not test a fix; there is no fix.** They test the behaviour an operator cares
+/// about — *I edited the file, does the page see it?* — which is why they keep their meaning
+/// whatever the mechanism turns out to be, and why they would catch a real regression that made
+/// a sibling stale. What went wrong in #228 is still unknown; if it recurs, this file is the
+/// harness to extend rather than a place to add another header assertion.
 ///
 /// **Why it is safe to keep in the gate**: no display — a `WKWebView` renders offscreen and
 /// this never looks at pixels — no network, no TCC grant, no new dependency, `WebKit` is
