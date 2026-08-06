@@ -13,14 +13,19 @@ struct CanvasNoteCourier {
     var mailboxRoot: URL = MailboxDirectory.resolve()
     var foregroundPid: (TerminalSession) -> pid_t? = { $0.hostView.foregroundPid }
     var ancestors: (pid_t) -> [pid_t] = { AgentLocator.ancestors(of: $0) }
+    /// The registry `AddressBook` resolves a session through. Injectable for the same reason
+    /// `mailboxRoot` is: a test gets a registry it owns rather than reading the operator's live
+    /// one. `SpoolModel` and `BenchSnapshotModel` take it exactly this way.
+    var registryRoot: URL = AgentRegistry.defaultRoot
     var now: () -> Date = Date.init
 
     /// Who is reachable in this terminal, if anyone.
     ///
-    /// **`MailboxDirectory.owner(in:foregroundPid:shellPid:ancestors:)`, not a fourth join on
-    /// pid.** There are already three (`SpoolModel`, `BenchSnapshot.TerminalRecord`, and that
-    /// function), and `MailboxDirectory`'s own header names one rule spelled twice as the defect
-    /// shape it is trying not to repeat.
+    /// **`AddressBook`, not a fourth join on pid.** #247 folded the two joins that existed —
+    /// `SpoolModel`'s and `BenchSnapshot.TerminalRecord`'s — into that one type, precisely so
+    /// "which agent is in this pane" is answered in one place. This is the third caller and it
+    /// asks the same way: a registry-backed owner is matched by its **session**, and only an
+    /// owner with no session id falls back to its recorded pid.
     ///
     /// **The shell pid is derived rather than remembered, and it is derivable exactly here.**
     /// `SpoolModel` knows it because it watched the pane's first foreground process appear; a pane
@@ -32,8 +37,10 @@ struct CanvasNoteCourier {
     /// is that tool, and the agent is a descendant of the same shell.
     func owner(of session: TerminalSession?) -> MailboxOwner? {
         guard let session, let foreground = foregroundPid(session) else { return nil }
-        return MailboxDirectory.owner(
-            in: MailboxDirectory.owners(in: mailboxRoot),
+        let book = AddressBook(
+            owners: MailboxDirectory.owners(in: mailboxRoot),
+            sessionFor: AgentRegistry.sessionLookup(in: registryRoot))
+        return book.owner(
             foregroundPid: foreground,
             shellPid: ancestors(foreground).last ?? foreground,
             ancestors: ancestors)

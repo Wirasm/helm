@@ -18,6 +18,7 @@ import XCTest
 @MainActor
 final class WorkbenchCanvasOriginTests: XCTestCase {
     private var mailRoot: URL!
+    private var registryRoot: URL!
     private var artifacts: URL!
     private var canvas: URL!
 
@@ -34,9 +35,10 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     override func setUpWithError() throws {
         let fm = FileManager.default
         mailRoot = fm.temporaryDirectory.appendingPathComponent("helm-origin-mail-\(UUID())")
+        registryRoot = fm.temporaryDirectory.appendingPathComponent("helm-origin-reg-\(UUID())")
         artifacts = fm.temporaryDirectory.appendingPathComponent("helm-origin-canvas-\(UUID())")
-        try Self.claim(handle, pid: agentPid, under: mailRoot)
-        try Self.claim(otherHandle, pid: otherPid, under: mailRoot)
+        try Self.claim(handle, pid: agentPid, under: mailRoot, registry: registryRoot)
+        try Self.claim(otherHandle, pid: otherPid, under: mailRoot, registry: registryRoot)
         try fm.createDirectory(at: artifacts, withIntermediateDirectories: true)
         canvas = artifacts.appendingPathComponent("report.md")
         try "# Report\n\nWhy this exists\n".write(to: canvas, atomically: true, encoding: .utf8)
@@ -44,6 +46,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: mailRoot)
+        try? FileManager.default.removeItem(at: registryRoot)
         try? FileManager.default.removeItem(at: artifacts)
         pids = [:]
     }
@@ -51,7 +54,9 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     /// `nonisolated static` because `setUpWithError` is not on the main actor even in a
     /// `@MainActor` test case, and reaching an instance from it is a data race the compiler
     /// refuses.
-    private nonisolated static func claim(_ handle: Handle, pid: pid_t, under root: URL) throws {
+    private nonisolated static func claim(
+        _ handle: Handle, pid: pid_t, under root: URL, registry: URL
+    ) throws {
         let box = root.appendingPathComponent(handle.value)
         try FileManager.default.createDirectory(at: box, withIntermediateDirectories: true)
         try """
@@ -60,6 +65,19 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
          "claimedAt":1785831967319}
         """
         .write(to: box.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
+
+        // And the registry row that makes it resolvable. Since #247 an owner carrying a
+        // `sessionId` is matched by its SESSION, never by its recorded pid — so a mailbox with
+        // no row here is an agent helm cannot place, which is the point of that change and not
+        // something a fixture gets to skip.
+        try FileManager.default.createDirectory(
+            at: registry, withIntermediateDirectories: true)
+        try """
+        {"pid":\(pid),"sessionId":"e6f1c2d8-0000-4000-8000-0000000\(pid)","cwd":"/work"}
+        """
+        .write(
+            to: registry.appendingPathComponent("\(pid).json"),
+            atomically: true, encoding: .utf8)
     }
 
     /// A bench whose canvas notes go to `mailRoot`, and whose panes report the pids this test
@@ -74,7 +92,8 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
             notes: CanvasNoteCourier(
                 mailboxRoot: mailRoot,
                 foregroundPid: { [weak self] session in self?.pids[session.id] },
-                ancestors: { _ in [] }))
+                ancestors: { _ in [] },
+                registryRoot: registryRoot))
         model.activate(workspacePath: workspace)
         return (model, manager)
     }
