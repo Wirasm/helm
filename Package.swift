@@ -58,6 +58,12 @@ let package = Package(
                 // resources phase.
                 .copy("Resources/mermaid.min.js"),
                 .copy("Resources/marked.min.js"),
+                // helm's OWN script, not a vendored one: the canvas annotation
+                // bridge (#197). It lived in a Swift string literal, where the
+                // only test available was a substring check and three PRs in a
+                // row shipped a defect every such check passed. Same loader,
+                // same lockstep with project.yml.
+                .copy("Resources/canvas-annotation.js"),
                 // Ghostty shell-integration script tree (bash/zsh/fish/…),
                 // vendored at the embed's exact source commit — provenance in
                 // docs/VENDORED.md. Copied as a directory so the hierarchy
@@ -107,7 +113,14 @@ let package = Package(
                 //
                 // Not mirrored in project.yml: its Helm target has `testTargets: []`, so the
                 // .app build never sees Tests/ at all.
-                .copy("Archon/Fixtures")
+                .copy("Archon/Fixtures"),
+                // The DOM stub `CanvasScriptRuntime` runs the shipped annotation script
+                // against. A file rather than a Swift string literal for exactly the reason
+                // the script itself became one (#197) — a harness written as a literal is the
+                // same medium, one level up. Named, not a `Fixtures/` directory: `.copy`
+                // flattens to the last path component, so a second `Fixtures` would collide
+                // with Archon's in the bundle.
+                .copy("Canvas/canvas-dom-stub.js")
             ]
         ),
     ]
