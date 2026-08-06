@@ -66,8 +66,12 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// **`'unsafe-inline'` is deliberate, and it is not the risk here.** The strict policy —
     /// `script-src 'self'; style-src 'self'` — is what a *new* artifact can be written
     /// against, and it kills every artifact in the store today, all of which carry an inline
-    /// `<style>` and an inline `<script>`; measured against a copy of the real board map,
-    /// which went dead under it. With no host in the allowlist, `'unsafe-inline'` still
+    /// `<style>` and an inline `<script>`. Measured twice against a copy of the real board
+    /// map, and **the way it dies is worth knowing before anyone re-opens this**: the page
+    /// keeps every one of its 591 DOM nodes and comes back unstyled and inert — computed
+    /// font `-webkit-standard` on a transparent body, inline script never run, five
+    /// violations (`style-src-elem`, `style-src-attr` ×2, `script-src-elem` ×2). A node
+    /// count alone reports that as unchanged. With no host in the allowlist, `'unsafe-inline'` still
     /// forbids **remote** script, and `connect-src 'self'` still forbids remote `fetch`, XHR
     /// and WebSocket. That is the entire trust argument, bought at no cost to what exists.
     /// Tightening to the strict form is a decision about the artifacts in the store, not

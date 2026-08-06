@@ -202,9 +202,8 @@ final class CanvasSchemeHandlerTests: XCTestCase {
     /// got it on its document but not on a sibling — or the other way round — would be a
     /// policy with a hole in it. Asserted over all four response kinds for that reason.
     ///
-    /// **Against the constant, never a copy of the header.** A test holding its own spelling
-    /// of the policy stays green while the two drift apart, which is the whole point of there
-    /// being one value; what this asserts is that every response carries *that* value.
+    /// **Against the constant, never a copy of the header** — for the reason
+    /// `contentSecurityPolicy`'s own doc comment gives for why it is not `private`.
     func testEveryResponseCarriesThePolicy() throws {
         let expected = CanvasSchemeHandler.contentSecurityPolicy
 
@@ -225,11 +224,9 @@ final class CanvasSchemeHandlerTests: XCTestCase {
     /// the header again — so widening `connect-src` to a CDN fails here with a sentence
     /// saying why, instead of as a string mismatch a reader has to diff.
     ///
-    /// Measured, and the reason the strict policy was rejected: `script-src 'self'` alone
-    /// kills every artifact in the store today — all of them carry an inline `<style>` and an
-    /// inline `<script>`, and the operator's board map went dead under it. `'unsafe-inline'`
-    /// without a host in the allowlist still forbids remote script; `connect-src 'self'`
-    /// still forbids remote fetch, XHR and WebSocket.
+    /// Why the strict policy was rejected, and why `'unsafe-inline'` is not the risk it
+    /// reads as, are argued in full on `contentSecurityPolicy` itself. This only re-checks
+    /// that the shape those measurements bought is still the shape helm ships.
     func testThePolicyForbidsTheNetworkWithoutKillingTheArtifactsThatExist() {
         let policy = CanvasSchemeHandler.contentSecurityPolicy
 
@@ -251,8 +248,11 @@ final class CanvasSchemeHandlerTests: XCTestCase {
             policy.contains("style-src 'self' 'unsafe-inline'"),
             "strict style-src kills inline <style>, and mermaid builds <style> at runtime")
         XCTAssertTrue(
-            policy.contains("img-src 'self' data:") && policy.contains("font-src 'self' data:"),
+            policy.contains("img-src 'self' data:"),
             "mermaid's own bundle ships data: images")
+        XCTAssertTrue(
+            policy.contains("font-src 'self' data:"),
+            "a data: @font-face is how an artifact carries a font without a sibling file")
     }
 
     // MARK: - The canvas that cannot be served at all
