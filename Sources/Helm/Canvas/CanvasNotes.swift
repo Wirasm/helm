@@ -113,14 +113,33 @@ enum CanvasNotes {
         }
     }
 
-    /// Every entry's heading, for the pane's `Notes (n)` count and list. Reading the file
-    /// rather than keeping a parallel tally: the sidecar is the memory, and something else
-    /// may have appended to it.
-    static func headings(in sidecar: URL) -> [String] {
-        guard let text = try? String(contentsOf: sidecar, encoding: .utf8) else { return [] }
-        return text.split(separator: "\n", omittingEmptySubsequences: false)
+    /// Every entry's heading, for the pane's `Notes (n)` count. Takes the sidecar's text
+    /// rather than its URL so the count and the drawer's rendering are carved out of one
+    /// read of one file — two reads could disagree, and then the header would be counting
+    /// notes the drawer is not showing.
+    ///
+    /// **Still a rendering, not a parse.** Nothing here turns a heading back into a `Mark`;
+    /// that is #199's, along with the round-trip drift it brings.
+    static func headings(in text: String) -> [String] {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
             .filter { $0.hasPrefix("## ") }
             .map { String($0.dropFirst(3)) }
+    }
+
+    /// The sidecar as the drawer reads it: the file's own text, with the timestamp's `<sub>`
+    /// wrapper turned into markdown emphasis.
+    ///
+    /// **The one liberty the drawer takes, and it is presentation.** `entry` writes the
+    /// stamp as `<sub>…</sub>` because the sidecar is read by agents and by whatever renders
+    /// markdown-with-HTML — helm's own document canvas does, through marked. The drawer does
+    /// not: it renders blocks natively (`MarkdownText`), so the tags would sit there as
+    /// literal angle brackets in the one surface built to make this file legible. Swapping
+    /// them for `_…_` keeps the footnote reading as a footnote and costs no interpretation
+    /// of the note itself — the heading is left exactly as written, which is the boundary
+    /// #199 needs held.
+    static func readable(_ text: String) -> String {
+        text.replacingOccurrences(of: "<sub>", with: "_")
+            .replacingOccurrences(of: "</sub>", with: "_")
     }
 
     /// The whole accumulation, for `Post`.

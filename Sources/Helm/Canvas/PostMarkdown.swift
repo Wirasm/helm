@@ -7,16 +7,17 @@ import SwiftUI
 /// `##`/``` markers (inline-only parse). So: split the text into blocks ourselves,
 /// then inline-parse each block's text. No external dependencies, plain text on
 /// any parse failure.
-/// **Kept deliberately, with no caller today.** This is a markdown → SwiftUI
-/// renderer, written for the conversation view that left with the kild layer. The
-/// canvas does not use it: a whole document renders through marked.js in a
-/// webview instead.
+/// **The surface it was kept for arrived: the sidecar drawer (#198).** This was written
+/// for the conversation view that left with the kild layer, and retained on the argument
+/// that the next thing to need it would render many small blocks of prose rather than one
+/// document — where a WKWebView would be absurd. That is exactly the drawer: a panel over
+/// the canvas showing the notes written beside it, inside a pane whose main content is
+/// already a webview.
 ///
-/// It is retained because the next surface that needs it — a readable view over an
-/// agent's transcript — renders many small blocks of prose rather than one document,
-/// and a WKWebView per message would be absurd. Deleting it would mean writing it
-/// again. If that surface ships and still does not use this, delete it then, along
-/// with `MarkdownTheme` and both test files.
+/// The canvas document itself still does not use it. A whole artifact renders through
+/// marked.js, because it has to be the same rendering an agent validates with a headless
+/// browser (`CanvasFileViews`); the drawer renders helm's own sidecar, which nothing else
+/// looks at.
 enum PostMarkdown {
     enum Block: Equatable {
         case heading(level: Int, text: String)
