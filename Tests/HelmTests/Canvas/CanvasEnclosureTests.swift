@@ -149,12 +149,22 @@ final class CanvasEnclosureTests: XCTestCase {
     func testACircleRoundEverythingStillReturnsEverything() throws {
         // The container the operator really did circle, and the acceptance criterion in as many
         // words. Unchanged by this fix, and that is the point of asserting it.
+        //
+        // **What #215 changed here, and what it did not.** The article is still SELECTED — it is
+        // still the first target — but it is no longer NAMED: helm injected `id="content"`, so it
+        // occurs in no artifact and can be grepped for in none. The count and the leading text
+        // are what pin the selection, which is this test's subject; the id list belongs to #215
+        // and is asserted here only so the two cannot drift apart unnoticed.
         let page = try CanvasScriptRuntime()
 
         circle(page, (x: 0, y: 0, width: 760, height: 1800), clear: 10)
 
+        XCTAssertEqual(try enclosure(page).count, 9, "every candidate on the page")
         XCTAssertEqual(
-            try ids(of: page), ["content", "title", "intro", "detail", "item-a", "item-b"])
+            try texts(of: page).first?.hasPrefix("The Plan"), true,
+            "the article the loop is around is still the first thing it returns")
+        XCTAssertEqual(
+            try ids(of: page), ["title", "intro", "detail", "item-a", "item-b", "phase-2"])
     }
 
     func testAStrokeThatGrazesANeighbourDoesNotMeanTheNeighbour() throws {

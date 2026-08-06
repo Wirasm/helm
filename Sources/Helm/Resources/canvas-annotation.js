@@ -5,22 +5,65 @@
   if (!window.__helmMarkTool) { window.__helmMarkTool = "select"; }
   function tool() { return window.__helmMarkTool || "select"; }
 
-  // The nearest ancestor carrying an id, and the text it covers. ONE resolver, used
-  // by every tool — #112 asks for the draw-time hit test and any later re-resolution
-  // to share a code path, because inconsistent resolution between capture and action
-  // is its own bug class.
+  // helm's own document wrapper, and the one id on a canvas that helm rather than the
+  // agent wrote. `CanvasHTML.documentPage` puts every rendered markdown artifact inside
+  // `<article id="content">` — so `content` is in helm's Swift and in NO operator's `.md`
+  // file. An anchor naming it is a grep that finds nothing, printed in exactly the form
+  // that means "grep for this", which is #215's second half: a degradation that announced
+  // itself would be fine, and this one asserts.
+  //
+  // The same judgement `MermaidAnchor.isRenderGenerated` makes on the Swift side, for the
+  // same reason — an id minted by a renderer rather than authored is not an anchor.
+  //
+  // Spelled out here rather than interpolated, exactly like the handler name and the tool
+  // global above, and held to `CanvasHTML.documentPage` by `CanvasAnnotationScriptTests`
+  // for the same reason: JavaScript cannot compile against a Swift constant, so the gate
+  // is a test that reads both. Matched on the id and its position, never on `tagName` —
+  // a browser reports `ARTICLE` where a stub reports `article`, and a comparison that
+  // holds in the harness and not in WebKit is the failure this suite exists to prevent.
+  function helmFrame(node) {
+    return node.id === "content" && node.parentNode === document.body;
+  }
+
+  // What the operator marked, and what it can be NAMED by — two questions, and #215 was
+  // conflating them into one field. `text` is the marked element's own; `id` may come from
+  // an ancestor, because a name can belong to a container and still name what is inside it.
+  //
+  // The old code reassigned `node` while walking and then read the text off whatever the
+  // walk stopped on, so `text` was always the ANCESTOR's: `node || labelled` could not fall
+  // back, since after the walk `node` is either the id-bearing ancestor or `document.body`
+  // and both are truthy. Every markdown block came back as the whole document under
+  // `#content`, and every id-less sibling produced the identical `(id, text)` pair — which
+  // is why circling three paragraphs yielded one target. Per-element text separates them
+  // with no change to the dedupe key.
+  //
+  // **The walk stays.** It is what lets a marked word inside `<h2 id="phase-2">` anchor to
+  // the heading, and it is the whole of #113: a hit on a mermaid node lands on the `<text>`
+  // or `<p>` inside the `<g>` that carries the id, so a resolver that read only the marked
+  // element's own id would anchor no diagram at all.
+  //
+  // ONE name for one element, and now genuinely one: the text-selection branch below used to
+  // carry a second copy of this walk, so "every tool resolves the same way" was true of three
+  // tools out of four and a selection on a markdown canvas anchored to `#content` through a
+  // code path `resolve` never touched.
+  function nameFor(node) {
+    for (var up = node; up && up !== document.body; up = up.parentNode) {
+      if (up.id && !helmFrame(up)) { return up.id; }
+    }
+    return null;
+  }
+
+  // ONE resolver, used by every tool — #112 asks for the draw-time hit test and any later
+  // re-resolution to share a code path, because inconsistent resolution between capture and
+  // action is its own bug class. So this changes what all four marks report, not one.
   function resolve(node) {
     if (!node) { return null; }
     if (node.nodeType === 3) { node = node.parentNode; }
-    var labelled = node;
-    var id = null;
-    while (node && node !== document.body) {
-      if (node.id) { id = node.id; break; }
-      node = node.parentNode;
-    }
-    var text = ((node || labelled).textContent || "").trim().slice(0, 400);
+    // A text node detached from the document. Reading `.textContent` off null threw.
+    if (!node) { return null; }
+    var text = (node.textContent || "").trim().slice(0, 400);
     if (!text) { return null; }
-    return { id: id, text: text };
+    return { id: nameFor(node), text: text };
   }
 
   function targetAt(x, y) {
@@ -279,19 +322,17 @@
     var t = tool();
 
     if (t === "select") {
-      // Unchanged: the text selection helm has always reported.
+      // The text is the operator's own highlight rather than an element's contents, which is
+      // why this branch cannot simply call `resolve` — but the NAME is the same question the
+      // other three tools ask, so it goes through the same `nameFor` (#215).
       var selection = document.getSelection();
       var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
       var text = empty ? "" : String(selection).trim();
       if (!text) { bridge.postMessage({ cleared: true }); return; }
       var range = selection.getRangeAt(0);
       var node = range.commonAncestorContainer;
-      if (node.nodeType === 3) { node = node.parentNode; }
-      var id = null;
-      while (node && node !== document.body) {
-        if (node.id) { id = node.id; break; }
-        node = node.parentNode;
-      }
+      if (node && node.nodeType === 3) { node = node.parentNode; }
+      var id = node ? nameFor(node) : null;
       var r = range.getBoundingClientRect();
       bridge.postMessage({
         id: id, text: text,

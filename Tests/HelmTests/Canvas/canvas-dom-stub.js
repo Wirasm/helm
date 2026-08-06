@@ -247,11 +247,62 @@
   content.appendChild(node("li", "item-a", "Item A", box(20, 1400, 300, 30)));
   content.appendChild(node("li", "item-b", "Item B", box(400, 1400, 300, 30)));
 
+  // **Everything above this line carries an id, and that is how #215 survived.** When the
+  // marked element has its own id the walk in `resolve` stops on its first iteration, so the
+  // element it stops on IS the element that was marked and the right text comes back by
+  // accident. The defect only exists for an element with NO id — of which the fixture had
+  // none, including in the test named `testTheWholeDocumentIsNotQuotedBackAtTheAgent`.
+  //
+  // `marked` gives paragraphs no id, so an id-less block is what a markdown canvas is made
+  // of. Two of them, laid out apart, because a second one is what proves the `(id, text)`
+  // dedupe separates siblings that once produced the identical pair.
+  //
+  // Placed in the 1150-1330 band, which no existing test's stroke reaches: #208's fixtures
+  // sit at the page centroid and at y≈700-1110, the loop tests at y≈1390-1440, and
+  // `testALoopAroundNothingSelectsNothing` needs y≈1600-1660 to stay empty.
+  var named = node("h2", "phase-2", "Phase ", box(20, 1150, 700, 40));
+  content.appendChild(named);
+  // An id-less element inside an id-bearing one that is NOT helm's frame — the shape that
+  // proves the ancestor walk survives. mermaid's node labels are exactly this: the hit lands
+  // on a `<text>`/`<p>` inside the `<g>` carrying the id, so a resolver that read only the
+  // marked element's own id would anchor no diagram at all (#113).
+  named.appendChild(node("span", "", "two", box(120, 1150, 60, 40)));
+  content.appendChild(node("p", "", "First unnamed block", box(20, 1220, 700, 40)));
+  content.appendChild(node("p", "", "Second unnamed block", box(20, 1290, 700, 40)));
+
   function find(id) {
     var hits = descendants(documentElement).filter(function (el) {
       return el.id === id;
     });
     return hits[0] || null;
+  }
+
+  // The only handle an id-less element has. `find` addresses the fixture by id, which is
+  // exactly the address a markdown block does not have — and not having one is the whole of
+  // #215.
+  function findByOwnText(ownText) {
+    var hits = descendants(documentElement).filter(function (el) {
+      return el.ownText === ownText;
+    });
+    return hits[0] || null;
+  }
+
+  function selectWithin(anchor, text) {
+    selection = {
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: function () {
+        return text;
+      },
+      getRangeAt: function () {
+        return {
+          commonAncestorContainer: anchor,
+          getBoundingClientRect: function () {
+            return anchor.getBoundingClientRect();
+          },
+        };
+      },
+    };
   }
 
   // Direct children of the paper only. The arrowhead's barb is a `<path>` too, nested inside
@@ -356,22 +407,10 @@
       return el !== null;
     },
     select: function (id, text) {
-      var anchor = find(id);
-      selection = {
-        isCollapsed: false,
-        rangeCount: 1,
-        toString: function () {
-          return text;
-        },
-        getRangeAt: function () {
-          return {
-            commonAncestorContainer: anchor,
-            getBoundingClientRect: function () {
-              return anchor.getBoundingClientRect();
-            },
-          };
-        },
-      };
+      selectWithin(find(id), text);
+    },
+    selectInBlock: function (ownText, text) {
+      selectWithin(findByOwnText(ownText), text);
     },
   };
 })(this);
