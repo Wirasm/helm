@@ -17,6 +17,10 @@ import XCTest
 /// here rather than in a canvas six months later.
 @MainActor
 final class CanvasSchemeHandlerTests: XCTestCase {
+    /// The artifact's own bytes: written to disk in `setUp`, handed back by the default
+    /// document closure, and asserted on. One name so the three cannot drift apart.
+    private static let documentHTML = "<h1>plan</h1>"
+
     private var root: URL!
     private var directory: URL!
     private var artifact: URL!
@@ -28,7 +32,7 @@ final class CanvasSchemeHandlerTests: XCTestCase {
         directory = root.appendingPathComponent("artifacts")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         artifact = directory.appendingPathComponent("plan.html")
-        try "<h1>plan</h1>".write(to: artifact, atomically: true, encoding: .utf8)
+        try Self.documentHTML.write(to: artifact, atomically: true, encoding: .utf8)
         try #"{"scene":"ok"}"#.write(
             to: directory.appendingPathComponent("scene.json"), atomically: true, encoding: .utf8)
         try "secret".write(
@@ -76,7 +80,12 @@ final class CanvasSchemeHandlerTests: XCTestCase {
     /// Requests `path` on the canvas's own origin and returns what the handler answered.
     @discardableResult
     private func request(
-        _ path: String, document: @escaping @MainActor () -> Data? = { Data("<h1>plan</h1>".utf8) }
+        _ path: String,
+        // Spelled out rather than `Self.` — a default argument cannot name a covariant
+        // `Self`, even in a final class.
+        document: @escaping @MainActor () -> Data? = {
+            Data(CanvasSchemeHandlerTests.documentHTML.utf8)
+        }
     ) throws -> SchemeTask {
         var components = URLComponents()
         components.scheme = CanvasAddress.scheme
@@ -108,12 +117,25 @@ final class CanvasSchemeHandlerTests: XCTestCase {
         XCTAssertEqual(task.contentType, "application/json; charset=utf-8")
     }
 
+    func testABinarySiblingKeepsItsOwnType() throws {
+        // The charset rides along on a binary type, exactly as the old unconditional
+        // `textEncodingName: "utf-8"` did. Measured in a live WKWebView rather than reasoned
+        // about: a real PNG served this way decodes into an `<img>` at its true dimensions,
+        // because only the essence before the `;` decides how WebKit handles it.
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: directory.appendingPathComponent("x.png"))
+
+        let task = try request("/x.png")
+
+        XCTAssertEqual(task.status, 200)
+        XCTAssertEqual(task.contentType, "image/png; charset=utf-8")
+    }
+
     func testTheDocumentItselfCarriesA200() throws {
         let task = try request("/plan.html")
 
         XCTAssertEqual(task.status, 200)
         XCTAssertEqual(task.contentType, "text/html; charset=utf-8")
-        XCTAssertEqual(String(data: task.body, encoding: .utf8), "<h1>plan</h1>")
+        XCTAssertEqual(String(data: task.body, encoding: .utf8), Self.documentHTML)
     }
 
     // MARK: - A sibling that does not

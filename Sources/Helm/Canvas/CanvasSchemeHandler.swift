@@ -14,10 +14,19 @@ import WebKit
 /// `CanvasFileBoundary`'s job rather than this type's, so it can be tested without a live
 /// `WKURLSchemeTask`.
 ///
-/// **What a page sees is a status.** Every answer carries one — 200 for bytes, 404 for a
+/// **What a page sees when it asks for a file is a status** — 200 for bytes, 404 for a
 /// sibling that is not there, 403 for one the boundary refuses — so `res.ok` and
 /// `res.status` mean what a canvas author expects them to mean, and the three outcomes are
 /// three outcomes. `respond` and `refuse` carry why that was not free (#201).
+///
+/// **One path deliberately still fails instead: the document the closure cannot produce.**
+/// That is normally the main-frame navigation, and failing it leaves the last good render
+/// on screen where a 404 would blank the pane — which matters, because the way it happens
+/// in practice is an agent deleting or rewriting the artifact under a canvas that is
+/// already up. A `WKURLSchemeTask` carries no `isMainFrame`, so this handler *cannot* tell
+/// that navigation from a page fetching its own address; a page that does the latter at
+/// the moment the artifact is unreadable gets the bare `TypeError` this ticket otherwise
+/// removed. Known, narrow, and worth the trade — but not a claim of completeness.
 ///
 /// One handler per webview, holding one artifact. It never sees another canvas's path, so
 /// "could canvas A read canvas B?" is not a policy question here — there is nothing to ask
@@ -34,6 +43,15 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// generates from markdown, or an `.html` artifact itself. Siblings are typed from
     /// their own extension, so this is not a per-instance value.
     private static let documentMIMEType = "text/html"
+
+    /// HTTP's status codes, because `Response.ok` is defined in terms of them and a canvas
+    /// author already knows what they mean.
+    private static let ok = 200
+    private static let forbidden = 403
+    private static let notFound = 404
+    /// Stamped on every `HTTPURLResponse` this type builds. Nothing speaks HTTP here — it
+    /// is the string the initializer wants in order to hand WebKit a status.
+    private static let httpVersion = "HTTP/1.1"
 
     /// The artifact's own directory — nothing outside it is served.
     private let directory: URL
@@ -94,7 +112,10 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     ///
     /// The charset on `Content-Type` is where `textEncodingName: "utf-8"` went —
     /// `HTTPURLResponse` derives the encoding from the header rather than taking it
-    /// separately, and dropping it would leave WebKit guessing at a UTF-8 sibling.
+    /// separately, and dropping it would leave WebKit guessing at a UTF-8 sibling. It goes
+    /// on binary types too, exactly as the unconditional `textEncodingName` did, and that
+    /// is measured rather than assumed: a real PNG sibling served as
+    /// `image/png; charset=utf-8` decodes into an `<img>` at its true dimensions.
     private func respond(_ task: any WKURLSchemeTask, url: URL, data: Data, mimeType: String) {
         guard
             let response = HTTPURLResponse(
@@ -131,21 +152,19 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         task.didFinish()
     }
 
-    /// The two cases that are **not** a page asking for a file, and so have no status to
-    /// report: a request with no URL, and an artifact the document closure cannot produce.
-    /// Both mean this canvas cannot be served at all, and both are the main-frame
-    /// navigation — which should fail as a navigation rather than render a blank error
-    /// page of helm's own invention.
+    /// No status to report, on any of its four call sites.
+    ///
+    /// Two are requests helm cannot answer *as a request*: one with no URL at all, and an
+    /// artifact the document closure cannot produce — the deliberate asymmetry the type's
+    /// header argues, where failing beats blanking a live pane.
+    ///
+    /// The other two are `respond` and `refuse` failing to build a response at all. That is
+    /// helm not managing to say anything, which is exactly what a transport error means,
+    /// and it must never be quietly dropped: a `WKURLSchemeTask` that is neither finished
+    /// nor failed leaves the page waiting forever.
     private func fail(_ task: any WKURLSchemeTask, _ code: URLError.Code) {
         task.didFailWithError(URLError(code))
     }
-
-    /// HTTP's status codes, because `Response.ok` is defined in terms of them and a canvas
-    /// author already knows what they mean.
-    private static let ok = 200
-    private static let forbidden = 403
-    private static let notFound = 404
-    private static let httpVersion = "HTTP/1.1"
 
     private static func mimeType(for name: String) -> String {
         let ext = (name as NSString).pathExtension
