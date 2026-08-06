@@ -91,6 +91,24 @@ enum CanvasNotesDrawerMetrics {
         guard paneWidth > 0 else { return minimum }
         return min(paneWidth, max(minimum, paneWidth * fraction))
     }
+
+    /// Space around the prose.
+    static let inset: CGFloat = 14
+
+    /// The reading measure — **760, which is the artifact's own** (`CanvasHTML`'s
+    /// `article { max-width: 760px }`). Half of an ultrawide is 1700pt, and prose set to
+    /// that is 200 characters a line: the drawer would be wide and unreadable, which is a
+    /// different way of failing this issue. The panel still takes half; the text stops.
+    static let measure: CGFloat = 760
+
+    /// How wide the prose is inside a drawer of this width. **A concrete number, not a
+    /// `maxWidth`** — a vertical `ScrollView` proposes an unspecified width to its content,
+    /// and under that proposal `maxWidth: .infinity` resolves to the *ideal* width instead
+    /// of the container's. Measured, on the first live capture of this drawer: a 1720pt
+    /// panel with a 515pt column of text in it.
+    static func textWidth(inDrawerOf drawerWidth: CGFloat) -> CGFloat {
+        max(0, min(drawerWidth - inset * 2, measure))
+    }
 }
 
 /// The sidecar, over the trailing half of the canvas — **rendered**, not listed (#198).
@@ -167,12 +185,21 @@ struct CanvasNotesDrawer: View {
     @ViewBuilder
     private var accumulation: some View {
         if let text = model.notesText {
-            ScrollView {
-                MarkdownText(text: CanvasNotes.readable(text))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
+            GeometryReader { proxy in
+                ScrollView {
+                    MarkdownText(text: CanvasNotes.readable(text))
+                        .frame(
+                            width: CanvasNotesDrawerMetrics.textWidth(inDrawerOf: proxy.size.width),
+                            alignment: .leading
+                        )
+                        .padding(CanvasNotesDrawerMetrics.inset)
+                        // The column is pinned to the drawer's leading edge. A `ScrollView`
+                        // centres content narrower than itself, and a measure floating in
+                        // the middle of a wide panel reads as a mistake.
+                        .frame(width: proxy.size.width, alignment: .leading)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             // An empty sidecar has to read as empty rather than as a drawer that failed to
             // load one — they look identical, and only one of them is worth investigating.

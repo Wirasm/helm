@@ -206,6 +206,17 @@ final class CanvasNotesDrawerTests: XCTestCase {
         XCTAssertEqual(CanvasNotesDrawerMetrics.width(inPaneOf: 400), 280)
     }
 
+    func testTheProseStopsAtAReadingMeasureHoweverWideTheDrawerIs() {
+        // Half of an ultrawide is 1700pt, and prose set to that is 200 characters a line.
+        XCTAssertEqual(
+            CanvasNotesDrawerMetrics.textWidth(inDrawerOf: 1720),
+            CanvasNotesDrawerMetrics.measure,
+            "the panel takes half; the text stops at the artifact's own measure")
+        XCTAssertEqual(
+            CanvasNotesDrawerMetrics.textWidth(inDrawerOf: 320), 292,
+            "and fills a narrow one, inset either side")
+    }
+
     func testTheDrawerIsNeverWiderThanThePaneItIsOver() {
         XCTAssertEqual(
             CanvasNotesDrawerMetrics.width(inPaneOf: 220), 220,
