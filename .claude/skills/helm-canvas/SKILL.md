@@ -144,8 +144,9 @@ file you did not change.
 It costs the page's **scroll position**, so push again when something changed rather than on a
 timer.
 
-**The sibling you get is the current one, so never write a cache-buster.** Nothing is served stale:
-measured six ways, including a plain `fetch` and an ES module `import` across a full
+**The sibling you `fetch` or `import` is the current one, so never write a cache-buster.** Nothing
+on those two paths is served stale: measured six ways, including a plain `fetch` and an ES module
+`import` across a full
 quit-and-relaunch of the real app (helm #228). `./app.js?v=2` appears in older canvases and was
 never busting a cache — it worked because editing the import URL edits the **artifact**, which was
 the only file helm watched. Pushing again is the supported way, and it needs no edit at all.

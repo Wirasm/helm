@@ -127,6 +127,77 @@ final class CanvasSiblingRefreshTests: XCTestCase {
             "the artifact's own watcher is the route that always worked; the fix must not cost it")
     }
 
+    /// **The same bug, in a markdown canvas** — where it is much easier to miss.
+    ///
+    /// `CanvasSchemeHandler` resolves a relative request against the artifact's directory with no
+    /// branch on content type, so `![probe](./probe.svg)` in a `.md` artifact is served over
+    /// exactly the path an `.html` artifact's `<script src>` is. Every other test in this file is
+    /// `.html`-shaped, and the fix is only symmetric because `CanvasModel.refresh()` does not
+    /// discriminate — nothing pinned that down until this.
+    ///
+    /// **The markdown text is byte-identical across the re-push, deliberately.**
+    /// `MarkdownCanvasPage`'s reload key already carries the whole document string, so a
+    /// `generation` beside it reads as redundant and is not: with the source unchanged, the
+    /// counter is the only term that can differ. Drop it — the tidy-up `CanvasReloadKey` exists to
+    /// make unwritable — and this is what goes red.
+    ///
+    /// The document is asked whether it is a **new** document (`window` is destroyed by a
+    /// navigation, so a mark set on the old one is gone) and then asked what the sibling says
+    /// now. Both, because either alone is ambiguous: a fresh mark with stale bytes and a stale
+    /// mark with fresh bytes are different bugs.
+    ///
+    /// **A measured aside, because it cost an hour and would cost the next reader the same.**
+    /// The obvious probe here — put `![probe](./probe.svg)` in the markdown and read
+    /// `naturalWidth` — reports the **old** width after a reload that demonstrably happened:
+    /// `window.__mark` is gone and a `fetch` of the identical URL returns the new bytes, so the
+    /// handler is serving correctly and WebKit is reusing its in-memory copy of the *image*. It
+    /// clears on a second webview (a new pane, a relaunch), which is why nothing about it
+    /// survives a restart. That is a real effect and it is **not** #261 — the pane does reload,
+    /// which is all this fix claims — so it is recorded here rather than asserted, and it wants
+    /// a ticket of its own.
+    func testARePushRefreshesAMarkdownCanvasSiblingToo() async throws {
+        let markdownArtifact = directory.appendingPathComponent("report.md")
+        let sibling = directory.appendingPathComponent("probe.svg")
+        let source = "# Report\n\n![probe](./probe.svg)\n"
+        try Self.svg(width: 11).write(to: sibling, atomically: true, encoding: .utf8)
+        try source.write(to: markdownArtifact, atomically: true, encoding: .utf8)
+
+        let (model, manager) = mounted()
+        let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
+        try await push(markdownArtifact, from: terminal.id)
+
+        let canvas = try self.canvas(showing: markdownArtifact, in: model)
+        let page = LiveMarkdownPane(artifact: markdownArtifact)
+        page.render(try document(of: canvas), markdown: source)
+        await page.waitForRender()
+        let first = await page.siblingText()
+        XCTAssertTrue(
+            first.contains(#"width="11""#),
+            "precondition: a markdown canvas serves a sibling at all — got \(first)")
+        await page.mark()
+
+        // ONLY the sibling. `report.md` is not rewritten, so its text is the same string in both
+        // reload keys and the `FileWatcher` on it fires nothing at all.
+        try Self.svg(width: 22).write(to: sibling, atomically: true, encoding: .utf8)
+
+        try await push(markdownArtifact, from: terminal.id)
+        page.render(try document(of: canvas), markdown: source)
+
+        let navigated = await page.didNavigateAwayFromTheMarkedDocument()
+        XCTAssertTrue(
+            navigated,
+            "the re-push must give the pane a NEW document. The mark surviving means this webview "
+                + "never navigated — and markdown is where that is easiest to reintroduce: the "
+                + "reload key already carries the whole source, so dropping `generation` beside it "
+                + "reads as a cleanup, and with a byte-identical source the counter is the only "
+                + "term left that can differ")
+        await page.waitForRender()
+        let second = await page.siblingText()
+        XCTAssertTrue(
+            second.contains(#"width="22""#),
+            "and the new document must get the new sibling bytes — got \(second)")
+    }
+
     // MARK: - The bench half, without WebKit
 
     /// The same fact one layer down and a hundred times cheaper: `Document.generation` is the
@@ -265,6 +336,102 @@ final class CanvasSiblingRefreshTests: XCTestCase {
           .then(t => window.webkit.messageHandlers.probe.postMessage(String(t).trim()));
         </script></body></html>
         """
+
+    /// A sibling image whose width says which version of it the page got. SVG rather than a
+    /// raster format because it is text, and `naturalWidth` reads the declared width.
+    private static func svg(width: Int) -> String {
+        """
+        <svg xmlns="http://www.w3.org/2000/svg" width="\(width)" height="\(width)">\
+        <rect width="\(width)" height="\(width)" fill="#7cf"/></svg>
+        """
+    }
+
+    /// The markdown canvas's twin of `LivePane` — the **real** webview `MarkdownCanvasWebView`
+    /// builds, loaded by the **real** rule it loads by.
+    ///
+    /// It asks the page a question instead of being told one: helm generates a markdown
+    /// canvas's page, so there is no inline script of the author's to post from, and
+    /// `evaluateJavaScript` in the **page** world is how a test reads what rendered.
+    @MainActor
+    private final class LiveMarkdownPane {
+        private let path: StandardizedPath
+        private let coordinator: CanvasFileCoordinator
+        private let webView: WKWebView
+
+        init(artifact: URL) {
+            path = StandardizedPath(artifact.path)
+            coordinator = CanvasFileCoordinator(
+                host: CanvasAddress.host(for: path), onAnnotation: { _ in })
+            webView = MarkdownCanvasPage.makeWebView(for: path, coordinator: coordinator)
+        }
+
+        /// What SwiftUI's `updateNSView` does. The markdown is passed in rather than re-read so
+        /// the test can hold it constant across a re-push, which is the case that matters.
+        func render(_ document: CanvasModel.Document, markdown: String, theme: CanvasTheme = .dark)
+        {
+            MarkdownCanvasPage.load(
+                webView, path: path, markdown: markdown, generation: document.generation,
+                theme: theme, coordinator: coordinator)
+        }
+
+        /// Leave something on `window` that a navigation destroys.
+        func mark() async { _ = await ask("window.__helmTestMark = 1; 'ok'") }
+
+        /// Wait for the document helm generates to have rendered the markdown — the `<img>` the
+        /// source names only exists once `marked` has run, so it is the signal that the page is
+        /// there and answering.
+        func waitForRender(timeout: Duration = .seconds(5)) async {
+            await poll(until: "String(!!document.querySelector('img'))", equals: "true", timeout)
+        }
+
+        /// Whether the webview really navigated: `window` does not survive a navigation, so the
+        /// mark left on the previous document going away **is** the new document arriving.
+        /// False after the deadline means no navigation happened at all, which is #261's shape.
+        func didNavigateAwayFromTheMarkedDocument(timeout: Duration = .seconds(5)) async -> Bool {
+            await poll(until: "String(!!window.__helmTestMark)", equals: "false", timeout)
+        }
+
+        private func poll(
+            until script: String, equals wanted: String, _ timeout: Duration
+        ) async
+            -> Bool
+        {
+            let deadline = ContinuousClock.now + timeout
+            while ContinuousClock.now < deadline {
+                if await ask(script) == wanted { return true }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+            return false
+        }
+
+        /// What the page gets when it asks for its sibling **now** — the real fetch, over the
+        /// real handler, from whatever document is currently loaded.
+        func siblingText() async -> String {
+            await withCheckedContinuation { continuation in
+                webView.callAsyncJavaScript(
+                    """
+                    const r = await fetch('./probe.svg');
+                    return r.ok ? await r.text() : 'HTTP ' + r.status;
+                    """,
+                    arguments: [:], in: nil, in: .page
+                ) { result in
+                    switch result {
+                    case let .success(value): continuation.resume(returning: value as? String ?? "")
+                    case let .failure(error):
+                        continuation.resume(returning: "THREW \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+
+        private func ask(_ script: String) async -> String {
+            await withCheckedContinuation { continuation in
+                webView.evaluateJavaScript(script) { value, _ in
+                    continuation.resume(returning: value as? String ?? "")
+                }
+            }
+        }
+    }
 
     /// A canvas pane's page: the **real** webview `HTMLCanvasWebView` builds, loaded by the
     /// **real** rule it loads by, with one test-only `probe` handler added so the page can say
