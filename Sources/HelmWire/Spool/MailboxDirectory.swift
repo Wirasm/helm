@@ -290,6 +290,20 @@ package struct AddressBook {
     /// running under *this pane's own shell* before it can match. That is a far narrower
     /// coincidence than bare pid equality anywhere on the machine, and it is liveness-checked
     /// by construction rather than by remembering to check.
+    ///
+    /// **The residual that argument leaves, stated rather than hidden.** It defends against a
+    /// wrong match and says nothing about a missed one: an agent that resumed under a new pid
+    /// *and* sits behind a wrapper is found by neither branch — the direct one because the
+    /// wrapper holds the foreground and has no registry row, this one because it still walks up
+    /// from the owner's stale recorded pid, which is dead and has no ancestors. The failure is
+    /// an absence, not a misattribution — `SpoolModel` answers `unclaimed` and keeps polling
+    /// until the agent is the foreground process again — so it is the safe direction to fail
+    /// in, and it is not a regression: the pre-#247 join missed that case too.
+    ///
+    /// Closing it needs the inverse of `sessionFor` (session → live pid) or a walk *down* from
+    /// the shell, and neither is a lookup this signature has. That is deliberately not invented
+    /// here: it would widen "which agent is in this pane" into process-tree search on the
+    /// strength of a case nothing has yet reported.
     package func owner(
         foregroundPid: pid_t?,
         shellPid: pid_t?,

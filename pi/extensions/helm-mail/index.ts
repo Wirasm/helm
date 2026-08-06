@@ -112,6 +112,25 @@ interface Owner {
 	 * one has to keep meaning "live".
 	 */
 	retiredAt?: number;
+	/**
+	 * Set by `hooks/helm-mail.mjs` when it had to guess the pid — #247. A Claude Code hook is a
+	 * fresh process whose ppid is a shell, so a `SessionStart` firing before Claude Code has
+	 * published its registry row records a pid that was never the agent's; present means exactly
+	 * that, and the hook's own `deliver` clears it once the registry can answer.
+	 *
+	 * **pi never writes it.** `claim` below records `process.pid` of the live session, which is
+	 * the agent by construction — there is no window in which pi has to guess.
+	 *
+	 * **Nothing here reads it either, and that is deliberate rather than pending.** `ownerGone`
+	 * already reaches the conservative answer without it, and acting on it — "the pid is a
+	 * guess and no live row carries the session, so this is gone" — would retire a live Claude
+	 * agent inside the very window the mark exists to describe, which is #236's own disaster.
+	 * It is declared here because this interface is what the on-disk shape IS, and the shape
+	 * grew a field; #245, which decides pi's own rule for stale and guessed pids, is where a
+	 * reader for it would be argued for (`peers()` could say "(pid is a guess)" beside
+	 * `[retired]`).
+	 */
+	pidIsProvisional?: boolean;
 }
 
 /** One row of Claude Code's session registry, `<config>/sessions/<pid>.json`. */
