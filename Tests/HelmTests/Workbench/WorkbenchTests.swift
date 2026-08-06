@@ -156,6 +156,67 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertEqual(bench.focusedSlot, bench.columns[0].slots[0].id, "it moves to the neighbour")
     }
 
+    // MARK: - Splitting for an agent (#269)
+
+    /// **The focus rule, at the layer that decides it.** An agent asking for ⌘D gets the column
+    /// and does not get the keyboard — `Workbench.offer` is to `insert` what this is to
+    /// `splitRight(with:)`, and #125's argument is the same one: the operator may be mid-sentence
+    /// in the column being split, and a fresh empty shell taking focus sends their next
+    /// keystrokes somewhere they did not look.
+    func testAnOfferedSplitRightAddsTheColumnWithoutTakingFocus() {
+        var bench = Workbench(terminal: UUID())
+        let before = bench.focusedSlot
+
+        bench.splitRight(offering: terminal())
+
+        XCTAssertEqual(bench.columns.count, 2, "the column is there — this is not a no-op")
+        XCTAssertEqual(
+            bench.focusedSlot, before,
+            "an offered split leaves the keyboard exactly where the operator put it")
+        XCTAssertEqual(
+            bench.columns[0].width, bench.columns[1].width, accuracy: 1e-9,
+            "…and still halves what the focused column had, like the operator's own ⌘D")
+        assertInvariants(bench, "after an offered splitRight")
+    }
+
+    func testAnOfferedSplitDownAddsTheRowWithoutTakingFocus() {
+        var bench = Workbench(terminal: UUID())
+        let before = bench.focusedSlot
+
+        bench.splitDown(offering: terminal())
+
+        XCTAssertEqual(bench.columns[0].slots.count, 2, "the row is there")
+        XCTAssertEqual(
+            bench.focusedSlot, before, "and the keyboard did not follow it")
+        assertInvariants(bench, "after an offered splitDown")
+    }
+
+    /// **Controls, and named as such: both pass either way.** They exist because the cheapest
+    /// way to make the two tests above green is to stop *any* split from focusing, which would
+    /// break ⌘D and ⌘⇧D for the operator — the case that is supposed to seize, because they
+    /// asked. A test that only proves you select less is satisfied by selecting nothing.
+    func testTheOperatorsSplitRightStillTakesFocus() {
+        var bench = Workbench(terminal: UUID())
+        let before = bench.focusedSlot
+
+        bench.splitRight(with: terminal())
+
+        XCTAssertNotEqual(bench.focusedSlot, before, "⌘D still focuses the new column")
+        XCTAssertEqual(
+            bench.focusedSlot, bench.columns[1].slots[0].id, "…and it is the one just made")
+    }
+
+    func testTheOperatorsSplitDownStillTakesFocus() {
+        var bench = Workbench(terminal: UUID())
+        let before = bench.focusedSlot
+
+        bench.splitDown(with: terminal())
+
+        XCTAssertNotEqual(bench.focusedSlot, before, "⌘⇧D still focuses the new row")
+        XCTAssertEqual(
+            bench.focusedSlot, bench.columns[0].slots[1].id, "…and it is the one just made")
+    }
+
     // MARK: - Focus
 
     func testFocusSurvivesAnInsertionBeforeIt() {

@@ -287,24 +287,52 @@ struct Workbench: Codable, Equatable {
     /// which is what keeps "no slot has zero panes" true by construction instead of by
     /// a repair pass.
     mutating func splitRight(with pane: Pane) {
+        splitRight(pane, movingFocus: true)
+    }
+
+    /// The same split, **without moving focus** — an agent asking (#269), as against
+    /// `splitRight(with:)`, which is the operator pressing ⌘D.
+    ///
+    /// *Appear, don't seize*, exactly as `offer(_:at:)` is to `insert(_:at:)` and for the same
+    /// reason: the operator may be mid-sentence in the column being split, and a new empty
+    /// shell taking the keyboard sends their next keystrokes somewhere they did not look. The
+    /// column still halves, which is a layout change around them rather than a focus change to
+    /// them — see `SpoolCommandPolicy`, which is the only caller and argues that trade.
+    mutating func splitRight(offering pane: Pane) {
+        splitRight(pane, movingFocus: false)
+    }
+
+    /// One body for both, because the two differ in exactly one line and a second copy of the
+    /// halving arithmetic is a drift waiting to happen. The flag is private; the difference is
+    /// spelled at the two entry points, where a reader is.
+    private mutating func splitRight(_ pane: Pane, movingFocus: Bool) {
         guard let address = address(ofSlot: focusedSlot) else { return }
         let width = columns[address.column].width / 2
         columns[address.column].width = width
         let slot = Slot(panes: [pane])
         columns.insert(Column(slots: [slot], width: width), at: address.column + 1)
-        focusedSlot = slot.id
+        if movingFocus { focusedSlot = slot.id }
         normalize()
     }
 
     /// ⌘⇧D — a new row under the focused slot, in the same column. See `splitRight`
     /// for why the pane comes in rather than being made here.
     mutating func splitDown(with pane: Pane) {
+        splitDown(pane, movingFocus: true)
+    }
+
+    /// The same row, without moving focus. See `splitRight(offering:)`.
+    mutating func splitDown(offering pane: Pane) {
+        splitDown(pane, movingFocus: false)
+    }
+
+    private mutating func splitDown(_ pane: Pane, movingFocus: Bool) {
         guard let address = address(ofSlot: focusedSlot) else { return }
         let height = columns[address.column].slots[address.slot].height / 2
         columns[address.column].slots[address.slot].height = height
         let slot = Slot(panes: [pane], height: height)
         columns[address.column].slots.insert(slot, at: address.slot + 1)
-        focusedSlot = slot.id
+        if movingFocus { focusedSlot = slot.id }
         normalize()
     }
 

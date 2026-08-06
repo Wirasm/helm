@@ -53,6 +53,24 @@ protocol SpoolClosing: AnyObject {
     func close(_ id: UUID) -> Bool
 }
 
+/// Driving the bench, as a seam — the same trade `SpoolSpawning`, `SpoolCapturing` and
+/// `SpoolClosing` all make (#269).
+///
+/// **One call, and everything worth deciding is already decided before it.** Which commands an
+/// agent may send is `SpoolCommandPolicy`'s, in `HelmWire`, reachable from `swift test` with no
+/// bench at all; which non-seizing twin an allowed command routes to is
+/// `WorkbenchSpoolCommander`'s, on the far side, because it is the one thing that genuinely
+/// needs a live `WorkbenchModel`. An adapter that decided *whether* would put the reviewable
+/// half where a test cannot reach it, which is exactly what `SpoolClosing`'s split avoids.
+@MainActor
+protocol SpoolCommanding: AnyObject {
+    /// Carry out a command helm has already agreed an agent may send, and report what it did.
+    ///
+    /// Synchronous, like a capture and a close: a command is applied to the bench value and
+    /// there is no second party to wait for, so one write to the result rather than two.
+    func run(_ command: HelmCommandName) -> Result<CommandReport, SpoolRefusal>
+}
+
 /// The spool: helm's one push channel, and the rung of #51 that works with the screen locked.
 ///
 /// **This is a deliberate reversal, and it is recorded as one.** #33 ruled *"there is no
@@ -100,6 +118,11 @@ final class SpoolModel: ObservableObject {
     /// reference would be gone before the first request and every close would answer "helm has
     /// no bench".
     private var closer: (any SpoolClosing)?
+    /// Held strongly for the same reason as the three above, and it is the same failure if it
+    /// is not: an adapter `RootView` builds inline is retained by nothing else, so a weak
+    /// reference would be gone before the first request and every command would answer "helm
+    /// has no bench".
+    private var commander: (any SpoolCommanding)?
     private var watcher: SpoolWatcher?
 
     /// Requests acted on in this process, by result id — so a second window's `drain` and this
@@ -133,6 +156,10 @@ final class SpoolModel: ObservableObject {
 
     func attach(closer: any SpoolClosing) {
         self.closer = closer
+    }
+
+    func attach(commander: any SpoolCommanding) {
+        self.commander = commander
     }
 
     /// Begin watching. Idempotent, and a no-op under `HELM_SPOOL_OFF`.
@@ -206,7 +233,8 @@ final class SpoolModel: ObservableObject {
                         + "{\"id\",\"kind\",…} — a spawn is "
                         + "{\"id\",\"cwd\",\"command\",\"args\",\"prompt\"}, a capture is "
                         + "{\"id\",\"kind\":\"capture\",\"path\",\"window\"}, a close is "
-                        + "{\"id\",\"kind\":\"close\",\"terminal\",\"force\"}")
+                        + "{\"id\",\"kind\":\"close\",\"terminal\",\"force\"}, a command is "
+                        + "{\"id\",\"kind\":\"command\",\"command\"}")
                 continue
             }
             guard !handled.contains(request.id) else { continue }
@@ -221,6 +249,8 @@ final class SpoolModel: ObservableObject {
             case .success(.capture(let accepted)):
                 act(on: accepted)
             case .success(.close(let accepted)):
+                act(on: accepted)
+            case .success(.command(let accepted)):
                 act(on: accepted)
             }
         }
@@ -306,6 +336,35 @@ final class SpoolModel: ObservableObject {
         }
         answer(
             request.id, .closed, terminalId: request.terminal, pid: pane?.foreground)
+    }
+
+    /// Drive the bench with one of helm's own commands, and say what it did (#269).
+    ///
+    /// **Whether this command may be sent at all was settled before we got here.**
+    /// `SpoolPolicy.accept` runs `SpoolCommandPolicy.verdict`, so an `AcceptedCommandRequest`
+    /// exists only for a command an agent is allowed to send — the same "answered by the
+    /// compiler rather than by reading upwards" shape `SpoolWork`'s own header describes.
+    /// Everything left here is helm being unable to act, which is `failed` rather than
+    /// `refused`.
+    private func act(on request: AcceptedCommandRequest) {
+        guard let commander else {
+            answer(
+                request.id, .failed,
+                reason: "helm has no bench to run a command on. It is running, and it answered "
+                    + "this request — so the commander was never attached, which is a helm "
+                    + "defect rather than anything the caller can fix.")
+            return
+        }
+        switch commander.run(request.command) {
+        case .success(let report):
+            // `terminalId` carries the new pane as well as `command.paneCreated`, so the field
+            // a caller already reads after a spawn means the same thing after a command and
+            // `helm-close <terminalId>` is the next move with no lookup.
+            answer(
+                request.id, .ran, terminalId: report.paneCreated, command: report)
+        case .failure(let refusal):
+            answer(request.id, .failed, reason: refusal.reason)
+        }
     }
 
     /// Start the agent, then say what was started and how to reach it.
@@ -403,17 +462,20 @@ final class SpoolModel: ObservableObject {
     private func answer(
         _ id: String, _ status: SpoolResult.Status, terminalId: TerminalID? = nil,
         pid: pid_t? = nil, sessionId: String? = nil, handle: Handle? = nil,
-        runtime: String? = nil, reason: String? = nil, capture: CaptureReport? = nil
+        runtime: String? = nil, reason: String? = nil, capture: CaptureReport? = nil,
+        command: CommandReport? = nil
     ) {
         directory.write(
             SpoolResult(
                 id: id, status: status, terminalId: terminalId, pid: pid,
                 sessionId: sessionId, handle: handle, runtime: runtime, reason: reason,
-                capture: capture))
+                capture: capture, command: command))
         NSLog(
-            "helm: spool request %@ is %@%@%@", id, status.rawValue,
+            "helm: spool request %@ is %@%@%@%@", id, status.rawValue,
             handle.map { " — reachable at \($0.value)" } ?? "",
-            capture.map { " — \($0.path), terminal content \($0.terminalContent.rawValue)" } ?? "")
+            capture.map { " — \($0.path), terminal content \($0.terminalContent.rawValue)" } ?? "",
+            command.map { " — \($0.command.rawValue), \($0.panes) panes in \($0.columns) columns" }
+                ?? "")
     }
 
     /// Re-ask `probe` until it answers or the deadline passes.

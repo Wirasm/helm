@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import HelmWire
 
 /// Every command helm can carry out, as one closed value.
 ///
@@ -96,15 +97,15 @@ extension HelmCommand {
     /// enumeration is what stops the config and the keymap from disagreeing about what a command
     /// is called, which is precisely the drift a second hand-written list would guarantee.
     ///
-    /// `String`-backed and `CaseIterable` on purpose: the raw values are the names a config
-    /// writes, and `allCases` lets `KeyHintCatalogTests` assert the catalogue is **total** rather
-    /// than merely consistent with whatever happens to be bound today.
-    enum Name: String, CaseIterable, Codable, Sendable {
-        case newTerminal, selectTerminal, openArtifact, openCanvasFile, pushCanvasFile
-        case openCanvasURL, openWorkspace, adjustFontSize, jumpToPrompt, selectWorkspace
-        case cycleWorkspace, toggleChat, splitRight, splitDown, closePane, moveFocus
-        case composeText, toggleRail
-    }
+    /// **It lives in `HelmWire` now (#269), and this is a typealias onto it rather than a second
+    /// enumeration.** The prediction above — *"a bindings config will write it into a file"* —
+    /// came true as a spool request rather than a config: `CommandRequest` carries one of these
+    /// names across the process boundary and `SpoolCommandPolicy` decides per name whether an
+    /// agent may send it. Both live in `HelmWire`, which depends on nothing in `Helm`, so the
+    /// identity had to move there; `HelmCommandName`'s own header argues why the *payloads* did
+    /// not follow it. Spelling it `HelmCommand.Name` here keeps every call site in `Helm`
+    /// (`Shortcut`, `KeyHintCatalog`) reading exactly as it did.
+    typealias Name = HelmCommandName
 
     /// **The compiler keeps this in step.** Add a case to `HelmCommand` and this `switch` stops
     /// being exhaustive, so the name cannot be forgotten — which is the whole reason a payload-free

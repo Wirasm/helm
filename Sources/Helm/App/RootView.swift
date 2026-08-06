@@ -82,6 +82,11 @@ struct RootView: View {
             // pane never opens a workspace, so it needs nothing from this view at all.
             spool.attach(
                 closer: WorkbenchSpoolCloser(workbench: workbench, terminals: terminalManager))
+            // #269's driver. It takes the rail as well as the bench because `toggleRail` is the
+            // one allowed command that touches neither a pane nor a pty — and both objects are
+            // this view's `@StateObject`s, which is why the wiring is here with the rest.
+            spool.attach(
+                commander: WorkbenchSpoolCommander(workbench: workbench, rail: archonRail))
             spool.start()
         }
         .onDisappear { benchSnapshot.stop() }
