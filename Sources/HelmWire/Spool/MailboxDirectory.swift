@@ -11,12 +11,49 @@ package struct MailboxOwner: Decodable, Equatable {
     package let sessionId: String?
     package let cwd: String?
 
+    /// **`package`-visible and unvalidated, on purpose — this is a fixture constructor, not a
+    /// second route off disk.** It exists for test code across the module boundary
+    /// (`Tests/HelmTests/Board/BenchSnapshotTests.swift` builds owner records directly to drive
+    /// `OwnerRecord`) and for `MailboxDirectory`'s own suite. Nothing in `Sources/` calls it —
+    /// the one thing that reaches into `Helm`/`HelmWire` production code is `init(from:)` below,
+    /// which is where the validation lives. Read `Handle`'s header before assuming this
+    /// initializer proves anything about where a `MailboxOwner` came from.
     package init(handle: String, runtime: String?, pid: pid_t, sessionId: String?, cwd: String?) {
         self.handle = handle
         self.runtime = runtime
         self.pid = pid
         self.sessionId = sessionId
         self.cwd = cwd
+    }
+
+    private enum CodingKeys: String, CodingKey { case handle, runtime, pid, sessionId, cwd }
+
+    /// **Validated on the way in, not just decoded.** `owner.json` has exactly two writers —
+    /// `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts` — and neither is Swift, so
+    /// this decode is the one place Swift gets to refuse a malformed file rather than silently
+    /// building a `MailboxOwner` nothing can address. An empty or whitespace-only `handle` is
+    /// exactly that kind of malformed: `MailboxDirectory.owners(in:)`'s own header already
+    /// promises "a missing directory, an unreadable file or a malformed one yields absence
+    /// rather than an error… one bad file costs its own row and nothing else" for JSON that
+    /// fails to parse at all, and its `compactMap { try? decoder.decode(…) }` is what turns a
+    /// thrown error here into that same promise rather than a crash — an empty handle is
+    /// malformed by the same rule, not a different one. Trimmed as well as checked, so
+    /// `handle` is never stored with the leading/trailing whitespace a hand-edited file might
+    /// carry — the same normalization `Handle(validating:)` applies to a caller-named one.
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .handle)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .handle, in: container,
+                debugDescription: "handle must not be empty or whitespace-only")
+        }
+        handle = trimmed
+        runtime = try container.decodeIfPresent(String.self, forKey: .runtime)
+        pid = try container.decode(pid_t.self, forKey: .pid)
+        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
     }
 }
 

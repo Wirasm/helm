@@ -14,10 +14,19 @@ import Foundation
 /// path inside Swift: there is no `init(_ String)`, so the only ways to end up holding a
 /// `Handle` are —
 ///
-/// - `readingFrom:`, which pulls one out of a `MailboxOwner` — a value that, in this codebase,
-///   is only ever produced by `MailboxDirectory.owners(in:)` decoding an `owner.json` off disk.
-///   This is the blessed path, and the one every production call site uses
-///   (`SpoolModel.act(on: AcceptedSpawnRequest)`, on a `ready` result).
+/// - `readingFrom:`, which pulls one out of a `MailboxOwner`. Every production call site
+///   (`SpoolModel.act(on: AcceptedSpawnRequest)`, on a `ready` result) reaches this with a
+///   `MailboxOwner` that came from `MailboxDirectory.owners(in:)` decoding an `owner.json` off
+///   disk. **This is not a compiler-enforced fact, and the type does not claim it is one**:
+///   `MailboxOwner` also has a `package`-visible memberwise initializer taking a raw `String`,
+///   kept for fixture construction in test code across the module boundary (see its own header).
+///   Nothing in `Sources/` calls it — `readingFrom:` is the blessed path by convention, made
+///   *mostly* enforceable by the fact that decoding is the only route production code takes, and
+///   fully enforceable is what `init(from:)` below buys: whichever route builds a
+///   `MailboxOwner`, decoding is the one that validates, so a `Handle(readingFrom:)` sourced from
+///   a real `owner.json` cannot be empty or whitespace-only. A `Handle` built from a
+///   *hand-constructed* `MailboxOwner` can still be anything that owner's `handle` field is —
+///   the same honesty `validating:` already asks of a caller-named string.
 /// - `validating:`, for the one legitimate case where a caller *names* a recipient rather than
 ///   reading one that already claimed a mailbox — a real case (`helm-mail-cc` sends by handle),
 ///   even though that particular caller is JavaScript and out of this type's reach today.
@@ -29,7 +38,9 @@ import Foundation
 /// **`MailboxOwner.handle` itself stays a bare `String`, deliberately.** `Handle(readingFrom:)`
 /// only means something if there is a raw field to read *from* — wrapping it at the decode site
 /// too would make the two indistinguishable and the blessed path pointless. Decoding
-/// `owner.json` already *is* the reading act this type exists to require.
+/// `owner.json` already *is* the reading act this type exists to require, and — since #229's
+/// review — the act that validates: `MailboxOwner.init(from:)` throws on an empty or
+/// whitespace-only handle rather than passing one through.
 ///
 /// Encodes as a bare string through a single-value container, exactly like `WorkspacePath` —
 /// `SpoolResult.handle` is read by three standalone scripts as `json["handle"] as? String`, and
@@ -37,7 +48,10 @@ import Foundation
 package struct Handle: Codable, Equatable, Hashable, Sendable {
     package let value: String
 
-    /// The blessed path: a handle already read out of an owner record.
+    /// The blessed path: a handle read out of an owner record. Non-failable because a
+    /// `MailboxOwner` that came from decoding — the only route production code takes — cannot
+    /// carry an empty or whitespace-only `handle`; see this type's own header for what that
+    /// guarantee does and does not cover.
     package init(readingFrom owner: MailboxOwner) {
         self.value = owner.handle
     }
