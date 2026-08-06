@@ -1009,6 +1009,29 @@ function checkSwiftAcceptsWhatTheWritersEmit(hooks, pi, rules) {
 		}
 		fs.rmSync(root, { recursive: true, force: true });
 
+		// THE EXHAUSTED FORM IS A HANDLE THE WRITERS CAN EMIT TOO, and every case above runs
+		// against a root that is empty or widens at most to the full id — so this corpus could not
+		// reach it. It is a real gap rather than a hypothetical one: a pid is decimal digits, which
+		// this alphabet happens to allow, and "happens to" is what a check is for. Reached by
+		// walking the ladder, so the shape is `deriveHandle`'s own rather than a spelling of it.
+		for (const { cwd, sessionId } of EDGE_INPUTS.filter((one) => one.sessionId !== "")) {
+			const walk = makeRoot();
+			// Five rungs: four fill the ladder, the fifth is the exhausted answer.
+			for (let rung = 0; rung < 5; rung++) {
+				const held = hooks.deriveHandle(walk, cwd, sessionId);
+				emitted.add(held);
+				emitted.add(pi.deriveHandle(walk, cwd, sessionId));
+				writeOwner(walk, held, { runtime: "claude", pid: FOREIGN_LIVE_PID, sessionId: `held-${rung}`, cwd, claimedAt: 1 });
+			}
+			fs.rmSync(walk, { recursive: true, force: true });
+		}
+		// The corpus must actually CONTAIN one, or the paragraph above is describing a case this
+		// loop failed to reach and the check below is quietly the same one it was before.
+		check(
+			[...emitted].some((handle) => handle.endsWith(`-${process.pid}`)),
+			`and the corpus reaches the exhausted form itself — a handle ending -${process.pid} is in it (#262)`,
+		);
+
 		const refused = [];
 		for (const handle of emitted) {
 			const verdict = swiftValidate(rules, handle);
