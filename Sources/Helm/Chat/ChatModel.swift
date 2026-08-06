@@ -137,9 +137,14 @@ final class ChatModel: ObservableObject {
         }
 
         if case .reading(let session) = source {
-            // Two cadences on purpose. Draining is a `stat` and, most ticks,
-            // nothing else — a turn opens with a median 8.83 s of no bytes — so
-            // it is cheap enough to run at the poll rate. Re-reading the registry
+            // Two cadences on purpose. Draining is a `stat`, a `headBytes` read,
+            // and — most ticks — nothing else, because a turn opens with a median
+            // 8.83 s of no bytes, so it is cheap enough to run at the poll rate.
+            // (The head read is #92's third guard, and it has to be asked on the
+            // quiet ticks too: a rewrite through the same inode need not change
+            // the length. `TranscriptTail.poll` argues it and carries the
+            // measurement — do not restate the figure here, one of the two copies
+            // would go stale and nothing would notice.) Re-reading the registry
             // is a directory listing plus a read and decode per row, and `status`
             // moves on transitions rather than continuously, so half-second
             // latency on it is invisible while four times the file traffic on the
@@ -219,7 +224,8 @@ final class ChatModel: ObservableObject {
     private func drain(_ url: URL) {
         let batch = tail.poll(url)
         if batch.didReset {
-            // The transcript was replaced or truncated. Everything held is stale.
+            // The transcript was replaced, truncated, or rewritten where it
+            // stood. Everything held is stale.
             entries = []
             answers = []
             turn = 0
