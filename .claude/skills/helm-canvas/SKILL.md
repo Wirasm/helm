@@ -69,12 +69,41 @@ A canvas is a real web page on a real origin — `helm-canvas://<host>/` — not
 - **ES modules work**, resolved against that same directory — so a library vendored beside the
   artifact can be `import`ed with no bundler and no build step.
 - **Origin-scoped browser APIs work**, `localStorage` among them.
-- **Nothing outside the directory is readable.** Both sides are canonicalized — `..` collapsed *and*
-  symlinks followed — so containment is decided about the file that would actually be read, not
-  about the text of the request.
+- **The network is open.** A canvas may `fetch` a remote host, open a WebSocket, load a remote
+  `<script>` or `<img>`. helm serves no content-security policy and does not police what an artifact
+  reaches — a canvas that pulls live data or polls an API is a canvas worth having. One CSP was
+  built and rejected (helm #209): blocking belongs in hooks and sandboxes, not in the app.
+- **Nothing outside the artifact's directory is readable over `helm-canvas://`.** Both sides are
+  canonicalized — `..` collapsed *and* symlinks followed — so containment is decided about the file
+  that would actually be read, not about the text of the request. This is about the local
+  filesystem, and says nothing about the network.
 
-There is no server. A canvas is a static origin, so anything wanting a request/response cycle has
-nothing to talk to.
+There is **no server on the canvas's own origin**. Siblings are served as static files, so anything
+wanting a request/response cycle of its own has nothing local to talk to — reach a remote host, or
+do it in the page.
+
+**Your artifact keeps running whenever it is opened**, long after the session that wrote it ends. It
+is a page in the operator's window, not a transcript.
+
+## Taking a dependency
+
+Three routes, all of which work. They differ in what happens six months from now, and that is the
+only axis worth thinking about.
+
+- **A CDN `<script src>`** — nothing to set up. **A pinned URL renders the same later; an unpinned
+  one does not.** `https://cdn.jsdelivr.net/npm/chart.js` resolves to whatever is current;
+  `https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js` is fixed.
+- **`curl` it beside the artifact** and `<script src="./lib.min.js">`. Measured across fifteen
+  common libraries, all fifteen ship a browser-ready file — a UMD/IIFE bundle or dependency-free
+  ESM — reachable this way in about a quarter of a second (helm #200). The artifact then renders
+  identically forever and needs no network at all.
+- **`bun add x && bun build entry.js --outfile lib.js --minify --target browser`** for the rare
+  library shipping no browser build. About 1.5 s, unattended, nonzero exit if the network is gone.
+
+**Vendoring a library's ESM *source* works only if it ships browser-ready ESM.** `@quickdrawjs/core`
+does — no dependencies, imports written with file extensions. An ordinary TypeScript-compiled
+package does not: `import './thing'` is unresolvable in a browser. That is the case the third route
+exists for.
 
 ## What you can check yourself
 
@@ -101,19 +130,8 @@ quoted text with nothing to anchor to; `gitGraph` and `pie` produce no addressab
 For a diagram the operator must be able to point at, those four families or your own HTML ids are
 the options that work.
 
-**A successful sibling `fetch` currently reports `res.ok === false` and `status: 0`** (helm #201).
-The bytes are correct. Branch on what you got, not on `res.ok`, until that fix lands.
-
-**Remote script is a bad bet and sometimes not one at all.** A canvas renders with no click, and an
-unpinned CDN build renders differently, or not at all, in six months. Put library bytes beside the
-artifact instead — measured across fifteen common libraries, all fifteen ship a browser-ready file
-you can fetch into the directory (helm #200).
-
-**Vendoring a library's ESM *source* works only if it ships browser-ready ESM.** `@quickdrawjs/core`
-does — no dependencies, imports written with file extensions. An ordinary TypeScript-compiled
-package does not: `import './thing'` is unresolvable in a browser. For those,
-`bun add x && bun build entry.js --outfile lib.js --minify --target browser` produces one in about
-1.5 s and exits nonzero if the network is gone.
+**Sibling `fetch` reports a real status** — 200 for bytes, 404 for a sibling that is not there, 403
+for one the boundary refuses — so `res.ok` and `res.status` mean what they mean (helm #201).
 
 **htmx blanks a canvas under its own defaults.** Its history handling calls `history.replaceState()`
 after a swap, which a bare `WKWebView` ignores and helm does not — the page comes out empty, and
