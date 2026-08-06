@@ -18,33 +18,75 @@ nobody can do for you is wake you** — see *Arm*, below. pi's side is `helm-mai
 ## Who is reachable
 
 ```bash
-find ~/.helm/mail -maxdepth 2 -name owner.json -type f -exec cat {} \; 2>/dev/null
+find ~/.helm/mail -maxdepth 2 -name owner.json -type f 2>/dev/null | while read -r f; do
+  python3 - "$f" <<'PY'
+import json, os, sys
+
+def alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)          # signal 0 asks whether it exists; it kills nothing
+    except PermissionError:
+        return True              # another user owns it, so it is there
+    except OSError:
+        return False
+    return True
+
+o = json.load(open(sys.argv[1]))
+print("retired" if o.get("retiredAt") else "live" if alive(o.get("pid")) else "dead", json.dumps(o))
+PY
+done
 ```
 
 `find` here for the reason spelled out at length under *Arm*, below: under zsh a glob matching
 nothing is fatal, and `~/.helm/mail/*/owner.json` matches nothing on a machine where no agent has
 claimed a mailbox yet. Printing no rows is the right answer to "who is reachable" when nobody is.
 
-Each row is `{handle, runtime, pid, sessionId, cwd, claimedAt}`. `cwd` is what tells two agents
-apart — it carries the worktree path, so *"the pi in the pr-122 worktree"* is a match on `runtime`
-plus a `cwd` ending in `.worktrees/pr-122`.
+One line per mailbox — its state, then the whole of its `owner.json`:
 
-**Listed is not the same as live — check the pid.** A dead agent's mailbox is usually reaped, but
-not always: one still holding unread mail is kept deliberately (that mail is evidence, and the
-handle may be re-claimed), and reaping only runs when some agent starts a session, so an idle
-machine keeps its corpses.
-
-```bash
-kill -0 <pid> 2>/dev/null && echo live || echo DEAD
 ```
+live {"handle": "agentic-coding-course-c9db", "runtime": "claude", "pid": 68658, ...}
+retired {"handle": "helm-4831", ..., "claimedAt": 1786028945735, "retiredAt": 1786045284085}
+dead {"handle": "helm-7139", "runtime": "claude", "pid": 54430, ...}
+```
+
+Each row is `{handle, runtime, pid, sessionId, cwd, claimedAt}`, plus a `retiredAt` once the
+mailbox has been retired. `cwd` is what tells two agents apart — it carries the worktree path, so
+*"the pi in the pr-122 worktree"* is a match on `runtime` plus a `cwd` ending in
+`.worktrees/pr-122`.
+
+**Listed is not the same as live, and `retiredAt` is asked before the pid.** When any agent starts
+a session it reaps the mailboxes whose owners are gone, and reaping **rewrites `owner.json` with a
+`retiredAt` rather than deleting the directory** (#236). The directory and its `read/` stay on
+purpose: a retired mailbox is still worth reading, it is only not worth writing to. **A row
+carrying `retiredAt` is not a recipient** — the send succeeds, the file lands, and nobody ever
+opens it.
+
+**The pid cannot tell you that, which is why it is asked second.** A retired owner's pid may still
+be alive — the `/clear` ghost's is, and the kernel reuses pids — so `kill -0` calls a mailbox
+nobody is listening to perfectly healthy. Measured against a mailbox the real hook had just
+retired: `kill -0` said live, and the row said `retired` (#248). This section used to teach the
+`kill -0` on its own, which is the wrong test the moment a mailbox can be retired instead of
+deleted.
+
+**The pid check stays, because it catches what `retiredAt` has not caught yet.** Reaping only runs
+when some agent starts a session, so an idle machine keeps its corpses unmarked; and a mailbox
+still holding unread mail is left unretired deliberately, because that mail is evidence and the
+handle may be re-claimed. `dead` is a real state, and for the purposes of sending it means what
+`retired` means.
 
 **A live pid is not proof of a live agent.** If two rows share one pid, the one whose `sessionId`
 matches `~/.claude/sessions/<pid>.json` is the real agent and the other is a `/clear` ghost — the
-process is alive, it just runs somebody else now. The next session start reaps it, so this is a
+process is alive, it just runs somebody else now. The next session start retires it, so this is a
 window rather than a permanent state, but sending into it during that window is silent.
 
-Mail to a dead handle goes nowhere and says nothing. If the one you want is dead, tell the operator
-rather than sending into it.
+Mail to a `retired` or `dead` handle goes nowhere and says nothing. If the one you want is not
+`live`, tell the operator rather than sending into it — and say which of the two it was, because
+`retired` means that agent existed and is gone where `dead` may only mean nobody has reaped it yet.
+
+There is no separate one-handle check. The listing *is* the check, and each row is one line, so
+`… | grep <handle>` is how you ask about one.
 
 If two live rows match what the operator described, **ask which** rather than guessing — a message
 to the wrong agent is equally silent.
@@ -125,13 +167,22 @@ Put the actual request in the **body** — `subject` is a one-line label shown i
 notice, and the body is what they read from the file.
 
 **Check the `mv`, and mean it.** A mailbox is a directory, so a send whose target directory is gone
-writes nothing — the box was reaped while you composed (#236), or the handle was never right. Both
-paths do fail loudly *somewhere*: `python3` raises `FileNotFoundError` and `mv` says
+writes nothing — the handle was never right, or somebody removed the directory by hand. (Reaping is
+no longer one of the ways: it retires the mailbox and leaves it where it is — see the paragraph
+after this one, which is the case the `||` cannot see.) Both paths do fail loudly *somewhere*:
+`python3` raises `FileNotFoundError` and `mv` says
 `No such file or directory`. Neither is on stdout, and neither says what it cost, so in a long tool
 result they read as noise from a block that otherwise looks like it ran. The `||` is what makes the
 one thing that matters unmissable. **A failure here means the message was not delivered** — tell the
-operator that rather than reporting it sent, and re-read `~/.helm/mail/*/owner.json` to see whether
-that handle still exists at all before trying again.
+operator that rather than reporting it sent, and re-read the listing above to see whether that
+handle still exists at all before trying again.
+
+**The `mv` cannot catch a retired mailbox, and that is the failure it most looks like.** A retired
+directory is still there — that is the whole point of retiring rather than deleting — so the rename
+succeeds, the `||` stays quiet, and the message is never read. There is nowhere later to catch it:
+`retiredAt` is checked in the listing, before you compose. pi's extension refuses a retired
+recipient in code; writing the file yourself is what this runtime does instead, so the check is
+yours to make.
 
 ## Arm — the part only this runtime needs
 
@@ -165,12 +216,17 @@ it — so the empty mailbox looks defended and, under zsh, is not: the body is n
 the guard. Read in bash it is correct, which is exactly why it survived and why this paragraph is
 here (#237).
 
-An empty box is not exotic. It is every moment after you have read your mail, and `owner.json` is
-no longer the entry that always matches — a reaped mailbox has none (#236), which is how the two
-compounded: the directory went away and the watch that would have reported it died in the same
-instant. `find` returns nothing and exits 0 in either dialect, and keeps doing so when the
-directory has been deleted outright — but **surviving is not the same as receiving**. A watch on a
-mailbox that no longer exists stays alive and silent; that is #236, not this.
+An empty box is not exotic — it is every moment after you have read your mail. When this was
+written it was worse than that: reaping **deleted** the mailbox, so not even `owner.json` was an
+entry that always matched, and the two defects compounded — the directory went away and the watch
+that would have reported it died in the same instant. Reaping retires now and the directory stays
+(#236), so that particular pair cannot recur, and `owner.json` is there throughout.
+
+`find` returns nothing and exits 0 in either dialect, and keeps doing so on a directory deleted
+outright — but **surviving is not the same as receiving**. A watch on a mailbox that has been
+retired out from under you stays alive and perfectly silent, because a retired box is one nobody
+will write to again. Silence is not evidence that nothing was sent; if it goes on, run the listing
+above and look at your own row.
 
 Run it with the **Monitor** tool, which turns each line into a notification. Monitor is a deferred
 tool, so load it first — otherwise the call fails and it looks like the watch is the problem:
