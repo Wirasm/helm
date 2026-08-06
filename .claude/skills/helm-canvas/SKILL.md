@@ -1,25 +1,28 @@
 ---
 name: helm-canvas
-description: Put an artifact in front of the operator as a helm canvas — a rendered markdown or HTML file that appears as a tab beside their terminal. Use after writing a plan, report, review, diagram, or interactive page that is worth looking at rather than reading in a terminal; when the operator says "open it in the canvas", "show me that", "render this", "put it on screen"; when about to paste something long into the terminal instead; or via /helm-canvas.
+description: Put an artifact in front of the operator as a helm canvas — a rendered markdown or HTML file that appears as a tab beside their terminal. Use after writing a plan, report, review, diagram, or interactive page that is worth looking at rather than reading in a terminal; when the operator says "open it in the canvas", "show me that", "render this", "put it on screen"; or via /helm-canvas.
 ---
 
-# Offer a canvas
+# The canvas
+
+**This skill is the capability surface: what a canvas *is*, and what it can do.** It does not say
+what to put in one, what a good one looks like, or when a page beats a document. Those are
+decisions, and they belong to you or to a more specific skill — see *Where conventions live* at the
+end.
 
 **helm is the macOS terminal application this session is running inside.** Not a library, not a
 dependency, and not something in the repository you are working in — you could be in any repo and
 still be in helm. Nothing in the current project needs to know about it, and you will not find it
 there. Do not go looking.
 
-helm renders a markdown or HTML file as a **canvas** — a pane beside the terminal. You put
-something there by writing a file and asking helm to show it.
+A **canvas** is a pane beside the terminal that renders a markdown or HTML file. You put something
+there by writing a file and asking helm to show it.
 
-**It appears; it does not seize.** The artifact arrives as a tab the operator can reach. It does
-not take the keyboard and does not replace whatever they are currently reading — because they did
-not ask for it, and may be mid-thought in another pane. Bringing it forward stays their action.
+**It appears; it does not seize.** The artifact arrives as a tab the operator can reach. It does not
+take the keyboard and does not replace whatever they are currently reading. Bringing it forward
+stays their action.
 
-## How
-
-Write the file, then run:
+## Opening one
 
 ```bash
 ~/.claude/skills/helm-canvas/push.sh /absolute/path/to/artifact.md
@@ -44,92 +47,82 @@ there is none.
 It works the same from a shell the operator typed into, from a `Makefile`, or from a script — that
 path was never broken, and the script does not change it.
 
-**Do not print an OSC 8 hyperlink and expect a ⌘-click to work either.** It does not reach helm
-from inside a TUI — your own terminal UI captures the mouse first (helm #124). That was the
-instruction before this one, and it was wrong in the same way: fine from a shell, silent from an
-agent.
+**An OSC 8 hyperlink is not a second way in.** A ⌘-click on one does not reach helm from inside a
+TUI; your own terminal UI captures the mouse first (helm #124).
 
-## Check it before you offer it
+## The two renderers
 
-**For an `.html` artifact, look at it first.** You wrote it; you can render it. Nothing in helm has
-to help you, and you should not ask it to.
+**`.md` — helm is the renderer.** It converts the markdown, renders ```mermaid fences, and applies
+its own type scale. The file you write is input, not output.
 
-This works because a canvas is **self-contained** — an `.html` artifact carries everything it
-needs, so the file you render is the page the operator sees. That is a helm rule rather than a
-coincidence, and it is what makes checking your own work possible at all.
+**`.html` — your bytes are the page.** helm serves the file itself. Whatever you write is what
+renders.
 
-Render the file the way you would check any local page — a headless browser, a screenshot,
-whatever this environment already has — and look for:
+## What an HTML canvas can do
 
-- **Did it render at all**, or is it a blank page? An unclosed tag is invisible in the source and
-  total on screen.
-- **Did the diagrams parse?** A malformed mermaid fence renders as an error box, not as a diagram.
-  You cannot tell from your own source that it failed.
-- **Is anything you intended missing** — a section that collapsed, a table that came out as text.
+A canvas is a real web page on a real origin — `helm-canvas://<host>/` — not a preview pane. So:
 
-Fix it, then offer it. Offering a broken page and letting the operator find it is the failure this
-step exists to prevent.
+- **JavaScript runs, and runs with no click.** A pushed canvas renders and executes immediately.
+- **Sibling files are served.** The artifact's directory is the read boundary, so `./app.js`,
+  `./data.json`, `./style.css`, `./img/x.png` beside the artifact all load. This is the primitive
+  most interactive canvases are built on.
+- **ES modules work**, resolved against that same directory — so a library vendored beside the
+  artifact can be `import`ed with no bundler and no build step.
+- **Origin-scoped browser APIs work**, `localStorage` among them.
+- **Nothing outside the directory is readable.** Both sides are canonicalized — `..` collapsed *and*
+  symlinks followed — so containment is decided about the file that would actually be read, not
+  about the text of the request.
 
-**A markdown canvas cannot be checked this way, and you should not try.** For `.md`, **helm is the
-renderer**: it converts the markdown, renders the mermaid fences, and applies its own type scale.
-Opening the `.md` yourself shows you raw markdown, not the canvas. There is no way for you to see a
-markdown canvas as the operator sees it — so when the *appearance* is what matters, prefer `.html`,
-which you can verify.
+There is no server. A canvas is a static origin, so anything wanting a request/response cycle has
+nothing to talk to.
 
-## When to offer
+## What you can check yourself
 
-Offer something worth *looking at*: a plan, a review, a report, a diagram, an interactive page.
+**An `.html` artifact you can render and look at** — a headless browser, a screenshot, whatever this
+environment already has. It works because the page is self-contained: the file you render is the
+page the operator sees.
 
-Do not offer a three-line answer — say it. Offering everything is as useless as offering nothing,
-and the operator learns to ignore what you put in front of them.
+**A markdown canvas you cannot.** helm is the renderer, so opening the `.md` yourself shows raw
+markdown. There is no way to see a markdown canvas as the operator sees it.
 
-If you are about to paste something long into the terminal, that is the signal to write a file
-and offer it instead.
+## Limits that are helm's, not yours
 
-**A canvas earns its format only when the reader can do something scrolling cannot.** If the sole
-control is scroll, it should have been markdown. Ask what question the page lets the reader answer
-that a document does not — filter to the rows that are theirs, tick off what they have done, fold
-away the part they have read, search 35 items for one word. A page whose only listeners are
-scroll, touch and reduced-motion is ambience: carefully made, and it reads as a wall.
+These are properties of the platform. They are not preferences, and you cannot code around them.
 
-## If it needs a library
+**The operator's annotations land beside the artifact, never inside it.** When they mark up a
+canvas, helm writes their notes to a sidecar file — precisely because you rewrite the artifact and
+would clobber anything kept inside. Read the notes if they appear; only ever write the artifact.
 
-**Put the bytes beside the artifact at authoring time. Never `<script src="https://cdn…">`.** A
-canvas renders with no click, so a page that fetches and executes remote code at render time is a
-materially different proposition from one that cannot — and an unpinned CDN build renders
-differently, or not at all, in six months.
+**A mermaid node is addressable in four families only.** helm hands back the identifier from your
+```mermaid fence — name a node `phase2` and a mark comes back as `phase2`, which you can grep for
+and edit (helm #113). That holds for **flowchart, class, state and er**. `mindmap` and
+`sequenceDiagram` put no author-written identifier in the rendered output, so a mark degrades to
+quoted text with nothing to anchor to; `gitGraph` and `pie` produce no addressable nodes at all.
+For a diagram the operator must be able to point at, those four families or your own HTML ids are
+the options that work.
 
-`curl` is the build step. Nearly every library worth putting in a canvas ships a browser-ready
-file — a UMD/IIFE bundle, or ESM with no dependencies — so fetch that into the artifact's directory
-and `<script src="./lib.min.js">` it. Measured across fifteen candidates, fifteen were reachable
-that way (helm #200).
+**A successful sibling `fetch` currently reports `res.ok === false` and `status: 0`** (helm #201).
+The bytes are correct. Branch on what you got, not on `res.ok`, until that fix lands.
 
-Two things that look like shortcuts and are not:
+**Remote script is a bad bet and sometimes not one at all.** A canvas renders with no click, and an
+unpinned CDN build renders differently, or not at all, in six months. Put library bytes beside the
+artifact instead — measured across fifteen common libraries, all fifteen ship a browser-ready file
+you can fetch into the directory (helm #200).
 
-- **Vendoring a library's ESM *source* only works if the library ships browser-ready ESM.** It
-  worked for `@quickdrawjs/core`, which has no dependencies and writes its imports with file
-  extensions. It fails outright for an ordinary TypeScript-compiled package, whose `import
-  './thing'` no browser resolves. When that happens, `bun add x && bun build entry.js --outfile
-  lib.js --minify --target browser` bundles it in about 1.5 s, unattended, and fails loudly with a
-  nonzero exit when the network is not there.
-- **Do not reach for htmx.** It was rebuilt against a real artifact and came out *longer* than
-  plain JS — its model is fetching a fragment from a server, and a canvas has no server. Every
-  control worth having (search, anything derived from `localStorage`) has to be hand-written
-  anyway, and htmx's default history handling renders a helm canvas blank (helm #200).
+**Vendoring a library's ESM *source* works only if it ships browser-ready ESM.** `@quickdrawjs/core`
+does — no dependencies, imports written with file extensions. An ordinary TypeScript-compiled
+package does not: `import './thing'` is unresolvable in a browser. For those,
+`bun add x && bun build entry.js --outfile lib.js --minify --target browser` produces one in about
+1.5 s and exits nonzero if the network is gone.
 
-## Two things that will bite
+**htmx blanks a canvas under its own defaults.** Its history handling calls `history.replaceState()`
+after a swap, which a bare `WKWebView` ignores and helm does not — the page comes out empty, and
+`<meta name="htmx-config" content='{"historyEnabled":false}'>` is what stops it (helm #200).
 
-**Do not write into a canvas the operator has marked up.** When they annotate one, helm writes
-their notes to a file *beside* the artifact rather than into it — precisely because you rewrite
-the artifact and would clobber anything kept inside. That is helm's behaviour, not a convention
-you set up or go looking for: read the notes if they appear, and only ever write the artifact.
+## Where conventions live
 
-**A mermaid node can be annotated, but only in some diagram families.** helm hands back the
-identifier that appears in your ```mermaid fence — name a node `phase2` and the operator's mark
-comes back as `phase2`, which you can grep for and edit (helm #113).
-
-That holds for **flowchart, class, state and er** diagrams, and only those. `mindmap` and
-`sequenceDiagram` put no author-written identifier in the rendered output at all, so a mark on one
-degrades to quoted text with nothing to anchor to; `gitGraph` and `pie` produce no addressable
-nodes whatsoever. **If the operator needs to point at parts of a diagram, use a flowchart** — or
-HTML with your own ids.
+**Deliberately not here.** This skill answers "what can a canvas do". How a particular *kind* of
+canvas should look — a review, a plan, a board, a diagram — is a convention worth settling once and
+reusing, and it belongs in its own skill that composes with this one. Keeping them apart is the
+point: a capability list that also carries taste stops being a capability list, and the taste stops
+being reviewable on its own terms.
