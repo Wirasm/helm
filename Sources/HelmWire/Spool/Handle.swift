@@ -62,7 +62,7 @@ import Foundation
 /// **Measured across both writers, by executing them.** `slug`, `tail`, `heldByAnother` and
 /// `deriveHandle` were lifted verbatim out of each file by brace-matching the source text and
 /// run — never transcribed, which is the mistake recorded three paragraphs down. 225,702
-/// derivations of the hooks pair and 238,202 of pi's, over junk cwd basenames and session ids
+/// derivations of the `hooks` writer and 238,202 of pi's, over junk cwd basenames and session ids
 /// (uppercase, punctuation, combining marks, emoji, empty), including the pinned-handle route,
 /// and driven through the whole 4 → 6 → 8 → full widening to the exhaustion fallback 12,500
 /// times each by claiming every answer with a live foreign pid. **Nothing either writer emitted
@@ -92,7 +92,12 @@ import Foundation
 /// what the writers emitted on the day it ran and nothing about what they will emit — exactly the
 /// standing the line numbers it replaced had. It could not live in the Swift gate either: that
 /// gate is Swift-and-xcodegen by policy and this needs node, so it belongs in `hooks/test.sh` and
-/// pi's. Until it exists, the looser rule is the one that survives the far side drifting.
+/// pi's. **#246 is the ticket**, and it is smaller than it reads: both of those gates already run
+/// their own writer as a subprocess and already hold the derived handle in a variable
+/// (`hooks/test.sh`'s `$handle`, `pi/tests/helm-mail.mjs`'s `s.handle`), so an alphabet assertion
+/// is a line beside each rather than new infrastructure — though each side would then be checking
+/// itself against a copied regex, a fourth and fifth spelling where #246 asks for an extraction.
+/// Until it exists, the looser rule is the one that survives the far side drifting.
 ///
 /// That margin is not hypothetical caution. #239's first draft asserted the opposite — that
 /// `deriveHandle("/x/helm", "12345-678")` was `helm--678`, so dash placement *could not* be

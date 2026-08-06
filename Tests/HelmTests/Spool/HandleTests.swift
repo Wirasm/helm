@@ -90,9 +90,16 @@ final class HandleTests: XCTestCase {
             "helm-4831",  // the ordinary shape: <cwd basename>-<tail of session id>
             "agentic-coding-course-c9db",  // a multi-word basename, slugged
             "agent",  // slug's own fallback when a component reduces to nothing
-            "helm-678",  // deriveHandle("/x/helm", "12345-678") — the case the draft got wrong
-            "agent-gent",  // deriveHandle("/x/---", "---") — both components hit the fallback
-            "a-b",  // deriveHandle("/x/a", "-b-") — tail strips the dashes off its slice
+            // deriveHandle("/x/helm", "12345-678"): tail(full, 4) slices "-678" and strips the
+            // leading dash. The one entry where tail() itself does the stripping — and the case
+            // the draft got wrong, having assumed it did not.
+            "helm-678",
+            "agent-gent",  // deriveHandle("/x/---", "---") — both components hit slug's fallback
+            // deriveHandle("/x/a", "-b-"): slug("-b-") is already "b", so full.length is 1, no
+            // width in [4, 6, 8] is smaller, and tail() is never called at all. The dashes went
+            // to slug's own edge-strip. Traced by executing it — an earlier comment here credited
+            // tail, which is this file's own cautionary tale repeated one size smaller.
+            "a-b",
             "helm-f9e4639d-1111-2222-3333-444455556666",  // the full-session-id candidate
             "helm-12345-678-44347",  // pi's exhaustion fallback — it appends process.pid
             "0",  // a basename that is only digits
