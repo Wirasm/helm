@@ -54,7 +54,7 @@ package struct MailboxOwner: Decodable, Equatable {
     /// building a `MailboxOwner` nothing can address. An empty handle is exactly that kind of
     /// malformed, and since #239 so is one outside `[a-z0-9-]` — the alphabet those two writers'
     /// `slug` can emit, so neither can produce a file this refuses (`Handle`'s header has the
-    /// measurement, including the `helm--678` case that keeps the rule from being tighter).
+    /// measurement, and why the rule is deliberately looser than what they actually emit).
     /// `MailboxDirectory.owners(in:)`'s own header already promises "a missing directory, an
     /// unreadable file or a malformed one yields absence rather than an error… one bad file costs
     /// its own row and nothing else" for JSON that fails to parse at all, and its

@@ -67,19 +67,24 @@ final class HandleTests: XCTestCase {
                 + "the failure MailboxDirectory's header forbids for derivation")
     }
 
-    /// **The control that stops the rule overshooting, and it is the one that constrains its
-    /// shape.** Every candidate here is something `deriveHandle` can actually hand out, so all of
-    /// them must survive: a rule that refused any of them would reject a handle helm itself
-    /// wrote. `helm--678` is the sharp case — `deriveHandle` takes the *tail* of the slugged
-    /// session id and that slice can begin mid-dash (`deriveHandle("/x/helm", "12345-678")`,
-    /// measured against the real `slug`/`tail`) — which is exactly why the rule is the alphabet
-    /// and says nothing about where dashes fall.
+    /// **The control that stops the rule overshooting.** Every candidate must survive: refusing
+    /// one would make helm unable to read a mailbox it created.
+    ///
+    /// **These are real outputs, obtained by running the real code.** `slug`, `tail` and
+    /// `deriveHandle` were extracted from `hooks/helm-mail.mjs` by brace-matching the file text
+    /// and executed — not transcribed from reading them. The first draft of this test did
+    /// transcribe them, got `tail` wrong (it strips edge dashes; the draft assumed it did not),
+    /// and pinned `helm--678` here as a reachable handle. It is not reachable — the real answer
+    /// is `helm-678` — and `Handle`'s header now says so. Re-derive rather than re-read if this
+    /// list ever needs another entry.
     func testEveryHandleTheWritersCanEmitIsStillAccepted() throws {
         let corpus = [
             "helm-4831",  // the ordinary shape: <cwd basename>-<tail of session id>
             "agentic-coding-course-c9db",  // a multi-word basename, slugged
             "agent",  // slug's own fallback when a component reduces to nothing
-            "helm--678",  // a tail slice that begins mid-dash — reachable, so it must pass
+            "helm-678",  // deriveHandle("/x/helm", "12345-678") — the case the draft got wrong
+            "agent-gent",  // deriveHandle("/x/---", "---") — both components hit the fallback
+            "a-b",  // deriveHandle("/x/a", "-b-") — tail strips the dashes off its slice
             "helm-f9e4639d-1111-2222-3333-444455556666",  // the full-session-id fallback
             "0",  // a basename that is only digits
         ]
@@ -88,6 +93,26 @@ final class HandleTests: XCTestCase {
                 Handle(validating: candidate)?.value, candidate,
                 "\(candidate.debugDescription) is a handle deriveHandle can produce; refusing it "
                     + "would make helm unable to read a mailbox it created")
+        }
+    }
+
+    /// **The margin, recorded so it reads as a choice rather than an oversight.** The writers can
+    /// only emit `[a-z0-9]+(-[a-z0-9]+)*` — no edge dash, no `--`, measured over 200,000 fuzzed
+    /// derivations of the real `deriveHandle`, none outside it. This rule is looser than that on
+    /// purpose: it refuses characters and says nothing about where dashes fall, so it depends on
+    /// one property of the far side instead of three. `Handle`'s header has the argument, and
+    /// the reason it matters — nothing runs the real writers against this rule, so the boundary
+    /// is unwatched and the cheaper dependency is the safer one.
+    ///
+    /// If a later change *does* constrain dash placement, this test is what should be deleted to
+    /// say so — deliberately, with the header updated in the same commit.
+    func testTheRuleIsLooserThanWhatTheWritersEmitAndThatIsDeliberate() throws {
+        for candidate in ["helm--678", "-helm", "helm-"] {
+            XCTAssertNotNil(
+                Handle(validating: candidate),
+                "\(candidate.debugDescription) is accepted on purpose: no writer emits it, but "
+                    + "refusing it would couple this rule to how deriveHandle composes tail(), "
+                    + "not just to the characters slug() emits")
         }
     }
 

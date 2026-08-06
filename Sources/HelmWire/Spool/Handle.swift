@@ -42,15 +42,33 @@ import Foundation
 /// character rule does too, and it is enforced on every route: **`[a-z0-9-]`, and nothing about
 /// where the dashes fall.**
 ///
-/// **Why that exact alphabet, and why the rule stops there.** Both `owner.json` writers run every
-/// component of a handle through a `slug` that lowercases, collapses `[^a-z0-9]+` to `-` and
-/// falls back to `"agent"` (`hooks/helm-mail.mjs:66`, `pi/extensions/helm-mail/index.ts:178`),
-/// and `deriveHandle` joins those components with `-`. So every character a writer can emit is in
-/// this set, and the rule cannot refuse anything they produced. **A tighter rule could.**
-/// `deriveHandle` takes the *tail* of the slugged session id, and a slice can begin mid-dash:
-/// `deriveHandle("/x/helm", "12345-678")` is `helm--678` — measured against the real `slug` and
-/// `tail`, not reasoned about. So a rule forbidding `--`, or leading and trailing dashes, would
-/// refuse a handle helm itself hands out. Hence the alphabet, and no more.
+/// **Why that alphabet, and why the rule is deliberately looser than it could be.** Both
+/// `owner.json` writers run every component of a handle through a `slug` that lowercases,
+/// collapses `[^a-z0-9]+` to `-`, strips edge dashes and falls back to `"agent"`
+/// (`hooks/helm-mail.mjs:66`, `pi/extensions/helm-mail/index.ts:184`); `tail` strips edge dashes
+/// again (`:75`, `:202`); and `deriveHandle` joins the components with a single `-`. So the shape
+/// they can actually emit is *narrower* than this rule — `[a-z0-9]+(-[a-z0-9]+)*`, no leading or
+/// trailing dash and no `--`. Measured by extracting the real `slug`/`tail`/`deriveHandle` and
+/// fuzzing 200,000 derivations: none fell outside it, and the eight `owner.json` on this machine
+/// all match it too.
+///
+/// **The rule stops at the alphabet anyway, and the margin is the point.** Constraining dash
+/// placement would buy almost nothing — `Alice`, `my agent` and `owner_1234` are what a caller
+/// actually types, and the alphabet refuses all three — while widening what this rule depends on
+/// from *one* property of the far side (which characters `slug` emits) to *three* functions
+/// interacting (`slug`, `tail`, and how `deriveHandle` composes them). **Nothing checks that
+/// dependency.** This alphabet and the JavaScript `slug` are two spellings of one rule across a
+/// runtime boundary, and unlike the spool's wire format — watched by `SpoolWireConformanceTests`
+/// running the real scripts as subprocesses — no test runs the real writers and asserts their
+/// output satisfies this one. It could not live in the Swift gate either: that gate is
+/// Swift-and-xcodegen by policy and this needs node, so it belongs in `hooks/test.sh` and pi's.
+/// Until it exists, the looser rule is the one that survives the far side drifting.
+///
+/// That margin is not hypothetical caution. #239's first draft asserted the opposite — that
+/// `deriveHandle("/x/helm", "12345-678")` was `helm--678`, so dash placement *could not* be
+/// constrained — written from `tail`'s name and signature without reading its body. It is
+/// `helm-678`. The far side is easy to get wrong from here, which is the argument for depending
+/// on less of it.
 ///
 /// **What was ruled out, and why.**
 ///
