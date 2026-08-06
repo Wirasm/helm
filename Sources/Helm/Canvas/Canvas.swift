@@ -124,6 +124,13 @@ final class CanvasModel: ObservableObject {
     /// `.select` on a SwiftUI churn would look like the canvas ignoring the picker.
     @Published private(set) var markTool: CanvasMarkTool = .select
 
+    /// Whether the sidecar drawer is open (#198). Here for exactly `markTool`'s reason: the
+    /// pane is rebuilt on ordinary SwiftUI churn, and a drawer that snapped shut when a
+    /// sibling pane redrew would read as helm closing it. It is deliberately **not**
+    /// persisted — the drawer is temporary, and a pane that restored with half the artifact
+    /// covered would be answering a question nobody asked.
+    @Published private(set) var showsNotes = false
+
     /// A transient "that worked" line. Separate from `notesFailure` because a silent copy is
     /// indistinguishable from a dead click, and because the operator has to know their
     /// clipboard just changed under them.
@@ -137,10 +144,24 @@ final class CanvasModel: ObservableObject {
 
     @Published private(set) var selection: CanvasSelection?
 
-    /// Every note in this canvas's sidecar, by heading. Re-read from the file rather than
+    /// The sidecar's whole text, which is what the drawer renders — nil when there is no
+    /// sidecar, or nothing but whitespace in it.
+    ///
+    /// **Stored rather than read where it is drawn.** A view that reads the file in `body`
+    /// touches the disk every time SwiftUI redraws it, which for a pane sharing a bench with
+    /// live terminals is a great many times a second. One read per refresh, and everything
+    /// else about the sidecar is derived from this string rather than read again.
+    @Published private(set) var notesText: String?
+
+    /// Every note in this canvas's sidecar, by heading — for the header's `Notes (n)`. Not
     /// tallied in memory: the sidecar IS the memory, and an agent or an editor may have
     /// appended to it since.
-    @Published private(set) var notes: [String] = []
+    ///
+    /// **A pure function of `notesText`**, for `source`'s reason one screen up: a stored
+    /// copy is a second call site to forget, and the one it would silently reintroduce is
+    /// precisely the disagreement this design exists to prevent — a count taken from one
+    /// read of the file beside prose taken from another.
+    var notes: [String] { CanvasNotes.headings(in: notesText ?? "") }
 
     /// Why the last note could not be written, in the operator's terms. Shown in the pane
     /// — a note someone believes they wrote and that went nowhere is worse than one they
@@ -223,6 +244,9 @@ final class CanvasModel: ObservableObject {
         showing = .file(Document(url: url, content: Self.load(url)))
         selection = nil
         notesFailure = nil
+        // The drawer is about *this* canvas's sidecar. Carried onto another file it would
+        // be open over an artifact whose notes the operator never asked to see.
+        showsNotes = false
         // A receipt names the file it was written to. Carried onto a different canvas it is
         // a true sentence about the wrong document, which is worse than no sentence.
         notesNotice = nil
@@ -252,6 +276,13 @@ final class CanvasModel: ObservableObject {
             notesFailure = nil
         case .cleared:
             dismissSelection()
+            // A click on the page that selected nothing is the click-elsewhere every
+            // transient surface closes on, and the drawer is one — it sits *over* the
+            // artifact, so wanting to see what is underneath is the ordinary reason to
+            // click there. Here rather than in `dismissSelection`, which the comment
+            // field's own ✕ and Escape also call: abandoning a comment says nothing about
+            // whether the operator still wants the notes up.
+            closeNotes()
         }
     }
 
@@ -272,6 +303,35 @@ final class CanvasModel: ObservableObject {
     func pick(_ tool: CanvasMarkTool) {
         markTool = markTool == tool ? .select : tool
     }
+
+    /// The Notes button, both ways. The drawer **is** the notes surface — there is no
+    /// popover behind it any more — so this is also the only route to `Post` and to
+    /// Reveal in Finder for the sidecar.
+    func toggleNotes() {
+        showsNotes.toggle()
+    }
+
+    /// Escape, and the canvas click that reports a cleared selection. Named rather than
+    /// written as `showsNotes = false` at each call site, because the two are the same
+    /// decision — "put the drawer away" — and a third caller will want it too.
+    func closeNotes() {
+        showsNotes = false
+    }
+
+    /// Whether Escape is the drawer's to take.
+    ///
+    /// **The comment field takes it first.** #165 put that Escape on the responder chain,
+    /// where only the focused field can claim it; the drawer's is a key equivalent, which
+    /// fires *before* the first responder is ever asked. Without this rule the drawer would
+    /// eat the Escape of someone half-way through typing a comment, and the field they were
+    /// trying to abandon would stay exactly where it was.
+    var escapeClosesNotes: Bool { showsNotes && selection == nil }
+
+    /// Whether there is a sidecar worth opening — any content beside this canvas, not just
+    /// entries helm itself wrote. An agent appending prose with no `##` heading still put
+    /// something there to read, and a button that hid it would be the bug this drawer
+    /// exists to fix, one level up.
+    var hasNotes: Bool { notesText != nil }
 
     /// Show a notice and take it away again. The timer is deliberately not the operator's
     /// problem: the message is a receipt, not something to dismiss.
@@ -327,7 +387,7 @@ final class CanvasModel: ObservableObject {
     }
 
     func refreshNotes() {
-        notes = sidecarURL.map(CanvasNotes.headings(in:)) ?? []
+        notesText = sidecarURL.flatMap(CanvasNotes.markdown(in:))
     }
 
     func revealNotes() {
@@ -337,10 +397,9 @@ final class CanvasModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([sidecar])
     }
 
-    /// The accumulated markdown, for `Post`. nil when there is nothing to hand over.
-    var notesMarkdown: String? {
-        sidecarURL.flatMap(CanvasNotes.markdown(in:))
-    }
+    /// The accumulated markdown, for `Post`. nil when there is nothing to hand over — which
+    /// is also exactly when the drawer has nothing to render, because it is the same string.
+    var notesMarkdown: String? { notesText }
 
     func revealInFinder() {
         guard let url = fileURL else { return }
@@ -518,8 +577,6 @@ struct CanvasView: View {
     /// be several chat faces open, and an unaddressed notification would prefill them all.
     var post: ((String) -> Void)?
 
-    @State private var showingNotes = false
-
     var body: some View {
         if let showing = model.showing {
             VStack(spacing: 0) {
@@ -534,14 +591,40 @@ struct CanvasView: View {
                     noticeStrip(notice, symbol: "checkmark.circle")
                 }
                 content(for: showing)
+                    // Over the artifact, never squeezing it: the page keeps its layout and
+                    // its scroll position, and the drawer is temporary.
+                    .overlay(alignment: .trailing) { notesDrawer }
+                    .animation(.easeOut(duration: 0.16), value: model.showsNotes)
                     // The comment field is drawn over the page rather than beside it, so
-                    // the selection it is about stays visible under it.
+                    // the selection it is about stays visible under it. **After** the
+                    // drawer, so it is on top of one: a mark on the trailing half puts the
+                    // field over the drawer, and the field is the thing being typed into.
                     .overlay(alignment: .topLeading) { commentField }
             }
             .background(Color.surface)
             // Inside the `if`: the body is a bare ViewBuilder conditional with
             // no else, so there is no single view to hang this on outside it.
             .enableInjection()
+        }
+    }
+
+    /// The sidecar over the trailing half of the pane. Sized from the pane it is over
+    /// rather than from a fixed number, by `CanvasNotesDrawerMetrics`.
+    ///
+    /// A URL canvas has no sidecar to show, so `sidecarURL` is the second half of the
+    /// condition — `showsNotes` alone would put an empty drawer over a web page.
+    @ViewBuilder
+    private var notesDrawer: some View {
+        if model.showsNotes, model.sidecarURL != nil {
+            GeometryReader { proxy in
+                CanvasNotesDrawer(model: model, post: post)
+                    .frame(
+                        width: CanvasNotesDrawerMetrics.width(inPaneOf: proxy.size.width),
+                        height: proxy.size.height
+                    )
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .transition(.move(edge: .trailing).combined(with: .opacity))
         }
     }
 
@@ -675,20 +758,24 @@ struct CanvasView: View {
             Spacer()
             markPicker
             // Attention as state on an existing element, never a popup: a count on the
-            // header, not a badge that pops.
-            if !model.notes.isEmpty {
+            // header, not a badge that pops. It is a toggle now rather than a popover's
+            // anchor, and it says which way it is pointing — accent while the drawer is
+            // open, the same way a held tool does.
+            //
+            // Shown for **any** sidecar, not only one with `##` entries in it: the count is
+            // helm's own notes, but an agent appending plain prose beside the canvas still
+            // put something there to read, and hiding the only way in would be this issue
+            // over again.
+            if model.hasNotes {
                 Button {
-                    showingNotes.toggle()
+                    model.toggleNotes()
                 } label: {
-                    Text("Notes (\(model.notes.count))")
+                    Text(model.notes.isEmpty ? "Notes" : "Notes (\(model.notes.count))")
                         .font(.system(size: 11))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.textMuted)
+                .foregroundStyle(model.showsNotes ? Color.accent : Color.textMuted)
                 .help("The comments written beside this canvas")
-                .popover(isPresented: $showingNotes, arrowEdge: .bottom) {
-                    CanvasNotesList(model: model, post: post)
-                }
             }
             Button {
                 model.revealInFinder()

@@ -101,7 +101,8 @@ final class CanvasNotesTests: XCTestCase {
             CanvasAnnotation(anchor: .quote("a passage"), comment: "first"), for: canvas,
             at: stamp)
 
-        XCTAssertEqual(CanvasNotes.headings(in: CanvasNotes.sidecarURL(for: canvas)).count, 1)
+        let written = try XCTUnwrap(CanvasNotes.markdown(in: CanvasNotes.sidecarURL(for: canvas)))
+        XCTAssertEqual(CanvasNotes.headings(in: written).count, 1)
     }
 
     /// A canvas opened through Browse… can live somewhere not writable. The failure has to
@@ -123,15 +124,40 @@ final class CanvasNotesTests: XCTestCase {
             CanvasAnnotation(anchor: .quote("B"), comment: "two"), for: canvas, at: stamp)
 
         let sidecar = CanvasNotes.sidecarURL(for: canvas)
-        XCTAssertEqual(CanvasNotes.headings(in: sidecar), ["`#a` — \"A\"", "\"B\""])
-        XCTAssertTrue(try XCTUnwrap(CanvasNotes.markdown(in: sidecar)).contains("two"))
+        let written = try XCTUnwrap(CanvasNotes.markdown(in: sidecar))
+        XCTAssertEqual(CanvasNotes.headings(in: written), ["`#a` — \"A\"", "\"B\""])
+        XCTAssertTrue(written.contains("two"))
+        XCTAssertEqual(
+            CanvasNotes.headings(in: ""), [],
+            "and no text is no headings — what the pane's count reads when there is no sidecar")
     }
 
     func testThereIsNothingToPostFromAnEmptySidecar() {
         XCTAssertNil(
             CanvasNotes.markdown(in: directory.appendingPathComponent("nothing.notes.md")))
-        XCTAssertEqual(
-            CanvasNotes.headings(in: directory.appendingPathComponent("nothing.notes.md")), [])
+    }
+
+    /// The drawer renders the file natively, so the timestamp's `<sub>` wrapper would show
+    /// up as literal angle brackets in the one surface built to make the sidecar legible.
+    func testTheDrawerReadsTheTimestampAsAFootnoteRatherThanAsTags() throws {
+        let canvas = directory.appendingPathComponent("plan.md")
+        try CanvasNotes.append(
+            CanvasAnnotation(anchor: .quote("a passage"), comment: "first"), for: canvas,
+            at: stamp)
+
+        let written = try XCTUnwrap(CanvasNotes.markdown(in: CanvasNotes.sidecarURL(for: canvas)))
+        let footnote = try XCTUnwrap(
+            written.split(separator: "\n").first { $0.hasPrefix("<sub>") })
+        let time = footnote.dropFirst("<sub>".count).dropLast("</sub>".count)
+        let readable = CanvasNotes.readable(written)
+
+        XCTAssertFalse(readable.contains("<sub>"), "no tags in a natively rendered document")
+        XCTAssertFalse(readable.contains("</sub>"))
+        XCTAssertTrue(readable.contains("_\(time)_"), "the stamp itself survives, emphasised")
+        XCTAssertTrue(
+            readable.contains("## \"a passage\""),
+            "and the heading is untouched — turning one back into a mark is #199's, and it "
+                + "cannot do that against a sidecar the drawer has rewritten")
     }
 }
 

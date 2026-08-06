@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Single source of typographic truth for the room log's markdown rendering.
-/// Pure values — no views — so every font/spacing decision is testable from
-/// `swift test`. (The canvas renders markdown in a webview with its own
-/// CSS scale — see CanvasHTML.)
+/// Single source of typographic truth for markdown helm draws natively — the room log's
+/// posts, and the canvas's sidecar drawer (#198). Pure values — no views — so every
+/// font/spacing decision is testable from `swift test`. (A canvas *artifact* is a different
+/// path: it renders in a webview with its own CSS scale — see CanvasHTML.)
 ///
 /// Chat posts are dense but comfortably readable. Inline code gets a subtle
 /// fill via the AttributedString run background (SwiftUI `Text` can't pad or
