@@ -279,10 +279,10 @@ package struct AddressBook {
     /// pids.
     ///
     /// **Two ways to match, in confidence order.** The agent is usually the pty's own
-    /// foreground process — the direct hit above, and the one `BoardModel` already relies on.
-    /// It is not always: a shell function, `env`, or a wrapper script can sit in between, and
-    /// then the agent is a *descendant of the pane's login shell* while something else holds
-    /// the foreground.
+    /// foreground process — the direct hit above, and the same assumption `BoardModel` makes
+    /// when it looks a pane's foreground pid up in the registry. It is not always: a shell
+    /// function, `env`, or a wrapper script can sit in between, and then the agent is a
+    /// *descendant of the pane's login shell* while something else holds the foreground.
     ///
     /// **The ancestry branch is deliberately left on the pid, and it is not the defect the
     /// direct match was.** `ancestors` walks the **live** process tree, so a dead recorded pid
