@@ -104,86 +104,12 @@ final class CanvasHTMLTests: XCTestCase {
 
     // MARK: The mark tools (#112)
 
-    func testTheToolDrivesTheMarkSoNothingIsInferred() {
-        let script = CanvasHTML.annotationScript()
-
-        // The first cut guessed the mark from the gesture's shape. The tool says what it is.
-        XCTAssertTrue(script.contains("mark: \"point\""))
-        XCTAssertTrue(script.contains("mark: \"relation\""))
-        XCTAssertTrue(script.contains("mark: \"enclosure\""))
-        XCTAssertFalse(
-            script.contains("altKey"),
-            "marking is a tool you pick up, not a modifier you have to know about")
-    }
-
-    func testSelectIsUntouchedByTheDrawingLayer() {
-        XCTAssertTrue(
-            CanvasHTML.annotationScript().contains("var selection = document.getSelection()"),
-            "with no tool held, a canvas reports text selection exactly as before")
-    }
-
-    func testOneResolverServesEveryTool() {
-        // #112's own acceptance: the draw-time hit test and any later re-resolution share a
-        // code path, because inconsistent resolution between capture and action is its own
-        // bug class.
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertEqual(script.components(separatedBy: "function resolve(").count - 1, 1)
-        XCTAssertTrue(
-            script.contains("function targetAt(") && script.contains("function targetsInside("))
-    }
-
-    func testAFreehandLoopIsTreatedAsClosedAndMeasuredByCentres() {
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertTrue(
-            script.contains("function inside("),
-            "a loop encircles things; a bounding box would over-select what it grazed")
-        XCTAssertTrue(script.contains("r.left + r.width / 2"))
-    }
-
-    func testTheInkIsInertAndCannotBeHitTestedAgainstItself() {
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertTrue(script.contains("pointer-events:none"))
-        XCTAssertTrue(script.contains("data-helm-mark"))
-        XCTAssertTrue(
-            script.contains("paper.style.display = \"none\""),
-            "the paper is hidden for the hit test, or a mark would resolve to helm's own ink")
-        XCTAssertTrue(
-            script.contains("closest(\"[data-helm-mark]\")"),
-            "and excluded when collecting what a loop covers")
-    }
-
-    func testTheArrowheadItReferencesActuallyExists() {
-        // An unresolvable marker url() is ignored rather than erroring, so a missing <marker>
-        // is a silently bare line — the one cue that tells arrow from freehand mid-draw.
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertTrue(script.contains("url(#helm-mark-head)"))
-        XCTAssertTrue(
-            script.contains("marker.setAttribute(\"id\", \"helm-mark-head\")"),
-            "referenced but never defined")
-    }
-
-    func testOnlyThePrimaryButtonStartsAStroke() {
-        // A tool is a sticky selection, unlike the modifier it replaced: a right-click for
-        // the page's context menu would otherwise start a stroke the menu then swallows.
-        XCTAssertTrue(CanvasHTML.annotationScript().contains("e.button !== 0"))
-    }
-
-    func testAnAbandonedStrokeCanBeCleanedUpFromOutsideTheDocument() {
-        // Still the subject it always was — a drag released over helm's own header never
-        // fires mouseup here. What changed is that it may only discard an IN-FLIGHT stroke:
-        // `blur` also fires when the comment field takes the keyboard, and wiping there
-        // erased the mark before the operator had seen it.
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertTrue(script.contains("addEventListener(\"blur\", abandon)"))
-        XCTAssertTrue(script.contains("mouseleave"))
-        XCTAssertTrue(script.contains("window.__helmWipeMark = wipe"))
-        XCTAssertTrue(script.contains("window.__helmAbandonMark = abandon"))
-    }
+    // The script's *behaviour* moved to `CanvasAnnotationScriptTests`, which executes the
+    // shipped `canvas-annotation.js` rather than reading it (#197). Nothing was dropped: the
+    // tool driving the mark, the single resolver, the loop's centre test, the inert ink, the
+    // arrowhead, the primary-button guard and the abandon rules are all asserted there against
+    // what a gesture does. What stays here is what generating a string is still responsible
+    // for — `setMarkTool` and `clearMarkScript`, which are Swift and not the resource.
 
     func testSettingTheToolDropsHalfDrawnWorkButNotACommittedMark() {
         // It used to wipe unconditionally. That was right when ink was transient and wrong
@@ -197,72 +123,12 @@ final class CanvasHTMLTests: XCTestCase {
             "a tool change may not remove a mark that is already awaiting its comment")
     }
 
-    func testTheMarkIsDrawnInDocumentCoordinatesSoItScrollsWithItsSubject() {
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertTrue(
-            script.contains("position:absolute"),
-            "fixed positioning would leave the ink over whatever scrolled underneath")
-        XCTAssertTrue(script.contains("e.pageX"), "points are page-relative, not viewport")
-        XCTAssertTrue(
-            script.contains("window.scrollX"),
-            "and element rects are converted before being tested against the stroke")
-    }
-
-    func testTheInkSurvivesTheGestureAndIsTakenDownFromSwift() {
-        // The mark is the comment field's subject and lives exactly as long as it does.
-        let script = CanvasHTML.annotationScript()
-        let mouseup = script.components(separatedBy: "mouseup").last ?? ""
-
-        XCTAssertFalse(
-            mouseup.contains("wipe();\n            stroke = []"),
-            "releasing must not erase the mark the operator is about to comment on")
+    func testClearingTheMarkIsTheOneThingThatTakesAPostedOneDown() {
+        // The mark is the comment field's subject and lives exactly as long as it does. That
+        // it survives the release, a blur and a tool change is asserted by driving the page;
+        // this is the Swift half — the statement the coordinator evaluates when the field
+        // closes has to reach the global the page published.
         XCTAssertTrue(CanvasHTML.clearMarkScript().contains("__helmWipeMark"))
-    }
-
-    func testTheRectThatPlacesTheCommentFieldStaysViewportRelative() {
-        // The stroke moved to page coordinates so it scrolls with its subject. The rect did
-        // not, and must not: it positions the field on screen, so page coordinates would put
-        // it off screen the moment the canvas is scrolled.
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertTrue(script.contains("function viewportRect("))
-        XCTAssertFalse(
-            script.contains("rect: box }"), "every posted rect goes through the conversion")
-    }
-
-    func testATapLeavesSomethingVisible() {
-        XCTAssertTrue(
-            CanvasHTML.annotationScript().contains("function ring("),
-            "point is the one gesture with no travel, so it needs a mark of its own")
-    }
-
-    func testAPostedMarkSurvivesEverythingExceptSwiftTakingItDown() {
-        // Two ways a completed mark used to vanish before the operator saw it: the comment
-        // field autofocusing (which blurs the webview) and switching tools. Both called the
-        // same unconditional wipe as an abandoned drag.
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertTrue(script.contains("var committed = false"))
-        XCTAssertTrue(
-            script.contains("function abandon() { if (!committed) { wipe(); } }"),
-            "blur and mouseleave may only discard an in-flight gesture")
-        XCTAssertTrue(script.contains("addEventListener(\"blur\", abandon)"))
-        XCTAssertTrue(script.contains("mouseleave\", abandon"))
-        XCTAssertTrue(
-            CanvasHTML.setMarkTool(.arrow).contains("__helmAbandonMark"),
-            "changing tools must not disturb a mark already awaiting its comment")
-        XCTAssertTrue(
-            CanvasHTML.clearMarkScript().contains("__helmWipeMark"),
-            "only Swift closing the field takes a posted mark down")
-    }
-
-    func testEveryPostedMarkCommitsItself() {
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertEqual(
-            script.components(separatedBy: "committed = true;").count - 1, 3,
-            "point, relation and enclosure each commit before posting")
     }
 
     // MARK: Vendored scripts
@@ -282,56 +148,43 @@ final class CanvasHTMLTests: XCTestCase {
             "vendored marked build must assign the global the injection relies on"
         )
     }
-    // MARK: - The annotation bridge
 
-    /// The script's *behaviour* is verified by driving a canvas; what is pinned here is
-    /// that it is well-formed, names the handler, and reads rather than writes.
-    func testTheAnnotationScriptPostsToTheNamedHandler() {
+    /// **The annotation script is a bundled resource like the vendored two** (#197), and its
+    /// absence has to look like theirs: nothing, quietly, rather than a crash. An empty user
+    /// script installs no listeners and the canvas renders exactly as a canvas without the
+    /// bridge does — which #33 requires be a working page in any case.
+    func testTheAnnotationScriptShipsInTheBundle() {
         let script = CanvasHTML.annotationScript()
 
-        XCTAssertTrue(
-            script.contains("webkit.messageHandlers.\(CanvasBridgePolicy.handlerName)"),
-            script)
-        XCTAssertTrue(script.contains("mouseup"), "the selection is read when it is made")
-        XCTAssertTrue(script.contains("getSelection"), script)
+        XCTAssertFalse(
+            script.isEmpty,
+            "canvas-annotation.js must be in Package.swift's resources and project.yml's "
+                + "resources phase — the two that have to stay in lockstep")
+        XCTAssertTrue(script.hasPrefix("(function () {"), "and be the script, not something else")
     }
 
-    /// #165: a click that selected nothing has to be *reported*, not swallowed. It is the
-    /// canvas's own click-elsewhere-to-dismiss, and the only one of the comment field's
-    /// exits that does not go through the keyboard at all.
-    func testTheAnnotationScriptReportsAClickThatSelectedNothing() {
+    /// The bridge reads and reports. A script that wrote to the page would make the canvas
+    /// something the agent cannot validate outside helm (#33), and there is no execution that
+    /// proves an absence — so this stays a check on the text.
+    func testTheAnnotationScriptNeverWritesToThePage() {
         let script = CanvasHTML.annotationScript()
 
-        XCTAssertTrue(
-            script.contains("postMessage({ cleared: true })"),
-            "an empty selection posts a dismissal, which is what closes the comment field")
-        XCTAssertFalse(
-            script.contains("if (!text) { return; }"),
-            "returning on an empty selection is the bug — the field then had no way out")
-    }
-
-    /// **The canvas must render correctly without it.** A page that depended on a
-    /// helm-injected global would render in helm and be a blank page in `playwright-cli`,
-    /// so the agent would validate a different artifact from the one it is shown (#33).
-    func testTheAnnotationScriptReturnsEarlyWhenThereIsNoBridge() {
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertTrue(
-            script.contains("if (!window.webkit"),
-            "no handler means no listener, and a page that never had one is unaffected")
-        XCTAssertFalse(
-            script.contains("document.write"), "the bridge reads and reports; it never writes")
+        XCTAssertFalse(script.contains("document.write"))
         XCTAssertFalse(script.contains("innerHTML"), "…and never changes the page")
+        XCTAssertFalse(
+            script.contains("altKey"),
+            "marking is a tool you pick up, not a modifier you have to know about")
     }
 
-    func testTheAnnotationScriptIsBalanced() {
+    /// #112's own acceptance: the draw-time hit test and any later re-resolution share ONE
+    /// code path, because inconsistent resolution between capture and action is its own bug
+    /// class. A count of definitions, which is a fact about the text.
+    func testOneResolverServesEveryTool() {
         let script = CanvasHTML.annotationScript()
 
-        XCTAssertEqual(
-            script.filter { $0 == "{" }.count, script.filter { $0 == "}" }.count,
-            "an unbalanced IIFE is a syntax error the page would swallow silently")
-        XCTAssertEqual(
-            script.filter { $0 == "(" }.count, script.filter { $0 == ")" }.count)
+        XCTAssertEqual(script.components(separatedBy: "function resolve(").count - 1, 1)
+        XCTAssertTrue(
+            script.contains("function targetAt(") && script.contains("function targetsInside("))
     }
 
 }

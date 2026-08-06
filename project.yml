@@ -39,8 +39,13 @@ targets:
     sources:
       # Swift sources, minus Resources/ — which re-enters below as an explicit
       # resources build phase. MUST stay in lockstep with Package.swift's
-      # `resources:` (vendored marked.min.js + mermaid.min.js — see
-      # docs/VENDORED.md), same as the libghostty pin above.
+      # `resources:` — the vendored marked.min.js + mermaid.min.js (see
+      # docs/VENDORED.md) and helm's own canvas-annotation.js (#197) — same as
+      # the libghostty pin above. This side is a directory glob, so a new .js
+      # lands here for free and only Package.swift needs the extra line; that
+      # asymmetry is why the lockstep is worth saying out loud rather than
+      # trusting to memory. `CanvasAnnotationScriptTests` fails on the SPM side
+      # if the script goes missing, and `make app` is what proves this one.
       - path: Sources/Helm
         excludes:
           - Resources/**
