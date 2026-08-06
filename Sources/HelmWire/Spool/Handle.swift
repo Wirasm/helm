@@ -36,13 +36,49 @@ import Foundation
 /// them to match. That is the shape #233 exists to remove, one size smaller, so they are a call
 /// now rather than a copy: tightening `validating:` tightens every route at once.
 ///
-/// **That cuts both ways, and it is the cost to weigh before adding a rule.** A stricter
-/// `validating:` also starts *rejecting already-written files*, so anything added there has to
-/// be something nothing helm ever wrote could fail. Trimming and non-emptiness qualify: both
-/// `owner.json` writers run every component of a handle through a `slug` that lowercases,
-/// collapses `[^a-z0-9]+` and falls back to `"agent"` (`hooks/helm-mail.mjs:66`,
-/// `pi/extensions/helm-mail/index.ts:178`), so neither can emit one. A character rule would not
-/// obviously qualify — see `validating:`'s own note for why it is deferred rather than added.
+/// **That cuts both ways, and #239 is where the bill came due.** A stricter `validating:` also
+/// starts *rejecting already-written files*, so anything added there has to be something nothing
+/// helm ever wrote could fail. Trimming and non-emptiness always qualified. Since #239 a
+/// character rule does too, and it is enforced on every route: **`[a-z0-9-]`, and nothing about
+/// where the dashes fall.**
+///
+/// **Why that exact alphabet, and why the rule stops there.** Both `owner.json` writers run every
+/// component of a handle through a `slug` that lowercases, collapses `[^a-z0-9]+` to `-` and
+/// falls back to `"agent"` (`hooks/helm-mail.mjs:66`, `pi/extensions/helm-mail/index.ts:178`),
+/// and `deriveHandle` joins those components with `-`. So every character a writer can emit is in
+/// this set, and the rule cannot refuse anything they produced. **A tighter rule could.**
+/// `deriveHandle` takes the *tail* of the slugged session id, and a slice can begin mid-dash:
+/// `deriveHandle("/x/helm", "12345-678")` is `helm--678` — measured against the real `slug` and
+/// `tail`, not reasoned about. So a rule forbidding `--`, or leading and trailing dashes, would
+/// refuse a handle helm itself hands out. Hence the alphabet, and no more.
+///
+/// **What was ruled out, and why.**
+///
+/// - **Tighten `validating:` only, leaving decode permissive.** Rejected. Since #233 the other
+///   two routes *call* `validating:`, so "only" means splitting one rule back into two spellings
+///   — exactly the defect #233 removed, and one that had already shipped once between these very
+///   routes (`9863944`). It would also make `Handle(readingFrom:)`'s non-failability a lie about
+///   the rule: an owner decoded permissively could hand out a handle `validating:` refuses.
+/// - **Normalise instead of reject** — slug the candidate here, so `"My Agent"` becomes
+///   `my-agent`. Rejected, and it is the attractive one. The line is not "never normalise":
+///   trimming stays, and trimming *is* normalisation. The difference is whether it can change
+///   **which agent you address**. No writer can emit a handle carrying surrounding whitespace, so
+///   trimming only ever recovers the single handle that was meant. Slugging does not — `"Alice"`
+///   becomes `alice`, which is very likely a *different real agent*, and the caller is never told
+///   it asked for one address and got another. That is `MailboxDirectory`'s "read, never derived"
+///   argument one turn worse: a derived handle is silently wrong, and a normalised one is
+///   silently wrong while looking right.
+///
+/// **What it costs, measured rather than assumed.** Eight `owner.json` on this machine when the
+/// rule landed; all eight already inside `[a-z0-9-]`, and all eight with a `handle` equal to their
+/// own directory name. A file the new rule *does* refuse costs its own row and nothing else —
+/// `MailboxDirectory.owners(in:)` is a `compactMap { try? … }`, pinned by
+/// `MailboxDirectoryTests.testAnOwnerOutsideTheWritersAlphabetCostsItsOwnRowAndNothingElse`.
+/// Downstream that agent is unreportable, not unreachable: helm answers a spawn `unclaimed`
+/// rather than `ready` (exit 5, with a reason) instead of crashing or hanging, and the mailbox
+/// keeps working, because both writers are JavaScript and never consult this rule. It also
+/// self-heals — `owner.json` is a live claim the slugging writer rewrites on the next session
+/// start, not an archive.
 ///
 /// **`MailboxOwner.handle` itself stays a bare `String`, deliberately.** `Handle(readingFrom:)`
 /// only means something if there is a raw field to read *from* — wrapping it at the decode site
@@ -72,22 +108,32 @@ package struct Handle: Codable, Equatable, Hashable, Sendable {
     /// since #233 — the single expression of "is this plausibly an address" that the other two
     /// routes call rather than restate.
     ///
-    /// **It enforces exactly two things: trimmed, and not empty.** It is deliberately *not* a
-    /// typo catcher, and the claim that it was is what this comment used to overreach on.
-    /// `"Alice"`, `"my agent"` and `"owner_1234"` all pass here and all name a directory that
-    /// does not exist, because both writers of the scheme slug harder than this does — and
-    /// `Alice` vs `alice` is not hypothetical: the macOS default filesystem is case-insensitive,
-    /// so those are two agents to a sender and one directory to the disk, which
-    /// `pi/extensions/helm-mail/index.ts:178` documents as having already cost someone their
-    /// mail. Applying that character rule here is a **behaviour** change, not a doc fix: every
-    /// route now shares this rule, so it would also start rejecting already-written files. It
-    /// wants its own issue, with the `helm-mail-cc` case in scope. Until then this promises only
-    /// what it checks.
+    /// **It enforces three things: trimmed, not empty, and every character inside
+    /// `[a-z0-9-]`.** It is still not a typo catcher — `helm-4381` for `helm-4831` is a perfectly
+    /// well-formed address for nobody — but it no longer accepts handles that could not name a
+    /// mailbox directory at all. Until #239 it did: `"Alice"`, `"my agent"` and `"owner_1234"`
+    /// all passed, and `~/.helm/mail/Alice/` does not exist and never will, because both writers
+    /// of the scheme slug harder than this rule did.
+    ///
+    /// **`Alice` vs `alice` is the one with a measured cost, and it is why this refuses rather
+    /// than lowercases.** The macOS default filesystem is case-insensitive, so those are two
+    /// agents to a sender and one directory to the disk, and
+    /// `pi/extensions/helm-mail/index.ts:178` documents that as having already lost someone their
+    /// mail. Folding the case here would hand `Alice`'s mail to `alice` without telling anyone;
+    /// see the type's header for the full argument, and for what the alphabet is derived from.
     package init?(validating candidate: String) {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty, trimmed.allSatisfy(Self.addressableCharacters.contains) else {
+            return nil
+        }
         self.value = trimmed
     }
+
+    /// The alphabet both `owner.json` writers can emit, spelled out rather than written as a
+    /// predicate so it can be compared against their `slug` by eye: `[a-z0-9]` survives
+    /// `replace(/[^a-z0-9]+/g, "-")`, and `-` is what that replacement substitutes and what
+    /// `deriveHandle` joins a handle's components with.
+    private static let addressableCharacters = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
 
     /// `SpoolResult.handle` and `BenchSnapshot.OwnerRecord.handle` are only ever written by helm
     /// from a `Handle` that came through `validating:`, so a value that fails it here means the
