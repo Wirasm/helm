@@ -84,9 +84,17 @@ struct ArchonRailView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 7) {
             if let reply = model.reply { armed(reply) }
-            // The same field shape as the chat composer, for the same reason: a vertical-axis
-            // `TextField` submits on Return and keeps ⌥Return for a newline, so a one-line
-            // instruction costs one keystroke and a paragraph is still possible.
+            // A vertical-axis `TextField` submits on Return and keeps ⌥Return for a newline,
+            // so a one-line instruction costs one keystroke and a paragraph is still possible.
+            //
+            // **This used to say "the same field shape as the chat composer" and no longer is.**
+            // #119 gave that one a `.onKeyPress(.return)` handler so that Shift+Enter starts a
+            // line instead of submitting — AppKit has no binding for a shifted Return, so it
+            // resolves through the plain one and `.onSubmit` fires. This field, and the canvas
+            // note field, still submit on Shift+Enter. That is a divergence rather than a
+            // decision: an operator who learns Shift+Enter in the composer will truncate a
+            // launch instruction here, and `submit()` starts a workflow. Tracked separately
+            // because the fix is behavioural in two more features, not a comment.
             TextField(prompt, text: text, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)

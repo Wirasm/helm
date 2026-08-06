@@ -16,7 +16,8 @@ import GhosttyTerminal
 //   3. Helm's session overrides — the things helm must win:
 //      `term = xterm-256color` (the embedded xcframework ships no terminfo, so
 //      ghostty's default TERM breaks TUIs — docs/SPIKE.md), `scrollback-limit`
-//      (a job requirement for agent transcripts, not a preference),
+//      (a per-surface ceiling, so only the app knows what it multiplies by —
+//      `TerminalSession.sessionOverrides` derives the number),
 //      `window-padding-x/y` (layout, see below), and the font size the human
 //      chose with ⌘+/⌘- if they ever have.
 //   4. Helm's theme — LAST, and therefore the final word on colour. This is a
