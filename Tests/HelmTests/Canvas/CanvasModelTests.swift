@@ -259,6 +259,66 @@ final class CanvasModelTests: XCTestCase {
         XCTAssertEqual(model.notes, [])
     }
 
+    // MARK: - Geometry marks reach the model (#216)
+
+    // `CanvasMarkTests` drives `CanvasAnnotation.decode` directly with hand-built enclosure
+    // and relation dictionaries; the tests above drive `CanvasPageSelection` through a helper
+    // that constructs `.selected(CanvasSelection(...))` itself, bypassing `CanvasPageSelection
+    // .init?` entirely. Neither pushes a geometry payload through the ACTUAL gate the bridge's
+    // message goes through — `CanvasPageSelection(message.body)` at `CanvasFileViews.swift`.
+    // That gate required a top-level `text`, which an enclosure and a relation never carry, so
+    // both were silently dropped before decode ever saw them. These two go through the real
+    // gate, exactly as the page posts them, and would have failed before the fix.
+
+    /// The page's freehand tool: `bridge.postMessage({ mark: "enclosure", targets, rect })`.
+    func testAnEnclosurePayloadReachesTheNoteThroughTheRealGate() throws {
+        let model = CanvasModel()
+        model.open(file)
+
+        let report = try XCTUnwrap(
+            CanvasPageSelection([
+                "mark": "enclosure",
+                "targets": [["id": "phase-2", "text": "Phase 2: Ship"]],
+                "rect": ["x": 10, "y": 20, "width": 30, "height": 40],
+            ]),
+            "the gate must admit a payload with no top-level text when it carries a mark")
+        model.pageDidReport(report)
+        XCTAssertNotNil(model.selection, "an enclosure is a selection, exactly as text is")
+
+        model.annotate(comment: "these two are the same step")
+
+        XCTAssertNil(model.notesFailure)
+        XCTAssertEqual(model.notes, ["circled `#phase-2` — \"Phase 2: Ship\""])
+        addTeardownBlock { [sidecar = model.sidecarURL] in
+            if let sidecar { try? FileManager.default.removeItem(at: sidecar) }
+        }
+    }
+
+    /// The page's arrow tool: `bridge.postMessage({ mark: "relation", from, to, rect })`.
+    func testARelationPayloadReachesTheNoteThroughTheRealGate() throws {
+        let model = CanvasModel()
+        model.open(file)
+
+        let report = try XCTUnwrap(
+            CanvasPageSelection([
+                "mark": "relation",
+                "from": ["id": "phase-1", "text": "One"],
+                "to": ["id": "phase-3", "text": "Three"],
+                "rect": ["x": 0, "y": 0, "width": 0, "height": 0],
+            ]),
+            "the gate must admit a payload with no top-level text when it carries a mark")
+        model.pageDidReport(report)
+        XCTAssertNotNil(model.selection, "a relation is a selection, exactly as text is")
+
+        model.annotate(comment: "this should point the other way")
+
+        XCTAssertNil(model.notesFailure)
+        XCTAssertEqual(model.notes, ["arrow `#phase-1` → `#phase-3`"])
+        addTeardownBlock { [sidecar = model.sidecarURL] in
+            if let sidecar { try? FileManager.default.removeItem(at: sidecar) }
+        }
+    }
+
     // MARK: - Dismissing
 
     // #165: the comment field's only exit was `.onExitCommand` in the view, which travels
