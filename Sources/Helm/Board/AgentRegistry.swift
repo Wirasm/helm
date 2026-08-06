@@ -87,4 +87,24 @@ enum AgentRegistry {
             return try? decoder.decode(AgentSession.self, from: data)
         }
     }
+
+    /// The `sessionFor:` `AddressBook` asks for: which Claude session is running in a pid.
+    ///
+    /// **One read of the registry, then a pure closure over it.** Both callers ask about
+    /// several pids for one answer — `BenchSnapshotModel` about every terminal pane it is
+    /// projecting, `SpoolModel` about one pane per poll attempt — and re-listing the directory
+    /// per pid would turn a two-second snapshot into a directory scan per pane.
+    ///
+    /// The consequence is that the answer is **as fresh as the call**, which is why `SpoolModel`
+    /// builds a new lookup on every poll attempt: the row it is waiting for is written by an
+    /// agent that has not started yet, and a lookup captured before the poll would never see it.
+    ///
+    /// `nil` for a pid with no row — silence, which `AddressBook` is careful never to read as
+    /// an answer. `AgentLocator` is deliberately not involved: this is the registry's own
+    /// "which session is in THIS process", one row per pid, and the wrapper case is handled by
+    /// `AddressBook`'s ancestry branch rather than by widening this question.
+    static func sessionLookup(in root: URL = defaultRoot) -> (pid_t) -> String? {
+        let rows = sessions(in: root)
+        return { pid in rows.first { $0.pid == pid }?.sessionId }
+    }
 }

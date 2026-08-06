@@ -48,6 +48,25 @@ package struct MailboxOwner: Decodable, Equatable {
         case handle, runtime, pid, sessionId, cwd, retiredAt
     }
 
+    /// The one runtime that publishes a pid→session registry helm can read.
+    ///
+    /// Spelled once here rather than at each comparison: `AddressBook` asks this question on
+    /// every join, and "is this owner one the registry can speak for" is the whole difference
+    /// between resolving by session and resolving by pid (#247).
+    package static let claudeRuntime = "claude"
+
+    /// Can Claude Code's session registry answer "where is this owner now"?
+    ///
+    /// **Only for a `claude` owner carrying a session id.** pi keys its sessions by cwd-slug
+    /// (`~/.pi/agent/sessions/--path--`) and publishes no pid→session mapping at all, so a pi
+    /// owner's `sessionId` is pi's own and means nothing to `~/.claude/sessions` — #236 settled
+    /// that on the JS side and #245 is where pi's own rule gets decided. An owner the registry
+    /// cannot speak for keeps being resolved on its recorded pid, which is the only answer
+    /// available for it.
+    package var isRegistryBacked: Bool {
+        runtime == Self.claudeRuntime && !(sessionId ?? "").isEmpty
+    }
+
     /// **Validated on the way in, not just decoded.** `owner.json` has exactly two writers —
     /// `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts` — and neither is Swift, so
     /// this decode is the one place Swift gets to refuse a malformed file rather than silently
@@ -82,16 +101,16 @@ package struct MailboxOwner: Decodable, Equatable {
     }
 }
 
-/// `~/.helm/mail` — the address book, read by pid.
+/// `~/.helm/mail` — where the address book lives, and how it is read off disk.
 ///
-/// **This is the identity lookup, and it replaces the Claude session registry rather than
-/// supplementing it.** An earlier plan for #54 treated `~/.claude/sessions` as the source of
-/// truth and pi as a degraded case with a null `sessionId`. Post-rung-3 that is backwards:
-/// `owner.json` carries `handle`, `runtime`, `pid`, `sessionId` and `cwd` **for both
-/// runtimes**, and helm already knows the pid authoritatively because it created the terminal.
-/// So one join on pid gives a real answer for pi — where the Claude registry gives nothing at
-/// all — and the same answer for Claude. One lookup, both runtimes, strictly less code than a
-/// source of truth plus a degradation path.
+/// **`owner.json` is still the identity, and the Claude registry is still not a second source
+/// of truth.** An earlier plan for #54 treated `~/.claude/sessions` as the truth and pi as a
+/// degraded case with a null `sessionId`; post-rung-3 that is backwards, because `owner.json`
+/// carries `handle`, `runtime`, `pid`, `sessionId` and `cwd` **for both runtimes** and the
+/// registry describes only one of them. What #247 changed is narrower and does not disturb
+/// that: the registry is how a **pid** is turned into a session id, and the session id is what
+/// the address book is joined on. The identity still comes out of `owner.json`. See
+/// `AddressBook`.
 ///
 /// # The handle is read, never derived
 ///
@@ -107,12 +126,11 @@ package struct MailboxOwner: Decodable, Equatable {
 /// testing and wrong the first time two session ids happened to end in the same four
 /// characters. Reading the file is the only correct resolution, so it is the only one here.
 ///
-/// **Lives in `HelmWire` (#221)** — `owner(in:foregroundPid:shellPid:ancestors:)` used to
-/// default `ancestors` to `AgentLocator.ancestors(of:)`, but `AgentLocator` is `Helm`-only
-/// (`Chat/AgentLocator.swift`, used by `ChatModel` too) and this library depends on nothing in
-/// `Helm` — the dependency graph only runs the other way. So the default is gone and the one
-/// caller across the module boundary, `SpoolModel.swift`, passes `{ AgentLocator.ancestors(of: $0) }`
-/// explicitly; the tests that used to lean on the default do the same with a stand-in closure.
+/// **Lives in `HelmWire` (#221)** — the join used to default `ancestors` to
+/// `AgentLocator.ancestors(of:)`, but `AgentLocator` is `Helm`-only (`Chat/AgentLocator.swift`,
+/// used by `ChatModel` too) and this library depends on nothing in `Helm` — the dependency
+/// graph only runs the other way. So there is no default, and the callers across the module
+/// boundary pass the live lookups in. `AddressBook.sessionFor` arrived by the same rule.
 package enum MailboxDirectory {
     /// Where the mail lives. `HELM_MAIL_DIR` is honoured because both mail implementations
     /// honour it — a test that redirects one and not the other is testing nothing.
@@ -172,27 +190,112 @@ package enum MailboxDirectory {
         }
     }
 
-    /// The mailbox belonging to the process running in a terminal, given every owner and that
-    /// terminal's two pids.
+}
+
+/// Everyone addressable right now, together with the one lookup that turns a pid into an
+/// identity — and the single place "which agent is in this pane" is answered.
+///
+/// # A recorded pid is neither identity nor liveness (#236, #247)
+///
+/// `owner.json` records a pid at `SessionStart` and is **never rewritten**, so a helm restart
+/// brings every agent back in the same session under a new pid and leaves a stale number in
+/// every owner file. #236 taught the JS half to ask the session first; this is the same rule on
+/// the Swift side, and it was left behind:
+///
+/// ```swift
+/// owners.first(where: { $0.pid == foregroundPid })   // what this used to be
+/// ```
+///
+/// **#236 made that more reachable, not less.** Before it, a live owner with a stale pid was
+/// reaped and vanished, so the join could not hit it. Now — correctly — that row survives, so
+/// the population of live rows carrying stale pids goes *up* while macOS keeps recycling pids
+/// (a process per spawn, a process per hook firing). The first collision answers a spool spawn
+/// with another agent's `handle` and attributes the wrong session to a pane in
+/// `snapshot.json`, the file agents outside the process are told to trust. Silent both ways.
+///
+/// The rule is therefore **pid → registry row → `sessionId` → mailbox**, with the pid match
+/// kept only for an owner the registry cannot speak for.
+///
+/// # Why a value rather than two arguments
+///
+/// There are two joins — `SpoolModel` through `owner(foregroundPid:shellPid:ancestors:)`, and
+/// `BenchSnapshot.TerminalRecord` through `owner(forPid:)` — and `BenchSnapshot` carries what
+/// it joins on down through five nested initializers. Two parallel parameters riding that far
+/// together, with only a habit keeping them in step, is the shape this repo has been bitten by
+/// before; one value carries the rule with it and neither side can bring half of it.
+///
+/// Pure, and both lookups are closures, so every rule here is testable without spawning a
+/// process or reading a registry. **No defaults** — see `MailboxDirectory`'s header for why.
+package struct AddressBook {
+    /// Everyone addressable — `MailboxDirectory.owners(in:)`'s output, retired rows already
+    /// dropped at the source (#236) so no join here has to remember to exclude them.
+    package let owners: [MailboxOwner]
+
+    /// Which Claude Code session is running in a given pid, per that runtime's own registry
+    /// (`~/.claude/sessions/<pid>.json`, read by `AgentRegistry`).
+    ///
+    /// A closure for exactly the reason `ancestors` is one: `HelmWire` depends on nothing in
+    /// `Helm`, and `AgentRegistry`/`AgentLocator` live in `Helm`. `nil` means **the registry
+    /// says nothing about that pid** — never "that pid has no session", and never a licence to
+    /// guess.
+    package let sessionFor: (pid_t) -> String?
+
+    package init(owners: [MailboxOwner], sessionFor: @escaping (pid_t) -> String?) {
+        self.owners = owners
+        self.sessionFor = sessionFor
+    }
+
+    /// The mailbox belonging to the process running at `pid`.
+    ///
+    /// **Ask the registry which session is in that process, then join on the session.** The pid
+    /// is how the session is found and nothing more, which is what makes a recycled pid
+    /// harmless and a stale one survivable: an agent resumed into a new process still resolves,
+    /// because the registry row moved with it while `owner.json` did not.
+    ///
+    /// **One sentence: a registry-backed owner is matched only by its session; everyone else is
+    /// matched by their recorded pid.** That is what makes the pid branch safe to keep — it can
+    /// never return a Claude owner, so no fallback can quietly undo the rule above it.
+    ///
+    /// The consequences are worth stating, because both are deliberate:
+    ///
+    /// - **A known session that no mailbox carries is absence.** If the pane runs Claude session
+    ///   *X* and no owner claims *X*, any owner whose recorded pid happens to equal this one is
+    ///   stale or recycled by definition. The agent has no mailbox yet, and a caller that polls
+    ///   (`SpoolModel`) sees one the moment its `SessionStart` hook writes it.
+    /// - **pi is never taken off the air by the registry.** pi publishes no pid→session mapping
+    ///   anywhere on disk, so its recorded pid is the whole answer available — deliberate, and
+    ///   #245 is where it gets revisited. A stale Claude row sitting on a pid pi now holds does
+    ///   not cost pi its mailbox, because the pid branch is still reached.
+    package func owner(forPid pid: pid_t) -> MailboxOwner? {
+        if let session = sessionFor(pid), !session.isEmpty,
+            let claimed = owners.first(where: { $0.isRegistryBacked && $0.sessionId == session })
+        {
+            return claimed
+        }
+        return owners.first { !$0.isRegistryBacked && $0.pid == pid }
+    }
+
+    /// The mailbox belonging to the process running in a terminal, given that terminal's two
+    /// pids.
     ///
     /// **Two ways to match, in confidence order.** The agent is usually the pty's own
-    /// foreground process, which is the direct hit and the one `BoardModel` already relies on.
+    /// foreground process — the direct hit above, and the one `BoardModel` already relies on.
     /// It is not always: a shell function, `env`, or a wrapper script can sit in between, and
     /// then the agent is a *descendant of the pane's login shell* while something else holds
-    /// the foreground. `AgentLocator` makes exactly this distinction against the Claude
-    /// registry; this is the same rule against the mailbox.
+    /// the foreground.
     ///
-    /// Pure, and the ancestry is a closure, so the rule is a test that spawns nothing.
-    /// **No default** — see the type's own header for why.
-    package static func owner(
-        in owners: [MailboxOwner],
+    /// **The ancestry branch is deliberately left on the pid, and it is not the defect the
+    /// direct match was.** `ancestors` walks the **live** process tree, so a dead recorded pid
+    /// yields an empty chain and matches nothing, and a recycled one has to genuinely be
+    /// running under *this pane's own shell* before it can match. That is a far narrower
+    /// coincidence than bare pid equality anywhere on the machine, and it is liveness-checked
+    /// by construction rather than by remembering to check.
+    package func owner(
         foregroundPid: pid_t?,
         shellPid: pid_t?,
         ancestors: (pid_t) -> [pid_t]
     ) -> MailboxOwner? {
-        if let foregroundPid, let direct = owners.first(where: { $0.pid == foregroundPid }) {
-            return direct
-        }
+        if let foregroundPid, let direct = owner(forPid: foregroundPid) { return direct }
         guard let shellPid else { return nil }
         return owners.first { ancestors($0.pid).contains(shellPid) }
     }

@@ -27,7 +27,7 @@ struct BenchSnapshot: Codable, Equatable {
         workspaces: WorkspaceModel,
         workbench: WorkbenchModel,
         terminals: TerminalManager,
-        owners: [MailboxOwner],
+        addressBook: AddressBook,
         foregroundPid: (TerminalSession) -> pid_t? = { $0.hostView.foregroundPid }
     ) -> BenchSnapshot {
         let mountedPath = workbench.workspacePath
@@ -46,7 +46,7 @@ struct BenchSnapshot: Codable, Equatable {
                     state: mounted ? .mounted : .parked,
                     bench: bench,
                     sessions: terminals.sessions(for: workspace.path),
-                    owners: owners,
+                    addressBook: addressBook,
                     foregroundPid: foregroundPid)
             })
     }
@@ -70,7 +70,7 @@ struct BenchSnapshot: Codable, Equatable {
             state: State,
             bench: Workbench?,
             sessions: [TerminalSession],
-            owners: [MailboxOwner],
+            addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?
         ) {
             path = workspace.path
@@ -88,7 +88,7 @@ struct BenchSnapshot: Codable, Equatable {
                     column: column,
                     focusedSlot: focusedSlot,
                     live: live,
-                    owners: owners,
+                    addressBook: addressBook,
                     foregroundPid: foregroundPid)
             }
         }
@@ -104,7 +104,7 @@ struct BenchSnapshot: Codable, Equatable {
             column: Column,
             focusedSlot: Slot.ID?,
             live: [UUID: TerminalSession],
-            owners: [MailboxOwner],
+            addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?
         ) {
             id = column.id
@@ -115,7 +115,7 @@ struct BenchSnapshot: Codable, Equatable {
                     mounted: focusedSlot != nil,
                     focused: slot.id == focusedSlot,
                     live: live,
-                    owners: owners,
+                    addressBook: addressBook,
                     foregroundPid: foregroundPid)
             }
         }
@@ -133,7 +133,7 @@ struct BenchSnapshot: Codable, Equatable {
             mounted: Bool,
             focused: Bool,
             live: [UUID: TerminalSession],
-            owners: [MailboxOwner],
+            addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?
         ) {
             id = slot.id
@@ -146,7 +146,7 @@ struct BenchSnapshot: Codable, Equatable {
                     visible: mounted && pane.id == slot.selected,
                     focused: focused && pane.id == slot.selected,
                     live: live[pane.id],
-                    owners: owners,
+                    addressBook: addressBook,
                     foregroundPid: foregroundPid)
             }
         }
@@ -170,7 +170,7 @@ struct BenchSnapshot: Codable, Equatable {
             visible: Bool,
             focused: Bool,
             live: TerminalSession?,
-            owners: [MailboxOwner],
+            addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?
         ) {
             id = pane.id
@@ -183,7 +183,7 @@ struct BenchSnapshot: Codable, Equatable {
                 terminal = TerminalRecord(
                     id: pane.id,
                     session: live,
-                    owners: owners,
+                    addressBook: addressBook,
                     foregroundPid: foregroundPid)
                 canvas = nil
             case let .canvas(source):
@@ -207,7 +207,7 @@ struct BenchSnapshot: Codable, Equatable {
         init(
             id: UUID,
             session: TerminalSession?,
-            owners: [MailboxOwner],
+            addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?
         ) {
             sessionId = id
@@ -237,7 +237,13 @@ struct BenchSnapshot: Codable, Equatable {
             title = session.displayTitle
             let pid = foregroundPid(session)
             self.foregroundPid = pid
-            owner = owners.first(where: { $0.pid == pid }).map(OwnerRecord.init)
+            // **The second join, and it goes through the same rule as the first (#247).** This
+            // was `owners.first(where: { $0.pid == pid })` — a pid match with no liveness and no
+            // identity behind it, so the first pid macOS recycled onto a live pane would put a
+            // different agent's handle and session id into `snapshot.json`, the file agents
+            // outside the process are told to trust. Two joins, one rule, spelled once in
+            // `AddressBook`.
+            owner = pid.flatMap { addressBook.owner(forPid: $0) }.map(OwnerRecord.init)
         }
     }
 

@@ -18,6 +18,7 @@ import XCTest
 final class SpoolModelTests: XCTestCase {
     private var directory: SpoolDirectory!
     private var mailRoot: URL!
+    private var registryRoot: URL!
     private var spawner: FakeSpawner!
     private var capturer: FakeCapturer!
     private var closer: FakeCloser!
@@ -27,8 +28,11 @@ final class SpoolModelTests: XCTestCase {
             .appendingPathComponent("helm-spool-model-\(UUID().uuidString)")
         directory = SpoolDirectory(root: base.appendingPathComponent("spool"))
         mailRoot = base.appendingPathComponent("mail")
+        registryRoot = base.appendingPathComponent("sessions")
         try directory.prepare()
         try FileManager.default.createDirectory(at: mailRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: registryRoot, withIntermediateDirectories: true)
         spawner = FakeSpawner()
         capturer = FakeCapturer()
         closer = FakeCloser()
@@ -38,6 +42,7 @@ final class SpoolModelTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory.root.deletingLastPathComponent())
         directory = nil
         mailRoot = nil
+        registryRoot = nil
         spawner = nil
         capturer = nil
         closer = nil
@@ -49,7 +54,7 @@ final class SpoolModelTests: XCTestCase {
         claimDeadline: Duration = .seconds(3), isOff: Bool = false
     ) -> SpoolModel {
         let model = SpoolModel(
-            directory: directory, mailRoot: mailRoot, isOff: isOff,
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: isOff,
             shellDeadline: .seconds(5), claimDeadline: claimDeadline)
         model.attach(spawner: spawner)
         model.attach(capturer: capturer)
@@ -84,6 +89,19 @@ final class SpoolModelTests: XCTestCase {
         try
             #"{"handle":"\#(handle)","runtime":"claude","pid":\#(pid),"sessionId":"\#(sessionId)","cwd":"/tmp"}"#
             .write(to: dir.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
+    }
+
+    /// One row of Claude Code's own registry, `~/.claude/sessions/<pid>.json` — where the
+    /// session named by a mailbox is running *now*.
+    ///
+    /// Seeded beside every mailbox because that is the real state of the world: an agent that
+    /// has claimed a mailbox has also published its row. Since #247 it is what a spawn is
+    /// resolved through, so a mailbox without one is an agent helm cannot yet name.
+    private func registryRow(pid: pid_t, sessionId: String) throws {
+        try #"{"pid":\#(pid),"sessionId":"\#(sessionId)","cwd":"/tmp","status":"busy"}"#
+            .write(
+                to: registryRoot.appendingPathComponent("\(pid).json"), atomically: true,
+                encoding: .utf8)
     }
 
     /// Wait for the answer to reach a state, or give up loudly. The budget is the test's, not
@@ -138,8 +156,9 @@ final class SpoolModelTests: XCTestCase {
         // request arrived and every spawn answered "helm has no workbench to open a terminal
         // in". Attaching from a scope that then ends is exactly the composition helm uses.
         try mailbox("tmp-9999", pid: FakeSpawner.agentPid, sessionId: "s")
+        try registryRow(pid: FakeSpawner.agentPid, sessionId: "s")
         let model = SpoolModel(
-            directory: directory, mailRoot: mailRoot, isOff: false,
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
             shellDeadline: .seconds(5), claimDeadline: .seconds(3))
         weak var observed: FakeSpawner?
         do {
@@ -181,6 +200,7 @@ final class SpoolModelTests: XCTestCase {
 
     func testARequestOpensATerminalAndTheLaunchLineGoesIntoItsPty() async throws {
         try mailbox("tmp-9999", pid: FakeSpawner.agentPid, sessionId: "session-9999")
+        try registryRow(pid: FakeSpawner.agentPid, sessionId: "session-9999")
         let model = self.model()
         try submit(request(prompt: "hello there"))
         model.start()
@@ -206,6 +226,7 @@ final class SpoolModelTests: XCTestCase {
         // would produce for this cwd and session — a derivation would answer with something
         // else here, silently, which is the whole reason the handle is looked up.
         try mailbox("helm-4831", pid: FakeSpawner.agentPid, sessionId: "52256761-dd8f-4831")
+        try registryRow(pid: FakeSpawner.agentPid, sessionId: "52256761-dd8f-4831")
         let model = self.model()
         try submit(request())
         model.start()
@@ -215,6 +236,29 @@ final class SpoolModelTests: XCTestCase {
         XCTAssertEqual(ready?.sessionId, "52256761-dd8f-4831")
         XCTAssertEqual(ready?.runtime, "claude")
         XCTAssertEqual(ready?.pid, FakeSpawner.agentPid)
+    }
+
+    /// #247, end to end through the consumer that hurts most: **a spawn answered with another
+    /// agent's handle**. The caller's very next move is to send mail to what it was told, so a
+    /// wrong handle here is a message written into a mailbox nobody reads, with no error.
+    ///
+    /// `stale-0000` recorded this pid at its own `SessionStart` and never rewrote it; that
+    /// process is gone and macOS handed the number back. #236 is why the row is still here to
+    /// be hit — before it, a stale-pid owner was reaped and could not be matched at all.
+    func testASpawnIsAnsweredWithTheAgentTheRegistryNamesNotTheStaleRowAtThatPid() async throws {
+        try mailbox("stale-0000", pid: FakeSpawner.agentPid, sessionId: "a-session-that-ended")
+        try mailbox("fresh-1111", pid: 40404, sessionId: "the-live-session")
+        try registryRow(pid: FakeSpawner.agentPid, sessionId: "the-live-session")
+
+        let model = self.model()
+        try submit(request())
+        model.start()
+
+        let ready = await awaitResult(is: .ready)
+        XCTAssertEqual(
+            ready?.handle?.value, "fresh-1111",
+            "the pid was recycled — this spawn was answered with a dead agent's address")
+        XCTAssertEqual(ready?.sessionId, "the-live-session")
     }
 
     func testTheAnswerIsImmediateAndThenBecomesAddressable() async throws {
@@ -233,6 +277,7 @@ final class SpoolModelTests: XCTestCase {
         // The agent comes up late, exactly as a real one does.
         spawner.pids[spawner.terminal] = FakeSpawner.agentPid
         try mailbox("late-0001", pid: FakeSpawner.agentPid, sessionId: "late")
+        try registryRow(pid: FakeSpawner.agentPid, sessionId: "late")
         let ready = await awaitResult(is: .ready)
         XCTAssertEqual(ready?.handle?.value, "late-0001")
         XCTAssertGreaterThan(
@@ -258,9 +303,10 @@ final class SpoolModelTests: XCTestCase {
 
     func testTwoWatchersOverOneSpoolActOnARequestOnce() async throws {
         try mailbox("tmp-9999", pid: FakeSpawner.agentPid, sessionId: "s")
+        try registryRow(pid: FakeSpawner.agentPid, sessionId: "s")
         let second = FakeSpawner()
         let other = SpoolModel(
-            directory: directory, mailRoot: mailRoot, isOff: false,
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
             shellDeadline: .seconds(5), claimDeadline: .seconds(3))
         other.attach(spawner: second)
 
@@ -333,7 +379,7 @@ final class SpoolModelTests: XCTestCase {
         // spool must not write the same PNG twice, and a backstop rescan must not either.
         let second = FakeCapturer()
         let other = SpoolModel(
-            directory: directory, mailRoot: mailRoot, isOff: false,
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
             shellDeadline: .seconds(5), claimDeadline: .seconds(3))
         other.attach(spawner: FakeSpawner())
         other.attach(capturer: second)
@@ -448,7 +494,7 @@ final class SpoolModelTests: XCTestCase {
         // `failed`, not `refused`: there is nothing the caller can do about it, and the two
         // are different exit codes on the way out.
         let model = SpoolModel(
-            directory: directory, mailRoot: mailRoot, isOff: false,
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
             shellDeadline: .seconds(5), claimDeadline: .seconds(3))
         try submit(close(), named: "bye.json")
         model.start()
@@ -463,7 +509,7 @@ final class SpoolModelTests: XCTestCase {
         let second = FakeCloser()
         second.terminal = closer.terminal
         let other = SpoolModel(
-            directory: directory, mailRoot: mailRoot, isOff: false,
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
             shellDeadline: .seconds(5), claimDeadline: .seconds(3))
         other.attach(closer: second)
 

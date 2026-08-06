@@ -41,7 +41,7 @@ final class BenchSnapshotTests: XCTestCase {
             workspaces: workspaces,
             workbench: workbench,
             terminals: terminals,
-            owners: []
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
         ) { _ in nil }
 
         let record = try XCTUnwrap(value.workspaces.first)
@@ -69,7 +69,7 @@ final class BenchSnapshotTests: XCTestCase {
             workspaces: workspaces,
             workbench: workbench,
             terminals: terminals,
-            owners: [owner]
+            addressBook: AddressBook(owners: [owner], sessionFor: { _ in nil })
         ) { _ in 4242 }
         let terminal = try XCTUnwrap(value.workspaces[0].columns[0].slots[0].panes[0].terminal)
 
@@ -91,10 +91,43 @@ final class BenchSnapshotTests: XCTestCase {
             workspaces: workspaces,
             workbench: workbench,
             terminals: terminals,
-            owners: [unrelated]
+            addressBook: AddressBook(owners: [unrelated], sessionFor: { _ in nil })
         ) { _ in 4242 }
 
         XCTAssertNil(value.workspaces[0].columns[0].slots[0].panes[0].terminal?.owner)
+    }
+
+    /// #247, the second consumer. `snapshot.json` is what agents outside the process are told to
+    /// trust, and `TerminalRecord` used to attribute a pane with its own `owners.first(where:
+    /// { $0.pid == pid })` — a pid match with no identity and no liveness behind it.
+    ///
+    /// Staged as it actually happens: `stale-9999` recorded pid 4242 at `SessionStart` and never
+    /// rewrote it; that process is long gone and macOS handed 4242 to a live agent whose own
+    /// mailbox says pid 777. The registry is the only thing that knows, and it is asked.
+    func testARecycledPidDoesNotAttributeAnotherAgentsMailboxToAPane() throws {
+        let workspace = Workspace(path: "/tmp/bench-snapshot-recycled")
+        let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
+        let stale = MailboxOwner(
+            handle: Handle(validating: "stale-9999")!, runtime: "claude", pid: 4242,
+            sessionId: "gone-session", cwd: workspace.path.value)
+        let live = MailboxOwner(
+            handle: Handle(validating: "live-1234")!, runtime: "claude", pid: 777,
+            sessionId: "live-session", cwd: workspace.path.value)
+
+        let value = BenchSnapshot.project(
+            writtenAt: .now,
+            workspaces: workspaces,
+            workbench: workbench,
+            terminals: terminals,
+            addressBook: AddressBook(
+                owners: [stale, live], sessionFor: { $0 == 4242 ? "live-session" : nil })
+        ) { _ in 4242 }
+        let terminal = try XCTUnwrap(value.workspaces[0].columns[0].slots[0].panes[0].terminal)
+
+        XCTAssertEqual(
+            terminal.owner?.handle.value, "live-1234",
+            "the pane is running the session the registry names, whatever pid a row remembers")
+        XCTAssertEqual(terminal.owner?.sessionId, "live-session")
     }
 
     func testParkedWorkspaceKeepsLiveTerminalIdentityButNeverClaimsVisibility() throws {
@@ -116,11 +149,12 @@ final class BenchSnapshotTests: XCTestCase {
             workspaces: workspaces,
             workbench: workbench,
             terminals: terminals,
-            owners: [
-                MailboxOwner(
-                    handle: Handle(validating: "parked-agent")!, runtime: "codex", pid: 4242,
-                    sessionId: "session", cwd: parked.path.value)
-            ]
+            addressBook: AddressBook(
+                owners: [
+                    MailboxOwner(
+                        handle: Handle(validating: "parked-agent")!, runtime: "codex", pid: 4242,
+                        sessionId: "session", cwd: parked.path.value)
+                ], sessionFor: { _ in nil })
         ) { session in session.id == parkedTerminal.id ? 4242 : nil }
 
         let parkedRecord = try XCTUnwrap(value.workspaces.first { $0.path == parked.path })
@@ -158,7 +192,7 @@ final class BenchSnapshotTests: XCTestCase {
 
         let value = BenchSnapshot.project(
             writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
-            owners: []
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
         ) { _ in nil }
 
         func paneIDs(_ record: BenchSnapshot.WorkspaceRecord) -> [UUID] {
@@ -193,7 +227,7 @@ final class BenchSnapshotTests: XCTestCase {
 
         let snapshot = BenchSnapshot.project(
             writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
-            owners: []
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
         ) { _ in nil }
 
         let data = try JSONEncoder().encode(snapshot)
@@ -232,7 +266,7 @@ final class BenchSnapshotTests: XCTestCase {
 
         let snapshot = BenchSnapshot.project(
             writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
-            owners: [owner]
+            addressBook: AddressBook(owners: [owner], sessionFor: { _ in nil })
         ) { _ in 4242 }
 
         let data = try JSONEncoder().encode(snapshot)
