@@ -373,14 +373,15 @@ final class SpoolWireConformanceTests: XCTestCase {
             "helm-spool.swift's stdout on a ready result was not a JSON object: \(stdout)")
         XCTAssertTrue(
             json["terminalId"] is String,
-            "helm-spool.swift: terminalId must be a bare string — helm-spool.swift, "
-                + "helm-close.swift and helm-capture.swift all read it with "
-                + "json[\"terminalId\"] as? String and cannot import HelmWire to do better; "
-                + "got \(String(describing: json["terminalId"]))")
+            "helm-spool.swift: terminalId must be a bare string — no script parses the field "
+                + "itself; the script prints this blob verbatim (helm-spool.swift:186) and the "
+                + "agent that invoked it reads terminalId out of the printed JSON, so the shape "
+                + "is the contract; got \(String(describing: json["terminalId"]))")
         XCTAssertTrue(
             json["handle"] is String,
-            "helm-spool.swift: handle must be a bare string — the same three scripts read it "
-                + "with json[\"handle\"] as? String; got \(String(describing: json["handle"]))")
+            "helm-spool.swift: handle must be a bare string — same route, same reason: it "
+                + "reaches its reader through the printed blob, not through any script's own "
+                + "parse; got \(String(describing: json["handle"]))")
     }
 
     func testHelmClosePrintsTerminalIdAsABareStringOnceClosed() throws {

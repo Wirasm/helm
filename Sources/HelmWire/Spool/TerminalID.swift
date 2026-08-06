@@ -19,11 +19,17 @@ import Foundation
 /// into a `TerminalID` — exactly the site that used to turn one into a `UUID`. The type changed;
 /// where the validation happens did not.
 ///
-/// Encodes as a bare string through a single-value container, exactly like `WorkspacePath` —
-/// `SpoolResult.terminalId` is read by three standalone scripts as `json["terminalId"] as?
-/// String`, and that shape must not change. (`BenchSnapshot.OwnerRecord.handle` is a `Handle`
-/// since #233, not the unrelated bare `String` this note used to describe — a sibling newtype
-/// with the same wire obligation, still not this type's business.)
+/// Encodes as a bare string through a single-value container, exactly like `WorkspacePath`, and
+/// that shape must not change. **No script parses `terminalId` itself**, so the obligation is not
+/// the `json["terminalId"] as? String` this comment used to claim (#240): all three scripts read
+/// only `status` and `reason` and print the whole result blob verbatim on stdout
+/// (`helm-spool.swift:186`, `helm-close.swift:153`, `helm-capture.swift:150`), and the agent that
+/// invoked the script reads the field out of that printed JSON. `SpoolWireConformanceTests`
+/// `.testHelmSpoolPrintsHandleAndTerminalIdAsBareStringsOnceReady` and
+/// `.testHelmClosePrintsTerminalIdAsABareStringOnceClosed` are what hold it, against the real
+/// scripts as subprocesses. (`BenchSnapshot.OwnerRecord.handle` is a `Handle` since #233, not the
+/// unrelated bare `String` this note used to describe — a sibling newtype with the same wire
+/// obligation, still not this type's business.)
 package struct TerminalID: Codable, Equatable, Hashable, Sendable {
     package let uuid: UUID
 
@@ -60,9 +66,9 @@ package struct TerminalID: Codable, Equatable, Hashable, Sendable {
     }
 
     /// A single-value container, so the wire shape is a bare string — byte-identical to the
-    /// `String` this type replaces. Three standalone scripts (`helm-spool.swift`,
-    /// `helm-close.swift`, `helm-capture.swift`) read `SpoolResult.terminalId` as
-    /// `json["terminalId"] as? String` and cannot `import HelmWire` to do anything smarter.
+    /// `String` this type replaces, and read outside this process by an agent rather than by a
+    /// `json["terminalId"]` in any script. See the type's header for what actually holds that
+    /// shape.
     package func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(uuid.uuidString)
