@@ -579,7 +579,10 @@ function peers(root: string, mine: string): string[] {
 		// `[retired]` is asked before the pid, and says something the pid cannot — #236. A retired
 		// owner's pid may well still be alive (the `/clear` ghost's is), so reading the pid alone
 		// would list a mailbox nobody is listening to as a perfectly healthy peer.
-		const alive = owner.retiredAt ? " [retired]" : pidAlive(owner.pid) ? "" : " [dead]";
+		let alive: string;
+		if (owner.retiredAt) alive = " [retired]";
+		else if (pidAlive(owner.pid)) alive = "";
+		else alive = " [dead]";
 		const mail = waiting > 0 ? `, ${waiting} waiting` : "";
 		rows.push(`  ${handle} — ${owner.runtime}, pid ${owner.pid}${alive}, ${owner.cwd}${mail}${mark}`);
 	}
@@ -817,8 +820,10 @@ function install(pi: ExtensionAPI): void {
 					// Shutting down; a watcher that will not close is not worth a message.
 				}
 				try {
-					const owner = claimed ? readJson<Owner>(path.join(claimed.dir, OWNER_FILE)) : undefined;
-					if (claimed && owner) retire(claimed.dir, owner);
+					if (claimed) {
+						const owner = readJson<Owner>(path.join(claimed.dir, OWNER_FILE));
+						if (owner) retire(claimed.dir, owner);
+					}
 				} catch {
 					// Best effort. The next claim by anyone retires it instead.
 				}
