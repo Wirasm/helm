@@ -195,9 +195,54 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// - `term`: the embedded xcframework ships no terminfo, so ghostty's
     ///   default TERM=xterm-ghostty breaks TUIs on machines without
     ///   Ghostty.app's terminfo installed (and over ssh regardless).
-    /// - `scrollback-limit`: not taste but a job requirement — an agent
-    ///   transcript outruns a general-purpose terminal's default in minutes,
-    ///   and a Ghostty config tuned for shell work has no reason to know that.
+    /// - `scrollback-limit`: **not taste but arithmetic, and helm is the only
+    ///   thing in the stack that can do it.** ghostty's own doc calls this "the
+    ///   size of the scrollback buffer in bytes … **per terminal surface, not
+    ///   for the entire application**" (`Config.zig` at the pinned 35e1a01), so
+    ///   the number is spent once per pane the operator has *visited* and a
+    ///   Ghostty config — written for one window — has no way to know how many
+    ///   that is. helm does. That is why this is an override the operator's own
+    ///   config cannot move, in either direction.
+    ///
+    ///   **Why 16 MiB, when it used to be 100 and ghostty's own default is 50 MB.**
+    ///   The limit counts *page memory*, not text: a page is laid out as
+    ///   `@sizeOf(Row) + @sizeOf(Cell) × cols` per row and both are
+    ///   `packed struct(u64)` (`page.zig`, `Capacity.adjust`), so **one line of
+    ///   history costs about 8 × (cols + 1) bytes** — 8.6 × with the page's style
+    ///   and grapheme areas amortised in — however few characters are on it. Across
+    ///   the pane widths helm's benches actually produce, 80 to 200 columns, 16 MiB
+    ///   is **10,000–24,000 lines** a pane, 200–500 screenfuls of scroll-up. 100 MiB
+    ///   was 60,000–150,000, which nobody scrolls, on a ceiling that multiplied:
+    ///   a seventeen-pane day reserved ~1.7 GiB where it now reserves ~272 MiB.
+    ///
+    ///   **And the ceiling is spendable, which is the part worth measuring.** 33.9 MB
+    ///   of text — 300,000 lines — written into *one* pane of an isolated instance,
+    ///   resident set before and after, settled over a minute of idle:
+    ///
+    ///   | limit  | before   | after    | delta    |
+    ///   | ------ | -------- | -------- | -------- |
+    ///   | 100 MiB| 147.4 MB | 253.9 MB | +106.5 MB |
+    ///   | 16 MiB | 183.8 MB | 203.0 MB | **+19.2 MB** |
+    ///
+    ///   Both deltas are their configured ceiling plus a little, so a single pane can
+    ///   and does spend the whole of it — and 34 MB of text costing 106 MB of memory is
+    ///   the 8-bytes-a-cell arithmetic above, visible from outside. Neither number moved
+    ///   while the instance sat idle: `scrollback-compression` defaults on at the pinned
+    ///   ghostty, and it bought nothing observable here, so nothing in this decision
+    ///   leans on it.
+    ///
+    ///   **The reason the smaller number is safe is that scrollback is not the
+    ///   archive.** The transcript on disk is
+    ///   (`~/.claude/projects/<slug>/<sessionId>.jsonl`) and the chat face already
+    ///   reads it, so history that scrolls off a pane is lost from the *pane*, not
+    ///   from helm. Scrollback only has to cover "scroll up and see what just
+    ///   happened".
+    ///
+    ///   Note the direction: at 16 MiB helm is holding a pane **below** ghostty's
+    ///   50 MB default rather than above it, which is the opposite of what this
+    ///   override did before (#106). An operator who has set a bigger
+    ///   `scrollback-limit` in their own config is capped by it, deliberately —
+    ///   their number was chosen for one window, and helm has N.
     /// - `window-padding-*`: **layout, not preference.** These are the insets
     ///   the grid is drawn inside, and they have to agree with the chrome
     ///   wrapped around it — the strip above uses the same 9, so the first
@@ -212,7 +257,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         let chosenFontSize = persistedFontSize
         return TerminalConfiguration { builder in
             builder.withCustom("term", "xterm-256color")
-            builder.withCustom("scrollback-limit", "104857600")  // 100 MiB
+            builder.withCustom("scrollback-limit", "16777216")  // 16 MiB — see above
             builder.withWindowPaddingX(paneInset.horizontal)
             builder.withWindowPaddingY(paneInset.vertical)
             if let chosenFontSize { builder.withFontSize(chosenFontSize) }

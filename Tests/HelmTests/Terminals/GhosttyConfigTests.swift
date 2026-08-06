@@ -99,7 +99,7 @@ final class GhosttyConfigTests: XCTestCase {
         let rendered = controller.renderedConfig
         XCTAssertTrue(rendered.contains("adjust-cell-height = 15%"), rendered)
         XCTAssertTrue(rendered.contains("font-thicken = true"), rendered)
-        XCTAssertTrue(rendered.contains("scrollback-limit = 104857600"), rendered)
+        XCTAssertTrue(rendered.contains("scrollback-limit = \(Self.scrollbackLimit)"), rendered)
         XCTAssertTrue(rendered.contains("keybind = shift+enter=text:\\n"), rendered)
         // `window-padding-x` was asserted here and has moved, not vanished: it stopped
         // being a default the operator outranks and became an override that outranks them
@@ -133,25 +133,48 @@ final class GhosttyConfigTests: XCTestCase {
     func testDefaultsApplyWithoutUserConfig() {
         let controller = TerminalSession.makeController(userConfig: nil)
         XCTAssertNil(controller.lastConfigurationIssue)
-        XCTAssertTrue(controller.renderedConfig.contains("scrollback-limit = 104857600"))
+        XCTAssertTrue(
+            controller.renderedConfig.contains("scrollback-limit = \(Self.scrollbackLimit)"))
         XCTAssertTrue(controller.renderedConfig.contains("adjust-cell-height = 15%"))
         XCTAssertTrue(controller.renderedConfig.contains("term = xterm-256color"))
     }
 
-    /// Scrollback is a job requirement, not taste: an agent transcript outruns
-    /// a shell-tuned default, so a user config must not be able to shrink it.
-    @MainActor
-    func testUserConfigCannotShrinkTheAgentScrollback() {
-        let controller = TerminalSession.makeController(userConfig: "scrollback-limit = 1000")
-        XCTAssertNil(controller.lastConfigurationIssue)
+    // MARK: - Scrollback
 
-        let rendered = controller.renderedConfig
-        guard let user = rendered.range(of: "scrollback-limit = 1000"),
-            let helm = rendered.range(of: "scrollback-limit = 104857600")
-        else {
-            return XCTFail("expected both scrollback values in: \(rendered)")
+    /// **16 MiB, spelled as the quantity rather than as 16777216.** A digit wrong in a
+    /// byte count is invisible in review and reads as a deliberate number afterwards;
+    /// written this way the test fails on the intent, and the derivation that chose 16
+    /// lives with the value in `TerminalSession.sessionOverrides`.
+    private static let scrollbackLimit = 16 * 1024 * 1024
+
+    /// The ceiling is helm's in **both** directions, and this used to assert only one
+    /// of them.
+    ///
+    /// It was `testUserConfigCannotShrinkTheAgentScrollback`, and while helm's number
+    /// was 100 MiB — above ghostty's own 50 MB default — "the operator cannot move it"
+    /// and "the operator cannot shrink it" were the same claim, so a one-sided test
+    /// looked complete. At 16 MiB helm is below that default, so the interesting case
+    /// is the other one: an operator whose config asks for **more** is now capped, and
+    /// nothing asserted that before. Both are here because the property is neither
+    /// "raise" nor "cap" — it is that the limit is a per-application decision (#106),
+    /// and an application-level decision that a per-window config can move is not one.
+    @MainActor
+    func testTheOperatorsConfigCannotMoveTheScrollbackCeilingEitherWay() {
+        for asked in ["1000", "999999999"] {
+            let controller = TerminalSession.makeController(
+                userConfig: "scrollback-limit = \(asked)")
+            XCTAssertNil(controller.lastConfigurationIssue)
+
+            let rendered = controller.renderedConfig
+            guard let user = rendered.range(of: "scrollback-limit = \(asked)"),
+                let helm = rendered.range(of: "scrollback-limit = \(Self.scrollbackLimit)")
+            else {
+                return XCTFail("expected both scrollback values in: \(rendered)")
+            }
+            XCTAssertLessThan(
+                user.lowerBound, helm.lowerBound,
+                "helm's scrollback must win over a config asking for \(asked)")
         }
-        XCTAssertLessThan(user.lowerBound, helm.lowerBound, "helm's scrollback must win")
     }
 
     // MARK: - Persisted font size
