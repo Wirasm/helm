@@ -51,9 +51,13 @@ JavaScript halves **reap each other's mailboxes** — pi's reaper sweeps the sha
 Claude Code's owners, and the hook does the same in reverse — so a divergence between them is one
 runtime destroying the other runtime's agents, which is what #236 was. `hooks/mailbox-conformance
 .mjs` (#246) lifts the rules out of all three sources and executes them against one fixture set;
-`hooks/test.sh` is where it runs, and its header argues that home. It needs node >= 22.6 and
+`hooks/test.sh` is where it runs, and its header argues that home. It needs node >= 22.18 and
 nothing else — it reads this extension's `.ts` by type stripping, with no build step, so it does
-not need pi's `npm install` at all.
+not need pi's `npm install` at all. **22.18 and not 22.6**, which is what this line and three
+others used to say: 22.6 is where `--experimental-strip-types` was *added*, and the harness passes
+no flags, so what it needs is the version where stripping is on by *default*. Measured — v22.6.0
+gives `process.features.typescript === undefined`, v22.18.0 gives `"strip"` — and measured in CI
+first, where the pin was `22.6` and the job was red on every branch.
 
 **It is hermetic, and it now proves that rather than claiming it.** Two harnesses start a real pi,
 which loads a real extension, which writes real files — helm-mail claims a mailbox, and the gate

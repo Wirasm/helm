@@ -81,10 +81,16 @@ final class HandleTests: XCTestCase {
     ///
     /// **And from *both* writers, which is why one entry below is new.** That first
     /// re-measurement ran `hooks/helm-mail.mjs` only, while everything it was cited in support of
-    /// said "the writers". They are not the same function: where every candidate handle is held,
-    /// `hooks` returns `<where>-<full>` and `pi/extensions/helm-mail/index.ts` returns
-    /// `<where>-<full>-<process.pid>`. That shape is reachable, is a handle helm must be able to
-    /// read, and no `hooks` run could ever have produced it.
+    /// said "the writers". They were not the same function: where every candidate handle is held,
+    /// `hooks` returned `<where>-<full>` and `pi/extensions/helm-mail/index.ts` returned
+    /// `<where>-<full>-<process.pid>`. That shape is reachable and is a handle helm must be able
+    /// to read.
+    ///
+    /// **Since #262 both writers emit it**, because `hooks` returning `<where>-<full>` there was a
+    /// defect and not a dialect — it handed back the last rung of its own candidate list, which
+    /// `heldByAnother` had just called held, and the claim overwrote a live agent's mailbox. The
+    /// entry stays and its comment is the only thing that changes: it is no longer "pi's", it is
+    /// what an exhausted address space produces in either runtime.
     func testEveryHandleTheWritersCanEmitIsStillAccepted() throws {
         let corpus = [
             "helm-4831",  // the ordinary shape: <cwd basename>-<tail of session id>
@@ -101,7 +107,8 @@ final class HandleTests: XCTestCase {
             // tail, which is this file's own cautionary tale repeated one size smaller.
             "a-b",
             "helm-f9e4639d-1111-2222-3333-444455556666",  // the full-session-id candidate
-            "helm-12345-678-44347",  // pi's exhaustion fallback — it appends process.pid
+            // The exhaustion fallback — both writers append process.pid since #262.
+            "helm-12345-678-44347",
             "0",  // a basename that is only digits
         ]
         for candidate in corpus {

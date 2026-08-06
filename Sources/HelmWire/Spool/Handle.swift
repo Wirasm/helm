@@ -70,15 +70,24 @@ import Foundation
 /// either.** The harness is not vacuous: widening `slug`'s own class to `[^a-zA-Z0-9_]+` makes
 /// both writers produce handles it reports. The eight `owner.json` on this machine match as well.
 ///
-/// **Both, because the two writers are not the same function — and that is why one measurement
-/// could not have spoken for the pair.** They diverge in exactly the exhaustion fallback: with
-/// every candidate held, `deriveHandle(_, "/x/helm", "12345-678")` is `helm-12345-678` from
+/// **Both, because the two writers were not the same function — and that is why one measurement
+/// could not have spoken for the pair.** They diverged in exactly the exhaustion fallback: with
+/// every candidate held, `deriveHandle(_, "/x/helm", "12345-678")` was `helm-12345-678` from
 /// `hooks` and `helm-12345-678-44347` from pi, which appends `process.pid`. A pid is digits, so
-/// pi's extra component sits inside this alphabet too and the conclusion is unchanged — but it is
-/// a shape `hooks` cannot emit, so a corpus derived from `hooks` alone was missing it
-/// (`HandleTests.testEveryHandleTheWritersCanEmitIsStillAccepted` now carries it). `hooks`'
-/// `deriveHandle` calls itself *"identical to pi's"*; it is not, and that comment is wrong
-/// independently of this type.
+/// pi's extra component sits inside this alphabet too and the conclusion was unchanged — but it
+/// was a shape only pi could emit, so a corpus derived from `hooks` alone was missing it
+/// (`HandleTests.testEveryHandleTheWritersCanEmitIsStillAccepted` carries it).
+///
+/// **#262 closed that divergence, and it was a defect rather than a difference.** `hooks` returned
+/// `<where>-<full>` — the last rung of its own candidate list, which its own `heldByAnother` had
+/// just reported held — and its `claim` then wrote over a live agent's `owner.json`. Both writers
+/// now emit `<where>-<full>-<pid>` there, so the shape above is reachable from **either**, and the
+/// paragraph's point survives its own fix: measuring one writer still cannot speak for the pair,
+/// because nothing about the language guarantees they agree. What changed is that something now
+/// checks — `hooks/mailbox-conformance.mjs` runs both and compares that arm, where it previously
+/// had to carve it out to compare anything at all. `hooks`' `deriveHandle` also called itself
+/// *"identical to pi's"*; that comment is gone, replaced by one naming the two divergences that
+/// remain and are correct.
 ///
 /// **The rule stops at the alphabet anyway, and the margin is the point.** Constraining dash
 /// placement would buy almost nothing — `Alice`, `my agent` and `owner_1234` are what a caller
