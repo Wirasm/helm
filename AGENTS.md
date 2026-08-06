@@ -491,18 +491,29 @@ and `/` are the whole reason: an ungated id writes wherever the caller likes"*
 (`Sources/HelmWire/Spool/SpoolRequest.swift:318`) — by a regex applied at exactly one edge,
 `SpoolPolicy.accept` (`SpoolRequest.swift:338`), while the value itself stays a bare `String` in
 seven declarations with open initializers (`SpoolRequest.swift:85`, `:129`, `:183`, `:236`, `:261`,
-`:276`, `SpoolResult.swift:82`). The rule therefore has to be re-spelled by hand wherever else it is
-needed — `SpoolModel.refuse` carries a second copy of the same regex
-(`Sources/Helm/Spool/SpoolModel.swift:232`), which is the two-spellings defect `Handle`'s header
-says #233 exists to remove — and where it was *not* re-spelled it is simply absent: `answerAbandoned`
-(`SpoolModel.swift:173`) takes an id straight out of a claimed request's JSON via
-`SpoolDirectory.abandoned()` (`SpoolDirectory.swift:176`) and hands it to the path builder at
-`SpoolDirectory.swift:132`, and `appendingPathComponent` does not collapse `..` (measured:
-`results/../../../../tmp/pwned.json`). The three scripts carry the rule not at all —
-`tools/helm-close.swift:113` hand-validates the *terminal* uuid and not the id, then interpolates
-the id into a path. The fix is the one this file already made five lines below, in the same struct:
-`AcceptedCloseRequest.terminal` got `TerminalID` for exactly the "a parse a caller could forget"
-argument, and `id` — the field whose own comment says it writes wherever the caller likes — did not.
+`:276`, `SpoolResult.swift:82`). So every site that needs the guarantee has to **ask again, by
+hand** — which is the exact defect `SpoolWork`'s own header, in that same file, says its shape
+exists to prevent: *"so that 'has this been checked?' is answered by the compiler at every call site
+instead of by reading upwards"* (`SpoolRequest.swift:227`). `id` is the field in those structs that
+is still answered by reading upwards.
+
+Note what this is **not**: `SpoolPolicy.idPattern` is defined exactly once (`SpoolRequest.swift:320`)
+and *referenced* by both sites, so `SpoolModel.refuse` (`Sources/Helm/Spool/SpoolModel.swift:232`) is
+a second **guard**, not a second **spelling** — it is not the two-hand-maintained-copies defect
+`Handle`'s header describes, and it is there for a real reason: `refuse` is also reached with
+`fallbackID` (`SpoolModel.swift:195`), an id derived from the *filename* when the JSON would not
+parse and `SpoolPolicy.accept` never ran.
+
+The cost lands where nobody asked at all. `answerAbandoned` (`SpoolModel.swift:173`) takes an id
+straight out of a claimed request's JSON via `SpoolDirectory.abandoned()` (`SpoolDirectory.swift:176`,
+decoded with no pattern check) and hands it to the path builder at `SpoolDirectory.swift:132` — and
+`appendingPathComponent` does not collapse `..` (measured: `results/../../../../tmp/pwned.json`).
+The three scripts do not ask either: `tools/helm-close.swift:113` hand-validates the *terminal*
+uuid, not the id, then interpolates the id into a path. Two sites ask, four do not — and a guard
+that has to be remembered is what a type exists to stop being a memory test. The fix is the one this
+file already made five lines below, in the same struct: `AcceptedCloseRequest.terminal` got
+`TerminalID` for exactly the "a parse a caller could forget" argument, and `id` — the field whose own
+comment says it writes wherever the caller likes — did not. Tracked as #260.
 
 Prefer a newtype the day the comment gets written, not the day it is disbelieved.
 
