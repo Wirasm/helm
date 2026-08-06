@@ -10,7 +10,10 @@ import Foundation
 ///
 /// The offset is held against the **path**, not an open file descriptor: a
 /// transcript can be replaced under us, and three things are what catch it — a
-/// changed inode, a file that shrank, and a changed **head** (#92).
+/// changed inode, a file that shrank, and a changed **head** (#92). All three
+/// are asked on every poll, including the polls with nothing new: a rewrite
+/// through the same inode need not change the length, and one that is never
+/// followed by an append is never noticed by anything else.
 ///
 /// Deliberately not an actor and deliberately not `@MainActor`: it is a plain
 /// value-ish reader with no published state, so the model can own one and call
@@ -66,20 +69,29 @@ struct TranscriptTail {
             inode = node
             batch.didReset = true
         }
-        guard size > offset else { return batch }
-
         guard let handle = try? FileHandle(forReadingFrom: url) else { return batch }
         defer { try? handle.close() }
 
-        // The third guard, and the only one that sees an in-place rewrite ending
-        // *longer* than the offset held: same inode, more bytes, so the two above
-        // both pass and the read lands mid-record in bytes nobody ever saw (#92).
-        // pi writes exactly that shape — `_rewriteFile()` is `openSync(path,
-        // "w")`, reached from the pre-v3 migration and from branch/resume.
+        // The third guard, and the only one that sees a rewrite through the same
+        // inode: the file is opened where it stood, so neither of the two above
+        // has anything to notice. pi writes exactly that shape — `_rewriteFile()`
+        // is `openSync(path, "w")`, reached from the pre-v3 migration and from
+        // branch/resume.
         //
-        // **Charged to the branch that was already opening the file.** A poll
-        // with nothing new returns above, having spent one `stat` and no more,
-        // which is what keeps the 250 ms cadence free.
+        // **Before the "nothing new" return, not after, and that placement is the
+        // whole guard.** Behind it, only a rewrite that also *grew* is seen — and
+        // the two shapes pi actually produces are a `"version":2` → `"version":3`
+        // digit swap and a fresh same-width uuid, both of which can land on
+        // exactly the byte count already held. A poll that returns first never
+        // opens the file, so nothing is misread; it is simply never noticed, and
+        // a session that rewrites and then ends leaves the tape frozen on the old
+        // conversation with no error and no way back. Two reviewers reproduced
+        // that independently against the first cut of this fix.
+        //
+        // The cost is one `open`/`read`/`close` of 512 bytes on every poll, on
+        // top of the `stat` that was already there. Measured against a 13 MB
+        // transcript, best of 30,000 idle polls per build, base against this:
+        // 57.0 µs → 73.2 µs. On a 250 ms cadence that is 0.006% of the interval.
         if let fresh = try? handle.read(upToCount: Self.headBytes) {
             if !batch.didReset, !Self.sharesHead(head, fresh) {
                 offset = 0
@@ -89,6 +101,7 @@ struct TranscriptTail {
             head = fresh
         }
 
+        guard size > offset else { return batch }
         try? handle.seek(toOffset: offset)
         guard let chunk = try? handle.readToEnd(), !chunk.isEmpty else { return batch }
         offset += UInt64(chunk.count)
@@ -115,12 +128,14 @@ struct TranscriptTail {
     /// rewrites what is already there, so a matching common prefix is exactly the
     /// claim "these are the same file, further along".
     ///
-    /// **What it cannot see**, said plainly rather than left to be discovered: a
-    /// rewrite whose first `headBytes` are byte-identical to the old ones. pi's
-    /// two rewrites both change that window — the migration bumps `version`, the
-    /// branch mints a new `id`, and both live in a header line under 334 bytes —
-    /// but this is a detector, not a proof. The remaining hole is narrower than
-    /// the one it closes, and closing it would mean re-reading the file.
+    /// **What it cannot see**, said plainly rather than left to be discovered:
+    /// a rewrite whose first `headBytes` are byte-identical to the old ones —
+    /// that is the *only* hole left, now that the caller asks on every poll
+    /// rather than only on one that grew. pi's two rewrites both change that
+    /// window: the migration bumps `version`, the branch mints a new `id`, and
+    /// both live in a header line measured at 126–334 bytes. This is still a
+    /// detector rather than a proof, and closing the last of it would mean
+    /// re-reading the whole file on every poll.
     private static func sharesHead(_ remembered: Data, _ fresh: Data) -> Bool {
         let common = min(remembered.count, fresh.count)
         guard common > 0 else { return true }

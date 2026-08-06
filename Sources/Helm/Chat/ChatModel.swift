@@ -137,9 +137,13 @@ final class ChatModel: ObservableObject {
         }
 
         if case .reading(let session) = source {
-            // Two cadences on purpose. Draining is a `stat` and, most ticks,
-            // nothing else — a turn opens with a median 8.83 s of no bytes — so
-            // it is cheap enough to run at the poll rate. Re-reading the registry
+            // Two cadences on purpose. Draining is a `stat`, a 512-byte head
+            // read, and — most ticks — nothing else, because a turn opens with a
+            // median 8.83 s of no bytes. Measured at 73.2 µs against a 13 MB
+            // transcript, so it is cheap enough to run at the poll rate. (The
+            // head read is #92's third guard: it has to be asked on the quiet
+            // ticks too, because a rewrite through the same inode need not change
+            // the length. `TranscriptTail.poll` argues it.) Re-reading the registry
             // is a directory listing plus a read and decode per row, and `status`
             // moves on transitions rather than continuously, so half-second
             // latency on it is invisible while four times the file traffic on the
