@@ -8,9 +8,9 @@ import XCTest
 /// **Why the duplication exists at all.** `tools/helm-spool.swift`, `helm-close.swift`,
 /// `helm-capture.swift` and `helm-command.swift` cannot `import HelmWire`: a single-file
 /// `swift tools/…swift` script resolves no `Package.swift` and runs from any cwd, which is the
-/// whole reason the spool is a
-/// script rather than an SPM target (`AGENTS.md`'s "Why the spool is a script, and must stay
-/// one" has the measurements). So the request JSON, the result JSON and the spool's own
+/// whole reason the spool is a script rather than an SPM target (`AGENTS.md`'s "Why the spool is
+/// a script, and must stay one" has the measurements). So the request JSON, the result JSON and
+/// the spool's own
 /// directory-resolution rules are each spelled out twice — once here as `HelmWire` types and
 /// functions, once by hand in each script. A duplicate is honest only when a runtime boundary
 /// makes sharing impossible — this is that boundary — but honest still means it has to be
@@ -25,8 +25,8 @@ import XCTest
 ///    reads `json["status"] as? String` and switches on it by hand — `helm-spool.swift:180`,
 ///    `helm-close.swift:151`, `helm-capture.swift:148`, `helm-command.swift:167`, none of which
 ///    decode through `SpoolResult`. Covered by `testHelm*ExitCodeAndStderrForEveryResultStatus`
-///    below, over
-///    **every** `SpoolResult.Status` case for every script — `Status: CaseIterable` plus an
+///    below, over **every** `SpoolResult.Status` case for every script — `Status: CaseIterable`
+///    plus an
 ///    exhaustive switch in `expectation(for:)` is what makes forgetting a script for a new
 ///    case a compile error in this file rather than a silent gap. `testHelm*PrintsHandleAnd
 ///    TerminalIdAsBareStringsOnceReady` (#229) covers the same direction from a different
@@ -559,7 +559,8 @@ final class SpoolWireConformanceTests: XCTestCase {
                     focusedPaneBefore: TerminalID(before), focusedPaneAfter: TerminalID(after),
                     columns: 1, panes: 1)))
 
-        let (exitCode, stderr) = try runAndCapture("helm-command.swift", ["splitRight", "--id", id])
+        let (exitCode, stderr) = try runAndCapture(
+            "helm-command.swift", ["splitRight", "--id", id])
 
         XCTAssertEqual(exitCode, 0, "helm ran it, so the script still succeeds — it only warns")
         XCTAssertTrue(
@@ -580,7 +581,8 @@ final class SpoolWireConformanceTests: XCTestCase {
         let terminal = UUID()
         SpoolDirectory(root: spoolDir).write(result(id: id, status: .ran, terminal: terminal))
 
-        let (exitCode, stderr) = try runAndCapture("helm-command.swift", ["splitRight", "--id", id])
+        let (exitCode, stderr) = try runAndCapture(
+            "helm-command.swift", ["splitRight", "--id", id])
 
         XCTAssertEqual(exitCode, 0)
         XCTAssertFalse(

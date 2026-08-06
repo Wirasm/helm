@@ -14,8 +14,8 @@ import Foundation
 ///
 /// **Lives in `HelmWire` (#221)**, alongside `SpoolRequest`, for the same reason: `Helm`'s own
 /// `SpoolModel` writes this and `HelmTests` decodes it, both against one definition. The
-/// standalone `helm-spool`/`helm-close`/`helm-capture` scripts still read `json["status"] as?
-/// String` — they cannot `import HelmWire` (`AGENTS.md`'s "Why the spool is a script, and must
+/// standalone `helm-spool`/`helm-close`/`helm-capture`/`helm-command` scripts still read
+/// `json["status"] as? String` — they cannot `import HelmWire` (`AGENTS.md`'s "Why the spool is a script, and must
 /// stay one") — so a new `Status` case is not automatically visible to them; a caller adding one
 /// has to update the scripts' string switches by hand, same as before #221.
 package struct SpoolResult: Codable, Equatable {

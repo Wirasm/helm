@@ -20,11 +20,12 @@ import Foundation
 /// on the channel #54 already justified needs no new argument.
 ///
 /// **Lives in `HelmWire` (#221), not in `Helm`.** `Helm` and `HelmTests` compile against this
-/// for one definition instead of restating it. `tools/helm-spool.swift`, `helm-close.swift` and
-/// `helm-capture.swift` cannot join them — a single-file `swift tools/…swift` script resolves no
-/// `Package.swift` and runs from any cwd, which is the whole reason the spool is a script rather
+/// for one definition instead of restating it. `tools/helm-spool.swift`, `helm-close.swift`,
+/// `helm-capture.swift` and `helm-command.swift` cannot join them — a single-file
+/// `swift tools/…swift` script resolves no `Package.swift`
+/// and runs from any cwd, which is the whole reason the spool is a script rather
 /// than an SPM target (`AGENTS.md`'s "Why the spool is a script, and must stay one" has the
-/// measurements from the attempt that broke both). So those three still hand-roll the JSON by
+/// measurements from the attempt that broke both). So those four still hand-roll the JSON by
 /// hand, on purpose — the runtime boundary `AGENTS.md`'s own rule carves out — and
 /// `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) is what keeps that duplicate honest: it
 /// runs each script as a real subprocess and decodes what it wrote with these same types.
