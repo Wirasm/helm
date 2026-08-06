@@ -43,8 +43,45 @@
     return yes;
   }
 
-  // Everything the loop encircles, by CENTRE rather than by any overlap: a stroke
-  // that grazes a neighbour did not mean the neighbour.
+  // Everything the loop encircles — an element is a target when the loop covers most of IT.
+  //
+  // Not "the loop contains its centre", which is the rule this replaces and the defect in
+  // #208. Centre-testing is a good defence against a SIBLING the stroke grazed, and no defence
+  // at all against an ANCESTOR: <article id="content"> wraps the whole page, so its centre IS
+  // the page's centre, and every loop drawn near the middle of a document also returned the
+  // entire document — listed first, in document order, with a 400-character quote of mermaid's
+  // injected CSS behind it.
+  //
+  // Coverage is asymmetric, and that asymmetry is the whole fix: an element larger than the
+  // loop cannot have most of itself inside the loop, wherever its centre falls. A container the
+  // operator really did circle still qualifies, because then the loop is around it. Measured on
+  // the page #208 was found on, for a loop around one node: that node covers 1.00, the <svg>
+  // around it 0.08, the <article> around that 0.02.
+  //
+  // It SUBSUMES the centre test rather than sitting beside it, so nothing was given up by
+  // dropping it. For any convex loop, coverage above one half implies the centre is inside — a
+  // half-plane holding more than half of a rectangle holds its centre, and a loop that excluded
+  // the centre could be separated from it by one. The odd sample grid keeps that exact rather
+  // than marginal: 24/49 and 25/49 straddle one half and nothing lands on it. And a grazed
+  // neighbour is rejected harder than before, by covering almost none of itself rather than by
+  // where its centre happened to be.
+  var coverageRequired = 0.5;
+
+  // What fraction of `box` the loop covers, sampling a grid of cell centres. Sampled rather
+  // than clipped: the stroke is a freehand path of any shape, and exact polygon clipping is a
+  // great deal of code to move a decision whose two sides measure an order of magnitude apart.
+  function coverage(poly, box) {
+    var n = 7, hits = 0;
+    for (var i = 0; i < n; i++) {
+      for (var j = 0; j < n; j++) {
+        var x = box.x + (box.width * (i + 0.5)) / n;
+        var y = box.y + (box.height * (j + 0.5)) / n;
+        if (inside(poly, x, y)) { hits++; }
+      }
+    }
+    return hits / (n * n);
+  }
+
   function targetsInside(poly) {
     var seen = {}, found = [];
     var nodes = document.querySelectorAll("[id], p, li, td, th, h1, h2, h3");
@@ -53,9 +90,11 @@
       var r = nodes[i].getBoundingClientRect();
       if (!r.width && !r.height) { continue; }
       // getBoundingClientRect is viewport-relative; the stroke is page-relative.
-      var cx = r.left + r.width / 2 + window.scrollX;
-      var cy = r.top + r.height / 2 + window.scrollY;
-      if (!inside(poly, cx, cy)) { continue; }
+      var box = {
+        x: r.left + window.scrollX, y: r.top + window.scrollY,
+        width: r.width, height: r.height
+      };
+      if (coverage(poly, box) < coverageRequired) { continue; }
       var t = resolve(nodes[i]);
       if (!t) { continue; }
       var key = (t.id || "") + "\u0000" + t.text;
