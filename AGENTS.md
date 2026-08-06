@@ -216,13 +216,41 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `allowedCommands` is untouched: `cls` is a script on `PATH` this repo cannot pin, and naming
     the flag buys the same behaviour without handing the allowlist's meaning away. The full
     argument, including the costs that were weighed and overruled, is in
-    `Sources/Helm/Spool/SpoolRequest.swift`; read it before changing a posture.
+    `Sources/HelmWire/Spool/SpoolRequest.swift`; read it before changing a posture.
   - **The launch line is pasted and then submitted separately, and it has to be.** libghostty
     wraps *every* `sendText` in bracketed-paste markers when the shell has enabled mode 2004 —
     fish, zsh and bash all do — so a line ending in `\r` lands on the command line and simply
     sits there. Measured, and it cost the first live run: a terminal opened, a shell ran, and
     no agent ever started. `WorkbenchSpoolSpawner.send` pastes, then sends Return as a
     `text:` binding action.
+- **Why the spool is a script, and must stay one.** It exists because `helm-spawn` cannot work
+  headless: that path needs an unlocked screen, a visible helm window and an Accessibility grant
+  on the invoking context, and no agent can grant itself any of them. #51's rung 2 is a channel
+  needing none — a file appears, helm acts, helm writes a file back.
+
+  That buys nothing unless the **caller** is equally unencumbered, and three properties are what
+  make it so. All three were measured when #221 tried converting these scripts into SPM
+  executable targets, and all three broke:
+  - **No build.** `swift tools/helm-spool.swift` compiles one file and does not resolve
+    `Package.swift`. An SPM target does — and SPM resolves the **whole** manifest before
+    building anything, so `swift run helm-spool` demands the gitignored `vendor/libghostty-spm`
+    and fails on a fresh checkout with `error: the package at '…/vendor/libghostty-spm' cannot
+    be accessed`. The spool would need `patch-libghostty.sh` and a build before an agent could
+    spawn anything.
+  - **No cwd.** `swift ~/…/helm/tools/helm-spool.swift` is a path any working directory can
+    name. `swift run helm-spool` requires the cwd to be inside the package; from anywhere else
+    it is `error: Could not find Package.swift in this directory or any of its parent
+    directories.` **This is the one that matters most** — hosting an agent in whatever repo the
+    operator is working in is the normal case, not an edge one.
+  - **No toolchain state.** No resolved dependencies, no `.build/`, no vendored framework. A
+    machine that has never built helm can still drive it.
+
+  **So the spool's wire format is duplicated between `tools/*.swift` and `HelmWire`, and that
+  duplication is honest** — the same carve-out as `pi/` and `hooks/`, for the same reason: a
+  runtime boundary makes sharing impossible. What is *not* optional is that it be **detectable**,
+  which is what `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) is for: it runs the real
+  script against a temp `HELM_SPOOL_DIR` and decodes what it writes with the real request type,
+  so the two sides cannot drift silently.
 - **To read the bench without a display, read helm's snapshot** —
   `~/.helm/bench/snapshot.json`, or `~/.helm/bench-<suite>/snapshot.json` under
   `HELM_DEFAULTS_SUITE`; `HELM_BENCH_DIR` explicitly overrides that root. It is private
@@ -346,13 +374,23 @@ comment on the other is not a contract — it is a contract plus a bug waiting f
 the far half from memory. #210 caught four of these in the canvas; they are not a canvas habit.
 `Notification.object` is `Any?`, so the keymap and the menu posted different objects for the same
 row and four View ▸ Focus commands were silent no-ops from the day they were split out (#152).
-`tools/*.swift` hand-rolls the spool's JSON as `["id": id, "kind": "close", …]` because there is
-no library target to import `SpoolRequest` from — the format is typed on one side and spelled out
-on the other. The mailbox's wire format is written **three** times, in Swift, TypeScript and
-JavaScript, and this file can only *ask* that they be kept in step. The cure is not more
-discipline. It is putting the type where both sides compile against it; a duplicate is honest
-only when a runtime boundary makes sharing impossible, which is why `pi/` and `hooks/` are one
-and `tools/` is not.
+`tools/helm-close.swift` hand-rolls the spool's JSON as `["id": id, "kind": "close", …]`, and
+that is only half fixed. `HelmWire` (#221) is a library target holding `SpoolRequest`,
+`SpoolResult` and the spool's directory-resolution rules, and `Helm` and its own tests compile
+against it for one definition instead of each restating it. `tools/*.swift` cannot join them: a
+single-file script needs no `Package.swift` resolved and no cwd inside this repo, which is the
+whole reason the spool is a script rather than an SPM target — see "Why the spool is a script,
+and must stay one", above, for what #221 measured when it tried the other way. So the format is
+typed once in `HelmWire` and spelled out once more in `tools/helm-spool.swift`/`helm-close.swift`/
+`helm-capture.swift`, on purpose. A duplicate is honest only when a runtime boundary makes
+sharing impossible, and that is now three, not two: the mailbox's wire format, written twice in
+Swift and TypeScript/JavaScript because `pi/` and `hooks/` are separate processes `HelmWire`
+cannot reach; and the spool's own, written twice in `HelmWire` and in `tools/*.swift`, for the
+reasons just given. Neither is left to drift unnoticed — `SpoolWireConformanceTests`
+(`Tests/HelmTests/Spool/`) runs each spool script as a real subprocess and decodes what it writes
+with the real request type, so a drift between `HelmWire` and `tools/` fails a test rather than
+shipping silently. `focus.swift`, `winshot.swift`, `ticklog.swift` and `helm-spawn.swift` stay
+standalone scripts too, for a simpler reason — none of them touch the spool's wire format at all.
 
 **A payload that can grow a second kind carries a discriminator from the first one.**
 `SpoolRequest`'s `{id, kind}` envelope and `Pane.Content`'s string `kind` cost one field each and
