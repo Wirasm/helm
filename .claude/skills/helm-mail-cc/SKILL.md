@@ -18,8 +18,12 @@ nobody can do for you is wake you** — see *Arm*, below. pi's side is `helm-mai
 ## Who is reachable
 
 ```bash
-for f in ~/.helm/mail/*/owner.json; do cat "$f"; done
+find ~/.helm/mail -maxdepth 2 -name owner.json -type f -exec cat {} \; 2>/dev/null
 ```
+
+`find` here for the reason spelled out at length under *Arm*, below: under zsh a glob matching
+nothing is fatal, and `~/.helm/mail/*/owner.json` matches nothing on a machine where no agent has
+claimed a mailbox yet. Printing no rows is the right answer to "who is reachable" when nobody is.
 
 Each row is `{handle, runtime, pid, sessionId, cwd, claimedAt}`. `cwd` is what tells two agents
 apart — it carries the worktree path, so *"the pi in the pr-122 worktree"* is a match on `runtime`

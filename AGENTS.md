@@ -94,13 +94,13 @@ bash .claude/skills/helm-canvas/test.sh
 bash .claude/skills/helm-mail-cc/test.sh
 ```
 
-It covers both `helm-mail-cc/` and `helm-mail-pi/`, because the send is documented identically in
-each. It **extracts** the snippets from `SKILL.md` and runs them rather than restating them — a test
-that retypes a documented snippet is a second copy that drifts, and would keep passing while the doc
-said something else. It runs the watch under **zsh** specifically: #237 is a documented loop that was
-correct in bash and fatal in zsh, which is the shell Claude Code's own Bash tool runs, and no gate
-read a skill file at all until this one. Needs bash, zsh and python3, which is why it is not in the
-Swift gate.
+It covers both `helm-mail-cc/` and `helm-mail-pi/`, because the send and the mailbox listing are
+documented identically in each. It **extracts** the snippets from `SKILL.md` and runs them rather
+than restating them — a test that retypes a documented snippet is a second copy that drifts, and
+would keep passing while the doc said something else. It runs them under **zsh** specifically: #237
+is a documented loop that was correct in bash and fatal in zsh, which is the shell Claude Code's own
+Bash tool runs, and no gate read a skill file at all until this one. Needs bash, zsh and python3,
+which is why it is not in the Swift gate.
 
 `push.sh` is how an agent puts an artifact on the bench, and it is the third mechanism to hold
 that job — the first two shipped broken. Both were verified from a shell the operator typed into,

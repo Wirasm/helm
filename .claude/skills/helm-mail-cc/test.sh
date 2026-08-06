@@ -139,6 +139,34 @@ check "moves what it delivered into read/" "1-a.json" "$(ls "$tmp/box/read" 2>/d
 check "leaves owner.json alone" "owner.json" "$(ls "$tmp/box" | grep '^owner')"
 check "is still running after delivering" alive "$(alive "$watch_pid")"
 
+printf '\nthe documented mailbox listing (both skills)\n'
+
+# The OTHER glob. `for f in ~/.helm/mail/*/owner.json` is the same fatal-under-zsh shape as the
+# watch was, and it was left in place on the first pass of #237 on the argument that a foreground
+# one-shot fails loudly where a background watch fails silently. That is true and it is still not
+# a reason to keep a dialect trap in a file being edited to remove one — a review caught it.
+# Executed rather than grepped, because the failure is what matters and the empty root is the case.
+mkdir -p "$tmp/emptyroot"
+for f in "$cc" "$pi"; do
+    name=$(basename "$(dirname "$f")")
+    listing=$(extract_block "$f" '^## Who is reachable')
+    if [ -z "$listing" ]; then
+        bad "$name — could not extract the 'Who is reachable' block"
+        continue
+    fi
+    printf '%s\n' "$listing" | sed "s|~/.helm/mail|$tmp/emptyroot|g" >"$tmp/listing.zsh"
+    zsh "$tmp/listing.zsh" >/dev/null 2>&1
+    check "$name lists reachable agents without dying on a mail root with none" 0 "$?"
+done
+
+# The control for the two above: it must still print the rows when there ARE mailboxes. A listing
+# that survives an empty root by listing nothing ever would pass the checks above and fail this.
+mkdir -p "$tmp/emptyroot/a-1111"
+printf '{"handle":"a-1111"}\n' >"$tmp/emptyroot/a-1111/owner.json"
+printf '%s\n' "$(extract_block "$cc" '^## Who is reachable')" | sed "s|~/.helm/mail|$tmp/emptyroot|g" >"$tmp/listing.zsh"
+check "and still prints a mailbox that is there" \
+    '{"handle":"a-1111"}' "$(zsh "$tmp/listing.zsh" 2>/dev/null)"
+
 printf '\nthe documented send (both skills)\n'
 
 # A send whose target directory is gone writes nothing, and both the python3 traceback and

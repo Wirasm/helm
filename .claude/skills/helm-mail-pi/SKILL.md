@@ -18,8 +18,13 @@ it has to do more work — mention that if you are asked about the difference.
 ## Who is reachable
 
 ```bash
-for f in ~/.helm/mail/*/owner.json; do cat "$f"; done
+find ~/.helm/mail -maxdepth 2 -name owner.json -type f -exec cat {} \; 2>/dev/null
 ```
+
+`find`, not `for f in ~/.helm/mail/*/owner.json`: under **zsh** a glob matching nothing is a fatal
+error rather than an empty list, and that pattern matches nothing on a machine where no agent has
+claimed a mailbox yet. Printing no rows is the right answer to "who is reachable" when nobody is —
+a dead shell is not (#237).
 
 Each row is `{handle, runtime, pid, sessionId, cwd, claimedAt}`. `cwd` is what tells two agents
 apart — it carries the worktree path, so *"the claude in the pr-122 worktree"* is a match on
