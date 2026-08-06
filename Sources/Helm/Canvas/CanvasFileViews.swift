@@ -437,6 +437,13 @@ struct CanvasSelection {
 /// and letting the second stand in for the first would make a malformed message close a
 /// field the operator was typing in. A selection must carry text for the same reason in
 /// reverse — a report with none would put an empty comment field over the page.
+///
+/// **`mark` is the discriminator, the same one `CanvasAnnotation.decode` branches on** — an
+/// enclosure carries `targets`, a relation carries `from`/`to`, neither carries `text` (#216).
+/// Requiring `text` unconditionally admitted a plain selection and silently dropped every
+/// geometry mark before it ever reached the decoder that understands it. `mark`'s presence is
+/// enough to route the payload onward; whether it resolves to anything is `decode`'s call, at
+/// comment time, same as it already is for a plain selection with no anchor.
 enum CanvasPageSelection {
     case selected(CanvasSelection)
     case cleared
@@ -445,6 +452,9 @@ enum CanvasPageSelection {
         guard let payload = body as? [String: Any] else { return nil }
         if payload["cleared"] as? Bool == true {
             self = .cleared
+        } else if payload["mark"] is String {
+            guard let selection = CanvasSelection(payload) else { return nil }
+            self = .selected(selection)
         } else if let text = payload["text"] as? String,
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             let selection = CanvasSelection(payload)
