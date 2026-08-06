@@ -50,21 +50,59 @@ at 13:19 and never rebuilt was green at 13:19 and red at 19:00, and every worktr
 machine went red within the same second (17:17:19). Concurrency did not do that; nothing in
 any diff did.
 
-So before suspecting your diff, or the load, ask ghostty:
+So before suspecting your diff, or the load, ask ghostty — **by absolute path, and asking
+CoreVideo at the same time**:
 
 ```
-log show --last 30m --style compact --predicate 'subsystem == "com.mitchellh.ghostty"'
+/usr/bin/log show --last 30m --style compact \
+  --predicate 'subsystem == "com.mitchellh.ghostty" OR subsystem == "com.apple.corevideo"'
 ```
 
-`embedded_window: error initializing surface` means `ghostty_surface_new` refused, so **no
-terminal exists to type into** and every keystroke assertion in `TerminalKeyboardTests` and
-`WorkbenchFocusRoutingTests` fails for that reason alone, on any tree. Those two suites now
-say so themselves rather than reporting `pty saw <nothing>` — the sentence that reads as a
-focus bug and is not one. Everything in them that does *not* need a surface still runs and
-still fails on a real regression: proved by reinstating #96's contract (seven tests then also
-fail on the first-responder assertion) and #152's click routing (five more, on the bench).
-A surface failure is an **environment** report, not a verdict on the diff, and the log line is
-the evidence to bring.
+**`/usr/bin/` is not decoration: `log` is a zsh builtin, and zsh is what Claude Code's Bash
+tool runs.** A bare `log show …` never reaches `/usr/bin/log` at all — it hits the builtin,
+which answers `(eval):log:1: too many arguments`. On its own that exits 1, but piped into
+`grep` or `head`, which is how anyone actually reads a log, the pipeline reports the *last*
+command's status and the whole thing exits **0 with no output**: a successful-looking query of
+an empty log. Three agents read it exactly that way and concluded the log was empty. It was
+not — 3562 lines in 90 minutes (#249). Measured, and it is the shell that decides: the bare
+form dies under zsh and works under fish and bash, while the `/usr/bin/log` form above returns
+the same output under all three.
+
+**Two lines matter, and they land within a millisecond of each other in the same process:**
+
+```
+[com.apple.corevideo:] CVDisplayLinkCreateWithCGDisplays error -6661 due to invalid display count (0)
+[com.mitchellh.ghostty:embedded_window] embedded_window: error initializing surface err=error.OutOfMemory
+```
+
+The **ghostty** line is what ties the failure to a surface: `ghostty_surface_new` refused, so
+**no terminal exists to type into** and every keystroke assertion in `TerminalKeyboardTests`
+and `WorkbenchFocusRoutingTests` fails for that reason alone, on any tree.
+
+The **CoreVideo** line is the one that names the cause, and `err=error.OutOfMemory` is a
+misleading name for it: every display asleep means zero *active* displays, so
+`CVDisplayLinkCreateWithActiveCGDisplays` fails and ghostty reports the whole surface init as
+out of memory. It is not memory — #253 ruled that out with numbers, and reproduced `-6661`
+with no helm involved. An agent that finds the ghostty line and stops has been pointed at the
+wrong subsystem, which is why the predicate names both: the old one, on ghostty alone, could
+not have shown the cause even on the runs where it did execute.
+
+**The control run is the other half of the evidence, and it stands on its own.** Revert to
+`origin/development` with `git checkout origin/development -- <files>`, grep the files to
+confirm the revert actually landed, rebuild, and show the same failures on the pristine base.
+It needs no subsystem knowledge, it does not depend on a log window that may have rolled, and
+it works when the log says nothing at all — three agents reached for it unprompted before
+anyone sanctioned it. Bring it *with* the log lines when you have both; bring it alone when
+you do not. A branch that touches no compiled code has a stronger version still: say so, and
+the test binary is byte-identical to base.
+
+Those two suites now name the surface failure themselves rather than reporting `pty saw
+<nothing>` — the sentence that reads as a focus bug and is not one. Everything in them that
+does *not* need a surface still runs and still fails on a real regression: proved by
+reinstating #96's contract (seven tests then also fail on the first-responder assertion) and
+#152's click routing (five more, on the bench). A surface failure is an **environment** report,
+not a verdict on the diff — and the evidence to bring is the CoreVideo/ghostty pair, the
+control run, or both.
 
 **This gate needs only the Swift toolchain and xcodegen. Keep it that way.** It is the one
 command a fresh worktree runs, and every dependency added to it is a dependency every
@@ -427,12 +465,57 @@ fails loudly instead of misreading it.
 **An invariant with a comment explaining it wants a type carrying it.** `StandardizedPath` is the
 worked example: "standardize every path on the way in" was a doc comment asking callers to prefer
 a helper, and `WorkbenchTests` took the shortcut anyway (#88) — the explicit `init` is what made
-the unstandardized value unconstructable. The same invariant is still loose elsewhere.
-`workspacePath` is a raw `String` in 48 places across Archon, Terminals, Workbench, Worktrees and
-Canvas, and it is the key a push is routed on (`WorkbenchModel.swift`). `MailboxDirectory` spends
-twenty lines arguing that a handle is *read, never derived* — and a handle is a `String`. A
-`terminalId` is a `UUID` in the app, a `String` across the spool, and a `UUID` again on the way
-back. Prefer a newtype the day the comment gets written, not the day it is disbelieved.
+the unstandardized value unconstructable.
+
+**What the rule has bought since, and how each defect was found.** `WorkspacePath` (#226): a
+pushed artifact is routed by comparing `request.workspacePath == model.workspacePath` **by value**,
+so a path that reached that line un-normalized matched nothing and the artifact simply never
+appeared — no error anywhere. `Handle` (#231, #233, #239): a handle *looks* derivable, and a
+derived one is silently wrong whenever `deriveHandle` widened its suffix 4 → 6 → 8 to dodge a live
+holder, which the caller cannot see. `TerminalID` (#231): a `UUID` in the app, `.uuidString` across
+the spool and `UUID(uuidString:)` on the way back — a parse a caller could forget, answered with a
+`nil` three calls downstream instead of a compile error. **All three were caught by a reviewer
+reading a comment, none by a red test**, which is the reusable part: the rule fires while the
+defect is still hypothetical, and by the time a gate can see it the newtype is a migration.
+
+**A stored raw field behind a validating constructor is not a violation — it is the shape.**
+`MailboxOwner.handle` stays a `String` precisely because `Handle(readingFrom:)` needs a raw field to
+read *from*; wrapping it at the decode site would make the blessed path indistinguishable from any
+other and therefore pointless. `CloseRequest.terminal` and `SpawnRequest.cwd` stay `String` because
+a request is decoded permissively in shape and judged strictly afterwards — that is what makes a
+malformed uuid a `refused` result naming the reason rather than unreadable JSON under the wrong id.
+Each of those argues itself in its own header; do not "fix" them.
+
+**What is still loose today is the spool request `id`.** It is gated as the filename it is — *"`..`
+and `/` are the whole reason: an ungated id writes wherever the caller likes"*
+(`Sources/HelmWire/Spool/SpoolRequest.swift:318`) — by a regex applied at exactly one edge,
+`SpoolPolicy.accept` (`SpoolRequest.swift:338`), while the value itself stays a bare `String` in
+seven declarations with open initializers (`SpoolRequest.swift:85`, `:129`, `:183`, `:236`, `:261`,
+`:276`, `SpoolResult.swift:82`). So every site that needs the guarantee has to **ask again, by
+hand** — which is the exact defect `SpoolWork`'s own header, in that same file, says its shape
+exists to prevent: *"so that 'has this been checked?' is answered by the compiler at every call site
+instead of by reading upwards"* (`SpoolRequest.swift:227`). `id` is the field in those structs that
+is still answered by reading upwards.
+
+Note what this is **not**: `SpoolPolicy.idPattern` is defined exactly once (`SpoolRequest.swift:320`)
+and *referenced* by both sites, so `SpoolModel.refuse` (`Sources/Helm/Spool/SpoolModel.swift:232`) is
+a second **guard**, not a second **spelling** — it is not the two-hand-maintained-copies defect
+`Handle`'s header describes, and it is there for a real reason: `refuse` is also reached with
+`fallbackID` (`SpoolModel.swift:195`), an id derived from the *filename* when the JSON would not
+parse and `SpoolPolicy.accept` never ran.
+
+The cost lands where nobody asked at all. `answerAbandoned` (`SpoolModel.swift:173`) takes an id
+straight out of a claimed request's JSON via `SpoolDirectory.abandoned()` (`SpoolDirectory.swift:176`,
+decoded with no pattern check) and hands it to the path builder at `SpoolDirectory.swift:132` — and
+`appendingPathComponent` does not collapse `..` (measured: `results/../../../../tmp/pwned.json`).
+The three scripts do not ask either: `tools/helm-close.swift:113` hand-validates the *terminal*
+uuid, not the id, then interpolates the id into a path. Two sites ask, four do not — and a guard
+that has to be remembered is what a type exists to stop being a memory test. The fix is the one this
+file already made five lines below, in the same struct: `AcceptedCloseRequest.terminal` got
+`TerminalID` for exactly the "a parse a caller could forget" argument, and `id` — the field whose own
+comment says it writes wherever the caller likes — did not. Tracked as #260.
+
+Prefer a newtype the day the comment gets written, not the day it is disbelieved.
 
 **Colour is a palette token, never a literal and never a system default.** Every surface
 spends `Design/Palette.swift` — views through `Color.surface`/`.textMuted`/…, the terminal
