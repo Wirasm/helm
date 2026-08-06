@@ -71,6 +71,9 @@ final class CanvasSchemeHandlerTests: XCTestCase {
         var contentType: String? {
             (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")
         }
+        var contentSecurityPolicy: String? {
+            (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Security-Policy")
+        }
     }
 
     private func handler(document: @escaping @MainActor () -> Data?) -> CanvasSchemeHandler {
@@ -191,6 +194,65 @@ final class CanvasSchemeHandlerTests: XCTestCase {
 
         XCTAssertEqual(task.status, 403)
         XCTAssertTrue(task.body.isEmpty)
+    }
+
+    // MARK: - What the page is allowed to reach
+
+    /// The policy is stamped by two separate `HTTPURLResponse` builders, and a canvas that
+    /// got it on its document but not on a sibling — or the other way round — would be a
+    /// policy with a hole in it. Asserted over all four response kinds for that reason.
+    ///
+    /// **Against the constant, never a copy of the header.** A test holding its own spelling
+    /// of the policy stays green while the two drift apart, which is the whole point of there
+    /// being one value; what this asserts is that every response carries *that* value.
+    func testEveryResponseCarriesThePolicy() throws {
+        let expected = CanvasSchemeHandler.contentSecurityPolicy
+
+        try FileManager.default.createSymbolicLink(
+            at: directory.appendingPathComponent("escape.txt"),
+            withDestinationURL: root.appendingPathComponent("outside.txt"))
+
+        for path in ["/plan.html", "/scene.json", "/missing.json", "/escape.txt"] {
+            let task = try request(path)
+
+            XCTAssertEqual(
+                task.contentSecurityPolicy, expected,
+                "\(path) came back without the policy, so a canvas reaching it is unpoliced")
+        }
+    }
+
+    /// What the policy has to *mean*, spelled as the properties #209 is about rather than as
+    /// the header again — so widening `connect-src` to a CDN fails here with a sentence
+    /// saying why, instead of as a string mismatch a reader has to diff.
+    ///
+    /// Measured, and the reason the strict policy was rejected: `script-src 'self'` alone
+    /// kills every artifact in the store today — all of them carry an inline `<style>` and an
+    /// inline `<script>`, and the operator's board map went dead under it. `'unsafe-inline'`
+    /// without a host in the allowlist still forbids remote script; `connect-src 'self'`
+    /// still forbids remote fetch, XHR and WebSocket.
+    func testThePolicyForbidsTheNetworkWithoutKillingTheArtifactsThatExist() {
+        let policy = CanvasSchemeHandler.contentSecurityPolicy
+
+        XCTAssertTrue(
+            policy.contains("connect-src 'self'"),
+            "the measured hole: the board map completed a fetch to https://example.com")
+        XCTAssertTrue(
+            policy.contains("default-src 'none'"),
+            "everything not named below has to fall to nothing, or the policy has a default")
+        for remote in ["http:", "https:", "ws:", "wss:", "*"] {
+            XCTAssertFalse(
+                policy.contains(remote),
+                "\(remote) in the policy is a remote origin a canvas may reach")
+        }
+        XCTAssertTrue(
+            policy.contains("script-src 'self' 'unsafe-inline'"),
+            "strict script-src kills the inline <script> every artifact in the store has")
+        XCTAssertTrue(
+            policy.contains("style-src 'self' 'unsafe-inline'"),
+            "strict style-src kills inline <style>, and mermaid builds <style> at runtime")
+        XCTAssertTrue(
+            policy.contains("img-src 'self' data:") && policy.contains("font-src 'self' data:"),
+            "mermaid's own bundle ships data: images")
     }
 
     // MARK: - The canvas that cannot be served at all

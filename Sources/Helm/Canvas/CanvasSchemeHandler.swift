@@ -19,6 +19,10 @@ import WebKit
 /// `res.status` mean what a canvas author expects them to mean, and the three outcomes are
 /// three outcomes. `respond` and `refuse` carry why that was not free (#201).
 ///
+/// **It is also where a canvas's reach is decided.** Every response carries the
+/// `Content-Security-Policy` below, which is what stops an artifact an agent wrote from
+/// talking to the internet in the operator's window (#209).
+///
 /// **One path deliberately still fails instead: the document the closure cannot produce.**
 /// That is normally the main-frame navigation, and failing it leaves the last good render
 /// on screen where a 404 would blank the pane — which matters, because the way it happens
@@ -52,6 +56,47 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// Stamped on every `HTTPURLResponse` this type builds. Nothing speaks HTTP here — it
     /// is the string the initializer wants in order to hand WebKit a status.
     private static let httpVersion = "HTTP/1.1"
+
+    /// **A canvas may not reach the internet.** Measured before this existed: the operator's
+    /// own board map, rendered unmodified, completed a `fetch` to `https://example.com`. helm
+    /// renders a pushed canvas with no click, so without this "an agent wrote a file" means
+    /// "an agent is running JavaScript with network reach in the operator's window", and it
+    /// keeps running after the agent is gone. That gap is the whole of #209.
+    ///
+    /// **`'unsafe-inline'` is deliberate, and it is not the risk here.** The strict policy —
+    /// `script-src 'self'; style-src 'self'` — is what a *new* artifact can be written
+    /// against, and it kills every artifact in the store today, all of which carry an inline
+    /// `<style>` and an inline `<script>`; measured against a copy of the real board map,
+    /// which went dead under it. With no host in the allowlist, `'unsafe-inline'` still
+    /// forbids **remote** script, and `connect-src 'self'` still forbids remote `fetch`, XHR
+    /// and WebSocket. That is the entire trust argument, bought at no cost to what exists.
+    /// Tightening to the strict form is a decision about the artifacts in the store, not
+    /// about this line.
+    ///
+    /// `style-src 'unsafe-inline'` is also what keeps mermaid alive: it builds `<style>`
+    /// elements at runtime, and #200 measured the analogous htmx case failing under
+    /// `style-src 'self'` as `CSP blocked style-src-elem: inline`. `img-src`/`font-src`
+    /// carry `data:` because mermaid's own bundle ships `data:` images.
+    ///
+    /// **A header rather than a `<meta>` tag**, because a meta tag is author-supplied — a
+    /// convention an agent can forget, and the agent is the party the policy is about. It
+    /// could not live here until #203 traded the bare `URLResponse`, which carries no
+    /// headers, for an `HTTPURLResponse`.
+    ///
+    /// **One value, and not `private`, because a CSP is a seam and both sides have to reach
+    /// the same string.** The near side is the two response builders below — a literal
+    /// repeated at each is two policies the day someone edits one. The far side is the test,
+    /// which asserts *against this constant* rather than re-spelling the header: a test
+    /// holding its own copy stays green while the copies drift, which is the failure the
+    /// architecture rule names. What the constant cannot reach is the far-far side — the
+    /// `helm-canvas` skill, where an agent reads what a canvas may do. Markdown cannot
+    /// compile against a Swift `let`, so that half stays a duplicate; it is named in #209's
+    /// PR rather than restated here.
+    static let contentSecurityPolicy = """
+        default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
+        img-src 'self' data:; font-src 'self' data:; connect-src 'self'; \
+        base-uri 'none'; form-action 'none'
+        """
 
     /// The artifact's own directory — nothing outside it is served.
     private let directory: URL
@@ -123,6 +168,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
                 headerFields: [
                     "Content-Type": "\(mimeType); charset=utf-8",
                     "Content-Length": String(data.count),
+                    "Content-Security-Policy": Self.contentSecurityPolicy,
                 ])
         else { return fail(task, .badServerResponse) }
         task.didReceive(response)
@@ -142,11 +188,19 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// twice — 200 gives `onload` and runs it, 404 gives `onerror` and does not — and
     /// `import()` of a missing module still throws even when the 404 carries valid module
     /// source. The body is empty regardless; there is nothing to render or execute.
+    ///
+    /// It carries the policy too. An empty body has nothing to execute, so this is not where
+    /// the enforcement happens — but a refusal *can* become the document, because a link to a
+    /// sibling on this origin is a navigation the coordinator allows, and "every response
+    /// carries it" is a rule with no edge to get wrong.
     private func refuse(_ task: any WKURLSchemeTask, url: URL, status: Int) {
         guard
             let response = HTTPURLResponse(
                 url: url, statusCode: status, httpVersion: Self.httpVersion,
-                headerFields: ["Content-Length": "0"])
+                headerFields: [
+                    "Content-Length": "0",
+                    "Content-Security-Policy": Self.contentSecurityPolicy,
+                ])
         else { return fail(task, .badServerResponse) }
         task.didReceive(response)
         task.didFinish()
