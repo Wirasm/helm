@@ -39,6 +39,36 @@ import WebKit
 // page's own JavaScript cannot see `window.webkit.messageHandlers` at all —
 // only helm's injected script, which runs in that same world, can post.
 
+// MARK: - When a file canvas has to navigate again
+
+/// Whether a file canvas's webview has to load again — the whole of *"has anything changed?"*
+/// for both artifact kinds, as a value rather than a string each view interpolates for itself.
+///
+/// **`generation` is a stored property here rather than a term someone remembers to include**,
+/// and that is the point (#261). It is the only field that can say *"the same path, the same
+/// theme, different bytes on disk"* — a **sibling** edit reaches the page through it and through
+/// nothing else, because nothing watches a sibling and the artifact's own identity has not
+/// moved. It was previously one term in a `"\(…)\u{0}\(…)"` string built twice, and the markdown
+/// copy is where dropping it would look like a cleanup: that key already folds in the whole
+/// document text, so a counter beside it reads as redundant. It is not — a markdown artifact
+/// referencing `./diagram.png` is byte-identical when only the diagram changed. AGENTS.md's rule
+/// is exact: prefer a newtype the day the comment gets written.
+///
+/// `document` is what identifies the bytes on screen, and the two canvases answer it
+/// differently: the markdown **source**, because helm generates that page and the same path can
+/// render different text; the artifact's **path** for an `.html` one, because the handler reads
+/// its bytes per request and the path is all the view knows.
+///
+/// **Deliberately not shared with `URLCanvasCoordinator`.** That one compares a URL and a
+/// generation and has no theme at all — helm does not render a remote page, so there is no third
+/// instance of this rule to unify, and pretending there is would mean a field one side must
+/// always leave empty.
+struct CanvasReloadKey: Equatable {
+    let theme: CanvasTheme
+    let generation: Int
+    let document: String
+}
+
 // MARK: - Markdown artifact (one webview per document)
 
 /// A whole markdown artifact as a single WKWebView: CanvasHTML.documentPage
@@ -80,6 +110,74 @@ struct MarkdownCanvasView: View {
     }
 }
 
+/// How a markdown canvas's webview is built, and when it reloads — `HTMLCanvasPage`'s twin,
+/// and here for the same reason (#261): a test cannot construct an `NSViewRepresentableContext`,
+/// so a join test would otherwise have to rebuild this rule and would agree with the bug.
+///
+/// **A markdown canvas serves siblings too, and that is easy to forget.**
+/// `CanvasSchemeHandler` resolves a relative request against the artifact's directory with no
+/// branch on content type at all, so `![diagram](./diagram.png)` in a `.md` artifact is fetched
+/// over exactly the path an `.html` artifact's `<script src>` is. So the sibling-only edit #261
+/// describes happens here as well, and the fix — `CanvasModel.refresh()` from a re-push — reaches
+/// it through `generation`, the same way.
+@MainActor
+enum MarkdownCanvasPage {
+    /// A webview on the artifact's own `helm-canvas://` origin, with the vendored renderers
+    /// injected and the annotation bridge installed. Loads nothing by itself.
+    static func makeWebView(
+        for path: StandardizedPath, coordinator: CanvasFileCoordinator
+    )
+        -> WKWebView
+    {
+        let configuration = WKWebViewConfiguration()
+        // Vendored renderers arrive as user scripts at document start; the
+        // page's inline script then only converts and renders.
+        for script in [CanvasHTML.vendoredMarked(), CanvasHTML.vendoredMermaid()] {
+            guard let script else { continue }
+            configuration.userContentController.addUserScript(
+                WKUserScript(
+                    source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+            )
+        }
+        // The page is generated, not on disk, so the handler serves whatever the
+        // coordinator last staged — which is what keeps a theme flip and a file change
+        // rendering the current document rather than the one this view was built with.
+        configuration.setURLSchemeHandler(
+            CanvasSchemeHandler(artifact: URL(fileURLWithPath: path.value)) {
+                [weak coordinator] in coordinator?.stagedDocument
+            },
+            forURLScheme: CanvasAddress.scheme
+        )
+        coordinator.installBridge(on: configuration.userContentController)
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = coordinator
+        webView.allowsMagnification = true
+        return webView
+    }
+
+    /// Loads only when the (theme, generation, content) triple actually
+    /// changed — file-watch reloads and appearance flips re-render; mere
+    /// SwiftUI churn does not.
+    ///
+    /// **`generation` is not redundant beside `markdown`, and looks it.** The document text is
+    /// already in the key, so folding in a counter reads like belt and braces — but a sibling
+    /// edit leaves the markdown byte-identical, and then the counter is the only term that can
+    /// differ. `CanvasReloadKey` is why that cannot be tidied away.
+    static func load(
+        _ webView: WKWebView, path: StandardizedPath, markdown: String, generation: Int,
+        theme: CanvasTheme, coordinator: CanvasFileCoordinator
+    ) {
+        let key = CanvasReloadKey(theme: theme, generation: generation, document: markdown)
+        guard coordinator.loadedKey != key else { return }
+        coordinator.loadedKey = key
+        coordinator.forgetPushedState()
+        coordinator.stagedDocument = Data(
+            CanvasHTML.documentPage(markdown: markdown, theme: theme).utf8)
+        guard let address = CanvasAddress.url(for: path) else { return }
+        webView.load(URLRequest(url: address, cachePolicy: .reloadIgnoringLocalCacheData))
+    }
+}
+
 private struct MarkdownCanvasWebView: NSViewRepresentable {
     let url: URL
     let markdown: String
@@ -96,31 +194,8 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        // Vendored renderers arrive as user scripts at document start; the
-        // page's inline script then only converts and renders.
-        for script in [CanvasHTML.vendoredMarked(), CanvasHTML.vendoredMermaid()] {
-            guard let script else { continue }
-            configuration.userContentController.addUserScript(
-                WKUserScript(
-                    source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-            )
-        }
-        // The page is generated, not on disk, so the handler serves whatever the
-        // coordinator last staged — which is what keeps a theme flip and a file change
-        // rendering the current document rather than the one this view was built with.
-        let coordinator = context.coordinator
-        configuration.setURLSchemeHandler(
-            CanvasSchemeHandler(artifact: URL(fileURLWithPath: path.value)) {
-                [weak coordinator] in coordinator?.stagedDocument
-            },
-            forURLScheme: CanvasAddress.scheme
-        )
-        coordinator.installBridge(on: configuration.userContentController)
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = coordinator
-        webView.allowsMagnification = true
-        load(webView, coordinator: coordinator)
+        let webView = MarkdownCanvasPage.makeWebView(for: path, coordinator: context.coordinator)
+        load(webView, coordinator: context.coordinator)
         return webView
     }
 
@@ -134,18 +209,10 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
         context.coordinator.showMark(showsMark, in: webView)
     }
 
-    /// Loads only when the (theme, generation, content) triple actually
-    /// changed — file-watch reloads and appearance flips re-render; mere
-    /// SwiftUI churn does not.
     private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
-        let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(markdown)"
-        guard coordinator.loadedKey != key else { return }
-        coordinator.loadedKey = key
-        coordinator.forgetPushedState()
-        coordinator.stagedDocument = Data(
-            CanvasHTML.documentPage(markdown: markdown, theme: theme).utf8)
-        guard let address = CanvasAddress.url(for: path) else { return }
-        webView.load(URLRequest(url: address, cachePolicy: .reloadIgnoringLocalCacheData))
+        MarkdownCanvasPage.load(
+            webView, path: path, markdown: markdown, generation: generation, theme: theme,
+            coordinator: coordinator)
     }
 }
 
@@ -178,21 +245,28 @@ struct HTMLCanvasView: View {
     }
 }
 
-private struct HTMLCanvasWebView: NSViewRepresentable {
-    let url: URL
-    let generation: Int
-    let markTool: CanvasMarkTool
-    let showsMark: Bool
-    let theme: CanvasTheme
-    let onSelection: (CanvasPageSelection) -> Void
-
-    private var path: StandardizedPath { StandardizedPath(url) }
-
-    func makeCoordinator() -> CanvasFileCoordinator {
-        CanvasFileCoordinator(host: CanvasAddress.host(for: path), onAnnotation: onSelection)
-    }
-
-    func makeNSView(context: Context) -> WKWebView {
+/// How a `.html` canvas's webview is built, and when it reloads. The two decisions
+/// `HTMLCanvasWebView` below hands to SwiftUI — named here so that something which is not
+/// SwiftUI can make them too.
+///
+/// **Split out for #261, and the bug is the argument.** A sibling-only edit reached the page
+/// through nothing at all: `WorkbenchModel.offer` declined to refresh an open pane, and the
+/// pane's own `FileWatcher` was never watching the sibling. Each half was covered on its own
+/// and the join was not — #216's shape exactly — and the join cannot be driven through an
+/// `NSViewRepresentable`, because `NSViewRepresentableContext` has no public initializer. So
+/// what a test needs is here and the representable calls it. A test that stood up its own
+/// `WKWebViewConfiguration` and its own reload rule would be a second spelling of both, and
+/// would agree with the bug rather than catch it.
+@MainActor
+enum HTMLCanvasPage {
+    /// A webview on the artifact's own `helm-canvas://` origin, with the annotation bridge
+    /// installed and `coordinator` as its navigation delegate. Loads nothing by itself —
+    /// `load` is the only thing that navigates.
+    static func makeWebView(
+        for path: StandardizedPath, coordinator: CanvasFileCoordinator
+    )
+        -> WKWebView
+    {
         let configuration = WKWebViewConfiguration()
         let artifact = URL(fileURLWithPath: path.value)
         // Read straight from disk per request: the artifact IS the document here, and a
@@ -203,29 +277,27 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
             },
             forURLScheme: CanvasAddress.scheme
         )
-        context.coordinator.installBridge(on: configuration.userContentController)
+        coordinator.installBridge(on: configuration.userContentController)
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
+        webView.navigationDelegate = coordinator
         webView.allowsMagnification = true
-        load(webView, coordinator: context.coordinator)
         return webView
-    }
-
-    static func dismantleNSView(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
-        coordinator.removeBridge(from: webView.configuration.userContentController)
-    }
-
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        load(webView, coordinator: context.coordinator)
-        context.coordinator.pushTool(markTool, to: webView)
-        context.coordinator.showMark(showsMark, in: webView)
     }
 
     /// (Re)loads when the file, its generation (external change), or the theme
     /// changes. Scripts are re-armed per load so a theme flip re-renders the
     /// page's diagrams in the matching mermaid theme.
-    private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
-        let key = "\(theme.rawValue)\u{0}\(generation)\u{0}\(path.value)"
+    ///
+    /// **`generation` is the only thing that can say "the same path, different bytes"**, which
+    /// is why a sibling edit has to reach `CanvasModel` before it can reach here: the path is
+    /// unchanged and the theme is unchanged, so a bench that refreshes nothing leaves this
+    /// function with no change to see and no reason to navigate (#261). `CanvasReloadKey` is
+    /// where that is carried.
+    static func load(
+        _ webView: WKWebView, path: StandardizedPath, generation: Int, theme: CanvasTheme,
+        coordinator: CanvasFileCoordinator
+    ) {
+        let key = CanvasReloadKey(theme: theme, generation: generation, document: path.value)
         guard coordinator.loadedKey != key else { return }
         coordinator.loadedKey = key
         coordinator.forgetPushedState()
@@ -257,6 +329,42 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     }
 }
 
+private struct HTMLCanvasWebView: NSViewRepresentable {
+    let url: URL
+    let generation: Int
+    let markTool: CanvasMarkTool
+    let showsMark: Bool
+    let theme: CanvasTheme
+    let onSelection: (CanvasPageSelection) -> Void
+
+    private var path: StandardizedPath { StandardizedPath(url) }
+
+    func makeCoordinator() -> CanvasFileCoordinator {
+        CanvasFileCoordinator(host: CanvasAddress.host(for: path), onAnnotation: onSelection)
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let webView = HTMLCanvasPage.makeWebView(for: path, coordinator: context.coordinator)
+        load(webView, coordinator: context.coordinator)
+        return webView
+    }
+
+    static func dismantleNSView(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
+        coordinator.removeBridge(from: webView.configuration.userContentController)
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        load(webView, coordinator: context.coordinator)
+        context.coordinator.pushTool(markTool, to: webView)
+        context.coordinator.showMark(showsMark, in: webView)
+    }
+
+    private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
+        HTMLCanvasPage.load(
+            webView, path: path, generation: generation, theme: theme, coordinator: coordinator)
+    }
+}
+
 // MARK: - Shared coordinator
 
 /// Navigation policy for both artifact web views, plus the annotation bridge's plumbing —
@@ -278,7 +386,7 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// `contentWorld:` it, so a page's own JS sees no `helmCanvas` at all.
     static let bridgeWorld = WKContentWorld.world(name: "helm-canvas-bridge")
 
-    var loadedKey: String?
+    var loadedKey: CanvasReloadKey?
     /// The tool the page was last told about, or nil when the page has not been told at
     /// all — which includes every fresh document. A change is pushed with
     /// `evaluateJavaScript` rather than folded into `loadedKey`, because reloading to switch

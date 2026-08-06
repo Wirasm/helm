@@ -201,8 +201,14 @@ struct Workbench: Codable, Equatable {
     mutating func offer(_ pane: Pane, at placement: Placement) {
         switch placement {
         case .existing:
-            // Already here. Pulling it forward would be the seizing this exists to avoid —
-            // and an agent re-offering the artifact it just rewrote is the common case.
+            // Already here, and it stays where it is: pulling it forward would be the seizing
+            // this exists to avoid, and an agent re-offering the artifact it just rewrote is
+            // the common case.
+            //
+            // **"Where it is" is arrangement, not content.** Re-rendering that pane is
+            // `WorkbenchModel.offer`'s (#261) — this type holds values and cannot reach a
+            // `CanvasModel` — so nothing here should be read as saying a re-push shows the
+            // operator the same bytes.
             return
         case let .tab(slotID):
             guard let address = address(ofSlot: slotID) else { return }

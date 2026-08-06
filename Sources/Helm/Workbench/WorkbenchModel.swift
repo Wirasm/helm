@@ -292,14 +292,47 @@ final class WorkbenchModel: ObservableObject {
     /// An agent putting an artifact on the bench. Same placement rules as `open`, but it
     /// **appears** rather than seizing — see `Workbench.offer(_:at:)` (#125).
     ///
-    /// An artifact already on the bench is left exactly where it is: the common case is an
-    /// agent re-offering the file it just rewrote, and `FileWatcher` has already re-rendered
-    /// that pane. Pulling it forward would be the interruption this whole path avoids.
+    /// An artifact already on the bench keeps its pane, its slot and its tab — nothing is
+    /// pulled forward, nothing is selected, focus does not move. What it does **not** keep is
+    /// its render: a re-push is a request to show that file again, and the pane re-reads it
+    /// where it already is (#261).
+    ///
+    /// **This used to return without refreshing anything**, on the stated reasoning that
+    /// *"`FileWatcher` has already re-rendered that pane"*. That is true of the artifact and
+    /// false of everything beside it. `CanvasModel.open` watches exactly one url, so an agent
+    /// that rewrote only `app.js` fired no event at all — and this, the one path left that
+    /// could still refresh the pane, declined on the strength of a refresh that never
+    /// happened. The failure was silent and pointed the wrong way: the page kept rendering the
+    /// old bytes, so the natural reading was "my change did not work" and the next move was to
+    /// edit code that was not being re-read. It is also what #228 really was — `./app.js?v=2`
+    /// worked because rewriting the import URL edits the **`.html`**, which is the file the
+    /// watcher was on all along, and never because it busted a cache.
+    ///
+    /// **A refresh is not a seizure, and that distinction is the whole design.** What "appear,
+    /// don't seize" protects is `selected` and `focusedSlot` (`Workbench.offer(_:at:)`), and
+    /// neither is touched here — the pane redraws exactly where it was, still behind whatever
+    /// tab it was behind. What it costs is **scroll position**, on a push that may have
+    /// changed nothing. That is the trade, and it is not close: a push is an explicit act by
+    /// an agent that has just written something, not a poll, so the wasted re-render is the
+    /// rare case — while the no-op's cost was the operator reading a page that is simply
+    /// wrong, with nothing anywhere saying so.
+    ///
+    /// **`open` is deliberately left alone.** The operator's own ⌘-click on an already-open
+    /// artifact selects that pane and brings it forward, which puts them in front of it and
+    /// lets them ask for a reload; nobody is in front of a push by construction.
     @discardableResult
     func offer(_ source: CanvasSource) -> Pane.ID? {
         guard var bench else { return nil }
         let placement = bench.placement(forOpening: source)
-        if case let .existing(open) = placement { return open }
+        if case let .existing(open) = placement {
+            // Only a pane already resolved into a canvas has a render to refresh. One that has
+            // not — a restored tab nobody has selected since launch — reads the file when
+            // `canvas(for:)` first builds its model, so resolving one here would buy nothing
+            // and would open a `FileWatcher`, and its file descriptor, for a pane that is not
+            // on screen.
+            canvases[open]?.model.refresh()
+            return open
+        }
         let pane = Pane(content: .canvas(source))
         bench.offer(pane, at: placement)
         commit(bench)

@@ -34,6 +34,12 @@ import XCTest
 /// a sibling stale. What went wrong in #228 is still unknown; if it recurs, this file is the
 /// harness to extend rather than a place to add another header assertion.
 ///
+/// **What went wrong in #228 is no longer unknown, and it was not here.** #261 is the mechanism:
+/// helm watched the artifact and nothing beside it, and a re-push of an open canvas refreshed
+/// nothing — so `?v=2` worked by editing the `.html`, not by busting a cache. This file measures
+/// what WebKit serves and deliberately bypasses `WorkbenchModel`;
+/// `CanvasSiblingRefreshTests` is the one that drives a push through it and reads the page.
+///
 /// **Why it is safe to keep in the gate**: no display — a `WKWebView` renders offscreen and
 /// this never looks at pixels — no network, no TCC grant, no new dependency, `WebKit` is
 /// already linked. It is the only live-WebKit test in the suite; if it turns flaky, delete it
