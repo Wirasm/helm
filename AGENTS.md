@@ -122,6 +122,18 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   hosting their session.
 - **Never delete a test to make the gate green.** If its subject genuinely no longer
   exists, say which and why in the commit.
+- **Watch a test fail before you trust it passing.** Take the fix out, run it, name which
+  tests went red and on what assertion; put it back and confirm green. Report both runs.
+  A test written after the fix passes for free, and a green suite is not evidence until
+  you have seen the red one.
+- **Revert with `git checkout <base> -- <file>`, and grep the file before believing the
+  run.** `git stash` after committing reverts only uncommitted edits, leaves the fix in
+  place, and the suite passes while measuring nothing.
+- **Some tests must pass either way — say which, and why.** A control that only proves you
+  select less is satisfied by selecting nothing. Keep the ones that fail if the change
+  overshoots, and name them as that.
+- **Review the tree you are shipping.** A rebase that rewrites a file invalidates every
+  review of it — re-run them and post against the final sha, not the one you started from.
 - **To see the UI, ask helm to draw itself: `swift tools/helm-capture.swift --out <p.png>`.**
   **No TCC grant, no display, no keystrokes, no Accessibility** — an app rendering its own view
   hierarchy is *drawing*, and TCC does not gate it. It is a spool request (`kind: "capture"`),
