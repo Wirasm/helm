@@ -193,6 +193,18 @@ final class CanvasSchemeHandlerTests: XCTestCase {
         XCTAssertTrue(task.body.isEmpty)
     }
 
+    /// **The 404 is the refusal that moves, so it is the one that must not be cached (#228).**
+    /// A 403 is a fixed boundary decision, but a sibling that is missing now is one an agent may
+    /// write in a minute — and a cached negative would outlive its creation, which is this
+    /// ticket's own failure shape one status code over.
+    func testAMissingSiblingIsNotCachedEither() throws {
+        let task = try request("/missing.json")
+
+        XCTAssertEqual(
+            task.cacheControl, "no-store",
+            "a 404 for a file the agent is about to write must not outlive the file")
+    }
+
     // MARK: - A path the boundary refuses
 
     func testASymlinkOutOfTheDirectoryIs403() throws {
@@ -206,6 +218,10 @@ final class CanvasSchemeHandlerTests: XCTestCase {
 
         XCTAssertEqual(task.status, 403)
         XCTAssertTrue(task.body.isEmpty)
+        // Both refusals go through `refuse`, so both carry it. A 403 is a fixed decision and
+        // would be harmless cached — it is here because one code path should not have two
+        // caching rules depending on which status it produced.
+        XCTAssertEqual(task.cacheControl, "no-store")
         XCTAssertNil(task.error)
     }
 

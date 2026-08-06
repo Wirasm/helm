@@ -76,6 +76,17 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// Siblings-are-served is the primitive the `helm-canvas` skill tells agents to build on —
     /// #200's whole conclusion is *put the library bytes beside the artifact* — so freshness
     /// there has to be unconditional rather than clever.
+    ///
+    /// **What is measured and what is not, because this file's other WebKit claims say which
+    /// and this one must too.** The *bug* is measured — #111's relaunch, and the `?v=2` that
+    /// worked. That WebKit honours `no-store` from a `WKURLSchemeHandler`'s `HTTPURLResponse`
+    /// is **reasoned from HTTP semantics, not measured here**: the tests below assert the
+    /// header is on the response, which is a different claim. `respond` and `refuse` above
+    /// each say "measured with real, loadable JavaScript served twice" because their claims
+    /// needed a live `WKWebView` to settle, and no unit test can settle this one either — it
+    /// wants an edit-reload-refetch against a real page. Until someone runs that, this is a
+    /// well-founded fix rather than a confirmed one, and #228 should be closed on the
+    /// measurement rather than on the reasoning.
     private static let cacheControl = "no-store"
 
     /// The artifact's own directory — nothing outside it is served.
@@ -168,11 +179,22 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// twice — 200 gives `onload` and runs it, 404 gives `onerror` and does not — and
     /// `import()` of a missing module still throws even when the 404 carries valid module
     /// source. The body is empty regardless; there is nothing to render or execute.
+    ///
+    /// **A refusal is no more cacheable than a success (#228), and the 404 is the one that
+    /// moves.** A 403 is a fixed boundary decision — the same path is refused every time — but
+    /// a 404 answers a question about the filesystem, and an agent referencing a sibling it has
+    /// not written yet is an ordinary sequence rather than an exotic one. A cached negative
+    /// would then outlive the file's creation and reproduce this ticket's exact shape one status
+    /// code over: the page keeps failing to load something that is now there, silently, and the
+    /// natural reading is again "my change did not work".
     private func refuse(_ task: any WKURLSchemeTask, url: URL, status: Int) {
         guard
             let response = HTTPURLResponse(
                 url: url, statusCode: status, httpVersion: Self.httpVersion,
-                headerFields: ["Content-Length": "0"])
+                headerFields: [
+                    "Content-Length": "0",
+                    "Cache-Control": Self.cacheControl,
+                ])
         else { return fail(task, .badServerResponse) }
         task.didReceive(response)
         task.didFinish()
