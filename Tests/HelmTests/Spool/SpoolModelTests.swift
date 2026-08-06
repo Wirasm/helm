@@ -22,6 +22,7 @@ final class SpoolModelTests: XCTestCase {
     private var spawner: FakeSpawner!
     private var capturer: FakeCapturer!
     private var closer: FakeCloser!
+    private var commander: FakeCommander!
 
     override func setUp() async throws {
         let base = FileManager.default.temporaryDirectory
@@ -36,6 +37,7 @@ final class SpoolModelTests: XCTestCase {
         spawner = FakeSpawner()
         capturer = FakeCapturer()
         closer = FakeCloser()
+        commander = FakeCommander()
     }
 
     override func tearDown() async throws {
@@ -46,6 +48,7 @@ final class SpoolModelTests: XCTestCase {
         spawner = nil
         capturer = nil
         closer = nil
+        commander = nil
     }
 
     // MARK: - Fixtures
@@ -59,6 +62,7 @@ final class SpoolModelTests: XCTestCase {
         model.attach(spawner: spawner)
         model.attach(capturer: capturer)
         model.attach(closer: closer)
+        model.attach(commander: commander)
         return model
     }
 
@@ -81,6 +85,10 @@ final class SpoolModelTests: XCTestCase {
 
     private func close(id: String = "bye", force: Bool = false) -> String {
         #"{"id":"\#(id)","kind":"close","terminal":"\#(closer.terminal.uuidString)","force":\#(force)}"#
+    }
+
+    private func command(id: String = "go", name: String = "splitRight") -> String {
+        #"{"id":"\#(id)","kind":"command","command":"\#(name)"}"#
     }
 
     private func mailbox(_ handle: String, pid: pid_t, sessionId: String) throws {
@@ -524,6 +532,105 @@ final class SpoolModelTests: XCTestCase {
         XCTAssertEqual(closer.closed.count + second.closed.count, 1)
     }
 
+    // MARK: - Command (#269)
+
+    func testWithTheWatcherOffACommandTouchesNothing() async throws {
+        // The negative control, per kind: it is what gives every other claim in this section
+        // its meaning.
+        let model = self.model(isOff: true)
+        try submit(command(), named: "go.json")
+        model.start()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(commander.ran, [], "no command may run")
+        XCTAssertNil(directory.result(id: "go"), "no result may be written")
+        XCTAssertEqual(directory.pending().count, 1, "and the request is still sitting there")
+    }
+
+    func testAnAllowedCommandRunsAndTheResultSaysWhatItDid() async throws {
+        let model = self.model()
+        try submit(command(name: "splitRight"), named: "go.json")
+        model.start()
+
+        let result = await awaitResult(id: "go", is: .ran)
+        XCTAssertEqual(commander.ran, [.splitRight], "the command reached the bench")
+        XCTAssertEqual(result?.command?.command, .splitRight, "…and the result names it")
+        // The whole point of the report: the caller does not have to re-read snapshot.json
+        // and race it to learn what its own request produced.
+        XCTAssertEqual(result?.command?.paneCreated?.uuidString, commander.created.uuidString)
+        XCTAssertEqual(
+            result?.terminalId?.uuidString, commander.created.uuidString,
+            "and it is copied to terminalId, so `helm-close <terminalId>` needs no lookup")
+        XCTAssertEqual(
+            result?.command?.focusedPaneBefore, result?.command?.focusedPaneAfter,
+            "the focus rule, reported as two readings rather than asserted in a header")
+        XCTAssertEqual(spawner.opened, [], "a command starts no agent")
+    }
+
+    func testACommandTheOperatorsFocusRuleForbidsIsRefusedWithItsReason() async throws {
+        let model = self.model()
+        try submit(command(name: "moveFocus"), named: "go.json")
+        model.start()
+
+        let result = await awaitResult(id: "go", is: .refused)
+        XCTAssertTrue(
+            result?.reason?.contains("moveFocus") == true,
+            "the refusal names the command; got \(String(describing: result?.reason))")
+        XCTAssertEqual(commander.ran, [], "and nothing reached the bench")
+    }
+
+    func testACommandNameHelmDoesNotHaveIsARefusalOfItsOwn() async throws {
+        // Told apart from the refusal above on purpose: one is a typo the caller can fix, the
+        // other is a standing decision it cannot.
+        let model = self.model()
+        try submit(command(name: "splitSideways"), named: "go.json")
+        model.start()
+
+        let result = await awaitResult(id: "go", is: .refused)
+        XCTAssertTrue(result?.reason?.contains("is not a helm command") == true)
+        XCTAssertEqual(commander.ran, [])
+    }
+
+    func testACommandWithNoBenchAttachedIsAHelmDefectAndSaysSo() async throws {
+        // `failed`, not `refused` — the same distinction the close path draws.
+        let model = SpoolModel(
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
+            shellDeadline: .seconds(5), claimDeadline: .seconds(3))
+        try submit(command(), named: "go.json")
+        model.start()
+
+        let result = await awaitResult(id: "go", is: .failed)
+        XCTAssertEqual(result?.reason?.contains("helm defect") == true, true)
+    }
+
+    func testACommanderThatCannotActFailsWithItsReasonRatherThanSilently() async throws {
+        commander.refusal = "helm has no workspace open"
+        let model = self.model()
+        try submit(command(), named: "go.json")
+        model.start()
+
+        let result = await awaitResult(id: "go", is: .failed)
+        XCTAssertEqual(result?.reason, "helm has no workspace open")
+    }
+
+    func testACommandIsActedOnAtMostOnce() async throws {
+        // Two windows draining one spool must not both split the bench.
+        let second = FakeCommander()
+        let other = SpoolModel(
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
+            shellDeadline: .seconds(5), claimDeadline: .seconds(3))
+        other.attach(commander: second)
+
+        let model = self.model()
+        try submit(command(), named: "go.json")
+        model.start()
+        other.start()
+        model.drain()
+        other.drain()
+
+        _ = await awaitResult(id: "go", is: .ran)
+        XCTAssertEqual(commander.ran.count + second.ran.count, 1)
+    }
+
     func testARequestClaimedByAPreviousRunIsAnsweredRatherThanReRun() async throws {
         // The restart case. A claimed file is indistinguishable from one being worked on, so
         // re-running it is the double-open #54 forbids — it is answered instead.
@@ -602,6 +709,36 @@ private final class FakeCloser: SpoolClosing {
         guard id == terminal, !refuses else { return false }
         closed.append(id)
         return true
+    }
+}
+
+/// A bench that is not there, for the driving kind (#269). It records which commands reached it
+/// and reports a bench that grew a pane and did not move the keyboard — which is what the real
+/// `WorkbenchSpoolCommander` promises and what `SpoolCommandPolicy` argues for.
+///
+/// Whether a command may be sent at all never reaches here: `SpoolPolicy.accept` has already
+/// refused everything the policy refuses, which is the seam that keeps that decision testable
+/// without a bench in the first place.
+@MainActor
+private final class FakeCommander: SpoolCommanding {
+    /// The pane a split or a new terminal produced, so a test can match it against the
+    /// result's `paneCreated` and `terminalId`.
+    let created = UUID()
+    /// Where the keyboard was, and stays. One value on both sides of the report is the fake's
+    /// way of modelling the promise; the real one measures it.
+    let focused = UUID()
+    var ran: [HelmCommandName] = []
+    /// helm accepting a command it then cannot carry out — no workspace open, say.
+    var refusal: String?
+
+    func run(_ command: HelmCommandName) -> Result<CommandReport, SpoolRefusal> {
+        if let refusal { return .failure(SpoolRefusal(refusal)) }
+        ran.append(command)
+        return .success(
+            CommandReport(
+                command: command, paneCreated: TerminalID(created),
+                focusedPaneBefore: TerminalID(focused), focusedPaneAfter: TerminalID(focused),
+                columns: 2, panes: 2))
     }
 }
 

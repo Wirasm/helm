@@ -5,11 +5,12 @@ import XCTest
 /// Proves the standalone spool scripts and `HelmWire` still agree on the wire format — the
 /// detectable half of the duplication `AGENTS.md` argues is honest (#221).
 ///
-/// **Why the duplication exists at all.** `tools/helm-spool.swift`, `helm-close.swift` and
-/// `helm-capture.swift` cannot `import HelmWire`: a single-file `swift tools/…swift` script
-/// resolves no `Package.swift` and runs from any cwd, which is the whole reason the spool is a
-/// script rather than an SPM target (`AGENTS.md`'s "Why the spool is a script, and must stay
-/// one" has the measurements). So the request JSON, the result JSON and the spool's own
+/// **Why the duplication exists at all.** `tools/helm-spool.swift`, `helm-close.swift`,
+/// `helm-capture.swift` and `helm-command.swift` cannot `import HelmWire`: a single-file
+/// `swift tools/…swift` script resolves no `Package.swift` and runs from any cwd, which is the
+/// whole reason the spool is a script rather than an SPM target (`AGENTS.md`'s "Why the spool is
+/// a script, and must stay one" has the measurements). So the request JSON, the result JSON and
+/// the spool's own
 /// directory-resolution rules are each spelled out twice — once here as `HelmWire` types and
 /// functions, once by hand in each script. A duplicate is honest only when a runtime boundary
 /// makes sharing impossible — this is that boundary — but honest still means it has to be
@@ -18,13 +19,14 @@ import XCTest
 /// **This file covers three of the spool's four boundaries, and says which one it does not:**
 ///
 /// 1. **The request direction** (script → helm): a script writes `<id>.json`, helm's
-///    `SpoolDirectory.request(at:)` decodes it. Covered by the three `testHelm*WritesWhat
-///    *RequestDecodes` tests below, unchanged from #221's first pass.
+///    `SpoolDirectory.request(at:)` decodes it. Covered by the four `testHelm*WritesWhat
+///    *RequestDecodes` tests below, unchanged from #221's first pass but for #269's fourth kind.
 /// 2. **The result direction** (helm → script): helm writes `results/<id>.json`, the script
 ///    reads `json["status"] as? String` and switches on it by hand — `helm-spool.swift:180`,
-///    `helm-close.swift:151`, `helm-capture.swift:148`, none of which decode through
-///    `SpoolResult`. Covered by `testHelm*ExitCodeAndStderrForEveryResultStatus` below, over
-///    **every** `SpoolResult.Status` case for every script — `Status: CaseIterable` plus an
+///    `helm-close.swift:151`, `helm-capture.swift:148`, `helm-command.swift:167`, none of which
+///    decode through `SpoolResult`. Covered by `testHelm*ExitCodeAndStderrForEveryResultStatus`
+///    below, over **every** `SpoolResult.Status` case for every script — `Status: CaseIterable`
+///    plus an
 ///    exhaustive switch in `expectation(for:)` is what makes forgetting a script for a new
 ///    case a compile error in this file rather than a silent gap. `testHelm*PrintsHandleAnd
 ///    TerminalIdAsBareStringsOnceReady` (#229) covers the same direction from a different
@@ -130,6 +132,17 @@ final class SpoolWireConformanceTests: XCTestCase {
         XCTAssertTrue(close.force)
     }
 
+    func testHelmCommandWritesWhatCommandRequestDecodes() throws {
+        let id = "conformance-command"
+        try run("helm-command.swift", ["splitRight", "--id", id])
+
+        guard case .command(let command) = try decodedRequest(id: id) else {
+            return XCTFail(
+                "helm-command.swift wrote a request HelmWire did not decode as a command")
+        }
+        XCTAssertEqual(command.command, "splitRight")
+    }
+
     func testHelmCaptureWritesWhatCaptureRequestDecodes() throws {
         let id = "conformance-capture"
         try run(
@@ -168,6 +181,7 @@ final class SpoolWireConformanceTests: XCTestCase {
         case .ready: return ResultExpectation(exitCode: 0, stderrContains: "")
         case .captured: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
         case .closed: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
+        case .ran: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
         case .unclaimed: return ResultExpectation(exitCode: 5, stderrContains: "no mailbox")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
         case .failed: return ResultExpectation(exitCode: 4, stderrContains: "could not act")
@@ -189,6 +203,8 @@ final class SpoolWireConformanceTests: XCTestCase {
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status captured")
         case .closed:
             return ResultExpectation(exitCode: 0, stderrContains: "is gone")
+        case .ran:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ran")
         case .unclaimed:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
@@ -210,6 +226,31 @@ final class SpoolWireConformanceTests: XCTestCase {
             return ResultExpectation(exitCode: 0, stderrContains: "terminal content")
         case .closed:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status closed")
+        case .ran:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ran")
+        case .unclaimed:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
+        case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
+        case .failed: return ResultExpectation(exitCode: 4, stderrContains: "could not act")
+        case .abandoned: return ResultExpectation(exitCode: 6, stderrContains: "stopped mid-flight")
+        }
+    }
+
+    /// helm-command.swift's own `Exit` enum — ok=0, refused=3, failed=4, abandoned=6 (#269).
+    /// Same shape as the two above: a command is one write, so everything but `ran` falls to
+    /// `default:`.
+    private func helmCommandExpectation(for status: SpoolResult.Status) -> ResultExpectation {
+        switch status {
+        case .started:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status started")
+        case .ready:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ready")
+        case .captured:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status captured")
+        case .closed:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status closed")
+        case .ran:
+            return ResultExpectation(exitCode: 0, stderrContains: "splitRight ran")
         case .unclaimed:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
@@ -239,6 +280,13 @@ final class SpoolWireConformanceTests: XCTestCase {
                     terminalSurfaces: 1, terminalSurfacesExcluded: 0))
         case .closed:
             return SpoolResult(id: id, status: .closed, terminalId: TerminalID(terminal), pid: 4242)
+        case .ran:
+            return SpoolResult(
+                id: id, status: .ran, terminalId: TerminalID(terminal),
+                command: CommandReport(
+                    command: .splitRight, paneCreated: TerminalID(terminal),
+                    focusedPaneBefore: TerminalID(terminal), focusedPaneAfter: TerminalID(terminal),
+                    columns: 2, panes: 2))
         case .unclaimed:
             return SpoolResult(
                 id: id, status: .unclaimed, terminalId: TerminalID(terminal), pid: 4242,
@@ -338,6 +386,49 @@ final class SpoolWireConformanceTests: XCTestCase {
         }
     }
 
+    func testHelmCommandExitCodeAndStderrForEveryResultStatus() throws {
+        for status in SpoolResult.Status.allCases {
+            let id = "command-result-\(status.rawValue)"
+            SpoolDirectory(root: spoolDir).write(
+                result(id: id, status: status, terminal: UUID()))
+
+            let (exitCode, stderr) = try runAndCapture(
+                "helm-command.swift", ["splitRight", "--id", id])
+
+            let expectation = helmCommandExpectation(for: status)
+            XCTAssertEqual(
+                exitCode, expectation.exitCode,
+                "helm-command.swift on status \(status.rawValue): exit \(exitCode), stderr: \(stderr)"
+            )
+            XCTAssertTrue(
+                stderr.contains(expectation.stderrContains),
+                "helm-command.swift on status \(status.rawValue): expected stderr to contain "
+                    + "\"\(expectation.stderrContains)\", got \"\(stderr)\"")
+        }
+    }
+
+    // MARK: - 2c. helm-command's own restated allowlist (#269)
+
+    /// **The one thing `helm-command.swift` restates beyond the JSON shape, watched the same
+    /// way everything else across this boundary is.** The script carries the four allowed names
+    /// so that `--list` can answer with no helm running — which is exactly when an agent wants
+    /// to ask — and a single-file script cannot `import HelmWire` to get them. So this runs the
+    /// real script and compares its real output against the real `SpoolCommandPolicy`.
+    ///
+    /// It needs no spool at all: `--list` exits before the directory is resolved, which is
+    /// itself part of the promise.
+    func testHelmCommandListsExactlyTheCommandsSpoolCommandPolicyAllows() throws {
+        let (exitCode, stdout, stderr) = try runAndCaptureBoth("helm-command.swift", ["--list"])
+        XCTAssertEqual(exitCode, 0, "--list must succeed with no helm running; stderr: \(stderr)")
+
+        let listed = stdout.split(separator: "\n").map(String.init)
+        XCTAssertEqual(
+            listed, SpoolCommandPolicy.allowed.map(\.rawValue),
+            "helm-command.swift's hand-copied allowlist has drifted from SpoolCommandPolicy — "
+                + "the script cannot import HelmWire (see this file's header), so the copy is "
+                + "honest only while this test holds it")
+    }
+
     // MARK: - 2b. handle and terminalId are bare strings, not objects (#229)
 
     /// **The property #229 introduced `Handle` and `TerminalID` to hold, proved the way the
@@ -401,6 +492,102 @@ final class SpoolWireConformanceTests: XCTestCase {
             json["terminalId"] is String,
             "helm-close.swift: terminalId must be a bare string; got "
                 + "\(String(describing: json["terminalId"]))")
+    }
+
+    /// The same property for a `ran` result (#269), and it matters more here than in the two
+    /// tests above rather than less: `command.paneCreated` is the field a caller feeds straight
+    /// back to `helm-close`, and `helm-command.swift` never parses it — the pane id reaches its
+    /// reader only through the blob the script prints verbatim.
+    func testHelmCommandPrintsTerminalIdAndPaneCreatedAsBareStringsOnceRan() throws {
+        let id = "wire-shape-ran"
+        let terminal = UUID()
+        SpoolDirectory(root: spoolDir).write(result(id: id, status: .ran, terminal: terminal))
+
+        let (exitCode, stdout, stderr) = try runAndCaptureBoth(
+            "helm-command.swift", ["splitRight", "--id", id])
+        XCTAssertEqual(exitCode, 0, "expected a ran result to succeed, stderr: \(stderr)")
+
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any],
+            "helm-command.swift's stdout on a ran result was not a JSON object: \(stdout)")
+        XCTAssertTrue(
+            json["terminalId"] is String,
+            "helm-command.swift: terminalId must be a bare string; got "
+                + "\(String(describing: json["terminalId"]))")
+        let report = try XCTUnwrap(
+            json["command"] as? [String: Any], "no command report: \(stdout)")
+        XCTAssertTrue(
+            report["paneCreated"] is String,
+            "helm-command.swift: command.paneCreated must be a bare string — it is what a "
+                + "caller passes to helm-close next; got \(String(describing: report["paneCreated"]))"
+        )
+        XCTAssertEqual(
+            report["command"] as? String, "splitRight",
+            "…and the command name is its raw value, the same string the script takes on its "
+                + "own command line")
+        for field in ["focusedPaneBefore", "focusedPaneAfter"] {
+            XCTAssertTrue(
+                report[field] is String,
+                "helm-command.swift: command.\(field) must be a bare string — the script reads "
+                    + "it by name to decide whether to warn that focus moved; got "
+                    + "\(String(describing: report[field]))")
+        }
+    }
+
+    /// **The focus warning is a canary, and a canary nobody tests is a canary that can die
+    /// quietly.** `helm-command.swift:181-185` reads `focusedPaneBefore` and `focusedPaneAfter`
+    /// out of the result **by name**, with no compiler link to `CommandReport` — it cannot
+    /// `import HelmWire`. Rename either field and both casts return `nil`, `nil == nil` is
+    /// `true`, and the one line that would tell a human the focus rule had been broken silently
+    /// stops printing. The shape assertions in the test above catch a *type* change; only this
+    /// catches a *name* change, because it is the only thing here that depends on the two fields
+    /// having been read as two different values.
+    ///
+    /// The result it is given is a deliberate impossibility — `SpoolCommandPolicy` allows no
+    /// command that moves focus, so no real helm writes one. That is the point: the branch
+    /// exists for the day something does, and a branch a real run cannot reach is exactly the
+    /// one a test has to.
+    func testHelmCommandWarnsWhenAResultSaysFocusMoved() throws {
+        let id = "wire-shape-focus-moved"
+        let before = UUID()
+        let after = UUID()
+        SpoolDirectory(root: spoolDir).write(
+            SpoolResult(
+                id: id, status: .ran,
+                command: CommandReport(
+                    command: .splitRight, paneCreated: nil,
+                    focusedPaneBefore: TerminalID(before), focusedPaneAfter: TerminalID(after),
+                    columns: 1, panes: 1)))
+
+        let (exitCode, stderr) = try runAndCapture(
+            "helm-command.swift", ["splitRight", "--id", id])
+
+        XCTAssertEqual(exitCode, 0, "helm ran it, so the script still succeeds — it only warns")
+        XCTAssertTrue(
+            stderr.contains("WARNING: focus MOVED"),
+            "helm-command.swift must warn when the two focus readings differ, which is the only "
+                + "thing that proves it read them as two fields at all; got \"\(stderr)\"")
+        XCTAssertTrue(
+            stderr.contains(before.uuidString) && stderr.contains(after.uuidString),
+            "…and must name both panes, so the warning is actionable; got \"\(stderr)\"")
+    }
+
+    /// The other half of the pair, and named as a **control**: it passes whether or not the
+    /// warning works, because a script that never warns satisfies it. It is here so that the
+    /// test above cannot be made green by warning unconditionally — which would be the cheapest
+    /// wrong fix, and would cry wolf on every ordinary command.
+    func testHelmCommandDoesNotWarnWhenFocusStayedPut() throws {
+        let id = "wire-shape-focus-kept"
+        let terminal = UUID()
+        SpoolDirectory(root: spoolDir).write(result(id: id, status: .ran, terminal: terminal))
+
+        let (exitCode, stderr) = try runAndCapture(
+            "helm-command.swift", ["splitRight", "--id", id])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertFalse(
+            stderr.contains("WARNING"),
+            "an allowed command that kept focus must not warn; got \"\(stderr)\"")
     }
 
     // MARK: - 3. Directory resolution — the HELM_DEFAULTS_SUITE branch

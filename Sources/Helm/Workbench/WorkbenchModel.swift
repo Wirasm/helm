@@ -366,6 +366,32 @@ final class WorkbenchModel: ObservableObject {
         commit(bench)
     }
 
+    /// ⌘D asked for **from outside** — the spool's `command` kind (#269), which is to
+    /// `splitRight()` what `spawnTerminal()` is to `newTerminal()`: the same split with focus
+    /// left where the operator put it (`Workbench.splitRight(offering:)`).
+    ///
+    /// Returns the session for the same reason the two spawning methods do — the spool has to
+    /// report the new pane's id in `results/<id>.json`, so the caller's next move
+    /// (`helm-close`, or a spawn into it) needs no lookup.
+    @discardableResult
+    func offerSplitRight() -> TerminalSession? {
+        guard let path = workspacePath, var bench else { return nil }
+        let session = terminals.newTerminal(in: path)
+        bench.splitRight(offering: Pane(id: session.id, content: .terminal(face: .terminal)))
+        commit(bench)
+        return session
+    }
+
+    /// ⌘⇧D asked for from outside. See `offerSplitRight`.
+    @discardableResult
+    func offerSplitDown() -> TerminalSession? {
+        guard let path = workspacePath, var bench else { return nil }
+        let session = terminals.newTerminal(in: path)
+        bench.splitDown(offering: Pane(id: session.id, content: .terminal(face: .terminal)))
+        commit(bench)
+        return session
+    }
+
     /// A divider was dragged, and `neighbour` is the member on its other side.
     ///
     /// Sizes are helm's own state because `SplitStack` lays the bench out itself: AppKit's

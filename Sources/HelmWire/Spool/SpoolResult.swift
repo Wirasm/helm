@@ -14,8 +14,8 @@ import Foundation
 ///
 /// **Lives in `HelmWire` (#221)**, alongside `SpoolRequest`, for the same reason: `Helm`'s own
 /// `SpoolModel` writes this and `HelmTests` decodes it, both against one definition. The
-/// standalone `helm-spool`/`helm-close`/`helm-capture` scripts still read `json["status"] as?
-/// String` — they cannot `import HelmWire` (`AGENTS.md`'s "Why the spool is a script, and must
+/// standalone `helm-spool`/`helm-close`/`helm-capture`/`helm-command` scripts still read
+/// `json["status"] as? String` — they cannot `import HelmWire` (`AGENTS.md`'s "Why the spool is a script, and must
 /// stay one") — so a new `Status` case is not automatically visible to them; a caller adding one
 /// has to update the scripts' string switches by hand, same as before #221.
 package struct SpoolResult: Codable, Equatable {
@@ -63,6 +63,15 @@ package struct SpoolResult: Codable, Equatable {
         /// distinction #176 asks for by name: a teardown that silently did nothing is
         /// indistinguishable from helm not running.
         case closed
+        /// helm carried out one of its own commands on the bench (#269). **One write**, like
+        /// `captured` and `closed`: a command is applied synchronously to the bench value and
+        /// there is no second party to wait for. `command` says which one ran and what the
+        /// bench looks like after it.
+        ///
+        /// A command an agent may not send is `refused`, not this — and so is a command name
+        /// this build does not have. The two are told apart by their `reason`, which is the
+        /// whole of `SpoolCommandPolicy`.
+        case ran
         /// The terminal is alive but no mailbox appeared before the deadline. Deliberately
         /// **not** a failure and deliberately not cleaned up: the agent may be running
         /// perfectly well without the mail hooks installed. It exists; it cannot be
@@ -109,6 +118,11 @@ package struct SpoolResult: Codable, Equatable {
     /// entirely about spawning, and the reason it is not optional-per-field: `terminalContent`
     /// only means anything alongside the path it describes.
     package var capture: CaptureReport?
+    /// What a `ran` result did to the bench (#269) — which command, what it made, and where the
+    /// keyboard was on each side of it. A nested value for the same reason `capture` is one:
+    /// these fields only mean anything together, and none of them belongs on a type that is
+    /// otherwise about spawning.
+    package var command: CommandReport?
     /// Seconds since the epoch, so a caller watching for the `started` → `ready` change has
     /// something that always differs between the two writes.
     package var updatedAt: Double
@@ -116,7 +130,7 @@ package struct SpoolResult: Codable, Equatable {
     package init(
         id: String, status: Status, terminalId: TerminalID? = nil, pid: Int32? = nil,
         sessionId: String? = nil, handle: Handle? = nil, runtime: String? = nil,
-        reason: String? = nil, capture: CaptureReport? = nil,
+        reason: String? = nil, capture: CaptureReport? = nil, command: CommandReport? = nil,
         updatedAt: Double = Date().timeIntervalSince1970
     ) {
         self.id = id
@@ -128,7 +142,61 @@ package struct SpoolResult: Codable, Equatable {
         self.runtime = runtime
         self.reason = reason
         self.capture = capture
+        self.command = command
         self.updatedAt = updatedAt
+    }
+}
+
+/// What a command actually did to the bench — observed after the fact, never asserted.
+///
+/// **A caller that has to re-read `snapshot.json` to learn whether its own request worked is a
+/// caller racing the snapshot** (#269). `spawn` carries `terminalId`/`pid`/`sessionId`/`handle`
+/// for exactly that reason; this is the same promise for a command, and it is deliberately
+/// small — enough to tell *it happened* from *it was refused* from *helm is older than this
+/// request*, plus the two facts a caller's next move actually needs.
+///
+/// **`focusedPaneBefore` and `focusedPaneAfter` are the policy's promise made checkable.**
+/// `SpoolCommandPolicy` argues at length that an allowed command does not move the operator's
+/// keyboard. An argument in a header is a claim; two readings of `Workbench.focusedPane` taken
+/// either side of the mutation are a measurement, and the caller gets to make it rather than
+/// trusting this repo's comments. They are equal on every command in the allowlist —
+/// `SpoolCommandPolicyTests` and `WorkbenchTests` both assert it — and a future command that
+/// broke that would say so in its own result rather than only in a review.
+///
+/// A `TerminalID` for a pane that may hold a canvas is the currency the spool already uses:
+/// `AcceptedCloseRequest.terminal` is one, and `SpoolClosePolicy` is what then reports "pane …
+/// holds a canvas, not a terminal". The wire has one pane-id type, not two.
+package struct CommandReport: Codable, Equatable {
+    /// The command helm ran, by name. Echoed rather than assumed from the request: a caller
+    /// reading only the result file learns what happened without holding onto what it sent.
+    package let command: HelmCommandName
+    /// The pane the command brought into being, when it brought one — `newTerminal`,
+    /// `splitRight` and `splitDown` all do. nil for the ones that do not.
+    ///
+    /// It is also copied into `SpoolResult.terminalId`, so the field a caller already reads
+    /// after a spawn means the same thing after a command, and `helm-close <terminalId>` is the
+    /// next move with no lookup.
+    package let paneCreated: TerminalID?
+    /// The pane holding the keyboard immediately before the command, and immediately after.
+    /// nil when there is no bench mounted at all.
+    package let focusedPaneBefore: TerminalID?
+    package let focusedPaneAfter: TerminalID?
+    /// The bench after: how many columns, and how many panes across all of them. Enough to see
+    /// a split land without opening `snapshot.json`, and no attempt to be a second snapshot —
+    /// `~/.helm/bench/snapshot.json` is the full report and stays the one place for it.
+    package let columns: Int
+    package let panes: Int
+
+    package init(
+        command: HelmCommandName, paneCreated: TerminalID?, focusedPaneBefore: TerminalID?,
+        focusedPaneAfter: TerminalID?, columns: Int, panes: Int
+    ) {
+        self.command = command
+        self.paneCreated = paneCreated
+        self.focusedPaneBefore = focusedPaneBefore
+        self.focusedPaneAfter = focusedPaneAfter
+        self.columns = columns
+        self.panes = panes
     }
 }
 

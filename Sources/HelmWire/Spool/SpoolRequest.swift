@@ -20,11 +20,12 @@ import Foundation
 /// on the channel #54 already justified needs no new argument.
 ///
 /// **Lives in `HelmWire` (#221), not in `Helm`.** `Helm` and `HelmTests` compile against this
-/// for one definition instead of restating it. `tools/helm-spool.swift`, `helm-close.swift` and
-/// `helm-capture.swift` cannot join them — a single-file `swift tools/…swift` script resolves no
-/// `Package.swift` and runs from any cwd, which is the whole reason the spool is a script rather
+/// for one definition instead of restating it. `tools/helm-spool.swift`, `helm-close.swift`,
+/// `helm-capture.swift` and `helm-command.swift` cannot join them — a single-file
+/// `swift tools/…swift` script resolves no `Package.swift`
+/// and runs from any cwd, which is the whole reason the spool is a script rather
 /// than an SPM target (`AGENTS.md`'s "Why the spool is a script, and must stay one" has the
-/// measurements from the attempt that broke both). So those three still hand-roll the JSON by
+/// measurements from the attempt that broke both). So those four still hand-roll the JSON by
 /// hand, on purpose — the runtime boundary `AGENTS.md`'s own rule carves out — and
 /// `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) is what keeps that duplicate honest: it
 /// runs each script as a real subprocess and decodes what it wrote with these same types.
@@ -36,6 +37,7 @@ package enum SpoolRequest: Equatable {
     case spawn(SpawnRequest)
     case capture(CaptureRequest)
     case close(CloseRequest)
+    case command(CommandRequest)
     /// A `kind` helm does not know. **Kept rather than thrown away**: a decoder that threw here
     /// would make "helm is older than this request" indistinguishable from "this file is not
     /// JSON", and the caller would be told the wrong thing about what to fix.
@@ -49,6 +51,7 @@ package enum SpoolRequest: Equatable {
         case .spawn(let request): request.id
         case .capture(let request): request.id
         case .close(let request): request.id
+        case .command(let request): request.id
         case .unrecognised(let id, _): id
         }
     }
@@ -56,7 +59,9 @@ package enum SpoolRequest: Equatable {
     /// Every kind helm knows, for the refusal that lists them — one list rather than a
     /// literal spelled out at each site that has to name them, which is how a third kind
     /// would otherwise arrive with a refusal message that still says there are two.
-    package static let kinds = [SpawnRequest.kind, CaptureRequest.kind, CloseRequest.kind]
+    package static let kinds = [
+        SpawnRequest.kind, CaptureRequest.kind, CloseRequest.kind, CommandRequest.kind,
+    ]
 }
 
 extension SpoolRequest: Decodable {
@@ -72,6 +77,7 @@ extension SpoolRequest: Decodable {
         case SpawnRequest.kind: self = .spawn(try SpawnRequest(from: decoder))
         case CaptureRequest.kind: self = .capture(try CaptureRequest(from: decoder))
         case CloseRequest.kind: self = .close(try CloseRequest(from: decoder))
+        case CommandRequest.kind: self = .command(try CommandRequest(from: decoder))
         default:
             self = .unrecognised(id: try container.decode(String.self, forKey: .id), kind: kind)
         }
@@ -212,6 +218,55 @@ package struct CloseRequest: Codable, Equatable {
     }
 }
 
+/// Drive the bench: one of the commands helm can already carry out (#269).
+///
+/// **Not a new capability — a route to one that exists.** `HelmCommand` has eighteen typed cases
+/// that the keymap and the menu have been able to fire since #219. Nothing outside the process
+/// could fire any of them: the spool knew `spawn`, `capture` and `close`, so an agent could
+/// create a pane and destroy one and photograph the window, and could do nothing to the bench in
+/// between. This is the fourth kind, and it costs one `case` on the envelope that was built to
+/// take it.
+///
+/// **The command travels as its name, and the name is `HelmCommandName` — the same enumeration
+/// the keymap and the status bar's hint catalogue key on** (`Sources/HelmWire/HelmCommandName
+/// .swift`, moved out of `Helm` for exactly this). There is no second list of command names
+/// anywhere, which is the thing #152 cost this repo when a payload had one shape at the source
+/// and another at the destination.
+///
+/// **`command` is a bare `String` here, deliberately, and it is the same shape as
+/// `CloseRequest.terminal`.** `SpoolRequest`'s own header says a request is *decoded permissively
+/// in shape and judged strictly afterwards*: a name this build never heard of has to become a
+/// `refused` result that lists the names it does know, not a decode failure `SpoolModel` can
+/// only describe as unreadable JSON under the wrong id. `SpoolPolicy.accept` is where the string
+/// becomes a `HelmCommandName`, once.
+///
+/// **There is no payload field, and its absence is a measurement rather than an omission.** Every
+/// command `SpoolCommandPolicy` allows is payload-free, because a `HelmCommand`'s payload is
+/// always an *address* — an index, a direction, a delta, a URL, a pane — and every one of those
+/// addresses the operator's focus point, which is what the focus rule refuses. So the name is
+/// currently the whole payload. If a payload-carrying command is ever allowed, the payload joins
+/// `HelmCommandName` in `HelmWire` and a field lands here; it does not get restated on the wire.
+package struct CommandRequest: Codable, Equatable {
+    package static let kind = "command"
+
+    package let id: String
+    /// The command, by the raw value of `HelmCommandName` — `splitRight`, `toggleRail`, …
+    package let command: String
+
+    private enum CodingKeys: String, CodingKey { case id, command }
+
+    package init(id: String, command: String) {
+        self.id = id
+        self.command = command
+    }
+
+    package init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        command = try container.decode(String.self, forKey: .command)
+    }
+}
+
 /// Why helm will not do what a request asked.
 ///
 /// A named type rather than a bare `String` because `Result`'s failure has to be an `Error` —
@@ -230,6 +285,7 @@ package enum SpoolWork: Equatable {
     case spawn(AcceptedSpawnRequest)
     case capture(AcceptedCaptureRequest)
     case close(AcceptedCloseRequest)
+    case command(AcceptedCommandRequest)
 }
 
 package struct AcceptedSpawnRequest: Equatable {
@@ -285,6 +341,21 @@ package struct AcceptedCloseRequest: Equatable {
         self.id = id
         self.terminal = terminal
         self.force = force
+    }
+}
+
+package struct AcceptedCommandRequest: Equatable {
+    package let id: String
+    /// **A real `HelmCommandName`, not the string that was in the file** — and one
+    /// `SpoolCommandPolicy` has already allowed. The same argument `AcceptedCloseRequest
+    /// .terminal` makes for `TerminalID`: parsing here is what makes "that is not a command"
+    /// and "that is a command helm will not take from an agent" two different refusals with two
+    /// different reasons, instead of one lookup that quietly matches nothing.
+    package let command: HelmCommandName
+
+    package init(id: String, command: HelmCommandName) {
+        self.id = id
+        self.command = command
     }
 }
 
@@ -348,6 +419,8 @@ package enum SpoolPolicy {
                 .map(SpoolWork.capture)
         case .close(let close):
             return accept(close).map(SpoolWork.close)
+        case .command(let command):
+            return accept(command).map(SpoolWork.command)
         case .unrecognised(_, let kind):
             return .failure(
                 SpoolRefusal(
@@ -469,6 +542,182 @@ package enum SpoolPolicy {
         }
         return .success(
             AcceptedCloseRequest(id: request.id, terminal: terminal, force: request.force))
+    }
+
+    /// **Two questions, two refusals, and telling them apart is the point.** *"That is not a
+    /// command helm has"* is a typo the caller can fix; *"that is a command helm will not take
+    /// from an agent"* is a standing decision it cannot. Collapsing them into one message would
+    /// send a caller hunting for a spelling mistake in a name that was spelled correctly.
+    ///
+    /// Which commands may be sent is `SpoolCommandPolicy`'s, and lives there rather than here
+    /// for the same reason `SpoolClosePolicy` does: this type answers *"is this request well
+    /// formed"*, and that one answers *"may an agent ask for this at all"*.
+    private static func accept(
+        _ request: CommandRequest
+    ) -> Result<AcceptedCommandRequest, SpoolRefusal> {
+        let raw = request.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let command = HelmCommandName(rawValue: raw) else {
+            return .failure(
+                SpoolRefusal(
+                    "\"\(request.command)\" is not a helm command. Every command helm has: "
+                        + HelmCommandName.allCases.map(\.rawValue).sorted()
+                        .joined(separator: ", ")))
+        }
+        if case .refused(let reason) = SpoolCommandPolicy.verdict(for: command) {
+            return .failure(SpoolRefusal(reason))
+        }
+        return .success(AcceptedCommandRequest(id: request.id, command: command))
+    }
+}
+
+/// Which of helm's own commands an **agent** may send, and why the rest may not (#269).
+///
+/// **The rule is one sentence: rearranging the bench is fine, taking focus is not.** It is
+/// #125's *appear, don't seize* — the rule a pushed artifact already keeps — applied to a
+/// channel that can now ask for anything the keymap can. An agent selecting the operator's
+/// active tab mid-thought is the wrong-terminal click `AGENTS.md` bans hard-coded coordinates
+/// over, arriving through a supported API instead of a stale click.
+///
+/// **`SpoolClosePolicy`'s nuance is extended here rather than reinvented.** #176 found that a
+/// command can be focus-taking *for the operator* and harmless *for a pane the agent owns*, and
+/// answered it by making the request **addressed**: `helm-close` names a pane, refuses the one
+/// holding the keyboard, and `force` does not override that. Every `HelmCommand` below that
+/// still fails is one with **no address at all** — it acts on `focusedSlot`/`focusedTerminal`,
+/// which is to say on whatever pane the operator happens to be in. There is nothing for a
+/// policy to check, because the request never said which pane it meant. So a refusal names the
+/// route to use instead **where one exists** — `helm-close` for `closePane` and `selectTerminal`,
+/// `push.sh` for `openCanvasFile`/`openCanvasURL`/`openArtifact`/`pushCanvasFile`, `helm-spool`
+/// for `openWorkspace` — and where one does not, it says what an addressed version would have to
+/// carry, which is exactly `CloseRequest`'s shape: a pane, refused when
+/// `SpoolPaneState.holdsKeyboard`.
+///
+/// **Where an allowed command has a non-seizing twin, helm runs the twin.** That is not this
+/// policy bending a command's meaning — helm has drawn that distinction since #125 and named
+/// both halves: `Workbench.insert` is the operator asking and `Workbench.offer` is an agent
+/// offering, differing in exactly one line, `focusedSlot`. `WorkbenchModel.spawnTerminal()` is
+/// already `newTerminal()`'s offering twin and predates this ticket. `WorkbenchSpoolCommander`
+/// is where the routing lives, and `CommandReport.focusedPaneBefore`/`After` is what makes the
+/// promise checkable by the caller rather than only argued here.
+///
+/// **Exhaustive over `HelmCommandName`, on purpose.** A nineteenth command cannot be added
+/// without a verdict: the switch below stops compiling. An allowlist that is a `Set` literal
+/// answers new commands with silence, and silence defaults them to *refused*, which sounds safe
+/// and is actually just undecided.
+package enum SpoolCommandPolicy {
+    package enum Verdict: Equatable {
+        case allowed
+        /// Why not, in the caller's terms, naming the route to what it probably wanted.
+        case refused(String)
+    }
+
+    /// The commands an agent may send, in the order `HelmCommandName` declares them — for the
+    /// refusal that lists them and for `helm-command.swift --list`. Derived from `verdict(for:)`
+    /// rather than written out, so the two can never disagree.
+    package static var allowed: [HelmCommandName] {
+        HelmCommandName.allCases.filter { verdict(for: $0) == .allowed }
+    }
+
+    package static func verdict(for command: HelmCommandName) -> Verdict {
+        switch command {
+
+        // MARK: Allowed — the bench grows, the keyboard does not move.
+
+        /// ⌘N, routed to `WorkbenchModel.spawnTerminal()`, which existed before this ticket and
+        /// is `newTerminal()`'s offering twin: `Workbench.offer` at
+        /// `placementForSpawnedTerminal()`, leaving `selected` and `focusedSlot` exactly as they
+        /// were. Distinct from `helm-spool` rather than a duplicate of it — that starts an
+        /// *agent*, this is a bare login shell an agent can then drive by other means.
+        case .newTerminal: return .allowed
+
+        /// ⌘D / ⌘⇧D, routed to `WorkbenchModel.offerSplitRight()`/`offerSplitDown()` — the
+        /// offering twins added for this ticket, differing from `splitRight(with:)` and
+        /// `splitDown(with:)` in the one line that assigns `focusedSlot`.
+        ///
+        /// **The honest cost, recorded rather than glossed: an agent's split still halves the
+        /// column or slot the *operator* is in**, because a bench command carries no address and
+        /// `Workbench.splitRight` is defined relative to `focusedSlot`. That is a layout change
+        /// around the operator, not a focus change to them — the same trade `Workbench.offer`
+        /// already makes when a pushed artifact appends a column and rebalances the rest, and
+        /// the operator's own ruling in #269 is that rearranging is fine.
+        case .splitRight, .splitDown: return .allowed
+
+        /// ⇧⌘R. The only command here that touches no pane at all: it shows or hides the Archon
+        /// rail, which is chrome beside the bench. No focus to take, nothing to destroy, and
+        /// the operator undoes it with the same shortcut.
+        case .toggleRail: return .allowed
+
+        // MARK: Refused — it moves the operator's keyboard.
+
+        case .moveFocus:
+            return .refused(
+                "moveFocus is the focus rule itself: it does nothing but move the operator's "
+                    + "keyboard to another slot. There is no version of this an agent may send")
+
+        case .selectTerminal:
+            return .refused(
+                "selectTerminal picks a tab in the focused slot, and Workbench.select focuses "
+                    + "the slot holding it — so it moves the operator's keyboard, and it does "
+                    + "so in whichever slot they are working in, because the command carries no "
+                    + "pane. To make a pane of your own current, there is nothing yet; to close "
+                    + "one, helm-close names a pane and refuses the operator's")
+
+        case .selectWorkspace, .cycleWorkspace:
+            return .refused(
+                "\(command.rawValue) parks the operator's whole bench and mounts another "
+                    + "workspace. It is the largest seizure helm can perform, and nothing an "
+                    + "agent asks for is worth it")
+
+        case .openCanvasFile, .openCanvasURL:
+            return .refused(
+                "\(command.rawValue) selects the new pane and focuses its slot "
+                    + "(Workbench.insert). An agent putting an artifact on the bench uses "
+                    + "push.sh, which offers it instead — it appears as a tab without taking "
+                    + "the keyboard (#125)")
+
+        // MARK: Refused — it acts on whatever pane the operator is in.
+
+        case .closePane:
+            return .refused(
+                "closePane closes the *focused* pane, which is the operator's. helm-close is "
+                    + "the addressed version and the one to use: it names a pane, refuses the "
+                    + "one holding the keyboard, and --force does not override that (#176)")
+
+        case .adjustFontSize, .jumpToPrompt, .toggleChat:
+            return .refused(
+                "\(command.rawValue) acts on the focused pane, so from a request file it acts "
+                    + "on whichever pane the operator is in — the command carries no address "
+                    + "for helm to check against. An addressed version would carry a pane and "
+                    + "refuse the one holding the keyboard, exactly as CloseRequest does")
+
+        // MARK: Refused — it raises UI nobody is there to answer.
+
+        case .openArtifact:
+            return .refused(
+                "openArtifact opens a picker on the operator's bench — a popover on the focused "
+                    + "slot's tab strip. The spool exists for the case where nobody is at the "
+                    + "pane, so a dialog raised from one is the silent hang of #179 with a "
+                    + "different cause. push.sh is how an artifact reaches the bench without one")
+
+        case .openWorkspace:
+            return .refused(
+                "openWorkspace raises a folder panel, and nobody is at the pane to answer it — "
+                    + "the silent hang of #179 with a different cause. helm-spool is the "
+                    + "headless route: a spawn's `cwd` is the workspace helm opens for it")
+
+        // MARK: Refused — the payload is not a caller's to build.
+
+        case .pushCanvasFile:
+            return .refused(
+                "pushCanvasFile carries a CanvasPushRequest — the workspace it belongs to and "
+                    + "the terminal that emitted it — which helm assembles from a pane's own "
+                    + "output. push.sh is the route, and it is already the non-seizing one")
+
+        case .composeText:
+            return .refused(
+                "composeText prefills one pane's composer, and the pane it means is chosen by "
+                    + "WorkbenchModel.composeTarget — the focused pane. Prefilling would also "
+                    + "overwrite whatever the operator had typed there and not yet sent")
+        }
     }
 }
 

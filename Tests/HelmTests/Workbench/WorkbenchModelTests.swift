@@ -331,6 +331,52 @@ final class WorkbenchModelTests: XCTestCase {
             "and the pane they were typing in is still the one on screen")
     }
 
+    // MARK: - A split from outside (#269)
+
+    /// The model-level twin of `WorkbenchTests`' value-level assertion, and it is not the same
+    /// test: `Workbench.splitRight(offering:)` proves the *bench value* leaves `focusedSlot`
+    /// alone, and this proves the method the spool actually calls does too — including that it
+    /// mints a real session and reports it, which is what `SpoolResult.terminalId` carries and
+    /// what a caller hands to `helm-close` next.
+    func testAnOfferedSplitRightMakesAPaneAndLeavesTheKeyboardWhereItWas() throws {
+        let (model, _) = mounted()
+        let focused = try XCTUnwrap(model.bench?.focusedSlot)
+        let reading = try XCTUnwrap(model.bench?.focusedPane?.id)
+
+        let made = try XCTUnwrap(model.offerSplitRight())
+
+        XCTAssertEqual(model.bench?.columns.count, 2, "the column is there")
+        XCTAssertNotNil(model.bench?.pane(made.id), "…and it holds the session that was made")
+        XCTAssertEqual(
+            model.bench?.focusedSlot, focused,
+            "an agent's ⌘D must not take the keyboard — the operator may be mid-sentence in "
+                + "the column being split")
+        XCTAssertEqual(model.bench?.focusedPane?.id, reading, "…and still see their own pane")
+    }
+
+    func testAnOfferedSplitDownMakesAPaneAndLeavesTheKeyboardWhereItWas() throws {
+        let (model, _) = mounted()
+        let focused = try XCTUnwrap(model.bench?.focusedSlot)
+
+        let made = try XCTUnwrap(model.offerSplitDown())
+
+        XCTAssertEqual(model.bench?.columns.first?.slots.count, 2, "the row is there")
+        XCTAssertNotNil(model.bench?.pane(made.id))
+        XCTAssertEqual(model.bench?.focusedSlot, focused, "and the keyboard did not follow it")
+    }
+
+    /// **A control, and named as one: it passes either way.** The cheapest way to make the two
+    /// tests above green is to stop every split from focusing, which would break ⌘D for the
+    /// operator — the case that is supposed to seize, because they asked for it.
+    func testTheOperatorsSplitStillTakesFocusAtTheModelLevel() throws {
+        let (model, _) = mounted()
+        let focused = try XCTUnwrap(model.bench?.focusedSlot)
+
+        model.splitRight()
+
+        XCTAssertNotEqual(model.bench?.focusedSlot, focused, "⌘D still moves the keyboard")
+    }
+
     // MARK: - Visibility
 
     func testVisibilityIsPushedOntoExactlyTheOnScreenPanes() throws {
