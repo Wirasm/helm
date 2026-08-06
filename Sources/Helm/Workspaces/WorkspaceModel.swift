@@ -11,11 +11,15 @@ import Foundation
 final class WorkspaceModel: ObservableObject {
     @Published private(set) var workspaces: [Workspace]
     @Published private(set) var selectedWorkspace: Workspace?
+    /// Keyed by `WorkspacePath.value`, not `WorkspacePath` itself: `Dictionary` only encodes
+    /// as a JSON object when its key is `String` (or `Int`), so a `WorkspacePath` key would
+    /// change `helmWorkspaceContexts`'s shape and strand a context saved before this type
+    /// existed.
     @Published private(set) var contexts: [String: WorkspaceContext]
 
     /// The selected workspace's path, for anything that needs a root without needing the
     /// workspace itself.
-    var selectedWorkspaceRoot: String? { selectedWorkspace?.path }
+    var selectedWorkspaceRoot: WorkspacePath? { selectedWorkspace?.path }
 
     private let defaults: UserDefaults
     private var terminalChanges: AnyCancellable?
@@ -43,7 +47,7 @@ final class WorkspaceModel: ObservableObject {
     func close(_ workspace: Workspace) {
         workspaces.removeAll { $0 == workspace }
         WorkspacePersistence.save(workspaces, to: defaults)
-        contexts[workspace.path] = nil
+        contexts[workspace.path.value] = nil
         WorkspaceContextStore.save(contexts, to: defaults)
         if selectedWorkspace == workspace { select(nil) }
     }
@@ -81,9 +85,9 @@ final class WorkspaceModel: ObservableObject {
         guard workbench.workspacePath == workspace.path, let bench = workbench.bench else {
             return
         }
-        var context = contexts[workspace.path] ?? WorkspaceContext()
+        var context = contexts[workspace.path.value] ?? WorkspaceContext()
         context.workbench = bench
-        contexts[workspace.path] = context
+        contexts[workspace.path.value] = context
         WorkspaceContextStore.save(contexts, to: defaults)
     }
 
@@ -133,10 +137,10 @@ final class WorkspaceModel: ObservableObject {
     /// `branchResolved` is set whether or not a branch was found, so a folder that is not a
     /// repository is asked once rather than on every render. Absence is a resolved answer.
     func cacheBranch(_ branch: String?, for workspace: Workspace) {
-        var context = contexts[workspace.path] ?? WorkspaceContext()
+        var context = contexts[workspace.path.value] ?? WorkspaceContext()
         context.branch = branch
         context.branchResolved = true
-        contexts[workspace.path] = context
+        contexts[workspace.path.value] = context
         WorkspaceContextStore.save(contexts, to: defaults)
     }
 }

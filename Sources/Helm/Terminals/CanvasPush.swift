@@ -44,7 +44,7 @@ import Foundation
 /// B lands its report on workspace A's bench.
 struct CanvasPushRequest: Equatable {
     let artifact: URL
-    let workspacePath: String
+    let workspacePath: WorkspacePath
 }
 
 /// Collapses a burst of refusals to one.

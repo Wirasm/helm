@@ -1,8 +1,8 @@
 import Foundation
 
 protocol WorktreeClient: Sendable {
-    func worktrees(in workspacePath: String) async throws -> [Worktree]
-    func remove(path: String, in workspacePath: String) async throws
+    func worktrees(in workspacePath: WorkspacePath) async throws -> [Worktree]
+    func remove(path: String, in workspacePath: WorkspacePath) async throws
 }
 
 struct WorktreeCLIError: Error, Equatable, LocalizedError, Sendable {
@@ -52,8 +52,10 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         self.timeout = timeout
     }
 
-    func worktrees(in workspacePath: String) async throws -> [Worktree] {
-        let listing = try await runGit(["-C", workspacePath, "worktree", "list", "--porcelain"])
+    func worktrees(in workspacePath: WorkspacePath) async throws -> [Worktree] {
+        let listing = try await runGit([
+            "-C", workspacePath.value, "worktree", "list", "--porcelain",
+        ])
         let records = try Self.parsePorcelain(listing.stdout)
         let defaultBranch = await resolveDefaultBranch(in: workspacePath)
 
@@ -73,8 +75,8 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         return worktrees
     }
 
-    func remove(path: String, in workspacePath: String) async throws {
-        _ = try await runGit(["-C", workspacePath, "worktree", "remove", path])
+    func remove(path: String, in workspacePath: WorkspacePath) async throws {
+        _ = try await runGit(["-C", workspacePath.value, "worktree", "remove", path])
     }
 
     static func parsePorcelain(_ output: String) throws -> [WorktreeRecord] {
@@ -132,10 +134,10 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         return records
     }
 
-    private func resolveDefaultBranch(in workspacePath: String) async -> String? {
+    private func resolveDefaultBranch(in workspacePath: WorkspacePath) async -> String? {
         guard
             let result = try? await runGit([
-                "-C", workspacePath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD",
+                "-C", workspacePath.value, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD",
             ])
         else { return nil }
         let branch = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -143,12 +145,12 @@ struct WorktreeCLI: WorktreeClient, Sendable {
     }
 
     private func mergedState(
-        of branch: String?, into defaultBranch: String?, in workspacePath: String
+        of branch: String?, into defaultBranch: String?, in workspacePath: WorkspacePath
     ) async -> WorktreeMergedState {
         guard let branch, let defaultBranch else { return .unknown }
         do {
             _ = try await runGit([
-                "-C", workspacePath, "merge-base", "--is-ancestor", branch, defaultBranch,
+                "-C", workspacePath.value, "merge-base", "--is-ancestor", branch, defaultBranch,
             ])
             return .merged
         } catch let error as WorktreeCLIError {

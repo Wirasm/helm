@@ -164,7 +164,7 @@ final class WorkbenchRestoreTests: XCTestCase {
             workspaces.saveContext(terminalManager: terminals, workbench: workbench)
 
             restored = try XCTUnwrap(
-                WorkspaceContextStore.load(from: defaults)[workspace.path]?.workbench,
+                WorkspaceContextStore.load(from: defaults)[workspace.path.value]?.workbench,
                 "launch \(launch) persisted no bench at all")
             XCTAssertEqual(
                 restored.columns.map(\.width), widths,
@@ -230,7 +230,7 @@ final class WorkbenchRestoreTests: XCTestCase {
         workspaces.saveContext(terminalManager: terminals, workbench: workbench)
 
         let restored = try XCTUnwrap(
-            WorkspaceContextStore.load(from: defaults)[workspace.path]?.workbench,
+            WorkspaceContextStore.load(from: defaults)[workspace.path.value]?.workbench,
             "no bench was persisted at all")
         XCTAssertEqual(
             restored.pane(file)?.content, .canvas(.file("/tmp/pr-84-review.md")),

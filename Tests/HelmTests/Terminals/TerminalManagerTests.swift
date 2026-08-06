@@ -16,8 +16,8 @@ import XCTest
 /// dropped.
 @MainActor
 final class TerminalManagerTests: XCTestCase {
-    private let firstWorkspace = "/tmp/helm-workspace-one"
-    private let secondWorkspace = "/tmp/helm-workspace-two"
+    private let firstWorkspace = WorkspacePath("/tmp/helm-workspace-one")
+    private let secondWorkspace = WorkspacePath("/tmp/helm-workspace-two")
 
     func testFirstTerminalIsLazyPerWorkspace() {
         let manager = TerminalManager()

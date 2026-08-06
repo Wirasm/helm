@@ -24,12 +24,13 @@ actor FakeArchonClient: ArchonClient {
     private(set) var currentListCalls = 0
     private(set) var maximumListCalls = 0
     private(set) var detailRequests: [String] = []
-    private(set) var workspacePaths: [String] = []
+    private(set) var workspacePaths: [WorkspacePath] = []
     private(set) var launchRequests: [ArchonLaunchRequest] = []
-    private(set) var completeRequests: [(branch: String, workspacePath: String)] = []
+    private(set) var completeRequests: [(branch: String, workspacePath: WorkspacePath)] = []
     private(set) var decisions:
         [(
-            decision: ArchonGateDecision, text: String?, runID: String, workspacePath: String
+            decision: ArchonGateDecision, text: String?, runID: String,
+            workspacePath: WorkspacePath
         )] = []
     private(set) var resumeRequests: [String] = []
 
@@ -57,15 +58,15 @@ actor FakeArchonClient: ArchonClient {
 
     func metrics() -> (
         listCalls: Int, maximumListCalls: Int, launchRequests: Int, detailRequests: [String],
-        workspacePaths: [String]
+        workspacePaths: [WorkspacePath]
     ) {
         (listCalls, maximumListCalls, launchRequests.count, detailRequests, workspacePaths)
     }
 
     func lastLaunch() -> ArchonLaunchRequest? { launchRequests.last }
-    func completions() -> [(branch: String, workspacePath: String)] { completeRequests }
+    func completions() -> [(branch: String, workspacePath: WorkspacePath)] { completeRequests }
 
-    func runs(in workspacePath: String) async throws -> ArchonRunsResponse {
+    func runs(in workspacePath: WorkspacePath) async throws -> ArchonRunsResponse {
         listCalls += 1
         currentListCalls += 1
         maximumListCalls = max(maximumListCalls, currentListCalls)
@@ -76,13 +77,13 @@ actor FakeArchonClient: ArchonClient {
         return runsResponse
     }
 
-    func workflows(in workspacePath: String) async throws -> ArchonWorkflowListResponse {
+    func workflows(in workspacePath: WorkspacePath) async throws -> ArchonWorkflowListResponse {
         workspacePaths.append(workspacePath)
         if let failure { throw failure }
         return workflowList
     }
 
-    func run(id: String, in workspacePath: String) async throws -> ArchonRun {
+    func run(id: String, in workspacePath: WorkspacePath) async throws -> ArchonRun {
         detailRequests.append(id)
         workspacePaths.append(workspacePath)
         if let detailFailure { throw detailFailure }
@@ -96,14 +97,15 @@ actor FakeArchonClient: ArchonClient {
         return acknowledgement
     }
 
-    func complete(branch: String, in workspacePath: String) async throws {
+    func complete(branch: String, in workspacePath: WorkspacePath) async throws {
         completeRequests.append((branch, workspacePath))
         if let completeFailure { throw completeFailure }
         if let failure { throw failure }
     }
 
     func decide(
-        _ decision: ArchonGateDecision, text: String?, on runID: String, in workspacePath: String
+        _ decision: ArchonGateDecision, text: String?, on runID: String,
+        in workspacePath: WorkspacePath
     ) async throws -> ArchonActionAcknowledgement {
         decisions.append((decision, text, runID, workspacePath))
         if let decisionFailure { throw decisionFailure }
@@ -126,7 +128,8 @@ actor FakeArchonClient: ArchonClient {
     func setResumeFailure(_ failure: ArchonCLIError?) { resumeFailure = failure }
     func gateCalls() -> (
         decisions: [(
-            decision: ArchonGateDecision, text: String?, runID: String, workspacePath: String
+            decision: ArchonGateDecision, text: String?, runID: String,
+            workspacePath: WorkspacePath
         )], resumes: [String]
     ) {
         (decisions, resumeRequests)

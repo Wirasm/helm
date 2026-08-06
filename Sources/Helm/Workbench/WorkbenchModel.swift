@@ -35,7 +35,7 @@ final class WorkbenchModel: ObservableObject {
     /// *state* is here rather than in a view because the command that opens it is.
     @Published var isBrowserOpen = false
 
-    private(set) var workspacePath: String?
+    private(set) var workspacePath: WorkspacePath?
 
     private let terminals: TerminalManager
 
@@ -52,7 +52,7 @@ final class WorkbenchModel: ObservableObject {
     private var canvases: [Pane.ID: CachedCanvas] = [:]
 
     private struct CachedCanvas {
-        let workspacePath: String?
+        let workspacePath: WorkspacePath?
         let model: CanvasModel
     }
 
@@ -78,7 +78,7 @@ final class WorkbenchModel: ObservableObject {
     /// `restoring` is the persisted bench — or the one `migrating(from:)` built out of a
     /// pre-bench context. Its terminal pane ids ARE session ids, so they go straight to
     /// `TerminalManager.activate(restoring:)` and the row comes back under them.
-    func activate(workspacePath path: String, restoring restorable: Workbench? = nil) {
+    func activate(workspacePath path: WorkspacePath, restoring restorable: Workbench? = nil) {
         workspacePath = path
         terminals.activate(workspacePath: path, restoring: restorable?.terminalPaneIDs ?? [])
         // The manager is the authority on which terminals exist — it may have just made a
@@ -105,7 +105,7 @@ final class WorkbenchModel: ObservableObject {
     /// what gets the same webview back instead of a reload, and pane ids are persisted, so
     /// switching back finds its canvases still there. `activate` is right to leave it
     /// alone; only closing is a teardown.
-    func closeWorkspace(_ path: String) {
+    func closeWorkspace(_ path: WorkspacePath) {
         for (id, cached) in canvases where cached.workspacePath == path {
             cached.model.close()
             canvases[id] = nil

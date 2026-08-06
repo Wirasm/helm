@@ -2,7 +2,7 @@ import SwiftUI
 
 struct WorktreesRailView: View {
     @ObservedObject var model: WorktreesRailModel
-    let workspacePath: String?
+    let workspacePath: WorkspacePath?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

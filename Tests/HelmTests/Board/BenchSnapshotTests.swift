@@ -61,7 +61,7 @@ final class BenchSnapshotTests: XCTestCase {
         let session = try XCTUnwrap(terminals.sessions.first)
         let owner = MailboxOwner(
             handle: "owner-1234", runtime: "codex", pid: 4242,
-            sessionId: "session", cwd: workspace.path)
+            sessionId: "session", cwd: workspace.path.value)
 
         let value = BenchSnapshot.project(
             writtenAt: .now,
@@ -83,7 +83,7 @@ final class BenchSnapshotTests: XCTestCase {
         let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
         let unrelated = MailboxOwner(
             handle: "other", runtime: "claude", pid: 999,
-            sessionId: nil, cwd: workspace.path)
+            sessionId: nil, cwd: workspace.path.value)
 
         let value = BenchSnapshot.project(
             writtenAt: .now,
@@ -118,7 +118,7 @@ final class BenchSnapshotTests: XCTestCase {
             owners: [
                 MailboxOwner(
                     handle: "parked-agent", runtime: "codex", pid: 4242,
-                    sessionId: "session", cwd: parked.path)
+                    sessionId: "session", cwd: parked.path.value)
             ]
         ) { session in session.id == parkedTerminal.id ? 4242 : nil }
 
@@ -131,6 +131,32 @@ final class BenchSnapshotTests: XCTestCase {
         XCTAssertTrue(pane.terminal?.isLive == true)
         XCTAssertEqual(pane.terminal?.sessionId, parkedTerminal.id)
         XCTAssertEqual(pane.terminal?.owner?.handle, "parked-agent")
+    }
+
+    /// The acceptance criterion #223 names explicitly: `WorkspaceRecord.path` is read by
+    /// agents outside the process, so `WorkspacePath` must not change its wire shape.
+    /// Inspected as `Any` off `JSONSerialization` rather than compared against a whole JSON
+    /// string, so this fails loudly if `path` ever becomes an object (`{"value":"…"}`)
+    /// instead of staying the bare string a `WorkspacePath(_ url:)` reader still expects.
+    func testWorkspaceRecordPathEncodesAsABareStringUnchangedByWorkspacePath() throws {
+        let workspace = Workspace(path: "/tmp/bench-snapshot-json-path")
+        let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
+
+        let snapshot = BenchSnapshot.project(
+            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
+            owners: []
+        ) { _ in nil }
+
+        let data = try JSONEncoder().encode(snapshot)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let records = try XCTUnwrap(json["workspaces"] as? [[String: Any]])
+        let path = try XCTUnwrap(records.first?["path"])
+
+        XCTAssertTrue(
+            path is String,
+            "WorkspacePath encodes through a single-value container, so this must still be a "
+                + "bare string — an object here breaks every agent reading helm.bench-snapshot")
+        XCTAssertEqual(path as? String, workspace.path.value)
     }
 
     func testSchemaAndIsoDateRoundTrip() throws {

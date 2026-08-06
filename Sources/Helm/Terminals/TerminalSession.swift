@@ -60,7 +60,7 @@ final class TerminalSession: ObservableObject, Identifiable {
     let ordinal: Int
     /// The workspace that groups this session in the frame. The manager remains
     /// the owner of every session and the one shared ghostty controller.
-    let workspacePath: String
+    let workspacePath: WorkspacePath
     /// Bypassing the notification gate is safe only if a burst cannot flood it.
     private var refusalThrottle = RefusalThrottle()
 
@@ -119,7 +119,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// (`TerminalSessionBackend`), not one invented here, and it is the only way to assert
     /// what #96 is about: that a synthesised keystroke actually reaches the shell.
     init(
-        id: UUID = UUID(), ordinal: Int, workspacePath: String, controller: TerminalController,
+        id: UUID = UUID(), ordinal: Int, workspacePath: WorkspacePath,
+        controller: TerminalController,
         backend: TerminalSessionBackend = .exec
     ) {
         self.id = id
@@ -137,7 +138,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         // everything that does not respawn it — a move between containers included.
         view.configuration = TerminalSurfaceOptions(
             backend: backend,
-            workingDirectory: workspacePath,
+            workingDirectory: workspacePath.value,
             envVars: PaneEnvironment.forPane(id)
         )
         hostView = view

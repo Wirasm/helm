@@ -37,9 +37,9 @@ struct BenchSnapshot: Codable, Equatable {
                 let bench =
                     mounted
                     ? workbench.bench
-                    : workspaces.contexts[workspace.path]?.workbench
+                    : workspaces.contexts[workspace.path.value]?.workbench
                         ?? Workbench.migrating(
-                            from: workspaces.contexts[workspace.path] ?? WorkspaceContext())
+                            from: workspaces.contexts[workspace.path.value] ?? WorkspaceContext())
                 return WorkspaceRecord(
                     workspace: workspace,
                     state: mounted ? .mounted : .parked,
@@ -53,7 +53,12 @@ struct BenchSnapshot: Codable, Equatable {
     struct WorkspaceRecord: Codable, Equatable {
         enum State: String, Codable { case mounted, parked }
 
-        let path: String
+        /// This field is read by agents outside the process against a versioned `format`, so
+        /// `WorkspacePath`'s `Codable` has to keep encoding it as the bare string it always
+        /// was — a single-value container, proven by `BenchSnapshotTests
+        /// .testWorkspaceRecordPathEncodesAsABareStringUnchangedByWorkspacePath` rather than
+        /// assumed.
+        let path: WorkspacePath
         let name: String
         let state: State
         let columns: [ColumnRecord]

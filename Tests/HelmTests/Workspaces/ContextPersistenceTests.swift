@@ -13,7 +13,7 @@ import XCTest
 /// rather than `terminalSessionIDs`, and the rules they pin are unchanged.
 @MainActor
 final class ContextPersistenceTests: XCTestCase {
-    private let workspacePath = "/tmp/helm-persist-tests"
+    private let workspacePath = WorkspacePath("/tmp/helm-persist-tests")
 
     private func mounted(_ manager: TerminalManager) -> WorkbenchModel {
         let workbench = WorkbenchModel(terminals: manager)
@@ -31,11 +31,11 @@ final class ContextPersistenceTests: XCTestCase {
 
         let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
-        model.open(Workspace(path: workspacePath))
+        model.open(Workspace(path: workspacePath.value))
         model.saveContext(terminalManager: manager, workbench: workbench)
 
         XCTAssertEqual(
-            model.contexts[workspacePath]?.workbench?.terminalPaneIDs, live,
+            model.contexts[workspacePath.value]?.workbench?.terminalPaneIDs, live,
             "a relaunch must rebuild every open terminal, in order — not just the first")
     }
 
@@ -47,11 +47,11 @@ final class ContextPersistenceTests: XCTestCase {
 
         let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
-        model.open(Workspace(path: workspacePath))
+        model.open(Workspace(path: workspacePath.value))
         model.saveContext(terminalManager: manager, workbench: workbench)
 
         XCTAssertEqual(
-            model.contexts[workspacePath]?.workbench?.canvasPanes.map(\.content),
+            model.contexts[workspacePath.value]?.workbench?.canvasPanes.map(\.content),
             [.canvas(.url(localhost))],
             "a URL canvas persists at last — openArtifactPath could only ever hold a file path")
     }
@@ -72,10 +72,10 @@ final class ContextPersistenceTests: XCTestCase {
         let saved = WorkspaceContext(
             workbench: Workbench(
                 panes: ids.map { Pane(id: $0, content: .terminal(face: .terminal)) }))
-        WorkspaceContextStore.save([workspacePath: saved], to: defaults)
+        WorkspaceContextStore.save([workspacePath.value: saved], to: defaults)
 
         let model = WorkspaceModel(defaults: defaults)
-        model.open(Workspace(path: workspacePath))
+        model.open(Workspace(path: workspacePath.value))
         // A manager and a bench that have never activated this workspace — exactly the
         // state at launch, between the first render and `.task`.
         let manager = TerminalManager()
@@ -83,7 +83,7 @@ final class ContextPersistenceTests: XCTestCase {
             terminalManager: manager, workbench: WorkbenchModel(terminals: manager))
 
         XCTAssertEqual(
-            model.contexts[workspacePath]?.workbench?.terminalPaneIDs, ids,
+            model.contexts[workspacePath.value]?.workbench?.terminalPaneIDs, ids,
             "a save before the workspace is mounted must not overwrite what restore needs")
     }
 
@@ -98,7 +98,7 @@ final class ContextPersistenceTests: XCTestCase {
         let manager = TerminalManager()
         let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
-        model.open(Workspace(path: workspacePath))
+        model.open(Workspace(path: workspacePath.value))
         let workbench = WorkbenchModel(terminals: manager)
         model.observe(terminals: manager, workbench: workbench)
 
@@ -110,7 +110,7 @@ final class ContextPersistenceTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
 
         XCTAssertEqual(
-            model.contexts[workspacePath]?.workbench?.terminalPaneIDs,
+            model.contexts[workspacePath.value]?.workbench?.terminalPaneIDs,
             manager.sessions(for: workspacePath).map(\.id),
             "every terminal that opened must be in the persisted bench, not all but the last")
     }
@@ -121,7 +121,7 @@ final class ContextPersistenceTests: XCTestCase {
         let manager = TerminalManager()
         let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
-        model.open(Workspace(path: workspacePath))
+        model.open(Workspace(path: workspacePath.value))
         let workbench = WorkbenchModel(terminals: manager)
         model.observe(terminals: manager, workbench: workbench)
 
@@ -130,7 +130,7 @@ final class ContextPersistenceTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
 
         XCTAssertEqual(
-            model.contexts[workspacePath]?.workbench?.columns.count, 2,
+            model.contexts[workspacePath.value]?.workbench?.columns.count, 2,
             "the columns must come back, not just the terminals in them")
     }
 
@@ -143,7 +143,7 @@ final class ContextPersistenceTests: XCTestCase {
         let manager = TerminalManager()
         let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
-        model.open(Workspace(path: workspacePath))
+        model.open(Workspace(path: workspacePath.value))
         let workbench = WorkbenchModel(terminals: manager)
         model.observe(terminals: manager, workbench: workbench)
 
@@ -154,7 +154,7 @@ final class ContextPersistenceTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
 
         XCTAssertEqual(
-            model.contexts[workspacePath]?.workbench?.pane(canvas)?.content,
+            model.contexts[workspacePath.value]?.workbench?.pane(canvas)?.content,
             .canvas(.url(URL(string: "http://localhost:3000")!)),
             "nothing but the canvas changed, so this is the only publisher that could carry "
                 + "it — and a saved bench that disagrees with the pane on screen is the bug")
@@ -167,17 +167,46 @@ final class ContextPersistenceTests: XCTestCase {
         let workbench = mounted(manager)
         let defaults = try isolatedDefaults("persist")
         let model = WorkspaceModel(defaults: defaults)
-        model.open(Workspace(path: workspacePath))
+        model.open(Workspace(path: workspacePath.value))
 
         workbench.newTerminal()
         model.saveContext(terminalManager: manager, workbench: workbench)
 
-        let saved = model.contexts[workspacePath]?.workbench
+        let saved = model.contexts[workspacePath.value]?.workbench
         XCTAssertEqual(
             saved?.terminalPaneIDs.count, 2, "saving right after a terminal opens must include it")
         XCTAssertEqual(
             saved?.slot(saved!.focusedSlot)?.selected,
             manager.sessions(for: workspacePath).last?.id,
             "and the selection must be the one that is actually selected")
+    }
+
+    // MARK: - Restoring what a pre-`WorkspacePath` build persisted (#223)
+
+    /// The acceptance criterion #223 names explicitly: a blob written before `WorkspacePath`
+    /// existed must still restore. Nothing here goes through `WorkspacePath` to write the
+    /// fixture — `defaults.set` is exactly what a build before this refactor did, an
+    /// un-normalized trailing slash included, so this is the bytes such a build would have
+    /// actually left behind, not a JSONEncoder-shaped approximation of them.
+    func testAWorkspaceAndItsContextPersistedBeforeWorkspacePathStillRestore() throws {
+        let defaults = try isolatedDefaults("persist-pre-workspace-path")
+        defaults.set(#"["/a/b/","/c"]"#, forKey: WorkspacePersistence.listKey)
+        defaults.set("/a/b/", forKey: WorkspacePersistence.selectionKey)
+        defaults.set(
+            #"{"/a/b":{"branch":"main","branchResolved":true}}"#,
+            forKey: WorkspaceContextStore.key)
+
+        let model = WorkspaceModel(defaults: defaults)
+
+        XCTAssertEqual(
+            model.workspaces.map(\.path.value), ["/a/b", "/c"],
+            "the un-normalized trailing slash from the old blob must still come back as one "
+                + "workspace, not two")
+        XCTAssertEqual(
+            model.selectedWorkspace?.path.value, "/a/b",
+            "the remembered selection must still resolve against the normalized list")
+        XCTAssertEqual(
+            model.contexts["/a/b"]?.branch, "main",
+            "and its context must still be found under the same key the old build wrote")
     }
 }

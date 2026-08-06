@@ -6,7 +6,7 @@ import XCTest
 /// wrong: with nothing of its own (#94), and with the launching session's `CLAUDE_*` (#139).
 @MainActor
 final class PaneEnvironmentTests: XCTestCase {
-    private let workspace = "/tmp/helm-pane-environment"
+    private let workspace = WorkspacePath("/tmp/helm-pane-environment")
 
     // MARK: - The pane's own identity (#94)
 

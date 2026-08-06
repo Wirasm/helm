@@ -61,7 +61,7 @@ final class ArchonCLITests: XCTestCase {
                 + "printf '{\"runs\":[],\"total\":0,\"counts\":{},\"scopeFallback\":false}'\n")
 
         let response = try await cli(extraEnvironment: ["RECORD": record.path])
-            .runs(in: workspace.path)
+            .runs(in: WorkspacePath(workspace))
 
         XCTAssertEqual(response.runs, [])
         XCTAssertTrue(
@@ -87,18 +87,18 @@ final class ArchonCLITests: XCTestCase {
                 + "\"ship\",\"branch\":\"b\",\"conversationId\":\"c\",\"logPath\":null}' ;; esac\n")
         let client = cli(extraEnvironment: ["ARGS_RECORD": argsRecord.path])
 
-        _ = try await client.workflows(in: workspace.path)
+        _ = try await client.workflows(in: WorkspacePath(workspace))
         XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nlist\n--json\n")
 
-        _ = try await client.run(id: "r1", in: workspace.path)
+        _ = try await client.run(id: "r1", in: WorkspacePath(workspace))
         XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nget\nr1\n--json\n--verbose\n")
 
-        _ = try await client.runs(in: workspace.path)
+        _ = try await client.runs(in: WorkspacePath(workspace))
         XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nruns\n--json\n")
 
         _ = try await client.launch(
             .init(
-                workspacePath: workspace.path, workflow: "ship", input: "do it",
+                workspacePath: WorkspacePath(workspace), workflow: "ship", input: "do it",
                 worktree: .branch("b")))
         XCTAssertEqual(
             try String(contentsOf: argsRecord),
@@ -106,14 +106,15 @@ final class ArchonCLITests: XCTestCase {
 
         _ = try await client.launch(
             .init(
-                workspacePath: workspace.path, workflow: "ship", input: "do it", worktree: .none))
+                workspacePath: WorkspacePath(workspace), workflow: "ship", input: "do it",
+                worktree: .none))
         XCTAssertEqual(
             try String(contentsOf: argsRecord),
             "workflow\nrun\nship\ndo it\n--detach\n--json\n--no-worktree\n")
 
         _ = try await client.launch(
             .init(
-                workspacePath: workspace.path, workflow: "ship", input: "do it",
+                workspacePath: WorkspacePath(workspace), workflow: "ship", input: "do it",
                 worktree: .automatic))
         XCTAssertEqual(
             try String(contentsOf: argsRecord),
@@ -191,12 +192,12 @@ final class ArchonCLITests: XCTestCase {
                 + "printf '{\"ok\":true,\"runId\":\"r1\",\"action\":\"a\",\"resumable\":true}'\n")
         let client = cli(extraEnvironment: ["ARGS_RECORD": argsRecord.path])
 
-        _ = try await client.decide(.approve, text: nil, on: "r1", in: workspace.path)
+        _ = try await client.decide(.approve, text: nil, on: "r1", in: WorkspacePath(workspace))
         XCTAssertEqual(
             try String(contentsOf: argsRecord), "workflow\napprove\nr1\n--json\n")
 
         _ = try await client.decide(
-            .reject, text: "--tests are red", on: "r1", in: workspace.path)
+            .reject, text: "--tests are red", on: "r1", in: WorkspacePath(workspace))
         XCTAssertEqual(
             try String(contentsOf: argsRecord),
             "workflow\nreject\nr1\n--json\n--reason\n--tests are red\n",
@@ -210,7 +211,7 @@ final class ArchonCLITests: XCTestCase {
                 + "printf 'Completed archon/task-141\\n'\n")
 
         try await cli(extraEnvironment: ["ARGS_RECORD": argsRecord.path])
-            .complete(branch: "archon/task-141", in: workspace.path)
+            .complete(branch: "archon/task-141", in: WorkspacePath(workspace))
 
         XCTAssertEqual(
             try String(contentsOf: argsRecord, encoding: .utf8),
@@ -222,7 +223,7 @@ final class ArchonCLITests: XCTestCase {
         try install("printf 'Not found: archon/task-missing\\n'\n")
 
         do {
-            try await cli().complete(branch: "archon/task-missing", in: workspace.path)
+            try await cli().complete(branch: "archon/task-missing", in: WorkspacePath(workspace))
             XCTFail("expected refusal")
         } catch let error as ArchonCLIError {
             XCTAssertEqual(
@@ -240,7 +241,7 @@ final class ArchonCLITests: XCTestCase {
         try install("printf 'Error: Not in a git repository.\\n' >&2\nexit 1\n")
 
         do {
-            _ = try await cli().runs(in: workspace.path)
+            _ = try await cli().runs(in: WorkspacePath(workspace))
             XCTFail("expected failure")
         } catch let error as ArchonCLIError {
             XCTAssertEqual(error.command, "archon workflow runs --json")
@@ -258,7 +259,7 @@ final class ArchonCLITests: XCTestCase {
         )
 
         do {
-            _ = try await cli().runs(in: workspace.path)
+            _ = try await cli().runs(in: WorkspacePath(workspace))
             XCTFail("expected failure")
         } catch let error as ArchonCLIError {
             guard case let .nonzeroExit(_, stderr) = error.reason else {
@@ -273,7 +274,7 @@ final class ArchonCLITests: XCTestCase {
     func testEmptyIsDistinctFromMalformedAndOnlyMalformedKeepsTheBytes() async throws {
         try install("exit 0\n")
         do {
-            _ = try await cli().runs(in: workspace.path)
+            _ = try await cli().runs(in: WorkspacePath(workspace))
             XCTFail("expected failure")
         } catch let error as ArchonCLIError {
             XCTAssertEqual(error.reason, .emptyOutput)
@@ -282,7 +283,7 @@ final class ArchonCLITests: XCTestCase {
 
         try install("printf 'not json'\n")
         do {
-            _ = try await cli().runs(in: workspace.path)
+            _ = try await cli().runs(in: WorkspacePath(workspace))
             XCTFail("expected failure")
         } catch let error as ArchonCLIError {
             guard case let .malformedJSON(_, capturedAt) = error.reason else {
@@ -313,7 +314,7 @@ final class ArchonCLITests: XCTestCase {
         // reaching the `cli(…)` helper from inside captures `self`, which is a `sending`
         // violation. The cancellation test below is shaped this way for the same reason.
         let client = cli(extraEnvironment: ["PID_RECORD": pidRecord.path], timeout: budget)
-        let workspacePath = workspace.path
+        let workspacePath = WorkspacePath(workspace)
 
         let started = ContinuousClock.now
         let call = Task { try await client.runs(in: workspacePath) }
@@ -340,7 +341,7 @@ final class ArchonCLITests: XCTestCase {
         let pidRecord = root.appendingPathComponent("pid")
         try installSleeper()
         let client = cli(extraEnvironment: ["PID_RECORD": pidRecord.path])
-        let workspacePath = workspace.path
+        let workspacePath = WorkspacePath(workspace)
 
         let call = Task { try await client.runs(in: workspacePath) }
         try await waitForPid(pidRecord)

@@ -49,10 +49,12 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
         }
         guard workbench.workspacePath == workspace.path else {
             return .failure(
-                SpoolRefusal("helm could not make \(workspace.path) the active workspace"))
+                SpoolRefusal(
+                    "helm could not make \(workspace.path.value) the active workspace"))
         }
         guard let session = workbench.spawnTerminal() else {
-            return .failure(SpoolRefusal("helm could not open a terminal in \(workspace.path)"))
+            return .failure(
+                SpoolRefusal("helm could not open a terminal in \(workspace.path.value)"))
         }
         return .success(session.id)
     }

@@ -273,7 +273,8 @@ private final class Bench {
         workbench = WorkbenchModel(terminals: terminals)
 
         let ids = (0..<count).map { _ in UUID() }
-        workbench.activate(workspacePath: workspacePath, restoring: Self.stacked(ids))
+        workbench.activate(
+            workspacePath: WorkspacePath(workspacePath), restoring: Self.stacked(ids))
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
@@ -290,7 +291,7 @@ private final class Bench {
     func close() {
         window.contentView = nil
         window.close()
-        terminals.closeWorkspace(workspacePath)
+        terminals.closeWorkspace(WorkspacePath(workspacePath))
         workbench.deactivate()
     }
 

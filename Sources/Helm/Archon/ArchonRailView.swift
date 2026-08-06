@@ -30,7 +30,7 @@ import SwiftUI
 /// the wrong one.
 struct ArchonRailView: View {
     @ObservedObject var model: ArchonRailModel
-    let workspacePath: String?
+    let workspacePath: WorkspacePath?
 
     @FocusState private var composerFocused: Bool
     /// The finished row under the pointer, so only that row shows its dismiss control. The rule

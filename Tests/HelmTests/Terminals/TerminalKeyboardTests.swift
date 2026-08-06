@@ -313,7 +313,7 @@ private final class HelmWindow {
     private let ptys = PtyRegistry()
     private let workspacePath = NSTemporaryDirectory()
     /// Every workspace this harness has activated, so `close()` can tear all of them down.
-    private var openedWorkspaces: [String] = []
+    private var openedWorkspaces: [WorkspacePath] = []
 
     init(terminals count: Int, layout: Layout = .oneSlot, attach: Attach = .immediately) {
         // A test bundle is not an app, and AppKit will not deliver a key event through a
@@ -329,8 +329,9 @@ private final class HelmWindow {
         // Restore rather than open, so the ids are known before anything mounts — which is
         // also the launch path, and one of the three cases #96 lists.
         let ids = (0..<count).map { _ in UUID() }
-        openedWorkspaces.append(workspacePath)
-        workbench.activate(workspacePath: workspacePath, restoring: Self.bench(ids, layout))
+        openedWorkspaces.append(WorkspacePath(workspacePath))
+        workbench.activate(
+            workspacePath: WorkspacePath(workspacePath), restoring: Self.bench(ids, layout))
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
@@ -443,9 +444,9 @@ private final class HelmWindow {
     func openAnotherWorkspace() -> Pane.ID {
         let path = workspacePath + "another/"
         let pane = UUID()
-        openedWorkspaces.append(path)
+        openedWorkspaces.append(WorkspacePath(path))
         workbench.activate(
-            workspacePath: path,
+            workspacePath: WorkspacePath(path),
             restoring: Workbench(panes: [Pane(id: pane, content: .terminal(face: .terminal))]))
         settle()
         return pane

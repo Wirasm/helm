@@ -24,9 +24,10 @@ final class BoardModel: ObservableObject {
     /// isolated boards over a fixture directory.
     static let shared = BoardModel(manager: .shared)
 
-    /// Keyed by `Workspace.path`. A workspace missing from this dictionary is
-    /// unmarked — which is why it is a dictionary of presences rather than a
-    /// presence for every known workspace.
+    /// Keyed by `Workspace.path.value`, matching `WorkspaceModel.contexts` — not persisted
+    /// itself, but the same key everything else that indexes on a workspace uses. A workspace
+    /// missing from this dictionary is unmarked — which is why it is a dictionary of
+    /// presences rather than a presence for every known workspace.
     @Published private(set) var presence: [String: AgentPresence] = [:]
 
     private let manager: TerminalManager
@@ -78,7 +79,7 @@ final class BoardModel: ObservableObject {
         var pids: [String: Set<pid_t>] = [:]
         for session in manager.sessions {
             guard let pid = session.hostView.foregroundPid else { continue }
-            pids[session.workspacePath, default: []].insert(pid)
+            pids[session.workspacePath.value, default: []].insert(pid)
         }
         return pids
     }

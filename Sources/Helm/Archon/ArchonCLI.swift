@@ -8,13 +8,14 @@ import Foundation
 /// opened from the Dock), so a call that does not say where it is about fails every time,
 /// everywhere, for a reason no part of the old code could see.
 protocol ArchonClient: Sendable {
-    func runs(in workspacePath: String) async throws -> ArchonRunsResponse
-    func workflows(in workspacePath: String) async throws -> ArchonWorkflowListResponse
-    func run(id: String, in workspacePath: String) async throws -> ArchonRun
+    func runs(in workspacePath: WorkspacePath) async throws -> ArchonRunsResponse
+    func workflows(in workspacePath: WorkspacePath) async throws -> ArchonWorkflowListResponse
+    func run(id: String, in workspacePath: WorkspacePath) async throws -> ArchonRun
     func launch(_ request: ArchonLaunchRequest) async throws -> ArchonLaunchAcknowledgement
-    func complete(branch: String, in workspacePath: String) async throws
+    func complete(branch: String, in workspacePath: WorkspacePath) async throws
     func decide(
-        _ decision: ArchonGateDecision, text: String?, on runID: String, in workspacePath: String
+        _ decision: ArchonGateDecision, text: String?, on runID: String,
+        in workspacePath: WorkspacePath
     ) async throws -> ArchonActionAcknowledgement
     func resume(_ run: ArchonRun) async throws -> ArchonLaunchAcknowledgement
 }
@@ -110,22 +111,22 @@ struct ArchonCLI: ArchonClient, Sendable {
     /// The row list is capped by the CLI at 20 whatever is asked; `counts` is over the whole
     /// project, which is why the rail's collapsed lines subtract what is already a line above
     /// them rather than trusting either number alone.
-    func runs(in workspacePath: String) async throws -> ArchonRunsResponse {
+    func runs(in workspacePath: WorkspacePath) async throws -> ArchonRunsResponse {
         try await decode(
             ArchonRunsResponse.self, arguments: ["workflow", "runs", "--json"],
-            in: workspacePath)
+            in: workspacePath.value)
     }
 
-    func workflows(in workspacePath: String) async throws -> ArchonWorkflowListResponse {
+    func workflows(in workspacePath: WorkspacePath) async throws -> ArchonWorkflowListResponse {
         try await decode(
             ArchonWorkflowListResponse.self, arguments: ["workflow", "list", "--json"],
-            in: workspacePath)
+            in: workspacePath.value)
     }
 
-    func run(id: String, in workspacePath: String) async throws -> ArchonRun {
+    func run(id: String, in workspacePath: WorkspacePath) async throws -> ArchonRun {
         try await decode(
             ArchonRun.self, arguments: ["workflow", "get", id, "--json", "--verbose"],
-            in: workspacePath)
+            in: workspacePath.value)
     }
 
     func launch(_ request: ArchonLaunchRequest) async throws -> ArchonLaunchAcknowledgement {
@@ -133,12 +134,13 @@ struct ArchonCLI: ArchonClient, Sendable {
             ["workflow", "run", request.workflow, request.input, "--detach", "--json"]
             + request.worktree.arguments
         return try await decode(
-            ArchonLaunchAcknowledgement.self, arguments: arguments, in: request.workspacePath)
+            ArchonLaunchAcknowledgement.self, arguments: arguments,
+            in: request.workspacePath.value)
     }
 
-    func complete(branch: String, in workspacePath: String) async throws {
+    func complete(branch: String, in workspacePath: WorkspacePath) async throws {
         let arguments = ["complete", branch]
-        let capture = try await capture(arguments: arguments, in: workspacePath)
+        let capture = try await capture(arguments: arguments, in: workspacePath.value)
         defer { try? FileManager.default.removeItem(at: capture.url) }
         let text = String(decoding: capture.data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -150,11 +152,12 @@ struct ArchonCLI: ArchonClient, Sendable {
 
     /// Answer one gate. **Recording the decision is all this does** — see `resume(_:)`.
     func decide(
-        _ decision: ArchonGateDecision, text: String?, on runID: String, in workspacePath: String
+        _ decision: ArchonGateDecision, text: String?, on runID: String,
+        in workspacePath: WorkspacePath
     ) async throws -> ArchonActionAcknowledgement {
         try await decode(
             ArchonActionAcknowledgement.self,
-            arguments: decision.arguments(for: runID, text: text), in: workspacePath)
+            arguments: decision.arguments(for: runID, text: text), in: workspacePath.value)
     }
 
     /// Actually continue a parked run — **and note which command this is not.**

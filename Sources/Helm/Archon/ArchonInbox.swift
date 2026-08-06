@@ -24,6 +24,11 @@ struct ArchonInboxDismissals: Equatable, Sendable {
     static let maximumAge: TimeInterval = 14 * 24 * 60 * 60
 
     /// Newest last, which is what makes `suffix(capacity)` the *keep* rather than the drop.
+    ///
+    /// Keyed by `WorkspacePath.value` rather than `WorkspacePath` itself: a `Dictionary` only
+    /// encodes as a JSON object when its key is `String` (or `Int`) — a custom `Codable` key
+    /// type serializes as a flat array instead, which would silently change the shape of
+    /// `archonInboxDismissed` and strand every dismissal already on disk.
     private var byWorkspace: [String: [ArchonInboxDismissal]] = [:]
 
     init() {}
@@ -45,22 +50,22 @@ struct ArchonInboxDismissals: Equatable, Sendable {
 
     // MARK: - Reading
 
-    func contains(_ runID: String, in workspacePath: String) -> Bool {
-        byWorkspace[workspacePath]?.contains { $0.id == runID } ?? false
+    func contains(_ runID: String, in workspacePath: WorkspacePath) -> Bool {
+        byWorkspace[workspacePath.value]?.contains { $0.id == runID } ?? false
     }
 
-    func total(in workspacePath: String) -> Int {
-        byWorkspace[workspacePath]?.count ?? 0
+    func total(in workspacePath: WorkspacePath) -> Int {
+        byWorkspace[workspacePath.value]?.count ?? 0
     }
 
     // MARK: - Writing
 
     /// `now` is a parameter rather than a `Date()` inside, so the age-out has a test that does
     /// not depend on the wall clock.
-    mutating func dismiss(_ runID: String, in workspacePath: String, now: Date) {
-        var kept = (byWorkspace[workspacePath] ?? []).filter { $0.id != runID }
+    mutating func dismiss(_ runID: String, in workspacePath: WorkspacePath, now: Date) {
+        var kept = (byWorkspace[workspacePath.value] ?? []).filter { $0.id != runID }
         kept.append(ArchonInboxDismissal(id: runID, dismissedAt: now))
-        byWorkspace[workspacePath] = Array(kept.suffix(Self.capacity))
+        byWorkspace[workspacePath.value] = Array(kept.suffix(Self.capacity))
     }
 
     /// Age-out first, then the cap. A workspace left with nothing is dropped entirely rather

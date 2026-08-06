@@ -12,7 +12,7 @@ import XCTest
 /// gone entirely is the liveness state, the `abandon` verb and the run pane — see the commit
 /// message. `approve`/`reject` came back with #150 and are exercised below.
 final class ArchonRailModelTests: XCTestCase {
-    private let workspace = "/tmp/project"
+    private let workspace = WorkspacePath("/tmp/project")
 
     // MARK: - Visibility
 
@@ -173,7 +173,7 @@ final class ArchonRailModelTests: XCTestCase {
         await model.refresh(in: workspace)
         model.dismiss(try XCTUnwrap(model.finished.first), in: workspace)
 
-        await model.refresh(in: "/tmp/other-project")
+        await model.refresh(in: WorkspacePath("/tmp/other-project"))
 
         XCTAssertEqual(model.finished.map(\.id), ["b"])
     }
@@ -293,7 +293,9 @@ final class ArchonRailModelTests: XCTestCase {
     func testPollStopsWhenCancelled() async throws {
         let model = ArchonRailModel(
             client: FakeArchonClient(), defaults: try isolatedDefaults("archon-rail-poll"))
-        let poll = Task { await model.poll(in: "/tmp/project", every: .milliseconds(1)) }
+        let poll = Task {
+            await model.poll(in: WorkspacePath("/tmp/project"), every: .milliseconds(1))
+        }
         try? await Task.sleep(for: .milliseconds(10))
         poll.cancel()
         await poll.value

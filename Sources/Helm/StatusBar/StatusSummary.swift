@@ -42,14 +42,14 @@ struct StatusSummary: Equatable {
         presence: [String: AgentPresence]
     ) -> StatusSummary {
         guard let workspace else { return .none }
-        let branch = contexts[workspace.path]?.branch
+        let branch = contexts[workspace.path.value]?.branch
         return StatusSummary(
             workspace: workspace.name,
             // An empty string is not a branch. `cacheBranch` already stores nil for a
             // folder that is not a repository, but a persisted context predates that
             // guard and would render as a gap with a separator on either side.
             branch: (branch?.isEmpty ?? true) ? nil : branch,
-            agents: presence[workspace.path]
+            agents: presence[workspace.path.value]
         )
     }
 

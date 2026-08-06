@@ -13,7 +13,7 @@ import XCTest
 /// `tearDownWithError` override nonisolated XCTest API, so a `@MainActor` class
 /// cannot own a mutable fixture without the compiler rightly complaining.
 final class BoardModelTests: XCTestCase {
-    private let workspace = "/tmp/helm-board-workspace"
+    private let workspace = WorkspacePath("/tmp/helm-board-workspace")
     private var root: URL!
 
     override func setUpWithError() throws {
@@ -28,7 +28,7 @@ final class BoardModelTests: XCTestCase {
     }
 
     private func writeRow(pid: Int, status: String) throws {
-        try #"{"pid":\#(pid),"cwd":"\#(workspace)","status":"\#(status)"}"#
+        try #"{"pid":\#(pid),"cwd":"\#(workspace.value)","status":"\#(status)"}"#
             .write(
                 to: root.appendingPathComponent("\(pid).json"), atomically: true, encoding: .utf8)
     }
@@ -47,7 +47,7 @@ final class BoardModelTests: XCTestCase {
         await board.refresh()
 
         XCTAssertNil(
-            board.presence[workspace],
+            board.presence[workspace.value],
             "an unattached surface reports no foreground pid, so there is nothing to match")
     }
 

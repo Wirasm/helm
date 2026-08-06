@@ -36,7 +36,8 @@ struct RootView: View {
                 model: model, select: switchWorkspace, open: openWorkspace,
                 close: closeWorkspace)
             HStack(spacing: 0) {
-                WorkbenchView(model: workbench, workspaceRoot: model.selectedWorkspaceRoot)
+                WorkbenchView(
+                    model: workbench, workspaceRoot: model.selectedWorkspaceRoot?.value)
                 if archonRail.isVisible {
                     Color.border.frame(width: 1)
                     ArchonRailView(
@@ -149,7 +150,7 @@ struct RootView: View {
     /// which `WorkbenchModel.activate` turns into today's 1×1 frame.
     private func activateSelectedWorkspace() {
         guard let workspace = model.selectedWorkspace else { return }
-        let context = model.contexts[workspace.path] ?? WorkspaceContext()
+        let context = model.contexts[workspace.path.value] ?? WorkspaceContext()
         workbench.activate(
             workspacePath: workspace.path,
             restoring: context.workbench ?? .migrating(from: context))
