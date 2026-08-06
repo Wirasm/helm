@@ -347,9 +347,11 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   - **The rule is one sentence: rearranging the bench is fine, taking focus is not.** It is
     #125's *appear, don't seize* on a channel that can now ask for anything the keymap can — an
     agent selecting your active tab mid-thought is the wrong-terminal click arriving through a
-    supported API. The other fourteen are `refused` results **naming the reason and the
-    addressed route**: `closePane` points at `helm-close`, `newTerminal`'s seizing twin at
-    `helm-spool`, `openCanvasFile` at `push.sh`.
+    supported API. The other fourteen are `refused` results **naming the reason and, where one
+    exists, the route to use instead**: `closePane` and `selectTerminal` point at `helm-close`,
+    `openCanvasFile` and `openArtifact` at `push.sh`, `openWorkspace` at `helm-spool` — a
+    spawn's `cwd` is the workspace helm opens for it. The rest name no route because there
+    isn't one yet, and say so by saying what an addressed version would have to carry.
   - **Every command that is still refused is one with no address**, and that is #176's rule
     extended rather than reinvented. `helm-close` names a pane and refuses the one holding the
     keyboard; `selectTerminal`, `closePane`, `toggleChat`, `adjustFontSize` and `jumpToPrompt`

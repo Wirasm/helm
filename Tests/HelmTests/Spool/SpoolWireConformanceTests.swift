@@ -525,6 +525,67 @@ final class SpoolWireConformanceTests: XCTestCase {
             report["command"] as? String, "splitRight",
             "…and the command name is its raw value, the same string the script takes on its "
                 + "own command line")
+        for field in ["focusedPaneBefore", "focusedPaneAfter"] {
+            XCTAssertTrue(
+                report[field] is String,
+                "helm-command.swift: command.\(field) must be a bare string — the script reads "
+                    + "it by name to decide whether to warn that focus moved; got "
+                    + "\(String(describing: report[field]))")
+        }
+    }
+
+    /// **The focus warning is a canary, and a canary nobody tests is a canary that can die
+    /// quietly.** `helm-command.swift:181-185` reads `focusedPaneBefore` and `focusedPaneAfter`
+    /// out of the result **by name**, with no compiler link to `CommandReport` — it cannot
+    /// `import HelmWire`. Rename either field and both casts return `nil`, `nil == nil` is
+    /// `true`, and the one line that would tell a human the focus rule had been broken silently
+    /// stops printing. The shape assertions in the test above catch a *type* change; only this
+    /// catches a *name* change, because it is the only thing here that depends on the two fields
+    /// having been read as two different values.
+    ///
+    /// The result it is given is a deliberate impossibility — `SpoolCommandPolicy` allows no
+    /// command that moves focus, so no real helm writes one. That is the point: the branch
+    /// exists for the day something does, and a branch a real run cannot reach is exactly the
+    /// one a test has to.
+    func testHelmCommandWarnsWhenAResultSaysFocusMoved() throws {
+        let id = "wire-shape-focus-moved"
+        let before = UUID()
+        let after = UUID()
+        SpoolDirectory(root: spoolDir).write(
+            SpoolResult(
+                id: id, status: .ran,
+                command: CommandReport(
+                    command: .splitRight, paneCreated: nil,
+                    focusedPaneBefore: TerminalID(before), focusedPaneAfter: TerminalID(after),
+                    columns: 1, panes: 1)))
+
+        let (exitCode, stderr) = try runAndCapture("helm-command.swift", ["splitRight", "--id", id])
+
+        XCTAssertEqual(exitCode, 0, "helm ran it, so the script still succeeds — it only warns")
+        XCTAssertTrue(
+            stderr.contains("WARNING: focus MOVED"),
+            "helm-command.swift must warn when the two focus readings differ, which is the only "
+                + "thing that proves it read them as two fields at all; got \"\(stderr)\"")
+        XCTAssertTrue(
+            stderr.contains(before.uuidString) && stderr.contains(after.uuidString),
+            "…and must name both panes, so the warning is actionable; got \"\(stderr)\"")
+    }
+
+    /// The other half of the pair, and named as a **control**: it passes whether or not the
+    /// warning works, because a script that never warns satisfies it. It is here so that the
+    /// test above cannot be made green by warning unconditionally — which would be the cheapest
+    /// wrong fix, and would cry wolf on every ordinary command.
+    func testHelmCommandDoesNotWarnWhenFocusStayedPut() throws {
+        let id = "wire-shape-focus-kept"
+        let terminal = UUID()
+        SpoolDirectory(root: spoolDir).write(result(id: id, status: .ran, terminal: terminal))
+
+        let (exitCode, stderr) = try runAndCapture("helm-command.swift", ["splitRight", "--id", id])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertFalse(
+            stderr.contains("WARNING"),
+            "an allowed command that kept focus must not warn; got \"\(stderr)\"")
     }
 
     // MARK: - 3. Directory resolution — the HELM_DEFAULTS_SUITE branch

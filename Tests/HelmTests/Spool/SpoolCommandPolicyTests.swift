@@ -88,6 +88,47 @@ final class SpoolCommandPolicyTests: XCTestCase {
         XCTAssertTrue(
             push.contains("push.sh"),
             "openCanvasFile's refusal must point at push.sh, the offering route; got \"\(push)\"")
+
+        guard case .refused(let workspace) = SpoolCommandPolicy.verdict(for: .openWorkspace) else {
+            return XCTFail("openWorkspace must be refused — it raises a folder panel")
+        }
+        XCTAssertTrue(
+            workspace.contains("helm-spool"),
+            "openWorkspace's refusal must point at helm-spool — a spawn's cwd is the workspace "
+                + "helm opens for it, which is the headless route to the same outcome; got "
+                + "\"\(workspace)\"")
+    }
+
+    /// **Every route a refusal names has to be a real one.** A message that sends a caller to a
+    /// script that does not exist is worse than one that says nothing: it costs them a search
+    /// before they learn there is no answer. Checked against the repository, not against this
+    /// file's memory of it.
+    func testEveryRouteARefusalNamesIsAScriptThatExists() {
+        let tools = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // Spool/
+            .deletingLastPathComponent()  // HelmTests/
+            .deletingLastPathComponent()  // Tests/
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent("tools")
+        let routes = ["helm-close": "helm-close.swift", "helm-spool": "helm-spool.swift"]
+        var named: Set<String> = []
+        for command in HelmCommandName.allCases {
+            guard case .refused(let reason) = SpoolCommandPolicy.verdict(for: command) else {
+                continue
+            }
+            for (route, script) in routes where reason.contains(route) {
+                named.insert(route)
+                XCTAssertTrue(
+                    FileManager.default.fileExists(
+                        atPath: tools.appendingPathComponent(script).path),
+                    "\(command.rawValue)'s refusal sends the caller to \(route), and "
+                        + "tools/\(script) is not there")
+            }
+        }
+        XCTAssertEqual(
+            named, Set(routes.keys),
+            "both routes should be reachable from some refusal — if one stopped being named, "
+                + "the headers claiming it is are now wrong too")
     }
 
     // MARK: - Through the real gate

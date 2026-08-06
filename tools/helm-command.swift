@@ -15,7 +15,9 @@
 // REARRANGING THE BENCH IS FINE, TAKING FOCUS IS NOT. An agent selecting the operator's active tab
 // mid-thought is the wrong-terminal click in a supported API — so every command that moves the
 // keyboard, or that acts on "the focused pane" without saying which pane it means, is refused with
-// the reason and with the addressed route to use instead (`helm-close`, `helm-spool`, `push.sh`).
+// the reason and, where one exists, the route to use instead — `helm-close` names a pane and
+// refuses the operator's, `push.sh` puts an artifact on the bench without seizing, and a
+// `helm-spool` spawn's `cwd` is the workspace helm opens for it.
 // `--list` names the four without sending anything; send any other command to read helm's own
 // refusal, which says why. `SpoolCommandPolicy` in `Sources/HelmWire/Spool/SpoolRequest.swift`
 // argues the whole verdict.

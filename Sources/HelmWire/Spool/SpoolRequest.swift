@@ -583,10 +583,12 @@ package enum SpoolPolicy {
 /// holding the keyboard, and `force` does not override that. Every `HelmCommand` below that
 /// still fails is one with **no address at all** — it acts on `focusedSlot`/`focusedTerminal`,
 /// which is to say on whatever pane the operator happens to be in. There is nothing for a
-/// policy to check, because the request never said which pane it meant. So the refusals name
-/// the addressed route where one exists (`helm-close`, `helm-spool`, `push.sh`), and the shape
-/// a later addressed command would take is exactly `CloseRequest`'s: carry a pane, and refuse it
-/// when `SpoolPaneState.holdsKeyboard`.
+/// policy to check, because the request never said which pane it meant. So a refusal names the
+/// route to use instead **where one exists** — `helm-close` for `closePane` and `selectTerminal`,
+/// `push.sh` for `openCanvasFile`/`openCanvasURL`/`openArtifact`/`pushCanvasFile`, `helm-spool`
+/// for `openWorkspace` — and where one does not, it says what an addressed version would have to
+/// carry, which is exactly `CloseRequest`'s shape: a pane, refused when
+/// `SpoolPaneState.holdsKeyboard`.
 ///
 /// **Where an allowed command has a non-seizing twin, helm runs the twin.** That is not this
 /// policy bending a command's meaning — helm has drawn that distinction since #125 and named
@@ -688,12 +690,18 @@ package enum SpoolCommandPolicy {
 
         // MARK: Refused — it raises UI nobody is there to answer.
 
-        case .openArtifact, .openWorkspace:
+        case .openArtifact:
             return .refused(
-                "\(command.rawValue) opens a picker on the operator's bench — a popover on the "
-                    + "focused slot's tab strip, or a folder panel. The spool exists for the "
-                    + "case where nobody is at the pane, so a dialog raised from one is the "
-                    + "silent hang of #179 with a different cause")
+                "openArtifact opens a picker on the operator's bench — a popover on the focused "
+                    + "slot's tab strip. The spool exists for the case where nobody is at the "
+                    + "pane, so a dialog raised from one is the silent hang of #179 with a "
+                    + "different cause. push.sh is how an artifact reaches the bench without one")
+
+        case .openWorkspace:
+            return .refused(
+                "openWorkspace raises a folder panel, and nobody is at the pane to answer it — "
+                    + "the silent hang of #179 with a different cause. helm-spool is the "
+                    + "headless route: a spawn's `cwd` is the workspace helm opens for it")
 
         // MARK: Refused — the payload is not a caller's to build.
 
