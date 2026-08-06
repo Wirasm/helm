@@ -11,3 +11,7 @@ DerivedData/
 .DS_Store
 
 .worktrees/
+
+# Archon keeps per-repo run state here. Local, never this repo's to carry — one
+# `git add -A` swept a 696-line workflow file into an unrelated fix (#263).
+.archon/

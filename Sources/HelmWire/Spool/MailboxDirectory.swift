@@ -168,7 +168,7 @@ package enum MailboxDirectory {
     /// That is a live hazard for every consumer here, because they all join on pid: macOS
     /// reuses pids, and this workspace churns them (a process per spawn, a process per hook
     /// firing). The first stale retired pid the OS hands to an unrelated live terminal would
-    /// make `owner(in:foregroundPid:…)` return the wrong mailbox — `SpoolModel` answering a
+    /// make `AddressBook.owner(foregroundPid:…)` return the wrong mailbox — `SpoolModel` answering a
     /// spawn with a dead agent's `handle`, and `BenchSnapshot` attributing a dead session's
     /// identity to a live pane every two seconds, in the file outside agents are told to trust.
     /// Silent in both cases: no error, just a wrong answer.
