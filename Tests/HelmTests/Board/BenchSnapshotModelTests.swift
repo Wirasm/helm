@@ -126,7 +126,7 @@ final class BenchSnapshotModelTests: XCTestCase {
 
         XCTAssertEqual(writes.count, 2)
         let pane = writes.last?.workspaces[0].columns[0].slots[0].panes[0]
-        XCTAssertEqual(pane?.terminal?.owner?.handle, "owner-4242")
+        XCTAssertEqual(pane?.terminal?.owner?.handle.value, "owner-4242")
         model.stop()
     }
 

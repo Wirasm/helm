@@ -61,7 +61,7 @@ final class BenchSnapshotTests: XCTestCase {
         let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
         let session = try XCTUnwrap(terminals.sessions.first)
         let owner = MailboxOwner(
-            handle: "owner-1234", runtime: "codex", pid: 4242,
+            handle: Handle(validating: "owner-1234")!, runtime: "codex", pid: 4242,
             sessionId: "session", cwd: workspace.path.value)
 
         let value = BenchSnapshot.project(
@@ -76,14 +76,14 @@ final class BenchSnapshotTests: XCTestCase {
         XCTAssertEqual(terminal.sessionId, session.id)
         XCTAssertTrue(terminal.isLive)
         XCTAssertEqual(terminal.foregroundPid, 4242)
-        XCTAssertEqual(terminal.owner?.handle, "owner-1234")
+        XCTAssertEqual(terminal.owner?.handle.value, "owner-1234")
     }
 
     func testUnmatchedMailboxOwnerIsNotInvented() throws {
         let workspace = Workspace(path: "/tmp/bench-snapshot-unknown")
         let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
         let unrelated = MailboxOwner(
-            handle: "other", runtime: "claude", pid: 999,
+            handle: Handle(validating: "other")!, runtime: "claude", pid: 999,
             sessionId: nil, cwd: workspace.path.value)
 
         let value = BenchSnapshot.project(
@@ -118,7 +118,7 @@ final class BenchSnapshotTests: XCTestCase {
             terminals: terminals,
             owners: [
                 MailboxOwner(
-                    handle: "parked-agent", runtime: "codex", pid: 4242,
+                    handle: Handle(validating: "parked-agent")!, runtime: "codex", pid: 4242,
                     sessionId: "session", cwd: parked.path.value)
             ]
         ) { session in session.id == parkedTerminal.id ? 4242 : nil }
@@ -131,7 +131,7 @@ final class BenchSnapshotTests: XCTestCase {
         XCTAssertFalse(pane.isFocused, "parked focusedSlot is only persisted arrangement")
         XCTAssertTrue(pane.terminal?.isLive == true)
         XCTAssertEqual(pane.terminal?.sessionId, parkedTerminal.id)
-        XCTAssertEqual(pane.terminal?.owner?.handle, "parked-agent")
+        XCTAssertEqual(pane.terminal?.owner?.handle.value, "parked-agent")
     }
 
     /// The gate everything else in `project` is decided by: `workspace.path == mountedPath`.
@@ -206,6 +206,53 @@ final class BenchSnapshotTests: XCTestCase {
             "WorkspacePath encodes through a single-value container, so this must still be a "
                 + "bare string — an object here breaks every agent reading helm.bench-snapshot")
         XCTAssertEqual(path as? String, workspace.path.value)
+    }
+
+    /// #233's acceptance criterion, and the same obligation one field over: `OwnerRecord.handle`
+    /// became a `Handle`, and an agent reading `snapshot.json` must not be able to tell.
+    ///
+    /// **This one has to pass on both sides of the change, and that is what it is for.** A test
+    /// that only goes green after the refactor would prove the refactor happened; this proves it
+    /// did not overshoot, so it is a control against a `Handle` that encodes through a keyed
+    /// container (`{"value":"…"}`) — which is what a hand-written `Codable` conformance, or a
+    /// later field added to `Handle`, would silently produce. Verified by giving `Handle` a keyed
+    /// encoder: this fails on the `handle is String` assertion below.
+    ///
+    /// Read off `JSONSerialization` rather than by a Swift round trip for the reason
+    /// `testWorkspaceRecordPathEncodesAsABareStringUnchangedByWorkspacePath` above does — a round
+    /// trip decodes with the same type it encoded with and passes either way, so it measures
+    /// nothing here. `format` and `version` are checked against the same bytes: the shape did not
+    /// change, so neither may they.
+    func testOwnerRecordHandleEncodesAsABareStringUnchangedByHandle() throws {
+        let workspace = Workspace(path: "/tmp/bench-snapshot-json-handle")
+        let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
+        let owner = MailboxOwner(
+            handle: Handle(validating: "owner-1234")!, runtime: "codex", pid: 4242,
+            sessionId: "session", cwd: workspace.path.value)
+
+        let snapshot = BenchSnapshot.project(
+            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
+            owners: [owner]
+        ) { _ in 4242 }
+
+        let data = try JSONEncoder().encode(snapshot)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["format"] as? String, BenchSnapshot.currentFormat)
+        XCTAssertEqual(json["version"] as? Int, BenchSnapshot.currentVersion)
+
+        let records = try XCTUnwrap(json["workspaces"] as? [[String: Any]])
+        let columns = try XCTUnwrap(records.first?["columns"] as? [[String: Any]])
+        let slots = try XCTUnwrap(columns.first?["slots"] as? [[String: Any]])
+        let panes = try XCTUnwrap(slots.first?["panes"] as? [[String: Any]])
+        let terminal = try XCTUnwrap(panes.first?["terminal"] as? [String: Any])
+        let record = try XCTUnwrap(terminal["owner"] as? [String: Any])
+        let handle = try XCTUnwrap(record["handle"])
+
+        XCTAssertTrue(
+            handle is String,
+            "Handle encodes through a single-value container, so this must still be a bare "
+                + "string — an object here breaks every agent reading helm.bench-snapshot")
+        XCTAssertEqual(handle as? String, "owner-1234")
     }
 
     func testSchemaAndIsoDateRoundTrip() throws {
