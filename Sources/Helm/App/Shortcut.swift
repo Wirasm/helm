@@ -37,33 +37,27 @@ struct Shortcut {
 
     let trigger: Trigger
     let modifiers: NSEvent.ModifierFlags
-    let notification: Notification.Name
-    /// Posted as the notification's `object`. nil for the payload-less commands.
-    let payload: Int?
-    /// Set instead of `payload` on the focus-movement rows.
-    let direction: Workbench.Direction?
+    /// What this row does, payload and all.
+    ///
+    /// **One field where there were three.** It was `notification` + `payload: Int?` +
+    /// `direction: Workbench.Direction?`, plus a computed `object: Any?` to choose between the
+    /// last two — because the channel took `Any?` and a row had to pre-flatten itself to fit.
+    /// A direction now travels as a direction; see `HelmCommand`, and #152 for what the
+    /// flattening cost.
+    let command: HelmCommand
     let focus: Focus
     /// Present when the shortcut also appears in the menu bar, which is both a
     /// discoverability surface and the mouse-only route to the same command.
     let menu: MenuEntry?
 
-    /// What is actually posted as the notification's `object`: the payload index, or a
-    /// direction's raw value. Two fields rather than one `Any` so the table stays
-    /// `Equatable`-friendly and a test can assert what a row sends.
-    var object: Any? { direction?.rawValue ?? payload }
-
     /// Fire this row's command.
     ///
-    /// **The one place a notification is paired with its object**, because the two consumers
-    /// pairing it themselves is a defect that already shipped: `Keymap` posted `object` and the
-    /// menu posted the raw `payload`, which is nil on all four focus-movement rows — so View ▸
-    /// Focus Left/Right/Up/Down were silent no-ops from the day `HelmCommands` was split out
-    /// (#152). The header's promise is *one table, two consumers*; a row that can be posted two
-    /// ways is that promise with a hole in it.
-    ///
-    /// A method rather than discipline: there is now nothing at either call site to get wrong.
+    /// Still the one place a row is turned into a posted command, and now there is nothing left
+    /// to pair: the payload is *inside* the command, so the two consumers cannot assemble it
+    /// differently. #152 was the menu posting `payload` (nil on all four focus rows) while the
+    /// keymap posted `object`; that shape no longer exists to get wrong.
     func post() {
-        NotificationCenter.default.post(name: notification, object: object)
+        command.post()
     }
 
     struct MenuEntry {
@@ -74,15 +68,12 @@ struct Shortcut {
 
     init(
         _ trigger: Trigger, _ modifiers: NSEvent.ModifierFlags,
-        posts notification: Notification.Name,
-        payload: Int? = nil, direction: Workbench.Direction? = nil,
+        does command: HelmCommand,
         focus: Focus = .anywhere, menu: MenuEntry? = nil
     ) {
         self.trigger = trigger
         self.modifiers = modifiers
-        self.notification = notification
-        self.payload = payload
-        self.direction = direction
+        self.command = command
         self.focus = focus
         self.menu = menu
     }
@@ -108,10 +99,10 @@ extension Shortcut {
         // ⌘↑/⌘↓ — jump between shell prompt marks (OSC 133). In an agent session each
         // turn leaves a mark, so this is effectively jump-between-turns.
         Shortcut(
-            .keyCode(126), .command, posts: .helmJumpToPrompt, payload: -1, focus: .terminalOnly,
+            .keyCode(126), .command, does: .jumpToPrompt(offset: -1), focus: .terminalOnly,
             menu: .init(title: "Jump to Previous Prompt", key: .upArrow, modifiers: .command)),
         Shortcut(
-            .keyCode(125), .command, posts: .helmJumpToPrompt, payload: 1, focus: .terminalOnly,
+            .keyCode(125), .command, does: .jumpToPrompt(offset: 1), focus: .terminalOnly,
             menu: .init(title: "Jump to Next Prompt", key: .downArrow, modifiers: .command)),
     ]
 
@@ -120,15 +111,15 @@ extension Shortcut {
     private static let workspaceScoped: [Shortcut] =
         (1...9).map { index in
             Shortcut(
-                .character("\(index)"), .control, posts: .helmSelectWorkspace, payload: index - 1,
+                .character("\(index)"), .control, does: .selectWorkspace(index: index - 1),
                 focus: .awayFromTerminal)
         }
         + [
             Shortcut(
-                .keyCode(123), .control, posts: .helmCycleWorkspace, payload: -1,
+                .keyCode(123), .control, does: .cycleWorkspace(delta: -1),
                 focus: .awayFromTerminal),
             Shortcut(
-                .keyCode(124), .control, posts: .helmCycleWorkspace, payload: 1,
+                .keyCode(124), .control, does: .cycleWorkspace(delta: 1),
                 focus: .awayFromTerminal),
         ]
 
@@ -136,81 +127,80 @@ extension Shortcut {
         (1...9).map { index in
             // ⌘⌥1–⌘⌥9 — the fallback that needs no System Settings change.
             Shortcut(
-                .character("\(index)"), [.command, .option], posts: .helmSelectWorkspace,
-                payload: index - 1)
+                .character("\(index)"), [.command, .option],
+                does: .selectWorkspace(index: index - 1))
         }
         + (1...9).map { index in
             // ⌘1–⌘9 — select terminal by tab position (1-based keys, 0-based index).
             Shortcut(
-                .character("\(index)"), .command, posts: .helmSelectTerminal, payload: index - 1)
+                .character("\(index)"), .command, does: .selectTerminal(index: index - 1))
         }
         + [
             // ⌘⇧= is how ⌘+ is actually typed: charactersIgnoringModifiers keeps shift
             // applied, so the bare-⌘ row below never sees it.
             Shortcut(
-                .character("+"), [.command, .shift], posts: .helmAdjustFontSize,
-                payload: FontSizeStep.increase.rawValue),
+                .character("+"), [.command, .shift], does: .adjustFontSize(.increase)),
             // ⌘⇧O — open a folder as a workspace. `charactersIgnoringModifiers` keeps
             // shift applied so this arrives uppercase; matching is case-insensitive
             // (see `match`), and the modifier set is what separates it from ⌘O.
             Shortcut(
-                .character("o"), [.command, .shift], posts: .helmOpenWorkspace,
+                .character("o"), [.command, .shift], does: .openWorkspace,
                 menu: .init(title: "Open Workspace…", key: "o", modifiers: [.command, .shift])),
             Shortcut(
-                .character("="), .command, posts: .helmAdjustFontSize,
-                payload: FontSizeStep.increase.rawValue,
+                .character("="), .command, does: .adjustFontSize(.increase),
                 menu: .init(title: "Increase Font Size", key: "+", modifiers: .command)),
             Shortcut(
-                .character("+"), .command, posts: .helmAdjustFontSize,
-                payload: FontSizeStep.increase.rawValue),
+                .character("+"), .command, does: .adjustFontSize(.increase)),
             Shortcut(
-                .character("-"), .command, posts: .helmAdjustFontSize,
-                payload: FontSizeStep.decrease.rawValue,
+                .character("-"), .command, does: .adjustFontSize(.decrease),
                 menu: .init(title: "Decrease Font Size", key: "-", modifiers: .command)),
             Shortcut(
-                .character("0"), .command, posts: .helmAdjustFontSize,
-                payload: FontSizeStep.reset.rawValue,
+                .character("0"), .command, does: .adjustFontSize(.reset),
                 menu: .init(title: "Reset Font Size", key: "0", modifiers: .command)),
             Shortcut(
-                .character("n"), .command, posts: .helmNewTerminal,
+                .character("n"), .command, does: .newTerminal,
                 menu: .init(title: "New Terminal", key: "n", modifiers: .command)),
             // ⌘T — swap the pane between the terminal and the agent's writing.
             // `.anywhere` because the terminal grid holds focus almost all the
             // time and this has to work from there; the local monitor consumes
             // it, so ghostty's own ⌘T (new tab) never sees it.
             Shortcut(
-                .character("t"), .command, posts: .helmToggleChat,
+                .character("t"), .command, does: .toggleChat,
                 menu: .init(title: "Toggle Chat View", key: "t", modifiers: .command)),
             Shortcut(
-                .character("o"), .command, posts: .helmOpenArtifact,
+                .character("o"), .command, does: .openArtifact,
                 menu: .init(title: "Open Artifact…", key: "o", modifiers: .command)),
-            // ⌘L — the address bar, wherever the idiom comes from. Payload-less:
-            // the canvas focuses its field and the operator types.
+            // ⌘L — the address bar, wherever the idiom comes from. The `nil` URL IS the
+            // command: the canvas focuses its field and the operator types. It used to be
+            // the *absence* of a notification object, which is the one shape an untyped
+            // channel cannot tell from a mistake.
             Shortcut(
-                .character("l"), .command, posts: .helmOpenCanvasURL,
+                .character("l"), .command, does: .openCanvasURL(nil),
                 menu: .init(title: "Open URL…", key: "l", modifiers: .command)),
             Shortcut(
-                .character("r"), [.command, .shift], posts: .helmToggleRail,
+                .character("r"), [.command, .shift], does: .toggleRail,
                 menu: .init(title: "Toggle Archon Rail", key: "r", modifiers: [.command, .shift])),
             // ⌘⇧D before ⌘D: `match` returns the FIRST row whose modifier set compares
             // equal, and while these two cannot collide (the sets differ), keeping the
             // more-specific one first is the habit that stops the next pair colliding.
             Shortcut(
-                .character("d"), [.command, .shift], posts: .helmSplitDown,
+                .character("d"), [.command, .shift], does: .splitDown,
                 menu: .init(title: "Split Down", key: "d", modifiers: [.command, .shift])),
             Shortcut(
-                .character("d"), .command, posts: .helmSplitRight,
+                .character("d"), .command, does: .splitRight,
                 menu: .init(title: "Split Right", key: "d", modifiers: .command)),
             // ⌘⌥W, because ⌘W is not available: SwiftUI's `WindowGroup` binds it to
             // close-window and helm would be fighting its own shell for it.
             Shortcut(
-                .character("w"), [.command, .option], posts: .helmClosePane,
+                .character("w"), [.command, .option], does: .closePane,
                 menu: .init(title: "Close Pane", key: "w", modifiers: [.command, .option])),
         ] + focusMovement
 
-    /// ⌘⌥ + arrows, because ⌘⌥1–9 is already the workspace fallback. The payload is a
-    /// `Workbench.Direction` raw value rather than an Int: the map carries `payload: Int?`
-    /// for tab and workspace indices, and a direction is not an index.
+    /// ⌘⌥ + arrows, because ⌘⌥1–9 is already the workspace fallback.
+    ///
+    /// The direction travels as a `Workbench.Direction`. It used to travel as that direction's
+    /// **raw value**, in a second field beside `payload`, because the channel took `Any?` and
+    /// the map had to pick one of two boxes to flatten into — see `HelmCommand`.
     private static let focusMovement: [Shortcut] = [
         (123, Workbench.Direction.left, KeyEquivalent.leftArrow, "Left"),
         (124, .right, .rightArrow, "Right"),
@@ -218,8 +208,7 @@ extension Shortcut {
         (125, .down, .downArrow, "Down"),
     ].map { keyCode, direction, key, name in
         Shortcut(
-            .keyCode(keyCode), [.command, .option], posts: .helmMoveFocus,
-            direction: direction,
+            .keyCode(keyCode), [.command, .option], does: .moveFocus(direction),
             menu: .init(title: "Focus \(name)", key: key, modifiers: [.command, .option]))
     }
 

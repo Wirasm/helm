@@ -62,7 +62,7 @@ final class KeyHintTests: XCTestCase {
     func testShortDigitListsAreNotCollapsedToARange() {
         let rows = (1...2).map { index in
             Shortcut(
-                .character("\(index)"), .command, posts: .helmSelectTerminal, payload: index - 1)
+                .character("\(index)"), .command, does: .selectTerminal(index: index - 1))
         }
         XCTAssertEqual(
             KeyHints.visible(terminalFocused: true, in: rows).first?.keys, "⌘1 ⌘2")
@@ -73,7 +73,7 @@ final class KeyHintTests: XCTestCase {
     func testNonConsecutiveDigitsAreNotCollapsed() {
         let rows = [1, 2, 4].map { index in
             Shortcut(
-                .character("\(index)"), .command, posts: .helmSelectTerminal, payload: index - 1)
+                .character("\(index)"), .command, does: .selectTerminal(index: index - 1))
         }
         XCTAssertEqual(
             KeyHints.visible(terminalFocused: true, in: rows).first?.keys, "⌘1 ⌘2 ⌘4")
@@ -88,18 +88,18 @@ final class KeyHintTests: XCTestCase {
     /// this file may type a glyph now; it asks here, and gets the bar's answer by
     /// construction.
     func testABindingRendersTheSameGlyphsTheBarShows() {
-        XCTAssertEqual(KeyGlyph.binding(for: .helmOpenWorkspace), "⇧⌘O")
+        XCTAssertEqual(KeyGlyph.binding(for: .openWorkspace), "⇧⌘O")
         XCTAssertEqual(
-            KeyGlyph.binding(for: .helmOpenWorkspace), keys("folder", terminalFocused: true),
+            KeyGlyph.binding(for: .openWorkspace), keys("folder", terminalFocused: true),
             "the empty bench and the status bar must not be able to disagree")
-        XCTAssertEqual(KeyGlyph.binding(for: .helmNewTerminal), "⌘N")
-        XCTAssertEqual(KeyGlyph.binding(for: .helmToggleRail), "⇧⌘R")
+        XCTAssertEqual(KeyGlyph.binding(for: .newTerminal), "⌘N")
+        XCTAssertEqual(KeyGlyph.binding(for: .toggleRail), "⇧⌘R")
     }
 
     /// A command nothing binds gets nil rather than a plausible-looking string, so a caller
     /// can decline to advertise a key instead of naming one that does not fire.
     func testAnUnboundCommandHasNoGlyphs() {
-        XCTAssertNil(KeyGlyph.binding(for: Notification.Name("helm.nothing.binds.this")))
+        XCTAssertNil(KeyGlyph.binding(for: .composeText))
     }
 
     // MARK: - Drift
@@ -108,7 +108,7 @@ final class KeyHintTests: XCTestCase {
     /// map binds is either named on the bar or explicitly left off it; adding a shortcut
     /// without deciding which fails here. Nothing else in the toolchain would say a word.
     func testEveryBoundCommandIsEitherNamedOrDeliberatelyOmitted() {
-        let bound = Set(Shortcut.all.map(\.notification))
+        let bound = Set(Shortcut.all.map(\.command.name))
         let accounted = Set(KeyHintCatalog.named.map(\.command))
             .union(KeyHintCatalog.omitted)
         XCTAssertEqual(
@@ -132,7 +132,7 @@ final class KeyHintTests: XCTestCase {
             guard case .keyCode = shortcut.trigger else { continue }
             XCTAssertNotNil(
                 KeyGlyph.trigger(shortcut.trigger),
-                "\(shortcut.notification.rawValue) binds a keyCode KeyGlyph cannot draw"
+                "\(shortcut.command.name.rawValue) binds a keyCode KeyGlyph cannot draw"
             )
         }
     }

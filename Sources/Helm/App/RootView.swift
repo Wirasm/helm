@@ -89,18 +89,23 @@ struct RootView: View {
         // here for the reason that file records at length: two earlier attempts in this
         // view lost writes, one by rebuilding its publisher on every body evaluation and
         // one by trapping the app outright.
-        .onReceive(NotificationCenter.default.publisher(for: .helmSelectWorkspace)) { note in
-            guard let index = note.object as? Int, model.workspaces.indices.contains(index) else {
-                return
+        .onReceive(HelmCommand.publisher) { command in
+            switch command {
+            case let .selectWorkspace(index):
+                guard model.workspaces.indices.contains(index) else { return }
+                switchWorkspace(model.workspaces[index])
+            case let .cycleWorkspace(delta):
+                guard !model.workspaces.isEmpty else { return }
+                let current =
+                    model.selectedWorkspace.flatMap { model.workspaces.firstIndex(of: $0) } ?? 0
+                let next = (current + delta + model.workspaces.count) % model.workspaces.count
+                switchWorkspace(model.workspaces[next])
+            default:
+                // Every other command belongs to a vertical. `default` rather than an
+                // exhaustive list because this is composition, not a feature: `App/` should
+                // not have to be edited when a vertical adds a command of its own.
+                break
             }
-            switchWorkspace(model.workspaces[index])
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .helmCycleWorkspace)) { note in
-            guard let direction = note.object as? Int, !model.workspaces.isEmpty else { return }
-            let current =
-                model.selectedWorkspace.flatMap { model.workspaces.firstIndex(of: $0) } ?? 0
-            let next = (current + direction + model.workspaces.count) % model.workspaces.count
-            switchWorkspace(model.workspaces[next])
         }
         .enableInjection()
     }

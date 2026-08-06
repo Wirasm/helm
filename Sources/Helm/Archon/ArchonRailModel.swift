@@ -130,7 +130,8 @@ final class ArchonRailModel: ObservableObject {
             defaults.data(forKey: Self.configKey)
             .flatMap { try? JSONDecoder().decode(ArchonLaunchConfig.self, from: $0) }
             ?? .empty
-        NotificationCenter.default.publisher(for: .helmToggleRail)
+        HelmCommand.publisher
+            .filter { if case .toggleRail = $0 { true } else { false } }
             // Hopped to main because `@Published` fires in `willSet`: a handler that read
             // state synchronously would see the value from *before* the change. The same
             // reason `WorkbenchModel.subscribe` gives, and the same shape.

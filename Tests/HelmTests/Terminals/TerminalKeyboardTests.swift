@@ -43,7 +43,7 @@ final class TerminalKeyboardTests: XCTestCase {
         let helm = HelmWindow(terminals: 1)
         defer { helm.close() }
 
-        helm.command(.helmNewTerminal)
+        helm.command(.newTerminal)
 
         XCTAssertEqual(helm.terminals.sessions.count, 2)
         helm.expectKeyboard(
@@ -64,8 +64,8 @@ final class TerminalKeyboardTests: XCTestCase {
         let helm = HelmWindow(terminals: 1)
         defer { helm.close() }
 
-        helm.command(.helmNewTerminal)
-        helm.command(.helmSelectTerminal, 0)
+        helm.command(.newTerminal)
+        helm.command(.selectTerminal(index: 0))
 
         helm.expectKeyboard(
             on: helm.session(0).hostView, "the selected terminal did not take the keyboard")
@@ -109,7 +109,7 @@ final class TerminalKeyboardTests: XCTestCase {
 
         let first = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
 
-        helm.command(.helmMoveFocus, Workbench.Direction.down.rawValue)
+        helm.command(.moveFocus(.down))
         let second = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
         XCTAssertNotEqual(first, second, "the bench did not move focus; the test proves nothing")
 
@@ -167,7 +167,7 @@ final class TerminalKeyboardTests: XCTestCase {
             "the terminal stole the keyboard back")
 
         // The positive control: the same machinery, asked a question it must answer.
-        helm.command(.helmMoveFocus, Workbench.Direction.down.rawValue)
+        helm.command(.moveFocus(.down))
 
         helm.expectKeyboard(
             on: helm.view(of: elsewhere),
@@ -182,7 +182,7 @@ final class TerminalKeyboardTests: XCTestCase {
         defer { helm.close() }
 
         let closing = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
-        helm.command(.helmClosePane)
+        helm.command(.closePane)
 
         let survivor = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
         XCTAssertNotEqual(closing, survivor, "nothing closed; the test proves nothing")
@@ -246,7 +246,7 @@ final class TerminalKeyboardTests: XCTestCase {
         helm.type("q")
 
         // Back to the grid: the same pane, the other face.
-        helm.command(.helmToggleChat)
+        helm.command(.toggleChat)
 
         helm.expectKeyboard(
             on: helm.session(0).hostView,
@@ -432,8 +432,8 @@ private final class HelmWindow {
     }
 
     /// Post one of helm's commands the way the menu does, and let it land.
-    func command(_ name: Notification.Name, _ object: Any? = nil) {
-        NotificationCenter.default.post(name: name, object: object)
+    func command(_ command: HelmCommand) {
+        command.post()
         settle()
     }
 

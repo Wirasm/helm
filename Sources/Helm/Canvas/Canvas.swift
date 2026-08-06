@@ -195,7 +195,7 @@ final class CanvasModel: ObservableObject {
         if case .url = showing { true } else { false }
     }
 
-    /// **This model no longer subscribes to `helmOpenCanvasFile` / `helmOpenCanvasURL`,
+    /// **This model no longer subscribes to `openCanvasFile` / `openCanvasURL`,
     /// and must not.** There is one of these per canvas pane now, not one per app: a
     /// subscription here would make every ⌘-clicked link replace the contents of *every*
     /// open canvas at once.

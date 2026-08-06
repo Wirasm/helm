@@ -36,7 +36,7 @@ import Foundation
 /// Pure on purpose, in the style of `TerminalURLPolicy` and `TerminalLinkRoute` — a ghostty
 /// callback cannot be constructed in a test, so the decision lives where `swift test`
 /// reaches it.
-/// What travels on `.helmPushCanvasFile`.
+/// What travels on `HelmCommand.pushCanvasFile`.
 ///
 /// The workspace is not decoration. A push fires from terminal **output**, so it can come
 /// from a session in a workspace the operator parked hours ago — where a ⌘-click could only

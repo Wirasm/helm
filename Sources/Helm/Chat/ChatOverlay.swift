@@ -50,8 +50,8 @@ struct ChatOverlay: View {
 
             footer
         }
-        .onReceive(NotificationCenter.default.publisher(for: .helmComposeText)) { note in
-            guard let request = note.object as? ComposeRequest, request.pane == session.id
+        .onReceive(HelmCommand.publisher) { command in
+            guard case let .composeText(request) = command, request.pane == session.id
             else { return }
             prefill = request.text
         }

@@ -29,7 +29,7 @@ final class ArchonRailModelTests: XCTestCase {
     }
 
     /// ⇧⌘R end to end. It was tested in two halves that never met — one proving the shortcut
-    /// maps to `.helmToggleRail`, one proving `toggleVisibility()` flips a flag — so the
+    /// maps to `.toggleRail`, one proving `toggleVisibility()` flips a flag — so the
     /// subscription in between, which is the part that can actually be deleted by accident,
     /// was never exercised at all.
     @MainActor
@@ -39,7 +39,7 @@ final class ArchonRailModelTests: XCTestCase {
         let flipped = expectation(description: "isVisible changed")
         let observer = model.$isVisible.dropFirst().sink { _ in flipped.fulfill() }
 
-        NotificationCenter.default.post(name: .helmToggleRail, object: nil)
+        HelmCommand.toggleRail.post()
 
         wait(for: [flipped], timeout: 2)
         observer.cancel()

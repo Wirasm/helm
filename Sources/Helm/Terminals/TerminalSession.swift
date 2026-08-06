@@ -543,9 +543,9 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
         guard let validated = TerminalURLPolicy.validated(url) else { return }
         switch TerminalLinkRoute.route(validated) {
         case .canvasFile:
-            NotificationCenter.default.post(name: .helmOpenCanvasFile, object: validated)
+            HelmCommand.openCanvasFile(validated).post()
         case .canvasURL:
-            NotificationCenter.default.post(name: .helmOpenCanvasURL, object: validated)
+            HelmCommand.openCanvasURL(validated).post()
         case .system:
             NSWorkspace.shared.open(validated)
         }
@@ -580,9 +580,9 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     func terminalDidRequestDesktopNotification(title: String, body: String) {
         switch CanvasPush.classify(title: title, body: body) {
         case let .open(url):
-            NotificationCenter.default.post(
-                name: .helmPushCanvasFile,
-                object: CanvasPushRequest(artifact: url, workspacePath: workspacePath))
+            HelmCommand.pushCanvasFile(
+                CanvasPushRequest(artifact: url, workspacePath: workspacePath)
+            ).post()
             return
         case let .refused(why):
             // Ungated on purpose. The gate below suppresses *ambient* notifications while
