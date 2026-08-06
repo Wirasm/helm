@@ -180,13 +180,20 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// `import()` of a missing module still throws even when the 404 carries valid module
     /// source. The body is empty regardless; there is nothing to render or execute.
     ///
-    /// **A refusal is no more cacheable than a success (#228), and the 404 is the one that
-    /// moves.** A 403 is a fixed boundary decision — the same path is refused every time — but
-    /// a 404 answers a question about the filesystem, and an agent referencing a sibling it has
-    /// not written yet is an ordinary sequence rather than an exotic one. A cached negative
-    /// would then outlive the file's creation and reproduce this ticket's exact shape one status
-    /// code over: the page keeps failing to load something that is now there, silently, and the
-    /// natural reading is again "my change did not work".
+    /// **A refusal is no more cacheable than a success (#228).** A cached negative outlives the
+    /// thing that caused it and reproduces this ticket's exact shape one status code over: the
+    /// page keeps failing to load something that is now there, silently, and the natural reading
+    /// is again "my change did not work".
+    ///
+    /// The 404 is the obvious one — an agent referencing a sibling it has not written yet is an
+    /// ordinary sequence rather than an exotic one. **But only one of the two 403 routes is
+    /// genuinely fixed.** A literal traversal is decided lexically by `standardizedFileURL`, so
+    /// that path is refused every time whatever is on disk; `CanvasFileBoundary`'s symlink check
+    /// resolves through `resolvingSymlinksInPath()`, so replacing an escaping symlink with a
+    /// real file inside the directory flips the same path 403 → 200. That is the same drift the
+    /// 404 has. Both statuses go through here and both get the header, so the code was already
+    /// right — this note exists because the first version of it argued 403 was safe, and being
+    /// right for a reason that is only half true is how the next person justifies removing it.
     private func refuse(_ task: any WKURLSchemeTask, url: URL, status: Int) {
         guard
             let response = HTTPURLResponse(

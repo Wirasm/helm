@@ -133,6 +133,14 @@ the options that work.
 **Sibling `fetch` reports a real status** — 200 for bytes, 404 for a sibling that is not there, 403
 for one the boundary refuses — so `res.ok` and `res.status` mean what they mean (helm #201).
 
+**A sibling you edit is refetched, so do not cache-bust.** helm serves every canvas response
+`no-store`, and that includes the 404 for a file you have not written yet — so editing `app.js` and
+pushing again reaches the page, and a sibling you create after the page first asked for it is found
+on the next load (helm #228). Before that fix a sibling came from WebKit's on-disk cache and
+**survived quitting helm**, which is why `./app.js?v=2` appears in older canvases: it was the only
+way through, and it is no longer needed. A live page is a different question — this is about what a
+reload fetches, not about pushing data into a page that is already open.
+
 **htmx blanks a canvas under its own defaults.** Its history handling calls `history.replaceState()`
 after a swap, which a bare `WKWebView` ignores and helm does not — the page comes out empty, and
 `<meta name="htmx-config" content='{"historyEnabled":false}'>` is what stops it (helm #200).
