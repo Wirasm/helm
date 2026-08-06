@@ -22,6 +22,8 @@ final class BenchSnapshotModel: ObservableObject {
     private var changes: Set<AnyCancellable> = []
     private var refreshTask: Task<Void, Never>?
     private var scheduled = false
+    /// The last snapshot actually written, so an unchanged one can be skipped. See `publish`.
+    private var published: BenchSnapshot?
     private var isStarted = false
     private weak var workspaces: WorkspaceModel?
     private weak var workbench: WorkbenchModel?
@@ -133,8 +135,23 @@ final class BenchSnapshotModel: ObservableObject {
                 owners: MailboxDirectory.owners(in: mailboxRoot),
                 sessionFor: AgentRegistry.sessionLookup(in: registryRoot)),
             foregroundPid: foregroundPid)
-        if !writer(snapshot) {
+
+        // **An identical snapshot is not written, so `writtenAt` means what every reader assumes
+        // it means.** The file is rebuilt on a timer as well as on change — deliberately, see the
+        // comment above — so before this it advanced roughly every two seconds whether or not
+        // anything had happened. `AGENTS.md` tells a reader to "check `writtenAt` before acting",
+        // which is right for *is this stale* and quietly wrong for the question an agent actually
+        // asks: **did my push land?** An agent diffing `writtenAt` to detect a reaction saw one
+        // every time. Measured by a capability test doing exactly that, with a no-edit control
+        // run: 21:21:57 → 21:22:01 → 21:22:05, nothing touched.
+        //
+        // Compared with the previous `writtenAt` substituted in, because that field is the one
+        // guaranteed to differ and is not itself news. Everything else in the value is content.
+        if let published, snapshot.sameContent(as: published) { return }
+        guard writer(snapshot) else {
             NSLog("helm: could not publish bench snapshot at %@", directory.snapshot.path)
+            return
         }
+        published = snapshot
     }
 }

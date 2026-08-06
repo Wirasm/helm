@@ -6,6 +6,13 @@ import HelmWire
 /// This is reporting state, never restore state. `WorkspaceContext.workbench` remains the
 /// persistence authority; a reader uses `writtenAt` to decide whether this file is fresh.
 struct BenchSnapshot: Codable, Equatable {
+    /// Everything except *when it was written*. `BenchSnapshotModel` skips a write whose content
+    /// is unchanged, so that `writtenAt` is a change signal rather than a heartbeat — and the one
+    /// field that always differs must not be what decides it.
+    func sameContent(as other: BenchSnapshot) -> Bool {
+        BenchSnapshot(writtenAt: other.writtenAt, workspaces: workspaces) == other
+    }
+
     static let currentFormat = "helm.bench-snapshot"
     static let currentVersion = 1
 

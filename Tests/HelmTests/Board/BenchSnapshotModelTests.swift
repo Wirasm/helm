@@ -58,6 +58,65 @@ final class BenchSnapshotModelTests: XCTestCase {
         model.stop()
     }
 
+    /// **`writtenAt` is a change signal, not a heartbeat (#267).** The file is rebuilt on a
+    /// timer as well as on change, so before this it advanced every couple of seconds whether or
+    /// not anything had happened — and an agent diffing it to answer *did my push land?* saw a
+    /// change every time. Measured that way by a capability test, with a no-edit control run.
+    ///
+    /// The timer still *runs*: it is what notices a mailbox or a registry row appearing, neither
+    /// of which publishes `objectWillChange`. It just no longer writes when the answer is the
+    /// same.
+    func testTheTimerDoesNotRewriteAnUnchangedSnapshot() async throws {
+        var writes: [BenchSnapshot] = []
+        var instant = Date(timeIntervalSince1970: 10)
+        let (model, workspaces, workbench, terminals) = fixture(
+            refreshInterval: .milliseconds(20),
+            now: { instant },
+            writer: { value in
+                writes.append(value)
+                instant = instant.addingTimeInterval(10)
+                return true
+            })
+
+        model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
+        XCTAssertEqual(writes.count, 1, "start publishes once")
+
+        // The real timer, firing several times over. Time advances on every publish; nothing
+        // else does.
+        try await Task.sleep(for: .milliseconds(200))
+
+        XCTAssertEqual(
+            writes.count, 1,
+            "a rebuild that differs only in `writtenAt` is not news, and writing it makes every "
+                + "reader diffing that field see a change that did not happen")
+        model.stop()
+    }
+
+    /// The other half, and it must pass either way — a model that never writes anything also
+    /// passes the test above. This one fails if the skip overshoots.
+    func testARealChangeIsStillWritten() async throws {
+        var writes: [BenchSnapshot] = []
+        let (model, workspaces, workbench, terminals) = fixture(
+            refreshInterval: .milliseconds(20),
+            writer: { value in
+                writes.append(value)
+                return true
+            })
+
+        model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
+        try await Task.sleep(for: .milliseconds(60))
+        let quiet = writes.count
+
+        workspaces.open(Workspace(path: "/tmp/bench-snapshot-model-second"))
+        try await Task.sleep(for: .milliseconds(200))
+
+        XCTAssertGreaterThan(
+            writes.count, quiet, "opening a workspace is content, and content is written")
+        XCTAssertGreaterThan(
+            writes.last?.workspaces.count ?? 0, writes[0].workspaces.count)
+        model.stop()
+    }
+
     func testWorkbenchAndTerminalBurstPublishesSettledStateOnce() async throws {
         var writes: [BenchSnapshot] = []
         var instant = Date(timeIntervalSince1970: 10)
@@ -190,7 +249,22 @@ final class BenchSnapshotModelTests: XCTestCase {
         XCTAssertEqual(attempts, 2)
     }
 
-    func testPeriodicRefreshPublishesWithoutAModelChangeAndStops() async throws {
+    /// **What the timer is for, and what this can and cannot assert (#267).**
+    ///
+    /// This used to assert the timer publishes *with no model change at all* — true, and exactly
+    /// what made `writtenAt` advance every couple of seconds and mean nothing. That behaviour is
+    /// gone, so the assertion went with it rather than being kept green by accident.
+    ///
+    /// The timer still runs, and its reason is real: a **mailbox** and a **registry row** appear
+    /// on disk while helm is running and neither publishes `objectWillChange` — `SpoolModel`
+    /// waits on precisely that. But an owner only reaches the snapshot **attached to a terminal
+    /// pane**, matched on the pane's foreground pid, and this fixture has no pane to attach one
+    /// to. So the half this test can state honestly is that the loop stops when the model does;
+    /// the noticing half is covered where the panes are, in `BenchSnapshotTests`.
+    ///
+    /// Said plainly rather than dressed up: a test asserting a fixture it cannot arrange is worth
+    /// less than a test saying which half it covers.
+    func testTheTimerStopsWhenTheModelDoes() async throws {
         var writes: [BenchSnapshot] = []
         let (model, workspaces, workbench, terminals) = fixture(
             refreshInterval: .milliseconds(5),
@@ -199,9 +273,7 @@ final class BenchSnapshotModelTests: XCTestCase {
                 return true
             })
         model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
-
         try await Task.sleep(for: .milliseconds(25))
-        XCTAssertGreaterThanOrEqual(writes.count, 2)
 
         model.stop()
         let writesAfterStop = writes.count
