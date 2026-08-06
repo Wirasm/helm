@@ -84,12 +84,21 @@ import json,sys
 json.dump({'id':sys.argv[1],'from':sys.argv[2],'to':sys.argv[3],
            'subject':sys.argv[4],'body':sys.argv[5],'sentAt':int(sys.argv[1].split('-')[0])},
           open(sys.argv[6],'w'))" "$ID" "$FROM" "$TO" "one line" "the message" "$D/.tmp-$ID"
-mv "$D/.tmp-$ID" "$D/$ID.json"
+mv "$D/.tmp-$ID" "$D/$ID.json" || echo "SEND FAILED — $D is gone; the message was NOT delivered"
 ```
 
 `subject` is one line and shows in the recipient's notice; `body` is never shown there and is read
 from the file by the recipient itself. Put the actual request in the **body** — a subject is a
 label, not a channel.
+
+**Check the `mv`, and mean it.** A mailbox is a directory, so a send whose target directory is gone
+writes nothing — the box was reaped while you composed (#236), or the handle was never right. Both
+paths do fail loudly *somewhere*: `python3` raises `FileNotFoundError` and `mv` says
+`No such file or directory`. Neither is on stdout, and neither says what it cost, so in a long tool
+result they read as noise from a block that otherwise looks like it ran. The `||` is what makes the
+one thing that matters unmissable. **A failure here means the message was not delivered** — tell the
+operator that rather than reporting it sent, and re-read `~/.helm/mail/*/owner.json` to see whether
+that handle still exists at all before trying again.
 
 ## What the recipient sees
 

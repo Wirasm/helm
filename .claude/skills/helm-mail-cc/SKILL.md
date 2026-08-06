@@ -114,11 +114,20 @@ import json,sys
 json.dump({'id':sys.argv[1],'from':sys.argv[2],'to':sys.argv[3],
            'subject':sys.argv[4],'body':sys.argv[5],'sentAt':int(sys.argv[1].split('-')[0])},
           open(sys.argv[6],'w'))" "$ID" "$FROM" "$TO" "one line" "the message" "$D/.tmp-$ID"
-mv "$D/.tmp-$ID" "$D/$ID.json"
+mv "$D/.tmp-$ID" "$D/$ID.json" || echo "SEND FAILED — $D is gone; the message was NOT delivered"
 ```
 
 Put the actual request in the **body** — `subject` is a one-line label shown in the recipient's
 notice, and the body is what they read from the file.
+
+**Check the `mv`, and mean it.** A mailbox is a directory, so a send whose target directory is gone
+writes nothing — the box was reaped while you composed (#236), or the handle was never right. Both
+paths do fail loudly *somewhere*: `python3` raises `FileNotFoundError` and `mv` says
+`No such file or directory`. Neither is on stdout, and neither says what it cost, so in a long tool
+result they read as noise from a block that otherwise looks like it ran. The `||` is what makes the
+one thing that matters unmissable. **A failure here means the message was not delivered** — tell the
+operator that rather than reporting it sent, and re-read `~/.helm/mail/*/owner.json` to see whether
+that handle still exists at all before trying again.
 
 ## Arm — the part only this runtime needs
 
@@ -131,15 +140,33 @@ Arm a background watch on your own mailbox, one notification per message:
 ```bash
 BOX=~/.helm/mail/<your handle>
 while true; do
-  for f in "$BOX"/*.json; do
-    case "$f" in *owner.json|*'*.json') continue ;; esac
-    [ -f "$f" ] || continue
+  find "$BOX" -maxdepth 1 -name '*.json' ! -name 'owner.json' -type f 2>/dev/null | while read -r f; do
     echo "MAIL $(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['from'])" "$f") — $f"
     mkdir -p "$BOX/read" && mv "$f" "$BOX/read/"
   done
   sleep 2
 done
 ```
+
+**`find`, not a glob, and do not simplify it back to one.** Under **zsh** a pattern matching
+nothing is a *fatal error* — `no matches found: …/*.json` — not an empty list, so
+`for f in "$BOX"/*.json` does not iterate zero times: it kills the shell the watch runs in, on the
+first pass, before the loop body executes once. You then go dark, and **you cannot notice that from
+inside a turn you are not having**. Claude Code's own Bash tool runs `/bin/zsh`, so this is the
+shell your watch actually gets.
+
+This loop was a glob for months, guarded by `case "$f" in *owner.json|*'*.json')`. That second
+pattern is **bash** — bash leaves an unmatched glob in place as literal text, and the `case` catches
+it — so the empty mailbox looks defended and, under zsh, is not: the body is never reached to run
+the guard. Read in bash it is correct, which is exactly why it survived and why this paragraph is
+here (#237).
+
+An empty box is not exotic. It is every moment after you have read your mail, and `owner.json` is
+no longer the entry that always matches — a reaped mailbox has none (#236), which is how the two
+compounded: the directory went away and the watch that would have reported it died in the same
+instant. `find` returns nothing and exits 0 in either dialect, and keeps doing so when the
+directory has been deleted outright — but **surviving is not the same as receiving**. A watch on a
+mailbox that no longer exists stays alive and silent; that is #236, not this.
 
 Run it with the **Monitor** tool, which turns each line into a notification. Monitor is a deferred
 tool, so load it first — otherwise the call fails and it looks like the watch is the problem:
