@@ -1,58 +1,16 @@
 import AppKit
+import HelmWire
 import QuartzCore
 
-/// What a capture actually contains — computed from the view tree, never asserted.
-///
-/// **The honesty is the feature.** #174 says it in as many words: *"a PNG with a blank terminal
-/// that does not announce itself is worse than no PNG"*. Every field here exists so a caller
-/// who has only the result file, and a caller who has only the image, both learn the same
-/// thing.
-struct CaptureReport: Codable, Equatable {
-    /// Where the PNG is. Absolute, so nothing has to know where the spool lives.
-    let path: String
-    let pixelWidth: Int
-    let pixelHeight: Int
-    /// Backing scale — 2 on a retina display, so `pixelWidth / scale` is the size in points a
-    /// layout assertion would be written against.
-    let scale: Double
-    /// The window that was drawn, by title. With `HELM_DEFAULTS_SUITE` set that reads
-    /// `helm — <suite>`, which is how a caller tells its own instance from the operator's.
-    let window: String
-    let terminalContent: TerminalContent
-    /// How many terminal panes were on the bench in this window. `terminalContent` is `.absent`
-    /// exactly when this is zero.
-    let terminalSurfaces: Int
-    /// How many of them could **not** be drawn. Zero on `.included`, all of them on
-    /// `.excluded`, and the reason `.partial` exists as a case at all.
-    let terminalSurfacesExcluded: Int
-}
-
-/// Whether terminal cells are in the PNG.
-///
-/// **`.included` is earned per capture, never assumed.** #174 scoped this feature expecting the
-/// answer to always be no — *"the terminal is a Metal-layer NSView, so Metal content does not
-/// come out of `CALayer.render(in:)`"* — and that premise is right about `CAMetalLayer` and
-/// wrong about what helm actually runs. The vendored wrapper says so itself: *"the render
-/// pipeline can swap `self.layer` to an IOSurfaceLayer for IOSurface-backed compositing"*
-/// (`AppTerminalView+Lifecycle.swift:176`). An IOSurface-backed layer has real `contents`, and
-/// the layer tree draws it.
-///
-/// So the question is asked of **each surface at capture time** rather than answered once here.
-/// Both states are reachable in one process — a pane that has not rendered yet is still a
-/// `CAMetalLayer` — which is exactly why `.partial` is a case rather than an impossibility.
-enum TerminalContent: String, Codable {
-    /// No terminal pane in the window at all, so nothing is missing from the image.
-    case absent
-    /// Every terminal pane's cells are in the PNG.
-    case included
-    /// No terminal pane's cells are. Their regions carry a marker in the PNG itself.
-    case excluded
-    /// Some are and some are not. The ones that are not carry the marker; the ones that are
-    /// are untouched.
-    case partial
-}
-
 /// helm drawing its own window into a bitmap.
+///
+/// **`CaptureReport` and `TerminalContent` — the values this produces — live in `HelmWire`
+/// (#221), not here.** They cross into `SpoolResult.capture`, which `Helm`'s own `SpoolModel`
+/// writes and `WindowCaptureTests` decodes without linking AppKit; this file keeps the drawing
+/// itself, which needs `NSView`/`CALayer` and has no business in a library only `Helm` depends
+/// on. `tools/helm-capture.swift` still reads the result back as a raw dictionary — it cannot
+/// `import HelmWire` either, for the reasons `AGENTS.md`'s "Why the spool is a script, and must
+/// stay one" gives — and `SpoolWireConformanceTests` is what watches its *request* side instead.
 ///
 /// **This is drawing, not screen capture, and that is the whole point of #174.** Screen
 /// Recording is a TCC grant: un-grantable from code, keyed on the code signature, and attached

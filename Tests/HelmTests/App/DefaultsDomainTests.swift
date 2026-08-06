@@ -393,11 +393,16 @@ final class DefaultsDomainTests: XCTestCase {
     /// makes the same argument for the test target's own suites.
     func testNoSourceFileReachesForStandardDefaultsOutsideTheResolver() throws {
         // The resolver is where `.standard` legitimately survives: it is the handle the
-        // migration reads and replaces *other* domains by name through.
-        let exempt = "DefaultsDomain.swift"
+        // migration reads and replaces *other* domains by name through. `DefaultsSuite.swift`
+        // (#221) is exempt for the same reason one door over: `SpoolDirectory.resolve` needs
+        // the identical `UserDefaults(suiteName:)` probe `DefaultsDomain.override` makes, to
+        // tell a real suite name from one `UserDefaults` will refuse — and `DefaultsDomain`
+        // now delegates to it rather than restating the check. Neither file ever touches
+        // `.standard`, which is the actual thing this guard is about.
+        let exempt: Set<String> = ["DefaultsDomain.swift", "DefaultsSuite.swift"]
 
         var offenders: [String] = []
-        for file in try swiftSources() where file.lastPathComponent != exempt {
+        for file in try swiftSources() where !exempt.contains(file.lastPathComponent) {
             let source = try code(in: file)
             if source.contains("UserDefaults.standard")
                 || source.contains("UserDefaults(suiteName:")

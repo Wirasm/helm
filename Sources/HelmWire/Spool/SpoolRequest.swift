@@ -3,7 +3,7 @@ import Foundation
 /// What a caller asks helm to do, as one of the kinds helm knows.
 ///
 /// **This is the request side of the only capability on the ladder that a headless agent can
-/// use.** Every other way of driving helm is GUI puppetry — `tools/helm-spawn.swift` needs an
+/// use.** Every other way of driving helm is GUI puppetry — `helm-spawn.swift` needs an
 /// unlocked screen, a visible window and an Accessibility grant on the invoking context, none
 /// of which an agent can grant itself. A file appearing in a directory needs none of them, so
 /// this works over ssh, with the screen locked, from a process with no display at all.
@@ -19,10 +19,20 @@ import Foundation
 /// mistake"* — is why a second one would have to be argued for rather than added; a second kind
 /// on the channel #54 already justified needs no new argument.
 ///
+/// **Lives in `HelmWire` (#221), not in `Helm`.** `Helm` and `HelmTests` compile against this
+/// for one definition instead of restating it. `tools/helm-spool.swift`, `helm-close.swift` and
+/// `helm-capture.swift` cannot join them — a single-file `swift tools/…swift` script resolves no
+/// `Package.swift` and runs from any cwd, which is the whole reason the spool is a script rather
+/// than an SPM target (`AGENTS.md`'s "Why the spool is a script, and must stay one" has the
+/// measurements from the attempt that broke both). So those three still hand-roll the JSON by
+/// hand, on purpose — the runtime boundary `AGENTS.md`'s own rule carves out — and
+/// `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) is what keeps that duplicate honest: it
+/// runs each script as a real subprocess and decodes what it wrote with these same types.
+///
 /// Decoded permissively in shape and judged strictly afterwards — see `SpoolPolicy`. Splitting
 /// those apart is what lets a malformed request be *refused with a reason* rather than dropped
 /// by a decoder, which is the silence this whole ladder exists to remove.
-enum SpoolRequest: Equatable {
+package enum SpoolRequest: Equatable {
     case spawn(SpawnRequest)
     case capture(CaptureRequest)
     case close(CloseRequest)
@@ -34,7 +44,7 @@ enum SpoolRequest: Equatable {
     /// The caller's own name for this request, whatever kind it is. It is what the result file
     /// is named after, so the caller can wait on `results/<id>.json` without discovering
     /// anything.
-    var id: String {
+    package var id: String {
         switch self {
         case .spawn(let request): request.id
         case .capture(let request): request.id
@@ -46,13 +56,13 @@ enum SpoolRequest: Equatable {
     /// Every kind helm knows, for the refusal that lists them — one list rather than a
     /// literal spelled out at each site that has to name them, which is how a third kind
     /// would otherwise arrive with a refusal message that still says there are two.
-    static let kinds = [SpawnRequest.kind, CaptureRequest.kind, CloseRequest.kind]
+    package static let kinds = [SpawnRequest.kind, CaptureRequest.kind, CloseRequest.kind]
 }
 
 extension SpoolRequest: Decodable {
     private enum Envelope: String, CodingKey { case id, kind }
 
-    init(from decoder: any Decoder) throws {
+    package init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: Envelope.self)
         // Absent means `spawn`, because every request written before #174 omits it and those
         // requests still mean what they meant.
@@ -69,26 +79,28 @@ extension SpoolRequest: Decodable {
 }
 
 /// Start an agent: a directory, an agent, and the first thing to say to it.
-struct SpawnRequest: Codable, Equatable {
-    static let kind = "spawn"
+package struct SpawnRequest: Codable, Equatable {
+    package static let kind = "spawn"
 
-    let id: String
+    package let id: String
     /// Where the agent runs. Becomes the terminal's working directory, and the workspace helm
     /// opens for it.
-    let cwd: String
+    package let cwd: String
     /// The program to run — a bare name, gated by `SpoolPolicy.allowedCommands`.
-    let command: String
+    package let command: String
     /// Arguments for it. Quoted by helm when the line is composed, so a caller never has to
     /// think about the shell. helm prepends the agent's unattended posture to these unless
     /// they settle it themselves — see `SpoolUnattendedPolicy`.
-    var args: [String] = []
+    package var args: [String] = []
     /// The first thing said to the agent. Delivered through a file, never through the
     /// keyboard — see `SpoolLaunchLine`.
-    var prompt: String?
+    package var prompt: String?
 
     private enum CodingKeys: String, CodingKey { case id, cwd, command, args, prompt }
 
-    init(id: String, cwd: String, command: String, args: [String] = [], prompt: String? = nil) {
+    package init(
+        id: String, cwd: String, command: String, args: [String] = [], prompt: String? = nil
+    ) {
         self.id = id
         self.cwd = cwd
         self.command = command
@@ -96,7 +108,7 @@ struct SpawnRequest: Codable, Equatable {
         self.prompt = prompt
     }
 
-    init(from decoder: any Decoder) throws {
+    package init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         cwd = try container.decode(String.self, forKey: .cwd)
@@ -110,30 +122,30 @@ struct SpawnRequest: Codable, Equatable {
 ///
 /// **Nothing about a machine's permissions appears here, and that is the feature.** There is no
 /// grant to name, no context to be the right one, and no rebuild that invalidates anything —
-/// helm drawing itself is not screen capture. See `WindowCapture`.
-struct CaptureRequest: Codable, Equatable {
-    static let kind = "capture"
+/// helm drawing itself is not screen capture. See `WindowCapture` (`Sources/Helm/Capture`).
+package struct CaptureRequest: Codable, Equatable {
+    package static let kind = "capture"
 
-    let id: String
+    package let id: String
     /// Where to put the PNG. Absolute, ending in `.png`, in a directory that already exists.
     /// Omitted means the spool's own `captures/<id>.png`, which is always writable and always
     /// findable from the result.
-    var path: String?
+    package var path: String?
     /// Which window, matched case-insensitively against its title. Needed only when helm has
     /// more than one and none of them is key — otherwise the choice is unambiguous and helm
     /// makes it. An ambiguous capture is **refused**, never guessed: the window titles are the
     /// only thing telling an isolated instance from the operator's.
-    var window: String?
+    package var window: String?
 
     private enum CodingKeys: String, CodingKey { case id, path, window }
 
-    init(id: String, path: String? = nil, window: String? = nil) {
+    package init(id: String, path: String? = nil, window: String? = nil) {
         self.id = id
         self.path = path
         self.window = window
     }
 
-    init(from decoder: any Decoder) throws {
+    package init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         path = try container.decodeIfPresent(String.self, forKey: .path)
@@ -163,15 +175,15 @@ struct CaptureRequest: Codable, Equatable {
 /// capability"* is the operator's ruling from #179. It would not survive a restart: a pane is
 /// persisted and restored, an in-process memory of having spawned it is not, so the rule would
 /// silently mean something different after a relaunch. And it forbids the two cases that are
-/// obviously legitimate — an agent closing the pane it is *itself* running in, which nothing
+/// obviously legitimate — an agent closing the pane it is itself running in, which nothing
 /// spawned via the spool, and a coordinator tidying up a teammate another agent started.
-struct CloseRequest: Codable, Equatable {
-    static let kind = "close"
+package struct CloseRequest: Codable, Equatable {
+    package static let kind = "close"
 
-    let id: String
+    package let id: String
     /// The pane to close: `TerminalSession.id`, which is the same uuid a spawn's result
     /// reports as `terminalId` and the pane's own child reads as `HELM_PANE`.
-    let terminal: String
+    package let terminal: String
     /// The caller saying *"yes, I know something is running in there"*.
     ///
     /// **The explicit thing #176 asks for, rather than a refusal.** A pane with a live process
@@ -182,17 +194,17 @@ struct CloseRequest: Codable, Equatable {
     /// without saying it.
     ///
     /// It does **not** override the focus rule. See `SpoolClosePolicy`.
-    var force: Bool = false
+    package var force: Bool = false
 
     private enum CodingKeys: String, CodingKey { case id, terminal, force }
 
-    init(id: String, terminal: String, force: Bool = false) {
+    package init(id: String, terminal: String, force: Bool = false) {
         self.id = id
         self.terminal = terminal
         self.force = force
     }
 
-    init(from decoder: any Decoder) throws {
+    package init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         terminal = try container.decode(String.self, forKey: .terminal)
@@ -205,51 +217,75 @@ struct CloseRequest: Codable, Equatable {
 /// A named type rather than a bare `String` because `Result`'s failure has to be an `Error` —
 /// and because a refusal is a value the caller reads in `results/<id>.json`, so it deserves to
 /// be one here too.
-struct SpoolRefusal: Error, Equatable {
-    let reason: String
-    init(_ reason: String) { self.reason = reason }
+package struct SpoolRefusal: Error, Equatable {
+    package let reason: String
+    package init(_ reason: String) { self.reason = reason }
 }
 
 /// A request that has passed every gate, and therefore the only thing helm will act on.
 ///
 /// A separate type per kind rather than a validated flag, so that "has this been checked?" is
 /// answered by the compiler at every call site instead of by reading upwards.
-enum SpoolWork: Equatable {
+package enum SpoolWork: Equatable {
     case spawn(AcceptedSpawnRequest)
     case capture(AcceptedCaptureRequest)
     case close(AcceptedCloseRequest)
 }
 
-struct AcceptedSpawnRequest: Equatable {
-    let id: String
-    let cwd: String
-    let command: String
+package struct AcceptedSpawnRequest: Equatable {
+    package let id: String
+    package let cwd: String
+    package let command: String
     /// **What will actually be on the command line**, not what the caller asked for: the
     /// request's own arguments with the agent's unattended posture prepended where it was
     /// missing (`SpoolUnattendedPolicy`). Resolving it here rather than in
     /// `SpoolLaunchLine.compose` keeps composition a pure quoter and makes this type honest
     /// about its name.
-    let args: [String]
-    let prompt: String?
+    package let args: [String]
+    package let prompt: String?
+
+    // Explicit rather than the synthesized memberwise init: Swift caps a synthesized struct
+    // init at `internal` regardless of the type's own access level, and `SpoolPolicyTests`
+    // (a different module) constructs one directly to exercise `SpoolModel`-shaped call sites
+    // without going through `SpoolPolicy.accept`.
+    package init(id: String, cwd: String, command: String, args: [String], prompt: String?) {
+        self.id = id
+        self.cwd = cwd
+        self.command = command
+        self.args = args
+        self.prompt = prompt
+    }
 }
 
-struct AcceptedCaptureRequest: Equatable {
-    let id: String
+package struct AcceptedCaptureRequest: Equatable {
+    package let id: String
     /// **Resolved, never optional.** The default is applied here rather than at the edge, so
     /// no call site downstream can re-derive it differently — and so the one place that decides
     /// where a PNG lands is the one place that checked whether it may.
-    let path: String
-    let window: String?
+    package let path: String
+    package let window: String?
+
+    package init(id: String, path: String, window: String?) {
+        self.id = id
+        self.path = path
+        self.window = window
+    }
 }
 
-struct AcceptedCloseRequest: Equatable {
-    let id: String
+package struct AcceptedCloseRequest: Equatable {
+    package let id: String
     /// **A real `UUID`, not the string that was in the file.** Parsing it here is what makes
     /// "that is not a pane id" a refusal with a reason instead of a lookup that quietly
     /// matches nothing — the two are indistinguishable to a caller, and one of them is a typo
     /// it could fix.
-    let terminal: UUID
-    let force: Bool
+    package let terminal: UUID
+    package let force: Bool
+
+    package init(id: String, terminal: UUID, force: Bool) {
+        self.id = id
+        self.terminal = terminal
+        self.force = force
+    }
 }
 
 /// Which requests helm will act on.
@@ -267,7 +303,7 @@ struct AcceptedCloseRequest: Equatable {
 ///
 /// A capture starts nothing, so its gate is a different one: the only thing a caller controls
 /// is where a PNG lands, and the rules below are what stop that being anywhere at all.
-enum SpoolPolicy {
+package enum SpoolPolicy {
     /// The agents helm will start. Matched exactly: no paths, no arguments smuggled in, no
     /// case folding (these are real program names on a case-preserving filesystem).
     ///
@@ -277,16 +313,16 @@ enum SpoolPolicy {
     /// `SpoolUnattendedPolicy.postures` is keyed on *this* set, not on that one. A future kind
     /// that carries a command of its own would have to say whether it belongs here, rather than
     /// inheriting an answer nobody meant to give it.
-    static let allowedCommands: Set<String> = ["claude", "pi", "codex"]
+    package static let allowedCommands: Set<String> = ["claude", "pi", "codex"]
 
     /// An id is a filename component — `results/<id>.json` — so it is gated as one. `..` and
     /// `/` are the whole reason: an ungated id writes wherever the caller likes.
-    static let idPattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    package static let idPattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 
     /// Bounds, so a malformed or hostile file costs a refusal rather than memory.
-    static let maxArgs = 32
-    static let maxArgLength = 4096
-    static let maxPromptLength = 200_000
+    package static let maxArgs = 32
+    package static let maxArgLength = 4096
+    package static let maxPromptLength = 200_000
 
     /// The verdict on one decoded request.
     ///
@@ -294,7 +330,7 @@ enum SpoolPolicy {
     /// needs no filesystem. The two rules that genuinely need disk — does `cwd` exist, does a
     /// capture's destination directory exist — are the only things that come in through the
     /// closure.
-    static func accept(
+    package static func accept(
         _ request: SpoolRequest,
         captures: URL,
         isDirectory: (String) -> Bool
@@ -329,7 +365,7 @@ enum SpoolPolicy {
                     "command \"\(request.command)\" is not one helm will start. Allowed: "
                         + allowedCommands.sorted().joined(separator: ", ")))
         }
-        let cwd = Workspace.normalized(request.cwd)
+        let cwd = FilesystemPath.normalized(request.cwd)
         guard cwd.hasPrefix("/") else {
             return .failure(
                 SpoolRefusal("cwd must be an absolute path, got \"\(request.cwd)\""))
@@ -445,19 +481,30 @@ enum SpoolPolicy {
 /// objects at a seam*. Every rule in `SpoolClosePolicy` is then a test that needs no bench, no
 /// ghostty surface and no pty, which is the same trade `SpoolSpawning` makes and the reason
 /// #54 asked for the seam in the first place.
-struct SpoolPaneState: Equatable {
+package struct SpoolPaneState: Equatable {
     /// False when the uuid names a canvas pane. A canvas is not what #176 is about, and
     /// closing one on a request meant for a terminal would be a silent wrong answer.
-    let holdsTerminal: Bool
+    package let holdsTerminal: Bool
     /// The pane the operator's keyboard is in: the focused slot's selected pane.
-    let holdsKeyboard: Bool
+    package let holdsKeyboard: Bool
     /// The pty's foreground process group leader (`tcgetpgrp`), or nil when the surface has
     /// no process at all. The login shell at an idle prompt; the running program otherwise.
-    let foreground: pid_t?
+    package let foreground: pid_t?
     /// `getppid(foreground)`. Nil when it could not be asked.
-    let foregroundParent: pid_t?
+    package let foregroundParent: pid_t?
     /// `getsid(foreground)` — the pty session's leader. Nil when it could not be asked.
-    let sessionLeader: pid_t?
+    package let sessionLeader: pid_t?
+
+    package init(
+        holdsTerminal: Bool, holdsKeyboard: Bool, foreground: pid_t?, foregroundParent: pid_t?,
+        sessionLeader: pid_t?
+    ) {
+        self.holdsTerminal = holdsTerminal
+        self.holdsKeyboard = holdsKeyboard
+        self.foreground = foreground
+        self.foregroundParent = foregroundParent
+        self.sessionLeader = sessionLeader
+    }
 
     /// Whether something is running in the pane beyond its own login shell.
     ///
@@ -473,7 +520,7 @@ struct SpoolPaneState: Equatable {
     /// looks like the same test and is not: the session leader is `login`, never the shell, so
     /// it reports *every* idle pane as busy. Both panes of a live isolated helm read
     /// `helm(42210) → /usr/bin/login → -fish`, with `getsid(fish) == login`. It is also the
-    /// layout `tools/helm-spawn.swift` has depended on since #51 — *"one `login` per terminal"*,
+    /// layout `helm-spawn.swift` has depended on since #51 — *"one `login` per terminal"*,
     /// and the shell is the single child of it.
     ///
     /// **If libghostty ever exec'd the shell in place of `login`, the shell would become the
@@ -484,7 +531,7 @@ struct SpoolPaneState: Equatable {
     /// **Unknown counts as busy** for the same reason: if the syscalls cannot answer, helm does
     /// not know whether it would be destroying work, and a caller that wants it gone anyway can
     /// say `force`.
-    var isBusy: Bool {
+    package var isBusy: Bool {
         guard foreground != nil else { return false }
         guard let foregroundParent, let sessionLeader else { return true }
         return foregroundParent != sessionLeader
@@ -529,9 +576,13 @@ struct SpoolPaneState: Equatable {
 /// possible guarantee that unmerged work is never destroyed — helm runs no git at all. If a
 /// headless worktree cleanup is wanted later, the honest shape is its own kind routed through
 /// `WorktreeCLI` with the rail's eligibility rules, not a flag on this one.
-enum SpoolClosePolicy {
+package enum SpoolClosePolicy {
     /// nil when the pane may go; the reason when it may not.
-    static func refusal(for request: AcceptedCloseRequest, pane: SpoolPaneState?) -> SpoolRefusal? {
+    package static func refusal(
+        for request: AcceptedCloseRequest, pane: SpoolPaneState?
+    )
+        -> SpoolRefusal?
+    {
         guard let pane else {
             return SpoolRefusal(
                 "helm has no pane \(request.terminal.uuidString). It may have been closed "
@@ -640,18 +691,18 @@ enum SpoolClosePolicy {
 /// skip past: `cls` is a shell script on `PATH` that this repo does not define, cannot test and
 /// cannot pin, so allowing it would turn a list of programs helm starts into a list of names
 /// something else gets to define — and it buys nothing that naming the flag does not.
-enum SpoolUnattendedPolicy {
+package enum SpoolUnattendedPolicy {
     /// One agent's answer to "what happens when there is no human at the pane".
-    struct Posture: Equatable {
+    package struct Posture: Equatable {
         /// Prepended to the request's own arguments.
-        let arguments: [String]
+        package let arguments: [String]
         /// Flags that mean *the caller has already decided*, so helm adds nothing. Matched on
         /// the flag name alone, so `--permission-mode plan` and `--permission-mode=plan` both
         /// count. This is the escape hatch, and it is the request's, not a helm setting.
-        let settled: Set<String>
+        package let settled: Set<String>
     }
 
-    static let postures: [String: Posture] = [
+    package static let postures: [String: Posture] = [
         "claude": Posture(
             arguments: ["--dangerously-skip-permissions"],
             settled: ["--dangerously-skip-permissions", "--permission-mode"]),
@@ -680,7 +731,7 @@ enum SpoolUnattendedPolicy {
     /// the result instead, helm's own `-p` would answer its own question and every codex
     /// posture would cancel itself. The order below — decide from `requested`, then prepend —
     /// is what keeps those two `-p`s from being the same `-p`.
-    static func arguments(for command: String, requested: [String]) -> [String] {
+    package static func arguments(for command: String, requested: [String]) -> [String] {
         guard let posture = postures[command] else { return requested }
         let named = Set(requested.map { String($0.prefix { $0 != "=" }) })
         guard named.isDisjoint(with: posture.settled) else { return requested }
@@ -701,8 +752,8 @@ enum SpoolUnattendedPolicy {
 ///
 /// There is no `cd`: the pane's working directory is already the request's `cwd`, because the
 /// workspace helm opened for it *is* that directory.
-enum SpoolLaunchLine {
-    static func compose(_ request: AcceptedSpawnRequest, promptPath: String?) -> String {
+package enum SpoolLaunchLine {
+    package static func compose(_ request: AcceptedSpawnRequest, promptPath: String?) -> String {
         var parts = [quoted(request.command)]
         parts.append(contentsOf: request.args.map(quoted))
         if let promptPath {
@@ -713,7 +764,7 @@ enum SpoolLaunchLine {
 
     /// POSIX single-quoting: everything inside is literal, and an embedded `'` is closed,
     /// escaped and reopened. The only escaping rule a shell has no exceptions to.
-    static func quoted(_ value: String) -> String {
+    package static func quoted(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

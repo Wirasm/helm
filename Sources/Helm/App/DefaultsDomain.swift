@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 /// The one `UserDefaults` domain helm persists to, and the one-time move of what the other
 /// one had accumulated.
@@ -32,13 +33,14 @@ import Foundation
 enum DefaultsDomain {
     /// The domain both launch paths now resolve to.
     ///
-    /// Stated in three places that must agree: here, `CFBundleIdentifier` in `SPMInfo.plist`,
-    /// and `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml`. `DefaultsDomainTests` fails on drift,
-    /// because drift here silently restores the two-domain bug.
-    static let canonical = "com.wirasm.helm"
+    /// Stated in three places that must agree: here (via `HelmWire.DefaultsSuite`),
+    /// `CFBundleIdentifier` in `SPMInfo.plist`, and `PRODUCT_BUNDLE_IDENTIFIER` in
+    /// `project.yml`. `DefaultsDomainTests` fails on drift, because drift here silently
+    /// restores the two-domain bug.
+    static let canonical = DefaultsSuite.canonical
 
     /// What `swift run helm` used to get: no identifier, so the process name.
-    static let legacy = "helm"
+    static let legacy = DefaultsSuite.legacy
 
     // MARK: - The opt-in override
 
@@ -56,72 +58,26 @@ enum DefaultsDomain {
     ///
     ///     HELM_DEFAULTS_SUITE=helm-task27 swift run helm
     ///     defaults read helm-task27
-    static let suiteVariable = "HELM_DEFAULTS_SUITE"
+    static let suiteVariable = DefaultsSuite.suiteVariable
 
     /// What `HELM_DEFAULTS_SUITE` asked for, as a decision rather than a string.
     ///
-    /// A closed set so the awkward values are answered once, here, instead of at whichever
-    /// call site meets them first.
-    enum Override: Equatable {
-        /// Unset, blank, or naming `canonical` — helm persists exactly as it does today.
-        case none
-        /// An isolated suite, by name.
-        case suite(String)
-        /// Set to something helm will not honour. The string says why, for the operator.
-        ///
-        /// **There is no fallback from here and there must not be.** Quietly reverting to
-        /// `canonical` would hand an agent who believes it is isolated a live write to the
-        /// operator's workspaces, which is the whole failure #86 is about — so a refusal
-        /// stops the launch instead.
-        case refused(String)
-    }
+    /// **The decision itself lives in `HelmWire.DefaultsSuite` (#221), not here.**
+    /// `SpoolDirectory.resolve` — reached both by a running helm and by the standalone
+    /// `helm-spool`/`helm-close`/`helm-capture` CLIs — has to make this exact call to find the
+    /// isolated spool a suite implies, and a CLI outside this process cannot reach a type that
+    /// lives in `Helm`. Rather than restating the parsing rules a second time (the
+    /// `tools/*.swift` bug this whole library exists to end, one door over), this delegates.
+    /// `DefaultsSuite`'s header has the full reasoning for each rule below; nothing about the
+    /// decision changed, only where it is made.
+    typealias Override = DefaultsSuite.Override
 
-    /// Read `HELM_DEFAULTS_SUITE` and decide. Pure, so every rule below is a test.
-    ///
-    /// The two nil-returning cases of `UserDefaults(suiteName:)` were measured rather than
-    /// read off the documentation: the canonical name (it is this process's own bundle
-    /// identifier, which "does not make sense as a suite") and `NSGlobalDomain`. The empty
-    /// string is **not** one of them — that one comes back as a usable object writing to a
-    /// nameless domain, so it is refused here.
+    /// Read `HELM_DEFAULTS_SUITE` and decide. Pure, so every rule is a test — see
+    /// `DefaultsDomainTests` and `DefaultsSuite`'s own header.
     static func override(
         in environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Override {
-        guard let raw = environment[suiteVariable] else { return .none }
-
-        // `export HELM_DEFAULTS_SUITE=` — a shell's own way of saying "not set", and the
-        // operator meant no override. This is the ONLY blank that is read as a decision.
-        guard !raw.isEmpty else { return .none }
-
-        // Anything else that trims away is a **broken value, not a choice**, and folding it
-        // into `.none` would be the one silent path in a function whose every other rejection
-        // is loud. `HELM_DEFAULTS_SUITE="$SUITE "` with `$SUITE` empty upstream, a template
-        // that did not substitute, a newline off a copy-paste: each of those launches an
-        // agent that believes it is contained straight at `com.wirasm.helm`, which is #86
-        // itself reached through the mechanism built to prevent it.
-        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else {
-            return .refused(
-                "\(suiteVariable) is set but names no domain — it is whitespace. Unset it to "
-                    + "mean the default; a blank value is a bug in whatever built it.")
-        }
-
-        // Asking for the canonical domain is asking for the default. Not a refusal — it is
-        // what an unset variable already does — but it cannot go through `suiteName:`, which
-        // returns nil for the running process's own identifier.
-        guard name != canonical else { return .none }
-
-        guard name != legacy else {
-            return .refused(
-                "\(suiteVariable)=\(name) names the domain the legacy migration drains, "
-                    + "so anything written there is liable to be emptied. Pick another name.")
-        }
-        guard !name.contains("/") else {
-            return .refused("\(suiteVariable)=\(name) looks like a path; a suite name is a domain.")
-        }
-        guard UserDefaults(suiteName: name) != nil else {
-            return .refused("\(suiteVariable)=\(name) is not a usable UserDefaults suite name.")
-        }
-        return .suite(name)
+        DefaultsSuite.override(in: environment)
     }
 
     /// The domain this process persists to, and the `UserDefaults` that writes there.

@@ -1,3 +1,4 @@
+import HelmWire
 import XCTest
 
 @testable import Helm

@@ -1,4 +1,5 @@
 import AppKit
+import HelmWire
 import QuartzCore
 import XCTest
 

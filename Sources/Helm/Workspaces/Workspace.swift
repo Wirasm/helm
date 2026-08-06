@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 /// A folder helm has open — the operating context that replaced the engine's
 /// registry `project`. Identity is the PATH, deliberately: a main checkout and one
@@ -33,15 +34,20 @@ struct Workspace: Hashable, Identifiable, Codable {
     /// the path helm shows and filters on; only store resolution needs the real one.
     ///
     /// **Kept as a free `String -> String` function rather than folded entirely into
-    /// `WorkspacePath`.** `Spool/SpoolRequest.swift` and `DefaultsDomain`'s legacy-domain
-    /// migration both call this directly, and both are out of scope for #223 (#221 owns the
-    /// former). `WorkspacePath.init` calls this same function, so there is exactly one
-    /// normalizer, not two that can drift apart — do not reimplement this in `WorkspacePath`.
+    /// `WorkspacePath`.** `WorkspacePath.init` calls this same function, so there is exactly
+    /// one normalizer, not two that can drift apart — do not reimplement this in
+    /// `WorkspacePath`.
+    ///
+    /// **The body delegates to `HelmWire.FilesystemPath` (#221) rather than restating its
+    /// three lines.** `SpoolPolicy.accept` needs the identical normalisation for a spawn's
+    /// `cwd`, and `DefaultsDomain`'s legacy-domain migration needs it for a persisted context
+    /// key — both call `Workspace.normalized` directly rather than `WorkspacePath`, and both
+    /// are out of scope for #223. A library both sides compile against is the fix for that —
+    /// not a second copy that can drift the way `tools/*.swift` used to. See
+    /// `FilesystemPath`'s header. So the chain is `WorkspacePath` → `Workspace.normalized` →
+    /// `FilesystemPath.normalized`: one normalizer, reached three ways.
     static func normalized(_ path: String) -> String {
-        let expanded = (path as NSString).expandingTildeInPath
-        var trimmed = Substring(expanded)
-        while trimmed.count > 1, trimmed.hasSuffix("/") { trimmed = trimmed.dropLast() }
-        return String(trimmed)
+        FilesystemPath.normalized(path)
     }
 
     // Coded as a bare path string, so the persisted blob is a plain ["/a", "/b"] —

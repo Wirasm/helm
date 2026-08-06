@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 /// The teardown edge: answers what helm can see about one pane, and takes it off the bench.
 ///

@@ -33,6 +33,25 @@ packages:
     exactVersion: 1.6.0
 
 targets:
+  # What crosses the spool's process boundary (#221) — see Package.swift's `HelmWire` target
+  # for the full argument. A local static library, mirroring SPM's plain `.target`: no product
+  # of its own, linked into `Helm` below. MUST stay in lockstep with Package.swift — a source
+  # added to one and not the other builds fine on one path and fails to find the symbol on the
+  # other, silently, until someone runs `make app`.
+  HelmWire:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/HelmWire
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        # `package`-level access (SE-0386) needs every target that shares it to agree on a
+        # package name — SPM sets this from `Package.swift`'s `name: "helm"` automatically,
+        # but xcodegen's project has no such wiring, so `HelmWire`'s `package` types were
+        # invisible to `Helm` here even though `swift build` saw them fine. Must match `Helm`'s
+        # own `SWIFT_PACKAGE_NAME` below exactly, or the two targets are two packages again.
+        SWIFT_PACKAGE_NAME: helm
   Helm:
     type: application
     platform: macOS
@@ -69,6 +88,7 @@ targets:
       - path: Assets/helm.icns
         buildPhase: resources
     dependencies:
+      - target: HelmWire
       - package: libghostty-spm
         product: GhosttyTerminal
       - package: InjectionNext
@@ -92,6 +112,8 @@ targets:
         PRODUCT_NAME: Helm
         # Match Package.swift (swift-tools-version 6.0 → Swift 6 language mode).
         SWIFT_VERSION: "6.0"
+        # Must match `HelmWire`'s `SWIFT_PACKAGE_NAME` above — see its comment.
+        SWIFT_PACKAGE_NAME: helm
         # Hardened runtime OFF for now: local dev builds only, no notarization
         # yet. Revisit when helm ships outside this machine.
         ENABLE_HARDENED_RUNTIME: NO
