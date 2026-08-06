@@ -26,7 +26,12 @@ import XCTest
 ///    `SpoolResult`. Covered by `testHelm*ExitCodeAndStderrForEveryResultStatus` below, over
 ///    **every** `SpoolResult.Status` case for every script — `Status: CaseIterable` plus an
 ///    exhaustive switch in `expectation(for:)` is what makes forgetting a script for a new
-///    case a compile error in this file rather than a silent gap.
+///    case a compile error in this file rather than a silent gap. `testHelm*PrintsHandleAnd
+///    TerminalIdAsBareStringsOnceReady` (#229) covers the same direction from a different
+///    angle: not "does the script exit right", but "are `handle` and `terminalId` still bare
+///    strings once they cross into `Handle`/`TerminalID`" — the property those two newtypes
+///    exist to hold, and the one an exit-code assertion cannot see even accidentally, since
+///    neither script's exit code depends on either field's shape.
 /// 3. **The directory-resolution rules** (`SpoolDirectory.resolve`, hand-duplicated as
 ///    `spoolRoot(_:)` in every script). The `HELM_SPOOL_DIR` override branch is exercised by
 ///    every test above, since that is how they all redirect a script at a temp directory. The
@@ -217,14 +222,14 @@ final class SpoolWireConformanceTests: XCTestCase {
     /// (`ready`, `closed`, `captured`) has everything it reads (`pid`, `capture.path`, …), and
     /// that its failure paths (`refused`, `failed`, `unclaimed`, `abandoned`) have a `reason`
     /// this test can look for in stderr.
-    private func result(id: String, status: SpoolResult.Status, terminal: String) -> SpoolResult {
+    private func result(id: String, status: SpoolResult.Status, terminal: UUID) -> SpoolResult {
         switch status {
         case .started:
-            return SpoolResult(id: id, status: .started, terminalId: terminal)
+            return SpoolResult(id: id, status: .started, terminalId: TerminalID(terminal))
         case .ready:
             return SpoolResult(
-                id: id, status: .ready, terminalId: terminal, pid: 4242, sessionId: "sess-1",
-                handle: "helm-4242", runtime: "claude")
+                id: id, status: .ready, terminalId: TerminalID(terminal), pid: 4242,
+                sessionId: "sess-1", handle: Handle(validating: "helm-4242"), runtime: "claude")
         case .captured:
             return SpoolResult(
                 id: id, status: .captured,
@@ -233,10 +238,10 @@ final class SpoolWireConformanceTests: XCTestCase {
                     pixelHeight: 600, scale: 2, window: "helm", terminalContent: .included,
                     terminalSurfaces: 1, terminalSurfacesExcluded: 0))
         case .closed:
-            return SpoolResult(id: id, status: .closed, terminalId: terminal, pid: 4242)
+            return SpoolResult(id: id, status: .closed, terminalId: TerminalID(terminal), pid: 4242)
         case .unclaimed:
             return SpoolResult(
-                id: id, status: .unclaimed, terminalId: terminal, pid: 4242,
+                id: id, status: .unclaimed, terminalId: TerminalID(terminal), pid: 4242,
                 reason: "no mailbox appeared before the deadline")
         case .refused:
             return SpoolResult(id: id, status: .refused, reason: "not an agent helm will start")
@@ -252,7 +257,8 @@ final class SpoolWireConformanceTests: XCTestCase {
         for status in SpoolResult.Status.allCases {
             guard let expectation = helmSpoolExpectation(for: status) else { continue }
             let id = "spool-result-\(status.rawValue)"
-            SpoolDirectory(root: spoolDir).write(result(id: id, status: status, terminal: id))
+            SpoolDirectory(root: spoolDir).write(
+                result(id: id, status: status, terminal: UUID()))
 
             let (exitCode, stderr) = try runAndCapture(
                 "helm-spool.swift", ["/tmp", "--command", "claude", "--id", id])
@@ -276,7 +282,8 @@ final class SpoolWireConformanceTests: XCTestCase {
     /// case above and does not fit `runAndCapture`.
     func testHelmSpoolDoesNotExitOnAStartedResult() throws {
         let id = "spool-result-started-is-not-terminal"
-        SpoolDirectory(root: spoolDir).write(result(id: id, status: .started, terminal: id))
+        SpoolDirectory(root: spoolDir).write(
+            result(id: id, status: .started, terminal: UUID()))
         try run("helm-spool.swift", ["/tmp", "--command", "claude", "--id", id])
 
         // Long enough for several poll cycles (helm-spool.swift polls every 0.25s) to prove
@@ -293,7 +300,7 @@ final class SpoolWireConformanceTests: XCTestCase {
             let terminal = UUID()
             let id = "close-result-\(status.rawValue)"
             SpoolDirectory(root: spoolDir).write(
-                result(id: id, status: status, terminal: terminal.uuidString))
+                result(id: id, status: status, terminal: terminal))
 
             let (exitCode, stderr) = try runAndCapture(
                 "helm-close.swift", [terminal.uuidString, "--id", id])
@@ -313,7 +320,8 @@ final class SpoolWireConformanceTests: XCTestCase {
     func testHelmCaptureExitCodeAndStderrForEveryResultStatus() throws {
         for status in SpoolResult.Status.allCases {
             let id = "capture-result-\(status.rawValue)"
-            SpoolDirectory(root: spoolDir).write(result(id: id, status: status, terminal: id))
+            SpoolDirectory(root: spoolDir).write(
+                result(id: id, status: status, terminal: UUID()))
 
             let (exitCode, stderr) = try runAndCapture(
                 "helm-capture.swift", ["--id", id])
@@ -328,6 +336,70 @@ final class SpoolWireConformanceTests: XCTestCase {
                 "helm-capture.swift on status \(status.rawValue): expected stderr to contain "
                     + "\"\(expectation.stderrContains)\", got \"\(stderr)\"")
         }
+    }
+
+    // MARK: - 2b. handle and terminalId are bare strings, not objects (#229)
+
+    /// **The property #229 introduced `Handle` and `TerminalID` to hold, proved the way the
+    /// issue asks for: by inspecting the actual JSON, not by a Swift round trip.** A round trip
+    /// through `Codable` cannot fail regardless of the container either type uses — decoding
+    /// and re-encoding a `Handle`/`TerminalID` would agree with itself even if `encode(to:)`
+    /// were changed to a keyed container tomorrow, because the decoder would just as happily
+    /// read a nested `{"value":"…"}` back. What cannot lie is the actual bytes on disk, read
+    /// with `JSONSerialization` — the same untyped decoder `helm-spool.swift` and
+    /// `helm-close.swift` use, because neither can `import HelmWire` (this file's own header
+    /// explains why). So each test here writes a real `SpoolResult` through real `HelmWire`
+    /// code, runs the real script against it, and inspects what the *script itself* printed
+    /// back to its own stdout (`helm-spool.swift:186`, `helm-close.swift:153` — both print the
+    /// result file verbatim before switching on `status`), asserting `is String` on the two
+    /// fields directly rather than comparing against a literal.
+    ///
+    /// **Watched red, then reverted, per `AGENTS.md`'s "watch a test fail before you trust it
+    /// passing".** Changing `TerminalID.encode(to:)` to `try container.encode(["uuid": uuid
+    /// .uuidString])` turns `testHelmSpoolPrintsHandleAndTerminalIdAsBareStringsOnceReady` red
+    /// on the `terminalId` assertion, naming the offending value as a dictionary rather than a
+    /// string. Restoring the single-value container turns it green again. See this PR's
+    /// description for the transcript.
+    func testHelmSpoolPrintsHandleAndTerminalIdAsBareStringsOnceReady() throws {
+        let id = "wire-shape-ready"
+        SpoolDirectory(root: spoolDir).write(result(id: id, status: .ready, terminal: UUID()))
+
+        let (exitCode, stdout, stderr) = try runAndCaptureBoth(
+            "helm-spool.swift", ["/tmp", "--command", "claude", "--id", id])
+        XCTAssertEqual(exitCode, 0, "expected a ready result to succeed, stderr: \(stderr)")
+
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any],
+            "helm-spool.swift's stdout on a ready result was not a JSON object: \(stdout)")
+        XCTAssertTrue(
+            json["terminalId"] is String,
+            "helm-spool.swift: terminalId must be a bare string — helm-spool.swift, "
+                + "helm-close.swift and helm-capture.swift all read it with "
+                + "json[\"terminalId\"] as? String and cannot import HelmWire to do better; "
+                + "got \(String(describing: json["terminalId"]))")
+        XCTAssertTrue(
+            json["handle"] is String,
+            "helm-spool.swift: handle must be a bare string — the same three scripts read it "
+                + "with json[\"handle\"] as? String; got \(String(describing: json["handle"]))")
+    }
+
+    func testHelmClosePrintsTerminalIdAsABareStringOnceClosed() throws {
+        let id = "wire-shape-closed"
+        let terminal = UUID()
+        SpoolDirectory(root: spoolDir).write(
+            result(id: id, status: .closed, terminal: terminal))
+
+        let (exitCode, stdout, stderr) = try runAndCaptureBoth(
+            "helm-close.swift", [terminal.uuidString, "--id", id])
+        XCTAssertEqual(exitCode, 0, "expected a closed result to succeed, stderr: \(stderr)")
+
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any],
+            "helm-close.swift's stdout on a closed result was not a JSON object: \(stdout)")
+        XCTAssertTrue(
+            json["terminalId"] is String,
+            "helm-close.swift: terminalId must be a bare string; got "
+                + "\(String(describing: json["terminalId"]))")
     }
 
     // MARK: - 3. Directory resolution — the HELM_DEFAULTS_SUITE branch
@@ -465,6 +537,49 @@ final class SpoolWireConformanceTests: XCTestCase {
         process.waitUntilExit()
         let data = stderrPipe.fileHandleForReading.readDataToEndOfFile()
         return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+    }
+
+    /// Same shape as `runAndCapture`, but also returns stdout — every other test here only
+    /// needs the exit code and stderr, but the wire-shape tests (#229) need to inspect the
+    /// actual JSON a script printed back, which each of them writes to stdout right before
+    /// switching on `status` (`helm-spool.swift:186`, `helm-close.swift:153`).
+    private func runAndCaptureBoth(
+        _ script: String, _ arguments: [String], timeout: TimeInterval = 10
+    ) throws -> (exitCode: Int32, stdout: String, stderr: String) {
+        let scriptURL = repositoryRoot.appendingPathComponent("tools/\(script)")
+        guard FileManager.default.fileExists(atPath: scriptURL.path) else {
+            throw MissingScript(path: scriptURL.path)
+        }
+
+        var environment = ProcessInfo.processInfo.environment
+        environment[SpoolDirectory.directoryVariable] = spoolDir.path
+        environment[SpoolDirectory.offVariable] = nil
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["swift", scriptURL.path] + arguments
+        process.environment = environment
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        try process.run()
+        runningProcesses.append(process)
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        guard !process.isRunning else {
+            throw ScriptNeverExited(script: script, timeout: timeout)
+        }
+        process.waitUntilExit()
+        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus, String(data: stdoutData, encoding: .utf8) ?? "",
+            String(data: stderrData, encoding: .utf8) ?? ""
+        )
     }
 
     /// Waits for `<spoolDir>/<id>.json` to appear, then decodes it exactly as
