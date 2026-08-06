@@ -236,29 +236,27 @@ final class CanvasAnchorTests: XCTestCase {
     /// and the script that reads it. Drop the marker from either side and this fails, rather
     /// than marking quietly going back to reporting `#content`.
     ///
-    /// **The negative assertions are the #215 follow-up, pinned.** A marker is only ever wrong
-    /// when these two files disagree, which is what the positive assertions catch. Recognising
-    /// helm's frame by its id or its position under `<body>` is wrong whenever an agent uses
-    /// the same wrapper — which nothing about this seam can catch, because the artifact is not
-    /// helm's to inspect. So the guess is forbidden by name.
+    /// **This is the only assertion that can see `documentPage` dropping the marker**, which is
+    /// why it is a substring check at all. Everything else about the marker is covered by
+    /// behaviour: the stub's wrapper carries it, so a script that stopped reading it fails
+    /// `testAnUnnamedBlockIsNotAnchoredToHelmsOwnWrapper`, and a script that went back to
+    /// recognising the frame by its id fails the `.html`-artifact test above — measured, both.
+    /// The stub cannot catch the Swift half, because the stub writes the attribute itself.
+    ///
+    /// **There is deliberately no assertion forbidding the old guess by name.** Two reviewers
+    /// flagged one independently as brittle and they were right: a substring check over the
+    /// script's *text* is exactly the kind of assertion #197 exists to replace, and this one
+    /// would have failed on a comment that quoted the code it forbids — it nearly did while
+    /// this was being written. The behavioural test is the regression pin.
     func testTheScriptAndTheGeneratedPageStillAgreeOnHelmsWrapper() {
         let page = CanvasHTML.documentPage(markdown: "# Hi\n\nA paragraph.", theme: .light)
-        let script = CanvasHTML.annotationScript()
 
         XCTAssertTrue(
             page.contains("<article id=\"content\" data-helm-frame>"),
             "helm must mark its own wrapper, or the script cannot tell it from an artifact's")
         XCTAssertTrue(
-            script.contains("getAttribute(\"data-helm-frame\")"),
+            CanvasHTML.annotationScript().contains("getAttribute(\"data-helm-frame\")"),
             "and the script must read the marker helm writes")
-        XCTAssertFalse(
-            script.contains("=== \"content\""),
-            "recognising the frame by its id discards an agent's own `id=\"content\"`")
-        // `nameFor`'s walk legitimately reads `up !== document.body`, which has two `=` and so
-        // cannot match the three below — the guess is the identity test, not the boundary one.
-        XCTAssertFalse(
-            script.contains("=== document.body"),
-            "and recognising it by its position under <body> does the same")
     }
 
     // MARK: -

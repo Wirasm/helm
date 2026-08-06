@@ -33,20 +33,12 @@ enum CanvasHTML {
     ///    own block; overall fit is the window's/zoom's job, not per-diagram
     ///    machinery.
     ///
-    /// `data-helm-frame` on the wrapper is load-bearing too, and it is helm marking its own
-    /// chrome so the annotation script can tell it from the artifact — the same job
-    /// `data-helm-mark` does for the ink. `#content` is helm's id, written here and present in
-    /// no operator's `.md` file, so an annotation naming it is a grep that finds nothing; the
-    /// script drops it for that reason (#215).
-    ///
-    /// **It has to be a marker rather than a test on the id, because the script does not only
-    /// meet this page.** An `.html` artifact is read straight from disk (`CanvasFileViews`,
-    /// "the artifact IS the document here") and never passes through here, yet gets the same
-    /// annotation script — and `<body><div id="content">` is one of the commonest wrappers in
-    /// hand-written HTML. Recognising helm's frame by its id and position would therefore
-    /// discard an id the agent really did write and really could grep for, silently and
-    /// indistinguishably from a block that has none. An attribute helm writes cannot be wrong
-    /// in either direction.
+    /// `data-helm-frame` on the wrapper is load-bearing, not decoration: it is helm marking its
+    /// own chrome, the same job `data-helm-mark` does for the ink, and `canvas-annotation.js`
+    /// reads it to know that `#content` is helm's id rather than the artifact's. **Take it off
+    /// and every mark on every markdown canvas anchors to `#content` again**, which is a grep
+    /// that finds nothing (#215). The argument for a marker over anything the script could
+    /// infer from the DOM lives beside `helmFrame`, where the inference would have been made.
     ///
     /// `deterministicIds: true` is load-bearing, not tidiness. Left unset, mermaid
     /// seeds its id generator from `Date.now()` (`InitIDGenerator`), so every render

@@ -418,13 +418,9 @@
       }
       return el !== null;
     },
-    // The same DOM, minus helm's frame marker — which is what an `.html` ARTIFACT is.
-    //
-    // helm reads those straight from disk and never generates them, so every element in one is
-    // the agent's, including a wrapper that happens to use the same landmark id helm's own page
-    // does. That sameness is the entire point: the first cut of `helmFrame` told the two apart
-    // by id and position, which cannot tell them apart at all, and so it discarded an id the
-    // agent wrote and could grep for.
+    // The same DOM, minus helm's frame marker — which is exactly what an `.html` ARTIFACT is,
+    // since helm reads those from disk and generates nothing in them. The marker is the only
+    // difference, which is the point; `CanvasAnchorTests` says why that matters.
     asHTMLArtifact: function () {
       content.removeAttribute("data-helm-frame");
     },
