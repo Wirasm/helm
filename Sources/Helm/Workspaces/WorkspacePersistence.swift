@@ -35,7 +35,7 @@ enum WorkspacePersistence {
 
     static func saveSelection(_ workspace: Workspace?, to defaults: UserDefaults) {
         if let workspace {
-            defaults.set(workspace.path, forKey: selectionKey)
+            defaults.set(workspace.path.value, forKey: selectionKey)
         } else {
             defaults.removeObject(forKey: selectionKey)
         }

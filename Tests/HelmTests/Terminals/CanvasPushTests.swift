@@ -153,11 +153,14 @@ final class RefusalThrottleTests: XCTestCase {
 final class CanvasPushRequestTests: XCTestCase {
     func testTheRequestCarriesTheWorkspaceThatAskedForIt() {
         let request = CanvasPushRequest(
-            artifact: URL(fileURLWithPath: "/tmp/report.md"), workspacePath: "/work/b")
+            artifact: URL(fileURLWithPath: "/tmp/report.md"),
+            workspacePath: WorkspacePath("/work/b"))
 
-        XCTAssertEqual(request.workspacePath, "/work/b")
+        XCTAssertEqual(request.workspacePath, WorkspacePath("/work/b"))
         XCTAssertNotEqual(
-            request, CanvasPushRequest(artifact: request.artifact, workspacePath: "/work/a"),
+            request,
+            CanvasPushRequest(
+                artifact: request.artifact, workspacePath: WorkspacePath("/work/a")),
             "two workspaces asking for the same artifact are not the same request — this is "
                 + "what stops a parked workspace's build landing on the active bench")
     }

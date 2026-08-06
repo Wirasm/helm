@@ -12,10 +12,10 @@ final class StatusSummaryTests: XCTestCase {
         let summary = StatusSummary.of(
             workspace: workspace,
             contexts: [
-                workspace.path: WorkspaceContext(branch: "feat/design-primitives"),
+                workspace.path.value: WorkspaceContext(branch: "feat/design-primitives"),
                 "/tmp/other": WorkspaceContext(branch: "main"),
             ],
-            presence: [workspace.path: .notWorking, "/tmp/other": .working]
+            presence: [workspace.path.value: .notWorking, "/tmp/other": .working]
         )
         XCTAssertEqual(summary.workspace, "helm-status")
         XCTAssertEqual(summary.branch, "feat/design-primitives")
@@ -41,7 +41,7 @@ final class StatusSummaryTests: XCTestCase {
         for branch in [nil, ""] {
             let summary = StatusSummary.of(
                 workspace: workspace,
-                contexts: [workspace.path: WorkspaceContext(branch: branch)],
+                contexts: [workspace.path.value: WorkspaceContext(branch: branch)],
                 presence: [:]
             )
             XCTAssertEqual(summary.workspace, "helm-status")
@@ -56,7 +56,7 @@ final class StatusSummaryTests: XCTestCase {
             StatusSummary.of(
                 workspace: workspace,
                 contexts: [:],
-                presence: presence.map { [workspace.path: $0] } ?? [:]
+                presence: presence.map { [workspace.path.value: $0] } ?? [:]
             ).agentLabel
         }
         XCTAssertNil(label(nil))

@@ -28,16 +28,16 @@ final class WorktreesRailModel: ObservableObject {
 
     private let worktreeClient: any WorktreeClient
     private let archonClient: any ArchonClient
-    private var currentWorkspace: String?
+    private var currentWorkspace: WorkspacePath?
     private var workspaceGeneration = 0
-    private var refreshesInFlight: Set<String> = []
+    private var refreshesInFlight: Set<WorkspacePath> = []
 
     init(worktreeClient: any WorktreeClient, archonClient: any ArchonClient) {
         self.worktreeClient = worktreeClient
         self.archonClient = archonClient
     }
 
-    func setExpanded(_ expanded: Bool, in workspacePath: String?) async {
+    func setExpanded(_ expanded: Bool, in workspacePath: WorkspacePath?) async {
         let changed = expanded != isExpanded
         isExpanded = expanded
         if expanded {
@@ -53,7 +53,7 @@ final class WorktreesRailModel: ObservableObject {
         }
     }
 
-    func workspaceChanged(to workspacePath: String?) async {
+    func workspaceChanged(to workspacePath: WorkspacePath?) async {
         guard workspacePath != currentWorkspace else {
             if isExpanded, rows.isEmpty { await refresh(in: workspacePath) }
             return
@@ -71,7 +71,7 @@ final class WorktreesRailModel: ObservableObject {
         await refresh(in: workspacePath)
     }
 
-    func refresh(in workspacePath: String?) async {
+    func refresh(in workspacePath: WorkspacePath?) async {
         guard isExpanded, let workspacePath else {
             if workspacePath == nil {
                 currentWorkspace = nil
@@ -122,7 +122,7 @@ final class WorktreesRailModel: ObservableObject {
         confirmation = nil
     }
 
-    func confirm(in workspacePath: String?) async {
+    func confirm(in workspacePath: WorkspacePath?) async {
         guard let workspacePath, workspacePath == currentWorkspace, let confirmation else {
             self.confirmation = nil
             return
@@ -142,7 +142,7 @@ final class WorktreesRailModel: ObservableObject {
         }
     }
 
-    private func performCleanup(path: String, in workspacePath: String) async -> Bool {
+    private func performCleanup(path: String, in workspacePath: WorkspacePath) async -> Bool {
         guard workspacePath == currentWorkspace,
             let row = rows.first(where: { $0.id == path }),
             let route = row.cleanupRoute,

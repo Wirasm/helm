@@ -31,7 +31,7 @@ final class TerminalManager: ObservableObject {
     /// Flat app-level ownership of every workspace's sessions. Switching a
     /// workspace only changes which subset is mounted; it never releases one.
     @Published private(set) var sessions: [TerminalSession] = []
-    @Published private(set) var activeWorkspacePath: String?
+    @Published private(set) var activeWorkspacePath: WorkspacePath?
 
     /// The single ghostty runtime every session's surface is created on.
     let controller: TerminalController
@@ -51,7 +51,7 @@ final class TerminalManager: ObservableObject {
         // startup cost to the active context rather than all remembered folders.
     }
 
-    func sessions(for workspacePath: String) -> [TerminalSession] {
+    func sessions(for workspacePath: WorkspacePath) -> [TerminalSession] {
         sessions.filter { $0.workspacePath == workspacePath }
     }
 
@@ -67,7 +67,7 @@ final class TerminalManager: ObservableObject {
     /// Restore stays lazy on purpose. `init` creates no pty until a workspace is
     /// visited, which bounds startup to the active context rather than every
     /// remembered folder — eager restore would spawn each one's shells at launch.
-    func activate(workspacePath: String, restoring restorable: [UUID] = []) {
+    func activate(workspacePath: WorkspacePath, restoring restorable: [UUID] = []) {
         activeWorkspacePath = workspacePath
         if sessions(for: workspacePath).isEmpty {
             restore(restorable, in: workspacePath)
@@ -77,7 +77,7 @@ final class TerminalManager: ObservableObject {
     /// Rebuilds a workspace's tab row from persisted ids, or opens one fresh shell
     /// when there is nothing to restore — which is also the never-visited case, so
     /// a first-run workspace still behaves exactly as it always has.
-    private func restore(_ ids: [UUID], in workspacePath: String) {
+    private func restore(_ ids: [UUID], in workspacePath: WorkspacePath) {
         guard !ids.isEmpty else {
             newTerminal(in: workspacePath)
             return
@@ -98,7 +98,7 @@ final class TerminalManager: ObservableObject {
 
     /// Closing a workspace is an explicit tab teardown, unlike switching: drop
     /// every session it owns so their retained NSViews release their ptys.
-    func closeWorkspace(_ workspacePath: String) {
+    func closeWorkspace(_ workspacePath: WorkspacePath) {
         sessions.removeAll { $0.workspacePath == workspacePath }
         if activeWorkspacePath == workspacePath { deactivate() }
     }
@@ -124,7 +124,7 @@ final class TerminalManager: ObservableObject {
     /// A fresh login shell in a workspace. Returns it, because the caller is the bench and
     /// the bench needs the id to build the pane that will show it.
     @discardableResult
-    func newTerminal(in workspacePath: String) -> TerminalSession {
+    func newTerminal(in workspacePath: WorkspacePath) -> TerminalSession {
         let session = TerminalSession(
             ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller,
             backend: backend())

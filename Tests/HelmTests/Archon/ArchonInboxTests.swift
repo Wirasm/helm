@@ -3,7 +3,7 @@ import XCTest
 @testable import Helm
 
 final class ArchonInboxTests: XCTestCase {
-    private let workspace = "/tmp/project"
+    private let workspace = WorkspacePath("/tmp/project")
     private let now = Date(timeIntervalSince1970: 1_785_832_000)
 
     func testARunIsClearedInOneWorkspaceOnly() {
@@ -11,7 +11,7 @@ final class ArchonInboxTests: XCTestCase {
         dismissals.dismiss("a", in: workspace, now: now)
 
         XCTAssertTrue(dismissals.contains("a", in: workspace))
-        XCTAssertFalse(dismissals.contains("a", in: "/tmp/other"))
+        XCTAssertFalse(dismissals.contains("a", in: WorkspacePath("/tmp/other")))
     }
 
     func testClearingTheSameRunTwiceMovesItRatherThanCountingItTwice() {

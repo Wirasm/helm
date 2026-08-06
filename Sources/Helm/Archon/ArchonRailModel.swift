@@ -155,11 +155,13 @@ final class ArchonRailModel: ObservableObject {
         defaults.set(isVisible, forKey: Self.visibilityKey)
     }
 
-    func poll(in workspacePath: String?, every interval: Duration = ArchonPolling.interval) async {
+    func poll(
+        in workspacePath: WorkspacePath?, every interval: Duration = ArchonPolling.interval
+    ) async {
         await ArchonPolling.loop(every: interval) { await refresh(in: workspacePath) }
     }
 
-    func refresh(in workspacePath: String?) async {
+    func refresh(in workspacePath: WorkspacePath?) async {
         guard let workspacePath else {
             gated = []
             running = []
@@ -196,7 +198,7 @@ final class ArchonRailModel: ObservableObject {
     /// different sets — `counts` spans the project (or the machine, under `scopeFallback`)
     /// while `runs` is the newest twenty — and the arithmetic that reconciled them existed only
     /// to keep a tally honest. There is no tally left to keep honest.
-    private func apply(_ response: ArchonRunsResponse, in workspacePath: String) {
+    private func apply(_ response: ArchonRunsResponse, in workspacePath: WorkspacePath) {
         gated = response.runs.filter(\.isPaused)
         running = response.runs.filter(\.isRunning)
         finished =
@@ -227,7 +229,7 @@ final class ArchonRailModel: ObservableObject {
 
     /// Clear one finished run. **From helm only** — Archon's record is untouched, which is
     /// exactly why this list must never present itself as history.
-    func dismiss(_ run: ArchonRun, in workspacePath: String?) {
+    func dismiss(_ run: ArchonRun, in workspacePath: WorkspacePath?) {
         guard let workspacePath else { return }
         dismissals.dismiss(run.id, in: workspacePath, now: Date())
         dismissals.save(to: defaults)
@@ -253,7 +255,7 @@ final class ArchonRailModel: ObservableObject {
     /// else the comment reaches an audit event nobody reads, and asking for one would be a
     /// second click that buys nothing.
     func choose(
-        _ decision: ArchonGateDecision, on run: ArchonRun, in workspacePath: String?
+        _ decision: ArchonGateDecision, on run: ArchonRun, in workspacePath: WorkspacePath?
     ) async {
         guard let gate = run.gate, gate.isAwaitingDecision else { return }
         guard !busyRuns.contains(run.id) else { return }
@@ -284,7 +286,7 @@ final class ArchonRailModel: ObservableObject {
     /// interactive loop "nothing to add" is a real decision — it is what finalizes the loop
     /// rather than running another iteration. Refusing to send it would make the one gate that
     /// distinguishes them unanswerable in the finalize direction.
-    func sendReply(in workspacePath: String?) async {
+    func sendReply(in workspacePath: WorkspacePath?) async {
         guard let reply else { return }
         // The run going missing between arming and sending is the same race `apply` handles,
         // caught here for the frame in which the press wins. Reported rather than dropped: a
@@ -310,7 +312,8 @@ final class ArchonRailModel: ObservableObject {
     /// lies by omission. **The resume is reported separately when it fails**, because by then the
     /// approval is already recorded and saying "approve failed" would be a third wrong answer.
     private func decide(
-        _ decision: ArchonGateDecision, text: String?, on run: ArchonRun, in workspacePath: String?
+        _ decision: ArchonGateDecision, text: String?, on run: ArchonRun,
+        in workspacePath: WorkspacePath?
     ) async {
         guard let workspacePath else {
             actionFailure = Self.noWorkspace
@@ -371,7 +374,7 @@ final class ArchonRailModel: ObservableObject {
     /// once rather than N times (measured: two calls in parallel finish in 0.59s, one alone in
     /// 0.56s). Only runs that have a line are asked about, so the cost is bounded by what is on
     /// screen, and in practice that is nought or one.
-    private func refreshStages(in workspacePath: String) async {
+    private func refreshStages(in workspacePath: WorkspacePath) async {
         let ids = running.map(\.id)
         guard !ids.isEmpty else {
             stages = [:]
@@ -400,7 +403,7 @@ final class ArchonRailModel: ObservableObject {
 
     /// Opening the settings is what loads the workflow list — the rail does not need it to
     /// poll, and `workflow list` reads every workflow file in the project on every call.
-    func loadWorkflows(in workspacePath: String?) async {
+    func loadWorkflows(in workspacePath: WorkspacePath?) async {
         isConfigOpen = true
         launchFailure = nil
         guard let workspacePath else {
@@ -421,7 +424,7 @@ final class ArchonRailModel: ObservableObject {
 
     /// Enter in the field, or the send button. Everything except the message comes from the
     /// settings.
-    func launch(in workspacePath: String?) async {
+    func launch(in workspacePath: WorkspacePath?) async {
         guard !isLaunching else { return }
         let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let workflow = config.workflow.trimmingCharacters(in: .whitespacesAndNewlines)

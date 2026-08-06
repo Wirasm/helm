@@ -59,9 +59,9 @@ struct WorkspaceBar: View {
         } label: {
             HStack(spacing: 5) {
                 Text("⌃\(index + 1)").foregroundStyle(Color.textMuted)
-                AgentDot(presence: board.presence[workspace.path])
+                AgentDot(presence: board.presence[workspace.path.value])
                 Text(workspace.name).fontWeight(isSelected ? .semibold : .regular)
-                if let branch = model.contexts[workspace.path]?.branch {
+                if let branch = model.contexts[workspace.path.value]?.branch {
                     Text(branch).foregroundStyle(Color.textMuted).lineLimit(1)
                 }
             }
@@ -74,7 +74,7 @@ struct WorkspaceBar: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button("Close Workspace") { close(workspace) }
-            Button("Copy Path") { Pasteboard.copy(workspace.path) }
+            Button("Copy Path") { Pasteboard.copy(workspace.path.value) }
         }
         .task(id: workspace.path) { await resolveBranch(for: workspace) }
     }
@@ -94,11 +94,11 @@ struct WorkspaceBar: View {
     /// is set whether or not a branch came back, so a folder that is not a repository is
     /// asked once rather than on every appearance.
     private func resolveBranch(for workspace: Workspace) async {
-        guard model.contexts[workspace.path]?.branchResolved != true else { return }
+        guard model.contexts[workspace.path.value]?.branchResolved != true else { return }
         let branch = await Task.detached { () -> String? in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["git", "-C", workspace.path, "branch", "--show-current"]
+            process.arguments = ["git", "-C", workspace.path.value, "branch", "--show-current"]
             let output = Pipe()
             process.standardOutput = output
             process.standardError = FileHandle.nullDevice

@@ -59,7 +59,7 @@ final class WorktreeCLITests: XCTestCase {
             """, at: git)
         try install("printf '8\\t%s\\n' \"$2\"\n", at: du)
 
-        let rows = try await client().worktrees(in: workspace.path)
+        let rows = try await client().worktrees(in: WorkspacePath(workspace))
 
         XCTAssertEqual(rows.count, 2)
         XCTAssertTrue(rows[0].isMain)
@@ -87,7 +87,7 @@ final class WorktreeCLITests: XCTestCase {
             """, at: git)
         try install("exit 1\n", at: du)
 
-        let rows = try await client().worktrees(in: workspace.path)
+        let rows = try await client().worktrees(in: WorkspacePath(workspace))
         let row = try XCTUnwrap(rows.first)
         XCTAssertEqual(row.mergedState, .unknown)
         XCTAssertNil(row.metadata.diskBytes, "a du failure is local to the row")
@@ -97,7 +97,7 @@ final class WorktreeCLITests: XCTestCase {
         try install("printf '%s\\n' \"$@\" > \"$CALLS\"\n", at: git)
         try install("exit 0\n", at: du)
 
-        try await client().remove(path: linked.path, in: workspace.path)
+        try await client().remove(path: linked.path, in: WorkspacePath(workspace))
 
         XCTAssertEqual(
             try String(contentsOf: calls, encoding: .utf8),
@@ -111,7 +111,7 @@ final class WorktreeCLITests: XCTestCase {
         try install("exit 0\n", at: du)
 
         do {
-            _ = try await client().worktrees(in: workspace.path)
+            _ = try await client().worktrees(in: WorkspacePath(workspace))
             XCTFail("expected failure")
         } catch let error as WorktreeCLIError {
             XCTAssertEqual(error.command, "git -C \(workspace.path) worktree list --porcelain")
@@ -140,7 +140,7 @@ final class WorktreeCLITests: XCTestCase {
         // capturing `self` to reach the `client(…)` helper is a `sending` violation. The
         // cancellation test below is shaped this way for the same reason.
         let client = client(extraEnvironment: ["PID_RECORD": pidRecord.path], timeout: budget)
-        let workspacePath = workspace.path
+        let workspacePath = WorkspacePath(workspace)
         let call = Task { try await client.worktrees(in: workspacePath) }
         try await waitForPid(pidRecord)
 
@@ -158,7 +158,7 @@ final class WorktreeCLITests: XCTestCase {
         try install("printf '%s' \"$$\" > \"$PID_RECORD\"\nexec /bin/sleep 999\n", at: git)
         try install("exit 0\n", at: du)
         let client = client(extraEnvironment: ["PID_RECORD": pidRecord.path])
-        let workspacePath = workspace.path
+        let workspacePath = WorkspacePath(workspace)
         let call = Task { try await client.worktrees(in: workspacePath) }
         try await waitForPid(pidRecord)
         call.cancel()

@@ -3,7 +3,7 @@ import XCTest
 @testable import Helm
 
 final class WorktreesRailModelTests: XCTestCase {
-    private let workspace = "/tmp/project"
+    private let workspace = WorkspacePath("/tmp/project")
 
     @MainActor
     func testCollapsedDoesNoIOAndExpansionListsOnce() async {
@@ -48,10 +48,11 @@ final class WorktreesRailModelTests: XCTestCase {
         XCTAssertEqual(model.rows.map(\.id), ["/reopened"])
 
         await model.setExpanded(false, in: workspace)
-        await worktrees.setResponse([.fixture(path: "/other")], for: "/other-workspace")
-        await model.workspaceChanged(to: "/other-workspace")
+        await worktrees.setResponse(
+            [.fixture(path: "/other")], for: WorkspacePath("/other-workspace"))
+        await model.workspaceChanged(to: WorkspacePath("/other-workspace"))
         XCTAssertTrue(model.rows.isEmpty)
-        await model.setExpanded(true, in: "/other-workspace")
+        await model.setExpanded(true, in: WorkspacePath("/other-workspace"))
 
         XCTAssertEqual(model.rows.map(\.id), ["/other"])
         let metrics = await worktrees.metrics()
@@ -61,15 +62,15 @@ final class WorktreesRailModelTests: XCTestCase {
     @MainActor
     func testOldWorkspaceCannotPublishAfterAWorkspaceSwitch() async {
         let worktrees = FakeWorktreeClient()
-        await worktrees.setResponse([.fixture(path: "/old")], for: "/old-workspace")
-        await worktrees.setResponse([.fixture(path: "/new")], for: "/new-workspace")
+        await worktrees.setResponse([.fixture(path: "/old")], for: WorkspacePath("/old-workspace"))
+        await worktrees.setResponse([.fixture(path: "/new")], for: WorkspacePath("/new-workspace"))
         await worktrees.setDelay(.milliseconds(25))
         let model = WorktreesRailModel(
             worktreeClient: worktrees, archonClient: FakeArchonClient())
 
-        let old = Task { await model.setExpanded(true, in: "/old-workspace") }
+        let old = Task { await model.setExpanded(true, in: WorkspacePath("/old-workspace")) }
         try? await Task.sleep(for: .milliseconds(5))
-        await model.workspaceChanged(to: "/new-workspace")
+        await model.workspaceChanged(to: WorkspacePath("/new-workspace"))
         await old.value
 
         XCTAssertEqual(model.rows.map(\.id), ["/new"])

@@ -29,7 +29,7 @@ final class BenchSnapshotModelTests: XCTestCase {
         let workbench = WorkbenchModel(terminals: terminals)
         let workspaces = WorkspaceModel(defaults: defaults)
         workspaces.open(Workspace(path: "/tmp/bench-snapshot-model"))
-        workbench.activate(workspacePath: "/tmp/bench-snapshot-model")
+        workbench.activate(workspacePath: WorkspacePath("/tmp/bench-snapshot-model"))
         let model = BenchSnapshotModel(
             directory: BenchSnapshotDirectory(root: root),
             mailboxRoot: root.appendingPathComponent("mail"),
@@ -90,7 +90,8 @@ final class BenchSnapshotModelTests: XCTestCase {
         workspaces.open(second)
         workbench.activate(workspacePath: second.path)
         for _ in 0..<8 { await Task.yield() }
-        XCTAssertEqual(writes.last?.workspaces.first { $0.path == second.path }?.state, .mounted)
+        XCTAssertEqual(
+            writes.last?.workspaces.first { $0.path == second.path }?.state, .mounted)
 
         workspaces.close(second)
         workbench.deactivate()

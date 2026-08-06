@@ -10,8 +10,8 @@ import XCTest
 /// sessions from an isolated `TerminalManager`, which is what `init(terminals:)` is for.
 @MainActor
 final class WorkbenchModelTests: XCTestCase {
-    private let workspace = "/tmp/helm-workbench-model"
-    private let other = "/tmp/helm-workbench-model-other"
+    private let workspace = WorkspacePath("/tmp/helm-workbench-model")
+    private let other = WorkspacePath("/tmp/helm-workbench-model-other")
 
     private func mounted() -> (WorkbenchModel, TerminalManager) {
         let manager = TerminalManager()

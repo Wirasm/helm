@@ -6,29 +6,37 @@ import Foundation
 /// never express. Nothing is registered anywhere; opening the folder is the whole
 /// ceremony, and closing one is a purely local list removal.
 struct Workspace: Hashable, Identifiable, Codable {
-    /// Absolute, tilde-expanded, no trailing slash.
-    let path: String
+    /// Absolute, tilde-expanded, no trailing slash. This is the origin every other
+    /// `workspacePath` in the app descends from (`AGENTS.md`) — `WorkspacePath`'s own `init`
+    /// calls `Self.normalized` below, so both routes in end up normalized the same way.
+    let path: WorkspacePath
 
-    var id: String { path }
+    var id: WorkspacePath { path }
 
     /// The folder's basename — what the sidebar row shows in bold.
     var name: String {
-        let last = (path as NSString).lastPathComponent
-        return last.isEmpty ? path : last
+        let last = (path.value as NSString).lastPathComponent
+        return last.isEmpty ? path.value : last
     }
 
     init(path: String) {
-        self.path = Self.normalized(path)
+        self.path = WorkspacePath(path)
     }
 
     init(url: URL) {
-        self.init(path: url.path)
+        self.path = WorkspacePath(url)
     }
 
     /// A trailing slash and a leading `~` are display noise, not identity: two
     /// values differing only by one would be two sidebar rows for one folder.
     /// Symlinks are deliberately NOT resolved here — the path the operator chose is
     /// the path helm shows and filters on; only store resolution needs the real one.
+    ///
+    /// **Kept as a free `String -> String` function rather than folded entirely into
+    /// `WorkspacePath`.** `Spool/SpoolRequest.swift` and `DefaultsDomain`'s legacy-domain
+    /// migration both call this directly, and both are out of scope for #223 (#221 owns the
+    /// former). `WorkspacePath.init` calls this same function, so there is exactly one
+    /// normalizer, not two that can drift apart — do not reimplement this in `WorkspacePath`.
     static func normalized(_ path: String) -> String {
         let expanded = (path as NSString).expandingTildeInPath
         var trimmed = Substring(expanded)

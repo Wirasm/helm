@@ -348,7 +348,7 @@ struct ArchonLaunchConfig: Codable, Equatable, Sendable {
 }
 
 struct ArchonLaunchRequest: Equatable, Sendable {
-    let workspacePath: String
+    let workspacePath: WorkspacePath
     let workflow: String
     let input: String
     let worktree: WorktreeChoice

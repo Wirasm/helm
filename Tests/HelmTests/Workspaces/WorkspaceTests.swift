@@ -22,7 +22,7 @@ final class WorkspaceTests: XCTestCase {
 
     func testPathIsIdentityAndNameIsTheBasename() {
         let workspace = Workspace(path: "/Users/dev/Projects/sild/helm")
-        XCTAssertEqual(workspace.id, "/Users/dev/Projects/sild/helm")
+        XCTAssertEqual(workspace.id, WorkspacePath("/Users/dev/Projects/sild/helm"))
         XCTAssertEqual(workspace.name, "helm")
 
         // Two checkouts of one repo are two DISTINCT workspaces — the thing a
@@ -33,11 +33,11 @@ final class WorkspaceTests: XCTestCase {
     }
 
     func testConstructionNormalisesTrailingSlashesAndTilde() {
-        XCTAssertEqual(Workspace(path: "/a/b/").path, "/a/b")
-        XCTAssertEqual(Workspace(path: "/a/b///").path, "/a/b")
-        XCTAssertEqual(Workspace(path: "/").path, "/")
+        XCTAssertEqual(Workspace(path: "/a/b/").path.value, "/a/b")
+        XCTAssertEqual(Workspace(path: "/a/b///").path.value, "/a/b")
+        XCTAssertEqual(Workspace(path: "/").path.value, "/")
         XCTAssertEqual(
-            Workspace(path: "~/code").path,
+            Workspace(path: "~/code").path.value,
             FileManager.default.homeDirectoryForCurrentUser.path + "/code"
         )
 
