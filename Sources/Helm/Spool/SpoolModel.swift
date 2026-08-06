@@ -72,6 +72,10 @@ final class SpoolModel: ObservableObject {
 
     private let directory: SpoolDirectory
     private let mailRoot: URL
+    /// Claude Code's session registry, which is how a pid becomes a session id and a session id
+    /// becomes a mailbox (#247). Injectable for the same reason `mailRoot` is: a test that reads
+    /// the operator's live `~/.claude/sessions` is testing the machine, not the rule.
+    private let registryRoot: URL
     private let isOff: Bool
     /// How long a freshly created terminal has to produce a login shell. Generous, because a
     /// deadline that can expire before the child is scheduled is the exact flake shape #157
@@ -106,12 +110,14 @@ final class SpoolModel: ObservableObject {
     init(
         directory: SpoolDirectory = .resolve(),
         mailRoot: URL = MailboxDirectory.resolve(),
+        registryRoot: URL = AgentRegistry.defaultRoot,
         isOff: Bool = SpoolDirectory.isOff(),
         shellDeadline: Duration = .seconds(20),
         claimDeadline: Duration = .seconds(90)
     ) {
         self.directory = directory
         self.mailRoot = mailRoot
+        self.registryRoot = registryRoot
         self.isOff = isOff
         self.shellDeadline = shellDeadline
         self.claimDeadline = claimDeadline
@@ -355,16 +361,21 @@ final class SpoolModel: ObservableObject {
         // this file names.
         let resolved = await poll(
             until: claimDeadline,
-            for: { [mailRoot] () -> (agent: pid_t?, owner: MailboxOwner)? in
+            for: { [mailRoot, registryRoot] () -> (agent: pid_t?, owner: MailboxOwner)? in
                 let foreground = spawner.foregroundPid(of: terminal)
+                // **Both halves are re-read on every attempt, and that is the point.** The
+                // mailbox is written by the agent's `SessionStart` hook and its registry row by
+                // the agent itself, so both appear *during* this poll — a book built once
+                // before the loop would be waiting for something it could never see.
+                let book = AddressBook(
+                    owners: MailboxDirectory.owners(in: mailRoot),
+                    sessionFor: AgentRegistry.sessionLookup(in: registryRoot))
                 guard
-                    let owner = MailboxDirectory.owner(
-                        in: MailboxDirectory.owners(in: mailRoot),
+                    let owner = book.owner(
                         foregroundPid: foreground, shellPid: shell,
-                        // `MailboxDirectory` no longer defaults this (#221): it lives in
-                        // `HelmWire`, which depends on nothing in `Helm`, and `AgentLocator`
-                        // is `Helm`-only. This is the one call site that used to lean on the
-                        // default.
+                        // `AddressBook` defaults neither closure (#221): it lives in `HelmWire`,
+                        // which depends on nothing in `Helm`, and `AgentLocator`/`AgentRegistry`
+                        // are `Helm`-only. This is the call site that used to lean on a default.
                         ancestors: { AgentLocator.ancestors(of: $0) })
                 else { return nil }
                 return (foreground == shell ? nil : foreground, owner)

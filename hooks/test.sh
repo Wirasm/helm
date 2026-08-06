@@ -115,6 +115,59 @@ run "$root" claude-session-start '{"session_id":"019fc78c-ec03-76f3-8e87-f0fc911
 	ok "two real session ids in ONE directory get two mailboxes" ||
 	bad "claim: two sessions collided onto $(ls "$root" | tr '\n' ' ')"
 
+# ── #247: a claim that could not ask the registry says so, and gets finished ─────────────
+
+# No row for this session anywhere in the registry — `SessionStart` firing before Claude Code has
+# published its own `<pid>.json`. That window is how a mailbox came to record a pid that was NEVER
+# the agent's, which is the likeliest origin of the incident #236 was filed for.
+#
+# `process.ppid` here is the command substitution `run` uses, and it is already DEAD by the time
+# these lines read the file. That is not an artefact of the harness: it is the defect's exact
+# shape — a hook's parent is a shell, not the agent — and it is why the record has to say the
+# number is a guess rather than look like an answer.
+root=$(fresh)
+run "$root" claude-session-start '{"session_id":"no-registry-row-4242","cwd":"/tmp/provisional"}'
+handle=$(handle_of "$root")
+grep -q '"pidIsProvisional": true' "$root/$handle/owner.json" &&
+	ok "a claim the registry could not answer records its pid as PROVISIONAL (#247)" ||
+	bad "claim: recorded a guessed pid with nothing saying so: $(cat "$root/$handle/owner.json")"
+
+# …and still records a number. `null` was the other option and it is a migration, not a field:
+# `heldByAnother` and `reap` here both require a numeric pid, pi's extension prints one, and
+# Swift's `MailboxOwner.pid` is a non-optional `pid_t` that would drop the whole row.
+pid=$(sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' "$root/$handle/owner.json")
+[ -n "$pid" ] &&
+	ok "…and still records a pid, so no reader of this format loses the row over it" ||
+	bad "claim: the provisional record has no pid at all"
+
+# The repair, and the reason no retry loop sits on the operator's critical path instead: a prompt
+# is proof this session is running AND registered, so the guess is replaced with the registry's
+# answer — off SessionStart, with no assumption about how long Claude Code takes to publish.
+claude_row "no-registry-row-4242"
+run "$root" claude-user-prompt-submit '{"session_id":"no-registry-row-4242","cwd":"/tmp/provisional"}'
+repaired=$(sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' "$root/$handle/owner.json")
+[ "$repaired" = "$$" ] &&
+	ok "the next prompt replaces a provisional pid with the registry's answer (#247)" ||
+	bad "deliver: provisional pid $pid was left in place (now $repaired; the registry says $$)"
+grep -q 'pidIsProvisional' "$root/$handle/owner.json" &&
+	bad "deliver: repaired the pid but left the record marked provisional" ||
+	ok "…and clears the mark, so a repaired record is indistinguishable from a correct claim"
+
+# THE CONTROL FOR THIS SECTION, and it is what fails if the repair became a heartbeat. A claim
+# the registry already answered must be byte-identical after a prompt: whether anything should
+# refresh a claim WHILE a session runs is #245's question, and this is deliberately not it.
+root=$(fresh)
+run "$root" claude-session-start '{"session_id":"aaaa-bbbb-cccc-1234","cwd":"/tmp/steady"}'
+handle=$(handle_of "$root")
+grep -q 'pidIsProvisional' "$root/$handle/owner.json" &&
+	bad "claim: marked a record provisional when the registry had answered it" ||
+	ok "a claim the registry answered carries no provisional mark"
+before=$(cat "$root/$handle/owner.json")
+run "$root" claude-user-prompt-submit '{"session_id":"aaaa-bbbb-cccc-1234","cwd":"/tmp/steady"}'
+[ "$before" = "$(cat "$root/$handle/owner.json")" ] &&
+	ok "a correctly claimed mailbox is untouched by a prompt — a repair, not a heartbeat (#245)" ||
+	bad "deliver: rewrote an owner.json that was already right"
+
 # ── drain ────────────────────────────────────────────────────────────────────────────────
 
 # Silence is the common case and must not cost a turn.
@@ -258,7 +311,7 @@ root=$(fresh)
 # place when a session restarts in that process. That filename is load-bearing: "which session is
 # in pid X" has to have exactly one answer for the reaper to decide anything. The rows seeded at
 # the top of this file are deliberately named otherwise, so they exercise the by-session-id scan
-# `ownerPid` does without also answering this question.
+# `ownerRecord` does without also answering this question.
 printf '{"pid":%s,"sessionId":"aaaa-bbbb-cccc-1234","cwd":"/tmp","status":"idle"}\n' "$$" \
 	>"$CLAUDE_HOME/sessions/$$.json"
 

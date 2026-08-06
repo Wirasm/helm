@@ -33,6 +33,9 @@ final class BenchSnapshotModelTests: XCTestCase {
         let model = BenchSnapshotModel(
             directory: BenchSnapshotDirectory(root: root),
             mailboxRoot: root.appendingPathComponent("mail"),
+            // Never the operator's real `~/.claude/sessions`: a test that reads it measures the
+            // machine it runs on, and #247 made this model read a registry at all.
+            registryRoot: root.appendingPathComponent("sessions"),
             refreshInterval: refreshInterval,
             now: now,
             foregroundPid: foregroundPid,
@@ -127,6 +130,46 @@ final class BenchSnapshotModelTests: XCTestCase {
         XCTAssertEqual(writes.count, 2)
         let pane = writes.last?.workspaces[0].columns[0].slots[0].panes[0]
         XCTAssertEqual(pane?.terminal?.owner?.handle.value, "owner-4242")
+        model.stop()
+    }
+
+    /// **The wiring, not the rule.** `AddressBook` is where "ask the session, not the pid" is
+    /// decided and `MailboxDirectoryTests` is where it is pinned — but a model that built its
+    /// book with `sessionFor: { _ in nil }` would satisfy every one of those tests and still
+    /// publish the wrong agent, because nothing else proves this model reads a registry at all.
+    ///
+    /// So: a live Claude agent whose `owner.json` still names the pid it started under, and a
+    /// registry row saying where that session actually is now. Only reading the registry joins
+    /// them.
+    func testTheSnapshotResolvesAPaneThroughTheSessionRegistryAndNotItsRecordedPid() throws {
+        let mail = root.appendingPathComponent("mail/helm-4831")
+        try FileManager.default.createDirectory(at: mail, withIntermediateDirectories: true)
+        let record =
+            #"{"handle":"helm-4831","runtime":"claude","pid":13104,"#
+            + #""sessionId":"s-4831","cwd":"/tmp"}"#
+        try record.write(
+            to: mail.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
+
+        let sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try #"{"pid":74011,"sessionId":"s-4831","cwd":"/tmp","status":"busy"}"#
+            .write(
+                to: sessions.appendingPathComponent("74011.json"), atomically: true,
+                encoding: .utf8)
+
+        var writes: [BenchSnapshot] = []
+        let (model, workspaces, workbench, terminals) = fixture(
+            foregroundPid: { _ in 74011 },
+            writer: {
+                writes.append($0)
+                return true
+            })
+        model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
+
+        let pane = writes.last?.workspaces[0].columns[0].slots[0].panes[0]
+        XCTAssertEqual(
+            pane?.terminal?.owner?.handle.value, "helm-4831",
+            "the pane runs session s-4831 at pid 74011; owner.json still says 13104")
         model.stop()
     }
 

@@ -10,6 +10,10 @@ final class BenchSnapshotModel: ObservableObject {
 
     private let directory: BenchSnapshotDirectory
     private let mailboxRoot: URL
+    /// Claude Code's session registry — how a pane's foreground pid becomes a session id, and
+    /// the session id a mailbox (#247). Injectable for the reason `mailboxRoot` is: a test that
+    /// reads the operator's live `~/.claude/sessions` measures the machine, not the rule.
+    private let registryRoot: URL
     private let now: () -> Date
     private let writer: Writer
     private let foregroundPid: (TerminalSession) -> pid_t?
@@ -26,6 +30,7 @@ final class BenchSnapshotModel: ObservableObject {
     init(
         directory: BenchSnapshotDirectory = .resolve(),
         mailboxRoot: URL = MailboxDirectory.resolve(),
+        registryRoot: URL = AgentRegistry.defaultRoot,
         refreshInterval: Duration = .seconds(2),
         now: @escaping () -> Date = Date.init,
         foregroundPid: @escaping (TerminalSession) -> pid_t? = { $0.hostView.foregroundPid },
@@ -33,6 +38,7 @@ final class BenchSnapshotModel: ObservableObject {
     ) {
         self.directory = directory
         self.mailboxRoot = mailboxRoot
+        self.registryRoot = registryRoot
         self.refreshInterval = refreshInterval
         self.now = now
         self.foregroundPid = foregroundPid
@@ -120,7 +126,12 @@ final class BenchSnapshotModel: ObservableObject {
             workspaces: workspaces,
             workbench: workbench,
             terminals: terminals,
-            owners: MailboxDirectory.owners(in: mailboxRoot),
+            // Read once per publish and handed down as one value. Both halves are re-read every
+            // time — an agent's mailbox and its registry row both appear while helm is running,
+            // and this file is republished every two seconds precisely to notice that.
+            addressBook: AddressBook(
+                owners: MailboxDirectory.owners(in: mailboxRoot),
+                sessionFor: AgentRegistry.sessionLookup(in: registryRoot)),
             foregroundPid: foregroundPid)
         if !writer(snapshot) {
             NSLog("helm: could not publish bench snapshot at %@", directory.snapshot.path)

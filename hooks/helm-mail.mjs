@@ -267,13 +267,14 @@ function consume(dir, names) {
  * first, a live agent is indistinguishable from a dead one, and on 2026-08-06 that deleted a
  * running agent's mailbox: `helm-4831` recorded 13104, dead, while the agent ran at 74011.
  *
- * `sessionPid` is the same registry lookup `ownerPid` makes to decide what to record, asked here
- * to decide whether a recorded pid still means anything. One rule, one implementation — the file
- * used to hold two that disagreed, and the destructive one was the weaker.
+ * `sessionPid` is the same registry lookup `ownerRecord` makes to decide what to record, asked
+ * here to decide whether a recorded pid still means anything. One rule, one implementation — the
+ * file used to hold two that disagreed, and the destructive one was the weaker.
  *
- * It does NOT take `ownerPid`'s `process.ppid` fallback. That fallback answers "what should I
+ * It does NOT take `ownerRecord`'s `process.ppid` fallback. That fallback answers "what should I
  * write for myself", where a guess beats nothing; here a guess would be an answer manufactured
- * out of silence, which is the whole defect.
+ * out of silence, which is the whole defect. Nor does it read `pidIsProvisional` — see
+ * `ownerRecord` for why acting on that mark HERE would retire a live agent (#247).
  */
 function ownerGone(owner) {
 	if (owner.runtime === "claude" && owner.sessionId && sessionPid(owner.sessionId)) return false;
@@ -357,7 +358,8 @@ function mineIn(root, sessionId, cwd) {
  * started. Reading it is strictly better than inferring from the process tree, because it is
  * the runtime stating its own identity rather than us guessing at how it invoked us.
  *
- * `process.ppid` stays as the fallback for a Claude Code that has not written a row yet.
+ * `process.ppid` stays as the fallback for a Claude Code that has not written a row yet — see
+ * `ownerRecord`, which is where that fallback stopped being silent.
  */
 function claudeSessionsDir() {
 	const configured = process.env.CLAUDE_CONFIG_DIR;
@@ -391,22 +393,98 @@ function sessionPid(sessionId) {
 	return undefined;
 }
 
-function ownerPid(sessionId) {
-	return sessionPid(sessionId) ?? process.ppid;
+/**
+ * The record this session is addressable by — and, when the registry cannot yet answer, a
+ * record that SAYS its pid is a guess. #247.
+ *
+ * `sessionPid(sessionId) ?? process.ppid` is what this used to be, silently. #236 refused
+ * exactly that fallback on the judging path — *"a guess there is an answer manufactured out of
+ * silence"* — and left it on the claiming path, where the guess is worse than it looks: a hook
+ * is a fresh process every firing, so `process.ppid` is whatever spawned it, which is a shell
+ * and not the agent. If `SessionStart` fires before Claude Code has published its registry row,
+ * the mailbox records a pid **that was never this agent's**, and it is the likeliest origin of
+ * the incident #236 was filed for — `helm-4831` recorded 13104 while running at 74011, and a
+ * resume fires `SessionStart`, which should have corrected a merely stale number.
+ *
+ * # Why the fallback is marked rather than removed or retried
+ *
+ * **Not `null`.** `owner.pid` is required by every reader of this format — `heldByAnother` and
+ * `reap` here, `owner.pid` in `pi/extensions/helm-mail/index.ts`, and a non-optional `pid_t` in
+ * `MailboxOwner`, which would drop the whole row and leave the agent unaddressable in helm.
+ * Making a required field optional in three runtimes plus a versioned snapshot is a migration,
+ * and it buys nothing the marker does not.
+ *
+ * **Not a retry loop.** `SessionStart` is on the operator's critical path, and a budget in
+ * milliseconds is a guess about how long another program takes to write a file — wrong on a
+ * loaded machine in exactly the direction that matters. `deliver` repairs the record instead,
+ * off the critical path and with no timing assumption at all: see `repairProvisionalPid`.
+ *
+ * # Who reads `pidIsProvisional`, and who deliberately does not
+ *
+ * `repairProvisionalPid` reads it. Nothing else does, and that is a decision:
+ *
+ * - **helm does not need it.** Since #247 the Swift join resolves a `claude` owner through
+ *   `~/.claude/sessions` and never through this pid (`AddressBook`), so a provisional value is
+ *   already unreachable there. A field decoded and unused would be a second spelling of a rule
+ *   already enforced.
+ * - **`ownerGone` must not act on it**, and the reason is #236 itself. "Provisional pid, no
+ *   live registry row → gone" would retire a live agent inside the very window this field
+ *   exists to describe: another session's `SessionStart` reaping between this claim and the
+ *   row appearing. Silence is not evidence there either.
+ * - **`heldByAnother` stays conservative.** A provisional pid that is alive keeps the handle
+ *   held, so a colliding session widens rather than taking a live agent's address.
+ *
+ * The residual, stated rather than hidden: a session that claims provisionally and is never
+ * prompted keeps a shell's pid, and if that shell outlives it, `reap` will never judge it gone.
+ * That is strictly better than the same mailbox ALSO being misattributed, which is what it was.
+ */
+function ownerRecord(handle, sessionId, cwd) {
+	const registered = sessionPid(sessionId);
+	return {
+		handle,
+		runtime: "claude",
+		pid: registered ?? process.ppid,
+		sessionId,
+		cwd,
+		claimedAt: Date.now(),
+		// Absent means "this pid is the registry's answer". Only ever written true, never false,
+		// so a repaired record is indistinguishable from one that was right from birth.
+		...(registered === undefined ? { pidIsProvisional: true } : {}),
+	};
+}
+
+/**
+ * Finish a claim that could not finish — the only reader of `pidIsProvisional`.
+ *
+ * Called from `deliver`, which is proof of the thing the claim was missing: the session is
+ * running and the operator is prompting it, so Claude Code has certainly published its row by
+ * now. One write, only while the record says its pid is a guess, and never again after.
+ *
+ * **This is not the heartbeat #245 is deciding about.** A heartbeat rewrites a correct record
+ * on a schedule to keep it fresh; this repairs a record that has said, in the file itself, that
+ * it is not correct yet — and stops. A claim that was right at `SessionStart` is never touched.
+ *
+ * `retiredAt` rides through on the spread: repairing a pid is not un-retiring a mailbox, and
+ * only a real claim (which builds the record from scratch) clears that.
+ */
+function repairProvisionalPid(dir, sessionId) {
+	const file = path.join(dir, OWNER_FILE);
+	const owner = readJson(file);
+	if (!owner?.pidIsProvisional || owner.sessionId !== sessionId) return;
+	const registered = sessionPid(sessionId);
+	if (registered === undefined) return;
+	const { pidIsProvisional, ...rest } = owner;
+	writeAtomic(file, { ...rest, pid: registered });
 }
 
 function claim(root, sessionId, cwd) {
 	const handle = mineIn(root, sessionId, cwd);
 	const dir = path.join(root, handle);
 	fs.mkdirSync(path.join(dir, READ_DIR), { recursive: true });
-	writeAtomic(path.join(dir, OWNER_FILE), {
-		handle,
-		runtime: "claude",
-		pid: ownerPid(sessionId),
-		sessionId,
-		cwd,
-		claimedAt: Date.now(),
-	});
+	// Built from scratch every claim, which is what makes a resume self-correcting: a session
+	// that comes back under a new pid gets the registry's current answer, and any provisional
+	// mark from last time goes with the old object rather than being merged forward.
+	writeAtomic(path.join(dir, OWNER_FILE), ownerRecord(handle, sessionId, cwd));
 	reap(root, handle);
 	return { handle, dir };
 }
@@ -444,6 +522,10 @@ try {
 	if (verb === "deliver") {
 		const handle = mineIn(root, sessionId, cwd);
 		const dir = path.join(root, handle);
+		// Before the early exit below, because a session with no mail waiting is still a session
+		// whose recorded pid may be a guess — and this firing is the proof the registry can now
+		// answer. #247.
+		repairProvisionalPid(dir, sessionId);
 		const waiting = queued(dir);
 		if (waiting.length === 0) process.exit(0);
 
