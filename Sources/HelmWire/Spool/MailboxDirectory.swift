@@ -11,6 +11,16 @@ package struct MailboxOwner: Decodable, Equatable {
     package let sessionId: String?
     package let cwd: String?
 
+    /// Epoch milliseconds, set by the agent's own side when this mailbox's owner was judged gone
+    /// (#236). Present means **retired**: the directory and its `read/` archive are still on disk,
+    /// but nobody is listening at that address.
+    ///
+    /// helm reads it for one reason — `owners(in:)` drops these rows, and its header says why.
+    /// A `Double` rather than a `Date` because the writers are JavaScript and write `Date.now()`;
+    /// decoding it as a `Date` would need a strategy this decoder does not set, and the value is
+    /// never rendered, only tested for presence.
+    package let retiredAt: Double?
+
     /// **A `package`-visible fixture constructor, not a second route off disk — and since #233
     /// not a second route past the validation either.** It exists for test code across the
     /// module boundary (`Tests/HelmTests/Board/BenchSnapshotTests.swift` builds owner records
@@ -22,15 +32,21 @@ package struct MailboxOwner: Decodable, Equatable {
     /// would copy that verbatim. That was left carried by a comment on `Handle`, which is
     /// accurate right up until someone stops reading it. A caller that genuinely wants a
     /// specific handle now writes `Handle(validating: "…")!` and says so out loud.
-    package init(handle: Handle, runtime: String?, pid: pid_t, sessionId: String?, cwd: String?) {
+    package init(
+        handle: Handle, runtime: String?, pid: pid_t, sessionId: String?, cwd: String?,
+        retiredAt: Double? = nil
+    ) {
         self.handle = handle.value
         self.runtime = runtime
         self.pid = pid
         self.sessionId = sessionId
         self.cwd = cwd
+        self.retiredAt = retiredAt
     }
 
-    private enum CodingKeys: String, CodingKey { case handle, runtime, pid, sessionId, cwd }
+    private enum CodingKeys: String, CodingKey {
+        case handle, runtime, pid, sessionId, cwd, retiredAt
+    }
 
     /// **Validated on the way in, not just decoded.** `owner.json` has exactly two writers —
     /// `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts` — and neither is Swift, so
@@ -62,6 +78,7 @@ package struct MailboxOwner: Decodable, Equatable {
         pid = try container.decode(pid_t.self, forKey: .pid)
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        retiredAt = try container.decodeIfPresent(Double.self, forKey: .retiredAt)
     }
 }
 
@@ -114,9 +131,31 @@ package enum MailboxDirectory {
         return home.appendingPathComponent(".helm/mail")
     }
 
-    /// Every readable owner under `root`. A missing directory, an unreadable file or a
+    /// Every **addressable** owner under `root`. A missing directory, an unreadable file or a
     /// malformed one yields absence rather than an error — the same rule `AgentRegistry`
     /// follows, and for the same reason: one bad file costs its own row and nothing else.
+    ///
+    /// # Retired owners are dropped here, and here is the only place that can be right
+    ///
+    /// Before #236 a gone owner's `owner.json` was **deleted**, so helm was correct by
+    /// construction: the row stopped existing and nothing could join to it. #236 stopped
+    /// deleting — `read/` was going with it, and the delete raced a sender mid-write — so a
+    /// retired mailbox now keeps its file, with its last-known pid, **forever**.
+    ///
+    /// That is a live hazard for every consumer here, because they all join on pid: macOS
+    /// reuses pids, and this workspace churns them (a process per spawn, a process per hook
+    /// firing). The first stale retired pid the OS hands to an unrelated live terminal would
+    /// make `owner(in:foregroundPid:…)` return the wrong mailbox — `SpoolModel` answering a
+    /// spawn with a dead agent's `handle`, and `BenchSnapshot` attributing a dead session's
+    /// identity to a live pane every two seconds, in the file outside agents are told to trust.
+    /// Silent in both cases: no error, just a wrong answer.
+    ///
+    /// **Filtered at the source rather than at the joins, because there are two joins and only
+    /// one of them goes through `owner(in:…)`** — `BenchSnapshot.TerminalRecord` does its own
+    /// `owners.first(where: { $0.pid == pid })`. Two call sites each remembering to exclude
+    /// retired rows is the same shape of defect as the one #236 fixed: one rule, two spellings,
+    /// and nothing to notice when they disagree. A consumer that genuinely wants retired rows
+    /// should decode them deliberately rather than filter them back out.
     package static func owners(in root: URL) -> [MailboxOwner] {
         guard
             let entries = try? FileManager.default.contentsOfDirectory(
@@ -126,7 +165,10 @@ package enum MailboxDirectory {
         return entries.compactMap { entry in
             let owner = entry.appendingPathComponent("owner.json")
             guard let data = try? Data(contentsOf: owner) else { return nil }
-            return try? decoder.decode(MailboxOwner.self, from: data)
+            guard let decoded = try? decoder.decode(MailboxOwner.self, from: data) else {
+                return nil
+            }
+            return decoded.retiredAt == nil ? decoded : nil
         }
     }
 

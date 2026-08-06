@@ -211,7 +211,7 @@ case "$OUT" in *rename*) teaches=$((teaches + 1)) ;; esac
 # `*.json` glob sat in the notice unnoticed. zsh and fish both treat an unmatched glob as a FATAL
 # error (measured: exit 1 and exit 124), so a glob-armed watch dies the moment it matches nothing.
 # `owner.json` normally matches and hides this — until the mailbox is gone, which is what the
-# deletion this PR removes used to do. Same spelling as the one /helm-mail-cc hands out (#237).
+# deletion this PR removes used to do. /helm-mail-cc is moving to this spelling under #237.
 case "$OUT" in
 *"watch: find \"$root/$handle\" -maxdepth 1 -name '*.json' ! -name 'owner.json' -type f"*)
 	ok "the notice hands out a watch command that survives an empty mailbox" ;;
