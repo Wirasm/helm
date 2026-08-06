@@ -43,14 +43,42 @@ import Foundation
 /// where the dashes fall.**
 ///
 /// **Why that alphabet, and why the rule is deliberately looser than it could be.** Both
-/// `owner.json` writers run every component of a handle through a `slug` that lowercases,
-/// collapses `[^a-z0-9]+` to `-`, strips edge dashes and falls back to `"agent"`
-/// (`hooks/helm-mail.mjs:66`, `pi/extensions/helm-mail/index.ts:184`); `tail` strips edge dashes
-/// again (`:75`, `:202`); and `deriveHandle` joins the components with a single `-`. So the shape
-/// they can actually emit is *narrower* than this rule — `[a-z0-9]+(-[a-z0-9]+)*`, no leading or
-/// trailing dash and no `--`. Measured by extracting the real `slug`/`tail`/`deriveHandle` and
-/// fuzzing 200,000 derivations: none fell outside it, and the eight `owner.json` on this machine
-/// all match it too.
+/// `owner.json` writers — `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts` — run
+/// every component of a handle through a `slug` that lowercases, collapses `[^a-z0-9]+` to `-`,
+/// strips edge dashes and falls back to `"agent"`; `tail` strips edge dashes off its slice again;
+/// and `deriveHandle` joins the components with a single `-`. So the shape they can actually emit
+/// is *narrower* than this rule — `[a-z0-9]+(-[a-z0-9]+)*`, no leading or trailing dash and no
+/// `--`.
+///
+/// **Those are function names and not line numbers, deliberately.** The first draft of this
+/// paragraph cited `hooks/helm-mail.mjs:66` and `pi/extensions/helm-mail/index.ts:184`, and
+/// offered *"compare against their `slug` by eye"* as the standing substitute for the conformance
+/// test named below. #236 then merged underneath this branch and moved pi's `slug` thirteen lines
+/// down; the citation landed inside `mailRoot()`, which has nothing to do with the alphabet. The
+/// substitute rotted inside this PR's own lifetime, from a commit about something else entirely.
+/// A function name survives an edit above it. A line number into another runtime is a claim
+/// nothing in either gate re-checks.
+///
+/// **Measured across both writers, by executing them.** `slug`, `tail`, `heldByAnother` and
+/// `deriveHandle` were lifted verbatim out of each file by brace-matching the source text and
+/// run — never transcribed, which is the mistake recorded three paragraphs down. 225,702
+/// derivations of the hooks pair and 238,202 of pi's, over junk cwd basenames and session ids
+/// (uppercase, punctuation, combining marks, emoji, empty), including the pinned-handle route,
+/// and driven through the whole 4 → 6 → 8 → full widening to the exhaustion fallback 12,500
+/// times each by claiming every answer with a live foreign pid. **Nothing either writer emitted
+/// fell outside `[a-z0-9-]`, and nothing fell outside the stricter `[a-z0-9]+(-[a-z0-9]+)*`
+/// either.** The harness is not vacuous: widening `slug`'s own class to `[^a-zA-Z0-9_]+` makes
+/// both writers produce handles it reports. The eight `owner.json` on this machine match as well.
+///
+/// **Both, because the two writers are not the same function — and that is why one measurement
+/// could not have spoken for the pair.** They diverge in exactly the exhaustion fallback: with
+/// every candidate held, `deriveHandle(_, "/x/helm", "12345-678")` is `helm-12345-678` from
+/// `hooks` and `helm-12345-678-44347` from pi, which appends `process.pid`. A pid is digits, so
+/// pi's extra component sits inside this alphabet too and the conclusion is unchanged — but it is
+/// a shape `hooks` cannot emit, so a corpus derived from `hooks` alone was missing it
+/// (`HandleTests.testEveryHandleTheWritersCanEmitIsStillAccepted` now carries it). `hooks`'
+/// `deriveHandle` calls itself *"identical to pi's"*; it is not, and that comment is wrong
+/// independently of this type.
 ///
 /// **The rule stops at the alphabet anyway, and the margin is the point.** Constraining dash
 /// placement would buy almost nothing — `Alice`, `my agent` and `owner_1234` are what a caller
@@ -59,10 +87,12 @@ import Foundation
 /// interacting (`slug`, `tail`, and how `deriveHandle` composes them). **Nothing checks that
 /// dependency.** This alphabet and the JavaScript `slug` are two spellings of one rule across a
 /// runtime boundary, and unlike the spool's wire format — watched by `SpoolWireConformanceTests`
-/// running the real scripts as subprocesses — no test runs the real writers and asserts their
-/// output satisfies this one. It could not live in the Swift gate either: that gate is
-/// Swift-and-xcodegen by policy and this needs node, so it belongs in `hooks/test.sh` and pi's.
-/// Until it exists, the looser rule is the one that survives the far side drifting.
+/// running the real scripts as subprocesses — no *test* runs the real writers and asserts their
+/// output satisfies this one. The fuzz above is a measurement taken once, not a gate: it says
+/// what the writers emitted on the day it ran and nothing about what they will emit — exactly the
+/// standing the line numbers it replaced had. It could not live in the Swift gate either: that
+/// gate is Swift-and-xcodegen by policy and this needs node, so it belongs in `hooks/test.sh` and
+/// pi's. Until it exists, the looser rule is the one that survives the far side drifting.
 ///
 /// That margin is not hypothetical caution. #239's first draft asserted the opposite — that
 /// `deriveHandle("/x/helm", "12345-678")` was `helm--678`, so dash placement *could not* be
@@ -107,8 +137,8 @@ import Foundation
 /// Encodes as a bare string through a single-value container, exactly like `WorkspacePath`, and
 /// that shape must not change. **No script parses `handle` itself**, so the obligation is not
 /// the `json["handle"] as? String` this comment used to claim: `helm-spool.swift` prints the
-/// whole result blob on stdout (`tools/helm-spool.swift:186`) and the agent that invoked it
-/// reads the field. `SpoolWireConformanceTests
+/// whole result blob on stdout — the `print` on its terminal-status branch — and the agent that
+/// invoked it reads the field. `SpoolWireConformanceTests
 /// .testHelmSpoolPrintsHandleAndTerminalIdAsBareStringsOnceReady` is what holds it, against the
 /// real script as a subprocess.
 package struct Handle: Codable, Equatable, Hashable, Sendable {
@@ -135,10 +165,10 @@ package struct Handle: Codable, Equatable, Hashable, Sendable {
     ///
     /// **`Alice` vs `alice` is the one with a measured cost, and it is why this refuses rather
     /// than lowercases.** The macOS default filesystem is case-insensitive, so those are two
-    /// agents to a sender and one directory to the disk, and
-    /// `pi/extensions/helm-mail/index.ts:178` documents that as having already lost someone their
-    /// mail. Folding the case here would hand `Alice`'s mail to `alice` without telling anyone;
-    /// see the type's header for the full argument, and for what the alphabet is derived from.
+    /// agents to a sender and one directory to the disk, and the doc comment on `slug` in
+    /// `pi/extensions/helm-mail/index.ts` records that as having already lost someone their mail.
+    /// Folding the case here would hand `Alice`'s mail to `alice` without telling anyone; see the
+    /// type's header for the full argument, and for what the alphabet is derived from.
     package init?(validating candidate: String) {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.allSatisfy(Self.addressableCharacters.contains) else {
@@ -148,9 +178,15 @@ package struct Handle: Codable, Equatable, Hashable, Sendable {
     }
 
     /// The alphabet both `owner.json` writers can emit, spelled out rather than written as a
-    /// predicate so it can be compared against their `slug` by eye: `[a-z0-9]` survives
-    /// `replace(/[^a-z0-9]+/g, "-")`, and `-` is what that replacement substitutes and what
-    /// `deriveHandle` joins a handle's components with.
+    /// predicate so the set itself is the thing on the page: `[a-z0-9]` is what survives
+    /// `slug`'s `replace(/[^a-z0-9]+/g, "-")`, and `-` is what that replacement substitutes and
+    /// what `deriveHandle` joins a handle's components with.
+    ///
+    /// **Reading it against that regex is not a substitute for a test, and this comment used to
+    /// offer it as one.** "Compare against their `slug` by eye" only works if a reader can find
+    /// `slug`, and the line numbers that pointed at it went stale from an unrelated merge before
+    /// this rule had shipped. What holds the two sides together is still nothing; the type's
+    /// header says where that test would have to live and why it is not here.
     private static let addressableCharacters = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
 
     /// `SpoolResult.handle` and `BenchSnapshot.OwnerRecord.handle` are only ever written by helm

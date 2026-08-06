@@ -37,8 +37,8 @@ final class HandleTests: XCTestCase {
     /// closed it would see exactly which inputs change meaning. They are the inputs that changed.
     ///
     /// Every one names a directory that does not exist and never will, because both writers of
-    /// the address scheme slug harder than the old rule did (`hooks/helm-mail.mjs:66`,
-    /// `pi/extensions/helm-mail/index.ts:178` — lowercase, collapse `[^a-z0-9]+` to `-`). Since
+    /// the address scheme slug harder than the old rule did — `slug` in `hooks/helm-mail.mjs` and
+    /// in `pi/extensions/helm-mail/index.ts` lowercases and collapses `[^a-z0-9]+` to `-`. Since
     /// #239 `validating:` enforces that alphabet, and every route shares the rule, so this is a
     /// behaviour change on all three of them. `Handle`'s header carries the decision and the two
     /// options it turned down.
@@ -53,8 +53,9 @@ final class HandleTests: XCTestCase {
 
     /// **The case collision, which is the one with a reported cost.** The macOS default
     /// filesystem folds case, so `Alice` and `alice` are two agents to a sender and one directory
-    /// to the disk; `pi/extensions/helm-mail/index.ts:178` documents that as having already lost
-    /// someone their mail. The refusal is what closes it — and the second half of this test is
+    /// to the disk; the doc comment on `slug` in `pi/extensions/helm-mail/index.ts` records that
+    /// as having already lost someone their mail. The refusal is what closes it — and the second
+    /// half of this test is
     /// the part that matters, because a rule that lowercased instead would also make the first
     /// half pass while quietly handing `Alice`'s mail to a different real agent.
     func testValidatingRefusesUppercaseRatherThanFoldingItOntoAnotherAgent() throws {
@@ -70,13 +71,20 @@ final class HandleTests: XCTestCase {
     /// **The control that stops the rule overshooting.** Every candidate must survive: refusing
     /// one would make helm unable to read a mailbox it created.
     ///
-    /// **These are real outputs, obtained by running the real code.** `slug`, `tail` and
-    /// `deriveHandle` were extracted from `hooks/helm-mail.mjs` by brace-matching the file text
-    /// and executed — not transcribed from reading them. The first draft of this test did
-    /// transcribe them, got `tail` wrong (it strips edge dashes; the draft assumed it did not),
-    /// and pinned `helm--678` here as a reachable handle. It is not reachable — the real answer
-    /// is `helm-678` — and `Handle`'s header now says so. Re-derive rather than re-read if this
-    /// list ever needs another entry.
+    /// **These are real outputs, obtained by running the real code.** `slug`, `tail`,
+    /// `heldByAnother` and `deriveHandle` were lifted verbatim out of the writers by
+    /// brace-matching the file text and executed — not transcribed from reading them. The first
+    /// draft of this test did transcribe them, got `tail` wrong (it strips edge dashes; the draft
+    /// assumed it did not), and pinned `helm--678` here as a reachable handle. It is not
+    /// reachable — the real answer is `helm-678` — and `Handle`'s header now says so. Re-derive
+    /// rather than re-read if this list ever needs another entry.
+    ///
+    /// **And from *both* writers, which is why one entry below is new.** That first
+    /// re-measurement ran `hooks/helm-mail.mjs` only, while everything it was cited in support of
+    /// said "the writers". They are not the same function: where every candidate handle is held,
+    /// `hooks` returns `<where>-<full>` and `pi/extensions/helm-mail/index.ts` returns
+    /// `<where>-<full>-<process.pid>`. That shape is reachable, is a handle helm must be able to
+    /// read, and no `hooks` run could ever have produced it.
     func testEveryHandleTheWritersCanEmitIsStillAccepted() throws {
         let corpus = [
             "helm-4831",  // the ordinary shape: <cwd basename>-<tail of session id>
@@ -85,7 +93,8 @@ final class HandleTests: XCTestCase {
             "helm-678",  // deriveHandle("/x/helm", "12345-678") — the case the draft got wrong
             "agent-gent",  // deriveHandle("/x/---", "---") — both components hit the fallback
             "a-b",  // deriveHandle("/x/a", "-b-") — tail strips the dashes off its slice
-            "helm-f9e4639d-1111-2222-3333-444455556666",  // the full-session-id fallback
+            "helm-f9e4639d-1111-2222-3333-444455556666",  // the full-session-id candidate
+            "helm-12345-678-44347",  // pi's exhaustion fallback — it appends process.pid
             "0",  // a basename that is only digits
         ]
         for candidate in corpus {
@@ -97,12 +106,13 @@ final class HandleTests: XCTestCase {
     }
 
     /// **The margin, recorded so it reads as a choice rather than an oversight.** The writers can
-    /// only emit `[a-z0-9]+(-[a-z0-9]+)*` — no edge dash, no `--`, measured over 200,000 fuzzed
-    /// derivations of the real `deriveHandle`, none outside it. This rule is looser than that on
-    /// purpose: it refuses characters and says nothing about where dashes fall, so it depends on
-    /// one property of the far side instead of three. `Handle`'s header has the argument, and
-    /// the reason it matters — nothing runs the real writers against this rule, so the boundary
-    /// is unwatched and the cheaper dependency is the safer one.
+    /// only emit `[a-z0-9]+(-[a-z0-9]+)*` — no edge dash, no `--`, measured over 225,702 fuzzed
+    /// derivations of the real `hooks` `deriveHandle` and 238,202 of pi's, none outside it. This
+    /// rule is looser than that on purpose: it refuses characters and says nothing about where
+    /// dashes fall, so it depends on one property of the far side instead of three. `Handle`'s
+    /// header has the argument, and the reason it matters — that measurement was taken once and
+    /// no *test* runs the real writers against this rule, so the boundary is unwatched and the
+    /// cheaper dependency is the safer one.
     ///
     /// If a later change *does* constrain dash placement, this test is what should be deleted to
     /// say so — deliberately, with the header updated in the same commit.
