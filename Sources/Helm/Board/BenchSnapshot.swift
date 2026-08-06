@@ -70,16 +70,21 @@ struct BenchSnapshot: Codable, Equatable {
             path = workspace.path
             name = workspace.name
             self.state = state
+            guard let bench else {
+                columns = []
+                return
+            }
+
             let live = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
-            columns =
-                bench?.columns.map { column in
-                    ColumnRecord(
-                        column: column,
-                        focusedSlot: state == .mounted ? bench?.focusedSlot : nil,
-                        live: live,
-                        owners: owners,
-                        foregroundPid: foregroundPid)
-                } ?? []
+            let focusedSlot = state == .mounted ? bench.focusedSlot : nil
+            columns = bench.columns.map { column in
+                ColumnRecord(
+                    column: column,
+                    focusedSlot: focusedSlot,
+                    live: live,
+                    owners: owners,
+                    foregroundPid: foregroundPid)
+            }
         }
     }
 

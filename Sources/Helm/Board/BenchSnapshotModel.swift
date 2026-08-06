@@ -121,9 +121,8 @@ final class BenchSnapshotModel: ObservableObject {
             terminals: terminals,
             owners: MailboxDirectory.owners(in: mailboxRoot),
             foregroundPid: foregroundPid)
-        guard writer(snapshot) else {
+        if !writer(snapshot) {
             NSLog("helm: could not publish bench snapshot at %@", directory.snapshot.path)
-            return
         }
     }
 }
