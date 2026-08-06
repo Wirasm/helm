@@ -69,7 +69,7 @@ struct WorkbenchView: View {
 /// `KeyGlyph.binding` so the two can no longer disagree.
 ///
 /// **It posts rather than opening the panel itself.** `WorkspaceBar` owns the `NSOpenPanel`
-/// and already listens for `.helmOpenWorkspace`, so the button, the bar's `+` and ⇧⌘O are
+/// and already listens for `.openWorkspace`, so the button, the bar's `+` and ⇧⌘O are
 /// one path with one behaviour. A second panel here would be a second answer to "what does
 /// opening a workspace do".
 ///
@@ -80,7 +80,7 @@ struct WorkbenchView: View {
 private struct EmptyBench: View {
     /// nil only if the row is ever removed from the map, in which case the button stands
     /// alone rather than claiming a key that does not fire.
-    private let keys = KeyGlyph.binding(for: .helmOpenWorkspace)
+    private let keys = KeyGlyph.binding(for: .openWorkspace)
 
     var body: some View {
         ViewThatFits(in: .vertical) {
@@ -127,7 +127,7 @@ private struct EmptyBench: View {
 
     private var openButton: some View {
         Button {
-            NotificationCenter.default.post(name: .helmOpenWorkspace, object: nil)
+            HelmCommand.openWorkspace.post()
         } label: {
             HStack(spacing: 8) {
                 Text("Choose Folder…")

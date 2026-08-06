@@ -180,7 +180,7 @@ final class WorkbenchModelTests: XCTestCase {
         let (model, _) = mounted()
 
         // ⌘L carries no payload, which is what tells the model to open the address field.
-        NotificationCenter.default.post(name: .helmOpenCanvasURL, object: nil)
+        HelmCommand.openCanvasURL(nil).post()
         try await Task.sleep(for: .milliseconds(100))
         let pane = try XCTUnwrap(model.bench?.canvasPanes.first)
         XCTAssertEqual(pane.content, .canvas(.empty), "⌘L has nothing to point at yet")
@@ -404,7 +404,7 @@ final class WorkbenchModelTests: XCTestCase {
         let (model, _) = mounted()
         let file = URL(fileURLWithPath: "/tmp/offered.md")
 
-        NotificationCenter.default.post(name: .helmOpenCanvasFile, object: file)
+        HelmCommand.openCanvasFile(file).post()
         try await Task.sleep(for: .milliseconds(100))
 
         XCTAssertEqual(
@@ -416,7 +416,7 @@ final class WorkbenchModelTests: XCTestCase {
     func testTheFaceCommandReachesTheModelWhileNoViewHoldsIt() async throws {
         let (model, _) = mounted()
 
-        NotificationCenter.default.post(name: .helmToggleChat, object: nil)
+        HelmCommand.toggleChat.post()
         try await Task.sleep(for: .milliseconds(100))
 
         XCTAssertEqual(
@@ -578,12 +578,10 @@ final class WorkbenchModelTests: XCTestCase {
     func testPostWithNoTargetSendsNothing() {
         let (model, _) = mounted()
         var received: [ComposeRequest] = []
-        let token = NotificationCenter.default.addObserver(
-            forName: .helmComposeText, object: nil, queue: .main
-        ) { note in
-            if let request = note.object as? ComposeRequest { received.append(request) }
+        let token = HelmCommand.publisher.sink {
+            if case let .composeText(request) = $0 { received.append(request) }
         }
-        defer { NotificationCenter.default.removeObserver(token) }
+        defer { token.cancel() }
 
         model.post("## `#phase-2`\n\nthis ordering is wrong")
 
@@ -595,12 +593,10 @@ final class WorkbenchModelTests: XCTestCase {
         model.toggleFace()
         let target = try XCTUnwrap(model.composeTarget)
         var received: [ComposeRequest] = []
-        let token = NotificationCenter.default.addObserver(
-            forName: .helmComposeText, object: nil, queue: .main
-        ) { note in
-            if let request = note.object as? ComposeRequest { received.append(request) }
+        let token = HelmCommand.publisher.sink {
+            if case let .composeText(request) = $0 { received.append(request) }
         }
-        defer { NotificationCenter.default.removeObserver(token) }
+        defer { token.cancel() }
 
         model.post("this ordering is wrong")
 

@@ -62,7 +62,7 @@ final class KeyHintTests: XCTestCase {
     func testShortDigitListsAreNotCollapsedToARange() {
         let rows = (1...2).map { index in
             Shortcut(
-                .character("\(index)"), .command, posts: .helmSelectTerminal, payload: index - 1)
+                .character("\(index)"), .command, does: .selectTerminal(index: index - 1))
         }
         XCTAssertEqual(
             KeyHints.visible(terminalFocused: true, in: rows).first?.keys, "⌘1 ⌘2")
@@ -73,7 +73,7 @@ final class KeyHintTests: XCTestCase {
     func testNonConsecutiveDigitsAreNotCollapsed() {
         let rows = [1, 2, 4].map { index in
             Shortcut(
-                .character("\(index)"), .command, posts: .helmSelectTerminal, payload: index - 1)
+                .character("\(index)"), .command, does: .selectTerminal(index: index - 1))
         }
         XCTAssertEqual(
             KeyHints.visible(terminalFocused: true, in: rows).first?.keys, "⌘1 ⌘2 ⌘4")
@@ -88,18 +88,18 @@ final class KeyHintTests: XCTestCase {
     /// this file may type a glyph now; it asks here, and gets the bar's answer by
     /// construction.
     func testABindingRendersTheSameGlyphsTheBarShows() {
-        XCTAssertEqual(KeyGlyph.binding(for: .helmOpenWorkspace), "⇧⌘O")
+        XCTAssertEqual(KeyGlyph.binding(for: .openWorkspace), "⇧⌘O")
         XCTAssertEqual(
-            KeyGlyph.binding(for: .helmOpenWorkspace), keys("folder", terminalFocused: true),
+            KeyGlyph.binding(for: .openWorkspace), keys("folder", terminalFocused: true),
             "the empty bench and the status bar must not be able to disagree")
-        XCTAssertEqual(KeyGlyph.binding(for: .helmNewTerminal), "⌘N")
-        XCTAssertEqual(KeyGlyph.binding(for: .helmToggleRail), "⇧⌘R")
+        XCTAssertEqual(KeyGlyph.binding(for: .newTerminal), "⌘N")
+        XCTAssertEqual(KeyGlyph.binding(for: .toggleRail), "⇧⌘R")
     }
 
     /// A command nothing binds gets nil rather than a plausible-looking string, so a caller
     /// can decline to advertise a key instead of naming one that does not fire.
     func testAnUnboundCommandHasNoGlyphs() {
-        XCTAssertNil(KeyGlyph.binding(for: Notification.Name("helm.nothing.binds.this")))
+        XCTAssertNil(KeyGlyph.binding(for: .composeText))
     }
 
     // MARK: - Drift
@@ -108,7 +108,7 @@ final class KeyHintTests: XCTestCase {
     /// map binds is either named on the bar or explicitly left off it; adding a shortcut
     /// without deciding which fails here. Nothing else in the toolchain would say a word.
     func testEveryBoundCommandIsEitherNamedOrDeliberatelyOmitted() {
-        let bound = Set(Shortcut.all.map(\.notification))
+        let bound = Set(Shortcut.all.map(\.command.name))
         let accounted = Set(KeyHintCatalog.named.map(\.command))
             .union(KeyHintCatalog.omitted)
         XCTAssertEqual(
@@ -118,6 +118,37 @@ final class KeyHintTests: XCTestCase {
         XCTAssertEqual(
             accounted.subtracting(bound), [],
             "a hint (or an omission) for a command nothing binds any more"
+        )
+    }
+
+    /// **Totality, which the test above cannot reach.** That one asks whether every command the
+    /// map *happens to bind today* is accounted for. This asks the stronger question
+    /// `HelmCommand.Name.allCases` makes available: is every command helm has — bound or not —
+    /// either advertised, deliberately left off the bar, or deliberately not a keystroke at all.
+    ///
+    /// Written because `Name`'s doc comment claimed this test existed before it did. The
+    /// conformance was added, the assertion was not, and a comment promising a machine check
+    /// that nothing performs is the exact defect `AGENTS.md:354` names — found by review, not
+    /// by the compiler, because nothing in the toolchain would say a word.
+    func testEveryCommandIsAccountedForOnTheBarOrDeliberatelyIsNot() {
+        // Not keystrokes: an OSC 8 ⌘-click, terminal OUTPUT, and a canvas `Post` respectively.
+        // A bar hint for one of these would advertise a key that does not exist.
+        let neverBound: Set<HelmCommand.Name> = [.openCanvasFile, .pushCanvasFile, .composeText]
+
+        // The exemption list is itself a hand-maintained set, so it is held to the map rather
+        // than trusted: binding one of these to a key must fail here instead of silently
+        // exempting it from the bar for ever.
+        XCTAssertEqual(
+            neverBound.intersection(Set(Shortcut.all.map(\.command.name))), [],
+            "a command listed as never-bound now has a key — it belongs on the bar or in `omitted`"
+        )
+
+        let accounted = Set(KeyHintCatalog.named.map(\.command))
+            .union(KeyHintCatalog.omitted)
+            .union(neverBound)
+        XCTAssertEqual(
+            Set(HelmCommand.Name.allCases).subtracting(accounted), [],
+            "a command with no hint, no omission, and no reason for being unbindable"
         )
     }
 
@@ -132,7 +163,7 @@ final class KeyHintTests: XCTestCase {
             guard case .keyCode = shortcut.trigger else { continue }
             XCTAssertNotNil(
                 KeyGlyph.trigger(shortcut.trigger),
-                "\(shortcut.notification.rawValue) binds a keyCode KeyGlyph cannot draw"
+                "\(shortcut.command.name.rawValue) binds a keyCode KeyGlyph cannot draw"
             )
         }
     }

@@ -28,21 +28,21 @@ struct KeyHint: Equatable, Identifiable {
 enum KeyHintCatalog {
     /// Ordered: the pane commands first, because they are the ones an operator needs on day
     /// one and the ones nothing else in the window hints at.
-    static let named: [(command: Notification.Name, label: String)] = [
-        (.helmNewTerminal, "new"),
-        (.helmSplitRight, "split"),
-        (.helmSplitDown, "split down"),
-        (.helmClosePane, "close"),
-        (.helmSelectTerminal, "pane"),
-        (.helmMoveFocus, "focus"),
-        (.helmToggleChat, "chat"),
-        (.helmOpenArtifact, "artifact"),
-        (.helmOpenCanvasURL, "url"),
-        (.helmJumpToPrompt, "turn"),
-        (.helmSelectWorkspace, "workspace"),
-        (.helmCycleWorkspace, "cycle"),
-        (.helmOpenWorkspace, "folder"),
-        (.helmToggleRail, "archon"),
+    static let named: [(command: HelmCommand.Name, label: String)] = [
+        (.newTerminal, "new"),
+        (.splitRight, "split"),
+        (.splitDown, "split down"),
+        (.closePane, "close"),
+        (.selectTerminal, "pane"),
+        (.moveFocus, "focus"),
+        (.toggleChat, "chat"),
+        (.openArtifact, "artifact"),
+        (.openCanvasURL, "url"),
+        (.jumpToPrompt, "turn"),
+        (.selectWorkspace, "workspace"),
+        (.cycleWorkspace, "cycle"),
+        (.openWorkspace, "folder"),
+        (.toggleRail, "archon"),
     ]
 
     /// Left off the bar on purpose.
@@ -51,7 +51,7 @@ enum KeyHintCatalog {
     /// reaches `charactersIgnoringModifiers`, and rendering that honestly would spend a
     /// tenth of the bar on the one command every macOS app binds identically. It keeps its
     /// menu items, which is where a universal shortcut belongs.
-    static let omitted: Set<Notification.Name> = [.helmAdjustFontSize]
+    static let omitted: Set<HelmCommand.Name> = [.adjustFontSize]
 }
 
 /// The hints to show, given where focus is.
@@ -70,7 +70,7 @@ enum KeyHints {
     ) -> [KeyHint] {
         KeyHintCatalog.named.compactMap { command, label in
             let live = shortcuts.filter {
-                $0.notification == command && $0.canFire(terminalFocused: terminalFocused)
+                $0.command.name == command && $0.canFire(terminalFocused: terminalFocused)
             }
             // The FIRST binding that can fire, not all of them. `Shortcut.all` is in match
             // order, so the first is the one the operator's keystroke would actually hit.
@@ -128,9 +128,9 @@ enum KeyGlyph {
     /// The first row that binds the command, which for a command bound once is the only one.
     /// nil when nothing binds it or its trigger has no glyph.
     static func binding(
-        for command: Notification.Name, in shortcuts: [Shortcut] = Shortcut.all
+        for command: HelmCommand.Name, in shortcuts: [Shortcut] = Shortcut.all
     ) -> String? {
-        guard let row = shortcuts.first(where: { $0.notification == command }),
+        guard let row = shortcuts.first(where: { $0.command.name == command }),
             let key = trigger(row.trigger)
         else { return nil }
         return modifiers(row.modifiers) + key

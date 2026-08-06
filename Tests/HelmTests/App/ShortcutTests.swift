@@ -20,8 +20,7 @@ final class ShortcutTests: XCTestCase {
 
     func testPromptJumpFiresOnlyWhileTheTerminalHasFocus() {
         let focused = match(nil, keyCode: 126, .command, terminalFocused: true)
-        XCTAssertEqual(focused?.notification, .helmJumpToPrompt)
-        XCTAssertEqual(focused?.payload, -1)
+        XCTAssertEqual(focused?.command, .jumpToPrompt(offset: -1))
 
         XCTAssertNil(
             match(nil, keyCode: 126, .command, terminalFocused: false),
@@ -30,7 +29,7 @@ final class ShortcutTests: XCTestCase {
 
     func testControlDigitsAreNeverStolenFromAFocusedShell() {
         XCTAssertEqual(
-            match("3", .control, terminalFocused: false)?.notification, .helmSelectWorkspace,
+            match("3", .control, terminalFocused: false)?.command, .selectWorkspace(index: 2),
             "⌃3 switches workspace when the terminal does not have focus")
         XCTAssertNil(
             match("3", .control, terminalFocused: true),
@@ -38,35 +37,36 @@ final class ShortcutTests: XCTestCase {
     }
 
     func testWorkspaceCycleAlsoYieldsToAFocusedShell() {
-        XCTAssertEqual(match(nil, keyCode: 123, .control)?.payload, -1)
+        XCTAssertEqual(match(nil, keyCode: 123, .control)?.command, .cycleWorkspace(delta: -1))
         XCTAssertNil(match(nil, keyCode: 123, .control, terminalFocused: true))
     }
 
     func testCommandOptionDigitsWorkEvenWithTheTerminalFocused() {
         let shortcut = match("5", [.command, .option], terminalFocused: true)
-        XCTAssertEqual(shortcut?.notification, .helmSelectWorkspace)
+
         XCTAssertEqual(
-            shortcut?.payload, 4,
+            shortcut?.command, .selectWorkspace(index: 4),
             "the ⌘⌥ fallback exists for operators who have not released Mission Control's ⌃1–⌃9")
     }
 
     // MARK: - Modifier sets must be exact
 
     func testCommandDigitSelectsATerminalAndIsNotConfusedWithWorkspaceBindings() {
-        XCTAssertEqual(match("2", .command)?.notification, .helmSelectTerminal)
-        XCTAssertEqual(match("2", .command)?.payload, 1, "keys are 1-based, indices 0-based")
+        XCTAssertEqual(
+            match("2", .command)?.command, .selectTerminal(index: 1),
+            "keys are 1-based, indices 0-based")
     }
 
     func testShiftedOpenIsAWorkspaceAndBareOpenIsAnArtifact() {
-        XCTAssertEqual(match("O", [.command, .shift])?.notification, .helmOpenWorkspace)
-        XCTAssertEqual(match("o", .command)?.notification, .helmOpenArtifact)
+        XCTAssertEqual(match("O", [.command, .shift])?.command, .openWorkspace)
+        XCTAssertEqual(match("o", .command)?.command, .openArtifact)
     }
 
     func testLetterMatchingIsCaseInsensitiveSoAShiftedKeyStillResolves() {
         XCTAssertEqual(
-            match("o", [.command, .shift])?.notification, .helmOpenWorkspace,
+            match("o", [.command, .shift])?.command, .openWorkspace,
             "charactersIgnoringModifiers keeps shift applied, but the case must not decide")
-        XCTAssertEqual(match("N", .command)?.notification, .helmNewTerminal)
+        XCTAssertEqual(match("N", .command)?.command, .newTerminal)
     }
 
     /// ⌘T swaps the terminal pane between its two faces. It was reserved rather
@@ -77,9 +77,9 @@ final class ShortcutTests: XCTestCase {
     /// this has to work from there. The local monitor consumes it, so ghostty's
     /// own ⌘T (new tab) never sees it.
     func testCommandTSwapsTheTerminalPanesTwoFaces() {
-        XCTAssertEqual(match("t", .command)?.notification, .helmToggleChat)
+        XCTAssertEqual(match("t", .command)?.command, .toggleChat)
         XCTAssertEqual(
-            match("t", .command, terminalFocused: true)?.notification, .helmToggleChat,
+            match("t", .command, terminalFocused: true)?.command, .toggleChat,
             "the terminal almost always has focus — a toggle it could not reach is no toggle")
     }
 
@@ -87,34 +87,36 @@ final class ShortcutTests: XCTestCase {
 
     func testSplitBindings() {
         XCTAssertEqual(
-            match("d", .command)?.notification, .helmSplitRight,
+            match("d", .command)?.command, .splitRight,
             "⌘D — a new column right of the focused one")
         XCTAssertEqual(
-            match("D", [.command, .shift])?.notification, .helmSplitDown,
+            match("D", [.command, .shift])?.command, .splitDown,
             "⌘⇧D — a new row under the focused slot; charactersIgnoringModifiers keeps shift "
                 + "applied, so this arrives uppercase")
     }
 
     func testShiftCommandRTogglesTheArchonRail() {
-        XCTAssertEqual(match("r", [.command, .shift])?.notification, .helmToggleRail)
+        XCTAssertEqual(match("r", [.command, .shift])?.command, .toggleRail)
     }
 
     /// ⌘W is unavailable — SwiftUI's `WindowGroup` binds it to close-window — so the pane
     /// close is ⌘⌥W.
     func testClosePaneAvoidsTheWindowClose() {
-        XCTAssertEqual(match("w", [.command, .option])?.notification, .helmClosePane)
+        XCTAssertEqual(match("w", [.command, .option])?.command, .closePane)
         XCTAssertNil(match("w", .command), "⌘W belongs to the window, and helm must not fight it")
     }
 
     /// ⌘⌥1–9 is already the workspace fallback, which is why focus movement is on arrows.
-    /// The payload is a `Workbench.Direction` raw value rather than an index.
+    ///
+    /// The direction is carried as a `Workbench.Direction`. It used to be carried as that
+    /// direction's **raw value**, which is why this test had a second assertion checking what
+    /// the row would flatten itself into; there is nothing left to flatten (#218).
     func testFocusMovementCarriesADirection() {
         for (keyCode, direction) in [
             (UInt16(123), Workbench.Direction.left), (124, .right), (126, .up), (125, .down),
         ] {
             let shortcut = match(nil, keyCode: keyCode, [.command, .option])
-            XCTAssertEqual(shortcut?.notification, .helmMoveFocus, "keyCode \(keyCode)")
-            XCTAssertEqual(shortcut?.object as? String, direction.rawValue)
+            XCTAssertEqual(shortcut?.command, .moveFocus(direction), "keyCode \(keyCode)")
         }
     }
 
@@ -143,11 +145,11 @@ final class ShortcutTests: XCTestCase {
             ("=", NSEvent.ModifierFlags.command), ("+", .command), ("+", [.command, .shift]),
         ] {
             XCTAssertEqual(
-                match(characters, modifiers)?.payload, FontSizeStep.increase.rawValue,
+                match(characters, modifiers)?.command, .adjustFontSize(.increase),
                 "\(modifiers) + \(characters) must increase the font size")
         }
-        XCTAssertEqual(match("-", .command)?.payload, FontSizeStep.decrease.rawValue)
-        XCTAssertEqual(match("0", .command)?.payload, FontSizeStep.reset.rawValue)
+        XCTAssertEqual(match("-", .command)?.command, .adjustFontSize(.decrease))
+        XCTAssertEqual(match("0", .command)?.command, .adjustFontSize(.reset))
     }
 
     // MARK: - Table integrity

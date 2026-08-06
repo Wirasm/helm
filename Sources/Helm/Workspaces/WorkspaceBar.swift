@@ -35,7 +35,7 @@ struct WorkspaceBar: View {
                 // status bar said ⇧⌘O — macOS prints modifiers ⌃⌥⇧⌘, so the bar was right
                 // and one window disagreed with itself about one key (#149).
                 .help(
-                    KeyGlyph.binding(for: .helmOpenWorkspace).map { "Open workspace (\($0))" }
+                    KeyGlyph.binding(for: .openWorkspace).map { "Open workspace (\($0))" }
                         ?? "Open workspace")
             Spacer(minLength: 8)
         }
@@ -43,7 +43,8 @@ struct WorkspaceBar: View {
         .foregroundStyle(Color.textPrimary)
         .background(ChromeBackground())
         .task { await board.poll() }
-        .onReceive(NotificationCenter.default.publisher(for: .helmOpenWorkspace)) { _ in
+        .onReceive(HelmCommand.publisher) { command in
+            guard case .openWorkspace = command else { return }
             openWorkspace()
         }
     }

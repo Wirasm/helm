@@ -353,8 +353,7 @@ final class WorkbenchModel: ObservableObject {
     /// what decides whether it can be sent, and #29 measured why that must not be relaxed.
     func post(_ text: String) {
         guard let pane = composeTarget else { return }
-        NotificationCenter.default.post(
-            name: .helmComposeText, object: ComposeRequest(pane: pane, text: text))
+        HelmCommand.composeText(ComposeRequest(pane: pane, text: text)).post()
     }
 
     /// The pane whose composer a `Post` reaches: the focused pane if it is a terminal on
@@ -406,71 +405,59 @@ final class WorkbenchModel: ObservableObject {
 
     // MARK: - Subscriptions
 
+    /// **One subscription, and the `switch` is exhaustive.** This was twelve, each unpacking
+    /// `Notification.object` with its own `as?` — seven of them, four re-parsing an enum from a
+    /// raw value the poster had flattened it into. A command this bench does not handle is now
+    /// `default`, named and deliberate, rather than a name nobody happened to subscribe to.
     private func subscribe() {
-        subscribe(to: .helmNewTerminal) { model, _ in model.newTerminal() }
-        subscribe(to: .helmSelectTerminal) { model, note in
-            if let index = note.object as? Int { model.selectTab(index) }
-        }
-        subscribe(to: .helmOpenArtifact) { model, _ in model.isBrowserOpen.toggle() }
-        subscribe(to: .helmAdjustFontSize) { model, note in
-            guard let raw = note.object as? Int, let step = FontSizeStep(rawValue: raw) else {
-                return
-            }
-            model.focusedTerminal?.adjustFontSize(step)
-        }
-        subscribe(to: .helmJumpToPrompt) { model, note in
-            guard model.terminals.anyTerminalHasFocus, let offset = note.object as? Int
-            else { return }
-            model.focusedTerminal?.jumpToPrompt(by: offset)
-        }
-        subscribe(to: .helmToggleChat) { model, _ in model.toggleFace() }
-        subscribe(to: .helmSplitRight) { model, _ in model.splitRight() }
-        subscribe(to: .helmSplitDown) { model, _ in model.splitDown() }
-        subscribe(to: .helmClosePane) { model, _ in model.closeFocusedPane() }
-        subscribe(to: .helmMoveFocus) { model, note in
-            guard let raw = note.object as? String,
-                let direction = Workbench.Direction(rawValue: raw)
-            else { return }
-            model.moveFocus(direction)
-        }
-        subscribe(to: .helmOpenCanvasFile) { model, note in
-            guard let url = note.object as? URL else { return }
-            model.open(.file(url))
-        }
-        // Scoped to the workspace whose terminal asked. A push comes from OUTPUT, so it
-        // can arrive from a session the operator parked long ago — and this model is the
-        // active workspace's, whichever that now is.
-        subscribe(to: .helmPushCanvasFile) { model, note in
-            guard let request = note.object as? CanvasPushRequest else { return }
-            guard request.workspacePath == model.workspacePath else { return }
-            model.offer(.file(request.artifact))
-        }
-        // ⌘L carries no payload and means "show me the address field"; a URL payload
-        // means "open this", which is what a ⌘-clicked http link posts.
-        subscribe(to: .helmOpenCanvasURL) { model, note in
-            if let url = note.object as? URL {
-                model.open(.url(url))
-            } else {
-                model.openAddressField()
-            }
-        }
-    }
-
-    private func subscribe(
-        to name: Notification.Name, _ handler: @escaping (WorkbenchModel, Notification) -> Void
-    ) {
-        NotificationCenter.default
-            .publisher(for: name)
+        HelmCommand.publisher
             // Load-bearing, not decoration: `@Published` fires in `willSet`, so a handler
             // that re-reads state synchronously would see the value from before the change.
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] note in
+            .sink { [weak self] command in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    handler(self, note)
+                    self.handle(command)
                 }
             }
             .store(in: &commands)
+    }
+
+    private func handle(_ command: HelmCommand) {
+        switch command {
+        case .newTerminal: newTerminal()
+        case let .selectTerminal(index): selectTab(index)
+        case .openArtifact: isBrowserOpen.toggle()
+        case let .adjustFontSize(step): focusedTerminal?.adjustFontSize(step)
+        case let .jumpToPrompt(offset):
+            guard terminals.anyTerminalHasFocus else { return }
+            focusedTerminal?.jumpToPrompt(by: offset)
+        case .toggleChat: toggleFace()
+        case .splitRight: splitRight()
+        case .splitDown: splitDown()
+        case .closePane: closeFocusedPane()
+        case let .moveFocus(direction): moveFocus(direction)
+        case let .openCanvasFile(url): open(.file(url))
+
+        // Scoped to the workspace whose terminal asked. A push comes from OUTPUT, so it
+        // can arrive from a session the operator parked long ago — and this model is the
+        // active workspace's, whichever that now is.
+        case let .pushCanvasFile(request):
+            guard request.workspacePath == workspacePath else { return }
+            offer(.file(request.artifact))
+
+        // ⌘L is `nil` and means "show me the address field"; a URL means "open this",
+        // which is what a ⌘-clicked http link sends. The distinction is now in the type
+        // rather than in whether an `Any?` happened to be absent.
+        case let .openCanvasURL(url):
+            if let url { open(.url(url)) } else { openAddressField() }
+
+        // Belongs to other verticals: the workspace bar, the Archon rail, `RootView`, and
+        // the chat overlay of one addressed pane. Listed rather than defaulted silently, so
+        // adding a command forces a decision here instead of producing a no-op.
+        case .openWorkspace, .toggleRail, .selectWorkspace, .cycleWorkspace, .composeText:
+            break
+        }
     }
 
     /// ⌘L. On a canvas already showing a page this is "edit this address" and keeps the

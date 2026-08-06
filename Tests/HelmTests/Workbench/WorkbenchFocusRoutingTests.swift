@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import GhosttyTerminal
 import SwiftUI
 import XCTest
@@ -57,7 +58,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
 
         try bench.clickPane(inSlot: second)
         Eventually.holds { bench.workbench.bench?.focusedSlot == second }
-        bench.command(.helmSplitDown)
+        bench.command(.splitDown)
 
         Eventually.holds { bench.workbench.bench?.columns.first?.slots.count == 3 }
         let order = try XCTUnwrap(bench.workbench.bench?.columns.first?.slots.map(\.id))
@@ -82,7 +83,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
 
         try bench.clickPane(inSlot: try bench.slot(holding: clicked))
         Eventually.holds { bench.workbench.bench?.focusedPane?.id == clicked }
-        bench.command(.helmToggleChat)
+        bench.command(.toggleChat)
 
         Eventually.holds { bench.workbench.bench?.pane(clicked)?.content == .terminal(face: .chat) }
         XCTAssertEqual(
@@ -188,32 +189,32 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
 
     // MARK: - The menu's route
 
-    /// View ▸ Focus Left/Right/Up/Down were silent no-ops: the menu posted `payload`, which is
-    /// nil on every row that carries a direction. Both consumers go through `Shortcut.post()`
-    /// now, so this asks the table itself the question the menu used to get wrong.
+    /// View ▸ Focus Left/Right/Up/Down were silent no-ops: the menu posted `payload`, which was
+    /// nil on every row that carried a direction in the separate `direction` field (#152).
+    ///
+    /// **Two of that test's three assertions no longer have anything to assert about.** A row
+    /// cannot carry a payload and a direction that disagree, because there is one field; and a
+    /// direction cannot arrive as something the subscriber drops, because it arrives as a
+    /// `Workbench.Direction` rather than as a `String` the far side re-parses. That is the
+    /// refactor's point, not a gap in coverage — what is left is the part that is still a
+    /// question: does each row carry the direction its menu title claims, and does posting
+    /// deliver exactly that.
     func testEveryFocusRowPostsItsDirectionThroughTheOneSeam() throws {
-        let rows = Shortcut.all.filter { $0.direction != nil }
+        let rows = Shortcut.all.filter { if case .moveFocus = $0.command { true } else { false } }
         XCTAssertEqual(rows.count, 4, "the four ⌘⌥arrow rows are the ones carrying a direction")
 
         for row in rows {
             XCTAssertNotNil(row.menu, "a focus row that is not in the menu cannot be clicked")
-            XCTAssertNil(
-                row.payload,
-                "\(row.menu!.title) carries its direction in `direction`; a non-nil payload "
-                    + "would mean the two fields disagree")
 
-            var delivered: Any?
-            let token = NotificationCenter.default.addObserver(
-                forName: row.notification, object: nil, queue: nil
-            ) { delivered = $0.object }
-            defer { NotificationCenter.default.removeObserver(token) }
+            var delivered: [HelmCommand] = []
+            let token = HelmCommand.publisher.sink { delivered.append($0) }
+            defer { token.cancel() }
 
             row.post()
 
             XCTAssertEqual(
-                delivered as? String, row.direction?.rawValue,
-                "\(row.menu!.title) posted \(String(describing: delivered)) — the subscriber "
-                    + "requires the direction's raw value and drops anything else")
+                delivered, [row.command],
+                "\(row.menu!.title) posted \(delivered) — the row and the channel disagree")
         }
     }
 
@@ -224,7 +225,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
         defer { bench.close() }
 
         let before = try XCTUnwrap(bench.workbench.bench?.focusedSlot)
-        let row = try XCTUnwrap(Shortcut.all.first { $0.direction == .down })
+        let row = try XCTUnwrap(Shortcut.all.first { $0.command == .moveFocus(.down) })
 
         row.post()
         Eventually.holds { bench.workbench.bench?.focusedSlot != before }
@@ -371,8 +372,8 @@ private final class Bench {
         return code
     }
 
-    func command(_ name: Notification.Name, _ object: Any? = nil) {
-        NotificationCenter.default.post(name: name, object: object)
+    func command(_ command: HelmCommand) {
+        command.post()
         settle()
     }
 
