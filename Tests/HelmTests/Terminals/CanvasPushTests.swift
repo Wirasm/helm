@@ -151,17 +151,37 @@ final class RefusalThrottleTests: XCTestCase {
 /// operator parked long ago — where a ⌘-click could only come from a pane they were looking
 /// at. The workspace has to travel with it.
 final class CanvasPushRequestTests: XCTestCase {
+    private let terminal = CanvasOrigin(terminal: UUID())
+
     func testTheRequestCarriesTheWorkspaceThatAskedForIt() {
         let request = CanvasPushRequest(
             artifact: URL(fileURLWithPath: "/tmp/report.md"),
-            workspacePath: WorkspacePath("/work/b"))
+            workspacePath: WorkspacePath("/work/b"), origin: terminal)
 
         XCTAssertEqual(request.workspacePath, WorkspacePath("/work/b"))
         XCTAssertNotEqual(
             request,
             CanvasPushRequest(
-                artifact: request.artifact, workspacePath: WorkspacePath("/work/a")),
+                artifact: request.artifact, workspacePath: WorkspacePath("/work/a"),
+                origin: terminal),
             "two workspaces asking for the same artifact are not the same request — this is "
                 + "what stops a parked workspace's build landing on the active bench")
+    }
+
+    /// #205's half of the same argument. The workspace says which bench; the origin says which
+    /// agent, and without it a mark on the canvas has nowhere to go (#210's second seam).
+    func testTheRequestCarriesTheTerminalThatAskedForIt() {
+        let request = CanvasPushRequest(
+            artifact: URL(fileURLWithPath: "/tmp/report.md"),
+            workspacePath: WorkspacePath("/work/b"), origin: terminal)
+
+        XCTAssertEqual(request.origin, terminal)
+        XCTAssertNotEqual(
+            request,
+            CanvasPushRequest(
+                artifact: request.artifact, workspacePath: request.workspacePath,
+                origin: CanvasOrigin(terminal: UUID())),
+            "two agents in one workspace pushing the same artifact are not the same request — "
+                + "a mark on it goes back to the one that pushed it")
     }
 }

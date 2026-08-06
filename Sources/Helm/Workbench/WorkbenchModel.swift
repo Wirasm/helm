@@ -56,6 +56,23 @@ final class WorkbenchModel: ObservableObject {
         let model: CanvasModel
     }
 
+    /// Which terminal put each canvas pane on the bench (#205) — the key is the **canvas** pane,
+    /// the value names the **terminal** pane, which is what `CanvasOrigin` exists to keep straight.
+    ///
+    /// Kept beside `canvases` rather than on `Pane.Content.canvas`, and that is load-bearing:
+    /// `CanvasSource` is compared by value to answer "is this file already open?"
+    /// (`Workbench.pane(showing:)`), so an origin inside it would make the same artifact pushed by
+    /// two agents two different sources — a second pane for a file already on screen, which is the
+    /// interruption `offer` exists to avoid. It also must not persist; `CanvasOrigin`'s header has
+    /// the reason.
+    private var origins: [Pane.ID: CanvasOrigin] = [:]
+
+    /// How a mark leaves helm. Injected for the same reason `BenchSnapshotModel` injects its
+    /// mailbox root and its `foregroundPid`: the routing is then reachable from `swift test`
+    /// against a mailbox the test owns, with no live agent and nothing written near the
+    /// operator's own `~/.helm/mail`.
+    private let notes: CanvasNoteCourier
+
     /// `AnyCancellable`s rather than NotificationCenter tokens: they unsubscribe in their
     /// own deinit, and Swift 6 forbids a nonisolated deinit from touching the non-Sendable
     /// token the observer API hands back.
@@ -64,8 +81,9 @@ final class WorkbenchModel: ObservableObject {
     /// Internal, not a `.shared`. `TerminalManager.shared` and `BoardModel.shared` are
     /// singletons because other slices reach them; nothing outside the workbench needs
     /// this one, and an injectable initialiser is what lets tests build isolated models.
-    init(terminals: TerminalManager) {
+    init(terminals: TerminalManager, notes: CanvasNoteCourier = CanvasNoteCourier()) {
         self.terminals = terminals
+        self.notes = notes
         subscribe()
     }
 
@@ -93,6 +111,9 @@ final class WorkbenchModel: ObservableObject {
         workspacePath = nil
         bench = nil
         canvases.removeAll()
+        // Keyed by canvas pane id, so it goes exactly when the cache does — a leftover entry
+        // would name a pane nothing resolves any more.
+        origins.removeAll()
         reconcileVisibility()
     }
 
@@ -109,6 +130,7 @@ final class WorkbenchModel: ObservableObject {
         for (id, cached) in canvases where cached.workspacePath == path {
             cached.model.close()
             canvases[id] = nil
+            origins[id] = nil
         }
     }
 
@@ -150,6 +172,16 @@ final class WorkbenchModel: ObservableObject {
             guard let self, let model, canvases[pane.id]?.model === model else { return }
             canvas(pane.id, didPointAt: source)
         }
+        // The return path (#205). Wired here for `onSourceChange`'s reasons exactly — this is the
+        // only place a `CanvasModel` is made, and the identity check keeps an orphan quiet: a
+        // model whose pane was re-resolved after `deactivate` is still alive and still holding
+        // this closure, and it has no origin to route to any more.
+        model.onAnnotation = { [weak self, weak model] annotation, canvas in
+            guard let self, let model, canvases[pane.id]?.model === model else {
+                return .notSent(.noOrigin)
+            }
+            return deliver(annotation, on: canvas, markedIn: pane.id)
+        }
         // A canvas pane only renders while its workspace is the active one, so this is
         // that workspace — the same association `TerminalManager` gets for free by
         // storing `workspacePath` on the session itself.
@@ -178,6 +210,25 @@ final class WorkbenchModel: ObservableObject {
         else { return }
         bench.repoint(pane, to: source)
         commit(bench)
+    }
+
+    /// An operator's mark on a canvas pane, on its way to the agent that pushed that canvas
+    /// (#205).
+    ///
+    /// **The bench is the only thing that can answer this**, which is why the decision is reached
+    /// from here rather than from the canvas: it holds the origin recorded at push time *and* the
+    /// sessions that origin names. What it does not do is *make* the decision —
+    /// `CanvasNoteRoute.route` is pure and tested on its own, and this only supplies it with a
+    /// live lookup.
+    private func deliver(
+        _ annotation: CanvasAnnotation, on canvas: URL, markedIn pane: Pane.ID
+    ) -> CanvasNoteDelivery {
+        let route = CanvasNoteRoute.route(origin: origins[pane]) { origin in
+            // A closed pane resolves to no session, which is `.originGone` — the agent that
+            // pushed this canvas is not there any more, and the operator is told so.
+            notes.owner(of: terminals.sessions.first { $0.id == origin.terminal })
+        }
+        return notes.send(annotation, on: canvas, along: route)
     }
 
     /// What ⌘+/⌘0/⌘↑ act on.
@@ -267,6 +318,7 @@ final class WorkbenchModel: ObservableObject {
         case .canvas:
             canvases[pane]?.model.close()
             canvases[pane] = nil
+            origins[pane] = nil
         }
     }
 
@@ -444,7 +496,11 @@ final class WorkbenchModel: ObservableObject {
         // active workspace's, whichever that now is.
         case let .pushCanvasFile(request):
             guard request.workspacePath == workspacePath else { return }
-            offer(.file(request.artifact))
+            // **Recorded whether the pane is new or already open, and the second case is the
+            // common one** — an agent re-offering the file it just rewrote gets `.existing`, and
+            // the newest pusher is the one who wants to hear about a mark on it.
+            guard let pane = offer(.file(request.artifact)) else { return }
+            origins[pane] = request.origin
 
         // ⌘L is `nil` and means "show me the address field"; a URL means "open this",
         // which is what a ⌘-clicked http link sends. The distinction is now in the type

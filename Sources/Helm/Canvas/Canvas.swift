@@ -100,6 +100,20 @@ final class CanvasModel: ObservableObject {
     /// write-back off silently — which is #89 again, with no compiler to say so.
     var onSourceChange: ((CanvasSource) -> Void)?
 
+    /// Hand a finished mark to whoever can route it, and hear back what happened (#205).
+    ///
+    /// **A canvas cannot answer "which agent?" and must not try.** Routing needs the terminal that
+    /// pushed this canvas, which is bench knowledge — `WorkbenchModel` is the one thing holding
+    /// both the pane and the sessions — so this model states the mark and is told the outcome. The
+    /// same shape as `onSourceChange` one screen up, and wired in the same place for the same
+    /// reason.
+    ///
+    /// **`nil` is a real, reachable state, not a missing wire.** A `CanvasModel` built outside a
+    /// bench has no pane and therefore no origin, so the honest answer is `.notSent(.noOrigin)` —
+    /// the clipboard behaviour helm shipped before this existed, and the sentence the operator
+    /// sees says exactly that rather than claiming a send.
+    var onAnnotation: ((CanvasAnnotation, URL) -> CanvasNoteDelivery)?
+
     /// Where this canvas is pointed, as the bench persists it.
     var source: CanvasSource? {
         switch showing {
@@ -367,15 +381,17 @@ final class CanvasModel: ObservableObject {
         }
         do {
             try CanvasNotes.append(annotation, for: canvas, at: Date())
-            // Written first, copied second. The sidecar is the memory; the clipboard is a
-            // convenience, and a copy that succeeded while the write failed would be a note
-            // the operator believes they made and cannot find.
+            // Written first, copied second, sent third. The sidecar is the memory; the clipboard
+            // is a convenience, and a copy that succeeded while the write failed would be a note
+            // the operator believes they made and cannot find. Mail is delivery, not storage
+            // (#205's acceptance says so in as many words), so it comes last: a mailbox that has
+            // gone away must not cost the operator the note itself.
             Pasteboard.copy(CanvasNotes.clipboardEntry(annotation, for: canvas))
+            let delivery = onAnnotation?(annotation, canvas) ?? .notSent(.noOrigin)
             self.selection = nil
             notesFailure = nil
             announce(
-                "Written to \(CanvasNotes.sidecarURL(for: canvas).lastPathComponent) "
-                    + "and copied — paste it to an agent")
+                delivery.receipt(sidecar: CanvasNotes.sidecarURL(for: canvas).lastPathComponent))
             refreshNotes()
         } catch {
             // A canvas opened through Browse… can live anywhere, including somewhere not

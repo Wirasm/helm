@@ -426,7 +426,8 @@ final class WorkbenchModelTests: XCTestCase {
 
         HelmCommand.pushCanvasFile(
             CanvasPushRequest(
-                artifact: URL(fileURLWithPath: "/tmp/push.md"), workspacePath: workspace)
+                artifact: URL(fileURLWithPath: "/tmp/push.md"), workspacePath: workspace,
+                origin: CanvasOrigin(terminal: UUID()))
         ).post()
         try await Task.sleep(for: .milliseconds(100))
 
@@ -442,7 +443,9 @@ final class WorkbenchModelTests: XCTestCase {
         let (model, _) = mounted()
 
         HelmCommand.pushCanvasFile(
-            CanvasPushRequest(artifact: URL(fileURLWithPath: "/tmp/push.md"), workspacePath: other)
+            CanvasPushRequest(
+                artifact: URL(fileURLWithPath: "/tmp/push.md"), workspacePath: other,
+                origin: CanvasOrigin(terminal: UUID()))
         ).post()
         try await Task.sleep(for: .milliseconds(100))
 
