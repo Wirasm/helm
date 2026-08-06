@@ -413,6 +413,44 @@ final class WorkbenchModelTests: XCTestCase {
         XCTAssertEqual(model.bench?.columns.count, 2, "…which at 1x1 is a new column")
     }
 
+    // MARK: - Push routing (#227)
+
+    /// `CanvasPushRequestTests` (`CanvasPushTests.swift`) pins the request TYPE — that two
+    /// workspaces asking for the same artifact compare unequal. What it cannot pin is that
+    /// `WorkbenchModel` actually acts on that difference: a push fires from terminal OUTPUT,
+    /// so it can arrive from a session in a workspace the operator parked hours ago, and the
+    /// guard at `WorkbenchModel.handle(.pushCanvasFile:)` is the only thing standing between
+    /// that and a background build landing on whatever bench happens to be open.
+    func testAPushNamingTheMountedWorkspaceLands() async throws {
+        let (model, _) = mounted()
+
+        HelmCommand.pushCanvasFile(
+            CanvasPushRequest(
+                artifact: URL(fileURLWithPath: "/tmp/push.md"), workspacePath: workspace)
+        ).post()
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(
+            model.bench?.canvasPanes.map(\.content), [.canvas(.file("/tmp/push.md"))],
+            "a push naming the workspace on screen has to reach its bench")
+    }
+
+    /// The negative half, and the one that matters: a gate that is `true` unconditionally
+    /// passes the test above for free. Only a push naming a workspace that is NOT mounted,
+    /// asserted to land nowhere, catches that.
+    func testAPushNamingAnUnmountedWorkspaceIsDropped() async throws {
+        let (model, _) = mounted()
+
+        HelmCommand.pushCanvasFile(
+            CanvasPushRequest(artifact: URL(fileURLWithPath: "/tmp/push.md"), workspacePath: other)
+        ).post()
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(
+            model.bench?.canvasPanes.count, 0,
+            "a push from a workspace nobody is looking at must not seize the open bench")
+    }
+
     func testTheFaceCommandReachesTheModelWhileNoViewHoldsIt() async throws {
         let (model, _) = mounted()
 

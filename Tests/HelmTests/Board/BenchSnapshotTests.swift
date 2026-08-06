@@ -134,6 +134,54 @@ final class BenchSnapshotTests: XCTestCase {
         XCTAssertEqual(pane.terminal?.owner?.handle, "parked-agent")
     }
 
+    /// The gate everything else in `project` is decided by: `workspace.path == mountedPath`.
+    /// #227 — `testParkedWorkspaceKeepsLiveTerminalIdentityButNeverClaimsVisibility` above
+    /// pins one workspace's own record; this pins the JOIN across two, which is what the
+    /// gate actually routes. A snapshot scoped to the mounted workspace has to carry its own
+    /// terminal and must not carry a parked workspace's — and the reverse for the parked
+    /// workspace's own record.
+    func testMountedWorkspaceShowsItsOwnTerminalAndExcludesAParkedWorkspaces() throws {
+        let parked = Workspace(path: "/tmp/bench-snapshot-routing-parked")
+        let live = Workspace(path: "/tmp/bench-snapshot-routing-live")
+        let terminals = TerminalManager()
+        let workbench = WorkbenchModel(terminals: terminals)
+        let workspaces = WorkspaceModel(defaults: try defaults())
+
+        workspaces.open(parked)
+        workbench.activate(workspacePath: parked.path)
+        let parkedTerminal = try XCTUnwrap(terminals.sessions(for: parked.path).first)
+        workspaces.saveContext(terminalManager: terminals, workbench: workbench)
+
+        workspaces.open(live)
+        workbench.activate(workspacePath: live.path)
+        let liveTerminal = try XCTUnwrap(terminals.sessions(for: live.path).first)
+
+        let value = BenchSnapshot.project(
+            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
+            owners: []
+        ) { _ in nil }
+
+        func paneIDs(_ record: BenchSnapshot.WorkspaceRecord) -> [UUID] {
+            record.columns.flatMap { $0.slots.flatMap { $0.panes.map(\.id) } }
+        }
+
+        let liveRecord = try XCTUnwrap(value.workspaces.first { $0.path == live.path })
+        XCTAssertTrue(
+            paneIDs(liveRecord).contains(liveTerminal.id),
+            "the mounted workspace's snapshot has to carry its own terminal")
+        XCTAssertFalse(
+            paneIDs(liveRecord).contains(parkedTerminal.id),
+            "…and must not carry a parked workspace's")
+
+        let parkedRecord = try XCTUnwrap(value.workspaces.first { $0.path == parked.path })
+        XCTAssertTrue(
+            paneIDs(parkedRecord).contains(parkedTerminal.id),
+            "a parked workspace still has to report its own terminal identity")
+        XCTAssertFalse(
+            paneIDs(parkedRecord).contains(liveTerminal.id),
+            "…and must not pick up the mounted workspace's pane ids")
+    }
+
     /// The acceptance criterion #223 names explicitly: `WorkspaceRecord.path` is read by
     /// agents outside the process, so `WorkspacePath` must not change its wire shape.
     /// Inspected as `Any` off `JSONSerialization` rather than compared against a whole JSON
