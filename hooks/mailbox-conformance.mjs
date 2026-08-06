@@ -76,9 +76,12 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+// `fileURLToPath`, not `new URL(…).pathname`: the latter leaves a path percent-encoded, so a
+// checkout under a directory with a space in it would look for `hooks/helm-mail.mjs` somewhere
+// that does not exist and the harness would refuse to run for the wrong reason.
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOOKS_SOURCE = path.join(REPO, "hooks", "helm-mail.mjs");
 const PI_SOURCE = path.join(REPO, "pi", "extensions", "helm-mail", "index.ts");
 const HANDLE_SOURCE = path.join(REPO, "Sources", "HelmWire", "Spool", "Handle.swift");
