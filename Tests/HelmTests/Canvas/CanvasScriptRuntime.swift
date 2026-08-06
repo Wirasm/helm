@@ -110,7 +110,18 @@ final class CanvasScriptRuntime {
         mouse("mouseup", point.x, point.y)
     }
 
+    /// Make the page an `.html` **artifact** rather than the markdown page helm generates: same
+    /// DOM, minus helm's frame marker, because an artifact is read straight from disk and every
+    /// element in it is the agent's own.
+    func asHTMLArtifact() { call("asHTMLArtifact") }
+
     func select(id: String, text: String) { call("select", id, text) }
+
+    /// Highlight inside a block the fixture gave no id, addressed by its own text — the only
+    /// handle an id-less element has, and not having one is the whole of #215.
+    func select(inBlockWithText block: String, text: String) {
+        call("selectInBlock", block, text)
+    }
     func blurWindow() { call("fireOnWindow", "blur") }
     func mouseLeaveDocument() { call("fireOnDocument", "mouseleave") }
 
