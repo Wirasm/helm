@@ -62,7 +62,7 @@ struct ChatComposer: View {
                 .foregroundStyle(Color.textPrimary)
                 .focused($focused)
                 .onSubmit(submit)
-                .onKeyPress(.return, phases: .down, action: startALine)
+                .onKeyPress(.return, phases: [.down, .repeat], action: startALine)
 
             Button(action: submit) {
                 Image(systemName: "arrow.up.circle.fill")
@@ -140,6 +140,14 @@ struct ChatComposer: View {
     /// the end. That difference is real and is the price of a `TextField` bound to a
     /// `String`: SwiftUI exposes no selection to insert into. It is visible the moment it
     /// happens rather than silent, and ⌥Return is the exact key for the mid-sentence case.
+    ///
+    /// **`.repeat` is in the phase set, and leaving it out was #119 again for anyone who
+    /// *holds* the chord.** macOS auto-repeats a held key past the repeat delay and SwiftUI
+    /// classifies those ticks as `.repeat`; a handler subscribed to `.down` alone does not
+    /// merely skip them — they fall through to AppKit exactly as an explicit `.ignored`
+    /// would, reach `insertNewline:`, and submit. So the tap was fixed and the hold was not,
+    /// which is the worse half: a two-key chord is held more readily than a single key is.
+    /// `testHoldingShiftReturnDoesNotSubmitOnTheRepeat` is that, measured.
     private func startALine(_ press: KeyPress) -> KeyPress.Result {
         guard press.modifiers.contains(.shift) else { return .ignored }
         draft += "\n"

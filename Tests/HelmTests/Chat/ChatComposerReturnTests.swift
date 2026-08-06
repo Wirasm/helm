@@ -79,6 +79,48 @@ final class ChatComposerReturnTests: XCTestCase {
         XCTAssertEqual(composer.sent.first, "first\n\n")
     }
 
+    /// **Holding Shift+Enter must not submit either, and a `.down`-only handler let it.**
+    ///
+    /// macOS auto-repeats a held key past the repeat delay, and SwiftUI classifies those ticks
+    /// as the `.repeat` phase. A handler subscribed to `.down` alone is not merely not called
+    /// for them — the event falls through to AppKit exactly as an explicit `.ignored` would,
+    /// reaches `insertNewline:`, and fires `.onSubmit`. So the *tap* was fixed and the *hold*
+    /// was still #119, on a chord people hold rather than tap. Found by a reviewer on this
+    /// diff and reproduced here before it was believed.
+    func testHoldingShiftReturnDoesNotSubmitOnTheRepeat() {
+        let composer = ComposerWindow()
+        defer { composer.close() }
+
+        composer.offer("hello")
+        composer.pressReturn(shift: true)
+        composer.pressReturn(shift: true, held: true)
+
+        XCTAssertEqual(
+            composer.sent, [],
+            "the auto-repeat of a held Shift+Enter submitted the draft — #119 for anyone who "
+                + "holds the chord instead of tapping it")
+
+        composer.pressReturn()
+        XCTAssertEqual(
+            composer.sent, ["hello\n\n"], "the repeat tick started no line of its own")
+    }
+
+    /// **A control: it passes either way**, and it is the one that would catch the fix
+    /// overshooting into `.repeat`. A held plain Enter still submits on its first tick — the
+    /// draft is empty after that, so the rest of the repeats are no-ops rather than a burst of
+    /// blank messages.
+    func testHoldingPlainEnterStillSubmitsOnceAndNoMore() {
+        let composer = ComposerWindow()
+        defer { composer.close() }
+
+        composer.offer("hello")
+        composer.pressReturn()
+        composer.pressReturn(held: true)
+        composer.pressReturn(held: true)
+
+        XCTAssertEqual(composer.sent, ["hello"], "a held Enter sent something other than once")
+    }
+
     /// **The one step of the real app this window cannot contain.**
     ///
     /// `Keymap` installs a local `NSEvent` monitor that runs *before* any view's key
@@ -174,8 +216,12 @@ private final class ComposerWindow {
 
     /// A key through the window, not into a view: `sendEvent` walks the responder chain, so
     /// this asks the question the operator asks.
+    /// `held` is the auto-repeat tick macOS sends once a key is kept down past the repeat
+    /// delay. SwiftUI classifies it as the `.repeat` phase rather than `.down`, and a handler
+    /// that did not subscribe to it never sees the event at all.
     func pressReturn(
-        shift: Bool = false, file: StaticString = #filePath, line: UInt = #line
+        shift: Bool = false, held: Bool = false,
+        file: StaticString = #filePath, line: UInt = #line
     ) {
         // 36 is Return's ANSI virtual key code, so a synthesised event looks like a real
         // one. Unlike in `TerminalKeyboardTests`, where ghostty translates the *physical* key
@@ -187,7 +233,7 @@ private final class ComposerWindow {
             timestamp: ProcessInfo.processInfo.systemUptime,
             windowNumber: window.windowNumber, context: nil,
             characters: "\r", charactersIgnoringModifiers: "\r",
-            isARepeat: false, keyCode: 36)
+            isARepeat: held, keyCode: 36)
         guard let event else {
             return XCTFail("could not synthesise a Return key event", file: file, line: line)
         }
