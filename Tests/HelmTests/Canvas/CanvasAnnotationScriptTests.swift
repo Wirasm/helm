@@ -369,6 +369,44 @@ final class CanvasAnnotationScriptTests: XCTestCase {
             .selection(.element(id: "intro", text: "Why this exists")))
     }
 
+    /// **The gate, not the decoder — #216.** `CanvasPageSelection.init?` is what
+    /// `WKScriptMessage.body` actually meets first: `CanvasFileViews.swift`'s
+    /// `userContentController(_:didReceive:)` drops whatever it refuses before
+    /// `CanvasAnnotation.decode` is ever reached. The test above proves the decoder
+    /// understands a mark; it says nothing about whether the mark gets there; #216 shipped
+    /// with every decoder test green because the gate one layer up required a top-level
+    /// `text` an enclosure and a relation never carry. Feeding `lastPosted` — the real
+    /// script's output, not a hand-typed literal — through the real gate is what would have
+    /// caught it: a JS key rename or a dropped `mark` fails here even though `decode` never
+    /// sees it.
+    func testEveryMarkThePagePostsIsAdmittedByTheRealGate() throws {
+        let point = try CanvasScriptRuntime()
+        point.setTool(.point)
+        point.tap(at: (x: 100, y: 110))
+        guard case .selected = try XCTUnwrap(CanvasPageSelection(try XCTUnwrap(point.lastPosted)))
+        else {
+            return XCTFail("a point must be admitted as a selection")
+        }
+
+        let arrow = try CanvasScriptRuntime()
+        arrow.setTool(.arrow)
+        arrow.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
+        guard case .selected = try XCTUnwrap(CanvasPageSelection(try XCTUnwrap(arrow.lastPosted)))
+        else {
+            return XCTFail(
+                "a relation must be admitted as a selection — it carries no top-level text")
+        }
+
+        let loop = try CanvasScriptRuntime()
+        loop.setTool(.freehand)
+        loop.loop(around: (x: 10, y: 1390, width: 320, height: 50))
+        guard case .selected = try XCTUnwrap(CanvasPageSelection(try XCTUnwrap(loop.lastPosted)))
+        else {
+            return XCTFail(
+                "an enclosure must be admitted as a selection — it carries no top-level text")
+        }
+    }
+
     /// The dismissal is the one message that deliberately decodes to nothing — it closes the
     /// comment field rather than writing a note.
     func testADismissalIsRefusedByTheDecoderRatherThanBecomingANote() throws {
