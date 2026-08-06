@@ -7,8 +7,8 @@ import XCTest
 ///
 /// **Why the duplication exists at all.** `tools/helm-spool.swift`, `helm-close.swift`,
 /// `helm-capture.swift` and `helm-command.swift` cannot `import HelmWire`: a single-file
-/// `swift tools/…swift` script
-/// resolves no `Package.swift` and runs from any cwd, which is the whole reason the spool is a
+/// `swift tools/…swift` script resolves no `Package.swift` and runs from any cwd, which is the
+/// whole reason the spool is a
 /// script rather than an SPM target (`AGENTS.md`'s "Why the spool is a script, and must stay
 /// one" has the measurements). So the request JSON, the result JSON and the spool's own
 /// directory-resolution rules are each spelled out twice — once here as `HelmWire` types and
@@ -23,7 +23,7 @@ import XCTest
 ///    *RequestDecodes` tests below, unchanged from #221's first pass but for #269's fourth kind.
 /// 2. **The result direction** (helm → script): helm writes `results/<id>.json`, the script
 ///    reads `json["status"] as? String` and switches on it by hand — `helm-spool.swift:180`,
-///    `helm-close.swift:151`, `helm-capture.swift:148`, `helm-command.swift:165`, none of which
+///    `helm-close.swift:151`, `helm-capture.swift:148`, `helm-command.swift:167`, none of which
 ///    decode through `SpoolResult`. Covered by `testHelm*ExitCodeAndStderrForEveryResultStatus`
 ///    below, over
 ///    **every** `SpoolResult.Status` case for every script — `Status: CaseIterable` plus an
@@ -514,7 +514,8 @@ final class SpoolWireConformanceTests: XCTestCase {
             json["terminalId"] is String,
             "helm-command.swift: terminalId must be a bare string; got "
                 + "\(String(describing: json["terminalId"]))")
-        let report = try XCTUnwrap(json["command"] as? [String: Any], "no command report: \(stdout)")
+        let report = try XCTUnwrap(
+            json["command"] as? [String: Any], "no command report: \(stdout)")
         XCTAssertTrue(
             report["paneCreated"] is String,
             "helm-command.swift: command.paneCreated must be a bare string — it is what a "

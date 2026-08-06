@@ -4,20 +4,21 @@
 //   swift helm-command.swift splitDown         a new row under the focused slot
 //   swift helm-command.swift newTerminal       a bare login shell in a pane of its own
 //   swift helm-command.swift toggleRail        show/hide the Archon rail
-//   swift helm-command.swift --list            what helm will take from an agent, and what it won't
+//   swift helm-command.swift --list            the commands helm will take from an agent
 //
-// The third sibling of `helm-spool.swift` and `helm-close.swift`, and it needs exactly what they
-// need: nothing. No display, no focused window, no Accessibility grant, no keystrokes — a file
-// appears in the spool, helm acts, helm writes a file back. It works with the screen locked,
-// headless and over ssh.
+// The fourth sibling of `helm-spool.swift`, `helm-close.swift` and `helm-capture.swift`, and it
+// needs exactly what they need: nothing. No display, no focused window, no Accessibility grant,
+// no keystrokes — a file appears in the spool, helm acts, helm writes a file back. It works with
+// the screen locked, headless and over ssh.
 //
 // helm has eighteen commands and will take four of them from an agent. The rule is one sentence:
 // REARRANGING THE BENCH IS FINE, TAKING FOCUS IS NOT. An agent selecting the operator's active tab
 // mid-thought is the wrong-terminal click in a supported API — so every command that moves the
 // keyboard, or that acts on "the focused pane" without saying which pane it means, is refused with
 // the reason and with the addressed route to use instead (`helm-close`, `helm-spool`, `push.sh`).
-// `--list` prints the whole verdict, refusals included; `SpoolCommandPolicy` in
-// `Sources/HelmWire/Spool/SpoolRequest.swift` argues it.
+// `--list` names the four without sending anything; send any other command to read helm's own
+// refusal, which says why. `SpoolCommandPolicy` in `Sources/HelmWire/Spool/SpoolRequest.swift`
+// argues the whole verdict.
 //
 // The result says what happened rather than making you re-read `snapshot.json` and race it:
 // `command.paneCreated` (also copied to `terminalId`, so `helm-close` is the next move with no
@@ -90,7 +91,8 @@ let usage = """
       \(allowed.joined(separator: "  "))
 
     Everything else is refused with a reason — rearranging the bench is fine, taking the
-    operator's keyboard is not. `--list` prints the full verdict without sending anything.
+    operator's keyboard is not. `--list` names the four above without sending anything;
+    send any other command to read helm's own refusal, which says why and what to use.
 
     Exits 2 no answer, 3 refused (read `reason`), 4 helm could not act.
     """
@@ -179,8 +181,11 @@ while Date() < deadline {
             // sides of the mutation, and these are those two readings.
             let before = report["focusedPaneBefore"] as? String
             let after = report["focusedPaneAfter"] as? String
-            let moved = before == after ? "" : " — WARNING: focus MOVED, \(before ?? "none") → "
-                + "\(after ?? "none")"
+            let moved =
+                before == after
+                ? ""
+                : " — WARNING: focus MOVED, \(before ?? "none") → "
+                    + "\(after ?? "none")"
             FileHandle.standardError.write(
                 Data("helm-command: \(command) ran\(made)\(bench)\(moved)\n".utf8))
             exit(Exit.ok.rawValue)
