@@ -132,7 +132,10 @@ kill "$broken_pid" 2>/dev/null
 # neither of these.
 printf '{"handle":"x","runtime":"claude","pid":1,"sessionId":"s","cwd":"/tmp","claimedAt":0}\n' >"$tmp/box/owner.json"
 printf '{"id":"1-a","from":"sender-9f2c","to":"x","subject":"s","body":"b","sentAt":1}\n' >"$tmp/box/1-a.json"
-sleep 3
+# 4s against the watch's own `sleep 2`, so a full poll cycle plus a python3 spawn fits twice over.
+# 3 was enough on an idle machine and left about a second of slack; several agents sharing this
+# box is the normal state here, and a gate that goes red under load teaches people to re-run it.
+sleep 4
 check "still delivers a message that arrives while it is running" \
     "MAIL sender-9f2c" "$(sed -n '1s/ —.*//p' "$tmp/watch.out")"
 check "moves what it delivered into read/" "1-a.json" "$(ls "$tmp/box/read" 2>/dev/null)"
