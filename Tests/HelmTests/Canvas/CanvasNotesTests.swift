@@ -127,12 +127,14 @@ final class CanvasNotesTests: XCTestCase {
         let written = try XCTUnwrap(CanvasNotes.markdown(in: sidecar))
         XCTAssertEqual(CanvasNotes.headings(in: written), ["`#a` — \"A\"", "\"B\""])
         XCTAssertTrue(written.contains("two"))
+        XCTAssertEqual(
+            CanvasNotes.headings(in: ""), [],
+            "and no text is no headings — what the pane's count reads when there is no sidecar")
     }
 
     func testThereIsNothingToPostFromAnEmptySidecar() {
         XCTAssertNil(
             CanvasNotes.markdown(in: directory.appendingPathComponent("nothing.notes.md")))
-        XCTAssertEqual(CanvasNotes.headings(in: ""), [])
     }
 
     /// The drawer renders the file natively, so the timestamp's `<sub>` wrapper would show

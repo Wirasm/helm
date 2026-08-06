@@ -144,20 +144,24 @@ final class CanvasModel: ObservableObject {
 
     @Published private(set) var selection: CanvasSelection?
 
-    /// Every note in this canvas's sidecar, by heading. Re-read from the file rather than
-    /// tallied in memory: the sidecar IS the memory, and an agent or an editor may have
-    /// appended to it since.
-    @Published private(set) var notes: [String] = []
-
     /// The sidecar's whole text, which is what the drawer renders — nil when there is no
     /// sidecar, or nothing but whitespace in it.
     ///
     /// **Stored rather than read where it is drawn.** A view that reads the file in `body`
     /// touches the disk every time SwiftUI redraws it, which for a pane sharing a bench with
-    /// live terminals is a great many times a second. One read per refresh, and `notes`
-    /// below is carved out of the same string, so the count on the header and the prose in
-    /// the drawer can never disagree about which version of the file they saw.
+    /// live terminals is a great many times a second. One read per refresh, and everything
+    /// else about the sidecar is derived from this string rather than read again.
     @Published private(set) var notesText: String?
+
+    /// Every note in this canvas's sidecar, by heading — for the header's `Notes (n)`. Not
+    /// tallied in memory: the sidecar IS the memory, and an agent or an editor may have
+    /// appended to it since.
+    ///
+    /// **A pure function of `notesText`**, for `source`'s reason one screen up: a stored
+    /// copy is a second call site to forget, and the one it would silently reintroduce is
+    /// precisely the disagreement this design exists to prevent — a count taken from one
+    /// read of the file beside prose taken from another.
+    var notes: [String] { CanvasNotes.headings(in: notesText ?? "") }
 
     /// Why the last note could not be written, in the operator's terms. Shown in the pane
     /// — a note someone believes they wrote and that went nowhere is worse than one they
@@ -384,7 +388,6 @@ final class CanvasModel: ObservableObject {
 
     func refreshNotes() {
         notesText = sidecarURL.flatMap(CanvasNotes.markdown(in:))
-        notes = CanvasNotes.headings(in: notesText ?? "")
     }
 
     func revealNotes() {
