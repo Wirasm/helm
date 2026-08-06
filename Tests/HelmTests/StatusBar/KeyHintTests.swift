@@ -121,6 +121,37 @@ final class KeyHintTests: XCTestCase {
         )
     }
 
+    /// **Totality, which the test above cannot reach.** That one asks whether every command the
+    /// map *happens to bind today* is accounted for. This asks the stronger question
+    /// `HelmCommand.Name.allCases` makes available: is every command helm has — bound or not —
+    /// either advertised, deliberately left off the bar, or deliberately not a keystroke at all.
+    ///
+    /// Written because `Name`'s doc comment claimed this test existed before it did. The
+    /// conformance was added, the assertion was not, and a comment promising a machine check
+    /// that nothing performs is the exact defect `AGENTS.md:354` names — found by review, not
+    /// by the compiler, because nothing in the toolchain would say a word.
+    func testEveryCommandIsAccountedForOnTheBarOrDeliberatelyIsNot() {
+        // Not keystrokes: an OSC 8 ⌘-click, terminal OUTPUT, and a canvas `Post` respectively.
+        // A bar hint for one of these would advertise a key that does not exist.
+        let neverBound: Set<HelmCommand.Name> = [.openCanvasFile, .pushCanvasFile, .composeText]
+
+        // The exemption list is itself a hand-maintained set, so it is held to the map rather
+        // than trusted: binding one of these to a key must fail here instead of silently
+        // exempting it from the bar for ever.
+        XCTAssertEqual(
+            neverBound.intersection(Set(Shortcut.all.map(\.command.name))), [],
+            "a command listed as never-bound now has a key — it belongs on the bar or in `omitted`"
+        )
+
+        let accounted = Set(KeyHintCatalog.named.map(\.command))
+            .union(KeyHintCatalog.omitted)
+            .union(neverBound)
+        XCTAssertEqual(
+            Set(HelmCommand.Name.allCases).subtracting(accounted), [],
+            "a command with no hint, no omission, and no reason for being unbindable"
+        )
+    }
+
     /// **The half the drift test above cannot see.** It asks whether a *command* is
     /// accounted for; this asks whether the command's KEYS can be drawn. `KeyGlyph.trigger`
     /// answers nil for a keyCode it does not name, and `render` quietly drops it — so
