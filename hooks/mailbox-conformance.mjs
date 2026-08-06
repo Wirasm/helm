@@ -85,6 +85,8 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOOKS_SOURCE = path.join(REPO, "hooks", "helm-mail.mjs");
 const PI_SOURCE = path.join(REPO, "pi", "extensions", "helm-mail", "index.ts");
 const HANDLE_SOURCE = path.join(REPO, "Sources", "HelmWire", "Spool", "Handle.swift");
+// `MailboxOwner` — the OTHER Swift reader of the mailbox's on-disk shape — lives here.
+const OWNER_SOURCE = path.join(REPO, "Sources", "HelmWire", "Spool", "MailboxDirectory.swift");
 
 // ── scratch space ────────────────────────────────────────────────────────────────────────
 
@@ -263,11 +265,21 @@ async function loadDecls({ source, file, names, extension }) {
 	return await import(pathToFileURL(out).href);
 }
 
-/** Every top-level function a source declares. Generics are erased by the `\b` — pi has `readJson<T>`. */
-function topLevelFunctionNames(source) {
+/**
+ * Every top-level declaration a source makes — functions and consts both.
+ *
+ * BOTH HALVES, and the const half is not padding. `OFF_ENV` is `HELM_MAIL_OFF`, the kill switch
+ * that is meant to silence both runtimes at once, and it is a `const` shared by both files. A
+ * coverage check that only saw `function` declarations would let it be renamed or retyped in one
+ * file while the operator believed both were off — the exact silent divergence this file exists
+ * to catch, in the half of the grammar it was not looking at. Found in review.
+ *
+ * Generics are erased by the `\b`: pi declares `readJson<T>`.
+ */
+function topLevelDeclarationNames(source) {
 	return source
 		.split("\n")
-		.map((line) => line.match(/^(?:export )?(?:async )?function ([A-Za-z0-9_]+)\b/))
+		.map((line) => line.match(/^(?:export )?(?:async )?(?:function|const) ([A-Za-z0-9_]+)\b/))
 		.filter(Boolean)
 		.map((match) => match[1]);
 }
@@ -282,10 +294,11 @@ function topLevelFunctionNames(source) {
  * not to that list would be silently uncovered, and the gate would stay green saying so.
  */
 const DELIBERATELY_UNSHARED = {
-	claim:
-		"different signatures and different jobs: the hook derives its own handle and reaps on the way in, " +
-		"pi is handed one and does not reap, and each writes its own `runtime`. The parts they DO share — " +
-		"deriveHandle, reap, writeAtomic, the owner record's shape — are each compared on their own above.",
+	// EMPTY TODAY, AND THAT IS THE HONEST STATE: all 28 declarations the two files share are
+	// compared. `claim` was the one entry here in the first draft, on the grounds that its
+	// signatures differ — which is true and is not a reason not to compare what it WRITES.
+	// `checkTheOwnerRecordDecodes` compares that, so the excuse went away rather than being kept
+	// as a comfortable one. An entry added here has to say what is compared instead.
 };
 
 /** Everything both halves are asked to agree about, and everything those need to run. */
@@ -293,6 +306,7 @@ const SHARED_NAMES = [
 	"NAME",
 	"READ_DIR",
 	"OWNER_FILE",
+	"OFF_ENV",
 	"ROOT_ENV",
 	"HANDLE_ENV",
 	"SUBJECT_MAX",
@@ -313,10 +327,18 @@ const SHARED_NAMES = [
 	"heldByAnother",
 	"deriveHandle",
 	"consume",
+	"claim",
 	"oneLine",
 	"notice",
 	"howToReply",
 ];
+
+/**
+ * Hooks-only helpers `claim` calls, lifted so it can run: `mineIn` finds the mailbox this
+ * session already owns, `ownerPid` decides what pid to record. pi's `claim` is handed both
+ * answers by its caller, which is the signature difference — see `checkTheOwnerRecordDecodes`.
+ */
+const HOOKS_EXTRA_NAMES = ["mineIn", "ownerPid"];
 
 /**
  * pi-only helpers the shared rules above call, lifted so those rules can run at all: `warn` for
@@ -327,7 +349,12 @@ const SHARED_NAMES = [
 const PI_EXTRA_NAMES = ["warn", "sanitizeSubject", "sanitizeFrom"];
 
 async function loadHooks(source = fs.readFileSync(HOOKS_SOURCE, "utf8")) {
-	return loadDecls({ source, file: "hooks/helm-mail.mjs", names: SHARED_NAMES, extension: ".mjs" });
+	return loadDecls({
+		source,
+		file: "hooks/helm-mail.mjs",
+		names: [...HOOKS_EXTRA_NAMES, ...SHARED_NAMES],
+		extension: ".mjs",
+	});
 }
 
 async function loadPi(source = fs.readFileSync(PI_SOURCE, "utf8")) {
@@ -406,6 +433,79 @@ function extractSwiftHandleRule(source) {
 	return rules;
 }
 
+/**
+ * Read `MailboxOwner.init(from:)`'s schema out of the Swift source — which keys it decodes,
+ * which are required, and as what type.
+ *
+ * **Why the harness needs a second Swift reader.** `Handle` only sees the `handle` field. The
+ * object both writers actually put on disk is the whole owner record, and `MailboxOwner` is a
+ * *separate* decoder for it — so the on-disk shape is duplicated three ways as much as the
+ * alphabet is. `MailboxDirectory.owners(in:)` is a `compactMap { try? … }` whose own header
+ * promises "one bad file costs its own row and nothing else", which is right for a malformed
+ * file and is exactly wrong as a drift alarm: a renamed field or a `pid` that stopped being an
+ * integer makes a live, reachable agent silently vanish from every helm surface with no error
+ * anywhere. Found in review; the first draft of this file claimed the record's shape was
+ * "compared on its own above" and it was not.
+ *
+ * Strict for the same reason `extractSwiftHandleRule` is: every statement in the initializer
+ * must be recognised, and an unrecognised one is a hard failure naming the leftover text.
+ */
+function extractSwiftOwnerSchema(source) {
+	const struct = source.indexOf("package struct MailboxOwner");
+	if (struct < 0) throw new Error("MailboxDirectory.swift: no `package struct MailboxOwner` — the owner-record check is measuring nothing");
+
+	const lines = source.slice(struct).split("\n");
+	const start = lines.findIndex((line) => /^\s*package init\(from decoder: Decoder\) throws \{\s*$/.test(line));
+	if (start < 0) throw new Error("MailboxOwner: no `package init(from decoder: Decoder) throws {`");
+	const indent = lines[start].match(/^\s*/)[0];
+	const end = lines.findIndex((line, i) => i > start && line === `${indent}}`);
+	if (end < 0) throw new Error("MailboxOwner: init(from:) has no closing brace at its own indentation");
+
+	let rest = `${lines
+		.slice(start + 1, end)
+		.map((line) => line.replace(/\/\/.*$/, ""))
+		.join(" ")
+		.replace(/\s+/g, " ")
+		.trim()} `;
+
+	const eat = (pattern, what) => {
+		const match = rest.match(pattern);
+		if (!match) throw new Error(`MailboxOwner.init(from:) ${what} — it continues: ${rest.slice(0, 100)}`);
+		rest = rest.slice(match[0].length);
+		return match;
+	};
+	eat(/^let \w+ = try decoder\.container\(keyedBy: CodingKeys\.self\) /, "no longer opens a keyed container");
+	const raw = eat(/^let (\w+) = try container\.decode\(String\.self, forKey: \.(\w+)\) /, "no longer decodes the handle as a required String");
+	// The handle is the one field routed through `Handle(validating:)` — the same rule the
+	// alphabet check extracts — rather than merely typed. If that stops being true, say so.
+	eat(new RegExp(`^guard let (\\w+) = Handle\\(validating: ${raw[1]}\\) else \\{ throw [^}]*\\} `), "no longer validates the handle through Handle(validating:)");
+	eat(/^(\w+) = (\w+)\.value /, "no longer stores the validated handle");
+
+	const fields = [{ key: raw[2], type: "String", required: true, throughHandle: true }];
+	while (rest.trim()) {
+		const field = eat(/^(\w+) = try container\.(decode|decodeIfPresent)\((\w+)\.self, forKey: \.(\w+)\) /, "grew a statement this harness does not understand");
+		fields.push({ key: field[4], type: field[3], required: field[2] === "decode", throughHandle: false });
+	}
+
+	// CodingKeys and the decoded set must be the same set, or a key exists that nothing reads.
+	const keys = source.slice(struct).match(/enum CodingKeys: String, CodingKey \{ *\n?\s*case ([^\n}]+)/);
+	if (!keys) throw new Error("MailboxOwner: no `enum CodingKeys` this harness can read");
+	const declared = keys[1].split(",").map((name) => name.trim()).filter(Boolean).sort();
+	const decoded = fields.map((field) => field.key).sort();
+	if (declared.join() !== decoded.join()) {
+		throw new Error(`MailboxOwner: CodingKeys says [${declared}] and init(from:) decodes [${decoded}] — one of them is not read`);
+	}
+	return fields;
+}
+
+/** How a Swift type in that schema constrains the JSON a writer may put there. */
+const SWIFT_JSON_TYPES = {
+	String: (value) => typeof value === "string",
+	// pid_t is Int32. A pid outside it is not a pid, and Swift would refuse the whole row.
+	pid_t: (value) => Number.isInteger(value) && value >= -2147483648 && value <= 2147483647,
+	Double: (value) => typeof value === "number" && Number.isFinite(value),
+};
+
 /** Split a Swift guard's comma-separated conditions without cutting inside parentheses. */
 function splitTopLevel(text) {
 	const out = [];
@@ -437,8 +537,13 @@ function splitTopLevel(text) {
  * the one place it cannot go.
  *
  * `\s` for `.whitespacesAndNewlines` is the closest JavaScript has and is not identical at the
- * Unicode margins. It does not matter for the corpus this is run against — every handle either
- * writer emits has already been through a `slug` that keeps only `[a-z0-9-]`.
+ * Unicode margins; `Set(string)` iterates JavaScript code points where Swift iterates grapheme
+ * clusters. Neither can bite the corpus this is run against, and the reason is a precondition
+ * worth stating rather than leaving implicit: **every input here has been through a `slug` that
+ * keeps only `[a-z0-9-]`** — both `deriveHandle`s slug every component, including the
+ * `HELM_MAIL_HANDLE` pin. A caller that reaches `Handle(validating:)` WITHOUT slugging first is
+ * outside what this check covers, and `Handle`'s own header already names the next such caller:
+ * `helm-mail-cc`, sending to a handle a human typed.
  */
 function swiftValidate(rules, candidate) {
 	let value = candidate;
@@ -637,12 +742,13 @@ function livenessCases() {
  * Everything a caller can vary about a run, so `selfChecks` can point the whole suite at a
  * mutated copy of any one source and require it to go red.
  */
-async function runConformance({ hooksSource, piSource, handleSource }) {
+async function runConformance({ hooksSource, piSource, handleSource, ownerSource }) {
 	// The three extractions are NOT in a group: if one of them cannot find its implementation
 	// there is nothing to compare at all, and carrying on would be the silent zero itself.
 	const hooks = await loadHooks(hooksSource);
 	const pi = await loadPi(piSource);
 	const rules = extractSwiftHandleRule(handleSource);
+	const schema = extractSwiftOwnerSchema(ownerSource);
 
 	// Each group is isolated, because a rule that diverges far enough to THROW — a `retire` that
 	// deletes the file the next line reads, say — would otherwise cancel every check after it
@@ -658,9 +764,10 @@ async function runConformance({ hooksSource, piSource, handleSource }) {
 	group("retire", () => checkRetireAgrees(hooks, pi));
 	group("reap", () => checkReapAgrees(hooks, pi));
 	group("consume", () => checkConsumeAgrees(hooks, pi));
+	group("the owner record", () => checkTheOwnerRecordDecodes(hooks, pi, rules, schema));
 	group("the notice", () => checkTheNoticeAgrees(hooks, pi));
 	group("the deliberate divergences", () => checkTheDeliberateDivergences(hooks, pi));
-	reportTheSwiftRule(rules);
+	reportTheSwiftRule(rules, schema);
 }
 
 /** Run one check group. A throw is that group's failure and nobody else's. */
@@ -685,25 +792,30 @@ function group(what, run) {
  * did not compare it.
  */
 function checkTheSharedSurfaceIsCovered(hooksSource, piSource) {
-	const inHooks = topLevelFunctionNames(hooksSource);
-	const inPi = new Set(topLevelFunctionNames(piSource));
+	const inHooks = topLevelDeclarationNames(hooksSource);
+	const inPi = new Set(topLevelDeclarationNames(piSource));
 	const shared = inHooks.filter((name) => inPi.has(name));
-	const covered = new Set([...SHARED_NAMES, ...PI_EXTRA_NAMES, ...Object.keys(DELIBERATELY_UNSHARED)]);
+	const covered = new Set([
+		...SHARED_NAMES,
+		...HOOKS_EXTRA_NAMES,
+		...PI_EXTRA_NAMES,
+		...Object.keys(DELIBERATELY_UNSHARED),
+	]);
 	const uncovered = shared.filter((name) => !covered.has(name));
 	check(
 		uncovered.length === 0,
-		`every function both mailbox files declare is compared or excused by name (${shared.length} shared)` +
+		`every function AND const both mailbox files declare is compared or excused by name (${shared.length} shared)` +
 			(uncovered.length ? ` — not classified: ${uncovered.join(", ")}` : ""),
 	);
 	// The control. An intersection of zero satisfies the line above, and an intersection of zero
 	// is what a renamed or moved implementation looks like from here.
-	ranAtLeast(shared.length, 15, "the shared surface");
+	ranAtLeast(shared.length, 25, "the shared surface");
 }
 
 /** The on-disk shape's names and the bounds on another agent's text — #127's numbers. */
 function checkTheConstantsAgree(hooks, pi) {
 	let ran = 0;
-	for (const name of ["NAME", "READ_DIR", "OWNER_FILE", "ROOT_ENV", "HANDLE_ENV", "SUBJECT_MAX", "FROM_MAX"]) {
+	for (const name of ["NAME", "READ_DIR", "OWNER_FILE", "OFF_ENV", "ROOT_ENV", "HANDLE_ENV", "SUBJECT_MAX", "FROM_MAX"]) {
 		ran += 1;
 		check(
 			hooks[name] === pi[name],
@@ -722,7 +834,7 @@ function checkTheConstantsAgree(hooks, pi) {
 	withEnv({ [hooks.ROOT_ENV]: undefined }, () =>
 		check(hooks.mailRoot() === pi.mailRoot() && hooks.mailRoot() === path.join(os.homedir(), ".helm", "mail"), "and unset, both fall back to ~/.helm/mail"),
 	);
-	ranAtLeast(ran, 9, "constants");
+	ranAtLeast(ran, 10, "constants");
 }
 
 function checkSlugAndTailAgree(hooks, pi) {
@@ -1085,6 +1197,73 @@ function checkReapAgrees(hooks, pi) {
 }
 
 /**
+ * The whole `owner.json` both writers actually put on disk, run through the whole Swift
+ * decoder that reads it — not just the `handle` field through `Handle`.
+ *
+ * Both `claim`s are called for real. Their signatures differ (the hook derives its own handle
+ * and reaps on the way in; pi is handed one and does not), and so do two of the values they
+ * write — `runtime` and `pid` — so what is compared is the RECORD SHAPE: the same key set, the
+ * same types, every key `MailboxOwner` requires present and typed as it will decode it.
+ *
+ * A drift here fails silently in production and loudly nowhere: `MailboxDirectory.owners(in:)`
+ * is `compactMap { try? … }`, so a renamed field or a `pid` that stopped being an integer costs
+ * that agent its whole row — the mailbox keeps working, both writers are JavaScript and never
+ * consult this rule, and the agent simply vanishes from every helm surface that joins on it.
+ */
+function checkTheOwnerRecordDecodes(hooks, pi, rules, schema) {
+	const written = {};
+	withEnv({ [hooks.HANDLE_ENV]: undefined, CLAUDE_CONFIG_DIR: makeRegistry([]) }, () => {
+		const hooksRoot = makeRoot();
+		const { handle: hooksHandle } = hooks.claim(hooksRoot, "aaaa-bbbb-cccc-1234", "/tmp/some-repo");
+		written.hooks = JSON.parse(fs.readFileSync(path.join(hooksRoot, hooksHandle, "owner.json"), "utf8"));
+
+		const piRoot = makeRoot();
+		const piHandle = pi.deriveHandle(piRoot, "/tmp/some-repo", "aaaa-bbbb-cccc-1234");
+		pi.claim(piRoot, piHandle, "aaaa-bbbb-cccc-1234", "/tmp/some-repo");
+		written.pi = JSON.parse(fs.readFileSync(path.join(piRoot, piHandle, "owner.json"), "utf8"));
+	});
+
+	check(
+		Object.keys(written.hooks).sort().join() === Object.keys(written.pi).sort().join(),
+		`both claims write the same key set: ${Object.keys(written.hooks).sort().join(", ")}`,
+	);
+
+	let refused = 0;
+	for (const [label, record] of Object.entries(written)) {
+		for (const field of schema) {
+			const value = record[field.key];
+			if (value === undefined) {
+				if (field.required) {
+					refused += 1;
+					bad(`MailboxOwner requires "${field.key}" and ${label}'s claim does not write it — Swift would drop that agent's whole row`);
+				}
+				continue;
+			}
+			const accepts = SWIFT_JSON_TYPES[field.type];
+			if (!accepts) {
+				refused += 1;
+				bad(`MailboxOwner decodes "${field.key}" as ${field.type}, which this harness cannot model — teach it, or the owner-record check is measuring less than the rule`);
+				continue;
+			}
+			if (!accepts(value)) {
+				refused += 1;
+				bad(`${label}'s claim writes "${field.key}": ${JSON.stringify(value)}, which MailboxOwner decodes as ${field.type} and would refuse`);
+			}
+			if (field.throughHandle && !swiftValidate(rules, value).accepted) {
+				refused += 1;
+				bad(`${label}'s claim writes a "${field.key}" that Handle(validating:) refuses: ${JSON.stringify(value)}`);
+			}
+		}
+	}
+	check(refused === 0, `every field MailboxOwner decodes is present and typed as it expects, in both writers' real claim() output (${schema.length} fields)`);
+	// Extra keys are FINE — Swift ignores them — and `claimedAt` is exactly that, written by both
+	// and decoded by nobody. Named rather than left as an unexplained asymmetry in the counts.
+	const extra = Object.keys(written.hooks).filter((key) => !schema.some((field) => field.key === key));
+	check(extra.join() === "claimedAt", `the only field the writers emit and Swift ignores is claimedAt (found: ${extra.join(", ") || "none"})`);
+	ranAtLeast(schema.length, 6, "the owner record");
+}
+
+/**
  * `consume` is what makes a message arrive EXACTLY ONCE — the rename into `read/` is the
  * consume, so a crash leaves every message in exactly one of the two directories and two
  * readers cannot both win one. Written in both files; found uncovered by
@@ -1209,9 +1388,27 @@ function checkTheDeliberateDivergences(hooks, pi) {
 				claimedAt: 1,
 			});
 		}
+		const hooksFallback = hooks.deriveHandle(exhausted, cwd, sessionId);
+		const piFallback = pi.deriveHandle(exhausted, cwd, sessionId);
 		check(
-			hooks.deriveHandle(exhausted, cwd, sessionId) !== pi.deriveHandle(exhausted, cwd, sessionId),
+			hooksFallback !== piFallback,
 			"with every candidate held, the hook returns <where>-<full> and pi appends its own pid",
+		);
+		// AND THE DIVERGENCE HAS A COST, MEASURED RATHER THAN LEFT AS PROSE — found in review.
+		// `full` is the last rung of the hook's own candidate list, so falling through means
+		// `heldByAnother` already said true for exactly the string it then returns; `claim` goes on
+		// to overwrite a live owner's `owner.json`, silently reassigning that agent's mailbox. pi's
+		// `-<pid>` suffix is what stops it. Rare — it needs four live processes colliding on one
+		// derived handle — and silent when it happens.
+		//
+		// This is `hooks/helm-mail.mjs`'s defect, not this file's, and fixing it belongs to
+		// whoever next owns that file. **If this check ever fails because the hook stopped
+		// returning a held handle, that is the fix landing**: delete this assertion and fold the
+		// fallback back into the agreement corpus above.
+		check(
+			hooks.heldByAnother(exhausted, hooksFallback, sessionId) === true &&
+				pi.heldByAnother(exhausted, piFallback) === false,
+			`the hook's exhausted fallback still returns a handle already held (${hooksFallback}) where pi's does not (${piFallback}) — a known asymmetry in hooks/helm-mail.mjs, not this harness`,
 		);
 		fs.rmSync(exhausted, { recursive: true, force: true });
 
@@ -1233,11 +1430,12 @@ function checkTheDeliberateDivergences(hooks, pi) {
 }
 
 /** Say what was actually enforced, so a weakened rule is visible in the output, not only in a diff. */
-function reportTheSwiftRule(rules) {
+function reportTheSwiftRule(rules, schema) {
 	const described = rules
 		.map((rule) => (rule.kind === "alphabet" ? `${rule.kind} ${JSON.stringify([...rule.characters].join(""))}` : rule.kind))
 		.join(", ");
 	ok(`Handle.init?(validating:) enforces: ${described}`);
+	ok(`MailboxOwner decodes: ${schema.map((field) => `${field.key}: ${field.type}${field.required ? "" : "?"}`).join(", ")}`);
 }
 
 // ── the self-checks ──────────────────────────────────────────────────────────────────────
@@ -1256,15 +1454,16 @@ async function selfChecks() {
 	const hooksSource = fs.readFileSync(HOOKS_SOURCE, "utf8");
 	const piSource = fs.readFileSync(PI_SOURCE, "utf8");
 	const handleSource = fs.readFileSync(HANDLE_SOURCE, "utf8");
+	const ownerSource = fs.readFileSync(OWNER_SOURCE, "utf8");
 	const mutations = [
 		{
 			what: "a function the harness names is gone from hooks/helm-mail.mjs",
-			sources: { hooksSource: hooksSource.replace(/^function ownerGone\(/m, "function ownerIsGone("), piSource, handleSource },
+			sources: { hooksSource: hooksSource.replace(/^function ownerGone\(/m, "function ownerIsGone("), piSource, handleSource, ownerSource },
 			expect: /no top-level declaration named ownerGone/,
 		},
 		{
 			what: "a function the harness names is gone from pi's index.ts",
-			sources: { hooksSource, piSource: piSource.replace(/^function sessionPid\(/m, "function sessionPidOf("), handleSource },
+			sources: { hooksSource, piSource: piSource.replace(/^function sessionPid\(/m, "function sessionPidOf("), handleSource, ownerSource },
 			expect: /no top-level declaration named sessionPid/,
 		},
 		{
@@ -1276,12 +1475,13 @@ async function selfChecks() {
 					"",
 				),
 				handleSource,
+				ownerSource,
 			},
 			expect: /ownerGone disagrees|both reapers leave the SAME shared root/,
 		},
 		{
 			what: "the hook's slug emits a character no mailbox directory can carry",
-			sources: { hooksSource: hooksSource.replace('.replace(/[^a-z0-9]+/g, "-")', '.replace(/[^a-z0-9]+/g, "_")'), piSource, handleSource },
+			sources: { hooksSource: hooksSource.replace('.replace(/[^a-z0-9]+/g, "-")', '.replace(/[^a-z0-9]+/g, "_")'), piSource, handleSource, ownerSource },
 			expect: /slug agrees|deriveHandle agrees|accepts all/,
 		},
 		{
@@ -1290,14 +1490,54 @@ async function selfChecks() {
 				hooksSource: `${hooksSource}\nfunction aFourthSharedRule() {\n\treturn 1;\n}\n`,
 				piSource: `${piSource}\nfunction aFourthSharedRule() {\n\treturn 1;\n}\n`,
 				handleSource,
+				ownerSource,
 			},
 			expect: /not classified: aFourthSharedRule/,
+		},
+		{
+			// The const half of the same guard, separately, because the function half passing says
+			// nothing about it — that gap is what review found, and `OFF_ENV` is what it hid.
+			what: "a fourth shared CONST is added to both mailbox files and nobody tells this harness",
+			sources: {
+				hooksSource: `${hooksSource}\nconst A_FOURTH_SHARED_CONST = "x";\n`,
+				piSource: `${piSource}\nconst A_FOURTH_SHARED_CONST = "x";\n`,
+				handleSource,
+				ownerSource,
+			},
+			expect: /not classified: A_FOURTH_SHARED_CONST/,
+		},
+		{
+			what: "MailboxOwner starts requiring a field neither writer's claim() writes",
+			sources: {
+				hooksSource,
+				piSource,
+				handleSource,
+				ownerSource: ownerSource.replace(
+					"retiredAt = try container.decodeIfPresent(Double.self, forKey: .retiredAt)",
+					"retiredAt = try container.decode(Double.self, forKey: .retiredAt)",
+				),
+			},
+			expect: /MailboxOwner requires "retiredAt"/,
+		},
+		{
+			what: "MailboxOwner's init grows a statement the harness cannot model",
+			sources: {
+				hooksSource,
+				piSource,
+				handleSource,
+				ownerSource: ownerSource.replace(
+					"        pid = try container.decode(pid_t.self, forKey: .pid)",
+					"        pid = pid_t(try container.decode(String.self, forKey: .pid)) ?? 0",
+				),
+			},
+			expect: /grew a statement this harness does not understand/,
 		},
 		{
 			what: "Handle's rule grows a clause the harness cannot model",
 			sources: {
 				hooksSource,
 				piSource,
+				ownerSource,
 				handleSource: handleSource.replace(
 					"guard !trimmed.isEmpty",
 					"guard !trimmed.isEmpty, trimmed.count < 64",
@@ -1315,7 +1555,8 @@ async function selfChecks() {
 		const changed =
 			mutation.sources.hooksSource !== hooksSource ||
 			mutation.sources.piSource !== piSource ||
-			mutation.sources.handleSource !== handleSource;
+			mutation.sources.handleSource !== handleSource ||
+			mutation.sources.ownerSource !== ownerSource;
 		if (!check(changed, `self-check: the mutation for "${mutation.what}" still applies to today's source`)) continue;
 
 		const real = report;
@@ -1354,7 +1595,7 @@ function requireTypeStripping() {
 
 async function main() {
 	requireTypeStripping();
-	for (const [what, file] of [["hooks", HOOKS_SOURCE], ["pi", PI_SOURCE], ["Handle", HANDLE_SOURCE]]) {
+	for (const [what, file] of [["hooks", HOOKS_SOURCE], ["pi", PI_SOURCE], ["Handle", HANDLE_SOURCE], ["MailboxOwner", OWNER_SOURCE]]) {
 		if (!fs.existsSync(file)) {
 			bad(`the ${what} implementation is not at ${file} — refusing to pass with nothing to compare`);
 			say("# 1 of 1 check(s) failed");
@@ -1367,6 +1608,7 @@ async function main() {
 			hooksSource: fs.readFileSync(HOOKS_SOURCE, "utf8"),
 			piSource: fs.readFileSync(PI_SOURCE, "utf8"),
 			handleSource: fs.readFileSync(HANDLE_SOURCE, "utf8"),
+			ownerSource: fs.readFileSync(OWNER_SOURCE, "utf8"),
 		});
 	} catch (error) {
 		bad(`the harness could not run: ${error.message}`);
