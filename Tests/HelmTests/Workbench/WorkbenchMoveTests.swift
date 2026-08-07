@@ -326,14 +326,21 @@ final class WorkbenchMoveTests: XCTestCase {
     func testTheKeyboardLandsOnTheMovedPaneWhicheverBranchRan() {
         let (start, left, right) = twoPlusOne()
 
-        for (label, pane, direction) in [
-            ("a slot relocating sideways", left[1].id, Workbench.Direction.right),
-            ("a slot reordering", left[0].id, .down),
-            ("a pane leaving for a column of its own", right.id, .left),
+        // **`anchor` is per case and never the pane under test, which is the whole rigging.**
+        // One hoisted `select(left[0].id)` outside the loop reads as "focus somewhere else" and
+        // is a lie for the middle case, which moves `left[0]` — focus is already on the pane
+        // being moved, so the assertion holds whatever `move` does. Measured: with that shape
+        // and the focus block taken out, two of three cases went red and "a slot reordering"
+        // passed against the un-fixed code.
+        for (label, pane, direction, anchor) in [
+            ("a slot relocating sideways", left[1].id, Workbench.Direction.right, right.id),
+            ("a slot reordering", left[0].id, .down, left[1].id),
+            ("a pane leaving for a column of its own", right.id, .left, left[0].id),
         ] {
             var bench = start
-            // Focus somewhere else entirely, so "it followed" cannot be "it never left".
-            bench.select(left[0].id)
+            XCTAssertNotEqual(anchor, pane, "\(label): the anchor must not be the pane moved")
+            // Focus somewhere else, so "it followed" cannot be "it never left".
+            bench.select(anchor)
 
             bench.move(pane, direction)
 

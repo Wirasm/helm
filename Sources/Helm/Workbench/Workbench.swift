@@ -503,6 +503,10 @@ struct Workbench: Codable, Equatable {
         // address computed before it can name a position that no longer exists. Nothing here
         // can break an invariant `normalize()` just established: the pane is in the slot being
         // selected, and the slot is one the bench holds.
+        // Unreachable, and not an assertion for `normalize()`'s reason: `move` has already
+        // returned `false` for a pane the bench does not hold, and every branch above relocates
+        // that pane rather than removing it — `normalize()` drops empty slots and columns, never
+        // a pane. The move still happened, so `true` is the honest answer if it ever were reached.
         guard let landed = address(of: pane) else { return true }
         columns[landed.column].slots[landed.slot].selected = pane
         focusedSlot = columns[landed.column].slots[landed.slot].id
