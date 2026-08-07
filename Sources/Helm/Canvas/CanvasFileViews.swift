@@ -342,8 +342,11 @@ enum HTMLCanvasPage {
     ) {
         guard coordinator.reloadDemand != demand else { return }
         coordinator.reloadDemand = demand
-        // Nothing has been loaded yet, so `load` above is about to navigate anyway; doing it
-        // here as well would be two loads for one render.
+        // Nothing has ever been loaded, so there is no document to take away and no page to
+        // protect. **Unreachable from the representable**, and said plainly rather than left to
+        // read as a live guard: `makeNSView` and `updateNSView` both call `load` first, and
+        // `load` leaves `loadedKey` set on every path. It is here for a caller that has not,
+        // which is what a `static` on an `enum` invites.
         guard coordinator.loadedKey != nil else { return }
         navigate(webView, path: path, theme: theme, coordinator: coordinator)
     }
@@ -406,6 +409,11 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
         let coordinator = CanvasFileCoordinator(
             host: CanvasAddress.host(for: path), onAnnotation: onSelection)
         coordinator.onUpdate = onUpdate
+        // Seeded, not left at zero. A demand is a *rise* against what this coordinator has
+        // already seen, and SwiftUI can build a fresh one for a pane whose model has pressed
+        // Reload before — which against a zero would read as a demand nobody made and load the
+        // document a second time, immediately after `makeNSView` loaded it.
+        coordinator.reloadDemand = reloadDemand
         return coordinator
     }
 

@@ -200,6 +200,43 @@ final class CanvasLiveUpdateTests: XCTestCase {
         XCTAssertEqual(offered, 0, "and it is not an update, so nothing was offered")
     }
 
+    /// **A demand is a rise, not a value — and a rebuilt pane must not read the model's history
+    /// as a fresh press.** Found by review, and it is the counter-desync `AGENTS.md` warns about
+    /// twice over.
+    ///
+    /// `CanvasModel.reloadDemand` outlives the coordinator by design — the model belongs to the
+    /// pane and the coordinator to SwiftUI, which rebuilds `HTMLCanvasWebView` whenever the
+    /// operator switches tabs away and back. A coordinator that started its own counter at zero
+    /// would then mismatch a model standing at 1 and navigate a second time, immediately after
+    /// `makeNSView` had just loaded the page — on **every** future revisit, not once.
+    ///
+    /// The seeding itself lives in `HTMLCanvasWebView.makeCoordinator`, which no test can reach
+    /// (`NSViewRepresentableContext` has no public initializer), so what this pins is the rule
+    /// the seeding relies on: **handed the demand it was seeded with, `reloadOnDemand` does
+    /// nothing.** Without that, seeding would be pointless; without the seeding, the app hands
+    /// it a value it was not seeded with. The second half — that a demand it has NOT seen does
+    /// navigate — is `testAPageThatDeclinesKeepsItsDocumentAndTheOperatorGetsTheChoice`, so
+    /// between them the counter cannot be satisfied by ignoring every demand.
+    func testACoordinatorRebuiltAfterAReloadDoesNotReloadAgainByItself() async throws {
+        try Self.page(handler: "window.__offers.push(u); return true;").write(
+            to: artifact, atomically: true, encoding: .utf8)
+
+        // The operator pressed Reload once, some time ago; SwiftUI has since rebuilt the view.
+        let pane = try Pane(artifact: artifact, reloadDemand: 1)
+        try await pane.firstLoad()
+        await pane.leaveAMark()
+
+        // What `updateNSView` does on the very next render, with nothing having happened.
+        pane.reloadOnDemand(1)
+
+        let survived = await pane.markSurvived()
+        XCTAssertTrue(
+            survived,
+            "the page was loaded a second time for a press nobody made — a counter compared "
+                + "against a fresh coordinator's guess of zero rather than against what the "
+                + "model actually stands at")
+    }
+
     // MARK: - The artifact
 
     /// An `.html` artifact, optionally holding state and taking updates. `__offers` is the page's
@@ -238,13 +275,18 @@ final class CanvasLiveUpdateTests: XCTestCase {
         /// receives in the app.
         private var answers: [CanvasUpdateAnswer] = []
 
-        init(artifact: URL) throws {
+        /// - Parameter reloadDemand: what the model's counter already stood at when this
+        ///   coordinator was made — `HTMLCanvasWebView.makeCoordinator`'s seeding, reproduced.
+        ///   Zero is the ordinary case; anything else is a pane whose operator has pressed
+        ///   Reload before and whose view SwiftUI has since rebuilt.
+        init(artifact: URL, reloadDemand: Int = 0) throws {
             path = StandardizedPath(artifact.path)
             coordinator = CanvasFileCoordinator(
                 host: CanvasAddress.host(for: path), onAnnotation: { _ in })
             webView = HTMLCanvasPage.makeWebView(for: path, coordinator: coordinator)
             super.init()
             coordinator.onUpdate = { [weak self] in self?.answers.append($0) }
+            coordinator.reloadDemand = reloadDemand
             webView.configuration.userContentController.add(self, name: "probe")
         }
 

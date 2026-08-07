@@ -193,14 +193,23 @@ enum CanvasHTML {
     /// Reports what the operator selected, so helm can anchor a comment to it.
     ///
     /// On `mouseup` it reads the selection, walks up from
-    /// `range.commonAncestorContainer` to the nearest ancestor carrying an `id`, and posts
-    /// `{ id, text, rect }`.
+    /// `range.commonAncestorContainer` to the nearest ancestor carrying an `id`, and posts a
+    /// message whose **`kind`** says what it is.
     ///
-    /// A `mouseup` that left **nothing** selected posts `{ cleared: true }` instead of
-    /// nothing at all — that is the operator clicking away from a selection they had, and
-    /// it is what lets the comment field close the way every popover does (#165). It costs
-    /// one message per click on the page and no state in it; the model decides what a
-    /// cleared report means.
+    /// **The kinds are `CanvasPageSelection.Kind`'s, and this comment deliberately does not
+    /// list them.** It used to spell the payload out — `{ id, text, rect }` for a selection,
+    /// `{ cleared: true }` for a dismissal — and that was already a second copy of a shape
+    /// living somewhere else. #109 changed the shape and every consumer of it, and this
+    /// sentence would have been the one thing left asserting the old one as current fact: a
+    /// wire format written twice, once in code and once in prose, where only the code half has
+    /// a test on it. Read `CanvasPageSelection.Kind`, which is exhaustive, and
+    /// `CanvasAnnotationScriptTests.testTheScriptAndSwiftStillAgreeOnEveryMessageKind`, which
+    /// runs the real script and checks every case of it.
+    ///
+    /// A `mouseup` that left **nothing** selected posts a `cleared` message instead of nothing
+    /// at all — that is the operator clicking away from a selection they had, and it is what
+    /// lets the comment field close the way every popover does (#165). It costs one message per
+    /// click on the page and no state in it; the model decides what a cleared report means.
     ///
     /// **The script is helm's, not the canvas's, and the canvas must render correctly
     /// without it.** A page that depended on a helm-injected global would render in helm
