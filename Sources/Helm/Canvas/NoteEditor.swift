@@ -92,7 +92,16 @@ struct NoteEditorView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .focused($writing)
-                .onAppear { writing = true }
+                // **`.task`, not `.onAppear`, and that is a measurement rather than a style
+                // choice.** A `TextField` takes focus assigned during `onAppear` — the canvas
+                // address bar has done exactly that since ⌘L existed — and a `TextEditor` does
+                // not: its `NSTextView` is not in the window's responder chain yet at that
+                // point, so the assignment lands on nothing and is silently dropped. Driven
+                // live against the real app, both ways: with `onAppear`, ⇧⌘N opened the editor
+                // and every character typed after it went nowhere at all, while the very same
+                // keystrokes reached the address bar's field in the same window a moment later.
+                // `.task` runs after the first render pass, by which point the responder exists.
+                .task { writing = true }
             Color.border.frame(height: 1)
             footer
         }
