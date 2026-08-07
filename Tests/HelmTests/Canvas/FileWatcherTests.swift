@@ -30,9 +30,33 @@ final class FileWatcherTests: XCTestCase {
     /// **The acceptance: a partial write never renders.** The file is written in three chunks the
     /// way a streaming writer produces them, and what the render sees is the finished document —
     /// once.
+    ///
+    /// # Why the debounce here is 2s where the watcher's own default is 120ms
+    ///
+    /// **This is the only test in the file whose sleeps must stay *under* a deadline, and that
+    /// makes it the only one a slow machine can break.** The other two sleep to let a window
+    /// *elapse*, so an overshooting sleep only makes them more certain; this one sleeps
+    /// *between chunks that must land in one window*, so an overshoot splits one save into two
+    /// and the assertion reads `("2") is not equal to ("1")`.
+    ///
+    /// It was 150ms against 20ms gaps — a 7.5× margin, which is not enough. `Task.sleep(for:
+    /// .milliseconds(20))` is a floor, not a promise: on a contended runner it overshoots freely,
+    /// and CI run 31216076135 is that happening on a branch whose diff touched the clipboard
+    /// path and nothing within reach of a file watcher. It was also seen red on `development`
+    /// itself earlier the same day and could not be reproduced afterwards.
+    ///
+    /// **2s against 20ms is a 100× margin.** It costs this one test about two seconds and buys a
+    /// red that means something. The production default (`FileWatcher.init`, 120ms) is untouched
+    /// — that number is a human-perception decision and has nothing to do with this.
+    ///
+    /// **The mechanism, proved rather than argued** (2026-08-07): six CPU burners only pushed
+    /// this machine to load 7.68 and the old values still passed three times, so the timing was
+    /// reproduced directly instead — set the window *below* the gaps, at 10ms, and the test fails
+    /// exactly as CI did, two assertions, deterministically. That is the same failure, so the
+    /// margin is the fix.
     func testAWriteThatArrivesInChunksRendersOnceAndOnlyWhenItIsWhole() async throws {
         var renders: [String] = []
-        let watcher = FileWatcher(url: file, debounce: .milliseconds(150)) { [file] in
+        let watcher = FileWatcher(url: file, debounce: .seconds(2)) { [file] in
             renders.append((try? String(contentsOf: file!, encoding: .utf8)) ?? "<unreadable>")
         }
         defer { _ = watcher }
@@ -44,7 +68,9 @@ final class FileWatcherTests: XCTestCase {
         }
         try handle.close()
 
-        try await settle(for: .milliseconds(500))
+        // Longer than the 2s window above, by the same margin logic — a settle that is shorter
+        // than the debounce measures a render that had not happened yet.
+        try await settle(for: .milliseconds(2500))
 
         XCTAssertEqual(
             renders.count, 1,
