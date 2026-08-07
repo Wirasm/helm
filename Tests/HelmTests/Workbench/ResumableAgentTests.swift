@@ -370,6 +370,37 @@ final class ResumableAgentTests: XCTestCase {
             "a pane that already holds the conversation must not be asked about it")
     }
 
+
+    /// **A bench comes off disk, so two panes can carry one id — and building the offers must
+    /// not trap on that.** `AgentRegistry.row(in:)`, added on this same branch, argues the rule
+    /// in its own header: *"`Dictionary(_:uniquingKeysWith:)` rather than `uniqueKeysWithValues:`,
+    /// because the latter traps and a hand-edited registry directory is not worth a crash."*
+    /// The offers were built the trapping way, over a value decoded from `UserDefaults` rather
+    /// than from a directory — a worse place for it, because the crash is at mount and every
+    /// relaunch reaches it again.
+    ///
+    /// `Workbench.normalize()` says so itself one type over: *"unreachable through any mutation
+    /// — but a decoded bench is not built by a mutation, so this is not an assertion."* Nothing
+    /// dedupes pane ids on the way in.
+    func testTwoPanesCarryingOneIdDoNotTrapWhenTheOffersAreBuilt() throws {
+        let pane = UUID()
+        let bench = Workbench(
+            panes: [
+                Pane(id: pane, content: .terminal(face: .terminal, agent: agent("first"))),
+                Pane(id: pane, content: .terminal(face: .terminal, agent: agent("second"))),
+            ])
+        let model = WorkbenchModel(
+            terminals: TerminalManager(),
+            agents: .fixture(foreground: [:], rows: [:]), launcher: RecordingLauncher())
+
+        model.activate(workspacePath: workspace, restoring: bench)
+
+        XCTAssertEqual(
+            model.resumeOffers.count, 1,
+            "one id, one offer — the duplicate is degenerate, and picking one is the answer; "
+                + "trapping is not")
+    }
+
     // MARK: - Controls
     //
     // Both pass on `origin/development` too. They are here because #63 could satisfy every

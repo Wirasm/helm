@@ -285,14 +285,27 @@ final class WorkbenchModel: ObservableObject {
         guard let bench, !bench.resumableAgents.isEmpty else { return [:] }
         let live = liveAgents(in: bench)
         return Dictionary(
-            uniqueKeysWithValues: bench.resumableAgents.compactMap { pane, agent in
+            bench.resumableAgents.compactMap { pane, agent in
                 guard live[pane] == nil else { return nil }
                 return (
                     pane,
                     AgentResumeOffer.offer(
                         agent, in: pane, transcriptExists: agents.transcriptExists)
                 )
-            })
+            },
+            // **`uniquingKeysWith:`, and first-in-bench-order.** A bench is decoded from
+            // `UserDefaults` and nothing on the way in dedupes pane ids — `normalize()` says so
+            // in its own words: *"unreachable through any mutation — but a decoded bench is not
+            // built by a mutation, so this is not an assertion."* `uniqueKeysWithValues:` traps
+            // on a duplicate, which here is a crash **at mount**, on every relaunch, that the
+            // operator can only escape by hand-editing defaults. `AgentRegistry.row(in:)` makes
+            // exactly this argument on this same branch and is the reason to make it here too.
+            //
+            // First rather than last, because `Workbench.address(of:)` is a `firstIndex(where:)`
+            // — so the first is the pane `record`, `resume` and `dismissResume` will all act on,
+            // and an offer about the other one would answer a question about a pane nothing
+            // touches.
+            uniquingKeysWith: { first, _ in first })
     }
 
     func deactivate() {
