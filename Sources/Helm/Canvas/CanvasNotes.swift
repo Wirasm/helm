@@ -8,11 +8,33 @@ import Foundation
 /// The sidecar is itself a `.md` file the artifact browser will list, and that is wanted:
 /// the notes are an artifact, and the operator should be able to open them.
 enum CanvasNotes {
+    /// What makes a filename a sidecar rather than a document.
+    ///
+    /// **Named once, because a second reader appeared** (#289). It used to be spelled inline in
+    /// `sidecarURL` below and nothing else had to know it; now `OperatorNote` does, and asking
+    /// here rather than restating `".notes.md"` there is what keeps the two from drifting.
+    static let sidecarSuffix = ".notes.md"
+
     /// `plan.md` → `plan.notes.md`, `tasks.html` → `tasks.notes.md`, `README` →
     /// `README.notes.md`. Beside the canvas, whatever directory that is.
     static func sidecarURL(for canvas: URL) -> URL {
         let name = canvas.deletingPathExtension().lastPathComponent
-        return canvas.deletingLastPathComponent().appendingPathComponent("\(name).notes.md")
+        return canvas.deletingLastPathComponent()
+            .appendingPathComponent("\(name)\(sidecarSuffix)")
+    }
+
+    /// Whether this file is some canvas's sidecar rather than a document of its own.
+    ///
+    /// **The question `OperatorNote` has to ask, and the reason it exists** (#289). A sidecar is
+    /// written *beside* its canvas, so a note's sidecar lands in `notes/` — where it is a `.md`
+    /// file, three components under the artifact root, and therefore indistinguishable from a
+    /// note by shape alone. Letting it pass for one would put the writing face over it, and
+    /// `CanvasModel.saveNote` **overwrites**, which is precisely what `append` below says must
+    /// never happen to this file: *"the sidecar is the memory; a rewrite would lose earlier
+    /// notes"*. So the exclusion is not tidiness — it is that sentence enforced from the one
+    /// place that could otherwise break it.
+    static func isSidecar(_ url: URL) -> Bool {
+        url.lastPathComponent.hasSuffix(sidecarSuffix)
     }
 
     /// One entry, in the shape an agent reads without being taught anything: the anchor as

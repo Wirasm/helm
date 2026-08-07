@@ -50,6 +50,26 @@ final class OperatorNoteTests: XCTestCase {
             "a file opened through Browse… from anywhere on disk is somebody else's")
     }
 
+    /// **A note can accumulate an annotation sidecar of its own, and that sidecar is not a note.**
+    ///
+    /// It lands in `notes/`, it is a `.md` file, and it is three components under the artifact
+    /// root — so shape alone lets it pass. Letting it would put the writing face over it, and
+    /// `CanvasModel.saveNote` overwrites where `CanvasNotes.append` must only append: one
+    /// keystroke would replace every comment ever made on that canvas. The browser lists
+    /// sidecars deliberately (`CanvasNotes`' own header), so opening one is an ordinary act.
+    func testACanvassOwnSidecarIsNotItselfANote() {
+        let note = try? XCTUnwrap(self.note("helm-3ec376/notes/2026-08-07-note.md"))
+
+        XCTAssertNil(
+            self.note("helm-3ec376/notes/2026-08-07-note.notes.md"),
+            "a sidecar in notes/ passes every shape check and is still not the operator's note")
+        // Derived from `CanvasNotes` rather than spelled again, so a change to the suffix is
+        // still measured here instead of quietly passing.
+        XCTAssertNil(
+            note.map { OperatorNote(CanvasNotes.sidecarURL(for: $0.url), under: root) } ?? nil,
+            "and the pairing has to hold whatever CanvasNotes names its sidecars")
+    }
+
     /// `Workbench.pane(showing:)` compares canvas sources by value, so two spellings of one path
     /// have to be one note for the same reason they are one pane (#88).
     func testAPathIsJudgedByWhereItResolvesRatherThanHowItIsSpelled() {

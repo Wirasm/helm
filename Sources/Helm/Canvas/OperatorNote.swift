@@ -52,6 +52,12 @@ struct OperatorNote: Equatable {
     ///   `ArtifactBrowser` already makes with its `root`.
     init?(_ url: URL, under artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot) {
         guard RenderableFile.isMarkdown(url) else { return nil }
+        // **A note's own annotation sidecar lands in `notes/` and is a `.md` file, so shape alone
+        // would let it pass for a note.** It is not one: `CanvasNotes.append` only ever appends,
+        // because the sidecar is the memory of every comment made on that canvas, and the writing
+        // face `saveNote()` drives overwrites. Asked of `CanvasNotes` rather than spelled here,
+        // so the two cannot drift.
+        guard !CanvasNotes.isSidecar(url) else { return nil }
         let candidate = StandardizedPath(url)
         let root = StandardizedPath(artifactRoot).value
         // Both sides standardized before the compare, so `~/.prp/../.prp/k/notes/a.md` is the
