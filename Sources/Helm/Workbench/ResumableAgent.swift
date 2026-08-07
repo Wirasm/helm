@@ -65,15 +65,21 @@ enum AgentResume {
     /// the list is one long and why the field is still stored.
     static let claude = "claude"
 
-    /// **What the resumed agent is told, and why it is told anything at all.**
+    /// **What the resumed agent is told, and why it is this short.**
     ///
-    /// An agent that resumes believing nothing happened acts on stale context — it is holding
-    /// a plan whose subprocesses are dead, files half-written by a tool call that never
-    /// returned, and teammates it will go on addressing. That, not the death itself, is the
-    /// failure: Anthropic's own Agent Teams documents *"no session resumption for in-process
-    /// teammates — the lead will try to message agents that no longer exist"* as its top
-    /// limitation, and the answer their supervisor ships is to tell a resurrected session that
-    /// it was resurrected. helm is in exactly that position and knows exactly the same fact.
+    /// It says one thing the agent cannot work out for itself — that what it had running is
+    /// gone — and then gets out of the way. An agent that resumes believing nothing happened
+    /// acts on stale context: a plan whose subprocesses are dead, teammates it will go on
+    /// addressing. Anthropic's own Agent Teams documents *"no session resumption for
+    /// in-process teammates — the lead will try to message agents that no longer exist"* as
+    /// its top limitation, and the answer their supervisor ships is to tell a resurrected
+    /// session that it was resurrected. helm is in the same position and knows the same fact.
+    ///
+    /// **It does not tell the agent how to work.** An earlier draft added *"re-check the
+    /// state on disk before acting on anything you remember"*, and that is instruction rather
+    /// than information — the agent is better placed than helm to decide what re-checking its
+    /// own situation costs. Every extra sentence here is a sentence helm puts in front of a
+    /// context it cannot see.
     ///
     /// **One line, deliberately.** It is single-quoted onto a command line that libghostty
     /// delivers as a bracketed paste, so an embedded newline would arrive as a continuation
@@ -81,9 +87,8 @@ enum AgentResume {
     /// which is what makes an inline argument safe here where `SpoolLaunchLine` has to stage a
     /// caller's prompt in a file.
     static let notice =
-        "helm restarted and resumed this session. Anything you had running is gone — "
-        + "subprocesses, watches, and any teammates you were messaging no longer exist. "
-        + "Re-check the state on disk before acting on anything you remember."
+        "helm restarted and resumed this session — anything you had running is gone. "
+        + "Orient yourself if you need to, then continue."
 
     /// The shell line that resumes `agent`, or nil when helm has no way to resume that
     /// runtime — which the offer turns into a sentence rather than a command that fails in
