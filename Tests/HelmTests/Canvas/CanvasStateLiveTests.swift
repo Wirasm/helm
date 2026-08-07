@@ -153,11 +153,17 @@ final class CanvasStateLiveTests: XCTestCase {
             """)
     }
 
+    /// **`probe` fires before the report, and the order is load-bearing for the RED run.** A page
+    /// whose first statement is `messageHandlers.helmCanvasState.postMessage(…)` throws when the
+    /// channel is not installed, taking the rest of the script with it — so every one of these
+    /// tests would fail on *"the page never loaded"*, a precondition failure that hides which
+    /// assertion actually caught the regression. Reporting the load first makes the missing
+    /// channel fail as *"no latch appeared beside the artifact"*, which is the thing under test.
     private static func body(_ script: String) -> String {
         """
         <!doctype html><html><body>game<script>
-        \(script)
         window.webkit.messageHandlers.probe.postMessage("loaded");
+        \(script)
         </script></body></html>
         """
     }
