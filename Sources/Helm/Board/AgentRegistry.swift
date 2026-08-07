@@ -146,7 +146,30 @@ enum AgentRegistry {
     /// convention. `Dictionary(_:uniquingKeysWith:)` rather than `uniqueKeysWithValues:`,
     /// because the latter traps and a hand-edited registry directory is not worth a crash.
     static func rows(in root: URL = defaultRoot) -> [pid_t: AgentSession] {
-        Dictionary(
-            sessions(in: root).map { ($0.pid, $0) }, uniquingKeysWith: { _, last in last })
+        row(in: sessions(in: root))
+    }
+
+    /// The same keying over rows a caller already has.
+    ///
+    /// **It exists because "every reader" turned out to be narrower than it sounded.** The
+    /// first version of this rule unified two readers and left two more — `AgentLocator
+    /// .session(in:forPid:)` and `ChatModel`'s half-second refresh, both doing their own
+    /// `first(where: { $0.pid == pid })` over the raw array. They are the *chat face's* answer
+    /// to "which session is in this pane", so a divergence there is not academic: the face
+    /// renders one conversation's transcript while `WorkbenchModel` records another as the
+    /// pane's `ResumableAgent` and `snapshot.json` reports a third, each internally consistent
+    /// and none of them erroring.
+    ///
+    /// Pure and array-in, because those two callers hold rows rather than a root — `AgentLocator`
+    /// takes the registry as an argument precisely so its rule is testable without a filesystem,
+    /// and making it read a directory instead would trade one seam for a worse one.
+    static func row(in rows: [AgentSession]) -> [pid_t: AgentSession] {
+        Dictionary(rows.map { ($0.pid, $0) }, uniquingKeysWith: { _, last in last })
+    }
+
+    /// The one row for a pid, out of rows a caller already has. The direct-match step every
+    /// reader shares; see `row(in:)` for why it is a function.
+    static func row(for pid: pid_t, in rows: [AgentSession]) -> AgentSession? {
+        row(in: rows)[pid]
     }
 }

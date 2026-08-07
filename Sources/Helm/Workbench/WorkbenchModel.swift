@@ -242,6 +242,15 @@ final class WorkbenchModel: ObservableObject {
     /// already the mounted one, and re-selecting it would be a second, wider seizure for no gain.
     func mountWithoutAsking() {
         guard let path = workspacePath, let offer = restoreOffer else { return }
+        // **The same line `answer(.restore)` runs, because this *is* that answer reached
+        // another way.** Leaving it out was a real gap and it had a shape worth naming: the two
+        // paths agreed about everything the header argues — restore, never fresh, exactly what
+        // was offered — and disagreed about one piece of bookkeeping neither sentence mentions.
+        // The offer can come from the shelf rather than from the saved bench
+        // (`BenchMountPolicy.candidate`), and a shelf left naming a bench that is now live is
+        // persisted by the next save; the operator closing back down to one empty shell would
+        // then be offered a frozen snapshot they never declined.
+        if shelvedBench == offer.bench { shelvedBench = nil }
         build(path, restoring: offer.bench)
     }
 

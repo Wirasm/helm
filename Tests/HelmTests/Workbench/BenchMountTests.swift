@@ -369,6 +369,27 @@ final class BenchMountTests: XCTestCase {
         XCTAssertNil(model.shelvedBench, "and nothing was declined, so nothing is shelved")
     }
 
+    /// **The branch `testARequestFromOutsideResolvesAnOpenQuestionByRestoring` cannot reach**,
+    /// because it starts with an empty shelf. When the offer came from the shelf, resolving it
+    /// has to un-shelve it exactly as `answer(.restore)` does — the two are the same answer
+    /// reached two ways. A shelf left naming a bench that is now live is persisted by the next
+    /// save, and the operator closing back down to one empty shell would then be offered a
+    /// frozen snapshot they never declined.
+    func testResolvingAShelvedOfferFromOutsideAlsoStopsItBeingShelved() throws {
+        let declined = bench(terminals: 6)
+        let model = WorkbenchModel(terminals: TerminalManager(), agents: .blind)
+        model.activate(
+            workspacePath: workspace, offering: bench(terminals: 1), shelved: declined)
+        XCTAssertEqual(model.restoreOffer?.bench, declined, "the question is about the shelf")
+
+        model.mountWithoutAsking()
+
+        XCTAssertEqual(model.bench, declined)
+        XCTAssertNil(
+            model.shelvedBench,
+            "a bench that is now live is not also shelved — the two answers must agree")
+    }
+
     /// The control: with no question open it does nothing at all, so it cannot be reached for
     /// as a general "make sure there is a bench" hammer.
     func testResolvingWithNoQuestionOpenChangesNothing() throws {

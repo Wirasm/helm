@@ -141,14 +141,26 @@ final class AgentRegistryTests: XCTestCase {
         try write(rowNamed(pid: 4242, session: "aaaa-1111"), as: "4242.json")
         try write(rowNamed(pid: 4242, session: "bbbb-2222"), as: "4242-stale.json")
 
-        let byRow = AgentRegistry.rows(in: root)[4242]?.sessionId
-        let byLookup = AgentRegistry.sessionLookup(in: root)(4242)
+        let rows = AgentRegistry.sessions(in: root)
+        let answers: [String: String?] = [
+            // The bench's watch (#63) and `AgentObserver`.
+            "rows": AgentRegistry.rows(in: root)[4242]?.sessionId,
+            // The snapshot's join and the spool's poll.
+            "sessionLookup": AgentRegistry.sessionLookup(in: root)(4242),
+            // The chat face's direct match.
+            "AgentLocator": AgentLocator.session(in: rows, forPid: 4242, ancestors: [])?
+                .sessionId,
+            // `ChatModel`'s half-second refresh.
+            "ChatModel refresh": AgentRegistry.row(for: 4242, in: rows)?.sessionId,
+        ]
 
-        XCTAssertNotNil(byRow, "one of them wins — the degenerate case is not absence")
+        XCTAssertNotNil(
+            answers["rows"] ?? nil, "one of them wins — the degenerate case is not absence")
         XCTAssertEqual(
-            byRow, byLookup,
-            "one rule, one answer: a pane's snapshot owner and its persisted resume record "
-                + "must not name two different sessions")
+            Set(answers.values.map { $0 ?? "<none>" }).count, 1,
+            "one rule, one answer, across every reader — a pane's chat face, its persisted "
+                + "resume record and its snapshot owner must not name three different "
+                + "sessions: \(answers)")
     }
 
     private func rowNamed(pid: Int, session: String) -> String {

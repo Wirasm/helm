@@ -151,8 +151,12 @@ final class ChatModel: ObservableObject {
             // main actor, under a live Metal view, is not.
             if Date().timeIntervalSince(lastRegistryRead) > 0.5 {
                 lastRegistryRead = Date()
+                // Through the registry's own pid→row step, for `AgentLocator`'s reason one file
+                // over: this is the *same* question the bench and the snapshot ask, and a
+                // reader that answers it its own way can render one conversation while they
+                // name another.
                 let rows = AgentRegistry.sessions(in: registryRoot)
-                if let fresh = rows.first(where: { $0.pid == session.pid }) {
+                if let fresh = AgentRegistry.row(for: session.pid, in: rows) {
                     if fresh != session { source = .reading(fresh) }
                     setStatus(fresh.status)
                 } else if !AgentLocator.isAlive(session.pid) {
