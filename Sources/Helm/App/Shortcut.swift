@@ -160,6 +160,15 @@ extension Shortcut {
             Shortcut(
                 .character("n"), .command, does: .newTerminal,
                 menu: .init(title: "New Terminal", key: "n", modifiers: .command)),
+            // ⌘⇧N — a note of the operator's own, beside ⌘N because it is the same shape of
+            // command one surface over: ⌘N makes a pane to work in, ⌘⇧N makes one to write in.
+            // Shift-on-top-of-the-base-binding is the pairing `paneMovement` already uses, and
+            // the same reason applies — an operator who knows ⌘N does not have to learn a second
+            // cluster. It arrives uppercase (`charactersIgnoringModifiers` keeps shift applied)
+            // and `match` folds case, so the modifier set is what separates the two rows.
+            Shortcut(
+                .character("n"), [.command, .shift], does: .newNote,
+                menu: .init(title: "New Note", key: "n", modifiers: [.command, .shift])),
             // ⌘T — swap the pane between the terminal and the agent's writing.
             // `.anywhere` because the terminal grid holds focus almost all the
             // time and this has to work from there; the local monitor consumes

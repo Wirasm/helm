@@ -4,14 +4,20 @@ import SwiftUI
 
 // MARK: - Model
 
-/// State for the read-only canvas: what it is showing, and the watcher that
+/// State for the canvas: what it is showing, and the watcher that
 /// reloads a file on external change (plans get rewritten by agents while you
 /// read them).
 ///
-/// Read-only on the **content**: helm never edits the file, because an agent owns it and
-/// rewrites it whole. Commenting is the exception #33 argued for and #39 shipped, and it
-/// keeps that rule — a note goes to a sidecar *beside* the canvas (`CanvasNotes`), never
-/// into it, precisely so the next rewrite cannot clobber it.
+/// Read-only on the **content of an agent's artifact**: helm never edits one, because an agent
+/// owns it and rewrites it whole. Commenting is the exception #33 argued for and #39 shipped, and
+/// it keeps that rule — a note goes to a sidecar *beside* the canvas (`CanvasNotes`), never into
+/// it, precisely so the next rewrite cannot clobber it.
+///
+/// **The operator's own note is the second exception, and it is a different one** (#289). A file
+/// in a project store's `notes/` directory is one helm started for him and nothing else writes, so
+/// there is no rewrite to clobber and no conflict to answer. `OperatorNote` is that line, carried
+/// as a type rather than as a rule somebody has to remember: `note` is nil for every artifact an
+/// agent pushed, and the writing face below is unreachable without one.
 @MainActor
 final class CanvasModel: ObservableObject {
     /// What the pane shows for the open file: a markdown document (rendered as
@@ -203,6 +209,145 @@ final class CanvasModel: ObservableObject {
     /// were told they could not write.
     @Published private(set) var notesFailure: String?
 
+    // MARK: - Writing a note (#289)
+
+    /// The note this canvas is showing, when it is showing one at all.
+    ///
+    /// **nil is the read-only canvas helm has always had**, and it is nil for everything except a
+    /// markdown file in a project store's `notes/` directory: an agent's plan, an `.html`
+    /// artifact, a file chosen through Browse… from the desktop, a URL. `OperatorNote`'s header
+    /// argues why that line is where it is; what matters here is that the writing face is
+    /// unreachable without one, so *"only files the operator created are editable"* is a fact
+    /// about this expression rather than a promise in a comment.
+    ///
+    /// Computed rather than stored, for `notes`' reason one screen up: a stored copy is a second
+    /// thing to keep in step with `showing`, and the canvas can be pointed somewhere else at any
+    /// moment.
+    var note: OperatorNote? { fileURL.flatMap { OperatorNote($0, under: artifactRoot) } }
+
+    /// What the operator is typing, and what helm believes is on disk. **nil means reading** —
+    /// the rendered page — which is every canvas that is not a note and every note the operator
+    /// has switched back to reading.
+    @Published private(set) var draft: NoteDraft?
+
+    /// Why the note could not be read or written, in the operator's terms.
+    ///
+    /// **Deliberately not `notesFailure`.** That one is the annotation sidecar's, and the two are
+    /// different files with different owners — folding them together would give the operator one
+    /// message that could mean either, at the moment they most need to know which.
+    @Published private(set) var writeFailure: String?
+
+    /// The save waiting to happen. Cancelled and replaced on every keystroke, so a run of typing
+    /// costs one write rather than one per character — `FileWatcher`'s own debounce, from the
+    /// other side of the same file.
+    private var saveTask: Task<Void, Never>?
+
+    /// Where the project stores are — `~/.prp` in production, a temporary directory in a test.
+    ///
+    /// **Held rather than reached for, and the same value `WorkbenchModel` starts a note with.**
+    /// `newNote` decides where a note is *written* and `note` above decides whether a file *is*
+    /// one; two roots that disagreed would produce a note the canvas then refused to open for
+    /// writing, with nothing anywhere saying why.
+    private let artifactRoot: URL
+
+    /// How long the note must be quiet before helm writes it.
+    ///
+    /// **Debounced autosave, and the other two candidates lose work in ways this does not.** An
+    /// explicit ⌘S is a thing to remember, and the note it loses is the one taken in a hurry —
+    /// which is every note. Save-on-blur only writes when focus moves, and focus does not move
+    /// when the machine sleeps, when helm is quit, or when a build takes the operator's attention
+    /// for twenty minutes.
+    ///
+    /// **What it does cost, said plainly:** up to this long of typing on a hard kill of the
+    /// process. Every other exit — switching to Read, closing the pane, pointing the canvas at
+    /// another file — flushes first, because those are helm's own code paths and each one calls
+    /// `saveNote()`.
+    ///
+    /// Long enough that a run of typing is one write rather than one per character, short enough
+    /// that a pause between sentences has already saved. Injectable for `FileWatcher`'s reason
+    /// one screen down — the tests set their own, so none of them depends on this number.
+    private let saveDebounce: Duration
+
+    /// Start writing. The header's Write button, and what a freshly created note opens into.
+    ///
+    /// **The draft is seeded from disk exactly once, here.** Nothing re-seeds it — not the file
+    /// watcher, not a re-render, not helm's own save firing that watcher a moment later — because
+    /// re-seeding is the one move that could take away a sentence the operator was half way
+    /// through typing.
+    ///
+    /// **A note helm cannot read is not opened for writing**, which is the guard that keeps this
+    /// from being destructive: seeding an empty draft over an unreadable file and then autosaving
+    /// it would replace that file with nothing.
+    func write() {
+        guard let note, draft == nil else { return }
+        let existing = try? String(contentsOf: note.url, encoding: .utf8)
+        guard let text = existing ?? emptyIfAbsent(note) else {
+            writeFailure =
+                "Could not read \(note.url.lastPathComponent) — helm will not write over a note "
+                + "it cannot read."
+            return
+        }
+        writeFailure = nil
+        draft = NoteDraft(text: text, saved: text)
+    }
+
+    /// "" for a note whose file is not there, nil for one that is there and would not read.
+    ///
+    /// The distinction is the whole of the guard above: a missing file is a note helm is about to
+    /// create by saving, and an unreadable one is somebody else's bytes.
+    private func emptyIfAbsent(_ note: OperatorNote) -> String? {
+        FileManager.default.fileExists(atPath: note.url.path) ? nil : ""
+    }
+
+    /// Stop writing and go back to the rendered page.
+    ///
+    /// **It refuses while there is text helm could not write**, and that refusal is the point: the
+    /// draft is the only copy of those keystrokes, so dropping it to satisfy a button would be the
+    /// data loss this whole design is arranged around. The failure strip is already on screen
+    /// saying why, and the operator's route out is to fix the file or copy the text.
+    func read() {
+        saveNote()
+        guard draft?.isDirty != true else { return }
+        draft = nil
+    }
+
+    /// A keystroke. The one writer of `draft.text`.
+    func edit(_ text: String) {
+        guard draft != nil else { return }
+        draft?.text = text
+        saveTask?.cancel()
+        saveTask = Task { [weak self, saveDebounce] in
+            try? await Task.sleep(for: saveDebounce)
+            guard !Task.isCancelled else { return }
+            self?.saveNote()
+        }
+    }
+
+    /// Write the draft, if there is one and it differs from what is on disk.
+    ///
+    /// Idempotent and cheap to call, which is what lets every exit path call it rather than
+    /// deciding for itself whether a save is owed — `read()`, `open(_:)` and `close()` all do.
+    ///
+    /// **A failure keeps the text and says so.** `saved` is not advanced, so `isDirty` stays true,
+    /// the next keystroke schedules another attempt, and the editor still holds every character.
+    /// A canvas opened through Browse… can live somewhere read-only and `CanvasNotes.append`
+    /// already had to say the same thing one method over; this is that rule for the note itself.
+    func saveNote() {
+        saveTask?.cancel()
+        saveTask = nil
+        guard let note, var draft, draft.isDirty else { return }
+        do {
+            try draft.text.write(to: note.url, atomically: true, encoding: .utf8)
+            draft.saved = draft.text
+            draft.savedAt = Date()
+            self.draft = draft
+            writeFailure = nil
+        } catch {
+            writeFailure =
+                "Could not save \(note.url.lastPathComponent): \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - An update the page kept (#109)
 
     /// The artifact was rewritten, the page declined to apply it or broke trying, and helm did
@@ -339,7 +484,17 @@ final class CanvasModel: ObservableObject {
     /// view would be gone in exactly that state. It moved up one level, to
     /// `WorkbenchModel`, which outlives every canvas pane and is also the thing that now
     /// decides *where* an opened source goes.
-    init(source: CanvasSource? = nil) {
+    /// - Parameters:
+    ///   - artifactRoot: where the project stores live, which is what decides whether the open
+    ///     file is a note the operator may write in (#289).
+    ///   - saveDebounce: how long a note must be quiet before helm writes it.
+    init(
+        source: CanvasSource? = nil,
+        artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot,
+        saveDebounce: Duration = .milliseconds(600)
+    ) {
+        self.artifactRoot = artifactRoot
+        self.saveDebounce = saveDebounce
         if let source { show(source) }
     }
 
@@ -375,7 +530,15 @@ final class CanvasModel: ObservableObject {
     }
 
     func open(_ url: URL) {
+        // **Before anything else.** The canvas is being pointed at another file, and the draft
+        // belongs to the one it is leaving — a save owed at this moment has nowhere to go once
+        // `showing` has moved.
+        saveNote()
         showing = .file(Document(url: url, content: Self.load(url)))
+        // The draft is about the file that was here. Carried onto another one it would be the
+        // wrong text over the right path, which is the one way a note editor can destroy work.
+        draft = nil
+        writeFailure = nil
         selection = nil
         notesFailure = nil
         // The drawer is about *this* canvas's sidecar. Carried onto another file it would
@@ -410,6 +573,10 @@ final class CanvasModel: ObservableObject {
     /// — it no longer means "empty the dock", because there is no dock: the ✕ in the
     /// canvas header closes the **pane**, not the source.
     func close() {
+        // The pane is going away and the draft with it, so this is the last moment a save can
+        // happen at all. `WorkbenchModel.close` and `closeWorkspace` both reach here, which is
+        // every way a note pane disappears short of the process dying.
+        saveNote()
         watcher = nil
         showing = nil
     }
@@ -825,6 +992,13 @@ struct CanvasView: View {
                 if let update = model.updateNotice {
                     updateStrip(update)
                 }
+                // Its own `if`, for the reason given directly above: a note that would not save
+                // and a comment that would not write are facts about two different files, and
+                // hiding either behind the other is helm choosing which of the operator's
+                // problems they are allowed to see.
+                if let failure = model.writeFailure {
+                    noticeStrip(failure, symbol: "exclamationmark.triangle")
+                }
                 if let failure = model.notesFailure {
                     noticeStrip(failure, symbol: "exclamationmark.triangle")
                 } else if let notice = model.notesNotice {
@@ -917,6 +1091,24 @@ struct CanvasView: View {
         }
     }
 
+    /// Write ⇄ Read, on a note only.
+    ///
+    /// Accent while writing, the same way a held tool and an open drawer already say which way
+    /// they are pointing — one treatment for "this control is on", spent at a third site rather
+    /// than a third treatment invented for it.
+    private var writeToggle: some View {
+        Button {
+            if model.draft == nil { model.write() } else { model.read() }
+        } label: {
+            Text(model.draft == nil ? "Write" : "Read")
+                .font(.system(size: 11))
+                .frame(minWidth: 32)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(model.draft == nil ? Color.textMuted : Color.accent)
+        .help(model.draft == nil ? "Write in this note" : "Render this note")
+    }
+
     /// The tools, as chrome on the canvas rather than a mode you have to know about.
     ///
     /// Five small buttons instead of a `Picker`: a segmented control would grow the header
@@ -976,8 +1168,23 @@ struct CanvasView: View {
         }
     }
 
+    /// The writing face, when there is a note and the operator is in it.
+    ///
+    /// **Ahead of `document.content` rather than a case inside it**, because a draft is about the
+    /// file and not about what helm made of its bytes: a note the operator has emptied loads as
+    /// `.markdown("")` and one whose file has just been deleted under them loads as `.notice`, and
+    /// switching them out of the editor on either would drop what they were typing.
     @ViewBuilder
     private func fileContent(for document: CanvasModel.Document) -> some View {
+        if let note = model.note, let draft = model.draft {
+            NoteEditorView(model: model, note: note, draft: draft)
+        } else {
+            renderedContent(for: document)
+        }
+    }
+
+    @ViewBuilder
+    private func renderedContent(for document: CanvasModel.Document) -> some View {
         switch document.content {
         case let .markdown(markdown):
             MarkdownCanvasView(
@@ -1031,7 +1238,18 @@ struct CanvasView: View {
                     .truncationMode(.middle)
             }
             Spacer()
-            markPicker
+            // **Only on a note, which is the visible half of the scope line.** An agent's
+            // artifact has no Write button at all, so there is nothing to click and nothing to
+            // explain — the conflict question #289 leaves open is one the operator cannot walk
+            // into by accident.
+            if model.note != nil {
+                writeToggle
+            }
+            // Nothing to mark while writing: the page is not on screen, and a picker over a text
+            // editor would be four buttons that do nothing.
+            if model.draft == nil {
+                markPicker
+            }
             // Attention as state on an existing element, never a popup: a count on the
             // header, not a badge that pops. It is a toggle now rather than a popover's
             // anchor, and it says which way it is pointing — accent while the drawer is

@@ -11,7 +11,7 @@
 // no keystrokes — a file appears in the spool, helm acts, helm writes a file back. It works with
 // the screen locked, headless and over ssh.
 //
-// helm has nineteen commands and will take four of them from an agent. The rule is one sentence:
+// helm has twenty commands and will take four of them from an agent. The rule is one sentence:
 // REARRANGING THE BENCH IS FINE, TAKING FOCUS IS NOT. An agent selecting the operator's active tab
 // mid-thought is the wrong-terminal click in a supported API — so every command that moves the
 // keyboard, or that acts on "the focused pane" without saying which pane it means, is refused with

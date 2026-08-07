@@ -30,6 +30,9 @@ enum KeyHintCatalog {
     /// one and the ones nothing else in the window hints at.
     static let named: [(command: HelmCommand.Name, label: String)] = [
         (.newTerminal, "new"),
+        // Next to `new` for the reason `move` sits next to `focus`: the two are one modifier
+        // apart (⌘N and ⇧⌘N), and reading them side by side is what teaches the second one.
+        (.newNote, "note"),
         (.splitRight, "split"),
         (.splitDown, "split down"),
         (.closePane, "close"),

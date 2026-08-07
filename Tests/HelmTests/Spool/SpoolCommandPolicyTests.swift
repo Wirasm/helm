@@ -58,6 +58,26 @@ final class SpoolCommandPolicyTests: XCTestCase {
         }
     }
 
+    /// **#289's verdict, and the clearest case on the list.** Starting a note creates a file,
+    /// inserts a pane, selects it, focuses its slot and puts the cursor in an editor — a
+    /// keystroke destination, not merely a layout change. There is no non-seizing twin to route
+    /// to, because a note nobody is sitting in front of is a file, and writing a file is
+    /// something an agent already does without asking helm.
+    func testStartingANoteIsRefusedAndSaysWhereAnAgentsOwnWritingGoesInstead() {
+        guard case .refused(let reason) = SpoolCommandPolicy.verdict(for: .newNote) else {
+            return XCTFail(
+                "newNote is the operator asking for somewhere to write — it takes the keyboard "
+                    + "by construction, which is the whole of the focus rule")
+        }
+        XCTAssertTrue(
+            reason.contains("push.sh"),
+            "the refusal has to name the offering route an agent actually has; got \"\(reason)\"")
+        XCTAssertTrue(
+            reason.contains("notes/"),
+            "and it has to say that the notes directory is the operator's, which is the rule "
+                + "that keeps #289's unanswered half unreachable; got \"\(reason)\"")
+    }
+
     // MARK: - Refusals say something
 
     /// **A refusal that does not say why is the silence this whole ladder exists to remove.**
@@ -200,9 +220,9 @@ final class SpoolCommandPolicyTests: XCTestCase {
             "the refusal for an unknown kind lists these, so an older helm's answer and a newer "
                 + "one's have to differ in exactly this line")
         XCTAssertEqual(
-            HelmCommandName.allCases.count, 19,
-            "helm has nineteen commands — eighteen from #219, plus movePane (#287). If that "
-                + "number changed, SpoolCommandPolicy's "
+            HelmCommandName.allCases.count, 20,
+            "helm has twenty commands — eighteen from #219, plus movePane (#287) and newNote "
+                + "(#289). If that number changed, SpoolCommandPolicy's "
                 + "switch already forced a verdict for the new one — this only records that it "
                 + "was a deliberate change rather than a merge artefact")
     }

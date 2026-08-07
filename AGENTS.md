@@ -396,14 +396,14 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     guarantee that unmerged work is never destroyed. `SpoolClosePolicy`'s header has the
     argument and the shape a later worktree kind would have to take.
 - **To drive the bench in between, `swift tools/helm-command.swift <command>`** — the fourth
-  spool kind (#269), needing what the other three need: nothing. helm has nineteen typed
-  commands (`HelmCommand`, #219 and #287) and **will take four of them from an agent**:
+  spool kind (#269), needing what the other three need: nothing. helm has twenty typed
+  commands (`HelmCommand`, #219, #287 and #289) and **will take four of them from an agent**:
   `newTerminal`, `splitRight`, `splitDown`, `toggleRail`. `--list` names them without a running
   helm.
   - **The rule is one sentence: rearranging the bench is fine, taking focus is not.** It is
     #125's *appear, don't seize* on a channel that can now ask for anything the keymap can — an
     agent selecting your active tab mid-thought is the wrong-terminal click arriving through a
-    supported API. The other fifteen are `refused` results **naming the reason and, where one
+    supported API. The other sixteen are `refused` results **naming the reason and, where one
     exists, the route to use instead**: `closePane` and `selectTerminal` point at `helm-close`,
     `openCanvasFile` and `openArtifact` at `push.sh`, `openWorkspace` at `helm-spool` — a
     spawn's `cwd` is the workspace helm opens for it. The rest name no route because there
@@ -429,8 +429,29 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     pane counts. Exit codes are 2 no answer, 3 refused, 4 helm could not act, 6 abandoned.
   - `SpoolCommandPolicy` (`Sources/HelmWire/Spool/SpoolRequest.swift`) is the allowlist and the
     argument; it is **exhaustive over `HelmCommandName`**, so a command cannot be added without
-    a verdict — `movePane` (#287) is the first one since, and it arrived refused because the
-    compiler asked. Read it before widening the list.
+    a verdict — `movePane` (#287) and `newNote` (#289) are the two since, and both arrived
+    refused because the compiler asked. Read it before widening the list.
+- **The operator writes here too now, and only in one place: `~/.prp/<key>/notes/`** (#289).
+  ⌘⇧N starts a dated markdown note in the store of the workspace he is in — matched by
+  `WorkspaceStore` where a store exists, keyed by prp's own derivation where none does yet, and
+  registered with prp's own `project.json` when helm is the first thing to touch the store. It
+  opens straight into a `TextEditor` over the markdown **source** (not the rendered page — that
+  would be an HTML→markdown round trip over a document nobody asked helm to reformat), autosaves
+  600ms after typing stops, and flushes on Read, on close, and on the canvas being pointed
+  elsewhere. The path is on the editor's footer as a `CopyableLabel`; **it is not put on the
+  clipboard when the note is created** — a clipboard that changes under an act nobody asked for
+  destroys whatever was in it.
+  - **`OperatorNote` is the scope line, carried as a type.** A file is editable only if it is a
+    markdown file exactly at `<artifact root>/<key>/notes/<name>.md`, so **every artifact an
+    agent writes stays as read-only as it was**. That is deliberate and it is half of #289: the
+    other half — the operator editing a file an agent also rewrites — needs an answer to the
+    question `CanvasNotes` avoided, and is not built. Do not build machinery that only makes
+    sense for it.
+  - **For an agent, `notes/` is read-only by convention.** He hands you a path; read it. Nothing
+    tells you a note changed, and nothing wakes you when one does — same as the state latch.
+    Writing into it would be an agent rewriting a file the operator may have open in the editor,
+    which is exactly the case with no answer. Artifacts still go to `plans/`, `research/`, … and
+    reach the bench through `push.sh`.
 - **`helm-spawn` is the GUI path, and still there** — `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`
   (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
   type `cls`, wait, type the prompt, submit — with every step waiting on something observable
