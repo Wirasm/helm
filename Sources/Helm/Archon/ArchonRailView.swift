@@ -87,14 +87,13 @@ struct ArchonRailView: View {
             // A vertical-axis `TextField` submits on Return and keeps ⌥Return for a newline,
             // so a one-line instruction costs one keystroke and a paragraph is still possible.
             //
-            // **This used to say "the same field shape as the chat composer" and no longer is.**
-            // #119 gave that one a `.onKeyPress(.return)` handler so that Shift+Enter starts a
-            // line instead of submitting — AppKit has no binding for a shifted Return, so it
-            // resolves through the plain one and `.onSubmit` fires. This field, and the canvas
-            // note field, still submit on Shift+Enter. That is a divergence rather than a
-            // decision: an operator who learns Shift+Enter in the composer will truncate a
-            // launch instruction here, and `submit()` starts a workflow. Tracked separately
-            // because the fix is behavioural in two more features, not a comment.
+            // **Shift+Enter starts a line here, and it used not to.** AppKit has no binding for
+            // a shifted Return, so it resolved through the plain one and `.onSubmit` fired —
+            // which in this field does not send a message, it **launches a workflow**: real
+            // work, on a real branch, that somebody then has to notice and unwind. A multi-line
+            // instruction is exactly when an operator reaches for the chord, and exactly when
+            // the truncated half is worth most. `submitOnReturnInsertNewlineOnShift` carries
+            // both halves and the whole argument (#278).
             TextField(prompt, text: text, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
@@ -102,7 +101,7 @@ struct ArchonRailView: View {
                 .foregroundStyle(Color.textPrimary)
                 .focused($composerFocused)
                 .disabled(workspacePath == nil)
-                .onSubmit { submit() }
+                .submitOnReturnInsertNewlineOnShift(submit: submit, insertNewline: startALine)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 7)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.surfaceRaised))
@@ -134,6 +133,23 @@ struct ArchonRailView: View {
     /// control, which is what keeps the launch draft alive across a gate.
     private var text: Binding<String> {
         model.reply == nil ? $model.draft : $model.replyText
+    }
+
+    /// Shift+Enter's newline, into whichever of the two strings the field is writing.
+    ///
+    /// **It goes through `text` rather than naming `draft`, so there is one rule and not two.**
+    /// Which string the field writes is `text`'s question and answering it a second time here
+    /// would be a handler that could put the operator's newline into the string they are not
+    /// looking at — the launch draft while they are answering a gate, or the reverse.
+    ///
+    /// **And it is computed here rather than handed to the modifier, which is not a style
+    /// choice.** A `Binding` passed into `.onKeyPress` is captured, and the capture is a
+    /// snapshot: measured on this field, `text.wrappedValue` read `""` on the same keystroke
+    /// where `model.draft` read `"first line"`. Recomputed at the keystroke, `model.reply` and
+    /// `model.draft` are both read off the live object. `submitOnReturnInsertNewlineOnShift`'s
+    /// header has the measurement.
+    private func startALine() {
+        text.wrappedValue += "\n"
     }
 
     private var prompt: String {
