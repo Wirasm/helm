@@ -27,9 +27,29 @@ concurrency:
 jobs:
   swift:
     name: build · test · format
-    runs-on: macos-15
+    # **macos-26, and this is the whole of why the gate was red.** The `macos-15` image
+    # defaults to Xcode 16.4 / Swift 6.1. Swift 6.2 changed main-actor isolation inference and
+    # this codebase is written against it, so under 6.1 it does not compile — **126 errors**,
+    # every one the same sentence: "main actor-isolated property … can not be referenced from a
+    # nonisolated context". Seven runs, six branches, zero green: #267's diff was entirely
+    # `BenchSnapshot` and it died in `Capture/WindowCapture.swift`, which no branch touched.
+    #
+    # The wrong fix is annotating files one at a time. #276 did two of them, honestly, and it
+    # was treating a symptom — there were 124 more. **Pin the toolchain, not the source.**
+    #
+    # If this label ever goes away, the fix is still a toolchain pin (`setup-xcode` at 26.2 on
+    # an image that carries it), never a sweep of `@MainActor` annotations to satisfy an older
+    # compiler than the one anyone develops on.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+
+      # Printed before anything can fail, because the first red run cost an evening to diagnose
+      # and one line would have answered it.
+      - name: toolchain
+        run: |
+          swift --version
+          xcodebuild -version
 
       # The patched libghostty is gitignored, so a fresh checkout has nothing to link
       # against. First and not optional — the same sentence AGENTS.md opens with.
@@ -65,7 +85,7 @@ jobs:
   # Only runs when the files it covers actually change.
   hooks:
     name: mailbox hooks · conformance
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -89,7 +109,7 @@ jobs:
 
   skills:
     name: skill gates
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: mail skills
