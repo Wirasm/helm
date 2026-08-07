@@ -35,12 +35,25 @@ struct WorkspaceContext: Codable, Equatable {
     /// and, per the note below, discard every workspace's context along with it.
     var workbench: Workbench?
 
+    /// A bench the operator declined at mount (#85).
+    ///
+    /// **"Fresh" means *do not open it now*, never *forget it*, and this field is the
+    /// difference.** Choosing fresh mounts one shell, and that shell is persisted into
+    /// `workbench` on the very next change — so without somewhere else to put it, one click
+    /// on the wrong button would destroy a seventeen-pane layout for good. The declined bench
+    /// is copied here first, and `BenchMountPolicy` offers it back in the one case where it is
+    /// still the operator's live question.
+    ///
+    /// It is not a second persistence authority: nothing reads it except the mount decision,
+    /// and restoring it clears it.
+    var shelvedBench: Workbench?
+
     /// Spelled out because the hand-written `init(from:)` below suppresses the
     /// synthesized memberwise one.
     init(
         terminalSessionIDs: [UUID] = [], selectedTerminalID: UUID? = nil,
         openArtifactPath: String? = nil, branch: String? = nil, branchResolved: Bool = false,
-        workbench: Workbench? = nil
+        workbench: Workbench? = nil, shelvedBench: Workbench? = nil
     ) {
         self.terminalSessionIDs = terminalSessionIDs
         self.selectedTerminalID = selectedTerminalID
@@ -48,6 +61,7 @@ struct WorkspaceContext: Codable, Equatable {
         self.branch = branch
         self.branchResolved = branchResolved
         self.workbench = workbench
+        self.shelvedBench = shelvedBench
     }
 
     /// Hand-written because the synthesized decoder is all-or-nothing at TWO levels, and
@@ -108,6 +122,11 @@ struct WorkspaceContext: Codable, Equatable {
         } else {
             workbench = nil
         }
+        // The shelf degrades quietly, and that asymmetry is deliberate: losing the bench you
+        // are about to see is worth a line in the log, losing one you already declined to open
+        // is not. It falls back to the `try?` idiom every field above uses.
+        shelvedBench =
+            (try? container.decodeIfPresent(Workbench.self, forKey: .shelvedBench)) ?? nil
     }
 }
 

@@ -42,12 +42,21 @@ struct WorkbenchView: View {
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
                 }
+            } else if let offer = model.restoreOffer {
+                // A nil bench with an offer beside it is a *mount waiting on an answer* (#85),
+                // not an empty helm. Both are nil because `Workbench`'s first invariant is
+                // that a bench always holds a pane — the offer is what tells them apart.
+                BenchRestoreOfferView(offer: offer) { model.answer($0) }
             } else {
                 // No workspace open, so there is no bench — `Workbench`'s first invariant
                 // is that a bench always holds a pane, so this is nil rather than empty.
                 EmptyBench()
             }
         }
+        // Which agent is in which pane (#63). Driven from a `.task` for `BoardModel.poll`'s
+        // reason: SwiftUI cancels it on teardown, so the loop's lifetime is the window's. The
+        // state it writes lives on the model, which outlives any single render.
+        .task { await model.watchAgents() }
         .enableInjection()
     }
 }
@@ -227,14 +236,26 @@ private struct SlotView: View {
     @ViewBuilder
     private func paneContent(_ pane: Pane) -> some View {
         switch pane.content {
-        case let .terminal(face):
+        case let .terminal(face, _):
             if let session = model.session(for: pane) {
-                // `focusedPane` is the bench's own reader — the focused slot's selected
-                // pane — so which terminal owns the keyboard is one question with one
-                // answer, asked where the answer lives rather than re-derived per slot.
-                TerminalPaneView(
-                    session: session, face: face,
-                    holdsKeyboard: bench.focusedPane?.id == pane.id)
+                VStack(spacing: 0) {
+                    // Above the terminal rather than over it (#63): the shell underneath is
+                    // live and usable, and an overlay on a pane the operator may simply want
+                    // to type in is the seizing the offer exists to avoid. It is absent when
+                    // there is nothing to ask, which is every pane on a normal launch.
+                    if let offer = model.resumeOffers[pane.id] {
+                        AgentResumeBar(
+                            offer: offer,
+                            resume: { model.resume(pane.id) },
+                            dismiss: { model.dismissResume(pane.id) })
+                    }
+                    // `focusedPane` is the bench's own reader — the focused slot's selected
+                    // pane — so which terminal owns the keyboard is one question with one
+                    // answer, asked where the answer lives rather than re-derived per slot.
+                    TerminalPaneView(
+                        session: session, face: face,
+                        holdsKeyboard: bench.focusedPane?.id == pane.id)
+                }
             }
         case .canvas:
             CanvasView(model: model.canvas(for: pane), post: postHandler)

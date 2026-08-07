@@ -87,6 +87,12 @@ final class WorkspaceModel: ObservableObject {
         }
         var context = contexts[workspace.path.value] ?? WorkspaceContext()
         context.workbench = bench
+        // The shelf rides along with the save that would otherwise have overwritten what is on
+        // it (#85). Written from the model rather than by a call of its own, because the two
+        // values have to land in the same write: a fresh bench persisted without its shelf, or
+        // a shelf persisted without the bench that replaced it, is exactly the half-state the
+        // field exists to prevent.
+        context.shelvedBench = workbench.shelvedBench
         contexts[workspace.path.value] = context
         WorkspaceContextStore.save(contexts, to: defaults)
     }

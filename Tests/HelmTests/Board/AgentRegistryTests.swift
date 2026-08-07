@@ -121,4 +121,51 @@ final class AgentRegistryTests: XCTestCase {
     func testEmptyRegistryYieldsNoRows() {
         XCTAssertEqual(AgentRegistry.sessions(in: root), [])
     }
+
+    // MARK: - One rule for a duplicate pid
+
+    /// **The contract is that every reader picks the same row, not which row it picks.**
+    ///
+    /// Claude Code names the file after the pid, so two rows carrying one pid means two files
+    /// claiming the same process — they cannot both be true and neither is more credible.
+    /// `contentsOfDirectory` promises no order, so *which* one survives is not assertable and
+    /// is not the point. What is: `sessionLookup` and `rows` are two callers of one question,
+    /// and they must not answer it differently.
+    ///
+    /// This is the case that was missing when the two disagreed. `rows` uniqued last-wins while
+    /// `sessionLookup` did its own `first { $0.pid == pid }`, so `snapshot.json` could attribute
+    /// one session to a pane while that pane's own persisted `ResumableAgent` named another —
+    /// silently, with each path confident. Caught by review rather than by a red test, which is
+    /// why this test exists.
+    func testEveryReaderResolvesADuplicatePidToTheSameRow() throws {
+        try write(rowNamed(pid: 4242, session: "aaaa-1111"), as: "4242.json")
+        try write(rowNamed(pid: 4242, session: "bbbb-2222"), as: "4242-stale.json")
+
+        let rows = AgentRegistry.sessions(in: root)
+        let answers: [String: String?] = [
+            // The bench's watch (#63) and `AgentObserver`.
+            "rows": AgentRegistry.rows(in: root)[4242]?.sessionId,
+            // The snapshot's join and the spool's poll.
+            "sessionLookup": AgentRegistry.sessionLookup(in: root)(4242),
+            // The chat face's direct match.
+            "AgentLocator": AgentLocator.session(in: rows, forPid: 4242, ancestors: [])?
+                .sessionId,
+            // `ChatModel`'s half-second refresh.
+            "ChatModel refresh": AgentRegistry.row(for: 4242, in: rows)?.sessionId,
+        ]
+
+        XCTAssertNotNil(
+            answers["rows"] ?? nil, "one of them wins — the degenerate case is not absence")
+        XCTAssertEqual(
+            Set(answers.values.map { $0 ?? "<none>" }).count, 1,
+            "one rule, one answer, across every reader — a pane's chat face, its persisted "
+                + "resume record and its snapshot owner must not name three different "
+                + "sessions: \(answers)")
+    }
+
+    private func rowNamed(pid: Int, session: String) -> String {
+        """
+        {"pid":\(pid),"sessionId":"\(session)","cwd":"/tmp/ws","status":"busy"}
+        """
+    }
 }

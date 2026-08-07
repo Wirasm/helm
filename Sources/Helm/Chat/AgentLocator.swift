@@ -21,9 +21,20 @@ enum AgentLocator {
         in rows: [AgentSession], forPid pid: pid_t, ancestors: [pid_t],
         descendantsOf isDescendant: (AgentSession) -> Bool = { _ in false }
     ) -> AgentSession? {
-        if let direct = rows.first(where: { $0.pid == pid }) { return direct }
+        // **`AgentRegistry.row(in:)`, not a `first(where:)` of its own.** Two files claiming one
+        // pid cannot both be true, and what matters is that every reader picks the same one —
+        // otherwise this face renders one conversation while the bench records another as the
+        // pane's resumable agent and `snapshot.json` reports a third. That rule is the
+        // registry's and is spelled once there.
+        //
+        // **The ancestor walk keeps its own order deliberately.** It is a search *along a
+        // chain*, and the chain's order is the confidence order — nearest ancestor first. Only
+        // the pid→row step is the shared question; the descendant tie-break below is likewise
+        // this file's own rule and stays where it is.
+        let byPid = AgentRegistry.row(in: rows)
+        if let direct = byPid[pid] { return direct }
         for step in ancestors {
-            if let hit = rows.first(where: { $0.pid == step }) { return hit }
+            if let hit = byPid[step] { return hit }
         }
         return rows.filter(isDescendant).first
     }

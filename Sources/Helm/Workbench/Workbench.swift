@@ -109,6 +109,30 @@ struct Workbench: Codable, Equatable {
         panes.filter { if case .canvas = $0.content { true } else { false } }
     }
 
+    /// Every terminal pane that has an agent recorded against it, in bench order (#63). The
+    /// input to both offers: `BenchRestoreOffer.agentCount` says what declining a restore
+    /// costs, and `WorkbenchModel` turns each entry into one pane's resume offer.
+    var resumableAgents: [(pane: Pane.ID, agent: ResumableAgent)] {
+        panes.compactMap { pane in
+            guard case let .terminal(_, agent) = pane.content, let agent else { return nil }
+            return (pane.id, agent)
+        }
+    }
+
+    /// Whether this bench is what `fresh` would build anyway: one terminal pane, nothing
+    /// recorded in it.
+    ///
+    /// The one shape a restore offer must NOT be made about, because there is no decision
+    /// under it — see `BenchMountPolicy.mount`. A pane carrying an agent fails this even
+    /// alone, and that is the case it exists to catch: a single pane whose whole value is the
+    /// conversation it held.
+    var isOneEmptyShell: Bool {
+        guard panes.count == 1, case let .terminal(_, agent) = panes[0].content else {
+            return false
+        }
+        return agent == nil
+    }
+
     /// The panes actually on screen: one per slot. Several at once, which is the whole
     /// difference between a bench and a tab row, and why `TerminalSession.isVisible`
     /// replaced a single app-level `selectedID`.
@@ -137,7 +161,7 @@ struct Workbench: Codable, Equatable {
     func face(ofSelectedPaneIn slot: Slot.ID) -> TerminalFace? {
         guard let slot = self.slot(slot),
             let pane = slot.panes.first(where: { $0.id == slot.selected }),
-            case let .terminal(face) = pane.content
+            case let .terminal(face, _) = pane.content
         else { return nil }
         return face
     }
@@ -641,10 +665,13 @@ struct Workbench: Codable, Equatable {
         guard let address = address(ofSlot: focusedSlot) else { return }
         let slot = columns[address.column].slots[address.slot]
         guard let index = slot.panes.firstIndex(where: { $0.id == slot.selected }),
-            case let .terminal(face) = slot.panes[index].content
+            case let .terminal(face, agent) = slot.panes[index].content
         else { return }
+        // The agent is carried across, not dropped: which face is drawn says nothing about
+        // who is in the pane, and rebuilding `.terminal` without it would silently discard a
+        // resume offer every time the operator pressed ⌘T.
         columns[address.column].slots[address.slot].panes[index].content =
-            .terminal(face: face == .terminal ? .chat : .terminal)
+            .terminal(face: face == .terminal ? .chat : .terminal, agent: agent)
         normalize()
     }
 
@@ -669,6 +696,24 @@ struct Workbench: Codable, Equatable {
     /// a later ⌘-click on that URL selects whichever comes first in bench order. Deduping
     /// here instead would mean closing or merging a pane the operator is looking at, which
     /// is a worse answer than an arbitrary one.
+    /// An agent started, stopped being offered, or was declined in a terminal pane (#63).
+    ///
+    /// **A terminal pane only**, for `repoint`'s reason one case over: nothing else can hold
+    /// an agent, and a canvas quietly growing one would be a value nothing can act on. The
+    /// face is left exactly as it was — recording who is in a pane is not a statement about
+    /// which of its two presentations is drawn.
+    ///
+    /// nil clears the record, which is what answering an offer does: a declined agent that
+    /// stayed on the pane would be re-offered on the next launch forever.
+    mutating func record(_ agent: ResumableAgent?, in pane: Pane.ID) {
+        guard let address = address(of: pane),
+            case let .terminal(face, _) = self.pane(pane)?.content
+        else { return }
+        columns[address.column].slots[address.slot].panes[address.pane].content =
+            .terminal(face: face, agent: agent)
+        normalize()
+    }
+
     mutating func repoint(_ pane: Pane.ID, to source: CanvasSource) {
         guard let address = address(of: pane), case .canvas = self.pane(pane)?.content
         else { return }
@@ -851,7 +896,12 @@ struct Pane: Codable, Equatable, Identifiable {
     }
 
     enum Content: Equatable {
-        case terminal(face: TerminalFace)
+        /// `agent` is what was running in this terminal when helm last looked, and the whole
+        /// of what #63 adds to a persisted bench — see `ResumableAgent`, which argues why it
+        /// lives on `.terminal` rather than beside `Pane`. Defaulted, so every construction
+        /// site that has nothing to say about an agent still reads `.terminal(face: .terminal)`
+        /// and says nothing.
+        case terminal(face: TerminalFace, agent: ResumableAgent? = nil)
         case canvas(CanvasSource)
     }
 }
@@ -877,7 +927,7 @@ enum TerminalFace: String, Codable, Equatable {
 /// gives: the synthesized shape uses positional `_0` keys, which break on any reordering
 /// of the cases and are unreadable in the stored blob.
 extension Pane.Content: Codable {
-    private enum CodingKeys: String, CodingKey { case kind, source }
+    private enum CodingKeys: String, CodingKey { case kind, source, agent }
     private enum Kind: String, Codable { case terminal, canvas }
 
     /// **A `kind` this build does not know throws, and `Slot` skips the pane.** The build
@@ -890,7 +940,17 @@ extension Pane.Content: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
         // The face is deliberately not read, because it is deliberately not written.
-        case .terminal: self = .terminal(face: .terminal)
+        //
+        // **The agent is, and it degrades to absence rather than throwing.** A malformed
+        // `agent` costs this pane its resume offer; throwing would cost the pane, and
+        // `Slot.init(from:)` skips a pane it cannot read. Losing a terminal because helm
+        // could not read a hint about it is the wrong trade in a file this decoder exists
+        // to be tolerant of.
+        case .terminal:
+            self = .terminal(
+                face: .terminal,
+                agent: (try? container.decodeIfPresent(ResumableAgent.self, forKey: .agent))
+                    ?? nil)
         case .canvas: self = .canvas(try container.decode(CanvasSource.self, forKey: .source))
         }
     }
@@ -900,11 +960,19 @@ extension Pane.Content: Codable {
     /// made the chat face worth reading is gone. Restoring into it would greet the
     /// operator with *"No Claude Code session is running in this terminal"* where a shell
     /// should be, and cost a keystroke to leave. ⌘T is one keystroke to get back **in**.
+    ///
+    /// **The agent IS persisted, and it is not the same claim.** A face is a presentation of
+    /// something that is gone; `agent` is the id of a conversation that is not — the pty died
+    /// with helm's process and the transcript did not (#63 proved that by hand: `claude
+    /// --resume` on a session whose process had been killed picked up 208 records). What comes
+    /// back is still a plain empty shell; what is added is an *offer*, which the operator may
+    /// decline, and which is the only form of resurrection that can be wrong safely.
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .terminal:
+        case let .terminal(_, agent):
             try container.encode(Kind.terminal, forKey: .kind)
+            try container.encodeIfPresent(agent, forKey: .agent)
         case let .canvas(source):
             try container.encode(Kind.canvas, forKey: .kind)
             try container.encode(source, forKey: .source)

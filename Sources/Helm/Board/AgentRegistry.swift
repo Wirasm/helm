@@ -123,7 +123,53 @@ enum AgentRegistry {
     /// is not new exposure: the pre-#247 join reached the very same wrong mailbox by the very
     /// same pid, with no registry involved at all.
     static func sessionLookup(in root: URL = defaultRoot) -> (pid_t) -> String? {
-        let rows = sessions(in: root)
-        return { pid in rows.first { $0.pid == pid }?.sessionId }
+        let rows = rows(in: root)
+        return { pid in rows[pid]?.sessionId }
+    }
+
+    /// The same read, keyed by pid, for the caller that needs the whole row rather than the
+    /// session id — `AgentObserver`, which also wants `cwd` (#63).
+    ///
+    /// **It exists so there is exactly one rule for a duplicate pid.** This was two functions:
+    /// `sessionLookup` did `rows.first { $0.pid == pid }` and a second dictionary elsewhere did
+    /// `uniquingKeysWith: { _, last in last }` — the same directory read twice, both authors
+    /// reasoning in prose about the identical degenerate case and reaching **opposite**
+    /// conclusions. Nothing detected the disagreement, and its cost was `snapshot.json`
+    /// attributing one session to a pane while the pane's own persisted record named another.
+    /// Caught in review before it shipped, and the shape of the defect is `AGENTS.md`'s own:
+    /// one rule, two spellings, nothing to notice when they diverge.
+    ///
+    /// **The rule is last-wins, and it is arbitrary on purpose.** Claude Code names the file
+    /// after the pid, so two rows for one pid means two files claiming the same process — they
+    /// cannot both be true and neither is more credible. What matters is not which is picked
+    /// but that every reader picks the same one, which is why this is a function and not a
+    /// convention. `Dictionary(_:uniquingKeysWith:)` rather than `uniqueKeysWithValues:`,
+    /// because the latter traps and a hand-edited registry directory is not worth a crash.
+    static func rows(in root: URL = defaultRoot) -> [pid_t: AgentSession] {
+        row(in: sessions(in: root))
+    }
+
+    /// The same keying over rows a caller already has.
+    ///
+    /// **It exists because "every reader" turned out to be narrower than it sounded.** The
+    /// first version of this rule unified two readers and left two more — `AgentLocator
+    /// .session(in:forPid:)` and `ChatModel`'s half-second refresh, both doing their own
+    /// `first(where: { $0.pid == pid })` over the raw array. They are the *chat face's* answer
+    /// to "which session is in this pane", so a divergence there is not academic: the face
+    /// renders one conversation's transcript while `WorkbenchModel` records another as the
+    /// pane's `ResumableAgent` and `snapshot.json` reports a third, each internally consistent
+    /// and none of them erroring.
+    ///
+    /// Pure and array-in, because those two callers hold rows rather than a root — `AgentLocator`
+    /// takes the registry as an argument precisely so its rule is testable without a filesystem,
+    /// and making it read a directory instead would trade one seam for a worse one.
+    static func row(in rows: [AgentSession]) -> [pid_t: AgentSession] {
+        Dictionary(rows.map { ($0.pid, $0) }, uniquingKeysWith: { _, last in last })
+    }
+
+    /// The one row for a pid, out of rows a caller already has. The direct-match step every
+    /// reader shares; see `row(in:)` for why it is a function.
+    static func row(for pid: pid_t, in rows: [AgentSession]) -> AgentSession? {
+        row(in: rows)[pid]
     }
 }

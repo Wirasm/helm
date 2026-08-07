@@ -73,7 +73,10 @@ struct RootView: View {
             // list and the bench together, and `openWorkspace` is where that already lives.
             spool.attach(
                 spawner: WorkbenchSpoolSpawner(
-                    workbench: workbench, terminals: terminalManager, activate: openWorkspace))
+                    workbench: workbench, terminals: terminalManager,
+                    // The non-asking open, and it is load-bearing rather than tidy — see
+                    // `openWorkspaceForRequest`.
+                    activate: openWorkspaceForRequest))
             // #174's capturer. It needs nothing from this view — it resolves helm's window from
             // `NSApp` at capture time — so it is attached here only because this is where the
             // spool is wired, and a second seam for one line would be worse.
@@ -126,6 +129,18 @@ struct RootView: View {
         activateSelectedWorkspace()
     }
 
+    /// The same open, reached from a **spool spawn** whose `cwd` becomes a workspace (#54).
+    ///
+    /// It differs in one line — the mount it takes — and the difference is spelled here rather
+    /// than behind a flag, which is `Workbench.splitRight(_:movingFocus:)`'s shape. A spawn
+    /// must never raise #85's restore question: the spool exists for the case where nobody is
+    /// at the pane, so a question raised from one is #179's silent hang with a different cause.
+    private func openWorkspaceForRequest(_ workspace: Workspace) {
+        persistCurrentContext()
+        model.open(workspace)
+        activateSelectedWorkspace(asking: false)
+    }
+
     private func closeWorkspace(_ workspace: Workspace) {
         persistCurrentContext()
         let wasSelected = model.selectedWorkspace == workspace
@@ -153,11 +168,21 @@ struct RootView: View {
 
     /// The persisted bench, else the one a pre-bench context describes, else nothing —
     /// which `WorkbenchModel.activate` turns into today's 1×1 frame.
-    private func activateSelectedWorkspace() {
+    ///
+    /// **Whether any of it is opened is the bench's decision, not this view's** (#85).
+    /// `BenchMountPolicy` is where "restore or ask" is decided and it is pure; this hands over
+    /// both candidates and nothing else. Three defects in two days came from logic living in a
+    /// view, which is why the ticket names that as an acceptance criterion.
+    private func activateSelectedWorkspace(asking: Bool = true) {
         guard let workspace = model.selectedWorkspace else { return }
         let context = model.contexts[workspace.path.value] ?? WorkspaceContext()
-        workbench.activate(
-            workspacePath: workspace.path,
-            restoring: context.workbench ?? .migrating(from: context))
+        let saved = context.workbench ?? .migrating(from: context)
+        if asking {
+            workbench.activate(
+                workspacePath: workspace.path, offering: saved, shelved: context.shelvedBench)
+        } else {
+            workbench.activate(
+                workspacePath: workspace.path, restoring: saved, shelved: context.shelvedBench)
+        }
     }
 }
