@@ -230,6 +230,12 @@ struct HTMLCanvasView: View {
     let markTool: CanvasMarkTool
     let showsMark: Bool
     let onSelection: (CanvasPageSelection) -> Void
+    /// The operator pressing Reload on the notice — a counter, not a flag, so pressing it twice
+    /// reloads twice and a demand can never be missed by arriving in the same render as the
+    /// answer that raised it. The same shape as `CanvasModel.addressFocus` and `generation`.
+    let reloadDemand: Int
+    /// What the page said about an offered update, on its way to the notice strip.
+    let onUpdate: (CanvasUpdateAnswer) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -240,7 +246,9 @@ struct HTMLCanvasView: View {
             markTool: markTool,
             showsMark: showsMark,
             theme: colorScheme == .dark ? .dark : .light,
-            onSelection: onSelection
+            onSelection: onSelection,
+            reloadDemand: reloadDemand,
+            onUpdate: onUpdate
         )
     }
 }
@@ -285,21 +293,74 @@ enum HTMLCanvasPage {
     }
 
     /// (Re)loads when the file, its generation (external change), or the theme
-    /// changes. Scripts are re-armed per load so a theme flip re-renders the
-    /// page's diagrams in the matching mermaid theme.
+    /// changes — **except that a generation move is now offered to the page first** (#109).
     ///
     /// **`generation` is the only thing that can say "the same path, different bytes"**, which
     /// is why a sibling edit has to reach `CanvasModel` before it can reach here: the path is
     /// unchanged and the theme is unchanged, so a bench that refreshes nothing leaves this
     /// function with no change to see and no reason to navigate (#261). `CanvasReloadKey` is
     /// where that is carried.
+    ///
+    /// **Three of the four reasons to move the key still navigate outright, and they have to.**
+    /// A first load (`previous == nil`) has no page to offer anything to. A theme flip changes
+    /// the *injected scripts*, which only take effect on a navigation, so a page that "applied"
+    /// it would be left rendering its diagrams in the old mermaid theme. A different document
+    /// is a different artifact. Only a generation move — the same artifact, rewritten — is an
+    /// **update**, and that is the one this offers.
     static func load(
         _ webView: WKWebView, path: StandardizedPath, generation: Int, theme: CanvasTheme,
         coordinator: CanvasFileCoordinator
     ) {
         let key = CanvasReloadKey(theme: theme, generation: generation, document: path.value)
-        guard coordinator.loadedKey != key else { return }
+        let previous = coordinator.loadedKey
+        guard previous != key else { return }
         coordinator.loadedKey = key
+
+        let isUpdate = previous.map { $0.theme == theme && $0.document == path.value } ?? false
+        guard isUpdate else {
+            navigate(webView, path: path, theme: theme, coordinator: coordinator)
+            return
+        }
+        coordinator.offer(
+            CanvasUpdate(artifact: URL(fileURLWithPath: path.value), generation: generation),
+            to: webView
+        ) {
+            navigate(webView, path: path, theme: theme, coordinator: coordinator)
+        }
+    }
+
+    /// The operator answering the notice: load the artifact again whatever the page said.
+    ///
+    /// **Force is the operator's, and only the operator's.** helm never reaches this on its own
+    /// — a page that declined an update or threw on one keeps its document until somebody at the
+    /// pane decides otherwise, which is the whole of *"the gate belongs on the destructive
+    /// action"*. The counter is compared rather than a flag consumed so that a demand cannot be
+    /// swallowed by arriving in the same SwiftUI update as the answer that raised it.
+    static func reloadOnDemand(
+        _ demand: Int, _ webView: WKWebView, path: StandardizedPath, theme: CanvasTheme,
+        coordinator: CanvasFileCoordinator
+    ) {
+        guard coordinator.reloadDemand != demand else { return }
+        coordinator.reloadDemand = demand
+        // Nothing has been loaded yet, so `load` above is about to navigate anyway; doing it
+        // here as well would be two loads for one render.
+        guard coordinator.loadedKey != nil else { return }
+        navigate(webView, path: path, theme: theme, coordinator: coordinator)
+    }
+
+    /// Actually take the document away and load it again. Scripts are re-armed per load so a
+    /// theme flip re-renders the page's diagrams in the matching mermaid theme.
+    ///
+    /// **Split out of `load` by #109, and `forgetPushedState` came with it deliberately.** What
+    /// that call resets is *what the page has been told* — the held tool, whether ink is up —
+    /// and the only thing that makes those stale is the JS context being destroyed, which is a
+    /// navigation. An offer the page applies destroys nothing, so resetting there would tell the
+    /// page its tool again for no reason and, worse, would leave `markShown` claiming false
+    /// while the operator is still looking at their own ink.
+    private static func navigate(
+        _ webView: WKWebView, path: StandardizedPath, theme: CanvasTheme,
+        coordinator: CanvasFileCoordinator
+    ) {
         coordinator.forgetPushedState()
 
         let controller = webView.configuration.userContentController
@@ -336,11 +397,16 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     let showsMark: Bool
     let theme: CanvasTheme
     let onSelection: (CanvasPageSelection) -> Void
+    let reloadDemand: Int
+    let onUpdate: (CanvasUpdateAnswer) -> Void
 
     private var path: StandardizedPath { StandardizedPath(url) }
 
     func makeCoordinator() -> CanvasFileCoordinator {
-        CanvasFileCoordinator(host: CanvasAddress.host(for: path), onAnnotation: onSelection)
+        let coordinator = CanvasFileCoordinator(
+            host: CanvasAddress.host(for: path), onAnnotation: onSelection)
+        coordinator.onUpdate = onUpdate
+        return coordinator
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -355,6 +421,8 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         load(webView, coordinator: context.coordinator)
+        HTMLCanvasPage.reloadOnDemand(
+            reloadDemand, webView, path: path, theme: theme, coordinator: context.coordinator)
         context.coordinator.pushTool(markTool, to: webView)
         context.coordinator.showMark(showsMark, in: webView)
     }
@@ -387,6 +455,14 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     static let bridgeWorld = WKContentWorld.world(name: "helm-canvas-bridge")
 
     var loadedKey: CanvasReloadKey?
+    /// The last reload the operator asked for, so a rising counter is a new demand and an
+    /// unchanged one is ordinary SwiftUI churn. Starts at zero to match `CanvasModel`'s, so a
+    /// pane that has never shown the notice never navigates for this reason.
+    var reloadDemand = 0
+    /// What the page said about an offered update, on its way to the notice strip. **A closure
+    /// rather than a delegate call**, for `CanvasModel.onSourceChange`'s reason one file over:
+    /// this object is SwiftUI's, made in `makeCoordinator`, and the model outlives it.
+    var onUpdate: ((CanvasUpdateAnswer) -> Void)?
     /// The tool the page was last told about, or nil when the page has not been told at
     /// all — which includes every fresh document. A change is pushed with
     /// `evaluateJavaScript` rather than folded into `loadedKey`, because reloading to switch
@@ -437,6 +513,31 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
         markShown = shows
         guard !shows else { return }
         evaluate(CanvasHTML.clearMarkScript(), in: webView)
+    }
+
+    /// **Offer the update to the page, and reload only if it has nobody to take it** (#109).
+    ///
+    /// **Into `WKContentWorld.page`, and this is the one thing helm says to a canvas that goes
+    /// there.** Everything else — the held tool, taking the ink down — goes into `bridgeWorld`,
+    /// and `evaluate(_:in:)` above exists to make that hard to get wrong. This is the exception
+    /// and it is not a lapse: `window.helmCanvasUpdate` is defined by the *artifact*, whose
+    /// scripts run in the page world, and a lookup in `bridgeWorld` would find nothing on every
+    /// page that ever registered one — the same silent inertness #190 was.
+    ///
+    /// The completion handler is `@MainActor`, so the answer lands on the same actor the
+    /// decision is made on: an offer cannot be overtaken by the reload it was racing.
+    func offer(_ update: CanvasUpdate, to webView: WKWebView, reload: @escaping () -> Void) {
+        webView.evaluateJavaScript(
+            update.offerScript(), in: nil, in: .page
+        ) { [weak self] result in
+            let answer: CanvasUpdateAnswer =
+                switch result {
+                case let .success(value): CanvasUpdateAnswer.decode(value)
+                case let .failure(error): .unreadable(error.localizedDescription)
+                }
+            self?.onUpdate?(answer)
+            if answer.reloads { reload() }
+        }
     }
 
     /// A load destroys the JS context, so whatever the page was told is gone with it.
@@ -505,8 +606,18 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
                     originHost: frame.securityOrigin.host,
                     expectedHost: host)
             else { return }
-            guard let report = CanvasPageSelection(message.body) else { return }
-            onAnnotation(report)
+            switch CanvasPageSelection.decode(message.body) {
+            case let .success(report):
+                onAnnotation(report)
+            case let .failure(refusal):
+                // **Named, never silent.** A message the gate dropped without a word is exactly
+                // #216 — every geometry mark refused here for months while both sides' tests
+                // stayed green. There is no operator-facing surface for it (nothing was marked,
+                // so there is no field to put a strip over), and inventing one would put a
+                // notice on screen for a page bug the operator cannot act on. The log is what a
+                // reader of `log show` can act on, and it names the kind.
+                NSLog("helm: canvas dropped a bridge message — \(refusal.reason)")
+            }
         }
     }
 }
@@ -546,31 +657,84 @@ struct CanvasSelection {
 /// field the operator was typing in. A selection must carry text for the same reason in
 /// reverse — a report with none would put an empty comment field over the page.
 ///
-/// **`mark` is the discriminator, the same one `CanvasAnnotation.decode` branches on** — an
-/// enclosure carries `targets`, a relation carries `from`/`to`, neither carries `text` (#216).
-/// Requiring `text` unconditionally admitted a plain selection and silently dropped every
-/// geometry mark before it ever reached the decoder that understands it. `mark`'s presence is
-/// enough to route the payload onward; whether it resolves to anything is `decode`'s call, at
-/// comment time, same as it already is for a plain selection with no anchor.
+/// **`kind` is the discriminator and there is exactly one of it** (#109, #210's third seam).
+/// Before it, this gate had to *infer* the shape from which fields were present — a selection
+/// was "carries a non-empty top-level `text`", a dismissal was `{cleared: true}`, a geometry
+/// mark was `{mark: …}` — and #216 is what that cost: an enclosure carries `targets` and a
+/// relation carries `from`/`to`, neither carries `text`, so both were dropped here for months
+/// while every decoder test stayed green. #216 patched the inference by admitting anything with
+/// a `mark`; this replaces the inference. `Kind` is now the only question asked, `mark` is gone
+/// from the wire rather than left beside `kind` as a second spelling of the same fact, and the
+/// values it used to carry are kinds.
+///
+/// **An unknown kind is refused, and the refusal says so.** That is the whole point of a
+/// discriminator: `Pane.Content` throws on a `kind` this build never heard of and `Slot` drops
+/// the pane rather than guessing, and this is the same rule one seam over. `decode` returns a
+/// `Result` rather than an optional so the coordinator can name what it dropped — a message
+/// dropped in silence is #216's failure mode, not its fix.
 enum CanvasPageSelection {
     case selected(CanvasSelection)
     case cleared
 
-    init?(_ body: Any) {
-        guard let payload = body as? [String: Any] else { return nil }
-        if payload["cleared"] as? Bool == true {
-            self = .cleared
-        } else if payload["mark"] is String {
-            guard let selection = CanvasSelection(payload) else { return nil }
-            self = .selected(selection)
-        } else if let text = payload["text"] as? String,
-            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            let selection = CanvasSelection(payload)
-        {
-            self = .selected(selection)
-        } else {
-            return nil
+    /// Every message the page may post. Exhaustive by construction: a value not in here is a
+    /// message this build does not understand, and understanding it is not something to guess
+    /// at from the fields that happen to be present.
+    ///
+    /// Spelled identically in `Resources/canvas-annotation.js`, which cannot compile against
+    /// this enum — `CanvasAnnotationScriptTests.testTheScriptAndSwiftStillAgreeOnEveryMessageKind`
+    /// is the gate that holds the two halves together, and `allCases` is what lets it be a gate
+    /// over *every* kind rather than a sample.
+    enum Kind: String, CaseIterable {
+        /// A text highlight — helm's behaviour since #39, and the only kind before #112.
+        case selection
+        /// A click that left nothing selected: the canvas's click-elsewhere-to-dismiss (#165).
+        case cleared
+        /// A tap (#112).
+        case point
+        /// An arrow (#112).
+        case relation
+        /// A circle or box (#112).
+        case enclosure
+    }
+
+    /// Why a body was not a message. Carried rather than collapsed into `nil` so the drop can
+    /// be logged in the operator's terms — "an unknown kind" and "a selection with no text" are
+    /// a version skew and a bug in the page respectively, and telling them apart is the
+    /// difference between #216 and a ticket somebody can act on.
+    enum Refusal: Error, Equatable {
+        case notAnObject
+        case noKind
+        case unknownKind(String)
+        case malformed(Kind)
+
+        var reason: String {
+            switch self {
+            case .notAnObject: "the body is not an object"
+            case .noKind: "the message carries no `kind`"
+            case let .unknownKind(kind): "`kind: \(kind)` is not a kind this helm understands"
+            case let .malformed(kind): "a `\(kind.rawValue)` message with nothing helm can use"
+            }
         }
+    }
+
+    static func decode(_ body: Any) -> Result<CanvasPageSelection, Refusal> {
+        guard let payload = body as? [String: Any] else { return .failure(.notAnObject) }
+        guard let raw = payload["kind"] as? String else { return .failure(.noKind) }
+        guard let kind = Kind(rawValue: raw) else { return .failure(.unknownKind(raw)) }
+        if kind == .cleared { return .success(.cleared) }
+        // The one shape check that survives the move to a declared kind, and it is about the
+        // FIELD rather than the anchor: a `selection` with no text would put an empty comment
+        // box over the page. Whether any of these resolves to an anchor is
+        // `CanvasAnnotation.decode`'s call at comment time — the same as it already was for a
+        // plain selection with no id — so nothing else is inspected here.
+        if kind == .selection {
+            let text = (payload["text"] as? String) ?? ""
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return .failure(.malformed(kind))
+            }
+        }
+        guard let selection = CanvasSelection(payload) else { return .failure(.malformed(kind)) }
+        return .success(.selected(selection))
     }
 }
 

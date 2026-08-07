@@ -263,7 +263,7 @@ final class CanvasAnchorTests: XCTestCase {
 
     private func targets(of page: CanvasScriptRuntime) throws -> [[String: Any]] {
         let posted = try XCTUnwrap(page.lastPosted, "the gesture posted nothing to the bridge")
-        XCTAssertEqual(posted["mark"] as? String, "enclosure")
+        XCTAssertEqual(posted["kind"] as? String, "enclosure")
         return try XCTUnwrap(posted["targets"] as? [Any]).compactMap { $0 as? [String: Any] }
     }
 

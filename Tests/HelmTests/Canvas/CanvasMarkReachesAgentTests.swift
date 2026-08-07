@@ -80,9 +80,7 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
         let page = try CanvasScriptRuntime()
         gesture(page)
         let body = try XCTUnwrap(page.lastPosted, "the gesture posted nothing to comment on")
-        let report = try XCTUnwrap(
-            CanvasPageSelection(body),
-            "the page's own message was refused before it reached the model — #216 exactly")
+        let report = try CanvasPageSelection.decode(body).get()
         model.pageDidReport(report)
         model.annotate(comment: comment)
         XCTAssertTrue(page.drainExceptions().isEmpty)

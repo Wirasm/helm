@@ -6,10 +6,19 @@ import XCTest
 /// type-checked and bounded here. A malformed body is nil — never a crash, never a
 /// half-written note.
 final class CanvasAnnotationTests: XCTestCase {
+    /// A plain text selection exactly as the page posts one — **including `kind`**, which every
+    /// bridge message has carried since #109 and which the gate refuses a body without. Filled
+    /// in here rather than in twenty fixtures so these tests stay about the ANCHOR, which is
+    /// their subject; `CanvasModelTests.testTheGateAsksTheKindAndRefusesOneItDoesNotKnow` is
+    /// where the kind itself is the subject.
     private func decode(
         _ body: Any, comment: String = "this ordering is wrong"
     ) -> CanvasAnnotation? {
-        CanvasAnnotation.decode(body, comment: comment)
+        guard var payload = body as? [String: Any] else {
+            return CanvasAnnotation.decode(body, comment: comment)
+        }
+        payload["kind"] = payload["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
+        return CanvasAnnotation.decode(payload, comment: comment)
     }
 
     // MARK: - The anchor

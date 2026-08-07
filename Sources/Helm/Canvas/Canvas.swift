@@ -182,6 +182,38 @@ final class CanvasModel: ObservableObject {
     /// were told they could not write.
     @Published private(set) var notesFailure: String?
 
+    // MARK: - An update the page kept (#109)
+
+    /// The artifact was rewritten, the page declined to apply it or broke trying, and helm did
+    /// **not** take the page away. nil the rest of the time, which is every page with no update
+    /// handler at all — those reload exactly as they always did and there is nothing to say.
+    ///
+    /// **This is the whole of "offer, don't push" made visible.** The alternative to a strip is
+    /// the reload, and the reload is what costs the operator a half-played game; a sentence
+    /// above the page costs them one line of it.
+    @Published private(set) var updateNotice: String?
+
+    /// The operator pressing Reload, as a counter the view hands down. A counter rather than a
+    /// flag for `addressFocus`'s reason: pressing it twice must reload twice, and a flag
+    /// consumed asynchronously can be missed.
+    @Published private(set) var reloadDemand = 0
+
+    /// What the page said about an offered update. Wired to `HTMLCanvasView` by the view below.
+    ///
+    /// **`applied` and `unhandled` both clear the strip, and that is not a tidy-up.** A stale
+    /// "reload?" over a page that has since taken an update, or over one helm is reloading right
+    /// now, is a button that would throw away state for no reason at all.
+    func pageAnsweredUpdate(_ answer: CanvasUpdateAnswer) {
+        updateNotice = answer.notice
+    }
+
+    /// The notice's Reload button — the only thing that reloads a page which said it is holding
+    /// state, and it is at the pane by construction.
+    func reloadArtifact() {
+        updateNotice = nil
+        reloadDemand += 1
+    }
+
     /// Where this canvas's notes accumulate — beside it, never inside it.
     var sidecarURL: URL? { fileURL.map(CanvasNotes.sidecarURL(for:)) }
 
@@ -264,6 +296,8 @@ final class CanvasModel: ObservableObject {
         // A receipt names the file it was written to. Carried onto a different canvas it is
         // a true sentence about the wrong document, which is worse than no sentence.
         notesNotice = nil
+        // Same rule: "this page is holding state, reload?" is about the page that was here.
+        updateNotice = nil
         refreshNotes()
         // Reload on every external change to **this file**. Watcher lifetime == document
         // lifetime; opening another file replaces it.
@@ -543,16 +577,52 @@ final class CanvasModel: ObservableObject {
 /// on the OLD inode and silently orphans the file descriptor — so on those
 /// events the watcher re-opens the path (briefly retrying while the writer
 /// finishes) and keeps watching the NEW inode.
+///
+/// **Every notification is debounced, and a partial write is the reason** (#109). `.write` and
+/// `.extend` fire per *write*, not per *save*: a writer that does not replace the file
+/// atomically — `>` in a shell, a `FileHandle`, an agent streaming a long document — produces
+/// one event per chunk, and each one used to re-read the file and re-render it. So the operator
+/// watched a truncated page render, then a longer truncated page, then the real one. Coalescing
+/// them into one call, a beat after the writing stops, is the whole fix: nothing renders while
+/// the bytes are still arriving, and one save is one render.
+///
+/// **The atomic path is debounced too, even though it has no partial state to hide.** A rename
+/// arrives whole, so it could notify immediately — but then a save that is *sometimes* atomic
+/// (many editors write in place for small files and rename for large ones) would have two
+/// different latencies, and "did helm see my write?" would have two different answers. One
+/// funnel, one answer.
 @MainActor
 final class FileWatcher {
     private let url: URL
     private let onChange: @MainActor () -> Void
+    private let debounce: Duration
     private var source: DispatchSourceFileSystemObject?
+    private var pending: Task<Void, Never>?
 
-    init(url: URL, onChange: @escaping @MainActor () -> Void) {
+    /// - Parameter debounce: how long the file must be quiet before a change is reported.
+    ///   Long enough to swallow the chunks of one write, short enough that a save still feels
+    ///   immediate — a rendered page arriving 120ms after the agent's last byte is not
+    ///   something an operator can perceive as a delay, and the tests set their own so they
+    ///   never depend on this number.
+    init(
+        url: URL, debounce: Duration = .milliseconds(120),
+        onChange: @escaping @MainActor () -> Void
+    ) {
         self.url = url
+        self.debounce = debounce
         self.onChange = onChange
         watch()
+    }
+
+    /// Report a change once the file has been quiet for `debounce`. Each new event cancels the
+    /// one waiting, so a run of writes reports **once**, after the last of them.
+    private func schedule() {
+        pending?.cancel()
+        pending = Task { [weak self, debounce] in
+            try? await Task.sleep(for: debounce)
+            guard !Task.isCancelled else { return }
+            self?.onChange()
+        }
     }
 
     private func watch() {
@@ -573,7 +643,7 @@ final class FileWatcher {
                 self.source = nil
                 self.rearm(attemptsLeft: 5)
             } else {
-                self.onChange()
+                self.schedule()
             }
         }
         source.setCancelHandler { close(fd) }
@@ -586,7 +656,7 @@ final class FileWatcher {
     private func rearm(attemptsLeft: Int) {
         if FileManager.default.fileExists(atPath: url.path) {
             watch()
-            onChange()
+            schedule()
             return
         }
         guard attemptsLeft > 0 else { return }
@@ -597,6 +667,8 @@ final class FileWatcher {
 
     deinit {
         source?.cancel()
+        // The pane is gone; a render scheduled a moment ago has nothing left to render into.
+        pending?.cancel()
     }
 }
 
@@ -623,6 +695,13 @@ struct CanvasView: View {
                 case let .url(page): CanvasAddressBar(model: model, page: page)
                 }
                 Divider()
+                // Its own `if`, not an arm of the chain below: an update helm is holding back
+                // and a note that failed to write are unrelated facts about different things,
+                // and either hiding the other would be helm choosing which of the operator's
+                // problems they are allowed to see.
+                if let update = model.updateNotice {
+                    updateStrip(update)
+                }
                 if let failure = model.notesFailure {
                     noticeStrip(failure, symbol: "exclamationmark.triangle")
                 } else if let notice = model.notesNotice {
@@ -675,6 +754,27 @@ struct CanvasView: View {
                 .offset(
                     x: max(8, selection.rect.minX),
                     y: max(8, selection.rect.maxY + 8))
+        }
+    }
+
+    /// The one strip that carries an action. Everything else helm says above a canvas is a
+    /// receipt — this is a question, because the answer costs the operator their page.
+    private func updateStrip(_ message: String) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.clockwise.circle")
+                Text(message).lineLimit(2)
+                Spacer()
+                Button("Reload") { model.reloadArtifact() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accent)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(Color.textMuted)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.surfaceRaised)
+            Divider()
         }
     }
 
@@ -756,10 +856,17 @@ struct CanvasView: View {
                 markTool: model.markTool, showsMark: model.showsMark,
                 onSelection: model.pageDidReport)
         case .web:
+            // The only canvas that can take an update as data: an `.html` artifact is read
+            // straight from disk, so its own scripts run and one of them may be
+            // `window.helmCanvasUpdate`. A markdown canvas is a page helm *generates* —
+            // `marked` writes the artifact into `innerHTML`, where a `<script>` never executes
+            // — so there is no author's code on it to register a handler, and it reloads
+            // exactly as it always has.
             HTMLCanvasView(
                 url: document.url, generation: document.generation,
                 markTool: model.markTool, showsMark: model.showsMark,
-                onSelection: model.pageDidReport)
+                onSelection: model.pageDidReport,
+                reloadDemand: model.reloadDemand, onUpdate: model.pageAnsweredUpdate)
         case let .plainText(text):
             ScrollView {
                 Text(text)

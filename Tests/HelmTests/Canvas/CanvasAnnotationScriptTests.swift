@@ -78,13 +78,13 @@ final class CanvasAnnotationScriptTests: XCTestCase {
             let page = try CanvasScriptRuntime()
             page.setTool(tool)
             page.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-            marks.append(try XCTUnwrap(page.lastPosted?["mark"] as? String))
+            marks.append(try XCTUnwrap(page.lastPosted?["kind"] as? String))
         }
 
         let tapping = try CanvasScriptRuntime()
         tapping.setTool(.point)
         tapping.tap(at: (x: 100, y: 110))
-        marks.append(try XCTUnwrap(tapping.lastPosted?["mark"] as? String))
+        marks.append(try XCTUnwrap(tapping.lastPosted?["kind"] as? String))
 
         XCTAssertEqual(marks, ["relation", "enclosure", "point"])
     }
@@ -132,7 +132,10 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         let message = try XCTUnwrap(page.lastPosted)
         XCTAssertEqual(message["id"] as? String, "intro")
         XCTAssertEqual(message["text"] as? String, "Why this exists")
-        XCTAssertNil(message["mark"], "a selection is the default kind and carries no marker")
+        XCTAssertEqual(
+            message["kind"] as? String, "selection",
+            "a selection used to be the DEFAULT kind and carry no marker at all — which is "
+                + "what made the gate infer the shape, and #216 is the bill (#109)")
     }
 
     /// #165: a click that selected nothing has to be *reported*, not swallowed. It is the
@@ -144,7 +147,7 @@ final class CanvasAnnotationScriptTests: XCTestCase {
 
         page.mouse("mouseup", 100, 110)
 
-        XCTAssertEqual(page.lastPosted?["cleared"] as? Bool, true)
+        XCTAssertEqual(page.lastPosted?["kind"] as? String, "cleared")
     }
 
     // MARK: Coordinate spaces (#196)
@@ -383,7 +386,8 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         let point = try CanvasScriptRuntime()
         point.setTool(.point)
         point.tap(at: (x: 100, y: 110))
-        guard case .selected = try XCTUnwrap(CanvasPageSelection(try XCTUnwrap(point.lastPosted)))
+        guard
+            case .selected = try CanvasPageSelection.decode(try XCTUnwrap(point.lastPosted)).get()
         else {
             return XCTFail("a point must be admitted as a selection")
         }
@@ -391,7 +395,8 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         let arrow = try CanvasScriptRuntime()
         arrow.setTool(.arrow)
         arrow.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-        guard case .selected = try XCTUnwrap(CanvasPageSelection(try XCTUnwrap(arrow.lastPosted)))
+        guard
+            case .selected = try CanvasPageSelection.decode(try XCTUnwrap(arrow.lastPosted)).get()
         else {
             return XCTFail(
                 "a relation must be admitted as a selection — it carries no top-level text")
@@ -400,11 +405,66 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         let loop = try CanvasScriptRuntime()
         loop.setTool(.freehand)
         loop.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-        guard case .selected = try XCTUnwrap(CanvasPageSelection(try XCTUnwrap(loop.lastPosted)))
+        guard
+            case .selected = try CanvasPageSelection.decode(try XCTUnwrap(loop.lastPosted)).get()
         else {
             return XCTFail(
                 "an enclosure must be admitted as a selection — it carries no top-level text")
         }
+    }
+
+    /// **The seam the discriminator created, and the gate that holds it** (#109).
+    ///
+    /// `kind` is spelled in `canvas-annotation.js` and again in `CanvasPageSelection.Kind`, and
+    /// JavaScript cannot compile against a Swift enum — so a kind renamed on one side and not
+    /// the other is exactly the silent drift #216 was, with the refusal now happening in the
+    /// gate instead of the inference. This runs the **real script** for every gesture and checks
+    /// the kind it posts is one Swift declares, and that `cleared` — which no gesture below
+    /// produces, because it is what a gesture produces when it finds *nothing* — is reachable
+    /// too. `allCases` is what makes it every kind rather than a sample.
+    func testTheScriptAndSwiftStillAgreeOnEveryMessageKind() throws {
+        func kind(_ posted: [String: Any]?) throws -> CanvasPageSelection.Kind {
+            let raw = try XCTUnwrap(
+                (try XCTUnwrap(posted))["kind"] as? String,
+                "the page posted a message with no `kind` at all — the gate refuses it and "
+                    + "nothing the operator marks reaches helm")
+            return try XCTUnwrap(
+                CanvasPageSelection.Kind(rawValue: raw),
+                "the script posts `kind: \(raw)`, which `CanvasPageSelection.Kind` does not "
+                    + "declare — the gate refuses it by name and the mark is dropped")
+        }
+
+        let point = try CanvasScriptRuntime()
+        point.setTool(.point)
+        point.tap(at: (x: 100, y: 110))
+        XCTAssertEqual(try kind(point.lastPosted), .point)
+
+        let arrow = try CanvasScriptRuntime()
+        arrow.setTool(.arrow)
+        arrow.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
+        XCTAssertEqual(try kind(arrow.lastPosted), .relation)
+
+        let loop = try CanvasScriptRuntime()
+        loop.setTool(.freehand)
+        loop.loop(around: (x: 10, y: 1390, width: 320, height: 50))
+        XCTAssertEqual(try kind(loop.lastPosted), .enclosure)
+
+        let highlight = try CanvasScriptRuntime()
+        highlight.setTool(.select)
+        highlight.select(id: "intro", text: "Why this exists")
+        highlight.mouse("mouseup", 100, 110)
+        XCTAssertEqual(try kind(highlight.lastPosted), .selection)
+
+        let dismissal = try CanvasScriptRuntime()
+        dismissal.setTool(.select)
+        dismissal.mouse("mouseup", 100, 110)
+        XCTAssertEqual(try kind(dismissal.lastPosted), .cleared)
+
+        XCTAssertEqual(
+            Set(CanvasPageSelection.Kind.allCases.map(\.rawValue)),
+            ["point", "relation", "enclosure", "selection", "cleared"],
+            "a sixth kind was declared in Swift and this test was not extended to make the "
+                + "script produce one — so nothing measures whether the page can post it")
     }
 
     /// The dismissal is the one message that deliberately decodes to nothing — it closes the

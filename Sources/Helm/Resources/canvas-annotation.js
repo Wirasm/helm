@@ -5,6 +5,20 @@
   if (!window.__helmMarkTool) { window.__helmMarkTool = "select"; }
   function tool() { return window.__helmMarkTool || "select"; }
 
+  // EVERY message posted below carries `kind`, and it is the ONLY field that says what the
+  // message is (#109/#210). There were three shapes here and no declared kind: a selection was
+  // "has a non-empty top-level text", a dismissal was `{cleared:true}`, and a geometry mark was
+  // `{mark:"…"}` — so the Swift gate had to infer the shape, inferred it wrongly, and dropped
+  // every enclosure and relation for months (#216). A second discriminator would be the same
+  // defect twice, so `mark` is gone rather than kept beside this: the values it carried —
+  // `point`, `relation`, `enclosure` — are kinds now.
+  //
+  // The far side is `CanvasPageSelection.Kind` in `CanvasFileViews.swift`, which is exhaustive
+  // and REFUSES a kind it does not know rather than guessing at the shape. So a kind added here
+  // and not there is dropped loudly (an NSLog naming it), and
+  // `CanvasAnnotationScriptTests.testTheScriptAndSwiftStillAgreeOnEveryMessageKind` fails: a
+  // JavaScript file cannot compile against a Swift enum, so that test is the gate.
+
   // helm's own document wrapper — helm's chrome, marked as such by the Swift that writes it,
   // exactly as the ink layer is.
   //
@@ -23,8 +37,9 @@
   // artifact's own `id="content"` is a real, greppable anchor and must decode as one. What
   // separates them is which element carried `data-helm-frame`, and that fact lives only in
   // the DOM — it does not cross the bridge. So this is the sole enforcement by necessity
-  // rather than by choice, and the far side could only refuse if the payload *told* it,
-  // which is #109/#210's discriminator and deliberately not in this change.
+  // rather than by choice, and the far side could only refuse if the payload *told* it.
+  // #109's `kind` does not close that: it says which MESSAGE this is, not which element the
+  // anchor came off, and an anchor field saying "this id is helm's own" is still not built.
   //
   // `MermaidAnchor` states the same ceiling for its own case: `sequenceDiagram` emits
   // `actor0` with no prefix, "helm cannot tell, and does not guess."
@@ -361,13 +376,13 @@
       var selection = document.getSelection();
       var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
       var text = empty ? "" : String(selection).trim();
-      if (!text) { bridge.postMessage({ cleared: true }); return; }
+      if (!text) { bridge.postMessage({ kind: "cleared" }); return; }
       var range = selection.getRangeAt(0);
       var node = elementFor(range.commonAncestorContainer);
       var id = node ? nameFor(node) : null;
       var r = range.getBoundingClientRect();
       bridge.postMessage({
-        id: id, text: text,
+        kind: "selection", id: id, text: text,
         rect: { x: r.left, y: r.top, width: r.width, height: r.height }
       });
       return;
@@ -384,13 +399,13 @@
 
     if (t === "point") {
       var at = targetAt(e.clientX, e.clientY);
-      if (!at) { wipe(); bridge.postMessage({ cleared: true }); return; }
+      if (!at) { wipe(); bridge.postMessage({ kind: "cleared" }); return; }
       // A tap draws nothing on its way, so it needs a mark of its own — otherwise
       // the one gesture with no travel is also the one with no visible subject.
       ring(e.pageX, e.pageY);
       committed = true;
       bridge.postMessage({
-        mark: "point", id: at.id, text: at.text, rect: viewportRect(box)
+        kind: "point", id: at.id, text: at.text, rect: viewportRect(box)
       });
       return;
     }
@@ -401,7 +416,7 @@
       // Either end may be empty — an arrow into blank space is "add a node here".
       committed = true;
       bridge.postMessage({
-        mark: "relation", from: startTarget, to: end, rect: viewportRect(box)
+        kind: "relation", from: startTarget, to: end, rect: viewportRect(box)
       });
       return;
     }
@@ -412,7 +427,7 @@
       // visibly — silence is indistinguishable from the stroke never registering.
       committed = true;
       bridge.postMessage({
-        mark: "enclosure", targets: targetsInside(drawn), rect: viewportRect(box)
+        kind: "enclosure", targets: targetsInside(drawn), rect: viewportRect(box)
       });
       return;
     }
