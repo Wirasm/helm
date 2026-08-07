@@ -129,7 +129,7 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
         XCTAssertTrue(body.contains("This shouldn't talk to that"), "…and what it covered")
         XCTAssertTrue(body.contains("this is the seam #210 is about"))
         XCTAssertEqual(
-            page.model.notesNotice, "Written to report.notes.md, copied, and sent to sild-611a")
+            page.model.notesNotice, "Written to report.notes.md and sent to sild-611a")
     }
 
     /// **A circle drawn round a real element, over WebKit's real layout.** The stroke is computed

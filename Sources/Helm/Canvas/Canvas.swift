@@ -114,6 +114,23 @@ final class CanvasModel: ObservableObject {
     /// sees says exactly that rather than claiming a send.
     var onAnnotation: ((CanvasAnnotation, URL) -> CanvasNoteDelivery)?
 
+    /// Where a note goes when the clipboard is its return path. `Pasteboard.copy` in production.
+    ///
+    /// **A seam because the operator's pasteboard is not a test fixture.** `PasteboardTests`'s own
+    /// header already says it — *"`NSPasteboard.general` is the operator's real clipboard and a test
+    /// has no business clearing it"* — and that is doubly true of an assertion that nothing was
+    /// written, which needs a known prior value and can only get one by writing first. It is not
+    /// hypothetical either: before #303 every run of `CanvasMarkReachesAgentTests` replaced the
+    /// operator's clipboard, because `annotate` copies and that suite drives `annotate` for real.
+    /// So the sink is injected exactly as `CanvasNoteCourier` injects its `mailboxRoot` and `now`,
+    /// for the reason stated there — a test gets one it owns, production takes the default.
+    ///
+    /// **What it pins is the seam, not the policy.** `CanvasNoteDelivery.copiesToClipboard` is the
+    /// rule and is tested as a pure function; this is what lets a test show that `annotate` actually
+    /// spends it. #216 is the argument for bothering: a rule and a pipeline were both green for
+    /// months while nothing crossed between them.
+    var copyToClipboard: (String) -> Void = Pasteboard.copy
+
     /// Where this canvas is pointed, as the bench persists it.
     var source: CanvasSource? {
         switch showing {
@@ -494,13 +511,21 @@ final class CanvasModel: ObservableObject {
         }
         do {
             try CanvasNotes.append(annotation, for: canvas, at: Date())
-            // Written first, copied second, sent third. The sidecar is the memory; the clipboard
-            // is a convenience, and a copy that succeeded while the write failed would be a note
-            // the operator believes they made and cannot find. Mail is delivery, not storage
-            // (#205's acceptance says so in as many words), so it comes last: a mailbox that has
-            // gone away must not cost the operator the note itself.
-            Pasteboard.copy(CanvasNotes.clipboardEntry(annotation, for: canvas))
+            // **Written first, and that is the half of the old ordering that was load-bearing.**
+            // The sidecar is the memory; a copy that succeeded while the write failed would be a
+            // note the operator believes they made and cannot find. Mail is delivery, not storage
+            // (#205's acceptance says so in as many words), so a mailbox that has gone away must
+            // not cost the operator the note itself.
+            //
+            // **"Copied second" could not survive #303, and nothing was resting on it.** Whether to
+            // copy now depends on how the note was delivered, and that is not known until the send
+            // returns — so the copy moved behind it. The two are independent in both directions:
+            // the send never reads the clipboard, and the copy never fed the send. What the old
+            // order guaranteed was write-before-copy, and that still holds, one line earlier.
             let delivery = onAnnotation?(annotation, canvas) ?? .notSent(.noOrigin)
+            if delivery.copiesToClipboard {
+                copyToClipboard(CanvasNotes.clipboardEntry(annotation, for: canvas))
+            }
             self.selection = nil
             notesFailure = nil
             announce(

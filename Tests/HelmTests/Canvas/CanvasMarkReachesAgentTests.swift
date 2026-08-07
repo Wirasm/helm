@@ -25,6 +25,11 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
     private let handle = Handle(validating: "sild-611a")!
     private let agentPid: pid_t = 40501
 
+    /// What `annotate` put on the clipboard, for the suite's own clipboard rather than the
+    /// operator's — `CanvasModel.copyToClipboard`'s header has why that distinction is not
+    /// pedantry. Before #303 this suite wrote to `NSPasteboard.general` on every run.
+    private var copied: [String] = []
+
     override func setUpWithError() throws {
         let fm = FileManager.default
         mailRoot = fm.temporaryDirectory.appendingPathComponent("helm-mark-mail-\(UUID())")
@@ -60,6 +65,7 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
         model.onAnnotation = { annotation, canvas in
             courier.send(annotation, on: canvas, along: route)
         }
+        model.copyToClipboard = { [weak self] text in self?.copied.append(text) }
         return model
     }
 
@@ -235,6 +241,38 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
             highlight, saying: "over here", on: model)
 
         XCTAssertEqual(
-            model.notesNotice, "Written to plan.notes.md, copied, and sent to sild-611a")
+            model.notesNotice, "Written to plan.notes.md and sent to sild-611a")
+    }
+
+    // MARK: - The clipboard (#303)
+
+    /// **The seam, driven through a real gesture.** `CanvasNoteRouteTests` holds the rule —
+    /// `copiesToClipboard` is false for `sent` and true for the other three — and this is what says
+    /// `annotate` spends it. #216 is the argument for testing the join at all: a rule and a pipeline
+    /// were each green for months while nothing crossed between them.
+    func testANoteThatReachedTheAgentIsNotAlsoTakenToTheClipboard() throws {
+        let model = openCanvas(routedTo: .mailbox(handle))
+
+        try mark(highlight, saying: "the agent has this", on: model)
+
+        XCTAssertFalse(
+            try XCTUnwrap(try delivered()["body"] as? String).isEmpty,
+            "the premise: this note really was delivered")
+        XCTAssertEqual(
+            copied, [], "a delivered note must not also replace what the operator had copied")
+    }
+
+    /// **Control**, and the one that keeps the test above from being satisfied by never copying at
+    /// all. With nobody to send to, the clipboard *is* the return path and the note has to land on
+    /// it, carrying the anchor — `CanvasClipboardTests` holds what that text is made of.
+    func testANoteWithNowhereToGoIsStillPutOnTheClipboard() throws {
+        let model = openCanvas(routedTo: .clipboard(.noOrigin))
+
+        try mark(highlight, saying: "nowhere to send this", on: model)
+
+        XCTAssertEqual(copied.count, 1, "the unrouted note is the operator's only copy")
+        let text = try XCTUnwrap(copied.first)
+        XCTAssertTrue(text.contains("nowhere to send this"))
+        XCTAssertTrue(text.contains("`#intro`"), "and it carries the anchor, not just the prose")
     }
 }

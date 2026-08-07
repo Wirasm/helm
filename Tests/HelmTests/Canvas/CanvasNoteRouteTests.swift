@@ -91,26 +91,75 @@ final class CanvasNoteRouteTests: XCTestCase {
             "`work-611a` is what deriving from cwd + session id would give, and it is not this")
     }
 
-    // MARK: - The receipt
+    // MARK: - The clipboard
 
-    /// Every case names the clipboard, because every case copies — the clipboard was the whole
-    /// return path before #205 and a routed note must not quietly take it away.
-    func testEveryReceiptSaysWhereTheNoteWentAndThatTheClipboardChanged() {
-        let receipts = [
-            CanvasNoteDelivery.sent(Handle(validating: "sild-611a")!),
+    /// Every outcome there is, so the two tests below cannot quietly stop covering one.
+    private var everyDelivery: [CanvasNoteDelivery] {
+        [
+            .sent(Handle(validating: "sild-611a")!),
             .notSent(.noOrigin),
             .notSent(.originGone),
             .failed(Handle(validating: "sild-611a")!, "there is no mailbox at sild-611a any more"),
-        ].map { $0.receipt(sidecar: "plan.notes.md") }
+        ]
+    }
+
+    /// **The case that changes (#303), and the only one.** The agent already has the note, so
+    /// replacing the operator's clipboard with a second copy of it buys nothing and costs them
+    /// whatever they were about to paste. *Copy when the copy is the delivery* — here it is not.
+    func testANoteTheAgentReceivedIsNotAlsoTakenToTheOperatorsClipboard() {
+        XCTAssertFalse(
+            CanvasNoteDelivery.sent(Handle(validating: "sild-611a")!).copiesToClipboard,
+            "a delivered note has a mailbox and a sidecar; the clipboard is somebody else's")
+    }
+
+    /// **Control.** Nobody pushed this canvas, so there is no mailbox to reach and the clipboard
+    /// **is** the return path — take it away and the note reaches nobody at all. Named as a control
+    /// because the change above, overshot into "never copy", would satisfy the test above on its
+    /// own; this and the two below are what forbid that.
+    func testANoteWithNoAgentToSendToStillGoesToTheClipboard() {
+        XCTAssertTrue(CanvasNoteDelivery.notSent(.noOrigin).copiesToClipboard)
+    }
+
+    /// **Control**, for the same reason: the pane was closed or the session ended, and the operator
+    /// still needs a way to hand the note to somebody.
+    func testANoteWhoseAgentIsGoneStillGoesToTheClipboard() {
+        XCTAssertTrue(CanvasNoteDelivery.notSent(.originGone).copiesToClipboard)
+    }
+
+    /// **Control**, and the sharpest of the three — delivery was *attempted* and failed, which is
+    /// the case most easily mistaken for `sent`. Stranding the note is worse than the pollution.
+    func testANoteThatCouldNotBeDeliveredStillGoesToTheClipboard() {
+        let failed = CanvasNoteDelivery.failed(Handle(validating: "sild-611a")!, "no mailbox")
+
+        XCTAssertTrue(
+            failed.copiesToClipboard,
+            "a failed send is not a send — the note has to end up somewhere reachable")
+    }
+
+    // MARK: - The receipt
+
+    /// **A receipt names the clipboard exactly when the clipboard was written**, over every case
+    /// there is. The reason the receipt says so at all is unchanged and still right — the operator
+    /// has to know their clipboard just changed under them — so the defect this forbids has two
+    /// directions: a copy the receipt is silent about, and a receipt claiming a copy that never
+    /// happened. Both read as lies about state the operator cannot see.
+    func testAReceiptSaysCopiedExactlyWhenTheNoteWasCopied() {
+        for delivery in everyDelivery {
+            let receipt = delivery.receipt(sidecar: "plan.notes.md")
+            XCTAssertEqual(
+                receipt.lowercased().contains("copied"), delivery.copiesToClipboard,
+                "\(receipt) disagrees with copiesToClipboard == \(delivery.copiesToClipboard)")
+        }
+    }
+
+    func testEveryReceiptNamesTheSidecarAndWhereTheNoteWent() {
+        let receipts = everyDelivery.map { $0.receipt(sidecar: "plan.notes.md") }
 
         for receipt in receipts {
             XCTAssertTrue(
                 receipt.contains("plan.notes.md"), "\(receipt) does not name the sidecar")
-            XCTAssertTrue(
-                receipt.lowercased().contains("copied"),
-                "\(receipt) does not say the clipboard changed under the operator")
         }
-        XCTAssertTrue(receipts[0].contains("sent to sild-611a"))
+        XCTAssertEqual(receipts[0], "Written to plan.notes.md and sent to sild-611a")
         XCTAssertTrue(
             receipts[3].contains("could not reach sild-611a"),
             "a delivery that failed must not read like one that worked")
