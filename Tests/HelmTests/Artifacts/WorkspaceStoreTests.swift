@@ -130,13 +130,51 @@ final class WorkspaceStoreTests: XCTestCase {
 
     /// helm's own checkout — proof that running from a worktree (this branch is one)
     /// still lands on the main checkout's store, `helm-3ec376fc`.
-    func testThisCheckoutResolvesToTheHelmStore() {
+    /// **The key is derived, so the expectation has to be derived too.**
+    ///
+    /// This asserted the literal `helm-3ec376fc`, which is the key for *one absolute path* —
+    /// `/Users/rasmus/Projects/mine/sild/helm`. On a CI runner the checkout is at
+    /// `/Users/runner/work/helm/helm` and the key is `helm-1df57be7`, so the test failed on a
+    /// machine where nothing was wrong. It was asserting where it was running.
+    ///
+    /// What is worth pinning is the *shape* and the *agreement* — that a worktree resolves to
+    /// its checkout, that the last component is `helm`, and that the key is this repo's own
+    /// documented recipe rather than whatever the implementation happens to do. So the
+    /// expectation is recomputed here the way `prp`'s resolver spells it — basename, lowercased
+    /// and slugged, then eight hex of the path's git blob hash — and compared against the
+    /// implementation. A drift in either now fails; a change of machine does not.
+    func testThisCheckoutResolvesToTheHelmStore() throws {
         let here = (#filePath as NSString).deletingLastPathComponent
         let root = WorkspaceStore.repositoryRoot(for: here)
 
         XCTAssertFalse(root.contains("/.worktrees/"), "a worktree must resolve to its checkout")
         XCTAssertEqual((root as NSString).lastPathComponent, "helm")
-        XCTAssertEqual(WorkspaceStore.derivedKey(forRoot: root), "helm-3ec376fc")
+
+        let hash = try Self.gitHashObject(of: root)
+        XCTAssertEqual(
+            WorkspaceStore.derivedKey(forRoot: root), "helm-\(hash.prefix(8))",
+            "the key is <slugged basename>-<first 8 of the path's blob hash>, and both halves "
+                + "have to come out of the path rather than out of the machine")
+    }
+
+    /// `git hash-object --stdin` over the path, which is what `prp`'s canonical resolver runs.
+    /// Shelling out on purpose: reimplementing the hash here would compare the implementation
+    /// against a second copy of itself, which is the mistake this test just made in another form.
+    private static func gitHashObject(of text: String) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "hash-object", "--stdin"]
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        try process.run()
+        input.fileHandleForWriting.write(Data(text.utf8))
+        try input.fileHandleForWriting.close()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Store matching
