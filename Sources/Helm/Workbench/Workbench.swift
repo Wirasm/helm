@@ -422,23 +422,34 @@ struct Workbench: Codable, Equatable {
     /// This caller is the operator, pressing a key, looking at the pane they just moved. Leaving
     /// their keyboard behind in the slot the pane vacated would mean their next keystroke goes
     /// to a pane they are no longer looking at — the wrong-terminal defect `AGENTS.md` bans
-    /// hard-coded coordinates over, produced deliberately. So focus follows — and where the
-    /// pane's whole slot travels it does so *by construction*: a slot that moves keeps its `id`,
-    /// and `focusedSlot` is an id rather than an index, so the keyboard is still in it wherever
-    /// it landed. Only the three branches that hand the pane to a *different* slot assign
-    /// anything, and each of those lines is marked below.
+    /// hard-coded coordinates over, produced deliberately. So focus follows, in **one block at
+    /// the end of this method** — it finds where the pane landed and puts the keyboard there,
+    /// whichever branch above did the moving.
+    ///
+    /// **That block is the entire focus behaviour, and that is deliberate rather than tidy.**
+    /// It began as three assignments inside the helpers, one per branch that hands the pane to a
+    /// different slot, each carrying a comment saying an agent's version would drop it. Three
+    /// sites is three things to find, and `detach` had *two* assigning lines under one of those
+    /// comments — the shape where a later author ports two of three and the third is a focus
+    /// change nobody meant. As one block the claim needs no comment to be true.
     ///
     /// **The agent caller needs the opposite, and must not inherit this by accident.** #269's
     /// rule is *rearranging the bench is fine, taking focus is not*: an agent moving a pane
     /// while the operator is mid-sentence must leave `focusedSlot` and every slot's `selected`
     /// exactly where they were. helm has drawn that distinction since #125 and names both halves
-    /// — `insert`/`offer`, `splitRight(with:)`/`splitRight(offering:)` — and the offering twin of
-    /// this method is the same difference: the marked lines stop assigning. It is **not built
-    /// here**, because a twin with no caller is a claim no test can hold; #287's follow-up is
-    /// where it lands, together with the `helm-command` kind that would reach it and absolute
-    /// `(column, slot)` addressing for a caller that computed a destination from
-    /// `snapshot.json`. `SpoolCommandPolicy.verdict(for: .movePane)` is where an agent is
-    /// refused today, and it says the same thing from the other side.
+    /// — `insert`/`offer`, `splitRight(with:)`/`splitRight(offering:)`.
+    ///
+    /// **Why this is a block and not `splitRight`'s `movingFocus: Bool`.** That flag is right
+    /// where there are *two* entry points, and `splitRight(with:)`/`splitRight(offering:)` each
+    /// supply one. A move has one caller today, so the same flag would ship a `false` branch no
+    /// test exercises and no caller reaches — an untested path that reads as a proven one, which
+    /// is worse than none. When #287's follow-up adds the second entry point it can take the
+    /// flag, and this block is what moves behind it; until then the twin is a deletion of one
+    /// contiguous block rather than a hand-port of scattered lines.
+    /// `SpoolCommandPolicy.verdict(for: .movePane)` is where an agent is refused today, and it
+    /// says the same thing from the other side — together with the `helm-command` kind that
+    /// would reach the twin and absolute `(column, slot)` addressing for a caller that computed
+    /// a destination from `snapshot.json`.
     @discardableResult
     mutating func move(_ pane: Pane.ID, _ direction: Direction) -> Bool {
         guard let from = address(of: pane) else { return false }
@@ -481,6 +492,20 @@ struct Workbench: Codable, Equatable {
             }
         }
         normalize()
+
+        // **The whole of "focus follows the pane", in one place — and the whole of what an
+        // offering twin drops.** It was three assignments scattered across the helpers, each
+        // carrying a comment saying so; a claim spread over three sites is a claim the next
+        // author has to find all of, and `detach` had two assigning lines under one of those
+        // comments. One block after the fact needs no marks: the twin is a deletion.
+        //
+        // *After* `normalize()`, because that is what drops an emptied slot or column — an
+        // address computed before it can name a position that no longer exists. Nothing here
+        // can break an invariant `normalize()` just established: the pane is in the slot being
+        // selected, and the slot is one the bench holds.
+        guard let landed = address(of: pane) else { return true }
+        columns[landed.column].slots[landed.slot].selected = pane
+        focusedSlot = columns[landed.column].slots[landed.slot].id
         return true
     }
 
@@ -521,9 +546,6 @@ struct Workbench: Codable, Equatable {
     ) {
         let moved = take(pane, from: from)
         columns[column].slots[slot].panes.append(moved)
-        // Marked: what an offering twin drops. See `move`'s header.
-        columns[column].slots[slot].selected = moved.id
-        focusedSlot = columns[column].slots[slot].id
     }
 
     /// One pane leaves a shared slot for a row of its own at the end of the same column.
@@ -537,8 +559,6 @@ struct Workbench: Codable, Equatable {
                 panes: [moved],
                 height: Self.equalShare(joining: columns[from.column].slots.count)),
             at: index)
-        // Marked: what an offering twin drops.
-        focusedSlot = columns[from.column].slots[index].id
     }
 
     /// One pane leaves for a column of its own at the end of the bench.
@@ -551,8 +571,6 @@ struct Workbench: Codable, Equatable {
         columns.insert(
             Column(slots: [Slot(panes: [moved])], width: Self.equalShare(joining: columns.count)),
             at: index)
-        // Marked: what an offering twin drops.
-        focusedSlot = columns[index].slots[0].id
     }
 
     /// Take a pane out of the slot holding it, leaving that slot showing what `close` would

@@ -301,9 +301,10 @@ final class WorkbenchMoveTests: XCTestCase {
                 + "keystroke to a pane they are no longer looking at")
     }
 
-    /// The other half, and the reason the header calls it *by construction*: where the pane's
-    /// whole slot travels, `focusedSlot` is an id and the id went with it. Nothing assigns.
-    func testFocusFollowsASlotThatTravelsWithoutAnythingAssigningIt() {
+    /// The other half: where the pane's whole slot travels, the keyboard is in the *same* slot
+    /// afterwards, because `focusedSlot` is an id and the id went with it. An index would have
+    /// gone stale here, which is the reason it is an id.
+    func testFocusStaysWithTheSlotThatTravelled() {
         let (start, _, right) = twoPlusOne()
         var bench = start
         bench.select(right.id)
@@ -312,10 +313,34 @@ final class WorkbenchMoveTests: XCTestCase {
         bench.move(right.id, .left)
 
         XCTAssertEqual(
-            bench.focusedSlot, slot,
-            "the same slot, now in the other column — an index would have gone stale here, "
-                + "which is why focusedSlot is an id")
+            bench.focusedSlot, slot, "the same slot, now in the other column")
         XCTAssertEqual(bench.focusedPane?.id, right.id)
+    }
+
+    /// **One rule for every branch, which is what collapsing the three assignments into one
+    /// block bought.** It used to be that a move of a pane the operator was *not* in took their
+    /// keyboard in the three tab branches and left it alone in the two slot branches — a
+    /// difference nobody chose, produced by where the assignments happened to sit. The rule is
+    /// now sayable in one sentence, so it is asserted in one test: after a move, the keyboard is
+    /// on the pane that moved.
+    func testTheKeyboardLandsOnTheMovedPaneWhicheverBranchRan() {
+        let (start, left, right) = twoPlusOne()
+
+        for (label, pane, direction) in [
+            ("a slot relocating sideways", left[1].id, Workbench.Direction.right),
+            ("a slot reordering", left[0].id, .down),
+            ("a pane leaving for a column of its own", right.id, .left),
+        ] {
+            var bench = start
+            // Focus somewhere else entirely, so "it followed" cannot be "it never left".
+            bench.select(left[0].id)
+
+            bench.move(pane, direction)
+
+            XCTAssertEqual(
+                bench.focusedPane?.id, pane,
+                "\(label): the keyboard is on the pane that moved")
+        }
     }
 
     // MARK: - Invariants
