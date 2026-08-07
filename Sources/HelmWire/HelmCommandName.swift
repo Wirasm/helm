@@ -28,11 +28,12 @@ import Foundation
 ///
 /// `String`-backed and `CaseIterable` on purpose, both load-bearing beyond #219's reasons: the
 /// raw values are what `tools/helm-command.swift` takes on its command line, and `allCases` is
-/// what lets `SpoolCommandPolicy` be *total* — a nineteenth command cannot be added without a
-/// verdict, because the switch that gives one stops compiling.
+/// what lets `SpoolCommandPolicy` be *total* — a command cannot be added without a verdict,
+/// because the switch that gives one stops compiling. `movePane` (#287) is the first one added
+/// since, and it arrived refused for exactly that reason: the compiler asked.
 package enum HelmCommandName: String, CaseIterable, Codable, Sendable {
     case newTerminal, selectTerminal, openArtifact, openCanvasFile, pushCanvasFile
     case openCanvasURL, openWorkspace, adjustFontSize, jumpToPrompt, selectWorkspace
     case cycleWorkspace, toggleChat, splitRight, splitDown, closePane, moveFocus
-    case composeText, toggleRail
+    case composeText, toggleRail, movePane
 }

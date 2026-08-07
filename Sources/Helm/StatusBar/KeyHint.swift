@@ -35,6 +35,9 @@ enum KeyHintCatalog {
         (.closePane, "close"),
         (.selectTerminal, "pane"),
         (.moveFocus, "focus"),
+        // Next to `focus` on purpose: the two are one keystroke apart (⌥⌘arrows and
+        // ⇧⌥⌘arrows), and reading them side by side is what teaches the second one.
+        (.movePane, "move"),
         (.toggleChat, "chat"),
         (.openArtifact, "artifact"),
         (.openCanvasURL, "url"),

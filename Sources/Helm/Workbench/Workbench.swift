@@ -362,6 +362,212 @@ struct Workbench: Codable, Equatable {
         normalize()
     }
 
+    /// ⌘⌥⇧←↑↓→ — move a **pane** one step. `moveFocus` above moves the keyboard and leaves the
+    /// bench alone; this moves the bench and, for the reason argued below, takes the keyboard
+    /// with it. Reports whether anything moved, as `close` does.
+    ///
+    /// **Addressed, and that is what makes it different from every other bench command.** It
+    /// names the pane it acts on rather than reading `focusedSlot`, so "which pane did you mean"
+    /// is answered by the caller instead of by wherever the operator happens to be looking. The
+    /// keyboard route passes `focusedPane`; #287's other caller — an agent — will pass a pane it
+    /// owns, and that is only possible because the address is a parameter.
+    ///
+    /// **The geometry is `moveFocus`'s, deliberately.** Vertical steps within the pane's own
+    /// column; horizontal steps to the adjacent column and land at the same depth, clamped to
+    /// what that column has.
+    ///
+    /// **Inside the bench, the pane keeps the standing it had.**
+    /// - A slot to itself, moving up or down — the two slots trade places, which is what a
+    ///   reorder gesture means everywhere else. Merging it into the neighbour as a tab would
+    ///   *hide* a pane the operator could see, on a keystroke that says "move".
+    /// - A slot to itself, moving sideways — the whole slot leaves its column and is inserted
+    ///   into the adjacent one at the depth it had. The pane stays visible, and the depth is
+    ///   what makes the move its own inverse: sent right from depth 1 it arrives at depth 1, and
+    ///   sent back it lands where it set off from.
+    /// - Sharing its slot with tabs — the pane alone leaves and joins the destination slot as a
+    ///   tab. It had no slot to itself, so it is not given one.
+    ///
+    /// **At the edge the pane leaves for a container of its own** — a column at the end of the
+    /// bench, a row at the end of its column — **unless it is already the only thing in the
+    /// container it would leave**, in which case there is nothing to leave and the move is a
+    /// no-op.
+    ///
+    /// This is the one place the geometry departs from `moveFocus`, which has nothing to create
+    /// and so simply stops. **It is what makes a move reversible, and reversibility is the whole
+    /// argument.** Moving a two-column bench's right-hand pane left empties that column, and an
+    /// emptied column goes — so without an edge rule the bench is a ratchet: every move can
+    /// reduce the column count and no move can ever restore it, leaving the operator with
+    /// exactly the "close it and make a new one" #287 is about. With it, ⌘⌥⇧← then ⌘⌥⇧→ returns
+    /// the pane to the column it came from. The guard is what keeps that from being churn: a
+    /// pane that is the only thing in the last column would be torn out of it and put back into
+    /// an identical new one, which is a no-op with a rebuilt column id, so it refuses instead.
+    /// The fixed point is one pane per column, and holding the key down reaches it and stops.
+    ///
+    /// **It is not a second ⌘D.** A split makes a *new terminal*; this only ever relocates a
+    /// pane that already exists, and the bench's pane count never changes.
+    ///
+    /// **An emptied column goes the way `close` already sends one.** Moving a column's last pane
+    /// out leaves a slotless column, and `normalize()` drops it and rebalances the widths —
+    /// which is the same repair pass `close` leans on, not a second rule invented here.
+    ///
+    /// **Sizes: positions keep them within a column, and are not carried across one.** A
+    /// reorder swaps who sits in each row and leaves the rows the size the operator dragged them
+    /// to — a move reorders panes, it must not silently redraw proportions. Anywhere a pane
+    /// arrives in a stack it was not in, there is nothing to keep: 0.5 *of the old column* is not
+    /// a measurement of the new one, so the newcomer takes `equalShare(joining:)`, the same
+    /// arithmetic `offer` uses so that nobody already there is halved to make room.
+    ///
+    /// ## Focus follows the pane, and that is a decision about **who asked**
+    ///
+    /// This caller is the operator, pressing a key, looking at the pane they just moved. Leaving
+    /// their keyboard behind in the slot the pane vacated would mean their next keystroke goes
+    /// to a pane they are no longer looking at — the wrong-terminal defect `AGENTS.md` bans
+    /// hard-coded coordinates over, produced deliberately. So focus follows — and where the
+    /// pane's whole slot travels it does so *by construction*: a slot that moves keeps its `id`,
+    /// and `focusedSlot` is an id rather than an index, so the keyboard is still in it wherever
+    /// it landed. Only the three branches that hand the pane to a *different* slot assign
+    /// anything, and each of those lines is marked below.
+    ///
+    /// **The agent caller needs the opposite, and must not inherit this by accident.** #269's
+    /// rule is *rearranging the bench is fine, taking focus is not*: an agent moving a pane
+    /// while the operator is mid-sentence must leave `focusedSlot` and every slot's `selected`
+    /// exactly where they were. helm has drawn that distinction since #125 and names both halves
+    /// — `insert`/`offer`, `splitRight(with:)`/`splitRight(offering:)` — and the offering twin of
+    /// this method is the same difference: the marked lines stop assigning. It is **not built
+    /// here**, because a twin with no caller is a claim no test can hold; #287's follow-up is
+    /// where it lands, together with the `helm-command` kind that would reach it and absolute
+    /// `(column, slot)` addressing for a caller that computed a destination from
+    /// `snapshot.json`. `SpoolCommandPolicy.verdict(for: .movePane)` is where an agent is
+    /// refused today, and it says the same thing from the other side.
+    @discardableResult
+    mutating func move(_ pane: Pane.ID, _ direction: Direction) -> Bool {
+        guard let from = address(of: pane) else { return false }
+        // The whole of the "keeps the standing it had" rule, asked before anything moves: the
+        // source slot survives a pane leaving it only when it held more than one.
+        let alone = columns[from.column].slots[from.slot].panes.count == 1
+
+        switch direction {
+        case .up, .down:
+            let next = from.slot + (direction == .up ? -1 : 1)
+            guard columns[from.column].slots.indices.contains(next) else {
+                // The end of the column. A tab leaves for a row of its own; a pane that already
+                // has a row there is at the end and stays.
+                guard !alone else { return false }
+                detachIntoNewSlot(pane, from: from, at: direction == .up ? from.slot : next)
+                break
+            }
+            if alone {
+                reorderSlots(in: from.column, from: from.slot, to: next)
+            } else {
+                detach(pane, from: from, intoSlot: next, of: from.column)
+            }
+        case .left, .right:
+            let next = from.column + (direction == .left ? -1 : 1)
+            guard columns.indices.contains(next) else {
+                // The end of the bench. Same shape one level up, and the guard is about the
+                // whole column rather than the slot: a pane alone in the last column would be
+                // torn out and put back into an identical new one.
+                guard columnHoldsMore(than: pane, at: from.column) else { return false }
+                moveIntoNewColumn(
+                    pane, from: from, at: direction == .left ? from.column : next)
+                break
+            }
+            if alone {
+                relocateSlot(from: from, toColumn: next)
+            } else {
+                detach(
+                    pane, from: from,
+                    intoSlot: min(from.slot, columns[next].slots.count - 1), of: next)
+            }
+        }
+        normalize()
+        return true
+    }
+
+    /// Whether this column holds anything besides that one pane — the edge rule's guard, and
+    /// the reason a lone pane in the last column cannot churn its way sideways for ever.
+    private func columnHoldsMore(than pane: Pane.ID, at column: Int) -> Bool {
+        columns[column].slots.contains { $0.panes.contains { $0.id != pane } }
+    }
+
+    /// Two slots of one column trade places, and the **positions** keep their heights — see
+    /// `move`, which is the only caller and holds the argument.
+    private mutating func reorderSlots(in column: Int, from: Int, to: Int) {
+        let heights = (columns[column].slots[from].height, columns[column].slots[to].height)
+        columns[column].slots.swapAt(from, to)
+        columns[column].slots[from].height = heights.0
+        columns[column].slots[to].height = heights.1
+    }
+
+    /// A whole slot leaves its column for the adjacent one, at the depth it had.
+    ///
+    /// The source column is left slotless rather than removed here: `normalize()` drops it on
+    /// the way out, which is the same repair `close` relies on, and removing it inline would
+    /// shift `destination` under the insert below.
+    private mutating func relocateSlot(from: Address, toColumn destination: Int) {
+        var slot = columns[from.column].slots.remove(at: from.slot)
+        slot.height = Self.equalShare(joining: columns[destination].slots.count)
+        columns[destination].slots.insert(
+            slot, at: min(from.slot, columns[destination].slots.count))
+    }
+
+    /// One pane leaves a shared slot and joins another as a tab.
+    ///
+    /// The source slot keeps at least one pane — `move` only routes here when it held more than
+    /// one — so every index computed before the removal is still valid after it, including a
+    /// destination in the same column.
+    private mutating func detach(
+        _ pane: Pane.ID, from: Address, intoSlot slot: Int, of column: Int
+    ) {
+        let moved = take(pane, from: from)
+        columns[column].slots[slot].panes.append(moved)
+        // Marked: what an offering twin drops. See `move`'s header.
+        columns[column].slots[slot].selected = moved.id
+        focusedSlot = columns[column].slots[slot].id
+    }
+
+    /// One pane leaves a shared slot for a row of its own at the end of the same column.
+    ///
+    /// Only reached with a slot holding more than one pane, so the row count is unchanged by the
+    /// removal and `equalShare` is measuring the stack this row is joining.
+    private mutating func detachIntoNewSlot(_ pane: Pane.ID, from: Address, at index: Int) {
+        let moved = take(pane, from: from)
+        columns[from.column].slots.insert(
+            Slot(
+                panes: [moved],
+                height: Self.equalShare(joining: columns[from.column].slots.count)),
+            at: index)
+        // Marked: what an offering twin drops.
+        focusedSlot = columns[from.column].slots[index].id
+    }
+
+    /// One pane leaves for a column of its own at the end of the bench.
+    ///
+    /// The source column survives the removal — `columnHoldsMore` is exactly that guarantee —
+    /// so inserting beside it cannot strand an index. Its slot may be left empty, which is
+    /// `normalize()`'s to clear, as it is for `close`.
+    private mutating func moveIntoNewColumn(_ pane: Pane.ID, from: Address, at index: Int) {
+        let moved = take(pane, from: from)
+        columns.insert(
+            Column(slots: [Slot(panes: [moved])], width: Self.equalShare(joining: columns.count)),
+            at: index)
+        // Marked: what an offering twin drops.
+        focusedSlot = columns[index].slots[0].id
+    }
+
+    /// Take a pane out of the slot holding it, leaving that slot showing what `close` would
+    /// leave it showing — the neighbour at the position the pane left. A slot emptied this way
+    /// is `normalize()`'s to remove, exactly as an emptied column is after a close.
+    private mutating func take(_ pane: Pane.ID, from: Address) -> Pane {
+        let moved = columns[from.column].slots[from.slot].panes.remove(at: from.pane)
+        let survivors = columns[from.column].slots[from.slot].panes
+        if columns[from.column].slots[from.slot].selected == pane, !survivors.isEmpty {
+            columns[from.column].slots[from.slot].selected =
+                survivors[min(from.pane, survivors.count - 1)].id
+        }
+        return moved
+    }
+
     /// A divider moved: the column takes the fraction it was dragged to, and `neighbour` —
     /// the column on the divider's other side — absorbs exactly the difference. Every other
     /// column keeps what it had, to the digit.

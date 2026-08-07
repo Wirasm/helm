@@ -69,6 +69,13 @@ enum HelmCommand: Equatable {
     case closePane
     /// ⌘⌥←/→/↑/↓ — the direction travels as a `Direction`, not as its raw value.
     case moveFocus(Workbench.Direction)
+    /// ⌘⌥⇧←/→/↑/↓ — move the focused **pane** one step, where `moveFocus` moves the keyboard.
+    ///
+    /// The command carries a direction only: which pane it means is the focused one, resolved by
+    /// `WorkbenchModel`. `Workbench.move(_:_:)` underneath it is addressed — it takes the pane —
+    /// and that is the seam #287's agent half needs. See `SpoolCommandPolicy.verdict(for:)` for
+    /// why sending *this* name across the spool is refused while the operation is not.
+    case movePane(Workbench.Direction)
     /// A canvas's `Post`: prefill one pane's composer with text.
     case composeText(ComposeRequest)
     /// ⇧⌘R — show or hide the remembered Archon monitor rail.
@@ -128,6 +135,7 @@ extension HelmCommand {
         case .splitDown: .splitDown
         case .closePane: .closePane
         case .moveFocus: .moveFocus
+        case .movePane: .movePane
         case .composeText: .composeText
         case .toggleRail: .toggleRail
         }

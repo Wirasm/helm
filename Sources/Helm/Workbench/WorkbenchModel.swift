@@ -449,6 +449,17 @@ final class WorkbenchModel: ObservableObject {
         commit(bench)
     }
 
+    /// ⌘⌥⇧+arrow. **The only decision here is which pane the keystroke meant** — the focused one
+    /// — and everything else is `Workbench.move(_:_:)`'s, which is addressed precisely so that a
+    /// second caller can mean a different pane (#287). `commit` rather than a bare assignment
+    /// because a move changes which panes are on screen: a relocated slot can be the only thing
+    /// a column had.
+    func movePane(_ direction: Workbench.Direction) {
+        guard var bench, let pane = bench.focusedPane?.id else { return }
+        bench.move(pane, direction)
+        commit(bench)
+    }
+
     /// ⌘T. The rule — including that it does nothing at all on a canvas — is
     /// `Workbench.toggleFace()`'s, so this is a delegation and not a decision.
     func toggleFace() {
@@ -548,6 +559,7 @@ final class WorkbenchModel: ObservableObject {
         case .splitDown: splitDown()
         case .closePane: closeFocusedPane()
         case let .moveFocus(direction): moveFocus(direction)
+        case let .movePane(direction): movePane(direction)
         case let .openCanvasFile(url): open(.file(url))
 
         // Scoped to the workspace whose terminal asked. A push comes from OUTPUT, so it

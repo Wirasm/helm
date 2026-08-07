@@ -194,22 +194,45 @@ extension Shortcut {
             Shortcut(
                 .character("w"), [.command, .option], does: .closePane,
                 menu: .init(title: "Close Pane", key: "w", modifiers: [.command, .option])),
-        ] + focusMovement
+        ] + focusMovement + paneMovement
+
+    /// The four arrows, in the order the menu lists them. Shared by the two rows below because
+    /// moving a pane and moving the keyboard are the same geometry — see `Workbench.move`,
+    /// which is deliberately `moveFocus`'s geometry — and two copies of this table would be two
+    /// places to get ← and → the wrong way round.
+    private static let arrows = [
+        (UInt16(123), Workbench.Direction.left, KeyEquivalent.leftArrow, "Left"),
+        (124, .right, .rightArrow, "Right"),
+        (126, .up, .upArrow, "Up"),
+        (125, .down, .downArrow, "Down"),
+    ]
 
     /// ⌘⌥ + arrows, because ⌘⌥1–9 is already the workspace fallback.
     ///
     /// The direction travels as a `Workbench.Direction`. It used to travel as that direction's
     /// **raw value**, in a second field beside `payload`, because the channel took `Any?` and
     /// the map had to pick one of two boxes to flatten into — see `HelmCommand`.
-    private static let focusMovement: [Shortcut] = [
-        (123, Workbench.Direction.left, KeyEquivalent.leftArrow, "Left"),
-        (124, .right, .rightArrow, "Right"),
-        (126, .up, .upArrow, "Up"),
-        (125, .down, .downArrow, "Down"),
-    ].map { keyCode, direction, key, name in
+    private static let focusMovement: [Shortcut] = arrows.map { keyCode, direction, key, name in
         Shortcut(
             .keyCode(keyCode), [.command, .option], does: .moveFocus(direction),
             menu: .init(title: "Focus \(name)", key: key, modifiers: [.command, .option]))
+    }
+
+    /// ⌘⌥⇧ + arrows — the same four keys with shift, moving the **pane** rather than the
+    /// keyboard (#287).
+    ///
+    /// **Shift on top of the focus binding, because that is what the gesture already means
+    /// everywhere else**: the modifier that turns *go there* into *take this there*. An operator
+    /// who knows ⌘⌥→ does not have to learn a second cluster, and the two commands stay legible
+    /// side by side in the menu and on the status bar.
+    ///
+    /// `.anywhere`, like focus movement: the terminal grid holds the keyboard almost all the
+    /// time, so a binding that could not fire from inside a pane could not move that pane.
+    private static let paneMovement: [Shortcut] = arrows.map { keyCode, direction, key, name in
+        Shortcut(
+            .keyCode(keyCode), [.command, .option, .shift], does: .movePane(direction),
+            menu: .init(
+                title: "Move Pane \(name)", key: key, modifiers: [.command, .option, .shift]))
     }
 
     /// Whether this row is live at all, given where focus is.
