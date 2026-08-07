@@ -460,6 +460,61 @@ final class ResumableAgentTests: XCTestCase {
             "an absent record is an absent key, not a null one")
     }
 
+    /// **A parked workspace still says what its panes were holding — and never that it is being
+    /// asked about them.** The two halves come from different places on purpose: the *record*
+    /// is on the bench, which is a value in `WorkspaceModel.contexts` and outlives any mount;
+    /// the *question* is `WorkbenchModel.resumeOffers`, which is this launch's, about the one
+    /// workspace the model currently holds.
+    ///
+    /// Without this a reader has to mount a workspace to learn whether anything was running in
+    /// it, which defeats the point of a snapshot that reports every workspace at once.
+    ///
+    /// **`isOffered == false` here is a control and passes either way**, and it is worth saying
+    /// why rather than leaving it to look like a measurement. `project` guards the parked branch
+    /// with `mounted ? workbench.resumeOffers : [:]`, but the model recomputes `resumeOffers` on
+    /// every mount — so by the time this workspace is parked the dictionary is the *other*
+    /// workspace's and holds none of these pane ids anyway. The guard is belt-and-braces, and
+    /// this assertion is what fails if a later change ever makes the offers survive a mount.
+    func testAParkedWorkspaceStillReportsWhatItsPanesHeldWithoutClaimingAnOpenQuestion() throws {
+        let defaults = try isolatedDefaults("resume-snapshot-parked")
+        let workspaces = WorkspaceModel(defaults: defaults)
+        let terminals = TerminalManager()
+        let model = WorkbenchModel(
+            terminals: terminals,
+            agents: .fixture(foreground: [:], rows: [:]), launcher: RecordingLauncher())
+
+        let parked = Workspace(path: "/tmp/helm-resume-parked")
+        let pane = UUID()
+        workspaces.open(parked)
+        model.activate(
+            workspacePath: parked.path,
+            restoring: Workbench(
+                panes: [Pane(id: pane, content: .terminal(face: .terminal, agent: agent()))]))
+        XCTAssertNotNil(model.resumeOffers[pane], "it is asked about while it is mounted")
+        workspaces.saveContext(terminalManager: terminals, workbench: model)
+
+        // Mounting another workspace parks the first — the model holds one at a time.
+        let mounted = Workspace(path: "/tmp/helm-resume-mounted")
+        workspaces.open(mounted)
+        model.activate(workspacePath: mounted.path, restoring: nil)
+
+        let snapshot = BenchSnapshot.project(
+            writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,
+            workbench: model, terminals: terminals,
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
+        ) { _ in nil }
+
+        let record = try XCTUnwrap(snapshot.workspaces.first { $0.path == parked.path })
+        XCTAssertEqual(record.state, .parked)
+        let resumable = try XCTUnwrap(
+            record.columns.flatMap(\.slots).flatMap(\.panes).first?.terminal?.resumable,
+            "the record is on the bench, so parking a workspace does not erase what it held")
+        XCTAssertEqual(resumable.session, agent().session)
+        XCTAssertFalse(
+            resumable.isOffered,
+            "nobody is being asked about a workspace that is not on screen")
+    }
+
     private func project(
         bench: Workbench, transcripts: Set<String>? = nil, suite: String
     ) throws -> BenchSnapshot {
