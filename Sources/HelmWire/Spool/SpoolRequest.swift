@@ -220,7 +220,7 @@ package struct CloseRequest: Codable, Equatable {
 
 /// Drive the bench: one of the commands helm can already carry out (#269).
 ///
-/// **Not a new capability — a route to one that exists.** `HelmCommand` has eighteen typed cases
+/// **Not a new capability — a route to one that exists.** `HelmCommand` has nineteen typed cases
 /// that the keymap and the menu have been able to fire since #219. Nothing outside the process
 /// could fire any of them: the spool knew `spawn`, `capture` and `close`, so an agent could
 /// create a pane and destroy one and photograph the window, and could do nothing to the bench in
@@ -599,8 +599,10 @@ package enum SpoolPolicy {
 /// is where the routing lives, and `CommandReport.focusedPaneBefore`/`After` is what makes the
 /// promise checkable by the caller rather than only argued here.
 ///
-/// **Exhaustive over `HelmCommandName`, on purpose.** A nineteenth command cannot be added
-/// without a verdict: the switch below stops compiling. An allowlist that is a `Set` literal
+/// **Exhaustive over `HelmCommandName`, on purpose.** A command cannot be added without a
+/// verdict: the switch below stops compiling. `movePane` (#287) is the first one added since
+/// this policy shipped, and the compiler is what asked for its verdict — which is the whole
+/// claim, held rather than asserted. An allowlist that is a `Set` literal
 /// answers new commands with silence, and silence defaults them to *refused*, which sounds safe
 /// and is actually just undecided.
 package enum SpoolCommandPolicy {
@@ -688,6 +690,28 @@ package enum SpoolCommandPolicy {
                     + "on whichever pane the operator is in — the command carries no address "
                     + "for helm to check against. An addressed version would carry a pane and "
                     + "refuse the one holding the keyboard, exactly as CloseRequest does")
+
+        /// **The one refusal that is about the wire rather than about the command** (#287), and
+        /// worth reading as such: `Workbench.move(_:_:)` is already addressed — it names the
+        /// pane it moves — and rearranging the bench is exactly what #269 says an agent may do.
+        /// What is missing is a *request* that can carry that address. `HelmCommand.movePane`
+        /// carries only a direction and applies it to `focusedSlot`'s pane, so sending this name
+        /// down a wire that has nothing else on it moves whichever pane the operator is in, and
+        /// moves their keyboard with it — `Workbench.move` follows the pane, deliberately, for
+        /// the caller it has today.
+        ///
+        /// So the follow-up is a shape rather than a widening of this list: a `MoveRequest`
+        /// carrying a pane and a destination, refused when `SpoolPaneState.holdsKeyboard` — the
+        /// same shape as `CloseRequest` — routed to `Workbench.move`'s offering twin, which
+        /// leaves `focusedSlot` and every slot's `selected` alone. That twin does not exist yet
+        /// either; `Workbench.move`'s header names the one line it differs by.
+        case .movePane:
+            return .refused(
+                "movePane moves the *focused* pane, which is the operator's, and takes their "
+                    + "keyboard with it. Workbench.move is addressed and an agent's move is "
+                    + "allowed in principle (#287) — what does not exist yet is a request that "
+                    + "names a pane and a destination, refused when that pane holds the "
+                    + "keyboard, as helm-close already does (#176)")
 
         // MARK: Refused — it raises UI nobody is there to answer.
 

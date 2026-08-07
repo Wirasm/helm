@@ -341,13 +341,14 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     guarantee that unmerged work is never destroyed. `SpoolClosePolicy`'s header has the
     argument and the shape a later worktree kind would have to take.
 - **To drive the bench in between, `swift tools/helm-command.swift <command>`** — the fourth
-  spool kind (#269), needing what the other three need: nothing. helm has eighteen typed
-  commands (`HelmCommand`, #219) and **will take four of them from an agent**: `newTerminal`,
-  `splitRight`, `splitDown`, `toggleRail`. `--list` names them without a running helm.
+  spool kind (#269), needing what the other three need: nothing. helm has nineteen typed
+  commands (`HelmCommand`, #219 and #287) and **will take four of them from an agent**:
+  `newTerminal`, `splitRight`, `splitDown`, `toggleRail`. `--list` names them without a running
+  helm.
   - **The rule is one sentence: rearranging the bench is fine, taking focus is not.** It is
     #125's *appear, don't seize* on a channel that can now ask for anything the keymap can — an
     agent selecting your active tab mid-thought is the wrong-terminal click arriving through a
-    supported API. The other fourteen are `refused` results **naming the reason and, where one
+    supported API. The other fifteen are `refused` results **naming the reason and, where one
     exists, the route to use instead**: `closePane` and `selectTerminal` point at `helm-close`,
     `openCanvasFile` and `openArtifact` at `push.sh`, `openWorkspace` at `helm-spool` — a
     spawn's `cwd` is the workspace helm opens for it. The rest name no route because there
@@ -372,8 +373,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     made checkable by the caller rather than argued in a header** — and the bench's column and
     pane counts. Exit codes are 2 no answer, 3 refused, 4 helm could not act, 6 abandoned.
   - `SpoolCommandPolicy` (`Sources/HelmWire/Spool/SpoolRequest.swift`) is the allowlist and the
-    argument; it is **exhaustive over `HelmCommandName`**, so a nineteenth command cannot be
-    added without a verdict. Read it before widening the list.
+    argument; it is **exhaustive over `HelmCommandName`**, so a command cannot be added without
+    a verdict — `movePane` (#287) is the first one since, and it arrived refused because the
+    compiler asked. Read it before widening the list.
 - **`helm-spawn` is the GUI path, and still there** — `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`
   (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
   type `cls`, wait, type the prompt, submit — with every step waiting on something observable
