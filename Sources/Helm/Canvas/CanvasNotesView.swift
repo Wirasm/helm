@@ -39,12 +39,17 @@ struct CanvasCommentField: View {
             }
 
             HStack(spacing: 8) {
+                // **Shift+Enter starts a line, and it used to write the note.** AppKit has no
+                // binding for a shifted Return, so it resolved through the plain one and
+                // `.onSubmit` fired — and a note is prose about a passage, which is the kind of
+                // thing written on more than one line. `submitOnReturnInsertNewlineOnShift`
+                // carries both halves and the whole argument (#278).
                 TextField("What about this?", text: $comment, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...4)
                     .font(.system(size: 12))
                     .focused($focused)
-                    .onSubmit(submit)
+                    .submitOnReturnInsertNewlineOnShift(submit: submit, insertNewline: startALine)
 
                 Button(action: submit) {
                     Image(systemName: "arrow.up.circle.fill")
@@ -66,6 +71,13 @@ struct CanvasCommentField: View {
 
     private var quoted: String {
         (selection.body["text"] as? String) ?? ""
+    }
+
+    /// Shift+Enter's newline. `@State` reads its own storage rather than a captured value, so
+    /// this is live even from a handler SwiftUI has not re-created —
+    /// `submitOnReturnInsertNewlineOnShift`'s header has the measurement that made that matter.
+    private func startALine() {
+        comment += "\n"
     }
 
     private func submit() {
