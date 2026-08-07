@@ -214,6 +214,55 @@ final class CanvasModel: ObservableObject {
         reloadDemand += 1
     }
 
+    // MARK: - What the page said about itself (#110)
+
+    /// The state this pane last wrote to the latch, so an unchanged report costs no write.
+    ///
+    /// **Not `@Published`, and that is the feature.** A report must move nothing on screen: the
+    /// operator is *playing* the page that sent it, and a redraw of the pane around them is the
+    /// smallest version of the interruption this whole design exists to avoid. Nothing here is
+    /// observable, so nothing redraws.
+    ///
+    /// Per-pane rather than read back from disk: comparing against the file would mean a read
+    /// per report, and the question — *"is this different from what I last wrote?"* — is one
+    /// this object is the only writer of.
+    private var latchedState: CanvasStateBody?
+
+    /// **A page reported what it is doing. Write it beside the artifact and stop** (#110).
+    ///
+    /// Everything this does *not* do is the acceptance: no session woken, no turn started, no
+    /// credit spent, no mail sent, no notice raised, nothing published. The agent reads the
+    /// latch when it next runs — `CanvasStateLatch`'s header has the standard this is copied
+    /// from and why a latch beats an interrupt.
+    ///
+    /// **An unchanged report is not written**, which is what makes `writtenAt` mean *"the page
+    /// last did something different"* rather than *"the page last spoke"*. MCP Apps permits the
+    /// dedupe in as many words; `BenchSnapshotModel` already takes the same one for the same
+    /// reason, and without it a page reporting on a `requestAnimationFrame` loop would rewrite
+    /// the file sixty times a second to say nothing.
+    ///
+    /// **The honest cost, recorded:** a page whose state genuinely changes every frame gets a
+    /// write every frame. That is the page's own choice and helm does not throttle it — a
+    /// coalescing delay would make the latch lag exactly when it is moving fastest, which is
+    /// the staleness a latch exists to remove.
+    func pageDidReportState(_ report: CanvasPageState) {
+        guard let canvas = fileURL else { return }
+        guard latchedState != report.body else { return }
+        do {
+            try CanvasStateLatch.write(report.body, for: canvas, at: Date())
+            latchedState = report.body
+        } catch {
+            // **Logged, not swallowed, and deliberately not shown.** The operator did not do
+            // this and cannot fix it — an artifact in a directory helm cannot write to is the
+            // author's problem, and it is the author who reads `log show`. The bridge's dropped
+            // messages are reported the same way, one file over, for the same reason.
+            NSLog(
+                "helm: could not latch canvas state to "
+                    + "\(CanvasStateLatch.sidecarURL(for: canvas).lastPathComponent) — "
+                    + error.localizedDescription)
+        }
+    }
+
     /// Where this canvas's notes accumulate — beside it, never inside it.
     var sidecarURL: URL? { fileURL.map(CanvasNotes.sidecarURL(for:)) }
 
@@ -298,6 +347,12 @@ final class CanvasModel: ObservableObject {
         notesNotice = nil
         // Same rule: "this page is holding state, reload?" is about the page that was here.
         updateNotice = nil
+        // The latch belongs to the artifact, not to the pane, so the *file* stays where it is —
+        // an agent reads it long after this canvas showed something else. What is dropped is
+        // this pane's memory of having written it, because carrying it over would let the first
+        // report from the *new* page be deduped against the old one's state and silently not
+        // written at all.
+        latchedState = nil
         refreshNotes()
         // Reload on every external change to **this file**. Watcher lifetime == document
         // lifetime; opening another file replaces it.
@@ -866,7 +921,8 @@ struct CanvasView: View {
                 url: document.url, generation: document.generation,
                 markTool: model.markTool, showsMark: model.showsMark,
                 onSelection: model.pageDidReport,
-                reloadDemand: model.reloadDemand, onUpdate: model.pageAnsweredUpdate)
+                reloadDemand: model.reloadDemand, onUpdate: model.pageAnsweredUpdate,
+                onState: model.pageDidReportState)
         case let .plainText(text):
             ScrollView {
                 Text(text)
