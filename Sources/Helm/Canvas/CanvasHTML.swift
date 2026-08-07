@@ -6,6 +6,20 @@ import Foundation
 enum CanvasTheme: String {
     case light = "default"
     case dark
+
+    /// Which of a palette token's two values this theme is asking for.
+    ///
+    /// The canvas's own *document* deliberately renders over CSS system colours — an artifact
+    /// is a document and should read like one — but anything helm draws **on top of** it is
+    /// helm's chrome and spends the palette, which is what this crossing is for. Stated once
+    /// here rather than at each call site, so "which appearance is a dark canvas?" has one
+    /// answer on the way into the page.
+    var appearance: Palette.Appearance {
+        switch self {
+        case .light: .light
+        case .dark: .dark
+        }
+    }
 }
 
 /// Pure HTML/JS generation for the canvas's WKWebViews — the single
@@ -176,16 +190,54 @@ enum CanvasHTML {
     /// part-way down when you decide to mark it.
     static let markToolGlobal = "__helmMarkTool"
 
+    /// The name the page registers its text highlight under, and the name its `::highlight()`
+    /// rule selects (#308). Spelled out in `canvas-annotation.js` as well, exactly like
+    /// `markToolGlobal` above and for the same reason — a JavaScript file cannot compile
+    /// against a Swift constant, so `CanvasAnnotationScriptTests` is the gate over both copies.
+    ///
+    /// **`CSS.highlights` is the document's, shared with the page's own scripts**, so this is a
+    /// name in someone else's namespace. `helm-mark` is the prefix helm already marks its chrome
+    /// with (`data-helm-mark`, `helm-mark-head`), which is as much as a shared registry allows.
+    static let markHighlightName = "helm-mark"
+
+    /// The global the page reads the text mark's colour from.
+    static let markTintGlobal = "__helmMarkTint"
+
+    /// What a text mark is painted with — `Palette.helm.selection`, resolved here because only
+    /// helm knows which appearance is in force.
+    ///
+    /// **The token is the one named for this job**: *"what a selection leaves behind: dragged
+    /// text in the terminal, the selected tab"*. A canvas text mark is the third thing with that
+    /// meaning, and spending the same token is what makes the three read as one application
+    /// rather than as three surfaces that each picked a colour.
+    ///
+    /// **Resolved in Swift rather than left to CSS**, and that is the reason it crosses at all.
+    /// A `prefers-color-scheme` rule in the page would follow the *system*, and helm's canvas
+    /// follows helm's own `AppearanceOverride`; `light-dark()` would need the artifact to have
+    /// declared a `color-scheme`, which an agent-authored `.html` need not have. `CanvasTheme`
+    /// already is helm's answer, so the answer is given rather than re-derived.
+    static func markTint(for theme: CanvasTheme) -> String {
+        Palette.helm.selection.value(in: theme.appearance).hex
+    }
+
     /// Take the mark down. Called when the comment field closes, submitted or dismissed —
-    /// the ink is that field's subject and lives exactly as long as it does.
+    /// the mark is that field's subject and lives exactly as long as it does. All four marks:
+    /// the page's `wipe` takes its ink and its text highlight down together (#308).
     static func clearMarkScript() -> String {
         "if (window.__helmWipeMark) { window.__helmWipeMark(); }"
     }
 
     /// One statement, so `CanvasFileViews` has no JS of its own to get wrong.
-    static func setMarkTool(_ tool: CanvasMarkTool) -> String {
+    ///
+    /// **The tint rides here rather than on a channel of its own**, and the invariant that buys
+    /// is worth stating: the only way the page has no tint is that this push never landed — and
+    /// then the page is still holding `read`, which posts nothing and paints nothing. So the
+    /// colour cannot be missing at the moment a text mark exists to need it, and the script is
+    /// free to paint nothing at all rather than invent a fallback colour.
+    static func setMarkTool(_ tool: CanvasMarkTool, theme: CanvasTheme) -> String {
         """
         window.\(markToolGlobal) = \(jsString(tool.token));
+        window.\(markTintGlobal) = \(jsString(markTint(for: theme)));
         if (window.__helmAbandonMark) { window.__helmAbandonMark(); }
         """
     }

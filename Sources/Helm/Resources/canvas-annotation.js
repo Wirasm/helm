@@ -10,6 +10,22 @@
   if (!window.__helmMarkTool) { window.__helmMarkTool = "read"; }
   function tool() { return window.__helmMarkTool || "read"; }
 
+  // What a text mark is painted with, pushed by Swift beside the tool itself.
+  //
+  // **A palette token, resolved in Swift**, because the two halves of one are not a thing a
+  // page can pick between: `Palette.helm.selection` is "what a selection leaves behind", it has
+  // a light value and a dark one, and which is in force is helm's effective appearance — not
+  // the system's, which is what a `prefers-color-scheme` rule here would have followed and got
+  // wrong for anyone using helm's own appearance override. `CanvasHTML.markTint` is the one
+  // spelling; there is deliberately no literal colour anywhere in this file.
+  //
+  // **It cannot be missing when it is needed**, which is why nothing here falls back to a
+  // colour of its own. It rides `setMarkTool`, so the only way it is unset is that the tool
+  // push never landed — and then the page is still on `read`, which paints nothing at all.
+  function tint() {
+    return typeof window.__helmMarkTint === "string" ? window.__helmMarkTint : null;
+  }
+
   // EVERY message posted below carries `kind`, and it is the ONLY field that says what the
   // message is (#109/#210). There were three shapes here and no declared kind: a selection was
   // "has a non-empty top-level text", a dismissal was `{cleared:true}`, and a geometry mark was
@@ -247,9 +263,11 @@
   // The ink. helm's own chrome, marked as such so an agent reading the DOM can tell
   // it from what it authored, and inert so the page can never come to need it.
   var paper = null, ink = null, stroke = [], from = null;
-  // Has this mark been POSTED? Until it has, the ink is an in-flight gesture and
+  // Has this mark been POSTED? Until it has, the mark is an in-flight gesture and
   // anything that interrupts may throw it away. Once posted it is the comment
   // field's subject, and only Swift — closing that field — may take it down.
+  // All four marks, not just the drawn three: a text highlight is committed at its
+  // own `return` below and answers to this flag identically.
   var committed = false;
 
   function sheet() {
@@ -323,8 +341,98 @@
     svg.appendChild(dot);
   }
 
+  // The text mark — the fourth thing that marks, and the one thing on this page that is not
+  // DRAWN (#308).
+  //
+  // **Three tools kept their mark and one did not.** freehand and arrow leave ink, point draws
+  // a ring precisely because a tap has no travel, and a text mark was the browser's own
+  // selection — which greys the instant the comment field takes the keyboard, so the operator
+  // was asked to comment on a passage that no longer looked marked. The three were built
+  // together for #112; text selection predates them and was never brought along.
+  //
+  // **A CSS Custom Highlight, not a rectangle on the ink layer**, and the reason is anchoring.
+  // An anchor is resolved out of the DOM — `nameFor` walks ancestors for an id, and a range's
+  // `commonAncestorContainer` decides which element it is about — so a highlight that wrapped
+  // the range in elements of its own, or split its text nodes, would change the thing the mark
+  // is named by while claiming to change nothing. `CSS.highlights` mutates **no DOM at all**:
+  // no wrapper, no split, no attribute, not one node added to the artifact's tree. Rects on the
+  // ink layer would also have avoided that, and would have had to be translucent and sit over
+  // the glyphs at max z-index, frozen at the geometry the range had when it was marked. This
+  // paints behind the text the way the browser's own selection does, and reflows with it.
+  //
+  // It is also why this needs no `data-helm-mark`. The ink layer carries that attribute so
+  // `resolve` and `targetsInside` can skip helm's own chrome; a highlight has no element to
+  // skip, so "the mark cannot become its own anchor target" is structural here rather than
+  // remembered.
+  //
+  // **Measured in a real WKWebView from the bridge world before any of this was written**,
+  // because none of it survives being assumed across a content-world boundary: `CSS.highlights`
+  // and `Highlight` exist there; a highlight `set` from the isolated world is visible to the
+  // PAGE world, so it is the document's one registry the renderer reads rather than a per-world
+  // copy; and a constructed stylesheet adopted from the isolated world parses its
+  // `::highlight()` rule. `CanvasMarkReachesAgentLiveTests` is that measurement kept as a gate.
+  //
+  // Spelled out here rather than interpolated, exactly like the handler name, the tool global,
+  // `data-helm-frame` and `data-helm-surface`. `CanvasHTML.markHighlightName` is the far half
+  // and `CanvasAnnotationScriptTests` holds them together, since a JavaScript file cannot
+  // compile against a Swift constant.
+  var highlightName = "helm-mark";
+  var tintSheet = null;
+
+  // The `::highlight()` rule the registry has nothing to paint with until it exists.
+  //
+  // **Adopted, not appended.** `document.adoptedStyleSheets` adds no node to the tree, so an
+  // agent reading the artifact's DOM back sees exactly what it wrote — the same promise the ink
+  // keeps by marking itself, kept here by there being nothing to mark. A `<style>` in `<head>`
+  // would render identically and would be an element helm put into someone else's document.
+  //
+  // Re-checked and re-written on every paint rather than built once: `adoptedStyleSheets` is
+  // the document's, an artifact's own script may replace it wholesale, and a registered
+  // highlight with no rule to paint it is indistinguishable from no mark at all.
+  //
+  // Returns false when the browser has neither, which is the same graceful nothing a missing
+  // script is (#33) — the canvas still renders and the mark still reaches the agent, because
+  // the payload is the anchor and never these pixels.
+  function adoptTint(colour) {
+    if (typeof window.CSSStyleSheet !== "function") { return false; }
+    if (!document.adoptedStyleSheets) { return false; }
+    if (!tintSheet) { tintSheet = new window.CSSStyleSheet(); }
+    tintSheet.replaceSync(
+      "::highlight(" + highlightName + "){background-color:" + colour + "}");
+    if (document.adoptedStyleSheets.indexOf(tintSheet) < 0) {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.concat([tintSheet]);
+    }
+    return true;
+  }
+
+  // **`cloneRange()`, and that is the whole feature rather than a tidiness.** `getRangeAt`
+  // hands back a range the Selection still owns, and the native selection goes away the moment
+  // the comment field takes the keyboard — which is the exact moment this has to survive. The
+  // clone is the operator's mark; the original is the browser's selection, and they stop being
+  // the same thing one keystroke later.
+  function paintTextMark(range) {
+    var colour = tint();
+    if (!colour) { return false; }
+    if (!window.CSS || !window.CSS.highlights) { return false; }
+    if (typeof window.Highlight !== "function") { return false; }
+    if (!adoptTint(colour)) { return false; }
+    window.CSS.highlights.set(highlightName, new window.Highlight(range.cloneRange()));
+    return true;
+  }
+
+  function unpaintTextMark() {
+    if (window.CSS && window.CSS.highlights) {
+      window.CSS.highlights.delete(highlightName);
+    }
+  }
+
   function wipe() {
     if (paper && paper.parentNode) { paper.parentNode.removeChild(paper); }
+    // Every mark this page can make comes down here, which is what lets a text mark share the
+    // ink's lifecycle instead of growing one of its own: Swift already calls this when the
+    // comment field closes — posted, dismissed by the ✕, or by Escape — and `abandon` already
+    // knows not to.
+    unpaintTextMark();
     paper = null; ink = null; stroke = []; from = null; committed = false;
   }
 
@@ -448,11 +556,41 @@
       var selection = document.getSelection();
       var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
       var text = empty ? "" : String(selection).trim();
-      if (!text) { bridge.postMessage({ kind: "cleared" }); return; }
+      // Take the mark down here rather than waiting to be told, exactly as `point` does when it
+      // resolves nothing. Swift answers a `cleared` by closing the field, which comes back as a
+      // wipe — but a render later, and in between the operator would be looking at a highlight
+      // over the passage they just clicked away from.
+      if (!text) { wipe(); bridge.postMessage({ kind: "cleared" }); return; }
       var range = selection.getRangeAt(0);
       var node = elementFor(range.commonAncestorContainer);
       var id = node ? nameFor(node) : null;
       var r = range.getBoundingClientRect();
+      // **One mark on screen, and this is the call that keeps it to one.** Every drawing gesture
+      // starts with a `wipe()` at `mousedown`; `text` is exempted from that on purpose — the
+      // `preventDefault` there is what would stop the operator selecting at all — so the whole
+      // burden of taking down whatever was already marked lands here, on the one branch that
+      // establishes a new mark. Without it: commit an arrow, pick up `text` (which does *not*
+      // wipe, because a tool change must not drop a mark awaiting its comment), select a
+      // passage, and the stale arrow is still painted beside the new highlight with only one of
+      // them being what the comment field is about.
+      //
+      // The `!text` branch above already makes exactly this call, and so does `point` when it
+      // resolves nothing. This is the third spelling of the same rule and the one that was
+      // missing.
+      //
+      // **Latent before this slice, real after it**: `text` painted nothing of its own, so the
+      // orphaned ink was the *only* thing on screen rather than one of two contradictory marks.
+      // Making a text mark visible is what turned it into a defect.
+      //
+      // Safe here: `wipe()` touches the ink layer and the highlight registry and never
+      // `document.getSelection()`, and everything read off the range is already read above.
+      wipe();
+      // The mark STAYS, and `committed` is what says so — the same two lines the three drawing
+      // tools end on, for the same reason: from here the mark is the comment field's subject,
+      // and only Swift closing that field may take it down. Without the flag, `abandon` on the
+      // `blur` the field itself causes would erase it before the operator had looked at it.
+      paintTextMark(range);
+      committed = true;
       bridge.postMessage({
         kind: "selection", id: id, text: text,
         rect: { x: r.left, y: r.top, width: r.width, height: r.height }

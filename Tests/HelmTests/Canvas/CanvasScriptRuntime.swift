@@ -66,7 +66,13 @@ final class CanvasScriptRuntime {
 
     // MARK: Driving the page
 
-    func setTool(_ tool: CanvasMarkTool) { call("setTool", tool.token) }
+    /// Arm the page the way Swift does — the tool it is holding **and** the colour a text mark
+    /// is painted with, because `setMarkTool` pushes both in one statement and a page told only
+    /// half of that paints nothing (`CanvasHTML.setMarkTool` says why there is no fallback).
+    /// The theme defaults to `.light` so every existing caller keeps meaning what it meant.
+    func setTool(_ tool: CanvasMarkTool, theme: CanvasTheme = .light) {
+        call("setTool", tool.token, CanvasHTML.markTint(for: theme))
+    }
 
     func scroll(x: Double, y: Double) { call("scrollTo", x, y) }
 
@@ -132,8 +138,15 @@ final class CanvasScriptRuntime {
     func select(inBlockWithText block: String, text: String) {
         call("selectInBlock", block, text)
     }
+    /// The native selection going away — what the comment field taking the keyboard does to it.
+    /// helm's own mark is supposed to be untouched by that, which is the whole of #308.
+    func collapseSelection() { call("collapseSelection") }
+
     func blurWindow() { call("fireOnWindow", "blur") }
     func mouseLeaveDocument() { call("fireOnDocument", "mouseleave") }
+
+    /// An artifact's own script replacing `document.adoptedStyleSheets` wholesale.
+    func dropAdoptedStyles() { call("dropAdoptedStyles") }
 
     /// What Swift pushes when the comment field closes, run for real rather than asserted on.
     func evaluateFromSwift(_ javaScript: String) { context.evaluateScript(javaScript) }
@@ -148,6 +161,35 @@ final class CanvasScriptRuntime {
     }
 
     var lastPosted: [String: Any]? { posted.last }
+
+    /// The text mark (#308): what the page registered under `CanvasHTML.markHighlightName`,
+    /// or nil when nothing is painted. `cloned` is whether the script cloned the selection's
+    /// range before registering it — see the stub, which models the two as different objects
+    /// precisely so a script that forgot cannot pass.
+    struct TextMark: Equatable {
+        var id: String
+        var text: String
+        var cloned: Bool
+    }
+
+    var textMark: TextMark? {
+        guard let value = call("highlightedRange", CanvasHTML.markHighlightName),
+            !value.isNull, !value.isUndefined,
+            let raw = value.toDictionary() as? [String: Any]
+        else { return nil }
+        return TextMark(
+            id: raw["id"] as? String ?? "",
+            text: raw["text"] as? String ?? "",
+            cloned: raw["cloned"] as? Bool ?? false)
+    }
+
+    /// Every name in the document's highlight registry — so "helm registered exactly its own"
+    /// is checkable, not just "helm registered something".
+    var highlightNames: [String] { (call("highlightNames")?.toArray() as? [String]) ?? [] }
+
+    /// The CSS behind the highlight: the `::highlight()` rule and the colour in it.
+    var adoptedStyle: String { call("adoptedStyle")?.toString() ?? "" }
+    var adoptedSheetCount: Int { Int(call("adoptedSheetCount")?.toInt32() ?? 0) }
 
     var hasMarkLayer: Bool { call("hasMarkLayer")?.toBool() ?? false }
     var markLayerStyle: String { call("markLayerStyle")?.toString() ?? "" }

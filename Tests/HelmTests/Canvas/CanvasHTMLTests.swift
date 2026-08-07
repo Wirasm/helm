@@ -115,12 +115,59 @@ final class CanvasHTMLTests: XCTestCase {
         // It used to wipe unconditionally. That was right when ink was transient and wrong
         // the moment it started outliving the gesture: switching tools with a comment open
         // erased the mark and left the field anchored to nothing.
-        let set = CanvasHTML.setMarkTool(.read)
+        let set = CanvasHTML.setMarkTool(.read, theme: .light)
 
         XCTAssertTrue(set.contains("__helmAbandonMark"))
         XCTAssertFalse(
             set.contains("__helmWipeMark"),
             "a tool change may not remove a mark that is already awaiting its comment")
+    }
+
+    /// **The tint rides the tool push, and that is the invariant worth pinning** (#308). The
+    /// page holds no colour of its own — `canvas-annotation.js` paints nothing without one, on
+    /// purpose — so the only thing keeping a text mark visible is that these two travel together.
+    /// Split them onto two channels and the failure is a mark that is registered and invisible.
+    func testTheToolPushCarriesTheColourATextMarkIsPaintedIn() {
+        for theme in [CanvasTheme.light, .dark] {
+            let set = CanvasHTML.setMarkTool(.text, theme: theme)
+
+            XCTAssertTrue(
+                set.contains(
+                    "window.\(CanvasHTML.markTintGlobal) = "
+                        + "\"\(Palette.helm.selection.value(in: theme.appearance).hex)\";"),
+                "\(theme): the tint must be the palette's `selection` token — \(set)")
+        }
+        XCTAssertNotEqual(
+            CanvasHTML.markTint(for: .light), CanvasHTML.markTint(for: .dark),
+            "a token resolved to one value in both appearances is a token that was not resolved")
+    }
+
+    /// **Why a painted mark can never be left wearing the other appearance's colour** (#308).
+    ///
+    /// The tint is written into the page's `::highlight()` rule at the moment the mark is
+    /// painted, and nothing repaints an already-registered highlight — which reads like a hole:
+    /// flip the appearance with a comment field open and the mark should be stranded in the old
+    /// colour. It cannot be, and the reason is one line up the call chain rather than anything
+    /// in the script: **`theme` is part of `CanvasReloadKey`**, so a flip is a *navigation*. The
+    /// JS context is destroyed and the highlight goes with it, exactly as the ink does — which
+    /// `MarkdownCanvasView.showsMark` already records as deliberate, the field outliving its
+    /// mark on a reload because the anchor was decoded when the mark was posted.
+    ///
+    /// Asserted rather than reasoned about, because it is a fact in **another file** that two
+    /// comments here lean on, and the review that raised this reached the opposite conclusion
+    /// from reading the script alone. If a later change ever made a theme flip something the
+    /// page survives, this fails and the repaint it would then need becomes findable.
+    func testAThemeFlipIsANavigationSoNoPaintedMarkOutlivesItsTint() {
+        let light = CanvasReloadKey(theme: .light, generation: 3, document: "# plan")
+        let dark = CanvasReloadKey(theme: .dark, generation: 3, document: "# plan")
+
+        XCTAssertNotEqual(
+            light, dark,
+            "same artifact, same generation, different appearance — if these compare equal the "
+                + "page is kept and a mark painted in the old tint is left on screen")
+        XCTAssertEqual(
+            light, CanvasReloadKey(theme: .light, generation: 3, document: "# plan"),
+            "and nothing else moved, or every render would navigate")
     }
 
     func testClearingTheMarkIsTheOneThingThatTakesAPostedOneDown() {
