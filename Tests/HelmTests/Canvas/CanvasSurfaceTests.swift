@@ -204,10 +204,18 @@ final class CanvasSurfaceTests: XCTestCase {
             repositoryRoot
             .appendingPathComponent(".claude/skills/helm-board/board.html")
         let markup = try String(contentsOf: template, encoding: .utf8)
+        // **The whole opening tag, not the attribute name.** `CanvasAnchorTests
+        // .testTheScriptAndTheGeneratedPageStillAgreeOnHelmsWrapper` already asserts on
+        // `<article id="content" data-helm-frame>` for exactly this reason, and the first cut of
+        // this test used the weaker form and was **satisfied by the template's own comment**:
+        // that file explains the contract in prose above the element, so deleting the real
+        // declaration off the `<main>` left one occurrence behind and this stayed green.
+        // Measured on a copy of the file — two occurrences became one and it still passed. A
+        // check bound to the documentation rather than to the declaration is not a check.
         XCTAssertTrue(
-            markup.contains(CanvasSurface.attribute),
-            "the board template must declare `\(CanvasSurface.attribute)` on its container, or "
-                + "helm and the board fight over every gesture")
+            markup.contains("<main id=\"board\" \(CanvasSurface.attribute)>"),
+            "the board template must declare `\(CanvasSurface.attribute)` on the element "
+                + "quickdraw mounts into, or helm and the board fight over every gesture")
     }
 
     /// Four levels up from `Tests/HelmTests/Canvas/` — the same walk

@@ -183,6 +183,11 @@ export function boardReport({ records, boundsOf, ownedIds, generation, warnings 
   const report = {
     format: "helm.board",
     version: 1,
+    // **Always present, both ways round.** `board.js` posts `mounted: false` when it cannot find
+    // its container — the one failure that would otherwise be a blank page and a silent latch —
+    // and a field that only ever appears on failure is one a reader has to know to look for.
+    // Absent is not a third state; it is an older build.
+    mounted: true,
     generation: typeof generation === "number" ? generation : null,
     counts: {
       records: shapes.length,

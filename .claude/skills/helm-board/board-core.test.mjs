@@ -178,6 +178,7 @@ console.log("the report");
     generation: 3,
   });
   check("it says what it is, from the first message", [report.format, report.version], ["helm.board", 1]);
+  check("and that it is mounted, in the same words the failure path uses", report.mounted, true);
   check("and which update it has applied", report.generation, 3);
   check("counts split by owner", report.counts, { records: 3, agent: 2, operator: 1 });
   check("the operator's stroke is a mark", report.marks.map((m) => m.id), ["mark:1"]);

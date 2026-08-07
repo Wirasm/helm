@@ -26,12 +26,36 @@ const documentURL = `./${base}.document.json`;
 // authority for the ids the agent owns.
 const cacheKey = `helm.board/${artifact}`;
 
-const container = document.getElementById("board");
+const latch =
+  window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.helmCanvasState;
+
 const warnings = [];
 
 function warn(message) {
   if (warnings.length < 8 && warnings.indexOf(message) < 0) warnings.push(message);
   console.warn(`board: ${message}`);
+}
+
+const container = document.getElementById("board");
+
+// **A missing container is the one failure that is otherwise completely silent.** The artifact
+// is the author's to edit, and renaming the element quickdraw mounts into throws inside
+// `createQuickdraw` before anything below runs — an ES module that throws leaves a blank page,
+// no message on screen, and nothing in the latch. So it is said in both directions: on the page
+// for whoever is looking at it, and in the report for the agent who is not.
+if (!container) {
+  const said = `no element with id "board" — the artifact must carry <main id="board" data-helm-surface>`;
+  warn(said);
+  const note = document.createElement("p");
+  note.textContent = `This board cannot mount: ${said}`;
+  document.body.appendChild(note);
+  if (latch) {
+    latch.postMessage({
+      kind: "canvas.state",
+      state: { format: "helm.board", version: 1, mounted: false, warnings: [said] },
+    });
+  }
+  throw new Error(said);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -137,8 +161,6 @@ function cacheOperatorRecords() {
 // ---------------------------------------------------------------------------------------------
 // Telling helm what is on the board
 // ---------------------------------------------------------------------------------------------
-
-const latch = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.helmCanvasState;
 
 function report() {
   if (!latch) return;

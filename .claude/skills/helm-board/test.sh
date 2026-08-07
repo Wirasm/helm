@@ -146,7 +146,20 @@ if command -v shasum >/dev/null 2>&1; then
         grep -E '^[0-9a-f]{64}  ' quickdraw/VENDORED.txt >"$tmp/pins"
         shasum -a 256 -c "$tmp/pins"
     ) >"$tmp/hashes" 2>&1
-    ok "every file still hashes to its pin" test $? -eq 0 || cat "$tmp/hashes"
+    verified=$?
+    # Spelled out rather than run through `ok`, and the reason is the whole point of the
+    # diagnostic: `ok` ends in a `printf`, so it returns 0 whichever branch it took and
+    # `ok … || cat` could never fire. The failure was still reported — but on a real pin
+    # mismatch the one line that says WHICH file changed was dropped, which is a gate telling
+    # you something is wrong and refusing to say what.
+    if [ "$verified" -eq 0 ]; then
+        pass=$((pass + 1))
+        printf '  ok    every file still hashes to its pin\n'
+    else
+        fail=$((fail + 1))
+        printf '  FAIL  every file still hashes to its pin\n'
+        sed 's/^/        /' "$tmp/hashes"
+    fi
     check "and every shipped file is pinned" \
         "$(ls "$here"/quickdraw/*.js "$here"/quickdraw/*.css | wc -l | tr -d ' ')" \
         "$(grep -cE '^[0-9a-f]{64}  ' "$here/quickdraw/VENDORED.txt")"
