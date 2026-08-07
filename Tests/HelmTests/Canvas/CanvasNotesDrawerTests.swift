@@ -40,6 +40,16 @@ final class CanvasNotesDrawerTests: XCTestCase {
             to: CanvasNotes.sidecarURL(for: file), atomically: true, encoding: .utf8)
     }
 
+    /// **A canvas whose clipboard is this suite's rather than the operator's**, for the one test
+    /// below that reaches `annotate`. With no `onAnnotation` wired the delivery is
+    /// `.notSent(.noOrigin)`, which copies — and the default sink is `NSPasteboard.general`.
+    /// `CanvasModel.copyToClipboard`'s header has the argument.
+    private func quietCanvas() -> CanvasModel {
+        let model = CanvasModel()
+        model.copyToClipboard = { _ in }
+        return model
+    }
+
     // MARK: - Opening and closing
 
     func testTheNotesButtonOpensAndClosesTheDrawer() throws {
@@ -132,7 +142,7 @@ final class CanvasNotesDrawerTests: XCTestCase {
     }
 
     func testANoteWrittenWhileTheDrawerIsOpenAppearsInIt() throws {
-        let model = CanvasModel()
+        let model = quietCanvas()
         model.open(file)
         model.pageDidReport(try selection(["id": "phase-2", "text": "Phase 2"]))
         model.toggleNotes()

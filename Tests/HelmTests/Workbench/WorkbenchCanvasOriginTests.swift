@@ -26,6 +26,11 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     /// exist; the courier's `foregroundPid` seam reads it, so no pty and no live agent are needed.
     private var pids: [UUID: pid_t] = [:]
 
+    /// What `annotate` put on the clipboard, into this suite's own list rather than the operator's
+    /// pasteboard — `mark(_:on:)` takes the sink over, and `CanvasModel.copyToClipboard`'s header
+    /// has why that is not pedantry.
+    private var copied: [String] = []
+
     private let workspace = WorkspacePath("/tmp/helm-canvas-origin")
     private let handle = Handle(validating: "sild-611a")!
     private let otherHandle = Handle(validating: "other-9c2f")!
@@ -109,6 +114,14 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     }
 
     private func mark(_ comment: String, on model: CanvasModel) throws {
+        // **Here rather than in `mounted()`, because these models come from the production path.**
+        // `WorkbenchModel.canvas(for:)` makes them and rightly leaves `copyToClipboard` at its
+        // default, so the sink has to be taken over at the one point every caller passes through —
+        // this is that point. Without it a fallback route reaches `Pasteboard.copy` for real and
+        // this suite clears the clipboard of whoever is running the gate, which is exactly what
+        // `CanvasModel.copyToClipboard`'s header says the seam exists to stop.
+        model.copyToClipboard = { [weak self] text in self?.copied.append(text) }
+
         let page = try CanvasScriptRuntime()
         page.select(id: "intro", text: "Why this exists")
         // The script posts on **mouseup**, never on the selection itself — a highlight the
@@ -181,6 +194,12 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
             model.canvas(for: pane).notesNotice,
             "Written to report.notes.md and copied — no agent pushed this canvas, "
                 + "so paste it to one")
+        // **The control for #303, on the production wiring rather than on the policy.** `sent` is
+        // the case that stopped copying; an unrouted note must still land on the clipboard, because
+        // here the clipboard is the only way it reaches anybody — and `WorkbenchModel.canvas(for:)`
+        // is the real path that has to keep doing it.
+        XCTAssertEqual(copied.count, 1, "with nobody to send to, the clipboard is the return path")
+        XCTAssertTrue(try XCTUnwrap(copied.first).contains("nobody pushed this"))
     }
 
     /// The origin agent is gone — the pane was closed, the session ended, or it never claimed a
