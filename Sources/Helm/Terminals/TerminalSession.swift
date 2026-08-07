@@ -282,12 +282,43 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// Padding used to be here, where the operator's config outranked it. It is a
     /// session override now — see `sessionOverrides` for why insets are layout
     /// rather than taste.
+    ///
+    /// **`copy-on-select = false` is here because ghostty's own default destroys the
+    /// operator's clipboard in an embedded surface, and only in an embedded one (#297).**
+    /// Measured, not reasoned about: a sentinel on `NSPasteboard.general`, one mouse drag
+    /// across a line of terminal text, and the sentinel is gone — replaced by the dragged
+    /// text, with nothing on screen to say so. What that costs is the most ordinary thing
+    /// anyone does with a terminal: copy something in a browser, come to helm, drag across
+    /// a line while reading, press ⌘V, and paste "does not work at all". It works
+    /// perfectly; the clipboard it pastes is simply no longer the one that was copied.
+    ///
+    /// **The lie is one layer down and helm cannot reach it.** ghostty's default is
+    /// `copy-on-select = true`, which means *the selection clipboard* — X11's middle-click
+    /// buffer, which macOS does not have. Ghostty asks the host whether it has one, and the
+    /// vendored AppKit wrapper answers yes (`supports_selection_clipboard = true`,
+    /// `TerminalController+Config.swift`) and then ignores the parameter naming which
+    /// clipboard to write, putting every selection on `NSPasteboard.general`
+    /// (`TerminalController+Callbacks.swift`, `writeClipboard(userdata:clipboard:…)` —
+    /// the `clipboard` argument is `_`). Ghostty.app answers no, which is why
+    /// `copy-on-select = true` is a harmless no-op in a real macOS ghostty window and a
+    /// clipboard eater in this one. `runtimeConfig` is private to the vendored controller,
+    /// so turning the claim off is a vendor patch; turning the *feature* off is a config
+    /// line, and it lands helm on exactly the behaviour Ghostty.app already has.
+    ///
+    /// **A default rather than a session override, deliberately.** An operator who wants
+    /// selections on the clipboard writes `copy-on-select = clipboard` — ghostty's own
+    /// spelling for the system clipboard, which routes through the standard channel and is
+    /// correct here — and their config layers over this one (`GhosttyConfig.swift` tier 2).
+    /// Forcing it in `sessionOverrides` would take a real preference away to fix a bug
+    /// that is not theirs. ⌘C is untouched either way: `copy_to_clipboard` always names
+    /// the standard clipboard.
     static let defaultConfiguration = TerminalConfiguration { builder in
         builder.withFontSize(baseFontSize)
         builder.withFontThicken(true)
         builder.withCursorStyle(.block)
         builder.withCursorStyleBlink(true)
         builder.withCustom("adjust-cell-height", "15%")
+        builder.withCustom("copy-on-select", "false")
     }
 
     /// The terminal's colours, out of the same table the chrome spends.
