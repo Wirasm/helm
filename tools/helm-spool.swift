@@ -14,6 +14,11 @@
 // `results/<id>.json` — no registry polling, no process-table walk, no heuristic about which
 // new session belongs to this spawn. helm created the terminal, so helm knows.
 //
+// PREFER `--prompt-file` OR `-` TO `--prompt` (#93). The spawned agent's own argv never carries
+// the prompt — helm stages it 0600 and hands the agent a path — but `--prompt TEXT` puts it in
+// THIS process's argv while this process runs, which is exactly what #93 is about, one hop
+// earlier. The other two forms never put it on a command line at all.
+//
 // The `handle` in the result is the thing worth waiting for: it is the spawned agent's mailbox
 // address, so the caller's next move — "now tell it something" — needs no lookup of its own.
 // helm reads it out of `~/.helm/mail/*/owner.json`; it is never derived from cwd and session id
