@@ -437,8 +437,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   registered with prp's own `project.json` when helm is the first thing to touch the store. It
   opens straight into a `TextEditor` over the markdown **source** (not the rendered page — that
   would be an HTML→markdown round trip over a document nobody asked helm to reformat), autosaves
-  600ms after typing stops, and flushes on Read, on close, and on the canvas being pointed
-  elsewhere. The path is on the editor's footer as a `CopyableLabel`; **it is not put on the
+  600ms after typing stops, and flushes on Read, on close, on the canvas being pointed elsewhere,
+  and on the last workspace closing (`WorkbenchModel.deactivate`, which drops the canvas cache
+  without closing what is in it — the one teardown that would otherwise take a note being typed
+  with it). The path is on the editor's footer as a `CopyableLabel`; **it is not put on the
   clipboard when the note is created** — a clipboard that changes under an act nobody asked for
   destroys whatever was in it.
   - **`OperatorNote` is the scope line, carried as a type.** A file is editable only if it is a
