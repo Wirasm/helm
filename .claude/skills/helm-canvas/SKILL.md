@@ -90,6 +90,71 @@ do it in the page.
 **Your artifact keeps running whenever it is opened**, long after the session that wrote it ends. It
 is a page in the operator's window, not a transcript.
 
+## A page that holds state
+
+An `.html` canvas is not write-only. A page that is *being used* — a game mid-play, a form
+half-filled, a simulation running — can take your updates without being thrown away, and can tell
+you how it is going. Both are opt-in and both are ordinary JavaScript.
+
+**Take an update instead of being reloaded.** Rewriting the artifact normally reloads the page, and
+a reload destroys scroll, focus, form input and a half-played game. Define `window.helmCanvasUpdate`
+and helm hands you the change as data instead — **a page that defines it is never reloaded by helm**:
+
+```js
+window.helmCanvasUpdate = function (update) {
+  // update.kind === "canvas.update", plus update.version, update.artifact, update.generation
+  refetchState();  // ./state.json, whatever you just rewrote
+  return true;     // handled
+  // return false; // "not now" — the operator gets an "Updated — reload?" strip and decides
+};
+```
+
+Returning `false`, or throwing, leaves the page exactly where it is and puts the choice on a strip
+above it. The operator's Reload button is the only thing that then takes the page away.
+
+**Report what the page is doing.** Post to `helmCanvasState` and helm writes it beside the artifact:
+
+```js
+const helm = window.webkit?.messageHandlers?.helmCanvasState;
+helm?.postMessage({ kind: "canvas.state", state: { score: 12, lesson: 3, lastMotion: "dw" } });
+```
+
+`state` is yours — any JSON **object**, meaning whatever you decide it means. helm never reads it.
+
+**You read it back from `<name>.state.json`, beside the artifact.** `motions.html` →
+`motions.state.json`:
+
+```json
+{
+  "format": "helm.canvas-state",
+  "version": 1,
+  "writtenAt": "2026-08-07T09:11:53Z",
+  "artifact": "motions.html",
+  "state": { "score": 12, "lesson": 3, "lastMotion": "dw" }
+}
+```
+
+Four things about it are worth knowing before you design around it:
+
+- **Latest-wins overwrite, not a log.** Every report replaces the last one. If you want history,
+  keep it *inside* `state` — helm will not accumulate it for you.
+- **Report when something meaningful changed, never on a frame or a timer.** A changed report is a
+  file write, so a page reporting from `requestAnimationFrame` writes sixty times a second in the
+  pane the operator is using. helm does not throttle you — a delay would make the latch stale
+  exactly when it is moving fastest — so the judgement is yours. A lesson completed is a report; a
+  cursor moving is not.
+- **You read it on your next turn. It cannot reach you sooner.** Nothing wakes your session,
+  nothing starts a turn, and a page cannot type into a prompt. `cat` it when you next run.
+- **`writtenAt` is a change signal.** A report identical to the previous one is not written, so the
+  timestamp answers *"when did the page last do something different"*. Check it before acting on
+  state you may have read a while ago.
+- **Cap of 64 KB, and a report helm cannot use is dropped silently from the page's side.** An array,
+  a number, or a state over the limit is refused — with the reason in `log show`, not in the page.
+  Feature-detect and keep the object small; name a sibling file in `state` if you have more to say.
+
+Neither of these exists on a **markdown** canvas: helm generates that page, so there is no script of
+yours on it to register a handler or post a report.
+
 ## Taking a dependency
 
 Three routes, all of which work. They differ in what happens six months from now, and that is the
@@ -157,7 +222,9 @@ never busting a cache — it worked because editing the import URL edits the **a
 the only file helm watched. Pushing again is the supported way, and it needs no edit at all.
 
 A live page is a different question again — all of this is about what a *reload* fetches, not about
-pushing data into a page that is already open.
+pushing data into a page that is already open. See **A page that holds state**, above: a page that
+defines `window.helmCanvasUpdate` is not reloaded at all, and refetches its own siblings on its own
+terms.
 
 **htmx blanks a canvas under its own defaults.** Its history handling calls `history.replaceState()`
 after a swap, which a bare `WKWebView` ignores and helm does not — the page comes out empty, and

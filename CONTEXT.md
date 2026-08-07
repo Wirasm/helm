@@ -174,6 +174,15 @@ visibility, focus and freshness without a display or request round trip. It is a
 not persistence and never a control channel; the **spool** remains the push channel.
 _Avoid_: bench API, layout database, restore file
 
+**canvas state latch**:
+A versioned JSON file beside a canvas — `<artifact>.state.json` — holding what that page last
+said about **itself**, written latest-wins and read by the agent on its **next turn**. A latch,
+not an interrupt: nothing wakes a session, starts a turn or spends a credit, and a page still
+cannot say anything into a live prompt. The **sidecar** is its opposite number and stays
+separate — that one is the operator's own notes, appended and never rewritten, where this one
+is machine state and every earlier value is noise.
+_Avoid_: callback, event, message (nothing is delivered — the agent reads a file); telemetry
+
 **request**:
 One file in the spool, of one **kind**: a `spawn` (`{id, cwd, command, args, prompt}`), a
 `capture` (`{id, kind, path, window}`) or a `close` (`{id, kind, terminal, force}`). Acted on

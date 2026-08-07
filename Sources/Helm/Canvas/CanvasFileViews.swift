@@ -236,6 +236,10 @@ struct HTMLCanvasView: View {
     let reloadDemand: Int
     /// What the page said about an offered update, on its way to the notice strip.
     let onUpdate: (CanvasUpdateAnswer) -> Void
+    /// What the page said about **itself**, on its way to the latch beside the artifact (#110).
+    /// A different callback from `onSelection` carrying a different type, because they are
+    /// different claims — one about the operator, one about the page.
+    let onState: (CanvasPageState) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -248,7 +252,8 @@ struct HTMLCanvasView: View {
             theme: colorScheme == .dark ? .dark : .light,
             onSelection: onSelection,
             reloadDemand: reloadDemand,
-            onUpdate: onUpdate
+            onUpdate: onUpdate,
+            onState: onState
         )
     }
 }
@@ -286,6 +291,15 @@ enum HTMLCanvasPage {
             forURLScheme: CanvasAddress.scheme
         )
         coordinator.installBridge(on: configuration.userContentController)
+        // **Only here, and not on the markdown canvas** (#110). An `.html` artifact is read
+        // straight from disk, so its own scripts run and one of them may report state; a
+        // markdown canvas is a page helm *generates*, with `marked` writing the artifact into
+        // `innerHTML` where a `<script>` never executes — the same scoping, and the same
+        // argument, as #109's update offer. It is a rule about where the capability is useful
+        // rather than a boundary: markdown renders unsanitized, so an `onerror` attribute is
+        // author JS that does run. The boundary that matters — that a page cannot forge an
+        // operator's annotation — is `bridgeWorld`'s and is untouched either way.
+        coordinator.installStateChannel(on: configuration.userContentController)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = coordinator
         webView.allowsMagnification = true
@@ -402,6 +416,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     let onSelection: (CanvasPageSelection) -> Void
     let reloadDemand: Int
     let onUpdate: (CanvasUpdateAnswer) -> Void
+    let onState: (CanvasPageState) -> Void
 
     private var path: StandardizedPath { StandardizedPath(url) }
 
@@ -409,6 +424,9 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
         let coordinator = CanvasFileCoordinator(
             host: CanvasAddress.host(for: path), onAnnotation: onSelection)
         coordinator.onUpdate = onUpdate
+        // Set before `makeNSView` builds the webview, so a page that reports in its very first
+        // inline script has somewhere for that report to land.
+        coordinator.onState = onState
         // Seeded, not left at zero. A demand is a *rise* against what this coordinator has
         // already seen, and SwiftUI can build a fresh one for a pane whose model has pressed
         // Reload before — which against a zero would read as a demand nobody made and load the
@@ -425,6 +443,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
         coordinator.removeBridge(from: webView.configuration.userContentController)
+        coordinator.removeStateChannel(from: webView.configuration.userContentController)
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
@@ -471,6 +490,13 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// rather than a delegate call**, for `CanvasModel.onSourceChange`'s reason one file over:
     /// this object is SwiftUI's, made in `makeCoordinator`, and the model outlives it.
     var onUpdate: ((CanvasUpdateAnswer) -> Void)?
+    /// What the page said about itself, on its way to the latch (#110). Set by the
+    /// representable exactly as `onUpdate` is; nil on a coordinator built without one, where a
+    /// report is dropped rather than crashing a pane over a page's own chatter.
+    var onState: ((CanvasPageState) -> Void)?
+    /// The page-world receiver, held here because `add(_:contentWorld:name:)` retains only the
+    /// weak proxy. Its lifetime is the coordinator's, which is the webview's.
+    private var stateChannel: CanvasStateChannel?
     /// The tool the page was last told about, or nil when the page has not been told at
     /// all — which includes every fresh document. A change is pushed with
     /// `evaluateJavaScript` rather than folded into `loadedKey`, because reloading to switch
@@ -586,6 +612,33 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
         )
     }
 
+    /// **Into `WKContentWorld.page`, on its own name, into its own object** (#110).
+    ///
+    /// This is the one thing helm lets an artifact's own JavaScript say to it, and every part of
+    /// that sentence is load-bearing. The world is the page's because the *artifact's* scripts
+    /// have to reach it — `bridgeWorld` is where they cannot, which is the whole of #164 — and
+    /// the receiver is `CanvasStateChannel` rather than this object because a shared receiver
+    /// would need a `switch` on `message.name`, and a switch is somewhere two destinations can
+    /// be confused. `CanvasPageState`'s header is the full argument.
+    func installStateChannel(on controller: WKUserContentController) {
+        let channel = CanvasStateChannel(host: host) { [weak self] state in
+            self?.onState?(state)
+        }
+        stateChannel = channel
+        controller.add(
+            WeakScriptMessageProxy(channel), contentWorld: .page,
+            name: CanvasPageState.handlerName)
+    }
+
+    /// `removeBridge`'s twin, and needed for its reason: `add(_:contentWorld:name:)` retains its
+    /// handler strongly, so nothing here can be left to a `deinit` that the retain is what
+    /// prevents.
+    func removeStateChannel(from controller: WKUserContentController) {
+        controller.removeScriptMessageHandler(
+            forName: CanvasPageState.handlerName, contentWorld: .page)
+        stateChannel = nil
+    }
+
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
@@ -625,6 +678,64 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
                 // notice on screen for a page bug the operator cannot act on. The log is what a
                 // reader of `log show` can act on, and it names the kind.
                 NSLog("helm: canvas dropped a bridge message — \(refusal.reason)")
+            }
+        }
+    }
+}
+
+// MARK: - The page's own channel
+
+/// Receives what an `.html` artifact says about itself, and **nothing else** (#110).
+///
+/// **A separate object from `CanvasFileCoordinator`, deliberately.** The coordinator is the
+/// annotation bridge's receiver; putting this on it too would mean one
+/// `userContentController(_:didReceive:)` branching on `message.name`, and that branch is the
+/// one place the operator's channel and the page's channel could ever be mixed up. Two objects
+/// is the version of *"the two destinations never merge"* that a later change cannot quietly
+/// undo — there is no `else` here to fall into, and this type cannot construct a
+/// `CanvasPageSelection` or reach `CanvasNotes` at all.
+///
+/// **The origin check is the same one, and is not optional.** A cross-origin iframe reaches a
+/// page-world handler — measured, and recorded in the research pass — so a report is accepted
+/// only from this canvas's own main frame. Without it one artifact could latch state onto
+/// another's file.
+@MainActor
+final class CanvasStateChannel: NSObject, WKScriptMessageHandler {
+    /// Which canvas this channel belongs to. A message whose origin is not this host is not
+    /// this canvas's message.
+    private let host: String
+    private let onState: (CanvasPageState) -> Void
+
+    init(host: String, onState: @escaping (CanvasPageState) -> Void) {
+        self.host = host
+        self.onState = onState
+    }
+
+    /// WebKit delivers script messages on the main thread, which is what makes `assumeIsolated`
+    /// correct here rather than a hop that would let a later report overtake an earlier one —
+    /// and this latch is latest-wins, so an out-of-order pair would leave the *older* state on
+    /// disk with no way to tell.
+    nonisolated func userContentController(
+        _ controller: WKUserContentController, didReceive message: WKScriptMessage
+    ) {
+        MainActor.assumeIsolated {
+            let frame = message.frameInfo
+            guard
+                CanvasAddress.accepts(
+                    isMainFrame: frame.isMainFrame,
+                    originScheme: frame.securityOrigin.protocol,
+                    originHost: frame.securityOrigin.host,
+                    expectedHost: host)
+            else { return }
+            switch CanvasPageState.decode(message.body) {
+            case let .success(report):
+                onState(report)
+            case let .failure(refusal):
+                // **Named, never silent** — the bridge's rule beside it, for #216's reason. And
+                // no operator-facing surface: a page whose state report is malformed has said
+                // nothing about the operator, so a strip over their artifact would be helm
+                // reporting an artifact's bug to somebody who cannot act on it. `log show` can.
+                NSLog("helm: canvas dropped a state report — \(refusal.reason)")
             }
         }
     }
