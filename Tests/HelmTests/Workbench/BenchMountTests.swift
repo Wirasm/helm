@@ -265,6 +265,40 @@ final class BenchMountTests: XCTestCase {
         XCTAssertEqual(snapshot.workspaces.first?.columns.count, 2)
     }
 
+    /// **Measured live against a real restart before it was written.** An agent sending
+    /// `newTerminal` while the question was open was told *"helm has no workspace open… open
+    /// one"* about a workspace that was open, and the only thing it could do with that advice
+    /// was ask helm to open it again.
+    func testABenchCommandSentWhileTheQuestionIsOpenIsRefusedWithTheRightReason() throws {
+        let terminals = TerminalManager()
+        let model = WorkbenchModel(terminals: terminals, agents: .blind)
+        let commander = WorkbenchSpoolCommander(workbench: model, rail: ArchonRailModel())
+        model.activate(workspacePath: workspace, offering: bench(terminals: 7))
+
+        guard case let .failure(refusal) = commander.run(.newTerminal) else {
+            return XCTFail("there is no bench to run a command on")
+        }
+
+        XCTAssertTrue(
+            refusal.reason.contains("7 saved pane"),
+            "the refusal names what is actually being asked: \(refusal.reason)")
+        XCTAssertFalse(
+            refusal.reason.contains("no workspace open"),
+            "a workspace IS open — it is waiting on an answer")
+    }
+
+    /// The control: with genuinely nothing open, the message is the one it always was.
+    func testABenchCommandWithNothingOpenStillSaysSo() throws {
+        let model = WorkbenchModel(terminals: TerminalManager(), agents: .blind)
+        let commander = WorkbenchSpoolCommander(workbench: model, rail: ArchonRailModel())
+
+        guard case let .failure(refusal) = commander.run(.newTerminal) else {
+            return XCTFail("nothing is open")
+        }
+
+        XCTAssertTrue(refusal.reason.contains("no workspace open"))
+    }
+
     // MARK: - The mount that never asks
 
     /// **The regression `BenchMountPolicy`'s header records.** A spool spawn's `cwd` becomes a

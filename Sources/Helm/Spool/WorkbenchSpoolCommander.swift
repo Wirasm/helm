@@ -91,12 +91,30 @@ final class WorkbenchSpoolCommander: SpoolCommanding {
                 panes: after?.panes.count ?? 0))
     }
 
-    /// The one thing that can actually go wrong here, and it is the same condition every
-    /// bench-touching method on `WorkbenchModel` guards with `guard let workspacePath, var
-    /// bench` — helm running with nothing open.
+    /// Why there was no bench to act on — and there are now **two** answers, which is why this
+    /// is not one sentence any more.
+    ///
+    /// `guard let workspacePath, var bench` is the condition every bench-touching method on
+    /// `WorkbenchModel` shares, and before #85 it meant one thing: helm running with nothing
+    /// open. It now also means a workspace **is** mounted and is waiting on the operator to say
+    /// whether to restore its saved bench. Telling those apart is not tidiness: measured live
+    /// against a real restart, an agent sending `newTerminal` at that moment was told *"helm has
+    /// no workspace open… open one"* about a workspace that was open, and the only thing it
+    /// could do with that advice was ask helm to open it again.
+    ///
+    /// The pending answer names the route that actually works, which is the same one the spawn
+    /// path takes: a spool spawn's `cwd` mounts without asking (`WorkbenchSpoolSpawner
+    /// .openTerminal`), so it resolves the question rather than waiting behind it.
     private var noBench: SpoolRefusal {
-        SpoolRefusal(
-            "helm has no workspace open, so there is no bench to run a command on. Open one, or "
-                + "send a spawn — its cwd is what opens a workspace.")
+        guard let offer = workbench.restoreOffer else {
+            return SpoolRefusal(
+                "helm has no workspace open, so there is no bench to run a command on. Open "
+                    + "one, or send a spawn — its cwd is what opens a workspace.")
+        }
+        return SpoolRefusal(
+            "helm is asking the operator whether to restore \(offer.paneCount) saved pane(s) in "
+                + "this workspace, so there is no bench yet. A bench command carries no address "
+                + "and cannot answer that for them. Send a spawn instead — its cwd mounts the "
+                + "workspace without asking — or wait until they answer.")
     }
 }
