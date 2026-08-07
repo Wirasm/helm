@@ -139,6 +139,52 @@ final class GhosttyConfigTests: XCTestCase {
         XCTAssertTrue(controller.renderedConfig.contains("term = xterm-256color"))
     }
 
+    // MARK: - copy-on-select
+
+    /// #297: a mouse selection in a pane must not replace the system clipboard.
+    ///
+    /// The bug this pins is one layer below helm and invisible from it: ghostty's default
+    /// `copy-on-select = true` targets the *selection* clipboard, the vendored AppKit
+    /// wrapper claims macOS has one and then writes every selection to
+    /// `NSPasteboard.general` regardless. So dragging across a line of terminal output
+    /// silently destroyed whatever the operator had copied somewhere else, and the ⌘V that
+    /// followed pasted terminal text — which reads exactly like "paste is broken".
+    ///
+    /// Asserted on the rendered config rather than on a live surface because that is where
+    /// helm's decision actually is; the live half — sentinel on the pasteboard, drag, read
+    /// it back — is in the PR, and no unit test can reach it (a selection needs a window,
+    /// a surface and a mouse).
+    @MainActor
+    func testHelmTurnsCopyOnSelectOffSoASelectionCannotEatTheClipboard() {
+        let controller = TerminalSession.makeController(userConfig: nil)
+        XCTAssertNil(controller.lastConfigurationIssue)
+        XCTAssertTrue(
+            controller.renderedConfig.contains("copy-on-select = false"),
+            controller.renderedConfig)
+    }
+
+    /// …and it is a **default**, not an override: an operator who genuinely wants
+    /// selections on the clipboard says so with ghostty's own spelling for the system
+    /// clipboard, and their config wins.
+    ///
+    /// This is the control that fails if the fix overshoots into `sessionOverrides` — the
+    /// tier helm's scrollback and insets live in, which the operator cannot move.
+    @MainActor
+    func testTheOperatorCanStillAskForCopyOnSelect() {
+        let controller = TerminalSession.makeController(userConfig: "copy-on-select = clipboard")
+        XCTAssertNil(controller.lastConfigurationIssue)
+
+        let rendered = controller.renderedConfig
+        guard let helmDefault = rendered.range(of: "copy-on-select = false"),
+            let user = rendered.range(of: "copy-on-select = clipboard")
+        else {
+            return XCTFail("expected both copy-on-select values in: \(rendered)")
+        }
+        XCTAssertLessThan(
+            helmDefault.lowerBound, user.lowerBound,
+            "helm's default must render BEFORE the operator's config so theirs wins")
+    }
+
     // MARK: - Scrollback
 
     /// **16 MiB, spelled as the quantity rather than as 16777216.** A digit wrong in a
