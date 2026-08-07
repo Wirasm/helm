@@ -115,6 +115,16 @@ final class CanvasScriptRuntime {
     /// element in it is the agent's own.
     func asHTMLArtifact() { call("asHTMLArtifact") }
 
+    /// Put a mounted drawable board on the page — a container carrying `data-helm-surface`
+    /// with a `<canvas>` inside it (#111). Opt-in, so no other test in this suite meets it.
+    /// Its page-coordinate box is `boardBox`.
+    func mountBoard() { call("mountBoard") }
+
+    /// Where `mountBoard` puts the board, in page coordinates. Named once here rather than
+    /// retyped per assertion — a stroke aimed at the wrong band would yield for the wrong
+    /// reason and still pass.
+    static let boardBox = (x: 20.0, y: 450.0, width: 700.0, height: 200.0)
+
     func select(id: String, text: String) { call("select", id, text) }
 
     /// Highlight inside a block the fixture gave no id, addressed by its own text — the only

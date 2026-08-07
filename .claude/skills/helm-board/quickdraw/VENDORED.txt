@@ -1,0 +1,11 @@
+@quickdrawjs/core 0.2.0 (MIT) — vendored verbatim from the npm tarball, unmodified.
+sha256 of each file below; regenerate with: shasum -a 256 quickdraw/*
+8a548f706fde08c022fb04f0afec9df9602c96b3071a7c7afabd48380dbd04b3  quickdraw/editor.js
+17c768b48862e85ecc99f2dd255382b8320defeadd300fa422f1a34bf97fca28  quickdraw/freehand.js
+a4d78bbacf202ee56e6436f939e367bc267cba62261beb4c530122b695207102  quickdraw/geometry.js
+fd67d491260dee0b45670033d1b84f9d8fffeb5c2b3e0ca6cac73da57be79347  quickdraw/index.js
+4b5671f6d5c5f4bbe6ff0015f810e53ed6f8731e039aaaf0056352b66d3a4b13  quickdraw/palette.js
+8aaeae6e07d06b6fb9b1cf0af4e381e5c89ab7b2b3c3a3899af48cfcdf88c8c5  quickdraw/shapes.js
+95b2a397d6c18d93223f6a8002b1b0aad576d6bd50f5654fe18dce83b7adda8c  quickdraw/store.js
+d2ccf51cbc6549be4e813242f2138231464d02cd03aebf69465cedb7ffdf7baa  quickdraw/ui.js
+c963a88fdc5a8406dd8b7dc9cfe3d4783cff608bc2ada58bbcfdfa3342aa4df5  quickdraw/quickdraw.css

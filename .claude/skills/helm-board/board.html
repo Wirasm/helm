@@ -1,0 +1,68 @@
+<!doctype html>
+<!--
+  A helm board. `new-board.sh` copies this beside your artifact, with __TITLE__ replaced.
+
+  Three things here are load-bearing and the rest is layout:
+
+  1. `data-helm-surface` on the container. helm injects its own annotation layer into every
+     `.html` artifact, and its listeners are registered with `capture: true` — so without this
+     attribute helm and the board fight over every gesture: a mark tool lays helm's ink over
+     the board's own, and under the DEFAULT tool a drag posts `cleared`, which closes the
+     operator's notes drawer on every stroke. The attribute says "the pointer here is the
+     page's", and helm then does nothing inside it at all. `CanvasSurface` in helm's sources
+     carries the argument.
+  2. Everything is a sibling — `./quickdraw/`, `./board.js`, `./board-core.js`. No CDN, no
+     bundler, no build step: `@quickdrawjs/core` ships dependency-free ESM with file extensions
+     written, so it imports as-is. An unpinned CDN build renders differently in six months, and
+     a canvas renders with no click.
+  3. `color-scheme: light dark` with system colours, so the page follows the pane's appearance
+     the way helm's own generated markdown page does — and `board.js` picks the board's theme
+     from the same signal.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>__TITLE__</title>
+    <link rel="stylesheet" href="./quickdraw/quickdraw.css" />
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background: Canvas;
+        color: CanvasText;
+        font: 15px/1.5 -apple-system, system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        flex: 0 0 auto;
+        padding: 10px 16px;
+        border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+      }
+      header h1 {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0;
+      }
+      /* The board fills what is left. quickdraw sizes its canvas to the container, so the
+         container needs a real height — `flex: 1` plus `min-height: 0` is what gives it one
+         inside a column flexbox. */
+      #board {
+        flex: 1 1 auto;
+        min-height: 0;
+        position: relative;
+      }
+    </style>
+  </head>
+  <body>
+    <header><h1>__TITLE__</h1></header>
+    <main id="board" data-helm-surface></main>
+    <script type="module" src="./board.js"></script>
+  </body>
+</html>

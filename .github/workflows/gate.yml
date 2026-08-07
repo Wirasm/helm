@@ -116,3 +116,8 @@ jobs:
         run: bash .claude/skills/helm-mail-cc/test.sh
       - name: canvas skill
         run: bash .claude/skills/helm-canvas/test.sh
+      # Needs node, which this job already has by virtue of the runner image. A gate that
+      # exists, is documented in AGENTS.md, and runs only when somebody remembers is the
+      # drift this workflow exists to stop — #291 is the same lesson from the other side.
+      - name: board skill
+        run: bash .claude/skills/helm-board/test.sh

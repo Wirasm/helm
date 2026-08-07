@@ -15,6 +15,12 @@
 //     `position:absolute` at `z-index: 2147483647` over `scrollWidth`×`scrollHeight` does.
 //     That is the hazard `targetAt` hides it for, so the stub reproduces it rather than
 //     letting the hide pass vacuously.
+//   - A mouse event's `target` is the topmost element under the pointer **ignoring the mark
+//     layer**, because the mark layer carries `pointer-events:none` and a browser never
+//     targets it. Modelled rather than assumed, and it is load-bearing for #111: the whole of
+//     `data-helm-surface` is a `closest` walk from `e.target`, and a stub that handed the
+//     script its own ink as the target would answer "not a surface" for every gesture and let
+//     the arbitration pass vacuously.
 (function (global) {
   "use strict";
 
@@ -205,6 +211,23 @@
     },
   };
 
+  // The element a browser would fire a mouse event AT. `elementFromPoint` above reports the
+  // mark layer while it is displayed, because that is what the layer's geometry says — but the
+  // layer is `pointer-events:none`, and a browser skips it when routing a real gesture. Hidden
+  // for the duration, exactly as `targetAt` hides it for its own hit test.
+  function pointerTarget(clientX, clientY) {
+    var paper = markLayer();
+    var was = paper ? paper.style.display : null;
+    if (paper) {
+      paper.style.display = "none";
+    }
+    var hit = doc.elementFromPoint(clientX, clientY);
+    if (paper) {
+      paper.style.display = was;
+    }
+    return hit;
+  }
+
   var posted = [];
   var win = {
     scrollX: 0,
@@ -350,11 +373,37 @@
         pageY: pageY,
         clientX: pageX - win.scrollX,
         clientY: pageY - win.scrollY,
+        // The element a browser would report. See the header: the mark layer is
+        // `pointer-events:none`, so it is never a target however high its z-index.
+        target: pointerTarget(pageX - win.scrollX, pageY - win.scrollY),
         preventDefault: function () {
           prevented = true;
         },
       });
       return prevented;
+    },
+    // A mounted drawable board, the shape `@quickdrawjs/core` actually produces: one container
+    // carrying `data-helm-surface`, a `<canvas>` inside it that every pointer event targets,
+    // and chrome with readable text.
+    //
+    // **Created on demand, never in the default fixture.** Every other test in this suite
+    // shares that fixture, and a laid-out element added to it silently changes what their
+    // loops enclose and what their taps hit. This one is opt-in, so #111's tests are the only
+    // ones that meet it.
+    //
+    // The toolbar's text is not decoration either: it is what an enclosure over an
+    // un-yielded board would quote back at the agent, so leaving it out would let the
+    // resolution half of the arbitration pass without the failure it prevents being
+    // constructible.
+    mountBoard: function () {
+      var container = node("main", "board", "", box(20, 450, 700, 200));
+      container.setAttribute("data-helm-surface", "");
+      body.appendChild(container);
+      // No id, exactly as quickdraw's own `document.createElement('canvas')` has none — so
+      // `closest` has to walk to find the declaration rather than reading it off the target.
+      container.appendChild(node("canvas", "", "", box(20, 450, 700, 200)));
+      container.appendChild(node("p", "board-tools", "Select Draw Arrow Text", box(24, 454, 200, 24)));
+      return true;
     },
     fireOnWindow: function (type) {
       fire(listeners.window, type, {});
