@@ -168,10 +168,12 @@ package struct CaptureRequest: Codable, Equatable {
 /// `SpoolClosePolicy`'s, because they are about the live bench rather than about this file.
 ///
 /// **Naming the pane is the whole gate on who may ask, and no trust model was invented for
-/// it.** A `terminal` is a uuid a caller has only two honest ways to know: it came back in the
-/// `terminalId` of a spawn's own result, or it is the pane the caller is *running inside* and
-/// reads as `HELM_PANE` (`PaneEnvironment`). Both are "what it opened" or "where it is", which
-/// is the scoping #176 asks about, expressed as knowledge rather than as identity.
+/// it.** A caller has only the honest ways `waysToKnowAPane` lists to come by one of these
+/// uuids, and every one of them is "what it opened" or "where it is" — the scoping #176 asks
+/// about, expressed as knowledge rather than as identity. That list is a stored constant rather
+/// than a sentence here **because it is also the refusal a caller reads** when it sends a uuid
+/// that is not one (`SpoolPolicy.accept`): #284 added a route, and the two copies of the
+/// enumeration that used to exist promptly disagreed about how many there were.
 ///
 /// **helm deliberately does NOT check that it spawned the pane itself, and that was the
 /// question to settle rather than assume.** Three reasons, in order of weight. It buys no
@@ -205,19 +207,26 @@ package struct CaptureRequest: Codable, Equatable {
 /// existing `helm-close <terminal-uuid>` keeps working unchanged in both directions; what moved
 /// is only the set of panes `SpoolClosePolicy` will let go of.
 ///
-/// **The third honest way to know a uuid, which #284 needed and the two above do not cover.**
-/// `push.sh` puts an artifact on the bench through an OSC sequence and reports no id at all, so
-/// an agent that pushed a canvas cannot have been handed one. It reads
-/// `~/.helm/bench/snapshot.json` instead and takes the `id` of the pane record whose `kind` is
-/// `canvas` (`BenchSnapshot.PaneRecord`). That is still knowledge of *what it opened* rather
-/// than an identity claim, which is the scoping the other two routes express.
+/// **The route #284 had to add, and why the list grew rather than stayed at two.** `push.sh`
+/// puts an artifact on the bench through an OSC sequence and reports no id at all, so an agent
+/// that pushed a canvas cannot have been *handed* one. Reading it out of the bench snapshot is
+/// still knowledge of what it opened, which is why it belongs on the same list rather than
+/// beside it.
 package struct CloseRequest: Codable, Equatable {
     package static let kind = "close"
 
+    /// Every honest way a caller comes by a pane uuid, **written once** because it is both this
+    /// type's documentation and the sentence `SpoolPolicy.accept` hands back when a caller sends
+    /// something that is not one. Those were two copies until #284 added a route to one of them
+    /// and not the other.
+    package static let waysToKnowAPane =
+        "the `terminalId` of a spawn's or a command's own result, the `HELM_PANE` of the pane "
+        + "you are running in, or the `id` of a pane in ~/.helm/bench/snapshot.json — which is "
+        + "the only route to a canvas you pushed, since push.sh hands back no id"
+
     package let id: String
-    /// The pane to close: `Pane.id`. For a terminal that is the same uuid a spawn's result
-    /// reports as `terminalId` and the pane's own child reads as `HELM_PANE`; for a canvas it is
-    /// the `id` of its record in `~/.helm/bench/snapshot.json`.
+    /// The pane to close: `Pane.id`, which for a terminal pane is also its `TerminalSession.id`.
+    /// `waysToKnowAPane` is where a caller gets one, and is the only place that list is written.
     ///
     /// **It keeps the name it was born with (#284).** `terminal` is what every helm built since
     /// #176 decodes and what every existing caller writes, so renaming the field would break
@@ -582,9 +591,8 @@ package enum SpoolPolicy {
         guard let terminal = TerminalID(validating: request.terminal) else {
             return .failure(
                 SpoolRefusal(
-                    "terminal \"\(request.terminal)\" is not a pane id. It is the `terminalId` "
-                        + "of the spawn's own result, or the `HELM_PANE` of the pane you are "
-                        + "running in — a uuid either way"))
+                    "terminal \"\(request.terminal)\" is not a pane id. It is "
+                        + CloseRequest.waysToKnowAPane + " — a uuid whichever route you took"))
         }
         return .success(
             AcceptedCloseRequest(id: request.id, terminal: terminal, force: request.force))

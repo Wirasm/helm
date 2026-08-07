@@ -118,6 +118,10 @@ while let flag = arguments.first {
 guard let pane, !pane.isEmpty else { die(usage, .usage) }
 // Caught here as well as in helm, because an empty `$HELM_PANE` expands to nothing and the
 // round trip to a refusal file is a slow way to be told you passed an empty string.
+// **This list is a hand-copy of `CloseRequest.waysToKnowAPane`, and it is checked rather than
+// shared** — a script cannot `import HelmWire`, which is the same carve-out the JSON below gets.
+// `SpoolWireConformanceTests.testHelmCloseNamesEveryRouteToAPaneUuidThatHelmWireDoes` runs this
+// refusal and requires every route `HelmWire` names to appear here too.
 guard UUID(uuidString: pane) != nil else {
     die(
         "\"\(pane)\" is not a pane id — it is a spawn or command result's `terminalId`, the "

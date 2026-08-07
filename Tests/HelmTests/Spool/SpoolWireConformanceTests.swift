@@ -526,6 +526,33 @@ final class SpoolWireConformanceTests: XCTestCase {
                 + "\(String(describing: json["terminalId"]))")
     }
 
+    /// **`helm-close.swift` must name every route to a pane uuid that `HelmWire` names.**
+    ///
+    /// `CloseRequest.waysToKnowAPane` (#284) is one string precisely because the enumeration used
+    /// to be two copies and they disagreed the moment a route was added. The script is a *third*
+    /// copy that no constant can reach — it cannot `import HelmWire`, which is this file's whole
+    /// subject — so it is checked instead of shared: each route's distinctive marker has to
+    /// appear in the `HelmWire` constant **and** in what the script prints, which fails whichever
+    /// side falls behind rather than only the far one.
+    ///
+    /// The markers are deliberately the bare identifiers a caller would search for, not whole
+    /// sentences: this is a drift check, not a demand that two prose styles match.
+    func testHelmCloseNamesEveryRouteToAPaneUuidThatHelmWireDoes() throws {
+        let (exitCode, _, stderr) = try runAndCaptureBoth("helm-close.swift", ["not-a-uuid"])
+        XCTAssertEqual(exitCode, 1, "a non-uuid is a usage error, caught before the spool")
+
+        for marker in ["terminalId", "HELM_PANE", "snapshot.json"] {
+            XCTAssertTrue(
+                CloseRequest.waysToKnowAPane.contains(marker),
+                "HelmWire stopped naming \(marker) as a route to a pane uuid — if that is "
+                    + "deliberate, this test and helm-close.swift both have to hear about it")
+            XCTAssertTrue(
+                stderr.contains(marker),
+                "helm-close.swift's refusal does not name \(marker), which HelmWire's "
+                    + "CloseRequest.waysToKnowAPane does; got \"\(stderr)\"")
+        }
+    }
+
     /// A `closed` result with **no `pid`** — the shape #284 made reachable, and the one shape of
     /// a successful close the script had never been handed.
     ///
