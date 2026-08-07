@@ -25,11 +25,16 @@ import XCTest
 /// second key. Nothing would fail, and the chat composer would quietly keep the old behaviour.
 /// The two copies share no symbol to compare instead, which is the whole defect.
 ///
-/// **It bows out when the duplicate is gone.** Its subject is the second copy; once `ChatComposer`
-/// calls the modifier there is nothing left to compare, and the skip says so and asks to be
-/// deleted — `AGENTS.md` forbids deleting a test to go green but asks for exactly this when the
-/// subject genuinely no longer exists. The *modifier* losing its `.onKeyPress` is a different
-/// event and fails rather than skips: that one is a change to the live rule.
+/// **It bows out when the duplicate is gone — and only then, which is checked rather than
+/// assumed.** Its subject is the second copy: once `ChatComposer` *calls* the modifier there is
+/// nothing left to compare, and the skip says so and asks to be deleted — `AGENTS.md` forbids
+/// deleting a test to go green but asks for exactly this when the subject genuinely no longer
+/// exists. Two neighbouring states are failures instead, because both are the rule moving rather
+/// than the copy retiring: the composer having **neither** the inline handler nor the call is
+/// #119 back by a route that reuses nothing, and the *modifier* losing its `.onKeyPress` is a
+/// change to the live rule. A reviewer caught the first of those — the skip used to fire on the
+/// missing marker alone and announce a migration it had not looked for, which is this net handing
+/// out false comfort about exactly the drift it exists to catch.
 final class SubmitOnReturnParityTests: XCTestCase {
     private static let modifierPath = "Sources/Helm/Shared/SubmitOnReturn.swift"
     private static let composerPath = "Sources/Helm/Chat/ChatComposer.swift"
@@ -70,18 +75,46 @@ final class SubmitOnReturnParityTests: XCTestCase {
     // MARK: - Reading the two copies
 
     /// `ChatComposer`'s phase set, or the end of this file's reason to exist.
+    ///
+    /// **The missing marker has two causes and they are opposite**, so the premise is checked
+    /// rather than assumed. #292 landing means the composer *calls* the modifier — the duplicate
+    /// is gone and so is this file's subject, which is a skip that asks to be deleted. The
+    /// composer having neither the inline handler nor the call is the composer back on a bare
+    /// `.onSubmit`, which is #119 returning by a route that reuses nothing, and skipping on that
+    /// while announcing "the second copy of the rule is gone" would be this safety net handing
+    /// out false comfort about exactly the drift it was added to catch.
     private func phasesInTheInlineCopy() throws -> String {
-        guard let phases = phases(in: try source(of: Self.composerPath)) else {
-            throw XCTSkip(
-                """
-                \(Self.composerPath) no longer spells out `.onKeyPress(.return, phases: …)`.
-
-                If that is because it now calls submitOnReturnInsertNewlineOnShift, then #292 has \
-                landed, the second copy of the rule is gone, and THIS FILE'S SUBJECT NO LONGER \
-                EXISTS — delete it and say so in the commit, per AGENTS.md.
-                """)
+        let composer = try source(of: Self.composerPath)
+        if let phases = phases(in: composer) { return phases }
+        guard composer.contains("submitOnReturnInsertNewlineOnShift(") else {
+            throw Drift.neitherSpelledOutNorCalled
         }
-        return phases
+        throw XCTSkip(
+            """
+            \(Self.composerPath) now calls submitOnReturnInsertNewlineOnShift, so #292 has \
+            landed and the second copy of the rule is gone. THIS FILE'S SUBJECT NO LONGER \
+            EXISTS — delete it and say so in the commit, per AGENTS.md.
+            """)
+    }
+
+    /// The composer having lost the rule altogether, which is a failure and not a migration.
+    ///
+    /// `CustomStringConvertible` and not just `LocalizedError`, because XCTest reports a thrown
+    /// error through `String(describing:)` — measured: the first version conformed to
+    /// `LocalizedError` alone and the whole failure read `caught error:
+    /// "neitherSpelledOutNorCalled"`, which routes a reader nowhere.
+    private enum Drift: Error, CustomStringConvertible {
+        case neitherSpelledOutNorCalled
+
+        var description: String {
+            """
+            \(SubmitOnReturnParityTests.composerPath) neither spells out \
+            `.onKeyPress(.return, phases: …)` nor calls submitOnReturnInsertNewlineOnShift. \
+            That is not #292's migration — it is the chat composer back on a bare `.onSubmit`, \
+            which is #119: Shift+Enter sends the message and the operator's second line never \
+            exists. Give it the modifier.
+            """
+        }
     }
 
     /// The `phases:` argument of a file's `.onKeyPress(.return, …)`, as written.
