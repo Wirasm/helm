@@ -282,7 +282,7 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
         /// **Into `CanvasFileCoordinator.bridgeWorld`, exactly as `pushTool` does**, and
         /// fire-and-forget: the result never comes back in this host (see the type header), and
         /// nothing here needs it. The page world is a different `window`, and using it is #190 —
-        /// the global lands where the script cannot see it and every tool is silently `select`.
+        /// the global lands where the script cannot see it and every tool is silently `read`.
         private func evaluate(_ javaScript: String) {
             webView.evaluateJavaScript(
                 javaScript, in: nil, in: CanvasFileCoordinator.bridgeWorld,
@@ -291,12 +291,21 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
 
         /// Highlight an element's contents and release — one evaluation, so the selection and the
         /// `mouseup` that posts it cannot be reordered by a completion this host never delivers.
+        ///
+        /// **The tool is set here, in the same evaluation, exactly as `markLoop` sets
+        /// `.freehand`** — and #302 is why it has to be. This used to say nothing about the tool
+        /// and lean on the default being armed for text; that default is now `.read`, which posts
+        /// nothing, so the omission stopped being invisible. It did not fail: `marked` waits on a
+        /// `withCheckedContinuation` with **no timeout**, so a mark that never arrives hangs the
+        /// suite rather than failing it (measured — 12 minutes at 0% CPU before it was killed).
+        /// Nothing here relies on an implicit default any more.
         func markSelection(of id: String) async throws {
             let rect = try XCTUnwrap(rects[id], "#\(id) was not in the page's own layout report")
             try await marked {
                 evaluate(
                     """
                     (function () {
+                      \(CanvasHTML.setMarkTool(.text))
                       var range = document.createRange();
                       range.selectNodeContents(document.getElementById(\(Self.js(id))));
                       var selection = window.getSelection();

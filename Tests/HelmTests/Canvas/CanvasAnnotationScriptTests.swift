@@ -120,11 +120,17 @@ final class CanvasAnnotationScriptTests: XCTestCase {
             "while a primary press does take the pointer, or the drag selects text instead")
     }
 
-    // MARK: Text selection, which predates every tool
+    // MARK: The text tool, whose behaviour predates every tool
 
-    func testSelectReportsWhatWasSelectedAndWhereItIs() throws {
+    /// **This is `.select`'s behaviour, unchanged, under the name it was split into** (#302).
+    /// The tool is now picked up rather than always armed, and nothing else about it moved:
+    /// same message, same keys, same rect. That is what makes it a split rather than a
+    /// redesign, and it is the reason these two methods are worth reading as a pair with
+    /// `CanvasMarkToolTests.testACanvasNobodyHasTouchedPostsNothingAtAll` — same gestures,
+    /// opposite verdicts, and the only difference between them is which tool is held.
+    func testTheTextToolReportsWhatWasSelectedAndWhereItIs() throws {
         let page = try CanvasScriptRuntime()
-        page.setTool(.select)
+        page.setTool(.text)
         page.select(id: "intro", text: "Why this exists")
 
         page.mouse("mouseup", 100, 110)
@@ -141,9 +147,15 @@ final class CanvasAnnotationScriptTests: XCTestCase {
     /// #165: a click that selected nothing has to be *reported*, not swallowed. It is the
     /// canvas's click-elsewhere-to-dismiss, and the only one of the comment field's exits that
     /// does not go through the keyboard.
+    ///
+    /// **`cleared` survives #302, and this is where it earns it.** That change stopped the
+    /// *reading* tool posting one — which was the message arriving when nobody had marked
+    /// anything — and left this one exactly as it was: a `.text` click away from the passage
+    /// being commented on. Deleting `cleared` with the default would have taken the comment
+    /// field's only mouse exit with it.
     func testAClickThatSelectedNothingPostsADismissal() throws {
         let page = try CanvasScriptRuntime()
-        page.setTool(.select)
+        page.setTool(.text)
 
         page.mouse("mouseup", 100, 110)
 
@@ -229,7 +241,7 @@ final class CanvasAnnotationScriptTests: XCTestCase {
             XCTAssertTrue(
                 page.hasMarkLayer, "\(tool.token): the field taking the keyboard is not an abandon")
 
-            page.evaluateFromSwift(CanvasHTML.setMarkTool(.select))
+            page.evaluateFromSwift(CanvasHTML.setMarkTool(.read))
             XCTAssertTrue(page.hasMarkLayer, "\(tool.token): nor is changing tools")
 
             page.evaluateFromSwift(CanvasHTML.clearMarkScript())
@@ -364,7 +376,7 @@ final class CanvasAnnotationScriptTests: XCTestCase {
             .enclosure(covering: [.element(id: "item-a", text: "Item A")]))
 
         let selection = try CanvasScriptRuntime()
-        selection.setTool(.select)
+        selection.setTool(.text)
         selection.select(id: "intro", text: "Why this exists")
         selection.mouse("mouseup", 100, 110)
         XCTAssertEqual(
@@ -450,15 +462,28 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         XCTAssertEqual(try kind(loop.lastPosted), .enclosure)
 
         let highlight = try CanvasScriptRuntime()
-        highlight.setTool(.select)
+        highlight.setTool(.text)
         highlight.select(id: "intro", text: "Why this exists")
         highlight.mouse("mouseup", 100, 110)
         XCTAssertEqual(try kind(highlight.lastPosted), .selection)
 
         let dismissal = try CanvasScriptRuntime()
-        dismissal.setTool(.select)
+        dismissal.setTool(.text)
         dismissal.mouse("mouseup", 100, 110)
         XCTAssertEqual(try kind(dismissal.lastPosted), .cleared)
+
+        // **`.read` is the tool that produces no kind, and that is a fact about the seam too**
+        // (#302). Every case above says "this gesture posts a kind Swift declares"; this one
+        // says the inert tool posts nothing for Swift to declare a kind *for*. Without it the
+        // set below reads as though five tools map onto five kinds, and the one that maps onto
+        // none is the whole of the change.
+        let reading = try CanvasScriptRuntime()
+        reading.setTool(.read)
+        reading.select(id: "intro", text: "Why this exists")
+        reading.mouse("mouseup", 100, 110)
+        XCTAssertTrue(
+            reading.posted.isEmpty,
+            "reading posts no message at all, so there is no `kind` for the gate to judge")
 
         XCTAssertEqual(
             Set(CanvasPageSelection.Kind.allCases.map(\.rawValue)),
@@ -471,7 +496,7 @@ final class CanvasAnnotationScriptTests: XCTestCase {
     /// comment field rather than writing a note.
     func testADismissalIsRefusedByTheDecoderRatherThanBecomingANote() throws {
         let page = try CanvasScriptRuntime()
-        page.setTool(.select)
+        page.setTool(.text)
         page.mouse("mouseup", 100, 110)
 
         XCTAssertNil(

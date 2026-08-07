@@ -123,6 +123,9 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         model.copyToClipboard = { [weak self] text in self?.copied.append(text) }
 
         let page = try CanvasScriptRuntime()
+        // Stated rather than left to the default (#302): a highlight is a mark only with
+        // `.text` held, and the default `.read` posts nothing at all.
+        page.setTool(.text)
         page.select(id: "intro", text: "Why this exists")
         // The script posts on **mouseup**, never on the selection itself — a highlight the
         // operator is still dragging is not a mark.

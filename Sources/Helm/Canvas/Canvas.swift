@@ -152,8 +152,12 @@ final class CanvasModel: ObservableObject {
     /// sets it; submitting or dismissing clears it.
     /// Which tool the operator is holding (#112). Lives on the model rather than the view
     /// because it has to survive the pane being rebuilt — a tool that silently reset to
-    /// `.select` on a SwiftUI churn would look like the canvas ignoring the picker.
-    @Published private(set) var markTool: CanvasMarkTool = .select
+    /// `.read` on a SwiftUI churn would look like the canvas ignoring the picker.
+    ///
+    /// **`.read` is the default, and it is inert** (#302): a canvas nobody has picked a tool up
+    /// on posts nothing at all. Deliberately not persisted, for `showsNotes`' reason one field
+    /// down — a canvas that restored still armed would be one the operator did not arm.
+    @Published private(set) var markTool: CanvasMarkTool = .read
 
     /// Whether the sidecar drawer is open (#198). Here for exactly `markTool`'s reason: the
     /// pane is rebuilt on ordinary SwiftUI churn, and a drawer that snapped shut when a
@@ -413,6 +417,15 @@ final class CanvasModel: ObservableObject {
     /// What the page's annotation bridge said. A selection puts the comment field over it;
     /// a cleared report — a click on the page that left nothing selected — takes it away,
     /// which is the click-elsewhere-to-dismiss every popover has.
+    ///
+    /// **What `cleared` still means now that `.read` posts nothing** (#302). It was the one
+    /// message a canvas produced without anyone marking, and that is exactly what it has
+    /// stopped being — it is now only ever the answer to a gesture made with a tool the
+    /// operator picked up. Two live cases, so it is a long way from dead: a `.text` click that
+    /// lands away from the selection being commented on, and a `.point` tap that resolves no
+    /// target (the page wipes its ring and says so, rather than leaving ink over nothing).
+    /// Both are the operator abandoning a mark in flight, which is what this always handled;
+    /// what changed is that reading is no longer indistinguishable from that.
     func pageDidReport(_ report: CanvasPageSelection) {
         switch report {
         case let .selected(selection):
@@ -426,6 +439,12 @@ final class CanvasModel: ObservableObject {
             // click there. Here rather than in `dismissSelection`, which the comment
             // field's own ✕ and Escape also call: abandoning a comment says nothing about
             // whether the operator still wants the notes up.
+            //
+            // **Kept, and narrowed by the page rather than by a condition here.** Under
+            // `.read` no `cleared` arrives at all, so a drawer no longer closes under a
+            // reader's stray click — which is the same complaint as the popup, one surface
+            // over, and it is answered where the others are. It still closes for someone
+            // who picked a tool up and clicked away, and it keeps its own exits either way.
             closeNotes()
         }
     }
@@ -443,9 +462,15 @@ final class CanvasModel: ObservableObject {
     /// focus moved, leaving a box that could not be closed at all.
     /// Pick a tool up, or put it down by picking it again. The toggle is a rule rather than
     /// a button's closure, so it is reachable from `swift test` — and so getting back to
-    /// reading the page does not require remembering which icon `.select` is.
+    /// reading the page does not require remembering which icon `.read` is.
+    ///
+    /// **Putting a tool down lands on `.read`, which is now genuinely putting it down** (#302).
+    /// It used to land on `.select`, which was still armed for text — so there was no way to
+    /// hold nothing at all, and "put it down" meant "swap to the tool you cannot see you are
+    /// holding". Picking `.read` itself is a no-op by the same rule, which is the right answer:
+    /// asking for the state you are in is not a request to leave it.
     func pick(_ tool: CanvasMarkTool) {
-        markTool = markTool == tool ? .select : tool
+        markTool = markTool == tool ? .read : tool
     }
 
     /// The Notes button, both ways. The drawer **is** the notes surface — there is no
@@ -894,9 +919,15 @@ struct CanvasView: View {
 
     /// The tools, as chrome on the canvas rather than a mode you have to know about.
     ///
-    /// Four small buttons instead of a `Picker`: a segmented control would grow the header
+    /// Five small buttons instead of a `Picker`: a segmented control would grow the header
     /// by its own chrome, and this sits beside three existing icon buttons that already
     /// establish the shape.
+    ///
+    /// **`.read` is in the picker rather than implied by nothing being lit** (#302), and it is
+    /// the one that starts lit. A mode with no button is a mode the operator cannot see they
+    /// are in — and it is the only tool that is put down by picking it, so leaving it out
+    /// would also mean the only route back to reading is knowing that pressing the held tool
+    /// again does it.
     private var markPicker: some View {
         HStack(spacing: 2) {
             ForEach(CanvasMarkTool.allCases, id: \.self) { tool in

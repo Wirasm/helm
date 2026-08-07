@@ -6,11 +6,16 @@
 
   1. `data-helm-surface` on the container. helm injects its own annotation layer into every
      `.html` artifact, and its listeners are registered with `capture: true` — so without this
-     attribute helm and the board fight over every gesture: a mark tool lays helm's ink over
-     the board's own, and under the DEFAULT tool a drag posts `cleared`, which closes the
-     operator's notes drawer on every stroke. The attribute says "the pointer here is the
-     page's", and helm then does nothing inside it at all. `CanvasSurface` in helm's sources
+     attribute helm and the board fight over every gesture: a DRAWING tool lays helm's ink over
+     the board's own, and the TEXT tool posts `cleared` for a drag that selected nothing, which
+     closes the operator's notes drawer on every stroke. The attribute says "the pointer here is
+     the page's", and helm then does nothing inside it at all. `CanvasSurface` in helm's sources
      carries the argument.
+
+     helm's default tool is `read`, which interprets nothing — so neither of those fires until
+     the operator picks a tool up. That is NOT a substitute for this attribute: it is a mode
+     they hold, not a property of your page, and it lasts exactly until they reach for the text
+     tool over your board, which is when they are trying to say something about it.
   2. Everything is a sibling — `./quickdraw/`, `./board.js`, `./board-core.js`. No CDN, no
      bundler, no build step: `@quickdrawjs/core` ships dependency-free ESM with file extensions
      written, so it imports as-is. An unpinned CDN build renders differently in six months, and

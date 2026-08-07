@@ -28,10 +28,16 @@ import Foundation
 ///   mounted board is one `<canvas>` with no per-shape nodes in the tree at all, so an
 ///   enclosure over a board resolves to the board's container — a 400-character quote of the
 ///   toolbar's button labels, anchored to an id that names the whole board.
-/// - The unambiguous half needs no correction: under the default `.select` tool a drag over the
-///   board leaves `document.getSelection()` collapsed, so `mouseup` posts `{kind: "cleared"}`,
-///   which dismisses the operator's selection and closes the notes drawer. **Every stroke
-///   closes their notes.**
+/// - The unambiguous half needs no correction: with the text tool held, a drag over the board
+///   leaves `document.getSelection()` collapsed, so `mouseup` posts `{kind: "cleared"}`, which
+///   dismisses the operator's selection and closes the notes drawer. **Every stroke closes
+///   their notes.** That tool was `.select` and was the *default* when this was written, so the
+///   collision was met by an operator who had chosen nothing; #302 split it into `.read` and
+///   `.text` and made `.read` the default, which moves the collision off the default path and
+///   removes none of it. **The two are different mechanisms and neither implies the other** —
+///   `.read` is a global mode the operator holds, this is a per-artifact declaration that binds
+///   whatever they are holding. A board is broken again the moment anyone picks up `.text`,
+///   which is precisely when they are most likely to.
 ///
 /// ## The rule, in one sentence
 ///

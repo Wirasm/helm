@@ -62,7 +62,7 @@ final class CanvasAnchorTests: XCTestCase {
     /// code path `resolve` never touched.
     func testASelectionKeepsTheHighlightItAlwaysReportedAndLosesTheWrapper() throws {
         let page = try CanvasScriptRuntime()
-        page.setTool(.select)
+        page.setTool(.text)
         page.select(inBlockWithText: Self.first.text, text: "unnamed")
 
         page.mouse("mouseup", Self.first.at.x, Self.first.at.y)
@@ -115,7 +115,7 @@ final class CanvasAnchorTests: XCTestCase {
         XCTAssertEqual(message["text"] as? String, Self.word.text, "but report what was marked")
 
         let selection = try CanvasScriptRuntime()
-        selection.setTool(.select)
+        selection.setTool(.text)
         selection.select(inBlockWithText: Self.word.text, text: Self.word.text)
         selection.mouse("mouseup", Self.word.at.x, Self.word.at.y)
         XCTAssertEqual(
@@ -213,7 +213,7 @@ final class CanvasAnchorTests: XCTestCase {
             .enclosure(covering: [.quote(Self.first.text), .quote(Self.second.text)]))
 
         let selection = try CanvasScriptRuntime()
-        selection.setTool(.select)
+        selection.setTool(.text)
         selection.select(inBlockWithText: Self.first.text, text: "unnamed")
         selection.mouse("mouseup", Self.first.at.x, Self.first.at.y)
         XCTAssertEqual(try mark(selection), .selection(.quote("unnamed")))

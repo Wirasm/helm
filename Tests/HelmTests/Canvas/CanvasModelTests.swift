@@ -474,13 +474,39 @@ final class CanvasModelTests: XCTestCase {
 
     @MainActor
     func testPickingTheHeldToolPutsItDown() {
-        // Otherwise getting back to reading the page means remembering which icon is select.
+        // Otherwise getting back to reading the page means remembering which icon reads.
         let model = CanvasModel()
         model.pick(.arrow)
 
         model.pick(.arrow)
 
-        XCTAssertEqual(model.markTool, .select)
+        XCTAssertEqual(
+            model.markTool, .read,
+            "putting a tool down has to land on the inert mode, not on a second armed one")
+    }
+
+    /// #302: `.read` is the state, so asking for it is not a request to leave it. The toggle
+    /// rule is written as "the held tool puts itself down", and `.read` is the one tool that
+    /// rule could turn into a way of arming the canvas by pressing the button that disarms it.
+    @MainActor
+    func testPickingReadWhileAlreadyReadingStaysReading() {
+        let model = CanvasModel()
+
+        model.pick(.read)
+
+        XCTAssertEqual(model.markTool, .read)
+    }
+
+    /// The other half: `.read` is reachable from a held tool by name, not only by the toggle.
+    /// The picker draws a button for it, so this is the rule that button spends.
+    @MainActor
+    func testPickingReadPutsDownWhateverWasHeld() {
+        let model = CanvasModel()
+        model.pick(.freehand)
+
+        model.pick(.read)
+
+        XCTAssertEqual(model.markTool, .read)
     }
 
     @MainActor
@@ -495,7 +521,9 @@ final class CanvasModelTests: XCTestCase {
 
     @MainActor
     func testACanvasNobodyHasTouchedIsReading() {
-        XCTAssertEqual(CanvasModel().markTool, .select)
+        XCTAssertEqual(
+            CanvasModel().markTool, .read,
+            "a canvas nobody has picked a tool up on must interpret nothing (#302)")
     }
 }
 
