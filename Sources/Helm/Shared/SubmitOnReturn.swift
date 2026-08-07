@@ -46,11 +46,16 @@ extension View {
     /// exposes no selection to insert into. It is visible the moment it happens rather than
     /// silent, and ⌥Return is the exact key for the mid-sentence case.
     ///
-    /// **`ChatComposer` still spells all of this out inline and should call this instead.** It
-    /// is the same five lines and one mechanical edit; it is not made here only because
-    /// `Sources/Helm/Chat/` is another slice's file and in flight. Until it lands there are two
-    /// spellings of one rule, which is the thing this file exists to stop — tracked as a
-    /// follow-up on #278.
+    /// **`ChatComposer` still spells all of this out inline and should call this instead — #292.**
+    /// It is the same five lines and one mechanical edit; it is not made here only because
+    /// `Sources/Helm/Chat/` is another slice's file and in flight. Until #292 lands there are two
+    /// spellings of one rule, which is the thing this file exists to stop, and **it does not earn
+    /// the carve-out** `AGENTS.md` gives `hooks/`/`pi/` and the spool scripts: those are separate
+    /// runtimes, and `Chat/` and `Shared/` are the same target under the same `swift build`. So it
+    /// carries the obligation every honest duplicate here carries anyway — being **detectable**.
+    /// `SubmitOnReturnParityTests` reads both files and fails when the phase set or the shift
+    /// guard stops matching, because no behavioural suite can see the *modifier* gaining something
+    /// the inline copy never hears about.
     func submitOnReturnInsertNewlineOnShift(
         submit: @escaping () -> Void, insertNewline: @escaping () -> Void
     ) -> some View {
