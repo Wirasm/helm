@@ -78,6 +78,28 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
             var r = el.getBoundingClientRect();
             return { id: el.id, x: r.left, y: r.top, width: r.width, height: r.height };
           })));
+        // **The text mark, reported from the PAGE world** (#308). `CSS.highlights` is the
+        // document's one registry, and this side of it is the side the renderer reads — so a
+        // highlight helm registered from its isolated bridge world being visible HERE is the
+        // whole claim, and it is a claim nothing but a real WebKit can settle. Asked by the
+        // bridge world setting an attribute, because a bridge-world `evaluateJavaScript`
+        // result never comes back in this test host (measurement 1 above).
+        setInterval(function () {
+          if (document.body.getAttribute('data-helm-ask') === null) { return; }
+          document.body.removeAttribute('data-helm-ask');
+          var held = window.CSS && CSS.highlights ? CSS.highlights.get('helm-mark') : null;
+          var range = held ? Array.from(held)[0] : null;
+          window.webkit.messageHandlers.helmLiveProbe.postMessage(JSON.stringify({
+            painted: !!held,
+            collapsed: range ? range.collapsed : null,
+            covers: range ? String(range) : null,
+            rule: Array.prototype.some.call(document.adoptedStyleSheets || [], function (s) {
+              return Array.prototype.some.call(s.cssRules, function (r) {
+                return r.cssText.indexOf('highlight(helm-mark)') >= 0;
+              });
+            })
+          }));
+        }, 10);
         </script>
         </body></html>
         """
@@ -152,6 +174,51 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
         XCTAssertFalse(
             body.contains("`#summary`") || body.contains("`#closing`"),
             "a loop round one section must not sweep in its neighbours — \(body)")
+    }
+
+    /// **The text mark, painted by a real WebKit and read back from the page's own world**
+    /// (#308). This is the measurement the whole approach rests on and the one nothing else in
+    /// the suite can make: `CanvasScriptRuntime` runs against a DOM stub whose highlight
+    /// registry is a dictionary this repo wrote, so it can say the script *called* the API and
+    /// never that WebKit has one. Three things are only true here —
+    ///
+    /// - `CSS.highlights` and `Highlight` exist in the **bridge content world** at all;
+    /// - a highlight registered there is visible in the **page** world, so it is the document's
+    ///   registry the renderer reads rather than a per-world copy — which is the entire reason
+    ///   this could be built without touching the artifact's DOM;
+    /// - a `CSSStyleSheet` constructed and adopted from the bridge world parses its
+    ///   `::highlight()` rule, so there is something to paint the range *with*.
+    ///
+    /// And the behaviour the operator asked for, against the real thing that used to take it
+    /// away: **the native selection is dropped** — `removeAllRanges()`, which is what the
+    /// comment field taking the keyboard amounts to — and helm's mark is still there, still
+    /// covering the same words. That is the assertion `cloneRange()` exists for.
+    ///
+    /// It stops at "registered, uncollapsed, with a rule to paint it". Whether the tint *looks*
+    /// right is the operator's call and no test's: a `WKWebView` here renders offscreen and
+    /// nothing in this file looks at a pixel.
+    func testALiveTextMarkStaysPaintedAfterTheSelectionItCameFromIsGone() async throws {
+        let page = try await Page(canvas: canvas, mailRoot: mailRoot, route: .mailbox(handle))
+
+        try await page.markSelection(of: "bridge")
+
+        let painted = try await page.reportHighlight(afterDroppingTheNativeSelection: true)
+        XCTAssertEqual(painted["painted"] as? Bool, true, "the page world must see helm's mark")
+        XCTAssertEqual(
+            painted["collapsed"] as? Bool, false,
+            "a range the Selection collapsed under helm is a mark that is no longer over anything")
+        XCTAssertEqual(
+            painted["covers"] as? String, "This shouldn't talk to that.",
+            "and it still covers the passage the comment is about")
+        XCTAssertEqual(
+            painted["rule"] as? Bool, true,
+            "a registered highlight with no ::highlight() rule adopted paints nothing at all")
+
+        // Posted, or dismissed by the ✕ or Escape — one path out, and it is the one that
+        // already took the ink down.
+        page.clearMark()
+        let gone = try await page.highlightGoes()
+        XCTAssertTrue(gone, "closing the field takes the text mark with it")
     }
 
     /// The negative half on a live page: no origin, no mail, and the pane says so.
@@ -305,7 +372,7 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
                 evaluate(
                     """
                     (function () {
-                      \(CanvasHTML.setMarkTool(.text))
+                      \(CanvasHTML.setMarkTool(.text, theme: .light))
                       var range = document.createRange();
                       range.selectNodeContents(document.getElementById(\(Self.js(id))));
                       var selection = window.getSelection();
@@ -318,6 +385,62 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
                     })()
                     """)
             }
+        }
+
+        /// What Swift pushes when the comment field closes, issued for real into the same world.
+        func clearMark() { evaluate(CanvasHTML.clearMarkScript()) }
+
+        /// Ask the **page's own** world what it can see of helm's mark, and wait for its answer.
+        ///
+        /// The question is posed by setting an attribute on a shared `document`, because a
+        /// bridge-world `evaluateJavaScript` result never comes back in this host (measurement 1
+        /// in the type header) — so the page's `postMessage` is the only channel that returns.
+        ///
+        /// `afterDroppingTheNativeSelection` is the moment under test: `removeAllRanges()` is
+        /// what the comment field taking the keyboard does to the browser's own selection, and
+        /// helm's mark is a *clone* precisely so that it is not what happens to helm's.
+        func reportHighlight(
+            afterDroppingTheNativeSelection drop: Bool
+        ) async throws
+            -> [String: Any]
+        {
+            let reported = await withCheckedContinuation {
+                (continuation: CheckedContinuation<String, Never>) in
+                probe.pending = continuation
+                evaluate(
+                    """
+                    (function () {
+                      \(drop ? "window.getSelection().removeAllRanges();" : "")
+                      document.body.setAttribute("data-helm-ask", "1");
+                    })()
+                    """)
+            }
+            return try XCTUnwrap(
+                try JSONSerialization.jsonObject(with: Data(reported.utf8)) as? [String: Any],
+                "the page reported nothing readable: \(reported)")
+        }
+
+        /// **Asked until it answers, because the two worlds' views of the registry are eventually
+        /// consistent rather than instantly so — measured, and it is the surprise this helper
+        /// exists for.** A `set` from the bridge world was visible to the page world on the first
+        /// question every time; a `delete` was not, and took three round trips to land (measured
+        /// 1, 1, 1, 0 across four consecutive asks). A single question after the wipe therefore
+        /// fails on timing rather than on behaviour, and asserting the first answer would have
+        /// been a flaky test dressed up as a finding.
+        ///
+        /// It is still waiting on an **observable** rather than on a duration — each round trip
+        /// is a real answer from the page — with a bound so a mark that genuinely never goes
+        /// fails rather than hanging, which is the failure mode `markSelection`'s header records
+        /// costing twelve minutes.
+        ///
+        /// What lags is the page world's **JavaScript view**. Whether the paint lags with it is
+        /// not measurable here and is not claimed: this host renders offscreen.
+        func highlightGoes(within asks: Int = 20) async throws -> Bool {
+            for _ in 0..<asks {
+                let report = try await reportHighlight(afterDroppingTheNativeSelection: false)
+                if report["painted"] as? Bool == false { return true }
+            }
+            return false
         }
 
         /// A closed-ish loop just outside a real element's real rect, released short of where it
@@ -338,7 +461,7 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
                 evaluate(
                     """
                     (function () {
-                      \(CanvasHTML.setMarkTool(.freehand))
+                      \(CanvasHTML.setMarkTool(.freehand, theme: .light))
                       \(Self.dispatch("mousedown", at: corners[0]))
                       \(moves.joined(separator: "\n  "))
                       \(Self.dispatch("mouseup", at: corners[corners.count - 1]))

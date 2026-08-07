@@ -205,7 +205,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         load(webView, coordinator: context.coordinator)
-        context.coordinator.pushTool(markTool, to: webView)
+        context.coordinator.pushTool(markTool, theme: theme, to: webView)
         context.coordinator.showMark(showsMark, in: webView)
     }
 
@@ -450,7 +450,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
         load(webView, coordinator: context.coordinator)
         HTMLCanvasPage.reloadOnDemand(
             reloadDemand, webView, path: path, theme: theme, coordinator: context.coordinator)
-        context.coordinator.pushTool(markTool, to: webView)
+        context.coordinator.pushTool(markTool, theme: theme, to: webView)
         context.coordinator.showMark(showsMark, in: webView)
     }
 
@@ -503,6 +503,12 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// tools would throw away the scroll position, and a canvas is something you are part-way
     /// down when you decide to mark it.
     private(set) var pushedTool: CanvasMarkTool?
+    /// The appearance the page was last told to paint a text mark in, or nil for the same
+    /// reason `pushedTool` is (#308). Tracked beside the tool rather than assumed to follow it:
+    /// a theme flip does navigate today, and `navigate` does call `forgetPushedState` — but that
+    /// is a fact in `HTMLCanvasPage`, and a guard here that depended on it would be a colour
+    /// silently a whole appearance out of date if it ever stopped being true.
+    private var pushedTheme: CanvasTheme?
     /// Whether the page currently holds a mark. Starts false: a fresh document has no ink.
     private var markShown = false
     /// The generated document the scheme handler should serve on the next request. Only
@@ -533,10 +539,11 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
             script, in: nil, in: Self.bridgeWorld, completionHandler: { _ in })
     }
 
-    func pushTool(_ tool: CanvasMarkTool, to webView: WKWebView) {
-        guard pushedTool != tool else { return }
+    func pushTool(_ tool: CanvasMarkTool, theme: CanvasTheme, to webView: WKWebView) {
+        guard pushedTool != tool || pushedTheme != theme else { return }
         pushedTool = tool
-        evaluate(CanvasHTML.setMarkTool(tool), in: webView)
+        pushedTheme = theme
+        evaluate(CanvasHTML.setMarkTool(tool, theme: theme), in: webView)
     }
 
     /// Take the ink down when the comment field closes — submitted or dismissed. Pushed
@@ -580,6 +587,7 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// updates.
     func forgetPushedState() {
         pushedTool = nil
+        pushedTheme = nil
         markShown = false
     }
 

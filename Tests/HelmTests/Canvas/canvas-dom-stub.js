@@ -173,6 +173,10 @@
   var doc = {
     body: body,
     documentElement: documentElement,
+    // An array on the document, exactly as a browser has — the script re-checks membership on
+    // every paint rather than trusting that what it adopted once is still adopted, so a stub
+    // that made this a no-op would let that check pass vacuously.
+    adoptedStyleSheets: [],
     addEventListener: function (type, fn) {
       listen(listeners.document, type, fn);
     },
@@ -228,10 +232,60 @@
     return hit;
   }
 
+  // The CSS Custom Highlight API, to the extent the script touches it — a document-wide
+  // registry keyed by name, and a `Highlight` holding the ranges it was constructed with.
+  //
+  // **Modelled on what a real WKWebView answered, not on the spec.** The measurement that
+  // decided this feature exists at all was taken from the bridge content world of a live
+  // embed: `CSS.highlights` and `Highlight` are there, a highlight registered from the
+  // isolated world is visible to the PAGE world — so the registry is the document's rather
+  // than the world's, which is the only reason the renderer would ever paint it — and a
+  // constructed stylesheet adopted from the isolated world parses its `::highlight()` rule.
+  // `CanvasMarkReachesAgentLiveTests` keeps that measurement as a gate, because none of it is
+  // reproducible here: this is a registry, not a renderer, and nothing in this file can say a
+  // pixel changed colour.
+  //
+  // A `Highlight`'s ranges are exposed as `ranges` for the harness to read back. A browser's
+  // is Set-like and iterated; the script only ever constructs one, so what a test needs is a
+  // way to ask which range went in.
+  var highlights = {};
+
+  function Highlight(range) {
+    this.ranges = [range];
+  }
+
+  function StyleSheet() {
+    this.cssText = "";
+  }
+
+  StyleSheet.prototype.replaceSync = function (text) {
+    this.cssText = String(text);
+  };
+
   var posted = [];
   var win = {
     scrollX: 0,
     scrollY: 0,
+    CSS: {
+      highlights: {
+        set: function (name, highlight) {
+          highlights[name] = highlight;
+        },
+        get: function (name) {
+          return Object.prototype.hasOwnProperty.call(highlights, name)
+            ? highlights[name]
+            : undefined;
+        },
+        has: function (name) {
+          return Object.prototype.hasOwnProperty.call(highlights, name);
+        },
+        delete: function (name) {
+          delete highlights[name];
+        },
+      },
+    },
+    Highlight: Highlight,
+    CSSStyleSheet: StyleSheet,
     addEventListener: function (type, fn) {
       listen(listeners.window, type, fn);
     },
@@ -322,7 +376,25 @@
     return hits[0] || null;
   }
 
+  // `cloneRange` is modelled rather than aliased to the range itself, and that is the whole
+  // point of it being here. A browser's `getRangeAt(0)` hands back a range the Selection still
+  // owns; the clone is the operator's mark and outlives the selection going away when the
+  // comment field takes the keyboard. A stub returning `this` would let a script that forgot to
+  // clone pass — so the clone carries `cloned: true` and a test asserts on it.
   function selectWithin(anchor, text) {
+    function range(cloned) {
+      return {
+        cloned: cloned,
+        text: text,
+        commonAncestorContainer: anchor,
+        getBoundingClientRect: function () {
+          return anchor.getBoundingClientRect();
+        },
+        cloneRange: function () {
+          return range(true);
+        },
+      };
+    }
     selection = {
       isCollapsed: false,
       rangeCount: 1,
@@ -330,14 +402,15 @@
         return text;
       },
       getRangeAt: function () {
-        return {
-          commonAncestorContainer: anchor,
-          getBoundingClientRect: function () {
-            return anchor.getBoundingClientRect();
-          },
-        };
+        return range(false);
       },
     };
+  }
+
+  /// Drop the operator's highlight the way the comment field taking the keyboard does — the
+  /// native selection goes, and helm's mark is supposed to stay.
+  function collapseSelection() {
+    selection = emptySelection;
   }
 
   // Direct children of the paper only. The arrowhead's barb is a `<path>` too, nested inside
@@ -357,8 +430,13 @@
   global.document = doc;
   global.__helm = {
     posted: posted,
-    setTool: function (tool) {
+    // Both halves of what Swift pushes. The tint is not decoration: without it the script
+    // paints nothing at all, deliberately (`CanvasHTML.setMarkTool` argues why there is no
+    // fallback colour), so a harness that set only the tool would report every highlight
+    // assertion as a failure of the feature rather than of the fixture.
+    setTool: function (tool, tint) {
       win.__helmMarkTool = tool;
+      win.__helmMarkTint = tint;
     },
     scrollTo: function (x, y) {
       win.scrollX = x;
@@ -478,6 +556,41 @@
     },
     selectInBlock: function (ownText, text) {
       selectWithin(findByOwnText(ownText), text);
+    },
+    collapseSelection: collapseSelection,
+    highlightNames: function () {
+      return Object.keys(highlights);
+    },
+    // What the named highlight covers: the id of the element the range sits in, the text it
+    // was made over, and whether the script cloned the range before registering it.
+    highlightedRange: function (name) {
+      var held = highlights[name];
+      if (!held) {
+        return null;
+      }
+      var range = held.ranges[0];
+      return {
+        id: range.commonAncestorContainer ? range.commonAncestorContainer.id : "",
+        text: range.text || "",
+        cloned: !!range.cloned,
+      };
+    },
+    // Every adopted sheet's text, joined — so a test can assert the `::highlight()` rule
+    // exists AND carries the colour Swift pushed, rather than one or the other.
+    adoptedStyle: function () {
+      return doc.adoptedStyleSheets
+        .map(function (sheet) {
+          return sheet.cssText;
+        })
+        .join("\n");
+    },
+    adoptedSheetCount: function () {
+      return doc.adoptedStyleSheets.length;
+    },
+    // A page replacing `document.adoptedStyleSheets` wholesale, which is a thing an artifact's
+    // own script may do — the rule has to come back or the registered highlight paints nothing.
+    dropAdoptedStyles: function () {
+      doc.adoptedStyleSheets = [];
     },
   };
 })(this);

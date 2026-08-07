@@ -167,6 +167,7 @@ final class CanvasMarkToolTests: XCTestCase {
         // It is evaluated in the page, so the token has to arrive as a JS string rather than
         // a bare identifier — the difference between setting a tool and a ReferenceError.
         XCTAssertTrue(
-            CanvasHTML.setMarkTool(.freehand).contains("window.__helmMarkTool = \"freehand\";"))
+            CanvasHTML.setMarkTool(.freehand, theme: .light)
+                .contains("window.__helmMarkTool = \"freehand\";"))
     }
 }

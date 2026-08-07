@@ -115,12 +115,31 @@ final class CanvasHTMLTests: XCTestCase {
         // It used to wipe unconditionally. That was right when ink was transient and wrong
         // the moment it started outliving the gesture: switching tools with a comment open
         // erased the mark and left the field anchored to nothing.
-        let set = CanvasHTML.setMarkTool(.read)
+        let set = CanvasHTML.setMarkTool(.read, theme: .light)
 
         XCTAssertTrue(set.contains("__helmAbandonMark"))
         XCTAssertFalse(
             set.contains("__helmWipeMark"),
             "a tool change may not remove a mark that is already awaiting its comment")
+    }
+
+    /// **The tint rides the tool push, and that is the invariant worth pinning** (#308). The
+    /// page holds no colour of its own — `canvas-annotation.js` paints nothing without one, on
+    /// purpose — so the only thing keeping a text mark visible is that these two travel together.
+    /// Split them onto two channels and the failure is a mark that is registered and invisible.
+    func testTheToolPushCarriesTheColourATextMarkIsPaintedIn() {
+        for theme in [CanvasTheme.light, .dark] {
+            let set = CanvasHTML.setMarkTool(.text, theme: theme)
+
+            XCTAssertTrue(
+                set.contains(
+                    "window.\(CanvasHTML.markTintGlobal) = "
+                        + "\"\(Palette.helm.selection.value(in: theme.appearance).hex)\";"),
+                "\(theme): the tint must be the palette's `selection` token — \(set)")
+        }
+        XCTAssertNotEqual(
+            CanvasHTML.markTint(for: .light), CanvasHTML.markTint(for: .dark),
+            "a token resolved to one value in both appearances is a token that was not resolved")
     }
 
     func testClearingTheMarkIsTheOneThingThatTakesAPostedOneDown() {
