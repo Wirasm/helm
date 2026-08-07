@@ -187,6 +187,30 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
 
 - **Never restart a running helm without warning the operator** — a live window may be
   hosting their session.
+- **Kill only a pid you have verified is yours, never a pattern.** `pkill -f "\.build/debug/helm"`
+  cannot see a teammate's `swift run` binary path and cannot tell the operator's helm from a
+  worktree build. An agent reached for exactly that this morning; nothing died that shouldn't
+  have, and that was luck rather than design.
+- **Anything you spawn must die without you, and cleanup on the last line is not that.** This is
+  the half the rule above was missing, and it cost a day. #291's load measurement started twelve
+  CPU burners on purpose — it is where that ticket's *"0.26s idle, 1.16s at load 9"* came from —
+  and ended with `for p in $BURNERS; do kill $p; done`. The parent shell died before reaching it.
+  All twelve reparented to `init` and spun at **~81% CPU each for nine and a half hours**, about
+  970% of an eleven-core machine, until the operator noticed his fans.
+
+  **The damage is not the heat.** A machine held at load ~111 all day is a machine where every
+  later measurement is suspect: `FileWatcherTests` and `SpoolWireConformanceTests` were both put
+  under suspicion by it, and #291's own numbers were taken on a machine that then *stayed*
+  loaded. A confound that outlives the experiment poisons everything measured after it.
+
+  So: bound the child's own lifetime rather than promising to tidy up. `timeout <n> <cmd>`, or a
+  loop with a deadline it checks itself, or a `trap ... EXIT` — in that order of preference,
+  because the first two survive `SIGKILL` on the parent and the third does not. **Then check.**
+  `ps -Ao pcpu,etime,pid,command -r | head` before you report, and say what you left running.
+- **Before blaming the machine, look at what is on it.** *"The machine was busy"* is a real
+  diagnosis — #291 is one — but it is also the easiest wrong one to reach for, and twice today it
+  was true for a reason another agent had caused and could have found in one `ps`. Load has an
+  owner; name it.
 - **Never delete a test to make the gate green.** If its subject genuinely no longer
   exists, say which and why in the commit.
 - **Watch a test fail before you trust it passing.** Take the fix out, run it, name which
