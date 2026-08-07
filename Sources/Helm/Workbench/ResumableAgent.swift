@@ -89,6 +89,28 @@ enum AgentResume {
     /// runtime — which the offer turns into a sentence rather than a command that fails in
     /// the pane.
     ///
+    /// # It changes directory first, and that is a measurement rather than a precaution
+    ///
+    /// A restored pane's pty is rooted at the **workspace** (`TerminalManager.activate`), and
+    /// `ResumableAgent.cwd` is where the agent actually was — a subdirectory, whenever the
+    /// operator started it in one. Measured 2026-08-07 against the real CLI, both halves,
+    /// because the obvious reasoning gets one of them backwards:
+    ///
+    /// - **`--resume` is *not* cwd-scoped.** The same session id resolved from the parent
+    ///   directory, from `$HOME` and from `/tmp`. So the transcript is found wherever the line
+    ///   runs, and the offer's own transcript check is not what this is about.
+    /// - **The resumed agent adopts the *process* cwd, not the session's.** Resumed from
+    ///   `/tmp`, `pwd` answered `/tmp`. So without the `cd` an agent comes back in a directory
+    ///   it never worked in — a different `CLAUDE.md`, a different git repository, and every
+    ///   relative path in its own context now pointing somewhere else. It would run, look
+    ///   healthy, and be wrong, which is the failure shape this whole area exists to remove.
+    ///
+    /// **Unconditional, and `&&` rather than `;`.** A `cd` to the directory the pane is already
+    /// in costs nothing, and making it conditional would need the pane's cwd here, which this
+    /// pure function does not have. `&&` is what makes a directory that no longer exists stop
+    /// the line instead of starting an agent somewhere arbitrary — the operator clicked Resume,
+    /// so they are at the pane and the shell's own error is in front of them.
+    ///
     /// **It carries the same unattended posture a spawn does**, from
     /// `SpoolUnattendedPolicy` rather than a second spelling of it. The stretch is worth
     /// naming: that policy's header is written about the case where *nobody is at the pane*,
@@ -104,7 +126,8 @@ enum AgentResume {
         -> String?
     {
         guard agent.command == claude else { return nil }
-        var parts = [SpoolLaunchLine.quoted(agent.command)]
+        var parts = ["cd", SpoolLaunchLine.quoted(agent.cwd), "&&"]
+        parts.append(SpoolLaunchLine.quoted(agent.command))
         parts.append(
             contentsOf: SpoolUnattendedPolicy.arguments(for: agent.command, requested: [])
                 .map(SpoolLaunchLine.quoted))

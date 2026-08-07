@@ -30,6 +30,41 @@ enum BenchRestoreChoice: Equatable {
     case fresh
 }
 
+// MARK: - MountState
+
+/// What the workbench is doing right now: nothing, asking, or showing a bench.
+///
+/// **One field rather than a nil `bench` paired with a non-nil `restoreOffer`.** That pairing
+/// was the first draft, and it was an invariant carried by a comment restated in three files —
+/// `WorkbenchModel` explaining which nil is which, `WorkbenchView` branching on the offer to
+/// tell an unanswered mount from an empty helm, `WorkbenchSpoolCommander` doing the same to
+/// pick a refusal. Six writers inside one file had to set both by hand, together, because the
+/// author remembered to; nothing stopped a seventh setting one. `AGENTS.md`'s rule is exact and
+/// says to apply it *before* the defect is reachable: **prefer a newtype the day the comment
+/// gets written, not the day it is disbelieved.**
+///
+/// `bench` and `restoreOffer` survive as computed readers over this, so every consumer outside
+/// the model reads exactly what it read before — the change is that no combination of them can
+/// be constructed that this enum does not name.
+enum MountState: Equatable {
+    /// No workspace open. A fresh install, and where closing the last workspace returns to.
+    case empty
+    /// A workspace is mounted and waiting on the operator to answer #85's question. **Nothing
+    /// is built and no pty is spawned in this state**, which is also what keeps the saved bench
+    /// intact: `WorkspaceModel.saveContext` returns early on a nil `bench`.
+    case awaitingRestore(BenchRestoreOffer)
+    /// A bench, on screen. Never empty — `Workbench`'s first invariant is that it holds a pane.
+    case mounted(Workbench)
+
+    var bench: Workbench? {
+        if case let .mounted(bench) = self { bench } else { nil }
+    }
+
+    var restoreOffer: BenchRestoreOffer? {
+        if case let .awaitingRestore(offer) = self { offer } else { nil }
+    }
+}
+
 // MARK: - BenchMount
 
 /// What helm does with a workspace's saved bench at the moment it is mounted.

@@ -44,24 +44,15 @@ struct AgentObserver {
         transcriptRoot: URL = TranscriptLocator.defaultRoot
     ) -> AgentObserver {
         AgentObserver(
-            sessionsNow: { Self.rows(in: registryRoot) },
+            // `AgentRegistry.rows`, never a dictionary built here. It is the registry's own
+            // pid→row step, and building a second one is how this shipped a first draft where
+            // `sessionLookup` kept the *first* row for a duplicate pid and this kept the
+            // *last* — one rule, two spellings, and `snapshot.json` able to name a different
+            // session from the one the pane's own record held. That function's header has the
+            // measurement.
+            sessionsNow: { AgentRegistry.rows(in: registryRoot) },
             foregroundPid: { $0.hostView.foregroundPid },
             transcriptExists: { Self.transcriptExists($0, root: transcriptRoot) })
-    }
-
-    /// One directory read, keyed by pid.
-    ///
-    /// **Last row wins on a duplicate pid, and there is nothing better to do.** Claude Code
-    /// names the file after the pid, so two rows for one pid means two files claiming the same
-    /// process — which cannot both be true, and neither is more credible than the other.
-    /// `Dictionary(_:uniquingKeysWith:)` rather than `uniqueKeysWithValues:`, because the
-    /// latter traps, and a hand-edited registry directory is not worth a crash.
-    static func rows(in root: URL) -> [pid_t: AgentSession] {
-        Dictionary(
-            AgentRegistry.sessions(in: root).map { ($0.pid, $0) },
-            uniquingKeysWith: { _, last in
-                last
-            })
     }
 
     /// Whether `agent` still has a transcript to resume from.

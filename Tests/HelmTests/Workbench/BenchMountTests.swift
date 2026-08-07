@@ -347,6 +347,40 @@ final class BenchMountTests: XCTestCase {
             model.spawnTerminal(), "and a spawn into it has a bench to land on")
     }
 
+    /// **The one place helm answers the operator's own question for them**, and it is named
+    /// rather than a side effect of `bench == nil` — which is how it reached this state in the
+    /// first draft, with no code path saying so and no test measuring it.
+    ///
+    /// It resolves rather than refusing, on #179's ruling: a spawn that blocked until a human
+    /// clicked would be dead exactly when the spool is worth having. **Restore** rather than
+    /// fresh is what keeps that from being destructive.
+    func testARequestFromOutsideResolvesAnOpenQuestionByRestoring() throws {
+        let saved = bench(terminals: 3)
+        let terminals = TerminalManager()
+        let model = WorkbenchModel(terminals: terminals, agents: .blind)
+        model.activate(workspacePath: workspace, offering: saved)
+        XCTAssertNotNil(model.restoreOffer, "the question is open on the operator's screen")
+
+        model.mountWithoutAsking()
+
+        XCTAssertNil(model.restoreOffer)
+        XCTAssertEqual(
+            model.bench, saved, "restore, never fresh — it is the answer that loses nothing")
+        XCTAssertNil(model.shelvedBench, "and nothing was declined, so nothing is shelved")
+    }
+
+    /// The control: with no question open it does nothing at all, so it cannot be reached for
+    /// as a general "make sure there is a bench" hammer.
+    func testResolvingWithNoQuestionOpenChangesNothing() throws {
+        let saved = bench(terminals: 2)
+        let model = WorkbenchModel(terminals: TerminalManager(), agents: .blind)
+        model.activate(workspacePath: workspace, restoring: saved)
+
+        model.mountWithoutAsking()
+
+        XCTAssertEqual(model.bench, saved)
+    }
+
     // MARK: - Controls
     //
     // Both of these pass on `origin/development` too, and are here as controls: the change

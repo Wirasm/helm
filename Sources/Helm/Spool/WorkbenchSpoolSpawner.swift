@@ -45,15 +45,19 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
     /// keyboard.
     func openTerminal(cwd: String) -> Result<UUID, SpoolRefusal> {
         let workspace = Workspace(path: cwd)
-        // **`bench == nil` is the second condition, and #85 is why it has to be here.** A
-        // workspace can now be the active one with no bench built — a mount stopped to ask the
-        // operator whether to restore what was saved. Asking on `workspacePath` alone would
-        // skip the activation, find no bench, and refuse with "helm could not open a terminal"
-        // against a question nobody is at the pane to answer. `activate` is injected as the
-        // `.requestFromOutside` mount, which never asks and restores instead.
-        if workbench.workspacePath != workspace.path || workbench.bench == nil {
+        if workbench.workspacePath != workspace.path {
             activate(workspace)
         }
+        // **#85's question is resolved by name, not by noticing that `bench == nil`.** A
+        // workspace can now be the mounted one with no bench built, because the mount stopped to
+        // ask the operator whether to restore what was saved — and this is the case where they
+        // are demonstrably *at* the pane, since the question is on their screen. Reaching it
+        // through the general "was anything mounted?" branch answered that question as a side
+        // effect of a condition that used to mean something else. `mountWithoutAsking` is the
+        // named act, and its header argues why a spawn resolves the question rather than
+        // waiting behind it. `activate` above is the non-asking open, so a *different*
+        // workspace never leaves one behind for this to find.
+        workbench.mountWithoutAsking()
         guard workbench.workspacePath == workspace.path else {
             return .failure(
                 SpoolRefusal(

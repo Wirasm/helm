@@ -108,7 +108,7 @@ final class ResumableAgentTests: XCTestCase {
 
         XCTAssertEqual(
             line,
-            "'claude' '--dangerously-skip-permissions' --resume "
+            "cd '/tmp/helm-resume' && 'claude' '--dangerously-skip-permissions' --resume "
                 + "'4f2a1b3c-0000-1111-2222-333344445555'",
             "helm composes a command; it does not reimplement resume")
     }
@@ -137,6 +137,46 @@ final class ResumableAgentTests: XCTestCase {
                 line.contains(SpoolLaunchLine.quoted(argument)),
                 "\(argument) is what a spawned claude gets, so it is what a resumed one gets")
         }
+    }
+
+    /// **Measured against the real CLI, both halves, because the obvious reasoning gets
+    /// one of them backwards.** `--resume` is *not* cwd-scoped — the same session id
+    /// resolved from the parent directory, from `$HOME` and from `/tmp`. But the resumed
+    /// agent adopts the **process** cwd: resumed from `/tmp`, `pwd` answered `/tmp`. A
+    /// restored pane's pty is rooted at the workspace, so without this an agent started in
+    /// a subdirectory comes back in a directory it never worked in — a different
+    /// `CLAUDE.md`, a different git repository, and every relative path in its own context
+    /// now pointing elsewhere. It would run, look healthy, and be wrong.
+    func testTheResumeLineReturnsTheAgentToTheDirectoryItWasWorkingIn() throws {
+        let line = try XCTUnwrap(
+            AgentResume.line(
+                resuming: agent(cwd: "/tmp/helm-resume/packages/api"), notice: nil))
+
+        XCTAssertTrue(
+            line.hasPrefix("cd '/tmp/helm-resume/packages/api' && "),
+            "a restored pane's pty is rooted at the workspace, not at the subdirectory "
+                + "the agent was in")
+    }
+
+    /// `&&` rather than `;`, so a directory that no longer exists stops the line instead of
+    /// starting an agent somewhere arbitrary. The operator clicked Resume, so they are at
+    /// the pane and the shell's own error is in front of them.
+    func testAGoneDirectoryStopsTheLineRatherThanRelocatingTheAgent() throws {
+        let line = try XCTUnwrap(AgentResume.line(resuming: agent(), notice: nil))
+
+        XCTAssertTrue(line.contains("' && '"), "&& is what makes a failed cd fatal")
+        XCTAssertFalse(line.contains("; "), "a `;` would run the agent in the wrong place")
+    }
+
+    func testAnEmbeddedQuoteInACwdCannotEscapeTheLine() throws {
+        let hostile = "/tmp/a" + "'" + "; rm -rf /; cd " + "'"
+        let line = try XCTUnwrap(
+            AgentResume.line(resuming: agent(cwd: hostile), notice: nil))
+
+        XCTAssertTrue(
+            line.hasPrefix("cd " + SpoolLaunchLine.quoted(hostile) + " && "),
+            "the cwd comes off disk, so it is quoted like everything else")
+        XCTAssertFalse(line.contains("rm -rf / "), "nothing escapes the quoting")
     }
 
     func testAnEmbeddedQuoteInASessionIdCannotEscapeTheLine() throws {

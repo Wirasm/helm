@@ -123,7 +123,30 @@ enum AgentRegistry {
     /// is not new exposure: the pre-#247 join reached the very same wrong mailbox by the very
     /// same pid, with no registry involved at all.
     static func sessionLookup(in root: URL = defaultRoot) -> (pid_t) -> String? {
-        let rows = sessions(in: root)
-        return { pid in rows.first { $0.pid == pid }?.sessionId }
+        let rows = rows(in: root)
+        return { pid in rows[pid]?.sessionId }
+    }
+
+    /// The same read, keyed by pid, for the caller that needs the whole row rather than the
+    /// session id — `AgentObserver`, which also wants `cwd` (#63).
+    ///
+    /// **It exists so there is exactly one rule for a duplicate pid.** This was two functions:
+    /// `sessionLookup` did `rows.first { $0.pid == pid }` and a second dictionary elsewhere did
+    /// `uniquingKeysWith: { _, last in last }` — the same directory read twice, both authors
+    /// reasoning in prose about the identical degenerate case and reaching **opposite**
+    /// conclusions. Nothing detected the disagreement, and its cost was `snapshot.json`
+    /// attributing one session to a pane while the pane's own persisted record named another.
+    /// Caught in review before it shipped, and the shape of the defect is `AGENTS.md`'s own:
+    /// one rule, two spellings, nothing to notice when they diverge.
+    ///
+    /// **The rule is last-wins, and it is arbitrary on purpose.** Claude Code names the file
+    /// after the pid, so two rows for one pid means two files claiming the same process — they
+    /// cannot both be true and neither is more credible. What matters is not which is picked
+    /// but that every reader picks the same one, which is why this is a function and not a
+    /// convention. `Dictionary(_:uniquingKeysWith:)` rather than `uniqueKeysWithValues:`,
+    /// because the latter traps and a hand-edited registry directory is not worth a crash.
+    static func rows(in root: URL = defaultRoot) -> [pid_t: AgentSession] {
+        Dictionary(
+            sessions(in: root).map { ($0.pid, $0) }, uniquingKeysWith: { _, last in last })
     }
 }

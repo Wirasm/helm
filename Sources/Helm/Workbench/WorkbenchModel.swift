@@ -26,18 +26,24 @@ import SwiftUI
 /// terminal pane, forever. The bench's only job is to say *which panes show the chat face*.
 @MainActor
 final class WorkbenchModel: ObservableObject {
+    /// Nothing open, a question waiting on the operator, or a bench — as one value, so no
+    /// combination of the two can be constructed that `MountState` does not name. Its header
+    /// has the argument for why this is a type and not two paired Optionals.
+    @Published private(set) var mount: MountState = .empty
+
     /// nil when no workspace is open — **or when a mount is waiting on an answer** (#85). Not
     /// an "empty bench": `Workbench`'s first invariant is that a bench always holds at least
-    /// one pane, so there is no such value to make.
+    /// one pane, so there is no such value to make. A nil bench is exactly what makes
+    /// `WorkspaceModel.saveContext` return early, which is what keeps a saved bench intact
+    /// while the question about it is open.
     ///
-    /// The two nils are told apart by `restoreOffer`, and the pairing is load-bearing rather
-    /// than incidental: a nil bench is exactly what makes `WorkspaceModel.saveContext` return
-    /// early, which is what keeps a saved bench intact while the question about it is open.
-    @Published private(set) var bench: Workbench?
+    /// Computed rather than stored: every reader outside this file reads what it always read,
+    /// and `mount` is the one thing a writer can set.
+    var bench: Workbench? { mount.bench }
 
     /// The unanswered mount question, if there is one (#85). See `BenchMountPolicy` for when
     /// it is asked and which bench it is about.
-    @Published private(set) var restoreOffer: BenchRestoreOffer?
+    var restoreOffer: BenchRestoreOffer? { mount.restoreOffer }
 
     /// A bench a *fresh* declined, kept so that one wrong click cannot destroy a layout (#85).
     /// Read back into `WorkspaceContext.shelvedBench` by `WorkspaceModel.saveContext`, and
@@ -154,8 +160,7 @@ final class WorkbenchModel: ObservableObject {
     ) {
         workspacePath = path
         shelvedBench = shelved
-        restoreOffer = nil
-        mount(path, restoring: restorable)
+        build(path, restoring: restorable)
     }
 
     /// The operator's own mount: the same activation, except that a bench worth asking about
@@ -183,16 +188,13 @@ final class WorkbenchModel: ObservableObject {
             // Deliberately *before* `TerminalManager.activate`: that call spawns a shell for a
             // workspace with nothing to restore, and a question that has already spawned the
             // thing it is asking about is not a question.
-            restoreOffer = offer
-            bench = nil
+            mount = .awaitingRestore(offer)
             resumeOffers = [:]
             reconcileVisibility()
         case let .restore(saved):
-            restoreOffer = nil
-            mount(path, restoring: saved)
+            build(path, restoring: saved)
         case .fresh:
-            restoreOffer = nil
-            mount(path, restoring: nil)
+            build(path, restoring: nil)
         }
     }
 
@@ -205,7 +207,6 @@ final class WorkbenchModel: ObservableObject {
     func answer(_ choice: BenchRestoreChoice) {
         guard let path = workspacePath, let offer = restoreOffer else { return }
         answered.insert(path)
-        restoreOffer = nil
         switch choice {
         case .restore:
             // **Only the bench that was just opened stops being shelved.** `BenchMountPolicy`
@@ -214,25 +215,51 @@ final class WorkbenchModel: ObservableObject {
             // it then would be the destruction the shelf exists to prevent, reached through the
             // other button.
             if shelvedBench == offer.bench { shelvedBench = nil }
-            mount(path, restoring: offer.bench)
+            build(path, restoring: offer.bench)
         case .fresh:
             shelvedBench = offer.bench
-            mount(path, restoring: nil)
+            build(path, restoring: nil)
         }
+    }
+
+    /// Resolve an open mount question by restoring, on a request from outside (#85 × #54).
+    ///
+    /// **This is the one place helm answers the operator's own question for them, and it is
+    /// argued rather than incidental.** It used to happen as a side effect: a spawn re-activated
+    /// whenever `bench == nil`, and #85 gave that condition a second meaning. So the operator
+    /// could be looking at *"Restore 5 panes?"* and have it answered from a file on disk, with
+    /// no named code path saying so and no test measuring it.
+    ///
+    /// It still resolves rather than refusing, and that is the trade #179 already ruled on:
+    /// *a question nobody will be there to answer must be answered in advance, and answered so
+    /// the agent can work.* A spawn that blocked until a human clicked would be dead exactly
+    /// when the spool is worth having — screen locked, headless, over ssh. **Restore rather
+    /// than fresh** is the half that keeps it from being destructive: it is one of the two
+    /// answers the operator was going to give, it loses nothing, and #54 already accepts that
+    /// a spawn switches their view.
+    ///
+    /// What it does not do is go back through `WorkspaceModel.open`/`select` — the workspace is
+    /// already the mounted one, and re-selecting it would be a second, wider seizure for no gain.
+    func mountWithoutAsking() {
+        guard let path = workspacePath, let offer = restoreOffer else { return }
+        build(path, restoring: offer.bench)
     }
 
     /// Build the bench and everything that follows from it. The body `activate` used to be,
     /// plus the resume offers a restored bench brings with it.
-    private func mount(_ path: WorkspacePath, restoring restorable: Workbench?) {
+    private func build(_ path: WorkspacePath, restoring restorable: Workbench?) {
         answered.insert(path)
         terminals.activate(workspacePath: path, restoring: restorable?.terminalPaneIDs ?? [])
         // The manager is the authority on which terminals exist — it may have just made a
         // fresh shell for a workspace with nothing persisted, and that shell's id is not
         // in any restored bench.
         let live = terminals.sessions(for: path).map(\.id)
-        let mounted = restorable ?? Self.defaultBench(for: live)
-        bench = mounted
-        resumeOffers = offers(in: mounted)
+        // `defaultBench` is nil only when the manager opened nothing, which it does not do for
+        // a real workspace — so this is `.empty` rather than a bench with no panes, which
+        // `Workbench`'s first invariant forbids anyone to construct.
+        let built = restorable ?? Self.defaultBench(for: live)
+        mount = built.map(MountState.mounted) ?? .empty
+        resumeOffers = offers(in: built)
         reconcileVisibility()
     }
 
@@ -261,8 +288,7 @@ final class WorkbenchModel: ObservableObject {
 
     func deactivate() {
         workspacePath = nil
-        bench = nil
-        restoreOffer = nil
+        mount = .empty
         shelvedBench = nil
         resumeOffers = [:]
         canvases.removeAll()
@@ -383,8 +409,10 @@ final class WorkbenchModel: ObservableObject {
     /// reimplement resume, and it does not touch focus: the line goes to the surface helm
     /// created for that pane, so it cannot land in whatever pane holds the keyboard (#96).
     ///
-    /// The record stays on the pane. It is still true — that agent is what is running there —
-    /// and the next tick of `observeAgents` will confirm it and retire the offer.
+    /// The offer is retired here rather than left for `observeAgents` to notice: the operator
+    /// clicked, so the question is answered whether or not the agent turns up. The **record**
+    /// stays on the pane, because it is still true — that agent is what is running there — and
+    /// the next tick confirms it without writing anything.
     func resume(_ pane: Pane.ID) {
         guard let offer = resumeOffers[pane], offer.canResume,
             let line = AgentResume.line(resuming: offer.agent)
@@ -698,13 +726,13 @@ final class WorkbenchModel: ObservableObject {
     func resizeColumn(_ column: Column.ID, to fraction: Double, against neighbour: Column.ID) {
         guard var bench else { return }
         bench.resizeColumn(column, to: fraction, against: neighbour)
-        self.bench = bench
+        mount = .mounted(bench)
     }
 
     func resizeSlot(_ slot: Slot.ID, to fraction: Double, against neighbour: Slot.ID) {
         guard var bench else { return }
         bench.resizeSlot(slot, to: fraction, against: neighbour)
-        self.bench = bench
+        mount = .mounted(bench)
     }
 
     func moveFocus(_ direction: Workbench.Direction) {
@@ -766,7 +794,7 @@ final class WorkbenchModel: ObservableObject {
 
     /// One assignment, then everything the change implies.
     private func commit(_ updated: Workbench) {
-        bench = updated
+        mount = .mounted(updated)
         reconcileVisibility()
     }
 
