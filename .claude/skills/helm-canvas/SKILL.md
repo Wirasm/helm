@@ -47,8 +47,13 @@ there is none.
 It works the same from a shell the operator typed into, from a `Makefile`, or from a script — that
 path was never broken, and the script does not change it.
 
-**An OSC 8 hyperlink is not a second way in.** A ⌘-click on one does not reach helm from inside a
-TUI; your own terminal UI captures the mouse first (helm #124).
+**An OSC 8 hyperlink is not a second way in, and inside Claude Code there is no hyperlink at
+all.** Measured on a live agent (helm #124): a `printf` emitting a real OSC 8 sequence reaches the
+grid as plain styled text, because the TUI re-renders everything it prints. Even where a link does
+survive, Claude Code's TUI captures the mouse (`?1000h ?1002h ?1003h`) and eats the ⌘-click before
+helm sees it. `pi` and `codex` set no mouse tracking, so a link printed in one of *their* panes is
+clickable — but do not build on that either: `push.sh` needs no click, no mouse and nobody at the
+pane.
 
 ## The two renderers
 

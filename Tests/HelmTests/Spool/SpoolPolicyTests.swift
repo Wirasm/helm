@@ -221,17 +221,88 @@ final class SpoolPolicyTests: XCTestCase {
 
     // MARK: - The launch line
 
-    func testThePromptIsReadFromAFileRatherThanTypedOntoTheCommandLine() {
+    func testTheLaunchLineHandsOverAPathRatherThanThePromptItself() {
         let accepted = AcceptedSpawnRequest(
             id: "r", cwd: "/tmp", command: "claude",
             args: ["--dangerously-skip-permissions"], prompt: "/review the diff")
         let line = SpoolLaunchLine.compose(accepted, promptPath: "/tmp/spool/prompts/r.txt")
         XCTAssertEqual(
             line,
-            "'claude' '--dangerously-skip-permissions' \"$(cat '/tmp/spool/prompts/r.txt')\"")
+            "'claude' '--dangerously-skip-permissions' "
+                + "'\(SpoolLaunchLine.promptPointer(to: "/tmp/spool/prompts/r.txt"))'")
         // A prompt beginning with `/`, or holding quotes or newlines, never reaches the shell's
         // word splitting — which is what makes all three ordinary rather than three hazards.
         XCTAssertFalse(line.contains("/review the diff"))
+    }
+
+    func testTheLaunchLineNeverAsksTheShellToExpandThePrompt() {
+        // `"$(cat …)"` is a command substitution, and the shell resolves it BEFORE exec — so the
+        // fully expanded prompt became an argv element of the agent (#93). The old test asserted
+        // on the *line* and passed, because the defect is in what the shell makes of the line.
+        let accepted = AcceptedSpawnRequest(
+            id: "r", cwd: "/tmp", command: "claude", args: [], prompt: "secret")
+        let line = SpoolLaunchLine.compose(accepted, promptPath: "/tmp/spool/prompts/r.txt")
+        XCTAssertFalse(
+            line.contains("$("),
+            "no command substitution may survive here — the shell expands it into argv")
+        XCTAssertFalse(line.contains("`"), "backticks are a command substitution too")
+    }
+
+    func testTheAgentIsPointedAtTheFileInWordsItCanActOn() {
+        let pointer = SpoolLaunchLine.promptPointer(to: "/tmp/spool/prompts/r.txt")
+        XCTAssertTrue(pointer.contains("/tmp/spool/prompts/r.txt"))
+        // Delivery is now the agent's own first act, so the sentence has to say "read it and do
+        // it" rather than leaving the file as background reading.
+        XCTAssertTrue(pointer.lowercased().contains("read it now"))
+        // A bystander that greps the process table is told the line is not theirs, which is the
+        // second half of #93: two agents on one machine is prompt injection with no attacker.
+        XCTAssertTrue(pointer.contains("not addressed to you"))
+        // It goes through `quoted`, and an apostrophe there would be escaped rather than broken —
+        // but the typed line is read by humans in refusals, so keep it free of shell metacharacters.
+        XCTAssertFalse(pointer.contains("'"))
+    }
+
+    /// **The measurement the string assertions above cannot make.** The defect is not in the text
+    /// helm composes, it is in what a *shell* does with that text, so this runs one: a stand-in
+    /// program that prints its own argv, launched exactly the way helm launches an agent.
+    ///
+    /// Red against the `"$(cat …)"` line — the prompt comes back as argv[1].
+    func testAShellRunningTheLaunchLineNeverPutsThePromptInTheAgentsArgv() throws {
+        let secret = "PROMPT-SECRET-\(UUID().uuidString) do the thing"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("launch-line-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let promptPath = directory.appendingPathComponent("prompt.txt")
+        try secret.write(to: promptPath, atomically: true, encoding: .utf8)
+        let agent = directory.appendingPathComponent("argv-printer")
+        try "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"
+            .write(to: agent, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: agent.path)
+
+        let accepted = AcceptedSpawnRequest(
+            id: "r", cwd: directory.path, command: agent.path, args: [], prompt: secret)
+        let line = SpoolLaunchLine.compose(accepted, promptPath: promptPath.path)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", line]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let argv = String(decoding: data, as: UTF8.self)
+            .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        XCTAssertFalse(
+            argv.contains(where: { $0.contains(secret) }),
+            "the agent's argv carried the prompt, which is what `ps` reads (#93): \(argv)")
+        XCTAssertTrue(
+            argv.contains(where: { $0.contains(promptPath.path) }),
+            "argv must carry the path instead, or the agent has nothing to read: \(argv)")
     }
 
     func testNoPromptMeansNoTrailingArgument() {

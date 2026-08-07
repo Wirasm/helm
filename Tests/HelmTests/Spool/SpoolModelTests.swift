@@ -218,10 +218,12 @@ final class SpoolModelTests: XCTestCase {
         XCTAssertEqual(ready?.terminalId?.uuidString, spawner.terminal.uuidString)
 
         // The line went to *this* surface — not through the keyboard, not at whatever pane
-        // held focus. And the prompt is read from a file, so it never touches word splitting.
+        // held focus. And what it carries is the staged file's PATH, so the prompt touches
+        // neither word splitting nor the agent's argv (#93).
         let line = try XCTUnwrap(spawner.sent.first?.line)
         XCTAssertTrue(line.hasPrefix("'claude'"))
-        XCTAssertTrue(line.contains("\"$(cat '"))
+        XCTAssertTrue(line.contains(directory.prompts.appendingPathComponent("r.txt").path))
+        XCTAssertFalse(line.contains("$("))
         XCTAssertFalse(line.contains("hello there"))
         XCTAssertEqual(
             try String(

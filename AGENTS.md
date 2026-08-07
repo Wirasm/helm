@@ -384,8 +384,22 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   its row appearing in `~/.claude/sessions/`. It prints the new agent's pid and session id.
   **A nonzero exit is the whole point** — each refusal has its own code and says on stderr
   whether anything was typed. The prompt never goes through the keyboard or the shell's word
-  splitting: it is staged in a 0600 temp file and read back with `"$(cat …)"`, so multi-line
-  prompts, quotes, and a leading `/` are all ordinary.
+  splitting: it is staged in a 0600 temp file and **argv carries that file's path**, so
+  multi-line prompts, quotes, and a leading `/` are all ordinary.
+- **What `ps` shows of a spawned agent, and what it does not (#93).** Both spawn paths hand the
+  agent a **path**; neither hands it the prompt. The line used to be `cls "$(cat <file>)"`, which
+  reads as private and is not — a shell resolves a command substitution *before* exec, so the
+  whole prompt became an element of the agent's own `argv`. Measured live 2026-08-07:
+  `ps -o command= -p <pid>` printed a running agent's entire multi-line prompt, and the disclosure
+  #93 was filed over is an agent running `pgrep` and finding another agent's plan in its own
+  output. **What is bought is that the prompt is out of incidental process-table output. It is not
+  secret**: argv carries the path, the file is `0600` in a `0700` directory, and every agent here
+  runs as the same user, so anything that goes looking can read it — the trust boundary this
+  channel already assumes. **No agent has a flag for this**, measured against `claude --help`,
+  `pi --help` and `codex --help`: all three take the first prompt as an argv element and none
+  reads it from a file interactively, so delivery is the agent's own first act and **the prompt
+  file must outlive the spawn** — `helm-spawn` no longer deletes it, and the spool keeps
+  `prompts/<id>.txt`.
 - **Do NOT click, type or switch tabs in helm while a spawn is in flight.** Every guard
   helm-spawn has is about the *app* — frontmost, key window, a new terminal, an idle shell —
   and none of them can see **which pane inside helm holds the keyboard**, because that is not
