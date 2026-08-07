@@ -1,3 +1,4 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -215,6 +216,53 @@ final class BenchMountTests: XCTestCase {
             WorkspaceContextStore.load(from: defaults)[workspace.path.value])
         XCTAssertEqual(context.workbench?.panes.count, 1, "the fresh shell is what is live now")
         XCTAssertEqual(context.shelvedBench, saved, "and the declined bench is still on disk")
+    }
+
+    // MARK: - What a reader outside the process sees
+
+    /// An open question makes `columns` empty, and without a field saying so a reader could not
+    /// tell that from a workspace helm simply has nothing for.
+    func testAnOpenQuestionIsVisibleInTheSnapshotRatherThanLookingLikeAnEmptyHelm() throws {
+        let workspace = Workspace(path: "/tmp/helm-bench-mount-snapshot")
+        let workspaces = WorkspaceModel(defaults: try isolatedDefaults("bench-mount-snapshot"))
+        workspaces.open(workspace)
+        let terminals = TerminalManager()
+        let model = WorkbenchModel(terminals: terminals, agents: .blind)
+        model.activate(workspacePath: workspace.path, offering: bench(terminals: 3, canvases: 1))
+
+        let snapshot = BenchSnapshot.project(
+            writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,
+            workbench: model, terminals: terminals,
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
+        ) { _ in nil }
+
+        let record = try XCTUnwrap(snapshot.workspaces.first)
+        XCTAssertEqual(record.state, .mounted)
+        XCTAssertTrue(record.columns.isEmpty, "nothing is built while the question is open")
+        XCTAssertEqual(record.awaitingRestore?.paneCount, 4, "and the reader is told why")
+        XCTAssertEqual(record.awaitingRestore?.terminalCount, 3)
+        XCTAssertEqual(record.awaitingRestore?.canvasCount, 1)
+    }
+
+    /// The control for the field: a mounted workspace with a bench must not carry one, or
+    /// every reader learns to ignore it.
+    func testAMountedBenchCarriesNoQuestion() throws {
+        let workspace = Workspace(path: "/tmp/helm-bench-mount-snapshot-answered")
+        let workspaces = WorkspaceModel(
+            defaults: try isolatedDefaults("bench-mount-snapshot-answered"))
+        workspaces.open(workspace)
+        let terminals = TerminalManager()
+        let model = WorkbenchModel(terminals: terminals, agents: .blind)
+        model.activate(workspacePath: workspace.path, restoring: bench(terminals: 2))
+
+        let snapshot = BenchSnapshot.project(
+            writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,
+            workbench: model, terminals: terminals,
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
+        ) { _ in nil }
+
+        XCTAssertNil(snapshot.workspaces.first?.awaitingRestore)
+        XCTAssertEqual(snapshot.workspaces.first?.columns.count, 2)
     }
 
     // MARK: - The mount that never asks

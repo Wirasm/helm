@@ -52,6 +52,10 @@ struct BenchSnapshot: Codable, Equatable {
                     workspace: workspace,
                     state: mounted ? .mounted : .parked,
                     bench: bench,
+                    // Only the mounted workspace can have an open question — the model holds
+                    // one workspace at a time, and a parked one's arrangement is a value
+                    // nothing can be asked about.
+                    offer: mounted ? workbench.restoreOffer : nil,
                     sessions: terminals.sessions(for: workspace.path),
                     addressBook: addressBook,
                     foregroundPid: foregroundPid)
@@ -70,12 +74,23 @@ struct BenchSnapshot: Codable, Equatable {
         let name: String
         let state: State
         let columns: [ColumnRecord]
+        /// Present when this workspace is mounted but **waiting on the operator to say whether
+        /// to restore its saved bench** (#85). Then `columns` is empty — nothing is built while
+        /// the question is open — and without this field a reader could not tell that from a
+        /// workspace helm simply has nothing for.
+        ///
+        /// **An added optional rather than a third `state`.** `State` is a `String` enum agents
+        /// outside the process already decode; a new case would fail their decoder, where an
+        /// unknown key is ignored. The version does not move for the same reason — this is
+        /// additive, and `format`/`version` exist to announce a change a reader must handle.
+        let awaitingRestore: RestoreOfferRecord?
 
         @MainActor
         init(
             workspace: Workspace,
             state: State,
             bench: Workbench?,
+            offer: BenchRestoreOffer? = nil,
             sessions: [TerminalSession],
             addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?
@@ -83,6 +98,7 @@ struct BenchSnapshot: Codable, Equatable {
             path = workspace.path
             name = workspace.name
             self.state = state
+            awaitingRestore = offer.map(RestoreOfferRecord.init)
             guard let bench else {
                 columns = []
                 return
@@ -98,6 +114,27 @@ struct BenchSnapshot: Codable, Equatable {
                     addressBook: addressBook,
                     foregroundPid: foregroundPid)
             }
+        }
+    }
+
+    /// What the operator is being asked, for a reader that is not the operator (#85).
+    ///
+    /// The counts and nothing else. A reader has no way to answer the question — there is no
+    /// spool kind for it, deliberately, because *"a question nobody will be there to answer
+    /// must be answered in advance"* cuts both ways and an agent answering the operator's own
+    /// question about their own bench is the seizure #85 exists to remove. What it can do is
+    /// stop reading an empty `columns` as an empty helm.
+    struct RestoreOfferRecord: Codable, Equatable {
+        let paneCount: Int
+        let terminalCount: Int
+        let canvasCount: Int
+        let agentCount: Int
+
+        init(_ offer: BenchRestoreOffer) {
+            paneCount = offer.paneCount
+            terminalCount = offer.terminalCount
+            canvasCount = offer.canvasCount
+            agentCount = offer.agentCount
         }
     }
 
