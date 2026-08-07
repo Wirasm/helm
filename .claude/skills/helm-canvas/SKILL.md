@@ -160,9 +160,14 @@ yours on it to register a handler or post a report.
 helm injects its own annotation layer into every `.html` artifact, and its listeners capture — so a
 page with a drawing surface, a drag-to-pan map, a game board or anything else the *pointer* means
 something to is in a fight it did not know about. Two things go wrong and both are silent: with a
-mark tool held, helm's ink lands on top of whatever your page drew; and under the **default** tool a
-drag that selects no text posts a dismissal, which closes the operator's notes drawer on every
-gesture.
+**drawing** tool held, helm's ink lands on top of whatever your page drew; and with the **text**
+tool held, a drag that selects no text posts a dismissal, which closes the operator's notes drawer
+on every gesture.
+
+The operator's **default** tool is `read`, which interprets nothing at all — so neither of those
+fires until they pick a tool up. **That is not a substitute for the attribute below.** It is a mode
+they hold, not a property of your page: it lasts until they reach for the text tool over your board,
+which is exactly when they are trying to say something about it.
 
 **Put `data-helm-surface` on the element you own the pointer in, and helm does nothing inside it** —
 no stroke, no ink, no dismissal, and no anchor resolved out of it:

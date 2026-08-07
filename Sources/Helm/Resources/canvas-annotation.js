@@ -2,8 +2,13 @@
   if (!window.webkit || !window.webkit.messageHandlers
       || !window.webkit.messageHandlers.helmCanvas) { return; }
   var bridge = window.webkit.messageHandlers.helmCanvas;
-  if (!window.__helmMarkTool) { window.__helmMarkTool = "select"; }
-  function tool() { return window.__helmMarkTool || "select"; }
+  // `read` is the default, and it is a real tool rather than the absence of one (#302). The
+  // case it replaces was called `select` and did two jobs: reading the page, and treating what
+  // you highlighted as the subject of a comment. So a canvas was never inert — every click was
+  // a candidate mark — and `CanvasMarkTool`'s header has the argument. `text` is the second
+  // job, picked up like the three drawing tools.
+  if (!window.__helmMarkTool) { window.__helmMarkTool = "read"; }
+  function tool() { return window.__helmMarkTool || "read"; }
 
   // EVERY message posted below carries `kind`, and it is the ONLY field that says what the
   // message is (#109/#210). There were three shapes here and no declared kind: a selection was
@@ -368,7 +373,13 @@
 
   document.addEventListener("mousedown", function (e) {
     var t = tool();
-    if (t === "select") { return; }
+    // The two tools the BROWSER's pointer stays with. `read` for the obvious reason, and
+    // `text` because a text mark *is* the browser's own selection — cancelling `mousedown`
+    // here is exactly what would stop the operator making one. The far side is
+    // `CanvasMarkTool.draws`, which is exhaustive so a sixth tool has to state its verdict,
+    // and `CanvasMarkToolTests.testThePageTakesThePointerForExactlyTheToolsThatDraw` drives
+    // every case through this line to hold the two lists together.
+    if (t === "read" || t === "text") { return; }
     // The page's pointer, not helm's (#111). BEFORE `preventDefault` and before a stroke
     // starts, which is the whole of it: a mark tool held over a drawable board used to lay
     // helm's ink over the board's own — quickdraw never cancels `pointerdown`, so cancelling
@@ -401,13 +412,35 @@
   document.addEventListener("mouseup", function (e) {
     var t = tool();
 
-    if (t === "select") {
+    // **Reading, and helm says nothing whatsoever** (#302). Not a quieter mark — no
+    // `selection`, no `cleared`, no comment field, no message of any kind. This is the whole
+    // behaviour change: text still highlights, because the browser does that and helm never
+    // took the pointer at `mousedown` above, and helm simply does not read the result.
+    //
+    // **`cleared` is deliberately not sent here, and that is a decision rather than a
+    // consequence.** It is the canvas's click-elsewhere-to-dismiss (#165), and under `read`
+    // there is nothing to dismiss: no mark can be in flight, because no gesture under this
+    // tool ever posted one. Swift answers a `cleared` by closing the notes drawer as well
+    // (`CanvasModel.pageDidReport`), so sending one anyway would mean a canvas nobody is
+    // marking on still closing the operator's drawer every time they clicked the page —
+    // which is the same complaint as the popup, one surface over. The drawer keeps its own
+    // exits: its button, and Escape.
+    if (t === "read") { return; }
+
+    if (t === "text") {
       // **The page's pointer, so helm has nothing to say about this click** (#111). Without
-      // this, a drag on a drawable board under the DEFAULT tool selects no text, so the branch
+      // this, a drag on a drawable board with this tool held selects no text, so the branch
       // below posts `cleared` — and helm answers a dismissal by taking the operator's selection
       // down and closing the notes drawer. Every stroke closed their notes. Silence is the
       // correct message here: nothing helm can name was marked, and `cleared` does not mean
       // "nothing happened", it means "the operator clicked away from a selection".
+      //
+      // **Still needed, and #302 did not subsume it.** That change moved this branch off the
+      // default, so the board collision is no longer met by an operator who chose nothing —
+      // but the two are different mechanisms and neither implies the other: `read` is a GLOBAL
+      // mode the operator holds, `data-helm-surface` is a PER-ARTIFACT declaration that binds
+      // whatever they are holding. Delete this and a board is broken again the moment anyone
+      // picks up the text tool, which is precisely when they are most likely to.
       if (inPageSurface(e.target)) { return; }
       // The text is the operator's own highlight rather than an element's contents, which is
       // why this branch cannot simply call `resolve` — but the NAME is the same question the

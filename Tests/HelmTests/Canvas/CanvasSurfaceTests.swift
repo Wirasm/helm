@@ -64,15 +64,24 @@ final class CanvasSurfaceTests: XCTestCase {
         XCTAssertTrue(page.drainExceptions().isEmpty)
     }
 
-    /// The default tool — the one nobody chose — says nothing about a click on the board.
+    /// The **text** tool says nothing about a click on the board.
     ///
     /// This is the collision with a live cost. A drag on a board leaves `document.getSelection()`
     /// collapsed, the branch below posted `cleared`, and helm answers a dismissal by taking the
     /// operator's selection down and closing the notes drawer. Every stroke closed their notes.
-    func testTheDefaultToolSaysNothingAboutAClickInsideADeclaredSurface() throws {
+    ///
+    /// **This test held `.select` — the default — and #302 is why it now holds `.text`.** That
+    /// change split `.select` into an inert `.read` and a `.text` tool, and made `.read` the
+    /// default. Left as it was, this method would have gone on passing while measuring nothing:
+    /// under `.read` the page posts nothing *anywhere*, so "the board posted nothing" would be
+    /// satisfied by helm having stopped marking altogether — the control that only proves you
+    /// select less. `.text` is the tool that can still reach `bridge.postMessage` on this path,
+    /// so it is the only one whose silence over a board is evidence the yield is doing anything.
+    /// Its own control, below, is the same gesture on ordinary prose.
+    func testTheTextToolSaysNothingAboutAClickInsideADeclaredSurface() throws {
         let page = try CanvasScriptRuntime()
         page.mountBoard()
-        page.setTool(.select)
+        page.setTool(.text)
 
         let board = CanvasScriptRuntime.boardBox
         page.mouse("mousedown", board.x + 100, board.y + 100)

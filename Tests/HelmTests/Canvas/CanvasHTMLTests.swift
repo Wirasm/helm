@@ -115,7 +115,7 @@ final class CanvasHTMLTests: XCTestCase {
         // It used to wipe unconditionally. That was right when ink was transient and wrong
         // the moment it started outliving the gesture: switching tools with a comment open
         // erased the mark and left the field anchored to nothing.
-        let set = CanvasHTML.setMarkTool(.select)
+        let set = CanvasHTML.setMarkTool(.read)
 
         XCTAssertTrue(set.contains("__helmAbandonMark"))
         XCTAssertFalse(

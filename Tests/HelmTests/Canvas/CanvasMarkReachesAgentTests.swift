@@ -72,6 +72,10 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
     /// A text highlight, which the script posts on **mouseup** rather than on the selection
     /// itself — a highlight the operator is still dragging is not a mark.
     private func highlight(_ page: CanvasScriptRuntime) {
+        // The tool is stated rather than left to the default, and #302 is why: a highlight is
+        // a mark only when `.text` is held. Under `.read` — the default since that change —
+        // the page posts nothing at all, which is the point of it.
+        page.setTool(.text)
         page.select(id: "intro", text: "Why this exists")
         page.mouse("mouseup", 100, 110)
     }
