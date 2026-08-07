@@ -66,6 +66,24 @@
     return node.getAttribute("data-helm-frame") !== null;
   }
 
+  // A region the PAGE owns the pointer in — `data-helm-surface`, declared by the artifact
+  // (#111). Inside one, helm does nothing at all: no `preventDefault`, no stroke, no `cleared`,
+  // and no anchor resolved out of it.
+  //
+  // Spelled out here rather than interpolated, exactly like the handler name, the tool global
+  // and `data-helm-frame` above. `CanvasSurface` in Swift is where the argument lives — why the
+  // page rather than helm writes this one, and why helm's ink is strictly worse on a board than
+  // the board's own — and `CanvasSurfaceTests` is the gate over all three copies of the string,
+  // this one included, because a JavaScript file cannot compile against a Swift constant.
+  //
+  // `closest`, not a hand-rolled walk: `targetsInside` already asks the same kind of question
+  // the same way, and a second spelling of "walk up looking for an attribute" is a second thing
+  // to get wrong. Null-tolerant because `e.target` is null for a gesture over nothing at all,
+  // which is a real mark ("add a node here") and must not throw.
+  function inPageSurface(node) {
+    return !!(node && node.closest && node.closest("[data-helm-surface]"));
+  }
+
   // What the operator marked, and what it can be NAMED by — two questions, and #215 was
   // conflating them into one field. `text` is the marked element's own; `id` may come from
   // an ancestor, because a name can belong to a container and still name what is inside it.
@@ -109,6 +127,14 @@
   function resolve(node) {
     node = elementFor(node);
     if (!node) { return null; }
+    // **The second half of #111's rule, and the half with no visible symptom.** A page that
+    // owns the pointer here owns what is addressable here too: a mounted board is ONE
+    // `<canvas>` with no per-shape DOM nodes, so anything resolved out of it names the
+    // container and quotes its toolbar. The board's own records carry the ids an agent can
+    // find again, and they reach the agent through the state latch rather than through an
+    // anchor. ONE resolver, so every tool yields the same way — a guard added at `targetAt`
+    // alone would leave `targetsInside` reporting the board.
+    if (inPageSurface(node)) { return null; }
     var text = (node.textContent || "").trim().slice(0, 400);
     if (!text) { return null; }
     return { id: nameFor(node), text: text };
@@ -343,6 +369,12 @@
   document.addEventListener("mousedown", function (e) {
     var t = tool();
     if (t === "select") { return; }
+    // The page's pointer, not helm's (#111). BEFORE `preventDefault` and before a stroke
+    // starts, which is the whole of it: a mark tool held over a drawable board used to lay
+    // helm's ink over the board's own — quickdraw never cancels `pointerdown`, so cancelling
+    // the compatibility `mousedown` never stopped it drawing — and helm's copy could name
+    // nothing. Returning here means one gesture makes one mark, the board's.
+    if (inPageSurface(e.target)) { return; }
     // Primary button only. A tool is a STICKY selection, unlike the modifier it
     // replaced — so a right-click for the page's own context menu would otherwise
     // start a stroke, and the menu's tracking loop eats the matching mouseup.
@@ -370,6 +402,13 @@
     var t = tool();
 
     if (t === "select") {
+      // **The page's pointer, so helm has nothing to say about this click** (#111). Without
+      // this, a drag on a drawable board under the DEFAULT tool selects no text, so the branch
+      // below posts `cleared` — and helm answers a dismissal by taking the operator's selection
+      // down and closing the notes drawer. Every stroke closed their notes. Silence is the
+      // correct message here: nothing helm can name was marked, and `cleared` does not mean
+      // "nothing happened", it means "the operator clicked away from a selection".
+      if (inPageSurface(e.target)) { return; }
       // The text is the operator's own highlight rather than an element's contents, which is
       // why this branch cannot simply call `resolve` — but the NAME is the same question the
       // other three tools ask, so it goes through the same `nameFor` (#215).
