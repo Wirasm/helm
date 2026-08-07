@@ -27,6 +27,10 @@ final class WorkbenchSpoolCloser: SpoolClosing {
         case .terminal: holdsTerminal = true
         case .canvas: holdsTerminal = false
         }
+        // Still reported, and no longer a refusal on its own (#284): it is what tells
+        // `SpoolPaneState.isBusy` whether the live-process rule has anything to test. A canvas
+        // pane has no `TerminalSession`, so `foreground` below is nil for one either way — the
+        // flag is what makes that a stated rule rather than a coincidence of this lookup.
         let foreground = terminals.sessions.first { $0.id == id }?.hostView.foregroundPid
         return SpoolPaneState(
             holdsTerminal: holdsTerminal,

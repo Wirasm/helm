@@ -318,22 +318,38 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   `isVisible` says it is on screen and `isFocused` says it has the keyboard. Parked workspaces
   preserve arrangement and terminal identity but cannot claim visibility or focus. Read on
   demand—do not watch the file inode across replacements.
-- **To close a pane again, `swift tools/helm-close.swift <terminal-uuid> [--force]`.** The
+- **To close a pane again, `swift tools/helm-close.swift <pane-uuid> [--force]`.** The
   inverse of `helm-spool`, needing what it needs — nothing: a file appears, helm acts, helm
-  writes a file back (#176). The uuid is a spawn result's `terminalId`, or the `HELM_PANE` of
-  the pane you are running in; those are the two ways to know one, and **knowing it is the
-  scoping**. helm deliberately does *not* check that it spawned the pane for you: that would
-  buy no safety (anything that can write into the spool is already inside the trust boundary),
-  would not survive a restart (the pane is persisted, an in-process memory of spawning it is
-  not), and would forbid the two legitimate cases — an agent closing the pane it is itself in,
-  and a coordinator tidying up a teammate. `CloseRequest` argues it in full.
-  - **Two refusals, and they are not the same refusal.** A pane with a **live process** refuses
-    unless you pass `--force`, because closing it kills whatever was running and loses what it
-    had not written down — "is anything running" is `getsid(foreground) == foreground`, the
-    pty's session leader being its own foreground meaning an idle prompt. The pane the
-    **operator is working in** refuses *and `--force` does not override it*: force is a caller
-    asserting about work it owns, and where the operator's eyes are is not something a file on
-    disk gets a say in. Both are `refused` results with a reason, exit 3.
+  writes a file back (#176). **It names a pane, and a pane holds a terminal or a canvas** — one
+  uuid namespace (`Pane.id`), so the request carries no discriminator and a canvas close is
+  byte-identical to a terminal one (#284). Three ways to know a uuid, and **knowing it is the
+  scoping**: a spawn or command result's `terminalId`, the `HELM_PANE` of the pane you are
+  running in, or — for an artifact you pushed, since `push.sh` hands back no id — the `id` of the
+  `"kind": "canvas"` record in `~/.helm/bench/snapshot.json`. helm deliberately does *not* check
+  that it spawned the pane for you: that would buy no safety (anything that can write into the
+  spool is already inside the trust boundary), would not survive a restart (the pane is
+  persisted, an in-process memory of spawning it is not), and would forbid the two legitimate
+  cases — an agent closing the pane it is itself in, and a coordinator tidying up a teammate.
+  `CloseRequest` argues it in full.
+  - **Two refusals, they are not the same refusal, and only one of them can fire on a canvas.**
+    A pane with a **live process** refuses unless you pass `--force`, because closing it kills
+    whatever was running and loses what it had not written down — "is anything running" is
+    `getppid(foreground) == getsid(foreground)`, the foreground being a *child* of the pty's
+    session leader meaning an idle prompt, because libghostty spawns one `/usr/bin/login` per
+    pane and that is what leads the session. (`getsid(fg) == fg` is the rule that looks right and
+    is not: it calls every idle pane busy, and `SpoolClosePolicyTests` pins that it stays gone.)
+    A **canvas** has no pty at all, so it is never busy and never needs `--force`. The pane the
+    **operator is working in** refuses *and `--force` does not override it*, whichever the pane
+    holds: force is a caller asserting about work it owns, and where the operator's eyes are is
+    not something a file on disk gets a say in. Both are `refused` results with a reason, exit 3.
+  - **Closing a canvas destroys nothing, which is why this needed no ruling (#284).** A canvas
+    pane is an address, not a document: the artifact is a file on disk helm only reads, and the
+    operator's annotations are a `.notes.md` sidecar **beside** it (`CanvasNotes.sidecarURL`).
+    Both outlive the tab, a re-push re-opens the same source, and a `closed` result for one
+    carries **no `pid`** — the honest answer to "what did I just destroy". Before this,
+    `push.sh` was add-only and a re-pushed artifact left orphan tabs only the operator could ⌘W.
+    Bringing a canvas *forward* is a separate, unanswered question — it is a focus question, and
+    the focus rule below still refuses it.
   - **It stops at the pane — no worktree, no branch, no git at all.** #141's rail already owns
     that, and its safety *is* an operator confirming a modal against eligibility rules; a spool
     request has nobody at the pane by construction, so reaching that rail from here could only

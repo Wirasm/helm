@@ -34,6 +34,11 @@ import XCTest
 ///    strings once they cross into `Handle`/`TerminalID`" — the property those two newtypes
 ///    exist to hold, and the one an exit-code assertion cannot see even accidentally, since
 ///    neither script's exit code depends on either field's shape.
+///    `testHelmCloseOnACanvasSaysThePaneIsGoneWithoutInventingAPidThatDied` (#284) is a third
+///    angle on the same direction: an **absent optional**. `pid` was present on every `closed`
+///    result until a canvas pane could be closed, and the script reads it by hand — so the
+///    failure to guard against is a wrong sentence on stderr at exit 0, which neither the
+///    status sweep nor a bare-string assertion can see.
 /// 3. **The directory-resolution rules** (`SpoolDirectory.resolve`, hand-duplicated as
 ///    `spoolRoot(_:)` in every script). The `HELM_SPOOL_DIR` override branch is exercised by
 ///    every test above, since that is how they all redirect a script at a temp directory. The
@@ -142,6 +147,11 @@ final class SpoolWireConformanceTests: XCTestCase {
         XCTAssertEqual(spawn.prompt, "hello from the conformance test")
     }
 
+    /// **The `terminal` key is the assertion, and #284 deliberately left it alone.** Widening a
+    /// close to reach a canvas pane changed no field here: `Pane.id` is one uuid namespace, so a
+    /// canvas close is byte-identical to a terminal close (`CloseRequest`'s header argues why it
+    /// grew no discriminator). This test is therefore also the control for that claim — a script
+    /// that had started writing `"pane"` instead would fail on the decode, not on the value.
     func testHelmCloseWritesWhatCloseRequestDecodes() throws {
         let id = "conformance-close"
         let terminal = UUID()
@@ -514,6 +524,43 @@ final class SpoolWireConformanceTests: XCTestCase {
             json["terminalId"] is String,
             "helm-close.swift: terminalId must be a bare string; got "
                 + "\(String(describing: json["terminalId"]))")
+    }
+
+    /// A `closed` result with **no `pid`** — the shape #284 made reachable, and the one shape of
+    /// a successful close the script had never been handed.
+    ///
+    /// Every `closed` result before this carried a pid, because every closeable pane had a pty.
+    /// A canvas pane has none, so `SpoolModel` writes `pid: pane?.foreground` as absent
+    /// (`SpoolResult.Status.closed`'s own header), and `helm-close.swift:164` reads that field by
+    /// hand: `(json["pid"] as? Int).map { " — pid \($0) went with it" } ?? ""`. This is the
+    /// result direction of the wire, on a branch of the script that no test reached — and the
+    /// failure it guards is not an exit code but a **lie in the success message**, which is
+    /// exactly what an exit-code assertion cannot see. Both halves are asserted: the close still
+    /// succeeds, and it does not claim a process went with it.
+    func testHelmCloseOnACanvasSaysThePaneIsGoneWithoutInventingAPidThatDied() throws {
+        let id = "wire-shape-closed-no-pid"
+        let pane = UUID()
+        SpoolDirectory(root: spoolDir).write(
+            SpoolResult(id: id, status: .closed, terminalId: TerminalID(pane)))
+
+        let (exitCode, stdout, stderr) = try runAndCaptureBoth(
+            "helm-close.swift", [pane.uuidString, "--id", id])
+        XCTAssertEqual(exitCode, 0, "a closed result with no pid must still succeed: \(stderr)")
+        XCTAssertTrue(
+            stderr.contains("pane \(pane.uuidString) is gone"),
+            "helm-close.swift must name the pane it closed; got \"\(stderr)\"")
+        XCTAssertFalse(
+            stderr.contains("went with it"),
+            "helm-close.swift must not report a process dying when the result names none — a "
+                + "canvas close destroys nothing; got \"\(stderr)\"")
+
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any],
+            "helm-close.swift's stdout was not a JSON object: \(stdout)")
+        XCTAssertNil(
+            json["pid"],
+            "…and the blob it prints verbatim carries no pid either, which is what the agent "
+                + "reading it acts on")
     }
 
     /// The same property for a `ran` result (#269), and it matters more here than in the two

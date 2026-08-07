@@ -442,6 +442,38 @@ final class SpoolModelTests: XCTestCase {
         XCTAssertEqual(spawner.opened, [], "a close starts nothing")
     }
 
+    func testACanvasPaneIsClosedAndTheResultNamesNoPidBecauseNothingDied() async throws {
+        // #284: the request that used to be refused outright, end to end. `pid` absent is the
+        // honest answer to "what did I just destroy" — the artifact file and its `.notes.md`
+        // sidecar are exactly where they were.
+        closer.state = SpoolPaneState(
+            holdsTerminal: false, holdsKeyboard: false, foreground: nil,
+            foregroundParent: nil, sessionLeader: nil)
+        let model = self.model()
+        try submit(close(), named: "bye.json")
+        model.start()
+
+        let result = await awaitResult(id: "bye", is: .closed)
+        XCTAssertEqual(closer.closed, [closer.terminal])
+        XCTAssertEqual(result?.terminalId?.uuidString, closer.terminal.uuidString)
+        XCTAssertNil(result?.pid, "a canvas pane has no process, so there is none to report")
+    }
+
+    func testTheOperatorsOwnCanvasIsRefusedEvenWithForce() async throws {
+        // The control for the change above: #284 removed one refusal, not the policy. A canvas
+        // the operator is looking at is still theirs, and `force` still does not reach it.
+        closer.state = SpoolPaneState(
+            holdsTerminal: false, holdsKeyboard: true, foreground: nil,
+            foregroundParent: nil, sessionLeader: nil)
+        let model = self.model()
+        try submit(close(force: true), named: "bye.json")
+        model.start()
+
+        let result = await awaitResult(id: "bye", is: .refused)
+        XCTAssertEqual(result?.reason?.contains("operator") == true, true)
+        XCTAssertEqual(closer.closed, [], "the canvas is still on the bench")
+    }
+
     func testAPaneTheOperatorIsInIsRefusedAndStaysOnTheBench() async throws {
         // The acceptance criterion in as many words: *a pane the operator is focused on is
         // never closed out from under them*. And it is a REFUSAL, with a reason — a teardown
