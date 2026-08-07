@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import SwiftUI
@@ -64,6 +65,20 @@ final class WorkbenchModel: ObservableObject {
     /// *state* is here rather than in a view because the command that opens it is.
     @Published var isBrowserOpen = false
 
+    /// Why ⌘⇧N did not produce a note (#289) — no workspace open, or a `~/.prp` helm could not
+    /// write to.
+    ///
+    /// **Here rather than on a canvas, because the failure is that there is no canvas.** Every
+    /// other thing helm says about a note is a strip inside its own pane; this one happens before
+    /// a pane exists, so it has to be said on the bench. A keystroke that silently does nothing is
+    /// the shape of failure `AGENTS.md` records paying for repeatedly, and it is what this exists
+    /// to stop being.
+    ///
+    /// Cleared by the next attempt that works, and by a timer — it is a receipt about a moment,
+    /// not something to dismiss.
+    @Published private(set) var noteFailure: String?
+    private var noteFailureTask: Task<Void, Never>?
+
     private(set) var workspacePath: WorkspacePath?
 
     private let terminals: TerminalManager
@@ -113,6 +128,17 @@ final class WorkbenchModel: ObservableObject {
     /// the spool, and the default is the same paste-then-Return the spool sends.
     private let launcher: TerminalLaunching
 
+    /// Where the project stores are — `~/.prp` in production (#289).
+    ///
+    /// **One value, handed to both halves of the note seam.** `newNote` decides where a note is
+    /// written; `CanvasModel.note` decides whether an open file *is* one. Two roots that
+    /// disagreed would create a note the pane then refused to open for writing, with nothing
+    /// anywhere saying why — so the model that makes the one hands the same value to the other.
+    /// Injected for `notes`' and `agents`' reason exactly: every rule below is then reachable
+    /// from `swift test` against a temporary directory, with nothing written near the operator's
+    /// own `~/.prp`.
+    private let artifactRoot: URL
+
     /// Workspaces whose mount question has already been answered in this process. A switch
     /// away and back re-mounts, and re-asking then would make the question chrome rather than
     /// a decision — `BenchMountPolicy.mount` takes this as `answered`.
@@ -130,12 +156,14 @@ final class WorkbenchModel: ObservableObject {
         terminals: TerminalManager,
         notes: CanvasNoteCourier = CanvasNoteCourier(),
         agents: AgentObserver = .live(),
-        launcher: TerminalLaunching? = nil
+        launcher: TerminalLaunching? = nil,
+        artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot
     ) {
         self.terminals = terminals
         self.notes = notes
         self.agents = agents
         self.launcher = launcher ?? TerminalLineLauncher(terminals: terminals)
+        self.artifactRoot = artifactRoot
         subscribe()
     }
 
@@ -313,6 +341,12 @@ final class WorkbenchModel: ObservableObject {
         mount = .empty
         shelvedBench = nil
         resumeOffers = [:]
+        // **Flushed before they are dropped** (#289). Unlike `closeWorkspace`, this does not call
+        // `close()` on each model — that is deliberate and predates notes — so nothing else here
+        // would give a note being typed in its last chance to be written. A pending save holds
+        // its model weakly, so dropping the cache mid-debounce is the one path that could lose
+        // the keystrokes since the last write.
+        flushNotes()
         canvases.removeAll()
         // Keyed by canvas pane id, so it goes exactly when the cache does — a leftover entry
         // would name a pane nothing resolves any more.
@@ -467,7 +501,10 @@ final class WorkbenchModel: ObservableObject {
         let model = CanvasModel(
             source: {
                 if case let .canvas(source) = pane.content { source } else { nil }
-            }())
+            }(),
+            // The same root `newNote` writes into, so "is this a note?" has one answer per model
+            // rather than one per call site.
+            artifactRoot: artifactRoot)
         // The other direction, and the half that was missing: a canvas that goes somewhere
         // has to take its pane with it, or the bench persists where the pane *started*
         // (#89). Wired here because this is the only place a `CanvasModel` is made — and
@@ -584,6 +621,63 @@ final class WorkbenchModel: ObservableObject {
             at: bench.placementForSpawnedTerminal())
         commit(bench)
         return session
+    }
+
+    /// ⌘⇧N — start a note and put the operator in it (#289).
+    ///
+    /// **`open` rather than `offer`, and the cursor placed rather than left where it was.** Every
+    /// other route to a canvas pane weighs *appear, don't seize* (#125) because nobody asked for
+    /// what is arriving. This one is the operator pressing a key and expecting to type, so seizing
+    /// is the correct behaviour and the whole feature — which is also, exactly, why
+    /// `SpoolCommandPolicy` refuses to let an agent send it.
+    ///
+    /// **Three decisions live elsewhere and are only called from here**, which is what keeps this
+    /// method a wiring: where the note goes and what it is called are `OperatorNote.create`'s,
+    /// where the pane lands is `Workbench.placement(forOpening:)`'s, and whether the file may be
+    /// written into at all is `CanvasModel.write()`'s.
+    ///
+    /// - Parameter date: what day the filename says. Injected so the collision rule is testable
+    ///   without waiting for midnight. *Where* the note goes is `artifactRoot`'s, which is one
+    ///   value per model rather than a per-call argument — see its own note above.
+    @discardableResult
+    func newNote(on date: Date = Date()) -> Pane.ID? {
+        // A bench is what a pane goes into, and a workspace is what names the store. Both are nil
+        // together in practice; the message names the one the operator can act on.
+        guard let path = workspacePath, bench != nil else {
+            announceNoteFailure(OperatorNote.Failure.noWorkspace.sentence)
+            return nil
+        }
+        do {
+            let note = try OperatorNote.create(
+                inWorkspaceAt: path.value, under: artifactRoot, on: date)
+            guard let id = open(.file(note.url)), let pane = bench?.pane(id) else { return nil }
+            noteFailure = nil
+            noteFailureTask?.cancel()
+            // Straight into the writing face: the operator asked for somewhere to write, and a
+            // rendered view of an empty file is a blank pane with a button on it.
+            canvas(for: pane).write()
+            return id
+        } catch let failure as OperatorNote.Failure {
+            announceNoteFailure(failure.sentence)
+        } catch {
+            announceNoteFailure(
+                OperatorNote.Failure.couldNotWrite(
+                    error.localizedDescription
+                ).sentence)
+        }
+        return nil
+    }
+
+    /// Say why, and take it away again. The timer is `CanvasModel.announce`'s, for its reason:
+    /// the message is a receipt about something that just happened, not a task.
+    private func announceNoteFailure(_ sentence: String) {
+        noteFailure = sentence
+        noteFailureTask?.cancel()
+        noteFailureTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            self?.noteFailure = nil
+        }
     }
 
     /// Where an offered canvas lands is `Workbench.placement(forOpening:)`'s decision, not
@@ -807,6 +901,15 @@ final class WorkbenchModel: ObservableObject {
         return reading.count == 1 ? reading[0].id : nil
     }
 
+    /// Write every open note now (#289).
+    ///
+    /// **Named rather than written twice, because the two callers are unrelated**: a workspace
+    /// teardown that is about to drop these models, and the app being quit. Both are moments
+    /// after which a debounced save can no longer happen, and neither knows about the other.
+    func flushNotes() {
+        for cached in canvases.values { cached.model.saveNote() }
+    }
+
     func closeFocusedPane() {
         guard let pane = bench?.focusedPane else { return }
         close(pane.id)
@@ -857,11 +960,33 @@ final class WorkbenchModel: ObservableObject {
                 }
             }
             .store(in: &commands)
+
+        // **⌘Q is the ordinary way to leave, and it reached no flush point at all** (#289).
+        // Every other exit a note has — Read, closing the pane, pointing the canvas elsewhere,
+        // closing the last workspace — is one of helm's own code paths. Quitting is not: the
+        // process goes away with the debounce still pending, and a note typed in one burst with
+        // no 600ms gap in it has never been written even once, so what is lost is the *whole
+        // note* rather than a bounded tail. That is not a corner — "jot it down, ⌘Q" is the
+        // shape of the feature.
+        //
+        // **Synchronous, with no `receive(on:)`**, which is the opposite of the subscription
+        // above and is the point: the run loop is about to stop, so a hop to the main queue is
+        // a save that never runs. AppKit posts this on the main thread already.
+        //
+        // What it still does not cover is `kill -9`, and nothing can. That is the honest
+        // remainder of `CanvasModel.saveDebounce`'s cost.
+        NotificationCenter.default
+            .publisher(for: NSApplication.willTerminateNotification)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.flushNotes() }
+            }
+            .store(in: &commands)
     }
 
     private func handle(_ command: HelmCommand) {
         switch command {
         case .newTerminal: newTerminal()
+        case .newNote: newNote()
         case let .selectTerminal(index): selectTab(index)
         case .openArtifact: isBrowserOpen.toggle()
         case let .adjustFontSize(step): focusedTerminal?.adjustFontSize(step)

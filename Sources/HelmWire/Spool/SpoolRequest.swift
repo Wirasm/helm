@@ -268,7 +268,7 @@ package struct CloseRequest: Codable, Equatable {
 
 /// Drive the bench: one of the commands helm can already carry out (#269).
 ///
-/// **Not a new capability — a route to one that exists.** `HelmCommand` has nineteen typed cases
+/// **Not a new capability — a route to one that exists.** `HelmCommand` has twenty typed cases
 /// that the keymap and the menu have been able to fire since #219. Nothing outside the process
 /// could fire any of them: the spool knew `spawn`, `capture` and `close`, so an agent could
 /// create a pane and destroy one and photograph the window, and could do nothing to the bench in
@@ -729,6 +729,34 @@ package enum SpoolCommandPolicy {
                     + "(Workbench.insert). An agent putting an artifact on the bench uses "
                     + "push.sh, which offers it instead — it appears as a tab without taking "
                     + "the keyboard (#125)")
+
+        /// **Refused, and it is the clearest case on this list rather than a borderline one**
+        /// (#289). A note is the operator saying *give me somewhere to write* — helm creates the
+        /// file, opens it through `Workbench.insert`, selects the pane, focuses its slot and puts
+        /// the cursor in the editor. Every one of those is the focus rule, and the last is a
+        /// keystroke destination: an agent sending this while the operator types would move where
+        /// their next character lands. There is no non-seizing twin to route to either, because a
+        /// note nobody is sitting in front of is not a note — it is a file, and writing a file is
+        /// something an agent already does without asking helm.
+        ///
+        /// **The route to what an agent probably wanted is the store itself.** An artifact goes
+        /// into `~/.prp/<key>/` directly and reaches the bench through `push.sh`, which offers it
+        /// rather than seizing. `notes/` inside that store is the operator's; `OperatorNote`'s
+        /// header and the `helm-canvas` skill both say to read what is in there when he names it
+        /// and never to write into it.
+        ///
+        /// It also carries no address, in the sense every other refusal here means: it names no
+        /// store, so from a request file it would create a note in whichever workspace the
+        /// operator happens to have open.
+        case .newNote:
+            return .refused(
+                "newNote is the operator asking for somewhere to write: helm creates the file, "
+                    + "selects the new pane and focuses its slot (Workbench.insert) with the "
+                    + "cursor in the editor, so it takes the keyboard by construction. An agent "
+                    + "writing an artifact writes it into ~/.prp/<key>/ itself and puts it on "
+                    + "the bench with push.sh, which offers instead of seizing (#125). The "
+                    + "notes/ directory in that store is the operator's — read what is in it "
+                    + "when he names a path, never write into it")
 
         // MARK: Refused — it acts on whatever pane the operator is in.
 

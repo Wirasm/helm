@@ -78,6 +78,14 @@ enum HelmCommand: Equatable {
     case movePane(Workbench.Direction)
     /// A canvas's `Post`: prefill one pane's composer with text.
     case composeText(ComposeRequest)
+    /// ⌘⇧N — start a markdown note in the open workspace's `~/.prp` store and open it for
+    /// writing (#289).
+    ///
+    /// **Payload-free, and that is a fact about the command rather than a saving.** *Where* a
+    /// note goes is not a caller's choice: it is the store of the workspace the operator is in,
+    /// resolved by `OperatorNote.create`, and a command that carried a destination would be a
+    /// second answer to a question `WorkspaceStore` already answers for the artifact browser.
+    case newNote
     /// ⇧⌘R — show or hide the remembered Archon monitor rail.
     case toggleRail
 }
@@ -138,6 +146,7 @@ extension HelmCommand {
         case .movePane: .movePane
         case .composeText: .composeText
         case .toggleRail: .toggleRail
+        case .newNote: .newNote
         }
     }
 }

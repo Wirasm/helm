@@ -69,7 +69,7 @@ final class WorkbenchSpoolCommander: SpoolCommanding {
         // this switch is what forces a route to be chosen for it.
         case .selectTerminal, .openArtifact, .openCanvasFile, .pushCanvasFile, .openCanvasURL,
             .openWorkspace, .adjustFontSize, .jumpToPrompt, .selectWorkspace, .cycleWorkspace,
-            .toggleChat, .closePane, .moveFocus, .movePane, .composeText:
+            .toggleChat, .closePane, .moveFocus, .movePane, .composeText, .newNote:
             return .failure(
                 SpoolRefusal(
                     "\(command.rawValue) is allowed by SpoolCommandPolicy but helm has no route "

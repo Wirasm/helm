@@ -62,6 +62,14 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(match("o", .command)?.command, .openArtifact)
     }
 
+    /// ⌘N makes a pane to work in and ⌘⇧N one to write in (#289) — the same
+    /// shift-on-top-of-the-base-binding pairing `movePane` has with `moveFocus`. The modifier set
+    /// is compared exactly, which is the whole of what separates the two rows.
+    func testShiftedNewIsANoteAndBareNewIsATerminal() {
+        XCTAssertEqual(match("N", [.command, .shift])?.command, .newNote)
+        XCTAssertEqual(match("n", .command)?.command, .newTerminal)
+    }
+
     func testLetterMatchingIsCaseInsensitiveSoAShiftedKeyStillResolves() {
         XCTAssertEqual(
             match("o", [.command, .shift])?.command, .openWorkspace,

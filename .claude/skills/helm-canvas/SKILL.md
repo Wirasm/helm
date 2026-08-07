@@ -222,6 +222,24 @@ These are properties of the platform. They are not preferences, and you cannot c
 canvas, helm writes their notes to a sidecar file — precisely because you rewrite the artifact and
 would clobber anything kept inside. Read the notes if they appear; only ever write the artifact.
 
+**A canvas is read-only to *you* and to the operator, with exactly one exception: his own notes.**
+He can start a markdown note in helm (⌘⇧N) and type in it. It lands in **`~/.prp/<key>/notes/`** —
+the store of the workspace he is in, the same store your artifacts go to — named for the day,
+`2026-08-07-note.md`. Everything else on a canvas is rendered and cannot be edited, including every
+artifact you write: helm decides that from the **path**, and `notes/` is the only directory it will
+write into on his behalf.
+
+Three things follow, and they are the whole of what you need to know:
+
+- **He hands you the path; you read the file.** That is the interface. There is no notification and
+  no push — the same as the state latch, for the same reason: nothing wakes your session.
+- **Never write into `notes/`.** It is his directory. An agent rewriting a file he may have open in
+  the editor is the one case helm has no answer for, and helm will not stop you. Your artifacts go
+  to `plans/`, `research/`, `reviews/`, `canvas/` — wherever your own skill says — and reach the
+  bench through `push.sh`.
+- **Nothing tells you a note changed since you last read it.** If it matters, `cat` it again on
+  your next turn rather than assuming the copy in your context is current.
+
 **A mermaid node is addressable in four families only.** helm hands back the identifier from your
 ```mermaid fence — name a node `phase2` and a mark comes back as `phase2`, which you can grep for
 and edit (helm #113). That holds for **flowchart, class, state and er**. `mindmap` and

@@ -25,6 +25,44 @@ struct WorkbenchView: View {
     static let minimumSlotHeight: CGFloat = 80
 
     var body: some View {
+        VStack(spacing: 0) {
+            // **Above every branch, because the failure it reports happens in all of them.** ⌘⇧N
+            // with no workspace open is the empty bench's case; ⌘⇧N against a `~/.prp` helm cannot
+            // write to is the mounted one's. A strip inside a pane could say neither, because the
+            // whole failure is that no pane was made (#289).
+            if let failure = model.noteFailure {
+                noteFailureStrip(failure)
+            }
+            bench
+        }
+        // Which agent is in which pane (#63). Driven from a `.task` for `BoardModel.poll`'s
+        // reason: SwiftUI cancels it on teardown, so the loop's lifetime is the window's. The
+        // state it writes lives on the model, which outlives any single render.
+        .task { await model.watchAgents() }
+        .enableInjection()
+    }
+
+    /// One line, in the palette, in the shape a canvas already says things in. Not a dialog: the
+    /// operator pressed a key and nothing came of it, which is worth a sentence and not a modal
+    /// they have to dismiss before carrying on.
+    private func noteFailureStrip(_ message: String) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                Text(message).lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(Color.textMuted)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.surfaceRaised)
+            Color.border.frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var bench: some View {
         Group {
             if let bench = model.bench {
                 // The bench's own size, so a column can turn its fraction into points and
@@ -53,11 +91,6 @@ struct WorkbenchView: View {
                 EmptyBench()
             }
         }
-        // Which agent is in which pane (#63). Driven from a `.task` for `BoardModel.poll`'s
-        // reason: SwiftUI cancels it on teardown, so the loop's lifetime is the window's. The
-        // state it writes lives on the model, which outlives any single render.
-        .task { await model.watchAgents() }
-        .enableInjection()
     }
 }
 
