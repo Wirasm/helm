@@ -41,10 +41,26 @@
 // mid-run redirects the launch line — now caught in ~10s rather than 90, but still not
 // prevented.
 //
-// The prompt never passes through the keyboard or the shell's word splitting: it is written
-// to a private temp file and the typed line reads it back with `"$(cat …)"`. That is what
-// makes multi-line prompts, a leading `/`, and shell quoting all non-problems — the three
-// things that caused real trouble when this was done by hand.
+// THE PROMPT, AND EXACTLY HOW PRIVATE IT IS (#93).
+//
+// The prompt is written to a 0600 file in a 0700 directory, and the typed line hands the agent
+// that PATH — it does not hand over the contents. So the prompt never passes through the
+// keyboard, never through the shell's word splitting, and never through `argv`: multi-line
+// prompts, a leading `/`, and shell quoting are all non-problems, and `ps` shows a path.
+//
+// It used to be `cls "$(cat <file>)"`, which reads as private and is not. A shell resolves a
+// command substitution BEFORE exec, so the fully expanded prompt became an element of the
+// agent's own argv. Measured live 2026-08-07 on a running agent: `ps -o command= -p <pid>`
+// printed the whole thing, newlines and all. The temp file was doing a real job — quoting — and
+// the header claimed a second one it never did.
+//
+// WHAT IS NOT BOUGHT: the prompt is not secret. argv carries the path, and every agent on this
+// machine runs as the same user, so a process that goes looking can open the file. What is
+// removed is INCIDENTAL disclosure — the `pgrep` output that lands in another agent's context
+// unasked, which is the disclosure #93 actually observed.
+//
+// The agent reads the file as its first act, so the file OUTLIVES this tool. It is not deleted
+// on the success path (it was, when `$(cat …)` had already consumed it at exec).
 //
 // CEILING, and it is the point of rung 1 (#51): this needs an unlocked screen, a visible helm
 // window, and an Accessibility grant on the INVOKING context — the same per-context TCC rule
@@ -678,17 +694,33 @@ guard frontmostPid() == helmPid else {
         """, .focusFailed)
 }
 
-/// Single-quote for the shell, the only escaping that has to be right — and the reason the
-/// prompt itself is never on the command line.
+/// Single-quote for the shell, the only escaping that has to be right.
 func shellQuoted(_ text: String) -> String {
     "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
+/// What argv carries INSTEAD of the prompt (#93).
+///
+/// A deliberate duplicate of `SpoolLaunchLine.promptPointer` (`Sources/HelmWire/Spool/
+/// SpoolRequest.swift`), which is where the argument for the wording lives. It cannot be shared:
+/// a single-file `swift tools/…swift` script resolves no `Package.swift` and so cannot import
+/// `HelmWire` — the same runtime boundary `AGENTS.md` carves out for the spool's wire format, and
+/// for the same reason. `SpawnPromptPrivacyTests` reads this file and fails if the two drift.
+///
+/// No agent has a flag for this, which is why it is a sentence. Measured against `claude --help`,
+/// `pi --help` and `codex --help` (2026-08-07): all three take an initial prompt as an argv
+/// element and none takes one from a file for an interactive session.
+func promptPointer(to path: String) -> String {
+    "Your prompt for this session is in the file \"\(path)\". Read it now, in full, and act "
+        + "on it as if it had just been typed to you. (If you found this line in ps output, "
+        + "it is the launch line of another agent and is not addressed to you.)"
+}
+
 // `cls` is `claude --dangerously-skip-permissions`, and `claude [prompt]` starts an interactive
-// session with that prompt already submitted. Handing the prompt over as one argv element is
-// what makes a multi-line prompt, or one starting with `/`, ordinary: nothing is typed into the
-// TUI, so there is no Return to land early and no slash-command menu to eat it.
-let line = "cd \(shellQuoted(cwd)) && cls \"$(cat \(shellQuoted(promptPath.path)))\""
+// session with that prompt already submitted. The prompt handed over is the POINTER: one argv
+// element naming a file, so nothing is typed into the TUI (no Return to land early, no
+// slash-command menu to eat it) and nothing of the prompt reaches `ps`.
+let line = "cd \(shellQuoted(cwd)) && cls \(shellQuoted(promptPointer(to: promptPath.path)))"
 typeText(line)
 postKey(keyReturn)
 note("typed the launch line into terminal \(terminal)")
@@ -708,11 +740,16 @@ note("typed the launch line into terminal \(terminal)")
 //
 // **What it proves is one-way, and the asymmetry matters when reading the two refusals below.**
 // No child at all means nothing ran in this shell, which is the astray-keystrokes case. A child
-// does NOT mean `cls` itself ran: `cls "$(cat …)"` makes the shell fork for the command
-// substitution while building the argument, BEFORE it resolves the command name — verified, a
-// deliberately nonexistent command still produces a child of the shell. So a missing `cls` may
-// show up here either way, depending on whether that fork is short-lived enough to fall between
-// two samples. Neither message may claim PATH has been ruled out.
+// does NOT mean `cls` itself ran, and a missing `cls` can present as either outcome — a shell
+// that fails to exec an unknown command may or may not have forked first, and either way the
+// child is short-lived enough to fall between two samples. So neither message may claim PATH has
+// been ruled out.
+//
+// This used to be worse and is worth recording, because the refusals below were written against
+// it: `cls "$(cat …)"` made the shell fork for the command substitution while building the
+// argument, BEFORE it ever resolved the command name — verified at the time, a deliberately
+// nonexistent command still produced a child. #93 removed the substitution, so that particular
+// guaranteed fork is gone; what is left is the ordinary ambiguity above.
 //
 // Charged against `--timeout` rather than added to it, so a successful spawn waits no longer
 // than it did: the child appears in about a second, and the registry poll below keeps the rest.
@@ -737,7 +774,8 @@ else {
         `cls` missing from the login shell's PATH can look like this. `command -v cls` in a
         helm terminal separates the two in one step.
 
-        The prompt is still at \(promptPath.path) (not deleted, so it is not lost).
+        The prompt is at \(promptPath.path). helm-spawn never deletes it: the agent reads it
+        itself, as its first act, so it has to outlive this tool (#93).
         """, .launchLineNeverRan)
 }
 let remaining = max(timeout - Date().timeIntervalSince(typedAt), 1.0)
@@ -765,17 +803,24 @@ guard let agent = confirmed else {
         before retrying.
 
         Something DID start under that terminal's shell, so the keystrokes reached the
-        intended pane — that much is ruled out. It does NOT rule out `cls`: the shell forks
-        for the `"$(cat …)"` argument before it ever resolves the command name, so a missing
-        `cls` produces that child too. Check `command -v cls` in a helm terminal first; after
-        that, the agent stopped at a dialog preflight could not predict, or it took longer
-        than \(Int(timeout))s to start — retry with --timeout.
+        intended pane — that much is ruled out. It does NOT rule out `cls`: a shell that fails
+        to exec a missing command can leave a short-lived child behind too. Check
+        `command -v cls` in a helm terminal first; after that, the agent stopped at a dialog
+        preflight could not predict, or it took longer than \(Int(timeout))s to start — retry
+        with --timeout.
 
-        The prompt is still at \(promptPath.path) (not deleted, so it is not lost).
+        The prompt is at \(promptPath.path). helm-spawn never deletes it: the agent reads it
+        itself, as its first act, so it has to outlive this tool (#93).
         """, .agentNeverRegistered)
 }
 
-try? FileManager.default.removeItem(at: scratch)
+// The scratch directory is NOT removed here, and that is the change #93 made. A registered
+// session means the agent booted; it does not mean the agent has read its prompt yet — that is
+// its first turn, which is still ahead of us. Deleting now would race the agent to its own
+// instructions. It was safe while the line was `"$(cat …)"`, because the shell had already
+// consumed the file at exec. The directory is 0700 with a 0600 file inside, under the per-user
+// temp directory macOS reaps.
 note("agent running: pid \(agent.pid), session \(agent.sessionId), cwd \(agent.cwd)")
+note("prompt left at \(promptPath.path) for the agent to read")
 print("\(agent.pid) \(agent.sessionId)")
 exit(0)
