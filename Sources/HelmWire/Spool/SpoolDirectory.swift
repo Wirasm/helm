@@ -7,7 +7,7 @@ import Foundation
 /// ~/.helm/spool/            <id>.json          a request, waiting
 /// ~/.helm/spool/claimed/    <id>.json          claimed — never read again
 /// ~/.helm/spool/results/    <id>.json          what helm did about it
-/// ~/.helm/spool/prompts/    <id>.txt           the prompt, 0600, read by the launch line
+/// ~/.helm/spool/prompts/    <id>.txt           the prompt, 0600, read by the AGENT (#93)
 /// ~/.helm/spool/captures/   <id>.png           helm's own window, drawn on request (#174)
 /// ```
 ///
@@ -147,8 +147,15 @@ package struct SpoolDirectory: Equatable {
         return try? JSONDecoder().decode(SpoolResult.self, from: data)
     }
 
-    /// Stage a prompt where the launch line can read it. 0600, and written before anything is
+    /// Stage a prompt where the **agent** can read it. 0600, and written before anything is
     /// sent to the pty so a write failure costs a refusal rather than a half-typed line.
+    ///
+    /// **Nothing deletes this, and that is now load-bearing (#93).** The launch line hands the
+    /// agent this path rather than the prompt, so the file is read after the pane exists, after
+    /// the agent boots, on its first turn — long after helm has written the result and stopped
+    /// thinking about the request. A cleanup pass over `prompts/` would have to prove the agent
+    /// had already read it, which nothing here can see; the honest bound is that these are small
+    /// text files in a `0700` directory the operator owns.
     package func stagePrompt(_ text: String, for id: String) -> String? {
         let url = prompts.appendingPathComponent("\(id).txt")
         do {
