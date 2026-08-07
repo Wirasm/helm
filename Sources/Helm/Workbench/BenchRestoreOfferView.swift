@@ -83,7 +83,8 @@ struct BenchRestoreOfferView: View {
         if offer.canvasCount > 0 {
             parts.append("\(offer.canvasCount) canvas\(offer.canvasCount == 1 ? "" : "es")")
         }
-        var sentence = parts.isEmpty ? "This is what was here." : parts.joined(separator: ", ") + "."
+        var sentence =
+            parts.isEmpty ? "This is what was here." : parts.joined(separator: ", ") + "."
         if offer.agentCount > 0 {
             // Named, because it is what declining costs: the agents can only be offered once
             // their panes exist, so fresh is also a decision not to be asked about them.
@@ -103,7 +104,9 @@ struct BenchRestoreOfferView: View {
         }
     }
 
-    private func button(_ title: String, emphasis: Bool, action: @escaping () -> Void)
+    private func button(
+        _ title: String, emphasis: Bool, action: @escaping () -> Void
+    )
         -> some View
     {
         Button(action: action) {

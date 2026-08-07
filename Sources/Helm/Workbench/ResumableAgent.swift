@@ -98,7 +98,9 @@ enum AgentResume {
     /// started with them. Resuming it into a different permission posture would hand back a
     /// different agent from the one that died, and would do it silently. Two spellings of
     /// "how helm starts claude" is the drift this repo has paid for before.
-    static func line(resuming agent: ResumableAgent, notice: String? = AgentResume.notice)
+    static func line(
+        resuming agent: ResumableAgent, notice: String? = AgentResume.notice
+    )
         -> String?
     {
         guard agent.command == claude else { return nil }

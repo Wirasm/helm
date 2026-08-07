@@ -239,7 +239,10 @@ final class WorkbenchModel: ObservableObject {
     /// the point of it — so "has a record" alone would ask about a conversation that is on
     /// screen.
     private func offers(in bench: Workbench?) -> [Pane.ID: AgentResumeOffer] {
-        guard let bench else { return [:] }
+        // A bench with nothing recorded on it has nothing to ask about, and asking costs two
+        // directory reads — the registry, and a transcript lookup per pane. Every mount before
+        // an agent has ever run in a workspace takes this branch, which is most of them.
+        guard let bench, !bench.resumableAgents.isEmpty else { return [:] }
         let live = liveAgents(in: bench)
         return Dictionary(
             uniqueKeysWithValues: bench.resumableAgents.compactMap { pane, agent in

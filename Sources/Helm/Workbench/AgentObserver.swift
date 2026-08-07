@@ -58,7 +58,8 @@ struct AgentObserver {
     /// latter traps, and a hand-edited registry directory is not worth a crash.
     static func rows(in root: URL) -> [pid_t: AgentSession] {
         Dictionary(
-            AgentRegistry.sessions(in: root).map { ($0.pid, $0) }, uniquingKeysWith: { _, last in
+            AgentRegistry.sessions(in: root).map { ($0.pid, $0) },
+            uniquingKeysWith: { _, last in
                 last
             })
     }
