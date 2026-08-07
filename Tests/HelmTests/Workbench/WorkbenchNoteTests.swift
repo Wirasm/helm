@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 @testable import Helm
@@ -103,6 +104,32 @@ final class WorkbenchNoteTests: XCTestCase {
         XCTAssertEqual(
             try String(contentsOfFile: path.value, encoding: .utf8),
             "typed, and then the workspace went away")
+    }
+
+    /// **⌘Q is the ordinary way to leave, and it reached no flush point at all.**
+    ///
+    /// The failure it caused is not a bounded one: `edit` reschedules the debounce on every
+    /// keystroke, so a note typed in one burst with no pause in it has never been written once,
+    /// and quitting there lost the whole note. Posted here as the notification rather than
+    /// simulated, so what is measured is the subscription — the thing that was missing.
+    func testQuittingWritesANoteThatHasNeverBeenSavedEvenOnce() throws {
+        let model = mounted()
+        let id = try XCTUnwrap(model.newNote(on: day("2026-08-07")))
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+        guard case let .canvas(.file(path)) = pane.content else {
+            return XCTFail("a note is a canvas pane pointed at its own file")
+        }
+        // No pause anywhere in it, which is the case the debounce alone never covers.
+        model.canvas(for: pane).edit("typed in one burst, then ⌘Q")
+
+        NotificationCenter.default.post(
+            name: NSApplication.willTerminateNotification, object: NSApplication.shared)
+
+        XCTAssertEqual(
+            try String(contentsOfFile: path.value, encoding: .utf8),
+            "typed in one burst, then ⌘Q",
+            "the subscription has to be synchronous — a hop to the main queue is a save that "
+                + "never runs, because the run loop is stopping")
     }
 
     // MARK: - When it cannot

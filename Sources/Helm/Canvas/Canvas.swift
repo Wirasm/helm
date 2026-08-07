@@ -258,10 +258,17 @@ final class CanvasModel: ObservableObject {
     /// when the machine sleeps, when helm is quit, or when a build takes the operator's attention
     /// for twenty minutes.
     ///
-    /// **What it does cost, said plainly:** up to this long of typing on a hard kill of the
-    /// process. Every other exit — switching to Read, closing the pane, pointing the canvas at
-    /// another file — flushes first, because those are helm's own code paths and each one calls
-    /// `saveNote()`.
+    /// **What it costs, said plainly, and it is worse than "one interval" — that reading was
+    /// wrong and a reviewer caught it.** `edit` cancels and reschedules on every keystroke, so a
+    /// note typed in one continuous burst with no gap this long in it has never been written
+    /// **once**: what an unhandled exit loses there is the whole note, not a bounded tail. That
+    /// makes the flush points the load-bearing part rather than the number.
+    ///
+    /// Every exit helm can see calls `saveNote()`: switching to Read, closing the pane, pointing
+    /// the canvas at another file, closing the last workspace (`WorkbenchModel.deactivate`), and
+    /// **quitting** — `WorkbenchModel` subscribes to `NSApplication.willTerminateNotification`
+    /// for exactly this reason, because ⌘Q is the ordinary way to leave and reached none of the
+    /// others. What remains is `kill -9`, which nothing can cover.
     ///
     /// Long enough that a run of typing is one write rather than one per character, short enough
     /// that a pause between sentences has already saved. Injectable for `FileWatcher`'s reason

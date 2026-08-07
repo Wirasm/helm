@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import SwiftUI
@@ -345,7 +346,7 @@ final class WorkbenchModel: ObservableObject {
         // would give a note being typed in its last chance to be written. A pending save holds
         // its model weakly, so dropping the cache mid-debounce is the one path that could lose
         // the keystrokes since the last write.
-        for cached in canvases.values { cached.model.saveNote() }
+        flushNotes()
         canvases.removeAll()
         // Keyed by canvas pane id, so it goes exactly when the cache does — a leftover entry
         // would name a pane nothing resolves any more.
@@ -900,6 +901,15 @@ final class WorkbenchModel: ObservableObject {
         return reading.count == 1 ? reading[0].id : nil
     }
 
+    /// Write every open note now (#289).
+    ///
+    /// **Named rather than written twice, because the two callers are unrelated**: a workspace
+    /// teardown that is about to drop these models, and the app being quit. Both are moments
+    /// after which a debounced save can no longer happen, and neither knows about the other.
+    func flushNotes() {
+        for cached in canvases.values { cached.model.saveNote() }
+    }
+
     func closeFocusedPane() {
         guard let pane = bench?.focusedPane else { return }
         close(pane.id)
@@ -948,6 +958,27 @@ final class WorkbenchModel: ObservableObject {
                     guard let self else { return }
                     self.handle(command)
                 }
+            }
+            .store(in: &commands)
+
+        // **⌘Q is the ordinary way to leave, and it reached no flush point at all** (#289).
+        // Every other exit a note has — Read, closing the pane, pointing the canvas elsewhere,
+        // closing the last workspace — is one of helm's own code paths. Quitting is not: the
+        // process goes away with the debounce still pending, and a note typed in one burst with
+        // no 600ms gap in it has never been written even once, so what is lost is the *whole
+        // note* rather than a bounded tail. That is not a corner — "jot it down, ⌘Q" is the
+        // shape of the feature.
+        //
+        // **Synchronous, with no `receive(on:)`**, which is the opposite of the subscription
+        // above and is the point: the run loop is about to stop, so a hop to the main queue is
+        // a save that never runs. AppKit posts this on the main thread already.
+        //
+        // What it still does not cover is `kill -9`, and nothing can. That is the honest
+        // remainder of `CanvasModel.saveDebounce`'s cost.
+        NotificationCenter.default
+            .publisher(for: NSApplication.willTerminateNotification)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.flushNotes() }
             }
             .store(in: &commands)
     }
