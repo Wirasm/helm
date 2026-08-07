@@ -82,10 +82,11 @@ struct MarkdownCanvasView: View {
     let generation: Int
     /// What the operator is holding, pushed into the page on change.
     let markTool: CanvasMarkTool
-    /// Whether a mark is still awaiting a comment. False takes the ink down.
+    /// Whether a mark is still awaiting a comment. False takes the mark down — the ink, and
+    /// since #308 the text highlight with it; the page's `wipe` is one call for both.
     ///
-    /// The ink lives as long as the comment field, with one honest exception: an agent
-    /// rewriting the artifact reloads the document and takes the ink with it, while the
+    /// A mark lives as long as the comment field, with one honest exception: an agent
+    /// rewriting the artifact reloads the document and takes the mark with it, while the
     /// field stays open. That is deliberate — the ANCHOR is an id or a quote and was decoded
     /// the moment the mark was posted, so the comment is still correct and still worth
     /// writing. Dismissing the field to keep the invariant tidy would throw away what the
@@ -503,11 +504,18 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// tools would throw away the scroll position, and a canvas is something you are part-way
     /// down when you decide to mark it.
     private(set) var pushedTool: CanvasMarkTool?
-    /// The appearance the page was last told to paint a text mark in, or nil for the same
-    /// reason `pushedTool` is (#308). Tracked beside the tool rather than assumed to follow it:
-    /// a theme flip does navigate today, and `navigate` does call `forgetPushedState` — but that
-    /// is a fact in `HTMLCanvasPage`, and a guard here that depended on it would be a colour
-    /// silently a whole appearance out of date if it ever stopped being true.
+    /// The appearance the page was last told to paint a text mark in, or nil for the same reason
+    /// `pushedTool` is (#308).
+    ///
+    /// **Today this term never decides anything, and it is kept anyway.** `theme` is part of
+    /// `CanvasReloadKey`, so a flip is a navigation, and both load paths call
+    /// `forgetPushedState()` on the way — which nils `pushedTool` too, so the tool half of the
+    /// guard has already fired by the time this one is consulted. What it buys is that the fact
+    /// it leans on lives in *another type*: drop this and the day a theme flip becomes something
+    /// the page survives, helm would push a tool and no colour, and the failure would be a mark
+    /// painted a whole appearance out of date with nothing to catch it.
+    /// `CanvasHTMLTests.testAThemeFlipIsANavigationSoNoPaintedMarkOutlivesItsTint` pins the fact;
+    /// this is the guard that makes being wrong about it survivable.
     private var pushedTheme: CanvasTheme?
     /// Whether the page currently holds a mark. Starts false: a fresh document has no ink.
     private var markShown = false
@@ -546,7 +554,7 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
         evaluate(CanvasHTML.setMarkTool(tool, theme: theme), in: webView)
     }
 
-    /// Take the ink down when the comment field closes — submitted or dismissed. Pushed
+    /// Take the mark down when the comment field closes — submitted or dismissed. Pushed
     /// only on the transition, so an ordinary SwiftUI re-render never wipes a mark the
     /// operator is still looking at.
     func showMark(_ shows: Bool, in webView: WKWebView) {

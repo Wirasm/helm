@@ -296,6 +296,54 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         XCTAssertEqual(page.lastPosted?["kind"] as? String, "cleared")
     }
 
+    /// **One mark on screen, across a tool change — the case every existing test missed** by
+    /// building a fresh page per tool and calling `setTool` exactly once.
+    ///
+    /// Both halves of the round trip, because only one of them was broken and the diagnosis
+    /// depends on knowing which. A drawing tool wipes at `mousedown`, so `.text` → `.freehand`
+    /// was always clean. `.text` is exempted from that wipe on purpose — cancelling `mousedown`
+    /// is what would stop the operator selecting at all — so `.freehand` → `.text` had nothing
+    /// clearing the ink, and the arrow stayed painted beside the new highlight with only one of
+    /// them being what the comment field is about.
+    ///
+    /// **Latent before this slice and real after it**, which is why it belongs to #308 rather
+    /// than to #112: `.text` painted nothing of its own, so the orphaned ink was the only thing
+    /// on screen instead of one of two contradictory marks.
+    func testANewMarkReplacesWhateverToolMadeTheLastOne() throws {
+        let drawnFirst = try CanvasScriptRuntime()
+        drawnFirst.setTool(.arrow)
+        drawnFirst.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
+        XCTAssertTrue(drawnFirst.hasMarkLayer, "the arrow is the mark awaiting a comment")
+
+        // Picking a tool up must NOT drop a committed mark — that is the contract
+        // `testAPostedMarkOutlivesEverythingExceptSwiftTakingItDown` pins — so the ink is still
+        // there when the text gesture starts, and clearing it is the text branch's job.
+        drawnFirst.evaluateFromSwift(CanvasHTML.setMarkTool(.text, theme: .light))
+        drawnFirst.select(id: "intro", text: "Why this exists")
+        drawnFirst.mouse("mouseup", 100, 110)
+
+        XCTAssertEqual(drawnFirst.textMark?.text, "Why this exists", "the new mark is painted")
+        XCTAssertFalse(
+            drawnFirst.hasMarkLayer,
+            "and the arrow is gone — two marks on screen with one comment field between them "
+                + "is a mark that lies about what is under discussion")
+
+        let textFirst = try CanvasScriptRuntime()
+        textFirst.setTool(.text)
+        textFirst.select(id: "intro", text: "Why this exists")
+        textFirst.mouse("mouseup", 100, 110)
+        XCTAssertNotNil(textFirst.textMark)
+
+        textFirst.evaluateFromSwift(CanvasHTML.setMarkTool(.freehand, theme: .light))
+        textFirst.loop(around: (x: 10, y: 1390, width: 320, height: 50))
+
+        XCTAssertTrue(textFirst.hasMarkLayer, "the loop is the mark now")
+        XCTAssertNil(
+            textFirst.textMark,
+            "and the highlight went with the drawing tool's own mousedown wipe — this half was "
+                + "already correct, and is here so a fix to the other half cannot break it")
+    }
+
     /// **A control, and named as one.** The three tools built for #112 already kept their mark
     /// and none of them goes near the highlight registry; a change that started painting text
     /// highlights for a loop or a tap would be overshoot, and this is what fails on it. It

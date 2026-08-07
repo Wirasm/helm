@@ -565,6 +565,26 @@
       var node = elementFor(range.commonAncestorContainer);
       var id = node ? nameFor(node) : null;
       var r = range.getBoundingClientRect();
+      // **One mark on screen, and this is the call that keeps it to one.** Every drawing gesture
+      // starts with a `wipe()` at `mousedown`; `text` is exempted from that on purpose — the
+      // `preventDefault` there is what would stop the operator selecting at all — so the whole
+      // burden of taking down whatever was already marked lands here, on the one branch that
+      // establishes a new mark. Without it: commit an arrow, pick up `text` (which does *not*
+      // wipe, because a tool change must not drop a mark awaiting its comment), select a
+      // passage, and the stale arrow is still painted beside the new highlight with only one of
+      // them being what the comment field is about.
+      //
+      // The `!text` branch above already makes exactly this call, and so does `point` when it
+      // resolves nothing. This is the third spelling of the same rule and the one that was
+      // missing.
+      //
+      // **Latent before this slice, real after it**: `text` painted nothing of its own, so the
+      // orphaned ink was the *only* thing on screen rather than one of two contradictory marks.
+      // Making a text mark visible is what turned it into a defect.
+      //
+      // Safe here: `wipe()` touches the ink layer and the highlight registry and never
+      // `document.getSelection()`, and everything read off the range is already read above.
+      wipe();
       // The mark STAYS, and `committed` is what says so — the same two lines the three drawing
       // tools end on, for the same reason: from here the mark is the comment field's subject,
       // and only Swift closing that field may take it down. Without the flag, `abandon` on the

@@ -142,6 +142,34 @@ final class CanvasHTMLTests: XCTestCase {
             "a token resolved to one value in both appearances is a token that was not resolved")
     }
 
+    /// **Why a painted mark can never be left wearing the other appearance's colour** (#308).
+    ///
+    /// The tint is written into the page's `::highlight()` rule at the moment the mark is
+    /// painted, and nothing repaints an already-registered highlight — which reads like a hole:
+    /// flip the appearance with a comment field open and the mark should be stranded in the old
+    /// colour. It cannot be, and the reason is one line up the call chain rather than anything
+    /// in the script: **`theme` is part of `CanvasReloadKey`**, so a flip is a *navigation*. The
+    /// JS context is destroyed and the highlight goes with it, exactly as the ink does — which
+    /// `MarkdownCanvasView.showsMark` already records as deliberate, the field outliving its
+    /// mark on a reload because the anchor was decoded when the mark was posted.
+    ///
+    /// Asserted rather than reasoned about, because it is a fact in **another file** that two
+    /// comments here lean on, and the review that raised this reached the opposite conclusion
+    /// from reading the script alone. If a later change ever made a theme flip something the
+    /// page survives, this fails and the repaint it would then need becomes findable.
+    func testAThemeFlipIsANavigationSoNoPaintedMarkOutlivesItsTint() {
+        let light = CanvasReloadKey(theme: .light, generation: 3, document: "# plan")
+        let dark = CanvasReloadKey(theme: .dark, generation: 3, document: "# plan")
+
+        XCTAssertNotEqual(
+            light, dark,
+            "same artifact, same generation, different appearance — if these compare equal the "
+                + "page is kept and a mark painted in the old tint is left on screen")
+        XCTAssertEqual(
+            light, CanvasReloadKey(theme: .light, generation: 3, document: "# plan"),
+            "and nothing else moved, or every render would navigate")
+    }
+
     func testClearingTheMarkIsTheOneThingThatTakesAPostedOneDown() {
         // The mark is the comment field's subject and lives exactly as long as it does. That
         // it survives the release, a blur and a tool change is asserted by driving the page;
