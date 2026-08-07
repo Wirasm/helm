@@ -22,6 +22,17 @@ final class CanvasModelTests: XCTestCase {
         if case let .url(page) = model.showing { page } else { nil }
     }
 
+    /// **A canvas whose clipboard is this suite's rather than the operator's**, and what every test
+    /// below that reaches `annotate` is built with. With no `onAnnotation` wired the delivery is
+    /// `.notSent(.noOrigin)`, which copies — and the default sink is `NSPasteboard.general`, the
+    /// clipboard of whoever is running the gate. `CanvasModel.copyToClipboard`'s header has the
+    /// argument; `PasteboardTests`'s has the older half of it.
+    private func quietCanvas() -> CanvasModel {
+        let model = CanvasModel()
+        model.copyToClipboard = { _ in }
+        return model
+    }
+
     /// What the bridge reports when the operator selects `payload["text"]` on the page — with
     /// `kind: "selection"` filled in, because every message has declared one since #109 and
     /// `annotate` decodes this body again downstream.
@@ -192,7 +203,7 @@ final class CanvasModelTests: XCTestCase {
     // throwing it away on a failure means they have to find it again to retry.
 
     func testAnnotatingWritesTheNoteAndClearsTheSelection() throws {
-        let model = CanvasModel()
+        let model = quietCanvas()
         model.open(file)
         model.pageDidReport(try selection(["id": "phase-2", "text": "Phase 2"]))
 
@@ -209,7 +220,7 @@ final class CanvasModelTests: XCTestCase {
     }
 
     func testAnUnanchorableSelectionKeepsTheSelectionAndSaysSo() throws {
-        let model = CanvasModel()
+        let model = quietCanvas()
         model.open(file)
         model.pageDidReport(try selection(["text": "a passage"]))
 
@@ -226,7 +237,7 @@ final class CanvasModelTests: XCTestCase {
     }
 
     func testAWriteFailureReachesThePaneNamingTheFile() throws {
-        let model = CanvasModel()
+        let model = quietCanvas()
         // A canvas opened through Browse… can live somewhere not writable.
         model.open(URL(fileURLWithPath: "/System/helm-should-not-write-here/plan.md"))
         model.pageDidReport(try selection(["text": "a passage"]))
@@ -240,7 +251,7 @@ final class CanvasModelTests: XCTestCase {
     }
 
     func testAnnotatingWithoutASelectionDoesNothingAtAll() {
-        let model = CanvasModel()
+        let model = quietCanvas()
         model.open(file)
 
         model.annotate(comment: "this ordering is wrong")
@@ -252,7 +263,7 @@ final class CanvasModelTests: XCTestCase {
     /// A URL canvas has no file to write beside, so there is no sidecar and nothing to
     /// annotate — the same reason `fileURL` is nil for one.
     func testAURLCanvasHasNowhereToPutANote() throws {
-        let model = CanvasModel()
+        let model = quietCanvas()
         model.openURL(URL(string: "https://example.com/dashboard")!)
         model.pageDidReport(try selection(["text": "a passage"]))
 
@@ -276,7 +287,7 @@ final class CanvasModelTests: XCTestCase {
 
     /// The page's freehand tool: `bridge.postMessage({ kind: "enclosure", targets, rect })`.
     func testAnEnclosurePayloadReachesTheNoteThroughTheRealGate() throws {
-        let model = CanvasModel()
+        let model = quietCanvas()
         model.open(file)
 
         let report = try CanvasPageSelection.decode([
@@ -298,7 +309,7 @@ final class CanvasModelTests: XCTestCase {
 
     /// The page's arrow tool: `bridge.postMessage({ kind: "relation", from, to, rect })`.
     func testARelationPayloadReachesTheNoteThroughTheRealGate() throws {
-        let model = CanvasModel()
+        let model = quietCanvas()
         model.open(file)
 
         let report = try CanvasPageSelection.decode([
@@ -353,7 +364,7 @@ final class CanvasModelTests: XCTestCase {
     }
 
     func testDismissingTakesTheFailureStripWithIt() throws {
-        let model = CanvasModel()
+        let model = quietCanvas()
         model.open(file)
         model.pageDidReport(try selection(["text": "a passage"]))
         // An empty comment is what `CanvasAnnotation.decode` refuses.

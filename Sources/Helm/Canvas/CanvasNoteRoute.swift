@@ -83,16 +83,48 @@ enum CanvasNoteDelivery: Equatable {
     case notSent(CanvasNoteRoute.Fallback)
     case failed(Handle, String)
 
+    /// **Whether the note is also put on the operator's clipboard** (#303).
+    ///
+    /// **This reverses a decision that was taken deliberately, so it answers it rather than quietly
+    /// dropping it.** `receipt(sidecar:)`'s header used to argue the unconditional copy: *"every
+    /// case names the clipboard, because every case copies: the clipboard was the whole return path
+    /// before #205 and removing it from the routed case would take a capability away from an
+    /// operator who wants the note somewhere else as well."* Both of those facts are true; only the
+    /// conclusion drawn from them is wrong. **The clipboard is the operator's, not helm's**, and
+    /// replacing what is in it is a side effect they did not ask for — *they might also want the
+    /// note elsewhere* is a reason to **offer** a copy, never a reason to take the clipboard every
+    /// time. And on the routed path the copy bought nothing: the note is already twice recoverable,
+    /// once in the agent's own mailbox and once in the sidecar on disk. What it cost was a paste
+    /// buffer somebody was in the middle of using.
+    ///
+    /// **The three that keep it are keeping a return path, not a convenience.** With no agent, with
+    /// an origin that is gone, or with a delivery that was attempted and failed, the clipboard is
+    /// the only way the note reaches anybody at all — stranding it would be strictly worse than the
+    /// pollution. That asymmetry is the whole rule: **copy when the copy is the delivery.**
+    ///
+    /// A property on the delivery rather than a branch at the call site, because it is a policy and
+    /// there is more than one consumer of it — `Canvas.annotate` spends it and `receipt(sidecar:)`
+    /// speaks it, and those two disagreeing is a receipt that names a clipboard nothing wrote to.
+    var copiesToClipboard: Bool {
+        switch self {
+        // The agent has it. Anything further is helm helping itself to the pasteboard.
+        case .sent: false
+        case .notSent, .failed: true
+        }
+    }
+
     /// The receipt, naming the sidecar it was written to.
     ///
-    /// **Every case names the clipboard**, because every case copies: the clipboard was the whole
-    /// return path before #205 and removing it from the routed case would take a capability away
-    /// from an operator who wants the note somewhere else as well. The receipt says so because the
-    /// operator has to know their clipboard just changed under them.
+    /// **A case names the clipboard exactly when it copied to it** — `copiesToClipboard` is that
+    /// rule and this is it said out loud, which since #303 is three cases of the four. Why it is
+    /// said at all has not changed and is still right: the operator has to know their clipboard
+    /// just changed under them. It stops applying to `sent` only because nothing changed under them
+    /// there. `CanvasNoteRouteTests` pins the two against each other case by case, so a fifth case
+    /// cannot copy silently or claim a copy it did not make.
     func receipt(sidecar: String) -> String {
         switch self {
         case let .sent(handle):
-            "Written to \(sidecar), copied, and sent to \(handle.value)"
+            "Written to \(sidecar) and sent to \(handle.value)"
         case .notSent(.noOrigin):
             "Written to \(sidecar) and copied — no agent pushed this canvas, so paste it to one"
         case .notSent(.originGone):

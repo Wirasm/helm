@@ -146,6 +146,12 @@ private final class CommentWindow {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
 
+        // Return posts the note, and a note with no `onAnnotation` wired is `.notSent(.noOrigin)`,
+        // which copies. The default sink is the operator's `NSPasteboard.general`, so a suite about
+        // a keystroke would otherwise clear their clipboard once per Return —
+        // `CanvasModel.copyToClipboard`'s header has why that is the seam's whole job.
+        model.copyToClipboard = { _ in }
+
         model.open(canvas)
         let selection = try Self.selectionToCommentOn(file: file, line: line)
         model.pageDidReport(.selected(selection))

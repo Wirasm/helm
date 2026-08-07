@@ -129,7 +129,7 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
         XCTAssertTrue(body.contains("This shouldn't talk to that"), "…and what it covered")
         XCTAssertTrue(body.contains("this is the seam #210 is about"))
         XCTAssertEqual(
-            page.model.notesNotice, "Written to report.notes.md, copied, and sent to sild-611a")
+            page.model.notesNotice, "Written to report.notes.md and sent to sild-611a")
     }
 
     /// **A circle drawn round a real element, over WebKit's real layout.** The stroke is computed
@@ -228,6 +228,12 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
             model.onAnnotation = { annotation, canvas in
                 courier.send(annotation, on: canvas, along: route)
             }
+            // The clipboard this suite is allowed to write to. A `.clipboard` route copies, and
+            // the default sink is the operator's own `NSPasteboard.general` — see
+            // `CanvasModel.copyToClipboard`. Discarded rather than captured because what this file
+            // measures is a live WebKit page, and `CanvasMarkReachesAgentTests` is where the copy
+            // itself is asserted.
+            model.copyToClipboard = { _ in }
 
             coordinator = CanvasFileCoordinator(
                 host: CanvasAddress.host(for: path), onAnnotation: model.pageDidReport)
