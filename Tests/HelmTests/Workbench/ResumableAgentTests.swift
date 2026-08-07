@@ -370,7 +370,6 @@ final class ResumableAgentTests: XCTestCase {
             "a pane that already holds the conversation must not be asked about it")
     }
 
-
     /// **A bench comes off disk, so two panes can carry one id — and building the offers must
     /// not trap on that.** `AgentRegistry.row(in:)`, added on this same branch, argues the rule
     /// in its own header: *"`Dictionary(_:uniquingKeysWith:)` rather than `uniqueKeysWithValues:`,
@@ -399,6 +398,93 @@ final class ResumableAgentTests: XCTestCase {
             model.resumeOffers.count, 1,
             "one id, one offer — the duplicate is degenerate, and picking one is the answer; "
                 + "trapping is not")
+    }
+
+    // MARK: - What a reader outside the process sees
+
+    /// **The per-pane half of `awaitingRestore`.** Without it a pane showing "claude was running
+    /// here — resume it?" and a pane that never held an agent are byte-for-byte identical in
+    /// `snapshot.json` — same `isLive`, same `status`, `owner: nil` in both. Measured while
+    /// proving #63 across a real restart: the snapshot could say the mount question was open and
+    /// then had nothing to say about the offer that followed it, so the only way to see the
+    /// offer was a screenshot.
+    func testARestoredPaneSaysInTheSnapshotThatItIsBeingOfferedAResume() throws {
+        let pane = UUID()
+        let snapshot = try project(
+            bench: Workbench(
+                panes: [
+                    Pane(id: pane, content: .terminal(face: .terminal, agent: agent())),
+                    Pane(content: .terminal(face: .terminal)),
+                ]), suite: "resume-snapshot-offered")
+
+        let records = try panes(in: snapshot)
+        let offered = try XCTUnwrap(records[pane]?.resumable)
+        XCTAssertEqual(offered.session, agent().session, "a reader sees what helm persisted")
+        XCTAssertEqual(offered.command, "claude")
+        XCTAssertEqual(offered.cwd, "/tmp/helm-resume")
+        XCTAssertTrue(offered.isOffered, "the operator is being asked about this pane right now")
+        XCTAssertNil(offered.blockedReason, "and helm can make good on it")
+        XCTAssertEqual(
+            records.values.compactMap(\.resumable).count, 1,
+            "the pane that held nothing says nothing — or every reader learns to ignore the key")
+    }
+
+    /// A blocked offer is the state a reader most needs told apart from a live one: waiting on
+    /// an agent that is never coming back is the whole cost of not saying so.
+    func testABlockedOfferNamesItsReasonInTheSnapshot() throws {
+        let pane = UUID()
+        let snapshot = try project(
+            bench: Workbench(
+                panes: [Pane(id: pane, content: .terminal(face: .terminal, agent: agent()))]),
+            transcripts: [], suite: "resume-snapshot-blocked")
+
+        let record = try XCTUnwrap(try panes(in: snapshot)[pane]?.resumable)
+        XCTAssertTrue(record.isOffered)
+        XCTAssertEqual(record.blockedReason, "transcriptGone")
+    }
+
+    /// The control: a pane with nothing recorded carries no key at all, on a bench that is
+    /// otherwise identical. It is what fails if the field is written unconditionally.
+    func testAPaneThatNeverHeldAnAgentCarriesNoResumeRecord() throws {
+        let pane = UUID()
+        let snapshot = try project(
+            bench: Workbench(panes: [Pane(id: pane, content: .terminal(face: .terminal))]),
+            suite: "resume-snapshot-control")
+
+        XCTAssertNil(try panes(in: snapshot)[pane]?.resumable)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try JSONEncoder().encode(snapshot))
+                as? [String: Any])
+        XCTAssertFalse(
+            String(describing: json).contains("resumable"),
+            "an absent record is an absent key, not a null one")
+    }
+
+    private func project(
+        bench: Workbench, transcripts: Set<String>? = nil, suite: String
+    ) throws -> BenchSnapshot {
+        let workspace = Workspace(path: workspace.value)
+        let workspaces = WorkspaceModel(defaults: try isolatedDefaults(suite))
+        workspaces.open(workspace)
+        let terminals = TerminalManager()
+        let model = WorkbenchModel(
+            terminals: terminals,
+            agents: .fixture(foreground: [:], rows: [:], transcripts: transcripts),
+            launcher: RecordingLauncher())
+        model.activate(workspacePath: workspace.path, restoring: bench)
+        return BenchSnapshot.project(
+            writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,
+            workbench: model, terminals: terminals,
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
+        ) { _ in nil }
+    }
+
+    private func panes(in snapshot: BenchSnapshot) throws -> [UUID: BenchSnapshot.TerminalRecord] {
+        let record = try XCTUnwrap(snapshot.workspaces.first)
+        return Dictionary(
+            record.columns.flatMap(\.slots).flatMap(\.panes)
+                .compactMap { pane in pane.terminal.map { (pane.id, $0) } },
+            uniquingKeysWith: { first, _ in first })
     }
 
     // MARK: - Controls
