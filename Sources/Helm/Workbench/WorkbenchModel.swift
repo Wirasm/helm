@@ -208,8 +208,12 @@ final class WorkbenchModel: ObservableObject {
         restoreOffer = nil
         switch choice {
         case .restore:
-            // It is being opened, so there is nothing left shelved about it.
-            shelvedBench = nil
+            // **Only the bench that was just opened stops being shelved.** `BenchMountPolicy`
+            // asks about the *saved* bench unless that is a bare shell, so a shelf can still be
+            // sitting there while the operator restores something else entirely — and clearing
+            // it then would be the destruction the shelf exists to prevent, reached through the
+            // other button.
+            if shelvedBench == offer.bench { shelvedBench = nil }
             mount(path, restoring: offer.bench)
         case .fresh:
             shelvedBench = offer.bench

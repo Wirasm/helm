@@ -218,6 +218,35 @@ final class BenchMountTests: XCTestCase {
         XCTAssertEqual(context.shelvedBench, saved, "and the declined bench is still on disk")
     }
 
+    func testRestoringTheShelfIsWhatStopsItBeingShelved() throws {
+        let declined = bench(terminals: 6)
+        let terminals = TerminalManager()
+        let model = WorkbenchModel(terminals: terminals, agents: .blind)
+        model.activate(
+            workspacePath: workspace, offering: bench(terminals: 1), shelved: declined)
+
+        model.answer(.restore)
+
+        XCTAssertEqual(model.bench, declined, "the shelf is what was offered, so it is what opens")
+        XCTAssertNil(model.shelvedBench, "and it is not shelved any more")
+    }
+
+    /// The other half: restoring the *saved* bench says nothing about an older declined one,
+    /// and discarding it there would be the destruction the shelf exists to prevent, reached
+    /// through the other button.
+    func testRestoringTheSavedBenchLeavesAnOlderShelfAlone() throws {
+        let declined = bench(terminals: 6)
+        let worked = bench(terminals: 2)
+        let terminals = TerminalManager()
+        let model = WorkbenchModel(terminals: terminals, agents: .blind)
+        model.activate(workspacePath: workspace, offering: worked, shelved: declined)
+
+        model.answer(.restore)
+
+        XCTAssertEqual(model.bench, worked)
+        XCTAssertEqual(model.shelvedBench, declined, "one click must not destroy a layout")
+    }
+
     // MARK: - What a reader outside the process sees
 
     /// An open question makes `columns` empty, and without a field saying so a reader could not
