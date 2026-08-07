@@ -126,6 +126,21 @@ bash hooks/test.sh
 bash .claude/skills/helm-canvas/test.sh
 ```
 
+**If you touched `.claude/skills/helm-board/`, run its gate:**
+
+```
+bash .claude/skills/helm-board/test.sh
+```
+
+That skill is the drawable canvas (#111): `@quickdrawjs/core` 0.2.0 vendored, copied *beside*
+an artifact rather than injected, so it is a skill asset and not a bundle resource. Its gate
+**executes** `board-core.js` in node — the ownership diff, the overlap resolution and the state
+report all live there rather than in the DOM glue, precisely so a browser is not needed to test
+them — checks `new-board.sh`'s refusals, and re-hashes the vendored bytes against their pin.
+Needs node, which is why it is not in the Swift gate. **The one thing in that seam the Swift
+gate does own is `data-helm-surface`**, because three files spell it and one of them is Swift —
+see `CanvasSurface` and `CanvasSurfaceTests`.
+
 **If you touched either mail skill, run its gate:**
 
 ```

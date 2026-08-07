@@ -49,6 +49,36 @@ update the version + hash here, and re-open a markdown artifact with diagrams
 (e.g. a prp-diagram plan supplement) to confirm conversion and every diagram
 type still render.
 
+## @quickdrawjs/core 0.2.0 — `.claude/skills/helm-board/quickdraw/`
+
+The drawing engine behind a **board** (#111). **Not a bundle resource, and deliberately not in
+either manifest**: helm never injects it, and no helm surface imports it. `new-board.sh` copies
+this directory *beside an artifact*, where the page loads it as a sibling over
+`helm-canvas://` — so the pinned bytes travel with the board and a board renders the same in six
+months as it does today. That is also why it is 180 KB in the repository and 0 KB in the app.
+
+- **Version**: 0.2.0 (published 2026-08-02; latest at vendoring time, 2026-08-07)
+- **Source**: the `@quickdrawjs/core` npm tarball, `package/src/` — nine files of unminified,
+  dependency-free ESM with file extensions written, which is what makes it importable with no
+  bundler and no build step. Upstream is <https://github.com/nmndwivedi/quickdraw>
+  (monorepo, `packages/core`).
+- **Modified**: no. Copied verbatim, verified byte-identical to the tarball (`diff -r` clean).
+- **License**: MIT (© Naman Dwivedi)
+- **sha256**: pinned per file in `.claude/skills/helm-board/quickdraw/VENDORED.txt`, and
+  **re-checked by `bash .claude/skills/helm-board/test.sh`** — a vendored dependency whose bytes
+  nobody verifies is a CDN with extra steps.
+
+**Why vendored rather than pinned to a CDN.** It was four days old and on its fifth version in
+two days when it was chosen; the risk with a young single-author library is normally *you are
+stuck*, and vendoring converts that into *you own a file*. There is nothing to upgrade and
+nothing to fetch. Two upstream fixes worth sending are drafted at
+`~/.prp/helm-3ec376fc/reports/quickdraw-upstream.md`; keeping this copy legible and close to
+upstream is what makes a diff offerable rather than a private fork.
+
+To bump: re-download the tarball, `diff -r` against this directory, regenerate `VENDORED.txt`
+(`cd .claude/skills/helm-board && shasum -a 256 quickdraw/*`), and open a board to confirm it
+still renders and still takes a stroke.
+
 ## ghostty shell-integration — `Sources/Helm/Resources/ghostty/shell-integration/`
 
 Ghostty's shell-integration script tree (bash, elvish, fish, nushell, zsh),

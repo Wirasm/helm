@@ -155,6 +155,31 @@ Four things about it are worth knowing before you design around it:
 Neither of these exists on a **markdown** canvas: helm generates that page, so there is no script of
 yours on it to register a handler or post a report.
 
+## A page that takes the pointer
+
+helm injects its own annotation layer into every `.html` artifact, and its listeners capture — so a
+page with a drawing surface, a drag-to-pan map, a game board or anything else the *pointer* means
+something to is in a fight it did not know about. Two things go wrong and both are silent: with a
+mark tool held, helm's ink lands on top of whatever your page drew; and under the **default** tool a
+drag that selects no text posts a dismissal, which closes the operator's notes drawer on every
+gesture.
+
+**Put `data-helm-surface` on the element you own the pointer in, and helm does nothing inside it** —
+no stroke, no ink, no dismissal, and no anchor resolved out of it:
+
+```html
+<main id="board" data-helm-surface>…</main>
+```
+
+It is a bare attribute; there is nothing to configure. Everywhere else on the page helm's marking is
+unchanged, so anything you want the operator to be able to circle and comment on goes **outside**
+the declared element — a heading, a caption, prose beside the surface.
+
+**The second half is deliberate and worth knowing before you use it.** helm resolves a mark against
+DOM elements, so a surface that is one `<canvas>` has nothing inside it helm could honestly name.
+Declaring the region says *the addressable things in here are mine*, and reporting them is then your
+page's job — through `helmCanvasState`, above.
+
 ## Taking a dependency
 
 Three routes, all of which work. They differ in what happens six months from now, and that is the
@@ -237,3 +262,8 @@ canvas should look — a review, a plan, a board, a diagram — is a convention 
 reusing, and it belongs in its own skill that composes with this one. Keeping them apart is the
 point: a capability list that also carries taste stops being a capability list, and the taste stops
 being reviewable on its own terms.
+
+One exists so far: **`helm-board`** — a drawable canvas. It is the worked example of everything
+above at once, and reading it is the fastest way to see the three together: it declares
+`data-helm-surface`, it takes `helmCanvasUpdate` instead of being reloaded, and it reports through
+`helmCanvasState` what the operator drew and what they drew it over.
