@@ -107,6 +107,38 @@ final class CanvasStateLiveTests: XCTestCase {
                 + "parse or carry the first report's keys alongside the second's")
     }
 
+    /// **The channel survives a reload, and nothing else proves it does.**
+    ///
+    /// A page with no update handler is reloaded on every agent write — the ordinary path a
+    /// canvas updates by — and `HTMLCanvasPage.navigate` calls `removeAllUserScripts()` on the
+    /// way through. That call is why the annotation *script* has to be re-added, and the comment
+    /// beside it records that forgetting so is how marking would have silently died. A message
+    /// **handler** is not a user script and is not swept by it, so the state channel comes back
+    /// by itself — but "by itself" is exactly the kind of claim that is true until WebKit changes
+    /// its mind, and the failure would be a canvas that reports once, on its very first render,
+    /// and never again.
+    func testAPageStillReportsAfterAnAgentsRewriteReloadsIt() async throws {
+        try Self.page(reporting: "{ score: 1 }").write(
+            to: artifact, atomically: true, encoding: .utf8)
+        let pane = try Pane(artifact: artifact)
+        try await pane.firstLoad()
+        _ = try await pane.latch { ($0["state"] as? [String: Any])?["score"] as? Int == 1 }
+
+        // The agent rewrites the artifact. This page defines no `helmCanvasUpdate`, so helm
+        // offers, gets `unhandled`, and navigates — the destructive path, on purpose.
+        try Self.page(reporting: "{ score: 2 }").write(
+            to: artifact, atomically: true, encoding: .utf8)
+        pane.render(generation: 1)
+
+        let latch = try await pane.latch {
+            ($0["state"] as? [String: Any])?["score"] as? Int == 2
+        }
+        XCTAssertEqual(
+            (latch["state"] as? [String: Any])?["score"] as? Int, 2,
+            "the reloaded page's report reached nothing — the channel did not survive the "
+                + "navigation, and a canvas would report only on its first render")
+    }
+
     /// **A page cannot forge an operator's note through this channel either**, and the shape of
     /// the payload is why: what it posts becomes a `CanvasStateBody` and nothing else, so a
     /// message dressed up as an annotation still lands in the latch — or, here, is refused
@@ -194,9 +226,16 @@ final class CanvasStateLiveTests: XCTestCase {
             webView.configuration.userContentController.add(self, name: "probe")
         }
 
-        func firstLoad() async throws {
+        /// What SwiftUI's `updateNSView` does: hand the view the document's current generation
+        /// and let the view's own rule decide what that means.
+        func render(generation: Int, theme: CanvasTheme = .dark) {
             HTMLCanvasPage.load(
-                webView, path: path, generation: 0, theme: .dark, coordinator: coordinator)
+                webView, path: path, generation: generation, theme: theme,
+                coordinator: coordinator)
+        }
+
+        func firstLoad() async throws {
+            render(generation: 0)
             let deadline = ContinuousClock.now + .seconds(5)
             while ContinuousClock.now < deadline {
                 if loads >= 1 { return }

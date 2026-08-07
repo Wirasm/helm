@@ -138,6 +138,11 @@ Four things about it are worth knowing before you design around it:
 
 - **Latest-wins overwrite, not a log.** Every report replaces the last one. If you want history,
   keep it *inside* `state` — helm will not accumulate it for you.
+- **Report when something meaningful changed, never on a frame or a timer.** A changed report is a
+  file write, so a page reporting from `requestAnimationFrame` writes sixty times a second in the
+  pane the operator is using. helm does not throttle you — a delay would make the latch stale
+  exactly when it is moving fastest — so the judgement is yours. A lesson completed is a report; a
+  cursor moving is not.
 - **You read it on your next turn. It cannot reach you sooner.** Nothing wakes your session,
   nothing starts a turn, and a page cannot type into a prompt. `cat` it when you next run.
 - **`writtenAt` is a change signal.** A report identical to the previous one is not written, so the

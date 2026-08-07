@@ -226,6 +226,24 @@ final class CanvasModel: ObservableObject {
     /// Per-pane rather than read back from disk: comparing against the file would mean a read
     /// per report, and the question — *"is this different from what I last wrote?"* — is one
     /// this object is the only writer of.
+    ///
+    /// **It deliberately survives a reload of the same artifact, and that is not an oversight —
+    /// it is what the latch means.** A review read this as a defect (*"the page instance is brand
+    /// new, so `writtenAt` must move"*), which is the signal to write the rule down rather than
+    /// leave the next reader to re-derive it: **the latch tracks the artifact's state, not the
+    /// page's incarnations.** A theme flip, an `unhandled` update and the operator's own Reload
+    /// button all destroy the JS context, and a page that comes back reporting exactly what is
+    /// already on disk has, by construction, changed nothing. Clearing this there would rewrite
+    /// the file to say the same thing and move `writtenAt` — turning the one field an agent
+    /// checks for staleness from *"the state last changed"* into *"the page last restarted"*,
+    /// which is the reload counter nobody asked for. Pinned by
+    /// `CanvasStateTests.testAReloadOfTheSameArtifactIsNotAStateChangeAndWritesNothing`.
+    ///
+    /// What it is **not** is a claim that the file exists: delete the latch behind helm's back
+    /// and an unchanged report will not restore it. That is
+    /// `testRepeatingTheSameStateDoesNotRewriteTheLatch`'s instrument rather than a case anybody
+    /// is in — helm is the only writer, and re-creating a file somebody deleted on purpose is not
+    /// obviously the kinder answer.
     private var latchedState: CanvasStateBody?
 
     /// **A page reported what it is doing. Write it beside the artifact and stop** (#110).

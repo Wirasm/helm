@@ -223,6 +223,52 @@ final class CanvasStateTests: XCTestCase {
         XCTAssertNotEqual(one, try CanvasStateBody(["score": 5, "lesson": "dw", "at": 9]))
     }
 
+    // MARK: - The doc an artifact author copies from
+
+    /// **The skill is the far side of this wire, and nothing else holds it to the near side.**
+    ///
+    /// An artifact's JavaScript is written by whoever authored the page, from
+    /// `.claude/skills/helm-canvas/SKILL.md`, and it cannot compile against anything here — the
+    /// same runtime boundary `AGENTS.md` grants the mailbox and the spool their carve-outs for.
+    /// What the carve-out does **not** grant is silence: the rule is that a duplicate is honest
+    /// only when something can still detect the drift. `CanvasAnnotationScriptTests
+    /// .testTheScriptStillNamesTheSwiftConstantsItUsedToInterpolate` is this exact gate one file
+    /// over, for the exact same reason, and `helm-canvas/test.sh` reaches only `push.sh`.
+    ///
+    /// **Every value here is a compile-time constant, so this is the whole of the risk.** Rename
+    /// the handler, change the kind, or bump the version, and an agent authoring a page from a
+    /// stale doc posts to a name helm no longer registers — which by this channel's own design
+    /// is `NSLog` and nothing else: invisible to the operator, and invisible to the very agent
+    /// whose turn it happened on.
+    func testTheSkillStillNamesEveryConstantAnArtifactAuthorCopiesOutOfIt() throws {
+        let skill = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // Canvas/
+            .deletingLastPathComponent()  // HelmTests/
+            .deletingLastPathComponent()  // Tests/
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent(".claude/skills/helm-canvas/SKILL.md")
+        let text = try String(contentsOf: skill, encoding: .utf8)
+
+        XCTAssertTrue(
+            text.contains("messageHandlers?.\(CanvasPageState.handlerName)"),
+            "the documented page posts to a handler Swift never registered, and every report is "
+                + "silently dropped")
+        XCTAssertTrue(
+            text.contains(#"kind: "\#(CanvasPageState.Kind.state.rawValue)""#),
+            "the documented message carries a kind `decode` refuses by name")
+        XCTAssertTrue(
+            text.contains(#""format": "\#(CanvasStateLatch.currentFormat)""#),
+            "the documented latch is not the latch helm writes, so a reader checking `format` "
+                + "refuses helm's own file")
+        XCTAssertTrue(
+            text.contains(#""version": \#(CanvasStateLatch.currentVersion)"#),
+            "the documented version is stale, which is the one thing a version exists to stop")
+        XCTAssertTrue(
+            text.contains("\(CanvasStateBody.maxBytes / 1000) KB"),
+            "the documented cap is not the cap, so an author sizes their state against a number "
+                + "helm does not enforce")
+    }
+
     private func refusal(from message: Any) -> CanvasPageState.Refusal? {
         switch CanvasPageState.decode(message) {
         case .success: nil
@@ -299,6 +345,41 @@ final class CanvasStateTests: XCTestCase {
 
         let latch = try XCTUnwrap(try latchOnDisk())
         XCTAssertEqual((latch["state"] as? [String: Any])?["score"] as? Int, 8)
+    }
+
+    /// **The latch tracks the artifact's state, not the page's incarnations** — and a reload of
+    /// the *same* artifact is deliberately not a reset.
+    ///
+    /// Pinned because a reviewer read the surviving cache as a defect, which is the moment a rule
+    /// stops being obvious. A theme flip, an `unhandled` update and the operator's Reload button
+    /// all destroy the JS context; a page that comes back reporting exactly what is already on
+    /// disk has changed nothing, and rewriting the file to say so would move `writtenAt` — the
+    /// one field an agent checks for staleness — on an event that is not a state change. The
+    /// paired assertion is the one below it: a *different* artifact **does** reset.
+    /// Deleting the file between the two reports is the instrument, for
+    /// `testRepeatingTheSameStateDoesNotRewriteTheLatch`'s reason: comparing `writtenAt` would
+    /// **pass for the wrong reason**, because ISO 8601 has second resolution and two writes a
+    /// microsecond apart produce byte-identical timestamps. A latch that reappears is the only
+    /// evidence a write happened that cannot be faked by the clock standing still.
+    func testAReloadOfTheSameArtifactIsNotAStateChangeAndWritesNothing() throws {
+        let model = CanvasModel()
+        model.open(artifact)
+        let idle = try state(["score": 0])
+        model.pageDidReportState(idle)
+        XCTAssertNotNil(try latchOnDisk(), "the first report is written")
+
+        try FileManager.default.removeItem(at: CanvasStateLatch.sidecarURL(for: artifact))
+        // Everything a reload does to this model. `open` is deliberately NOT one of them — the
+        // pane stays on the artifact it was already showing, which is what a reload is.
+        model.reloadArtifact()
+        model.pageAnsweredUpdate(.unhandled)
+        model.pageDidReportState(idle)
+
+        XCTAssertNil(
+            try latchOnDisk(),
+            "a restarted page reporting what was already latched is not a state change, and "
+                + "writing for it would move `writtenAt` — turning the one field an agent checks "
+                + "for staleness into a reload counter")
     }
 
     /// A pane that moves to another artifact must not dedupe the new page's first report against
