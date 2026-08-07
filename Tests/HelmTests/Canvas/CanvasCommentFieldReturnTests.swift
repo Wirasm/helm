@@ -19,17 +19,18 @@ import XCTest
 /// Return means.
 @MainActor
 final class CanvasCommentFieldReturnTests: XCTestCase {
-    private var canvas: URL!
-
-    override func setUpWithError() throws {
-        canvas = FileManager.default.temporaryDirectory
+    /// A canvas to write notes beside, and its sidecar swept afterwards. A per-test helper rather
+    /// than a `setUpWithError`/`tearDownWithError` pair, because those are nonisolated and this
+    /// suite is `@MainActor` — CI warned about the mismatch four times over.
+    private func scratchCanvas() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("helm-canvas-\(UUID().uuidString).md")
-        try "# plan".write(to: canvas, atomically: true, encoding: .utf8)
-    }
-
-    override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: canvas)
-        try? FileManager.default.removeItem(at: CanvasNotes.sidecarURL(for: canvas))
+        try "# plan".write(to: url, atomically: true, encoding: .utf8)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: CanvasNotes.sidecarURL(for: url))
+        }
+        return url
     }
 
     /// **A control: it passes either way.** It cannot fail unless the fix overshoots and takes
@@ -37,7 +38,7 @@ final class CanvasCommentFieldReturnTests: XCTestCase {
     /// and the reason a test that only proves Shift+Return stopped writing would be satisfied by
     /// a field that never writes at all.
     func testReturnWritesTheNote() throws {
-        let field = try CommentWindow(canvas: canvas)
+        let field = try CommentWindow(canvas: try scratchCanvas())
         defer { field.close() }
 
         field.type("the loop reads backwards")
@@ -59,7 +60,7 @@ final class CanvasCommentFieldReturnTests: XCTestCase {
     /// own text is asserted, and then the Return that follows proves the newline really reaches
     /// the sidecar rather than being dropped on the way.
     func testShiftReturnStartsALineAndWritesNothing() throws {
-        let field = try CommentWindow(canvas: canvas)
+        let field = try CommentWindow(canvas: try scratchCanvas())
         defer { field.close() }
 
         field.type("the loop reads backwards")
@@ -92,7 +93,7 @@ final class CanvasCommentFieldReturnTests: XCTestCase {
     /// it was reproduced before it was believed; #278 says in as many words that this case must
     /// be covered here.
     func testHoldingShiftReturnDoesNotWriteOnTheRepeat() throws {
-        let field = try CommentWindow(canvas: canvas)
+        let field = try CommentWindow(canvas: try scratchCanvas())
         defer { field.close() }
 
         field.type("the loop reads backwards")
@@ -114,7 +115,7 @@ final class CanvasCommentFieldReturnTests: XCTestCase {
     /// comment is empty after that and the selection is gone, so the repeats that follow write
     /// nothing rather than becoming a burst of empty notes.
     func testHoldingPlainReturnStillWritesOnceAndNoMore() throws {
-        let field = try CommentWindow(canvas: canvas)
+        let field = try CommentWindow(canvas: try scratchCanvas())
         defer { field.close() }
 
         field.type("the loop reads backwards")
@@ -146,13 +147,7 @@ private final class CommentWindow {
         NSApp.setActivationPolicy(.accessory)
 
         model.open(canvas)
-        // The field is drawn *over a selection*, and `annotate` needs one to anchor to — without
-        // it every Return would write nothing and the "Shift+Enter wrote nothing" assertions
-        // would pass for that reason instead of the one they name.
-        let payload: [String: Any] = ["id": "phase-2", "text": "Phase 2"]
-        let selection = try XCTUnwrap(
-            CanvasSelection(payload), "could not build a selection to comment on",
-            file: file, line: line)
+        let selection = try Self.selectionToCommentOn(file: file, line: line)
         model.pageDidReport(.selected(selection))
 
         window = NSWindow(
@@ -175,6 +170,41 @@ private final class CommentWindow {
     func close() {
         window.contentView = nil
         window.close()
+    }
+
+    /// The mark the field is drawn over. `annotate` needs one to anchor to — without it every
+    /// Return writes nothing, and the "Shift+Enter wrote nothing" assertions would pass for that
+    /// reason instead of the one they name.
+    ///
+    /// **Built through `CanvasPageSelection.decode`, not around it, and that is the lesson rather
+    /// than a flourish.** The first version of this harness handed a dictionary straight to
+    /// `CanvasSelection.init`, so nothing held the fixture to the wire's own rules — and #109/#288
+    /// then made `kind` the discriminator, took `mark` off the wire, and started refusing a body
+    /// that carries no kind. The fixture was suddenly a shape no page can post, and CI said so as
+    /// *"Enter no longer writes the note"* across three tests while Enter was working perfectly.
+    /// A fixture that goes through the decoder cannot drift out from under the wire in silence:
+    /// it fails here, at construction, quoting the decoder's own refusal.
+    private static func selectionToCommentOn(
+        file: StaticString, line: UInt
+    ) throws -> CanvasSelection {
+        let body: [String: Any] = [
+            "kind": CanvasPageSelection.Kind.selection.rawValue,
+            "id": "phase-2",
+            "text": "Phase 2",
+        ]
+        switch CanvasPageSelection.decode(body) {
+        case let .success(.selected(selection)):
+            return selection
+        case .success(.cleared):
+            throw CanvasPageSelection.Refusal.malformed(.selection)
+        case let .failure(refusal):
+            XCTFail(
+                "the page-selection fixture this suite comments on is not a message helm accepts "
+                    + "any more — \(refusal.reason). Rebuild it to the shape "
+                    + "`CanvasPageSelection.decode` takes; do not loosen the decoder.",
+                file: file, line: line)
+            throw refusal
+        }
     }
 
     /// What the operator can see in the field. The comment is `@State` inside the view and there
