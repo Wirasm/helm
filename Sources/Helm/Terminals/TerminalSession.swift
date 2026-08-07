@@ -568,14 +568,31 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// the whole security story: terminal content is untrusted, so anything
     /// but http/https/file/mailto is dropped silently.
     ///
-    /// This is also the agent→helm channel, and it used to point out of the app: every
-    /// link went to `NSWorkspace`, so an agent offering a rendered report tabbed you
-    /// into a browser — the trip helm exists to absorb. A link to something the
-    /// canvas renders now opens **in helm** instead.
+    /// It used to point out of the app: every link went to `NSWorkspace`, so a rendered
+    /// report tabbed you into a browser — the trip helm exists to absorb. A link to
+    /// something the canvas renders now opens **in helm** instead.
     ///
-    /// **Offer, not push.** The agent writes a self-contained file or prints an
-    /// address; helm opens it only when you ⌘-click. Nothing appears unbidden — it is
-    /// not helm's job to rearrange the bench on the agent's word.
+    /// **Offer, not push.** helm opens it only when you ⌘-click. Nothing appears
+    /// unbidden — it is not helm's job to rearrange the bench on the operator's behalf.
+    ///
+    /// **This comment used to call itself "the agent→helm channel", and that was wrong
+    /// in its main case (#124).** Two independent measurements, 2026-08-07, on a live
+    /// spool-spawned Claude agent in an isolated helm:
+    ///
+    /// 1. **Claude Code's TUI captures the mouse**, so a ⌘-click is consumed before helm
+    ///    exists in the path — no `GHOSTTY_ACTION_OPEN_URL`, no hover, nothing to handle.
+    ///    Measured off the pty: it sets `?1000h ?1002h ?1003h ?1006h` at startup. It is
+    ///    **agent-specific, not a property of TUIs** — `pi` and `codex` set no mouse
+    ///    tracking at all, so a link in one of *their* panes still reaches here.
+    /// 2. **Inside a Claude session there is no hyperlink to click in the first place.**
+    ///    The agent ran `printf` emitting a real OSC 8 sequence; the TUI re-renders
+    ///    everything it prints, and what reached the grid was plain styled text. So the
+    ///    capture is not even the binding constraint for the case #124 describes.
+    ///
+    /// The agent→helm channel is `push.sh` (#125, #170, #184): an agent pushes the
+    /// artifact and helm offers it as a tab, needing no click and no operator at the pane.
+    /// This method stays exactly as it is — a link printed from a *shell* still works,
+    /// which is a path #124 required not to regress.
     ///
     /// Both things the canvas renders come in this way: a `.md`/`.html` file, and an
     /// http address — an agent's `http://localhost:3000` opens **in helm** rather than
