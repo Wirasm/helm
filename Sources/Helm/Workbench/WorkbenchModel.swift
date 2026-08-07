@@ -26,9 +26,32 @@ import SwiftUI
 /// terminal pane, forever. The bench's only job is to say *which panes show the chat face*.
 @MainActor
 final class WorkbenchModel: ObservableObject {
-    /// nil when no workspace is open. Not an "empty bench": `Workbench`'s first invariant
-    /// is that a bench always holds at least one pane, so there is no such value to make.
+    /// nil when no workspace is open — **or when a mount is waiting on an answer** (#85). Not
+    /// an "empty bench": `Workbench`'s first invariant is that a bench always holds at least
+    /// one pane, so there is no such value to make.
+    ///
+    /// The two nils are told apart by `restoreOffer`, and the pairing is load-bearing rather
+    /// than incidental: a nil bench is exactly what makes `WorkspaceModel.saveContext` return
+    /// early, which is what keeps a saved bench intact while the question about it is open.
     @Published private(set) var bench: Workbench?
+
+    /// The unanswered mount question, if there is one (#85). See `BenchMountPolicy` for when
+    /// it is asked and which bench it is about.
+    @Published private(set) var restoreOffer: BenchRestoreOffer?
+
+    /// A bench a *fresh* declined, kept so that one wrong click cannot destroy a layout (#85).
+    /// Read back into `WorkspaceContext.shelvedBench` by `WorkspaceModel.saveContext`, and
+    /// offered again by `BenchMountPolicy` in the one case where it is still the operator's
+    /// live question.
+    @Published private(set) var shelvedBench: Workbench?
+
+    /// One resume offer per restored terminal pane that had an agent (#63), keyed by pane.
+    ///
+    /// **Not persisted, and `ResumableAgent`'s header says why**: the record of what was
+    /// running belongs on the bench, the question about it belongs to this launch. Entries go
+    /// when the operator answers, and when a tick of `observeAgents` finds a live agent in the
+    /// pane after all — which is what makes an accepted resume put its own offer away.
+    @Published private(set) var resumeOffers: [Pane.ID: AgentResumeOffer] = [:]
 
     /// ⌘O's popover. App chrome rather than slot chrome — it appears once, on the focused
     /// slot's strip, because repeating it on every strip would multiply it by N. The
@@ -73,6 +96,22 @@ final class WorkbenchModel: ObservableObject {
     /// operator's own `~/.helm/mail`.
     private let notes: CanvasNoteCourier
 
+    /// How helm learns which agent is in a pane, and whether its transcript is still there
+    /// (#63). Injected for `notes`' reason exactly: every rule that depends on it is then
+    /// reachable from `swift test` against a fixture directory, on a machine that has never
+    /// run Claude Code and with nothing read out of the operator's own `~/.claude`.
+    private let agents: AgentObserver
+
+    /// How a resume line reaches the pty it is meant for. A seam rather than a direct
+    /// `hostView` call so `resume(_:)` is testable — the same trade `SpoolSpawning` makes for
+    /// the spool, and the default is the same paste-then-Return the spool sends.
+    private let launcher: TerminalLaunching
+
+    /// Workspaces whose mount question has already been answered in this process. A switch
+    /// away and back re-mounts, and re-asking then would make the question chrome rather than
+    /// a decision — `BenchMountPolicy.mount` takes this as `answered`.
+    private var answered: Set<WorkspacePath> = []
+
     /// `AnyCancellable`s rather than NotificationCenter tokens: they unsubscribe in their
     /// own deinit, and Swift 6 forbids a nonisolated deinit from touching the non-Sendable
     /// token the observer API hands back.
@@ -81,9 +120,16 @@ final class WorkbenchModel: ObservableObject {
     /// Internal, not a `.shared`. `TerminalManager.shared` and `BoardModel.shared` are
     /// singletons because other slices reach them; nothing outside the workbench needs
     /// this one, and an injectable initialiser is what lets tests build isolated models.
-    init(terminals: TerminalManager, notes: CanvasNoteCourier = CanvasNoteCourier()) {
+    init(
+        terminals: TerminalManager,
+        notes: CanvasNoteCourier = CanvasNoteCourier(),
+        agents: AgentObserver = .live(),
+        launcher: TerminalLaunching? = nil
+    ) {
         self.terminals = terminals
         self.notes = notes
+        self.agents = agents
+        self.launcher = launcher ?? TerminalLineLauncher(terminals: terminals)
         subscribe()
     }
 
@@ -96,20 +142,122 @@ final class WorkbenchModel: ObservableObject {
     /// `restoring` is the persisted bench — or the one `migrating(from:)` built out of a
     /// pre-bench context. Its terminal pane ids ARE session ids, so they go straight to
     /// `TerminalManager.activate(restoring:)` and the row comes back under them.
-    func activate(workspacePath path: WorkspacePath, restoring restorable: Workbench? = nil) {
+    ///
+    /// **This form mounts, and asks nobody** — the behaviour helm has always had, and still
+    /// the right one everywhere there is no operator at the pane: a spool spawn's `cwd`
+    /// becoming a workspace (#54), and a test that wants a bench to exist. See
+    /// `activate(workspacePath:offering:shelved:)` for the operator's own mount, which may
+    /// stop and ask (#85).
+    func activate(
+        workspacePath path: WorkspacePath, restoring restorable: Workbench? = nil,
+        shelved: Workbench? = nil
+    ) {
         workspacePath = path
+        shelvedBench = shelved
+        restoreOffer = nil
+        mount(path, restoring: restorable)
+    }
+
+    /// The operator's own mount: the same activation, except that a bench worth asking about
+    /// **stops and asks first** (#85).
+    ///
+    /// Paired with `activate(workspacePath:restoring:)` exactly as
+    /// `Workbench.splitRight(offering:)` is paired with `splitRight(with:)`, and for a stronger
+    /// reason than symmetry — see `BenchMountPolicy`'s header for the spawn that would
+    /// otherwise have hung against a question nobody was there to answer.
+    ///
+    /// While the question is open *nothing happens*: no pty is spawned, no bench is built, and
+    /// nothing is written over what is saved. Reopening 17 panes silently and offering to
+    /// reopen 17 panes are the difference between a hazard and an annoyance, and only one of
+    /// them can be declined.
+    func activate(
+        workspacePath path: WorkspacePath, offering restorable: Workbench?,
+        shelved: Workbench? = nil
+    ) {
+        workspacePath = path
+        shelvedBench = shelved
+        switch BenchMountPolicy.mount(
+            saved: restorable, shelved: shelved, answered: answered.contains(path))
+        {
+        case let .ask(offer):
+            // Deliberately *before* `TerminalManager.activate`: that call spawns a shell for a
+            // workspace with nothing to restore, and a question that has already spawned the
+            // thing it is asking about is not a question.
+            restoreOffer = offer
+            bench = nil
+            resumeOffers = [:]
+            reconcileVisibility()
+        case let .restore(saved):
+            restoreOffer = nil
+            mount(path, restoring: saved)
+        case .fresh:
+            restoreOffer = nil
+            mount(path, restoring: nil)
+        }
+    }
+
+    /// The operator's answer to the mount question (#85).
+    ///
+    /// **Fresh shelves rather than discards.** *"One wrong click should not destroy a layout.
+    /// Fresh means do not open it now, never forget it."* The declined bench goes to
+    /// `shelvedBench`, which `WorkspaceModel.saveContext` writes beside the live one — so the
+    /// bench that is about to be persisted over it is not the only copy.
+    func answer(_ choice: BenchRestoreChoice) {
+        guard let path = workspacePath, let offer = restoreOffer else { return }
+        answered.insert(path)
+        restoreOffer = nil
+        switch choice {
+        case .restore:
+            // It is being opened, so there is nothing left shelved about it.
+            shelvedBench = nil
+            mount(path, restoring: offer.bench)
+        case .fresh:
+            shelvedBench = offer.bench
+            mount(path, restoring: nil)
+        }
+    }
+
+    /// Build the bench and everything that follows from it. The body `activate` used to be,
+    /// plus the resume offers a restored bench brings with it.
+    private func mount(_ path: WorkspacePath, restoring restorable: Workbench?) {
+        answered.insert(path)
         terminals.activate(workspacePath: path, restoring: restorable?.terminalPaneIDs ?? [])
         // The manager is the authority on which terminals exist — it may have just made a
         // fresh shell for a workspace with nothing persisted, and that shell's id is not
         // in any restored bench.
         let live = terminals.sessions(for: path).map(\.id)
-        bench = restorable ?? Self.defaultBench(for: live)
+        let mounted = restorable ?? Self.defaultBench(for: live)
+        bench = mounted
+        resumeOffers = offers(in: mounted)
         reconcileVisibility()
+    }
+
+    /// One offer per pane whose record names an agent that is **not already running there**.
+    ///
+    /// The liveness check is what stops a switch away and back from re-offering an agent the
+    /// operator already resumed: the record stays on the pane while the agent runs — that is
+    /// the point of it — so "has a record" alone would ask about a conversation that is on
+    /// screen.
+    private func offers(in bench: Workbench?) -> [Pane.ID: AgentResumeOffer] {
+        guard let bench else { return [:] }
+        let live = liveAgents(in: bench)
+        return Dictionary(
+            uniqueKeysWithValues: bench.resumableAgents.compactMap { pane, agent in
+                guard live[pane] == nil else { return nil }
+                return (
+                    pane,
+                    AgentResumeOffer.offer(
+                        agent, in: pane, transcriptExists: agents.transcriptExists)
+                )
+            })
     }
 
     func deactivate() {
         workspacePath = nil
         bench = nil
+        restoreOffer = nil
+        shelvedBench = nil
+        resumeOffers = [:]
         canvases.removeAll()
         // Keyed by canvas pane id, so it goes exactly when the cache does — a leftover entry
         // would name a pane nothing resolves any more.
@@ -140,6 +288,112 @@ final class WorkbenchModel: ObservableObject {
     private static func defaultBench(for sessions: [Pane.ID]) -> Workbench? {
         guard !sessions.isEmpty else { return nil }
         return Workbench(panes: sessions.map { Pane(id: $0, content: .terminal(face: .terminal)) })
+    }
+
+    // MARK: - Which agent is in which pane (#63)
+
+    /// Watch the panes for agents until cancelled — driven from `WorkbenchView`'s `.task`, so
+    /// its lifetime is the window's and SwiftUI cancels it on teardown. The same shape, and
+    /// the same two-second cadence, `BoardModel.poll` already runs against the same registry.
+    ///
+    /// **Polling, not watching**, for `BoardModel`'s reason: a session's row is rewritten in
+    /// place, which a directory-level `DispatchSource` does not reliably see.
+    func watchAgents(every interval: Duration = .seconds(2)) async {
+        while !Task.isCancelled {
+            observeAgents()
+            try? await Task.sleep(for: interval)
+        }
+    }
+
+    /// One tick: write down who is in each pane, and put away any offer that has been answered
+    /// by the agent turning up.
+    ///
+    /// **The record is sticky — set when an agent is seen, never cleared when it stops being
+    /// seen.** That is deliberate and it is the whole point of the field. A `claude` running a
+    /// bash command hands the pty's foreground to a child for as long as that command takes,
+    /// so a record cleared on absence would be erased and rewritten several times a minute —
+    /// churning `UserDefaults` through `WorkspaceModel.observe`, and, far worse, leaving
+    /// nothing at all if helm died inside one of those windows. A crash is exactly the case
+    /// #63 exists for. The cost, recorded: an agent the operator exited on purpose is still
+    /// offered on the next launch. That offer names its session and is one click to decline,
+    /// which is the cheap side of the trade.
+    ///
+    /// **The active workspace only.** A parked workspace's arrangement is a value in
+    /// `WorkspaceModel.contexts` and nothing can mutate it until it is mounted again — the
+    /// same rule `canvas(_:didPointAt:)` states one method over. Its record is whatever was
+    /// written before it was parked, which is the last moment helm could see it.
+    func observeAgents() {
+        guard let bench else { return }
+        let live = liveAgents(in: bench)
+        // Only a real change is committed. Every commit reaches `UserDefaults`, and an
+        // identical record written every two seconds is a write per tick for the life of the
+        // process — the same reasoning `canvas(_:didPointAt:)` gives for asking whether the
+        // source actually moved.
+        var updated = bench
+        var changed = false
+        for (pane, agent) in live {
+            guard case let .terminal(_, recorded) = bench.pane(pane)?.content,
+                recorded != agent
+            else { continue }
+            updated.record(agent, in: pane)
+            changed = true
+        }
+        if changed { commit(updated) }
+        // An offer whose pane now holds a live agent has been answered by events: the operator
+        // accepted it, or started one by hand. Either way there is nothing left to ask.
+        let stale = resumeOffers.keys.filter { live[$0] != nil }
+        if !stale.isEmpty { for pane in stale { resumeOffers[pane] = nil } }
+    }
+
+    /// Which agent is running in each terminal pane **right now**, per Claude Code's own
+    /// registry. Absent from the dictionary means the registry says nothing about that pane —
+    /// never "there is no agent", which is the distinction `AddressBook` is careful about one
+    /// join over.
+    private func liveAgents(in bench: Workbench) -> [Pane.ID: ResumableAgent] {
+        // Re-read per call rather than captured: the row helm is waiting for is written by an
+        // agent that has not started yet, so a lookup taken earlier could never see it —
+        // `AgentRegistry.sessionLookup`'s header has the same note for the same reason.
+        let rows = agents.sessionsNow()
+        var found: [Pane.ID: ResumableAgent] = [:]
+        for id in bench.terminalPaneIDs {
+            guard let session = terminals.sessions.first(where: { $0.id == id }),
+                let pid = agents.foregroundPid(session), let row = rows[pid],
+                let sessionId = row.sessionId, !sessionId.isEmpty
+            else { continue }
+            found[id] = ResumableAgent(
+                command: AgentResume.claude, session: sessionId,
+                // The registry's own `cwd` when it has one — an agent started in a
+                // subdirectory is not working in the workspace root, and it is the `cwd` that
+                // finds the transcript.
+                cwd: row.cwd ?? session.workspacePath.value)
+        }
+        return found
+    }
+
+    /// The operator accepted a pane's resume offer (#63).
+    ///
+    /// helm composes the agent's own `--resume` and puts it in that pane's pty. It does not
+    /// reimplement resume, and it does not touch focus: the line goes to the surface helm
+    /// created for that pane, so it cannot land in whatever pane holds the keyboard (#96).
+    ///
+    /// The record stays on the pane. It is still true — that agent is what is running there —
+    /// and the next tick of `observeAgents` will confirm it and retire the offer.
+    func resume(_ pane: Pane.ID) {
+        guard let offer = resumeOffers[pane], offer.canResume,
+            let line = AgentResume.line(resuming: offer.agent)
+        else { return }
+        resumeOffers[pane] = nil
+        launcher.run(line, in: pane)
+    }
+
+    /// The operator declined a pane's resume offer, or acknowledged one helm cannot make good
+    /// on. **The record goes with it** — a declined agent left on the pane is one that is
+    /// offered again on every launch until the pane is closed.
+    func dismissResume(_ pane: Pane.ID) {
+        guard var bench, resumeOffers[pane] != nil else { return }
+        resumeOffers[pane] = nil
+        bench.record(nil, in: pane)
+        commit(bench)
     }
 
     // MARK: - Resolving panes to the objects they name
@@ -341,6 +595,9 @@ final class WorkbenchModel: ObservableObject {
 
     func close(_ pane: Pane.ID) {
         guard var bench, let closing = bench.pane(pane), bench.close(pane) else { return }
+        // The offer goes with the pane it was about. Nothing else would drop it — an offer is
+        // keyed by pane id, and a closed pane's id is one nothing resolves any more.
+        resumeOffers[pane] = nil
         commit(bench)
         switch closing.content {
         case .terminal:
@@ -484,11 +741,11 @@ final class WorkbenchModel: ObservableObject {
     /// a control that silently does nothing is worse than one that says it cannot.
     var composeTarget: Pane.ID? {
         guard let bench else { return nil }
-        if let focused = bench.focusedPane, case .terminal(.chat) = focused.content {
+        if let focused = bench.focusedPane, case .terminal(.chat, _) = focused.content {
             return focused.id
         }
         let reading = bench.panes.filter {
-            if case .terminal(.chat) = $0.content { true } else { false }
+            if case .terminal(.chat, _) = $0.content { true } else { false }
         }
         return reading.count == 1 ? reading[0].id : nil
     }

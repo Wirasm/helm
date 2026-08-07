@@ -60,9 +60,14 @@ final class TerminalManager: ObservableObject {
     ///
     /// `restoring` carries the ids persisted for this workspace. On the first visit
     /// after a relaunch they name terminals whose ptys died with the old process, so
-    /// the row is rebuilt under those same ids — the shells come back **empty**, and
-    /// an agent is a `cls --resume` away. helm deliberately does not re-run it:
-    /// helm attaches to agents, it never owns their launch.
+    /// the row is rebuilt under those same ids — and **the shells still come back empty**.
+    ///
+    /// That last part did not change with #63, and it is worth being exact about what did.
+    /// This type still starts nothing but a login shell: helm attaches to agents, it never
+    /// owns their launch. What #63 added is one level up — a restored *pane* whose persisted
+    /// record names an agent shows an **offer** to resume it (`AgentResumeBar`), and only the
+    /// operator accepting one ever puts a `--resume` line in a pty. Nothing here re-runs
+    /// anything, and a helm nobody clicks in behaves exactly as it always has.
     ///
     /// Restore stays lazy on purpose. `init` creates no pty until a workspace is
     /// visited, which bounds startup to the active context rather than every

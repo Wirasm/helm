@@ -35,9 +35,24 @@ enum TranscriptLocator {
         for session: AgentSession, root: URL = defaultRoot
     ) -> URL? {
         guard let sessionId = session.sessionId, !sessionId.isEmpty else { return nil }
+        return transcript(forSession: sessionId, cwd: session.cwd, root: root)
+    }
+
+    /// The same question asked without a registry row in hand (#63).
+    ///
+    /// A restore offer knows a session id and a `cwd` — read off the pane's persisted
+    /// `ResumableAgent`, from a process that no longer exists — and has no row to describe.
+    /// Synthesising an `AgentSession` with a made-up pid to ask this would be a value pretending
+    /// to be something it is not, which is the shape `AGENTS.md` names as a seam. So the two
+    /// fields the answer actually depends on are the parameters, and the row-shaped caller
+    /// above unpacks itself.
+    static func transcript(
+        forSession sessionId: String, cwd: String?, root: URL = defaultRoot
+    ) -> URL? {
+        guard !sessionId.isEmpty else { return nil }
         let file = "\(sessionId).jsonl"
 
-        if let cwd = session.cwd {
+        if let cwd {
             let guess = root.appendingPathComponent(directoryName(for: cwd))
                 .appendingPathComponent(file)
             if FileManager.default.fileExists(atPath: guess.path) { return guess }
