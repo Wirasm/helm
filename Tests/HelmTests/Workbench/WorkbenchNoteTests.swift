@@ -85,6 +85,26 @@ final class WorkbenchNoteTests: XCTestCase {
                 .count, 2)
     }
 
+    /// **`deactivate` drops the canvas cache without closing what is in it**, which predates notes
+    /// and is right for a webview. It is the one teardown that would otherwise take a note being
+    /// typed with it: a pending save holds its model weakly, so the model deallocs and the
+    /// keystrokes since the last write are gone.
+    func testClosingTheLastWorkspaceSavesANoteBeingTyped() throws {
+        let model = mounted()
+        let id = try XCTUnwrap(model.newNote(on: day("2026-08-07")))
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+        guard case let .canvas(.file(path)) = pane.content else {
+            return XCTFail("a note is a canvas pane pointed at its own file")
+        }
+        model.canvas(for: pane).edit("typed, and then the workspace went away")
+
+        model.deactivate()
+
+        XCTAssertEqual(
+            try String(contentsOfFile: path.value, encoding: .utf8),
+            "typed, and then the workspace went away")
+    }
+
     // MARK: - When it cannot
 
     /// A keystroke that silently does nothing is the failure shape `AGENTS.md` records paying for

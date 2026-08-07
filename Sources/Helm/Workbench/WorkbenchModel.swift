@@ -340,6 +340,12 @@ final class WorkbenchModel: ObservableObject {
         mount = .empty
         shelvedBench = nil
         resumeOffers = [:]
+        // **Flushed before they are dropped** (#289). Unlike `closeWorkspace`, this does not call
+        // `close()` on each model — that is deliberate and predates notes — so nothing else here
+        // would give a note being typed in its last chance to be written. A pending save holds
+        // its model weakly, so dropping the cache mid-debounce is the one path that could lose
+        // the keystrokes since the last write.
+        for cached in canvases.values { cached.model.saveNote() }
         canvases.removeAll()
         // Keyed by canvas pane id, so it goes exactly when the cache does — a leftover entry
         // would name a pane nothing resolves any more.
