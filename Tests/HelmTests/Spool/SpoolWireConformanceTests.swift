@@ -67,6 +67,10 @@ import XCTest
 /// 0.3–0.5s per invocation on this machine. The result-direction and suite tests add roughly
 /// twenty more invocations; the whole file still finishes in a few seconds, not enough to move
 /// this out of the ordinary gate.
+///
+/// **That cost is what every deadline here is really waiting on, and it is not what any test
+/// here has an opinion about** — see `scriptBudget` below for why the number is 60s rather
+/// than the 10s that twice reported a busy machine as a drifted wire format (#291).
 final class SpoolWireConformanceTests: XCTestCase {
     private var spoolDir: URL!
     private var runningProcesses: [Process] = []
@@ -77,6 +81,24 @@ final class SpoolWireConformanceTests: XCTestCase {
         try FileManager.default.createDirectory(at: spoolDir, withIntermediateDirectories: true)
         try SpoolDirectory(root: spoolDir).prepare()
     }
+
+    /// **How long a `swift tools/<script>` invocation is given, and what that number is not.**
+    ///
+    /// It is a **hang guard**, not a performance bar. Every wait in this suite is really
+    /// waiting on two things at once — `swift <file>` *compiling* the script, and then the
+    /// script doing its job — and only the second is what any test here has an opinion about.
+    ///
+    /// It was 10s, and 10s is inside the noise on the compile half. Measured on this machine:
+    /// one `swift tools/helm-capture.swift` is **0.32s** with a warm module cache, even at
+    /// load 61 on 11 cores. On a cold GitHub runner it is the first compile of anything, with
+    /// no cache at all — and run 31156875717 is that costing more than 10s and taking the
+    /// gate down on a branch whose diff touches no file this test reads (#291).
+    ///
+    /// 60s is 6× the worst honest cold compile and still fails a genuinely hung script inside
+    /// a minute. **Raise it rather than trimming it if it fires again** — a red here is
+    /// supposed to mean *the spool wire drifted*, and that is the most alarming thing this
+    /// suite can say. It must never be the sentence a busy machine produces.
+    private static let scriptBudget: TimeInterval = 60
 
     override func tearDownWithError() throws {
         // Every script that has NOT yet been given a terminal result keeps polling — nothing
@@ -646,7 +668,7 @@ final class SpoolWireConformanceTests: XCTestCase {
 
         let directory = SpoolDirectory(root: expectedRoot)
         let url = expectedRoot.appendingPathComponent("\(id).json")
-        let deadline = Date().addingTimeInterval(10)
+        let deadline = Date().addingTimeInterval(Self.scriptBudget)
         var request: SpoolRequest?
         while Date() < deadline, request == nil {
             request = directory.request(at: url)
@@ -692,7 +714,7 @@ final class SpoolWireConformanceTests: XCTestCase {
     /// expected to answer and stop on its own. Captures stderr, since that is where every
     /// `die()` message and every success message lands.
     private func runAndCapture(
-        _ script: String, _ arguments: [String], timeout: TimeInterval = 10
+        _ script: String, _ arguments: [String], timeout: TimeInterval = scriptBudget
     ) throws -> (exitCode: Int32, stderr: String) {
         let scriptURL = repositoryRoot.appendingPathComponent("tools/\(script)")
         guard FileManager.default.fileExists(atPath: scriptURL.path) else {
@@ -732,7 +754,7 @@ final class SpoolWireConformanceTests: XCTestCase {
     /// actual JSON a script printed back, which each of them writes to stdout right before
     /// switching on `status` (`helm-spool.swift:186`, `helm-close.swift:153`).
     private func runAndCaptureBoth(
-        _ script: String, _ arguments: [String], timeout: TimeInterval = 10
+        _ script: String, _ arguments: [String], timeout: TimeInterval = scriptBudget
     ) throws -> (exitCode: Int32, stdout: String, stderr: String) {
         let scriptURL = repositoryRoot.appendingPathComponent("tools/\(script)")
         guard FileManager.default.fileExists(atPath: scriptURL.path) else {
@@ -777,7 +799,9 @@ final class SpoolWireConformanceTests: XCTestCase {
     /// Polling for the *final* name rather than reading as soon as anything shows up is what
     /// keeps this from ever reading a half-written file: every script writes under a dot name
     /// and renames into place, so the final name existing at all means the write is whole.
-    private func decodedRequest(id: String, timeout: TimeInterval = 10) throws -> SpoolRequest {
+    private func decodedRequest(
+        id: String, timeout: TimeInterval = scriptBudget
+    ) throws -> SpoolRequest {
         let directory = SpoolDirectory(root: spoolDir)
         let url = spoolDir.appendingPathComponent("\(id).json")
         let deadline = Date().addingTimeInterval(timeout)
@@ -804,12 +828,22 @@ final class SpoolWireConformanceTests: XCTestCase {
         }
     }
 
+    /// **Says which of the two things it is, because it cannot tell and the reader can.**
+    ///
+    /// A red in this suite means "the spool wire drifted", which is the loudest thing it can
+    /// say — so when the cause is instead a machine too busy to compile a one-file script
+    /// inside the budget, the message has to offer that reading rather than leave a diff to
+    /// take the blame. #291 is that mistake made twice: once locally under agent load, once on
+    /// a cold CI runner, both on branches touching no file this suite reads.
     private struct ScriptNeverExited: Error, CustomStringConvertible {
         let script: String
         let timeout: TimeInterval
         var description: String {
             "\(script) was still running \(timeout)s after being given a terminal result — it "
-                + "should have answered and exited"
+                + "should have answered and exited. This budget covers `swift <file>` compiling "
+                + "the script as well as running it, so a cold or heavily loaded machine can "
+                + "reach it without anything having drifted (#291). Before reading this as a "
+                + "wire-format failure, re-run it on a quiet machine."
         }
     }
 
