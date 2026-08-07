@@ -83,32 +83,42 @@ extension CanvasAnnotation {
         guard !comment.isEmpty else { return nil }
         guard let payload = body as? [String: Any] else { return nil }
 
-        switch payload["mark"] as? String {
-        case "enclosure":
+        switch CanvasPageSelection.Kind(rawValue: payload["kind"] as? String ?? "") {
+        case .enclosure:
             let covered = decodedAnchors(payload["targets"])
             // Refused rather than shipped as a coordinate: a circle around nothing is the
             // operator pointing at empty space, and helm has no honest anchor for that.
             guard !covered.isEmpty, covered.count <= maximumEnclosureCount else { return nil }
             return CanvasAnnotation(mark: .enclosure(covering: covered), comment: comment)
 
-        case "relation":
+        case .relation:
             let from = decodedAnchor(payload["from"])
             let to = decodedAnchor(payload["to"])
             // One end may be empty — that is "add a node here". Neither end is nothing.
             guard from != nil || to != nil else { return nil }
             return CanvasAnnotation(mark: .relation(from: from, to: to), comment: comment)
 
-        case "point":
+        case .point:
             guard let at = decodedAnchor(payload) else { return nil }
             return CanvasAnnotation(mark: .point(at), comment: comment)
 
-        default:
-            // No mark, or one helm does not know: today's text selection, unchanged. An
-            // unknown value degrades here rather than refusing, because the page is
-            // agent-authored and a future mark helm has not learned is not a reason to
-            // throw away a comment the operator already typed.
+        case .selection:
             guard let at = decodedAnchor(payload) else { return nil }
             return CanvasAnnotation(mark: .selection(at), comment: comment)
+
+        case .cleared, .none:
+            // **A kind this build does not know is refused, and that reverses what this
+            // `default` used to do** (#109). It used to fall through to a text selection, on
+            // the reasoning that *"the page is agent-authored and a future mark helm has not
+            // learned is not a reason to throw away a comment"* — but the page posting here is
+            // not agent-authored: the bridge lives in a named content world (#164), so the only
+            // thing that can post is `canvas-annotation.js`, which ships in the same binary as
+            // this switch. An unknown kind is therefore not a newer page, it is drift — and
+            // guessing "it was probably a selection" is how a lasso would silently become a
+            // highlight over whatever text happened to be in the payload.
+            //
+            // `.cleared` lands here too, and always did: a dismissal is not a note.
+            return nil
         }
     }
 

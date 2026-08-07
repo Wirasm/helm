@@ -22,9 +22,13 @@ final class CanvasModelTests: XCTestCase {
         if case let .url(page) = model.showing { page } else { nil }
     }
 
-    /// What the bridge reports when the operator selects `payload["text"]` on the page.
+    /// What the bridge reports when the operator selects `payload["text"]` on the page — with
+    /// `kind: "selection"` filled in, because every message has declared one since #109 and
+    /// `annotate` decodes this body again downstream.
     private func selection(_ payload: [String: Any]) throws -> CanvasPageSelection {
-        .selected(try XCTUnwrap(CanvasSelection(payload)))
+        var payload = payload
+        payload["kind"] = payload["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
+        return .selected(try XCTUnwrap(CanvasSelection(payload)))
     }
 
     // MARK: - File source or URL source
@@ -270,18 +274,16 @@ final class CanvasModelTests: XCTestCase {
     // both were silently dropped before decode ever saw them. These two go through the real
     // gate, exactly as the page posts them, and would have failed before the fix.
 
-    /// The page's freehand tool: `bridge.postMessage({ mark: "enclosure", targets, rect })`.
+    /// The page's freehand tool: `bridge.postMessage({ kind: "enclosure", targets, rect })`.
     func testAnEnclosurePayloadReachesTheNoteThroughTheRealGate() throws {
         let model = CanvasModel()
         model.open(file)
 
-        let report = try XCTUnwrap(
-            CanvasPageSelection([
-                "mark": "enclosure",
-                "targets": [["id": "phase-2", "text": "Phase 2: Ship"]],
-                "rect": ["x": 10, "y": 20, "width": 30, "height": 40],
-            ]),
-            "the gate must admit a payload with no top-level text when it carries a mark")
+        let report = try CanvasPageSelection.decode([
+            "kind": "enclosure",
+            "targets": [["id": "phase-2", "text": "Phase 2: Ship"]],
+            "rect": ["x": 10, "y": 20, "width": 30, "height": 40],
+        ]).get()
         model.pageDidReport(report)
         XCTAssertNotNil(model.selection, "an enclosure is a selection, exactly as text is")
 
@@ -294,19 +296,17 @@ final class CanvasModelTests: XCTestCase {
         }
     }
 
-    /// The page's arrow tool: `bridge.postMessage({ mark: "relation", from, to, rect })`.
+    /// The page's arrow tool: `bridge.postMessage({ kind: "relation", from, to, rect })`.
     func testARelationPayloadReachesTheNoteThroughTheRealGate() throws {
         let model = CanvasModel()
         model.open(file)
 
-        let report = try XCTUnwrap(
-            CanvasPageSelection([
-                "mark": "relation",
-                "from": ["id": "phase-1", "text": "One"],
-                "to": ["id": "phase-3", "text": "Three"],
-                "rect": ["x": 0, "y": 0, "width": 0, "height": 0],
-            ]),
-            "the gate must admit a payload with no top-level text when it carries a mark")
+        let report = try CanvasPageSelection.decode([
+            "kind": "relation",
+            "from": ["id": "phase-1", "text": "One"],
+            "to": ["id": "phase-3", "text": "Three"],
+            "rect": ["x": 0, "y": 0, "width": 0, "height": 0],
+        ]).get()
         model.pageDidReport(report)
         XCTAssertNotNil(model.selection, "a relation is a selection, exactly as text is")
 
@@ -389,19 +389,52 @@ final class CanvasModelTests: XCTestCase {
     /// than rounded down to "cleared" — that would let a malformed message close a field the
     /// operator was typing in.
     func testOnlyARecognisedBodyIsAReport() throws {
-        XCTAssertNil(CanvasPageSelection("not a payload at all"))
-        XCTAssertNil(CanvasPageSelection(["cleared": "yes"]), "a string is not the flag")
+        XCTAssertEqual(
+            CanvasPageSelection.decode("not a payload at all").refusal, .notAnObject)
 
-        guard case .cleared = try XCTUnwrap(CanvasPageSelection(["cleared": true])) else {
+        guard case .cleared = try CanvasPageSelection.decode(["kind": "cleared"]).get() else {
             return XCTFail("a cleared body is a dismissal")
         }
         guard
-            case let .selected(selection) = try XCTUnwrap(
-                CanvasPageSelection(["id": "phase-2", "text": "Phase 2"]))
+            case let .selected(selection) = try CanvasPageSelection.decode([
+                "kind": "selection", "id": "phase-2", "text": "Phase 2",
+            ]).get()
         else {
             return XCTFail("a body with a selection in it is one")
         }
         XCTAssertEqual(selection.body["id"] as? String, "phase-2")
+    }
+
+    /// **The discriminator, at the gate** (#109). Every message the page posts says what it is,
+    /// the gate asks only that one field, and a kind this build has not learned is refused with
+    /// the kind named — never inferred from which fields happen to be present, which is what
+    /// dropped every geometry mark for months (#216).
+    func testTheGateAsksTheKindAndRefusesOneItDoesNotKnow() {
+        XCTAssertEqual(
+            CanvasPageSelection.decode(["kind": "lasso", "id": "a", "text": "b"]).refusal,
+            .unknownKind("lasso"),
+            "a kind helm does not know must be refused BY NAME. Falling through to a selection "
+                + "would put the comment field over whatever text the payload happened to carry "
+                + "and write a note that says the wrong thing about the wrong gesture")
+
+        XCTAssertEqual(
+            CanvasPageSelection.decode(["id": "phase-2", "text": "Phase 2"]).refusal, .noKind,
+            "the shape used to BE the kind — `text` present meant selection. That inference is "
+                + "what #216 is, and a payload with no kind is now a message rather than a guess")
+
+        XCTAssertEqual(
+            CanvasPageSelection.decode(["kind": "selection", "text": "   "]).refusal,
+            .malformed(.selection),
+            "an empty selection would put an empty comment box over the page")
+
+        for kind in CanvasPageSelection.Kind.allCases {
+            XCTAssertNotEqual(
+                CanvasPageSelection.decode(["kind": kind.rawValue, "text": "something"]).refusal,
+                .unknownKind(kind.rawValue),
+                "\(kind.rawValue) is a kind this build declares and must never be refused as "
+                    + "unknown — a `Kind` case with no branch behind it is the drift the "
+                    + "exhaustive switch exists to prevent")
+        }
     }
 
     // MARK: - Closing
@@ -452,5 +485,17 @@ final class CanvasModelTests: XCTestCase {
     @MainActor
     func testACanvasNobodyHasTouchedIsReading() {
         XCTAssertEqual(CanvasModel().markTool, .select)
+    }
+}
+
+/// Why a decode was refused, for the suites that assert on it.
+///
+/// `CanvasPageSelection.decode` returns a `Result` rather than an optional precisely so the
+/// reason survives — a message dropped without one is #216 — and this is what lets a test say
+/// *which* refusal it expected instead of "not nil". `.get()` is the other half, for the tests
+/// that expect a message rather than a refusal.
+extension Result where Success == CanvasPageSelection, Failure == CanvasPageSelection.Refusal {
+    var refusal: CanvasPageSelection.Refusal? {
+        if case let .failure(refusal) = self { refusal } else { nil }
     }
 }

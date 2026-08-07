@@ -27,9 +27,12 @@ final class CanvasNotesDrawerTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// What the bridge reports when the operator selects `text` on the page.
+    /// What the bridge reports when the operator selects `text` on the page — `kind` filled in,
+    /// as every bridge message has carried one since #109.
     private func selection(_ payload: [String: Any]) throws -> CanvasPageSelection {
-        .selected(try XCTUnwrap(CanvasSelection(payload)))
+        var payload = payload
+        payload["kind"] = payload["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
+        return .selected(try XCTUnwrap(CanvasSelection(payload)))
     }
 
     private func writeSidecar(_ text: String) throws {

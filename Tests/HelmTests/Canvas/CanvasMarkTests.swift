@@ -22,7 +22,7 @@ final class CanvasMarkTests: XCTestCase {
 
     func testCirclingOneElementYieldsAnEnclosureNamingIt() {
         let annotation = decode([
-            "mark": "enclosure",
+            "kind": "enclosure",
             "targets": [target("mermaid-0-flowchart-phase2-1", "Phase 2: Ship")],
         ])
 
@@ -35,7 +35,7 @@ final class CanvasMarkTests: XCTestCase {
         // Multiplicity is data, not an error — collapsing to "the nearest" would be helm
         // deciding what the operator meant.
         let annotation = decode([
-            "mark": "enclosure",
+            "kind": "enclosure",
             "targets": [
                 target("mermaid-0-flowchart-phase1-0", "One"),
                 target("mermaid-0-flowchart-phase2-1", "Two"),
@@ -51,7 +51,7 @@ final class CanvasMarkTests: XCTestCase {
 
     func testAnArrowYieldsARelationBetweenBothEnds() {
         let annotation = decode([
-            "mark": "relation",
+            "kind": "relation",
             "from": target("mermaid-0-flowchart-phase1-0", "One"),
             "to": target("mermaid-0-flowchart-phase3-3", "Three"),
         ])
@@ -67,7 +67,7 @@ final class CanvasMarkTests: XCTestCase {
         // "add a node here" is a real instruction. tldraw's model-facing arrow has nullable
         // fromId/toId for exactly this.
         let annotation = decode([
-            "mark": "relation", "from": target("phase-1", "One"),
+            "kind": "relation", "from": target("phase-1", "One"),
         ])
 
         XCTAssertEqual(
@@ -75,7 +75,7 @@ final class CanvasMarkTests: XCTestCase {
     }
 
     func testATapYieldsAPoint() {
-        let annotation = decode(["mark": "point", "id": "phase-2", "text": "Phase 2"])
+        let annotation = decode(["kind": "point", "id": "phase-2", "text": "Phase 2"])
 
         XCTAssertEqual(annotation?.mark, .point(.element(id: "phase-2", text: "Phase 2")))
     }
@@ -83,13 +83,13 @@ final class CanvasMarkTests: XCTestCase {
     // MARK: - What is refused
 
     func testACircleAroundNothingIsRefused() {
-        XCTAssertNil(decode(["mark": "enclosure", "targets": []]))
-        XCTAssertNil(decode(["mark": "enclosure"]))
+        XCTAssertNil(decode(["kind": "enclosure", "targets": []]))
+        XCTAssertNil(decode(["kind": "enclosure"]))
     }
 
     func testAnArrowWithNeitherEndIsRefused() {
         XCTAssertNil(
-            decode(["mark": "relation"]),
+            decode(["kind": "relation"]),
             "one end empty is 'add a node here'; both ends empty is nothing at all")
     }
 
@@ -98,28 +98,44 @@ final class CanvasMarkTests: XCTestCase {
             target("node-\($0)", "n\($0)")
         }
 
-        XCTAssertNil(decode(["mark": "enclosure", "targets": many]))
+        XCTAssertNil(decode(["kind": "enclosure", "targets": many]))
     }
 
     func testAMarkWithNoCommentIsRefusedLikeAnySelection() {
         XCTAssertNil(
-            decode(["mark": "point", "id": "phase-2", "text": "Phase 2"], comment: "   "))
+            decode(["kind": "point", "id": "phase-2", "text": "Phase 2"], comment: "   "))
     }
 
     // MARK: - Today's behaviour, unchanged
 
-    func testNoMarkIsStillASelection() {
-        let annotation = decode(["id": "phase-2", "text": "Phase 2"])
+    func testASelectionSaysSoAndDecodesAsOne() {
+        // Was `testNoMarkIsStillASelection`, and the rename is the change: a selection used to
+        // be the payload with NO discriminator on it at all, which is what made "which shape is
+        // this?" an inference and #216 the bill for getting it wrong. It declares itself (#109).
+        let annotation = decode(["kind": "selection", "id": "phase-2", "text": "Phase 2"])
 
         XCTAssertEqual(annotation?.mark, .selection(.element(id: "phase-2", text: "Phase 2")))
     }
 
-    func testAMarkHelmDoesNotKnowDegradesToSelectionRatherThanLosingTheComment() {
-        // The page is agent-authored. A mark helm has not learned yet is not a reason to
-        // throw away a comment the operator already typed.
-        let annotation = decode(["mark": "lasso", "id": "phase-2", "text": "Phase 2"])
-
-        XCTAssertEqual(annotation?.mark, .selection(.element(id: "phase-2", text: "Phase 2")))
+    /// **This inverts what it used to assert, and the inversion is the ticket.**
+    ///
+    /// It was `testAMarkHelmDoesNotKnowDegradesToSelectionRatherThanLosingTheComment`: an
+    /// unknown `mark` fell through to a text selection, reasoning that *"the page is
+    /// agent-authored and a mark helm has not learned yet is not a reason to throw away a
+    /// comment the operator already typed"*. **The page posting here is not agent-authored.**
+    /// The bridge lives in a named content world (#164), so the only thing that can post to it
+    /// is `canvas-annotation.js` — shipped in the same binary as this decoder. An unknown kind
+    /// is therefore never a newer page; it is drift between two files that ship together, and
+    /// "it was probably a selection" turns a lasso into a highlight over whatever text the
+    /// payload happened to carry, then writes a note saying the wrong thing about it.
+    ///
+    /// Nothing is lost silently either way: the gate refuses the message before a comment field
+    /// ever opens, and the refusal names the kind in the log.
+    func testAKindHelmDoesNotKnowIsRefusedRatherThanGuessedAt() {
+        XCTAssertNil(decode(["kind": "lasso", "id": "phase-2", "text": "Phase 2"]))
+        XCTAssertNil(
+            decode(["id": "phase-2", "text": "Phase 2"]),
+            "and a body with no kind at all is refused too — that shape IS the inference")
     }
 
     // MARK: - The families where there is nothing to anchor to
@@ -129,7 +145,7 @@ final class CanvasMarkTests: XCTestCase {
         // anchor that survives a re-render and matches nothing in the source — the exact
         // anchor #113 abolished. This is the behaviour that used to fall through.
         let annotation = decode([
-            "mark": "point", "id": "mermaid-0-node_1", "text": "branchA",
+            "kind": "point", "id": "mermaid-0-node_1", "text": "branchA",
         ])
 
         XCTAssertEqual(annotation?.mark, .point(.quote("branchA")))
@@ -137,7 +153,7 @@ final class CanvasMarkTests: XCTestCase {
 
     func testAnEdgeAndAMarkerDefDegradeToo() {
         for id in ["mermaid-0-L_phase1_phase2_0", "mermaid-0_flowchart-v2-pointEnd"] {
-            let annotation = decode(["mark": "point", "id": id, "text": "x"])
+            let annotation = decode(["kind": "point", "id": id, "text": "x"])
             XCTAssertEqual(
                 annotation?.mark, .point(.quote("x")),
                 "\(id) is renderer bookkeeping, not an anchor")
@@ -147,7 +163,7 @@ final class CanvasMarkTests: XCTestCase {
     func testAnAgentAuthoredIDIsStillKept() {
         // The whole reason `isRenderGenerated` exists: "cannot reduce" has two causes and
         // only one of them means "throw it away".
-        let annotation = decode(["mark": "point", "id": "phase-2", "text": "Phase 2"])
+        let annotation = decode(["kind": "point", "id": "phase-2", "text": "Phase 2"])
 
         XCTAssertEqual(annotation?.mark, .point(.element(id: "phase-2", text: "Phase 2")))
     }
@@ -156,7 +172,7 @@ final class CanvasMarkTests: XCTestCase {
         // A stated ceiling rather than a hidden one: sequenceDiagram emits `actor0` with no
         // `mermaid-` prefix, so helm cannot tell it from an id an agent wrote. It does not
         // guess — it keeps it, and #112's spec says so.
-        let annotation = decode(["mark": "point", "id": "actor0", "text": "alice"])
+        let annotation = decode(["kind": "point", "id": "actor0", "text": "alice"])
 
         XCTAssertEqual(annotation?.mark, .point(.element(id: "actor0", text: "alice")))
     }

@@ -36,7 +36,7 @@ final class CanvasMarkToolTests: XCTestCase {
         page.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
 
         XCTAssertFalse(page.hasMarkLayer)
-        XCTAssertEqual(page.lastPosted?["cleared"] as? Bool, true)
+        XCTAssertEqual(page.lastPosted?["kind"] as? String, "cleared")
     }
 
     func testEveryDrawingToolIsDistinguishableInThePicker() {

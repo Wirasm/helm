@@ -114,9 +114,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         // The script posts on **mouseup**, never on the selection itself — a highlight the
         // operator is still dragging is not a mark.
         page.mouse("mouseup", 100, 110)
-        let report = try XCTUnwrap(
-            CanvasPageSelection(try XCTUnwrap(page.lastPosted)),
-            "the page's own message was refused before it reached the model")
+        let report = try CanvasPageSelection.decode(try XCTUnwrap(page.lastPosted)).get()
         model.pageDidReport(report)
         model.annotate(comment: comment)
     }
