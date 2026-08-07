@@ -58,6 +58,11 @@ package struct SpoolResult: Codable, Equatable {
         /// `captured` and unlike a spawn: closing is synchronous and there is no second party
         /// to wait for. `terminalId` is the pane that went and `pid` is what was in it.
         ///
+        /// **`pid` is absent when the pane held a canvas (#284)**, because there was no process
+        /// in it to name — the pane is off the bench and the artifact file and its `.notes.md`
+        /// sidecar are exactly where they were. A caller reading `pid` gets the honest answer to
+        /// *"what did I just destroy"*, which for a canvas is nothing.
+        ///
         /// A close that was **refused** is `refused`, not this — a pane the operator is in, a
         /// pane with live work and no `force`, a uuid helm holds no pane for. That is the
         /// distinction #176 asks for by name: a teardown that silently did nothing is
@@ -164,8 +169,9 @@ package struct SpoolResult: Codable, Equatable {
 /// broke that would say so in its own result rather than only in a review.
 ///
 /// A `TerminalID` for a pane that may hold a canvas is the currency the spool already uses:
-/// `AcceptedCloseRequest.terminal` is one, and `SpoolClosePolicy` is what then reports "pane …
-/// holds a canvas, not a terminal". The wire has one pane-id type, not two.
+/// `AcceptedCloseRequest.terminal` is one, and since #284 a close acts on a canvas pane through
+/// exactly this type. The wire has one pane-id type, not two — see that field's own header for
+/// why a second one over the same `Pane.id` namespace would buy nothing.
 package struct CommandReport: Codable, Equatable {
     /// The command helm ran, by name. Echoed rather than assumed from the request: a caller
     /// reading only the result file learns what happened without holding onto what it sent.

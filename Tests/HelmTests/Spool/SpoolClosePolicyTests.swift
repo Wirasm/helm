@@ -21,12 +21,12 @@ final class SpoolClosePolicyTests: XCTestCase {
     private static let shell: pid_t = 4001
     private static let agent: pid_t = 4002
 
-    /// A pane at an idle prompt: the shell is in the foreground, and its parent is `login`.
-    private func idle(
-        holdsTerminal: Bool = true, holdsKeyboard: Bool = false
-    ) -> SpoolPaneState {
+    /// A terminal pane at an idle prompt: the shell is in the foreground, and its parent is
+    /// `login`. The `holdsTerminal: false` case it used to take is `canvas()` below — a canvas
+    /// with a login shell's pids attached was never a state that existed.
+    private func idle(holdsKeyboard: Bool = false) -> SpoolPaneState {
         SpoolPaneState(
-            holdsTerminal: holdsTerminal, holdsKeyboard: holdsKeyboard,
+            holdsTerminal: true, holdsKeyboard: holdsKeyboard,
             foreground: Self.shell, foregroundParent: Self.login, sessionLeader: Self.login)
     }
 
@@ -36,6 +36,14 @@ final class SpoolClosePolicyTests: XCTestCase {
         SpoolPaneState(
             holdsTerminal: true, holdsKeyboard: holdsKeyboard,
             foreground: Self.agent, foregroundParent: Self.shell, sessionLeader: Self.login)
+    }
+
+    /// A canvas pane, exactly as `WorkbenchSpoolCloser` reports one: no terminal, and therefore
+    /// no pty and none of the three pids that describe one.
+    private func canvas(holdsKeyboard: Bool = false) -> SpoolPaneState {
+        SpoolPaneState(
+            holdsTerminal: false, holdsKeyboard: holdsKeyboard,
+            foreground: nil, foregroundParent: nil, sessionLeader: nil)
     }
 
     // MARK: - What is closed
@@ -53,6 +61,47 @@ final class SpoolClosePolicyTests: XCTestCase {
         XCTAssertNil(SpoolClosePolicy.refusal(for: request(force: true), pane: busy()))
     }
 
+    // MARK: - A canvas pane (#284)
+
+    func testACanvasPaneNobodyIsInClosesWithNothingExplicit() {
+        // The whole of this half of #284, and the reason `push.sh` stopped being add-only: an
+        // agent that pushed an artifact can take it off the bench again, with no `force` and no
+        // ceremony. Replaces `testACanvasPaneIsNotClosedOnARequestMeantForATerminal`, whose
+        // subject — the "holds a canvas, not a terminal" refusal — no longer exists.
+        XCTAssertNil(SpoolClosePolicy.refusal(for: request(), pane: canvas()))
+    }
+
+    func testACanvasIsNeverBusySoItNeverNeedsForce() {
+        // Rule 2 has nothing to test on a canvas: no pty, no process group, nothing unwritten.
+        // Asserted on the type rather than only through the policy, because `isBusy` is where
+        // the rule is now stated — `holdsTerminal` short-circuits it before any pid is read.
+        XCTAssertFalse(canvas().isBusy)
+        XCTAssertNil(SpoolClosePolicy.refusal(for: request(), pane: canvas()))
+    }
+
+    func testACanvasThatSomehowReportsAForegroundIsStillNotBusy() {
+        // The guard is `holdsTerminal`, not "it happens to have no pid". `WorkbenchSpoolCloser`
+        // reads `foreground` out of the terminal sessions, so a canvas arrives with nil today —
+        // this pins that the rule does not depend on that lookup staying that way.
+        let odd = SpoolPaneState(
+            holdsTerminal: false, holdsKeyboard: false, foreground: Self.agent,
+            foregroundParent: nil, sessionLeader: nil)
+        XCTAssertFalse(odd.isBusy)
+        XCTAssertNil(SpoolClosePolicy.refusal(for: request(), pane: odd))
+    }
+
+    func testTheOperatorsOwnCanvasIsRefusedAndForceDoesNotOverrideIt() {
+        // Rule 1 applies to a canvas unchanged and for its own reason: the operator can be
+        // reading a plan as easily as typing in a terminal, and *never remove what someone is
+        // looking at* says nothing about what the pane holds. This is the control that would
+        // fail if #284 had been implemented by exempting canvases from the policy rather than by
+        // removing one refusal from it.
+        let refusal = SpoolClosePolicy.refusal(
+            for: request(force: true), pane: canvas(holdsKeyboard: true))
+        XCTAssertEqual(refusal?.reason.contains("operator") == true, true)
+        XCTAssertEqual(refusal?.reason.contains("force") == true, true)
+    }
+
     // MARK: - What is refused
 
     func testAPaneHelmDoesNotHaveIsRefusedByName() {
@@ -60,12 +109,6 @@ final class SpoolClosePolicyTests: XCTestCase {
         // look the same, which is the silence this whole ladder exists to remove.
         let refusal = SpoolClosePolicy.refusal(for: request(), pane: nil)
         XCTAssertEqual(refusal?.reason.contains(terminal.uuidString), true)
-    }
-
-    func testACanvasPaneIsNotClosedOnARequestMeantForATerminal() {
-        let refusal = SpoolClosePolicy.refusal(
-            for: request(force: true), pane: idle(holdsTerminal: false))
-        XCTAssertEqual(refusal?.reason.contains("canvas") == true, true)
     }
 
     func testThePaneTheOperatorIsWorkingInIsNeverClosed() {
