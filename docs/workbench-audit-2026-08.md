@@ -483,35 +483,52 @@ forge is the same binary plus a policy file plus `bench peer add`, topology as c
 and "the agent machine may become messy" gets one exception — `~/.bench/{mail,events,
 tasks}` and the artifact stores are the fleet's memory and get backed up, one cron line.
 
-### Open questions the next session should take up
+### Decisions taken, and what stays open
 
-Decided nowhere above, and each is cheap to settle now and expensive to improvise later:
+Four of the six open questions are settled (operator, 2026-08-09); two remain.
 
-1. **Cross-host verb scope.** What crosses the peering link: mail, attention items and
-   tasks clearly yes — but cross-host *bench verbs* (a forge agent closing or spawning
-   panes on the Mac) should default off, flagged per peer. A remote machine petitions;
-   it does not operate. This is the estate's security boundary and it is currently
-   unstated.
-2. **Cross-host artifacts.** A forge agent's pushed artifact lives on the forge's disk;
-   the Mac face cannot render a local path that is not local. Canvas sources should be
-   **daemon-served** (the face asks benchd for content the way it asks for grids, relayed
-   over peering) — which changes the canvas port's scheme handler from
-   filesystem-reading to daemon-reading. Decide before the canvas milestone.
-3. **benchd restart vs. pty survival.** Daemon upgrade kills every session — helm's flaw
-   one level down. Start with accept-and-resume (drain, upgrade, interactive `--resume`
-   storm); name the per-session pty-holder shim (the tmux-server trick, minimized) as
-   the known path if upgrades become frequent.
-4. **Agent identity and credentials on the forge.** Give agents their own identities —
-   per-machine git author, scoped PATs/deploy keys — rather than the operator's
-   everywhere: bounds blast radius, and makes the audit trail say who did what, which is
-   equal-owners legibility.
-5. **Limits and spend in the taxonomy.** `limited` (usage/rate limit hit) is a `blocked`
-   subtype the overnight fleet will produce; budget visibility is helm's #143 wearing
-   its real clothes. Add to the attention taxonomy now.
-6. **Queue triage at scale.** The first morning brings dozens of items; the event log
-   makes a digest a pure projection (since-you-left counts, grouped by project and by
-   addressee — which covers orchestrators with no hierarchy in the app). A view, built
-   early.
+1. **Cross-host verb scope — DECIDED: verbs are host-local; helpers live where they
+   help.** Cross-host traffic is petition-only, always: mail, attention items, tasks.
+   There is no per-peer flag and no exception machinery — when the operator wants agent
+   help operating the Mac bench, that agent runs *on the Mac* and holds Mac verbs as an
+   ordinary local tenant. Locality is the permission. Corollary on contracts: the verb
+   set stays terse enough to be self-describing — `spawn`, `close`, `move`, `open`,
+   `mail`, `attn`, `watch`, `attach` — and every result leads with one word
+   (helm's status-plus-reason shape, kept).
+2. **Cross-host artifacts — DECIDED: benchd is a private artifact server, and the
+   tailnet is the authentication.** benchd serves artifact bytes the way it serves
+   grids, relayed over peering; the face renders a forge artifact with no local path.
+   **Tailscale device identity is the whole auth story** — the operator's devices are on
+   the tailnet, nothing else is, and nothing ever asks for a login. It behaves like a
+   published artifact with an audience of one, where the audience check is "from my
+   tailnet." The canvas port's scheme handler therefore reads via the daemon, not the
+   filesystem. The canvas is a collaboration surface, agent-owned first: agents write
+   and re-push, the latch speaks back, the operator annotates — daemon-serving just
+   makes that location-independent.
+3. **benchd restart vs. pty survival — DECIDED: accept the resume-storm; the shim stays
+   parked.** Upgrade = drain, restart, interactive `--resume` per session. The one case
+   where restarts get frequent is agents developing the bench itself, and helm already
+   built that answer: port the isolated suite (`HELM_DEFAULTS_SUITE`, #86) as
+   `BENCH_SUITE=<name>` — a second, fully isolated benchd (own socket, own record, own
+   panes) agents test against while the live one hosts them. The per-session pty-holder
+   shim is named as the known path only if upgrade frequency ever proves it. Posture
+   underneath, stated as principle: **the agents own the bench's evolution** — they add
+   the capabilities they need themselves, gated by the PR, and a restart of the Mac's
+   *live* daemon is announced through a decision item first (the "never restart a
+   running helm without warning" rule, inherited).
+4. **Agent credentials — DECIDED: one shared agent identity.** The agents collectively
+   get a shared GitHub account and shared keys. The trade — per-agent audit granularity
+   for simplicity — is right at this scale, because the boundary that matters is
+   *agents vs. operator*, and it stays crisp: the agents' account's PRs are theirs, the
+   operator's approvals are the operator's, and blast radius is bounded by one account's
+   scopes rather than the operator's own credentials scattered across a fleet.
+5. **OPEN — limits and spend in the taxonomy.** `limited` (usage/rate limit hit) is a
+   `blocked` subtype the overnight fleet will produce; budget visibility is helm's #143
+   wearing its real clothes. Add to the attention taxonomy early.
+6. **OPEN — queue triage at scale.** The first morning brings dozens of items; the event
+   log makes a digest a pure projection (since-you-left counts, grouped by project and
+   by addressee — which covers orchestrators with no hierarchy in the app). A view,
+   built early.
 
 Carry-over: helm's #297 (OSC 52 clipboard overwrite) moves into the face's painter —
 hostile-output handling becomes a renderer decision made once, the better place for it.
