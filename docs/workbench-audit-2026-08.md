@@ -213,8 +213,13 @@ The single biggest lesson from the audit and the field (helm #235/#253 on one si
 on the other): the process that owns the ptys must not be the process that draws. benchd
 owns:
 
-- the ptys and their VT state — **libghostty-vt** embedded in the daemon, so scrollback
-  and screen state live server-side and any client renders a grid snapshot + diffs;
+- the ptys and their VT state — a VT *library* (libghostty-vt, or the `wezterm-term`
+  crate: the parser/screen model WezTerm is built on, no app or window involved) embedded
+  in the daemon, so scrollback and screen state live server-side and any client renders a
+  grid snapshot + diffs. A terminal is three layers — pty, VT state, painter — and only
+  the painter lives in the face: **the terminal the operator sees and types into is still
+  SwiftUI, in the one app**. benchd is not a second app; it is the app's engine moved
+  out-of-process, so the state survives the app;
 - the bench document (workspaces → columns → slots → panes, helm's depth-2 model, ported
   as-is — it is correct);
 - the spool successor: a **Unix socket API and a CLI that are the same surface** (the
@@ -314,8 +319,17 @@ covers becomes a visible, answerable attention item instead of a stuck pane.
 The one genuinely new subsystem, because it is what "equal owners" trades for the keyboard
 rule. Every agent action that wants the operator lands in one queue with a type:
 
-- `blocked` — permission request, question, plan awaiting approval (from the runtime taps
-  above, or from a mail message flagged as such);
+- `blocked` — what this means is defined by the bench, not by any runtime's approval UI,
+  because the operator runs wide-open postures and harness permission prompts essentially
+  never fire. In yolo mode blocked is: *ended its turn on a question* (CC `Stop` hook +
+  transcript-tail classification; pi sees the message itself; codex falls to the
+  sniffer), *stalled* (no output and no turn-end — the blind-stop case), *idle with
+  unread mail*, or *errored*. The `Notification` hook's waiting-for-input signal
+  contributes without being the headliner. Approvals exist only as **voluntary decision
+  gates**: an agent posts a `decision` item (`bench attn post --kind decision`) because a
+  skill or house rule says that act is gate-worthy — per host, so the forge gates almost
+  nothing and the Mac maybe gates merges. The operator is never asked by the harness;
+  they are petitioned through the bench;
 - `done` — task finished, PR opened, artifact pushed;
 - `offer` — "I put a canvas beside my pane; look when you like" (helm's #284 bring-forward
   question, answered: an offer is a badge, never a focus change).
@@ -333,8 +347,14 @@ not a model turn, decides when a supervisor agent needs to wake.
   survived contact with three runtimes), but make **delivery** transport-aware: for a
   Claude Code recipient, benchd forwards the notice to the session's messaging socket, so
   mail *wakes* an idle session as a real user turn — no armed watch, no polling, no wake
-  budget spent by the sender. pi keeps its in-process wake; a runtime with neither channel
-  falls back to deliver-before-turn. benchd also registers bench-hosted peers on the
+  budget spent by the sender. pi keeps its in-process wake. **The mailbox itself is
+  runtime-neutral — every agent sends and reads the same way; only the wake hop differs**
+  — and benchd's pty ownership supplies the universal fallback no outside process could
+  do safely: for a runtime with no wake channel (codex today), benchd pastes the mail
+  notice into the TUI's composer and submits it, guarded by the tap's idle-prompt check
+  (the spool launch-line move: paste, then Return separately; refuse while busy). So
+  woken delivery is the semantics on every runtime; the transport is a detail. benchd
+  also registers bench-hosted peers on the
   discovery path so `ListAgents` sees them. Keep helm's hard-won rules verbatim across all
   transports: notice carries path never body, `operator` reserved, retire never delete,
   loop caps on agent↔agent chatter (CC's own throttling plus a bench-side cap).
