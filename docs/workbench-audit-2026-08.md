@@ -253,32 +253,48 @@ environment, herdr's `HERDR_ENV` rule. The conformance-test culture ports whole:
 `SpoolWireConformanceTests`' shape — run the real binary, check both directions, every
 status case — is the right gate for this CLI.
 
-### The protocol decision: pty-first, ACP-sidecar
+### The protocol decision: pty-first, with the stitched taps as the nervous system
 
-Host every agent two ways at once:
+**The pty is the agent's face.** The field is unanimous that the TUI the agent teams ship
+is better than a rebuilt chat, and helm's own measurement (transcript grain, the silent
+pending question) says a file-based chat face can't work. Keep raw terminals.
 
-- **The pty is the agent's face.** The field is unanimous that the TUI the agent teams
-  ship is better than a rebuilt chat, and helm's own measurement (transcript grain, the
-  silent pending question) says a file-based chat face can't work. Keep raw terminals.
-- **ACP is the agent's nervous system.** Alongside the pty, benchd connects to each agent
-  via its ACP adapter (`claude-code-acp`, `pi-acp`, codex's) where available. That yields,
-  as *events*: the pending permission request (routable to the bench UI or the phone,
-  answerable without touching the pane), tool-call activity (working/idle for free, no
-  output sniffing), plans, session ids for resume. Agents without ACP degrade to herdr-style
-  process/output classification.
+**ACP is not the answer here, for two reasons found the hard way.** First, ACP is
+host↔agent, not agent↔agent — it has no peer messaging and cannot be the comms system.
+Second, and sharper: ACP adapters *replace* the TUI rather than attach to it —
+`claude-code-acp` wraps the Agent SDK and runs the loop itself, with the host rendering
+the transcript. There is no way to connect ACP to an already-running interactive TUI in a
+pty, so pty-first and ACP are either/or *per session*. For a bench that hosts the real
+CLIs, ACP buys nothing. It earns reconsideration only for headless workers nobody
+watches — and even there `claude -p --output-format stream-json` and `codex exec --json`
+are the more direct taps.
 
-This dissolves three helm problems at once: the chat face becomes viable (render the ACP
-stream, not the transcript file), attention states become facts instead of heuristics, and
-#283's silent 6.5h stall becomes impossible — a permission request that reaches no
-unattended posture becomes a visible, answerable attention item instead of a stuck pane.
+**The structured-event feed comes instead from the layer the operator already runs —
+hooks, the spool, the mailbox, the pi extension — given a spine.** That stitched system
+is the right architecture, not a stopgap (Claude Code's own teams feature is inbox files
+plus file-locked claiming; its cross-session messaging is a socket with disk discovery —
+the same trust model). Its flakiness is N pairwise stitches with no single owner: hook,
+extension and spool each half-know the world and reap each other by convention. benchd is
+the fix: every tap reports to one daemon that owns registry, liveness and delivery, and
+the per-runtime bits shrink to dumb sensors:
+
+- **Claude Code**: the `Notification` hook fires precisely on "needs permission" and
+  "waiting for input" — that *is* the `blocked` event; `Stop` = done, `PreToolUse` =
+  working; the messaging socket is the wake path.
+- **pi**: the extension's event loop already sees everything; it forwards states.
+- **codex**: the `notify` config (approval-requested, turn-complete) plus herdr-style
+  output classification as fallback — the weakest tap, and the one place sniffing stays.
+
+#283's silent 6.5h stall dies here regardless: a permission request no unattended posture
+covers becomes a visible, answerable attention item instead of a stuck pane.
 
 ### Attention: the queue, not the seizure
 
 The one genuinely new subsystem, because it is what "equal owners" trades for the keyboard
 rule. Every agent action that wants the operator lands in one queue with a type:
 
-- `blocked` — permission request, question, plan awaiting approval (from ACP, or from a
-  mail message flagged as such);
+- `blocked` — permission request, question, plan awaiting approval (from the runtime taps
+  above, or from a mail message flagged as such);
 - `done` — task finished, PR opened, artifact pushed;
 - `offer` — "I put a canvas beside my pane; look when you like" (helm's #284 bring-forward
   question, answered: an offer is a badge, never a focus change).
@@ -326,8 +342,9 @@ ownership — they are about *files*, and file ownership was never the asymmetri
   feature of theirs I would not copy first (it's a second product).
 - **An agent** — helm's rule stands: host CLIs, never build one. The intelligence stays in
   skills and the agents themselves.
-- **A rich chat editor/composer** — render the ACP stream read-only beside the pty face;
-  typing still goes to the agent's own TUI, which already handles interrupts, modes,
+- **A rich chat editor/composer** — the pty face is the interface; a read-only rendered
+  view, if ever, comes from transcripts plus the event taps, accepted as seconds behind.
+  Typing goes to the agent's own TUI, which already handles interrupts, modes,
   slash-commands.
 - **Auth between agents** — same-user filesystem is the trust boundary, stated plainly
   (helm's position, and Claude Code's own local-socket position). Equality needs
@@ -340,10 +357,29 @@ ownership — they are about *files*, and file ownership was never the asymmetri
    position 1).
 2. **Mac shell rendering attached terminals** in helm's bench model (columns/slots/tabs,
    ported values and placement policies).
-3. **ACP sidecar + the attention queue** — states, unread, jump, phone push.
+3. **The runtime taps + the attention queue** — states, unread, jump, phone push.
 4. **Mail + tasks with the Claude Code bridges.**
 5. **Canvas port** (webview, annotation, latch, notes).
 6. **Fleet ergonomics** — `bench watch`, zero-token supervision, worktree composition.
+7. **The second benchd** — the agents' own machine (below).
+
+### Two benchds: the agents get their own machine
+
+The daemon/renderer split makes the strongest version of "equal owners" a topology, not a
+metaphor: benchd on the Mac, a second benchd on a small always-on box the agents own,
+peered over Tailscale/SSH. What changes:
+
+- The Mac sleeping no longer kills the fleet; the Mac is an attach point, not the ground
+  the agents stand on.
+- The mailbox stays files-as-record on each daemon's disk; **delivery** goes
+  daemon→daemon, and handles grow a host qualifier (`sild-a3f2@forge`). Claude Code's
+  messaging sockets are same-machine, so cross-machine wake is benchd's job: relay to the
+  remote daemon, which pokes the local socket.
+- The trust boundary is stated honestly: same-user filesystem *within* a machine, the
+  peering link's identity *between* machines. Still no auth between agents on one box.
+- Ownership becomes per-host policy with teeth: the agents' box runs wider unattended
+  postures and a wider command allowlist than the Mac. The operator-protecting refusals
+  exist where the operator's keyboard is, and nowhere else.
 
 ### And if not greenfield
 
