@@ -345,6 +345,20 @@ not a model turn, decides when a supervisor agent needs to wake.
 - **Worktrees**: a pattern, not a primitive (cmux's "primitive, not solution" and helm's
   equal-standing rule agree). `bench spawn --worktree` composes the primitive; the bench
   never requires isolation it didn't ask for.
+- **Subagents: the spawning mechanism is the agent's choice, and the bench only tiers the
+  visibility.** A top-level agent may spawn runtime-internal subagents (Claude Code native
+  subagents/teams, codex subagents, pi's own) or pty-level peers through `bench spawn` —
+  the bench prescribes neither. Runtime-internal spawns live inside the parent's runtime
+  (its context, budget, cleanup); benchd does not manage them but *sees* them through the
+  parent's tap — CC teams fire `TeammateIdle`/`TaskCreated`/`TaskCompleted` hooks and
+  write inboxes to disk — so even invisible subagents feed the attention queue, and
+  benchd may *offer* to materialize a teammate as a pane when team config appears (cmux's
+  Teammate Mode, under the offer rule). Pty-level peers are full tenants: own pty, handle,
+  mailbox, bench-document row, attachable like everything else, with the spawn result
+  carrying `terminalId`/`sessionId`/`handle` so supervising needs no lookup — and closing
+  a teammate's pane stays legal, as in helm. Caps apply per tier: bench-side limits govern
+  pty tenants; the runtime's own knobs (CC spawn depth/concurrency) govern internal
+  subagents. Neither route is taxed for not being the other.
 
 ### The document surface: keep the moat
 
