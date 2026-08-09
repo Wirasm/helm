@@ -533,6 +533,40 @@ Four of the six open questions are settled (operator, 2026-08-09); two remain.
 Carry-over: helm's #297 (OSC 52 clipboard overwrite) moves into the face's painter —
 hostile-output handling becomes a renderer decision made once, the better place for it.
 
+### How to build it — DECIDED: strangler, in this repo
+
+One git project, so agents work across the whole stack in one checkout — and because the
+conformance-test culture requires it: every wire contract has a Rust truth and a Swift
+speaker, and only a monorepo lets one PR change both sides atomically under a test that
+runs both. Layout: `daemon/` as a cargo workspace (`benchd`, `bench` CLI, `bench-wire`),
+with its own gate run only when touched — the same carve-out as `pi/` and `hooks/`, so
+the Swift gate keeps needing only the Swift toolchain. Rust is the single spelling of
+every wire type; the Swift side is generated from it, or where codegen fights, a
+conformance-pinned duplicate under the repo's existing honest-duplicate rule.
+
+Replace one vertical at a time, old code unwired only when the new is proven — and the
+first step is *additive*, so the new stack is proven before anything old is touched:
+
+1. `daemon/` skeleton + `BENCH_SUITE` isolation from day one (agents build this on the
+   machine that hosts them).
+2. **Add** the taps → attention queue → `bench attn`/`watch`; helm renders the queue.
+   Zero unwiring; daemon, socket, CLI and taps all proven.
+3. Mail authority moves to benchd (registry, liveness, delivery, cc-socks wake); hooks
+   and the pi extension thin to sensors. Unwire the delivery halves.
+4. The wire front moves: `bench` CLI + socket replace `tools/*.swift`, with benchd
+   forwarding into helm's spool during transition; the conformance tests retarget and
+   prove parity before the scripts die.
+5. The bench document moves to benchd; helm renders daemon state but still hosts ptys
+   through the `SpoolSpawning`/`TerminalLaunching` seams — the substitution those
+   protocols were built for; this step is why the migration is not a rewrite.
+6. Ptys move last, **per-pane**: painter panes over daemon grids coexist with libghostty
+   panes on one bench until the last old pane is gone — then unwire the vendored patch
+   and the ownership half of the terminal stack. The forge follows for free.
+
+Apply the repo's own discipline to each unwiring: watch the old path fail after removal,
+name which tests proved parity, and revert with `git checkout <base> -- <files>` when a
+step lies. helm strangles itself along its own seams and ends the migration as the face.
+
 ### And if not greenfield
 
 The audit's honest conclusion: helm's *values* — the bench model, the policies, the wire
