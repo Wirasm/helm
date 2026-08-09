@@ -380,6 +380,25 @@ not a model turn, decides when a supervisor agent needs to wake.
   pty tenants; the runtime's own knobs (CC spawn depth/concurrency) govern internal
   subagents. Neither route is taxed for not being the other.
 
+### Orchestration: a tenancy pattern, not a feature
+
+The operator's intended mode — one orchestrator agent per project, later maybe one above
+those — needs nothing built beyond what is here, and that is deliberate. **An
+orchestrator is just another tenant**: same verbs, same mailbox, same pty, no
+architectural rank — its authority over workers is prompts and skills, so it can be
+killed, bypassed, duplicated for an A/B, or talked around (operator straight to a worker)
+without anything breaking. It composes: `bench spawn` for workers as attachable TUIs
+(look over its shoulder at anything it started), tasks posted and claimed by rename,
+briefs and reports as mail across hosts, and `bench watch` for zero-token supervision —
+a watcher process, not a model turn, wakes it only when a worker is genuinely blocked or
+done, so its spend is proportional to events, not time. The one small mechanism this
+pattern earns: **attention items carry a route** — a worker's `blocked` goes to its
+orchestrator's queue first, and only escalations land in the operator's — under the
+invariant that routing is a view, never a gate: the operator's queue can always show
+everything. Growth stays in the skill layer (helm's "renders and routes, does not
+decide" carries over verbatim): per-project orchestrators → a first mate above them is a
+prompt change, not a bench change. This is helm's #186, bench-native.
+
 ### The document surface: keep the moat
 
 Nothing in the field has helm's canvas, and the greenfield design keeps all of it as-is,
