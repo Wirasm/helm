@@ -71,6 +71,18 @@ Each is argued in the audit doc; this is the checklist form.
 - Update AGENTS.md as verticals move — it documents the working tree, not the plan.
   (Note: the audit found existing AGENTS.md drift, listed in the audit doc Part I §
   "Weaknesses" item 5; fixing that is fair game any time.)
+- **Do not assume current helm is fully working.** It is close, not done: there are
+  rough edges, ~38 open issues, and behavior the operator wants different (the audit
+  doc lists known defects). So wherever this roadmap says "prove parity," it means
+  parity with the *intended* behavior — helm's documented rules and the operator's
+  intent — not bug-for-bug parity with the running app. When old and new disagree,
+  stop and decide which is right rather than copying the old; a migration step is a
+  legitimate place to fix a rough edge, and fixing current helm in parallel stays fair
+  game throughout.
+- **Dogfooding is the arbiter.** The operator and the agents use the bench daily and
+  tune it until it is just right *for them*; "proven in daily use" in this roadmap
+  means that, not a test suite passing. Expect requirements to be corrected mid-flight
+  by use — that is the process working, not the plan failing.
 
 ---
 
