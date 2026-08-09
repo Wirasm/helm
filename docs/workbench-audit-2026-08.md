@@ -233,6 +233,23 @@ mature everything else and is the safer bet), the Mac client in **Swift/SwiftUI*
 deliberately thin. If starting from helm instead of from zero, Swift-for-both with the
 daemon as an SPM executable is defensible — the split matters far more than the language.
 
+**Own daemon, not tmux underneath.** tmux covers only pty custody + persistence + attach
+— the best-understood slice of benchd — and it is the wrong foundation for three
+reasons. (1) The rendering seam: a native face needs grid state, so tmux means control
+mode — subscribing to `%output` and re-parsing escape streams into your own VT state,
+iTerm2's most fragile subsystem — at which point tmux holds file descriptors while you do
+the hard part anyway. (2) The model mismatch: binary splits inside windows cannot carry
+columns-of-tabbed-slots or canvas panes; the sane mapping is one window per pane with
+tmux's layout ignored, i.e. tmux demoted to `posix_openpt` with baggage. (3) The killer,
+policy: tmux's socket is an unguarded second door — `send-keys` reaches *any* pane,
+including the operator's, which is precisely the wrong-terminal-keystroke class the
+refusal rules exist to eliminate, and tmux has no vocabulary for `holdsKeyboard`. Keeping
+the constitution means hiding the socket, which forfeits tmux's one real advantage
+(agents already know it). The native core is `portable-pty` + libghostty-vt/`wezterm-term`
++ scrollback + launchd — herdr is one developer's proof this ships. tmux's honest role is
+week-one scaffolding: prove the spine against control-mode panes, behind an API that lets
+the pty core swap in without anything above it noticing.
+
 **2. The Mac app — a renderer and an attention instrument, nothing else.**
 
 SwiftUI shell over daemon state: renders terminal grids (Metal, from libghostty-vt state —
