@@ -15,6 +15,13 @@ socket. Later, a second machine (the forge) runs the same daemon with a wider po
 agents get their own always-on box; the Mac attaches. Migration is strangler-style
 inside this repo: one vertical at a time, old code unwired only when the new is proven.
 
+**Everything is built and proven on one machine — the operator's Mac — first.** The
+second machine is not added until M0–M5 are done and living well in daily use; do not
+stand up a forge, a VM, or a remote peer "to test peering" before then. The design is
+machine-count invariant on purpose (topology is config), so nothing in M0–M5 needs a
+second machine to be built correctly — and `BENCH_SUITE` gives every isolation the
+early milestones need without one.
+
 ## Invariants — violating any of these is wrong even if it works
 
 Each is argued in the audit doc; this is the checklist form.
@@ -207,6 +214,10 @@ every display-bound workaround (OSC push path in `CanvasPush` → replaced by
 ## M6 — The forge
 
 **Goal:** the agents' own machine; the Mac becomes an attach point.
+
+**Entry condition: M0–M5 complete and proven in daily use on the Mac.** This milestone
+starts when the second machine is actually purchased and wanted — not before, and never
+as a way to test earlier milestones.
 
 - Linux support proven for `benchd` + `bench` + taps (should be near-free; verify).
 - Peering: benchd ⇄ benchd over the tailnet — mail delivery, task sync, wake relay,
