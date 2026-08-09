@@ -483,6 +483,39 @@ forge is the same binary plus a policy file plus `bench peer add`, topology as c
 and "the agent machine may become messy" gets one exception — `~/.bench/{mail,events,
 tasks}` and the artifact stores are the fleet's memory and get backed up, one cron line.
 
+### Open questions the next session should take up
+
+Decided nowhere above, and each is cheap to settle now and expensive to improvise later:
+
+1. **Cross-host verb scope.** What crosses the peering link: mail, attention items and
+   tasks clearly yes — but cross-host *bench verbs* (a forge agent closing or spawning
+   panes on the Mac) should default off, flagged per peer. A remote machine petitions;
+   it does not operate. This is the estate's security boundary and it is currently
+   unstated.
+2. **Cross-host artifacts.** A forge agent's pushed artifact lives on the forge's disk;
+   the Mac face cannot render a local path that is not local. Canvas sources should be
+   **daemon-served** (the face asks benchd for content the way it asks for grids, relayed
+   over peering) — which changes the canvas port's scheme handler from
+   filesystem-reading to daemon-reading. Decide before the canvas milestone.
+3. **benchd restart vs. pty survival.** Daemon upgrade kills every session — helm's flaw
+   one level down. Start with accept-and-resume (drain, upgrade, interactive `--resume`
+   storm); name the per-session pty-holder shim (the tmux-server trick, minimized) as
+   the known path if upgrades become frequent.
+4. **Agent identity and credentials on the forge.** Give agents their own identities —
+   per-machine git author, scoped PATs/deploy keys — rather than the operator's
+   everywhere: bounds blast radius, and makes the audit trail say who did what, which is
+   equal-owners legibility.
+5. **Limits and spend in the taxonomy.** `limited` (usage/rate limit hit) is a `blocked`
+   subtype the overnight fleet will produce; budget visibility is helm's #143 wearing
+   its real clothes. Add to the attention taxonomy now.
+6. **Queue triage at scale.** The first morning brings dozens of items; the event log
+   makes a digest a pure projection (since-you-left counts, grouped by project and by
+   addressee — which covers orchestrators with no hierarchy in the app). A view, built
+   early.
+
+Carry-over: helm's #297 (OSC 52 clipboard overwrite) moves into the face's painter —
+hostile-output handling becomes a renderer decision made once, the better place for it.
+
 ### And if not greenfield
 
 The audit's honest conclusion: helm's *values* — the bench model, the policies, the wire
