@@ -380,24 +380,36 @@ not a model turn, decides when a supervisor agent needs to wake.
   pty tenants; the runtime's own knobs (CC spawn depth/concurrency) govern internal
   subagents. Neither route is taxed for not being the other.
 
-### Orchestration: a tenancy pattern, not a feature
+### Orchestration: a tenancy pattern, and NOT part of the app
 
-The operator's intended mode — one orchestrator agent per project, later maybe one above
-those — needs nothing built beyond what is here, and that is deliberate. **An
-orchestrator is just another tenant**: same verbs, same mailbox, same pty, no
-architectural rank — its authority over workers is prompts and skills, so it can be
-killed, bypassed, duplicated for an A/B, or talked around (operator straight to a worker)
-without anything breaking. It composes: `bench spawn` for workers as attachable TUIs
-(look over its shoulder at anything it started), tasks posted and claimed by rename,
-briefs and reports as mail across hosts, and `bench watch` for zero-token supervision —
-a watcher process, not a model turn, wakes it only when a worker is genuinely blocked or
-done, so its spend is proportional to events, not time. The one small mechanism this
-pattern earns: **attention items carry a route** — a worker's `blocked` goes to its
-orchestrator's queue first, and only escalations land in the operator's — under the
-invariant that routing is a view, never a gate: the operator's queue can always show
-everything. Growth stays in the skill layer (helm's "renders and routes, does not
-decide" carries over verbatim): per-project orchestrators → a first mate above them is a
-prompt change, not a bench change. This is helm's #186, bench-native.
+**Read this section as a boundary, not a spec. The orchestrator hierarchy has nothing to
+do with the app, and must never be architected into it.** There is no orchestrator kind,
+role, rank, team, or supervisor field anywhere in benchd, the wire contracts, the CLI,
+or the face — and a future session working from this document must not add one. The
+bench knows tenants; that every tenant is equal is the constitution, and a hierarchy
+type would be its first violation. If a future change seems to need the bench to know
+who supervises whom, the answer is a skill or a prompt, not a field — the same rule helm
+already holds ("helm renders and routes; it does not decide"), kept on purpose.
+
+What the operator actually runs on top — one orchestrator agent per project, maybe one
+above those later — is **entirely convention**: an ordinary tenant whose authority over
+workers is its prompt and its skills. It composes the generic primitives every tenant
+has: `bench spawn` (workers as attachable TUIs the operator can always look in on),
+tasks posted and claimed by rename, briefs and reports as mail across hosts, and
+`bench watch` for zero-token supervision (a watcher process, not a model turn, wakes it
+only when a worker is genuinely blocked or done). Because none of that is structural,
+the operator can kill an orchestrator, bypass it, run two against one project to A/B
+their prompts, or talk to any worker directly — nothing breaks. Iterating the hierarchy
+— per-project orchestrators, later a first mate above them — is a prompt change, never a
+bench change. This is helm's #186, run on the bench rather than built into it.
+
+One deliberately generic mechanism is adjacent and must stay generic: an attention item
+can be **addressed to any tenant's queue** — the same symmetric addressing mail has, so
+a worker's skill can say "post your blocked items to <handle>". That is addressing, not
+hierarchy: the daemon stores no notion of who routes to whom, the sender names a
+recipient per item, and the operator's queue can always show everything. If that field
+ever grows orchestrator-shaped semantics — default supervisors, escalation chains,
+role-aware filtering — it has crossed the line this section draws.
 
 ### The document surface: keep the moat
 
