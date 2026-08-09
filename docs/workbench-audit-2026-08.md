@@ -281,10 +281,14 @@ host↔agent, not agent↔agent — it has no peer messaging and cannot be the c
 Second, and sharper: ACP adapters *replace* the TUI rather than attach to it —
 `claude-code-acp` wraps the Agent SDK and runs the loop itself, with the host rendering
 the transcript. There is no way to connect ACP to an already-running interactive TUI in a
-pty, so pty-first and ACP are either/or *per session*. For a bench that hosts the real
-CLIs, ACP buys nothing. It earns reconsideration only for headless workers nobody
-watches — and even there `claude -p --output-format stream-json` and `codex exec --json`
-are the more direct taps.
+pty, so pty-first and ACP are either/or *per session*. For this bench it buys nothing at
+all, because the design has no headless sessions to give it: **every agent, on every
+machine, runs as a full interactive top-level session in a benchd-held pty** — never
+`claude -p`, never `codex exec` — precisely so it can be attached to from the Mac and
+look identical to sitting at the box. One benchd per machine is the landlord; each agent
+session is a tenant with its own pty, lifecycle and address — the per-agent-daemon effect
+without N processes to supervise. Resume after a reboot is interactive too: benchd types
+`claude --resume <id>` into a fresh pty, the same move as helm's `cls --resume`.
 
 **The structured-event feed comes instead from the layer the operator already runs —
 hooks, the spool, the mailbox, the pi extension — given a spine.** That stitched system
