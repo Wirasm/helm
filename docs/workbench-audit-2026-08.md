@@ -398,6 +398,22 @@ peered over Tailscale/SSH. What changes:
   postures and a wider command allowlist than the Mac. The operator-protecting refusals
   exist where the operator's keyboard is, and nowhere else.
 
+The operator's own machine plan maps onto this one-to-one. **Machine 1** (MacBook/iPhone,
+control plane) = the attach clients: face, `bench attach` over Tailscale, phone —
+"approve sensitive actions" becomes the attention queue rather than ssh-and-hunt.
+**Machine 2** (Linux agent box) = the forge; the `tmux / herdr / cmux` slot in that plan
+is exactly the slot benchd fills, and its `~/worktrees/<product>-agent-NN` layout is what
+`bench spawn --worktree` composes. Docker stays an optional per-task isolation posture,
+orthogonal to the daemon. **Machine 3** (future local inference) sits below the bench's
+abstraction line: benchd never knows which model an agent talks to, so vLLM/Ollama are
+endpoint config on the CLIs (an Anthropic-shaped proxy for Claude Code), swappable
+per-agent without touching the bench. Three consequences the plan settles: benchd and the
+CLI/TUI must be **Linux-first** (which also settles the daemon language: Rust); the
+design must be **machine-count invariant** — day one is everything on the Mac, adding the
+forge is the same binary plus a policy file plus `bench peer add`, topology as config;
+and "the agent machine may become messy" gets one exception — `~/.bench/{mail,events,
+tasks}` and the artifact stores are the fleet's memory and get backed up, one cron line.
+
 ### And if not greenfield
 
 The audit's honest conclusion: helm's *values* — the bench model, the policies, the wire
