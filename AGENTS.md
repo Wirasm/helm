@@ -179,11 +179,22 @@ today**: the spool has no `canvas` kind, so `8` means hand over the path.
 cases ran the real `push.sh` from the gate's own process tree, so every run by an agent inside a
 pane pushed six artifacts onto the **operator's** bench, each a tab onto a `mktemp` directory the
 gate then deleted — he watched the dead tabs pile up. That is #282 from the other side and the
-better argument for the guard, because it happened rather than being hypothetical. Every emitting
-case is staged now: detached by a double fork for the refusals, and given a pty of its own
-(`exec -a helm script`, stream to `/dev/null`) for the one case that must prove a real emit. Check
-it the way it was checked — diff the canvas panes in `~/.helm/bench/snapshot.json` around a run,
-and expect zero new ones even while a *broken* `push.sh` is the thing under test.
+better argument for the guard, because it happened rather than being hypothetical. **push.sh is now
+invoked from exactly one line of that file** — one runner everything goes through, detached — and a
+check fails the run if that stops being true. Staging each case individually was the first attempt
+and it removed the instances rather than the bug: `run_code` still called push.sh raw and was merely
+never handed a renderable path, which the next case added beside the extension list would be.
+- **The double fork does not remove the terminal, it removes the ancestry.** A controlling tty is
+  inherited across fork and reparenting does not clear it, so the run still *reports* a tty; what it
+  cannot do is prove that tty is helm's, because `pty_owner` needs the chain and ppid is 1. So the
+  refusal is `6` headless and `8` from a shell that has a terminal — assert the set, not the number,
+  or the gate fails for whoever runs it by hand.
+- **And the reparent races the runner's own startup.** `( ( cmd & ) & )` reparents only once the
+  intermediate shell exits, which can be after the grandchild is running — and a run that proceeds
+  attached is exactly the one that reaches the bench. The runner waits for ppid 1 and refuses rather
+  than proceeding without it.
+- Check it the way it was checked: diff the canvas panes in `~/.helm/bench/snapshot.json` around a
+  run, and expect zero new ones even while a *broken* `push.sh` is the thing under test.
 
 `hooks/` is the **Claude Code** half of the mailbox — `claude-session-start` claims a mailbox so
 a session can be addressed, `claude-user-prompt-submit` delivers waiting mail by writing the notice
