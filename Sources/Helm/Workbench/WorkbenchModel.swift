@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import HelmWire
 import SwiftUI
 
 /// The live workbench for the ACTIVE workspace, and the resolver from the bench's values
@@ -220,7 +221,7 @@ final class WorkbenchModel: ObservableObject {
             // thing it is asking about is not a question.
             mount = .awaitingRestore(offer)
             resumeOffers = [:]
-            reconcileVisibility()
+            reconcileSessions()
         case let .restore(saved):
             build(path, restoring: saved)
         case .fresh:
@@ -299,7 +300,7 @@ final class WorkbenchModel: ObservableObject {
         let built = restorable ?? Self.defaultBench(for: live)
         mount = built.map(MountState.mounted) ?? .empty
         resumeOffers = offers(in: built)
-        reconcileVisibility()
+        reconcileSessions()
     }
 
     /// One offer per pane whose record names an agent that is **not already running there**.
@@ -361,7 +362,7 @@ final class WorkbenchModel: ObservableObject {
         // Keyed by canvas pane id, so it goes exactly when the cache does — a leftover entry
         // would name a pane nothing resolves any more.
         origins.removeAll()
-        reconcileVisibility()
+        reconcileSessions()
     }
 
     /// Closing a workspace is an explicit teardown, unlike switching: drop every canvas it
@@ -791,6 +792,27 @@ final class WorkbenchModel: ObservableObject {
         return self.bench?.visiblePaneIDs.contains(pane) ?? false
     }
 
+    /// Call a pane something (#313), and report what it was called before — nil when this bench
+    /// has no such pane.
+    ///
+    /// **No offering twin, for `Workbench.name`'s reason**: a name moves nothing, so the
+    /// operator's version and an agent's would be the same mutation.
+    ///
+    /// **The bench is where the name lives; the session is a copy for rendering.** `commit` pushes
+    /// it onto the session (`reconcileSessions`), which is what puts a *terminal's* name on its
+    /// tab, in its notifications and — through `TerminalSession.displayTitle` —  in
+    /// `snapshot.json`. A **canvas** has no session, so its name reaches its tab straight off the
+    /// pane (`SlotTabStrip`) and reaches `snapshot.json` not at all: `BenchSnapshot.CanvasRecord`
+    /// carries only a source. That is a real limit rather than a hedge, and `helm-name`'s own help
+    /// text says so, because a caller reads the name back out of its result either way.
+    @discardableResult
+    func name(_ pane: Pane.ID, to name: PaneName) -> PaneName? {
+        guard var bench else { return nil }
+        guard let previous = bench.name(pane, to: name) else { return nil }
+        commit(bench)
+        return previous
+    }
+
     /// ⌘1–⌘9 — select by position **within the focused slot**. It was by position within
     /// the workspace; a bench has no single row for that to mean.
     func selectTab(_ index: Int) {
@@ -804,7 +826,7 @@ final class WorkbenchModel: ObservableObject {
     ///
     /// **A slot that is already focused commits nothing**, and that guard is load-bearing now
     /// rather than tidy. Every click on a pane's body reaches here (#152), and `commit` runs
-    /// `reconcileVisibility` and drives `WorkspaceModel.observe`'s save — so without it, typing
+    /// `reconcileSessions` and drives `WorkspaceModel.observe`'s save — so without it, typing
     /// in the pane you are already in would write the whole workspace context to `UserDefaults`
     /// on every click. It also settles the feedback question: a no-op commit would re-render the
     /// bench, and re-renders are what `FocusClaimingTerminalView`'s edge-triggered claim exists
@@ -942,25 +964,41 @@ final class WorkbenchModel: ObservableObject {
     /// One assignment, then everything the change implies.
     private func commit(_ updated: Workbench) {
         mount = .mounted(updated)
-        reconcileVisibility()
+        reconcileSessions()
     }
 
-    /// Push `isVisible` onto every session in the app.
+    /// Push what a session cannot know for itself onto every session in the app: `isVisible`,
+    /// and — since #313 — the pane's name.
     ///
     /// On **every** bench change, not just on select: a close, a split or a focus move can
     /// all change which panes are on screen. Sessions in parked workspaces are invisible by
     /// definition, which is why this walks every session rather than only this workspace's.
+    ///
+    /// **The name is pushed here rather than handed to the tab view, and that is what makes
+    /// there be one answer to "what is this pane called" (#313).** `TerminalSession.displayTitle`
+    /// is spent by three readers — the tab, `TerminalNotifier`, and `BenchSnapshot.TerminalRecord`
+    /// — so a name the *view* knew about would have left `snapshot.json` reporting the OSC title
+    /// while the tab beside it read something else. It is the same shape as `isVisible` for the
+    /// same reason: a fact that belongs to the bench, about a session that has no way to ask.
+    ///
+    /// **A parked workspace's sessions keep the name they were last pushed**, which is correct
+    /// rather than stale: their panes are not on this bench, and nothing can rename them while
+    /// they are off it (`WorkbenchSpoolPanes.pane` reads the mounted bench and answers nil for
+    /// everything else).
     ///
     /// It does nothing else. An earlier draft of this plan had it keep one `hostView`
     /// attached at 1×1pt in case zero attached ghostty surfaces stalled every pty — that
     /// was measured and it does not: a backgrounded pty ran a delayed command to completion
     /// with every surface unmounted. Do not reintroduce it from reading
     /// `TerminalSession`'s header, which predicts the opposite and is wrong about this.
-    private func reconcileVisibility() {
+    private func reconcileSessions() {
         let visible = bench?.visiblePaneIDs ?? []
+        let names = Dictionary(
+            (bench?.panes ?? []).map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         for session in terminals.sessions {
-            session.isVisible =
-                session.workspacePath == workspacePath && visible.contains(session.id)
+            let mine = session.workspacePath == workspacePath
+            session.isVisible = mine && visible.contains(session.id)
+            if let name = names[session.id] { session.name = name }
         }
     }
 

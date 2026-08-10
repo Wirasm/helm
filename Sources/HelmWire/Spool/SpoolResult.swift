@@ -14,7 +14,8 @@ import Foundation
 ///
 /// **Lives in `HelmWire` (#221)**, alongside `SpoolRequest`, for the same reason: `Helm`'s own
 /// `SpoolModel` writes this and `HelmTests` decodes it, both against one definition. The
-/// standalone `helm-spool`/`helm-close`/`helm-capture`/`helm-command`/`helm-select` scripts still
+/// standalone `helm-spool`/`helm-close`/`helm-capture`/`helm-command`/`helm-select`/`helm-name`
+/// scripts still
 /// read `json["status"] as? String` — they cannot `import HelmWire` (`AGENTS.md`'s "Why the spool
 /// is a script, and must
 /// stay one") — so a new `Status` case is not automatically visible to them; a caller adding one
@@ -90,6 +91,18 @@ package struct SpoolResult: Codable, Equatable {
         /// A select that was **refused** is `refused`, not this — a pane in the operator's own
         /// slot, or a uuid helm holds no pane for.
         case selected
+        /// The pane is called what the request asked for (#313). **One write**, like `captured`,
+        /// `closed`, `ran` and `selected`: naming is applied synchronously to the bench value and
+        /// there is no second party to wait for. `name` says what it was called before and what
+        /// it is called now.
+        ///
+        /// Written just as readily when the pane already had that name — the caller asked for a
+        /// state and the state holds, which is `selected`'s argument and the same one.
+        ///
+        /// A name that was **refused** is `refused`, not this — a pane somebody has already named
+        /// and no `rename`, a name that is empty or oversized or full of control characters, or a
+        /// uuid helm holds no pane for.
+        case named
         /// The terminal is alive but no mailbox appeared before the deadline. Deliberately
         /// **not** a failure and deliberately not cleaned up: the agent may be running
         /// perfectly well without the mail hooks installed. It exists; it cannot be
@@ -145,6 +158,10 @@ package struct SpoolResult: Codable, Equatable {
     /// where the keyboard was on each side of it. A nested value for `capture`'s and `command`'s
     /// reason: these fields only mean anything together.
     package var select: SelectReport?
+    /// What a `named` result did to the pane (#313) — what it was called before, and what it is
+    /// called now. A nested value for `capture`'s, `command`'s and `select`'s reason: these fields
+    /// only mean anything together.
+    package var name: NameReport?
     /// Seconds since the epoch, so a caller watching for the `started` → `ready` change has
     /// something that always differs between the two writes.
     package var updatedAt: Double
@@ -153,7 +170,7 @@ package struct SpoolResult: Codable, Equatable {
         id: String, status: Status, terminalId: TerminalID? = nil, pid: Int32? = nil,
         sessionId: String? = nil, handle: Handle? = nil, runtime: String? = nil,
         reason: String? = nil, capture: CaptureReport? = nil, command: CommandReport? = nil,
-        select: SelectReport? = nil,
+        select: SelectReport? = nil, name: NameReport? = nil,
         updatedAt: Double = Date().timeIntervalSince1970
     ) {
         self.id = id
@@ -167,7 +184,45 @@ package struct SpoolResult: Codable, Equatable {
         self.capture = capture
         self.command = command
         self.select = select
+        self.name = name
         self.updatedAt = updatedAt
+    }
+}
+
+/// What naming a pane actually did — read back off the bench, never echoed from the request
+/// (#313).
+///
+/// **`SelectReport.isVisible`'s promise, for the other addressed verb that changes something the
+/// operator can see.** A result that only said *"named"* would leave the caller to re-read
+/// `snapshot.json` and race it; worse, it would be indistinguishable from a helm that accepted the
+/// request and rendered nothing.
+///
+/// **`previousName` is the field that makes the ownership rule legible in the answer.** A caller
+/// that gets `previousName: nil` named a pane nothing had named; one that gets a string back
+/// replaced somebody's words, and can say so to the operator who asked for it. It is also the only
+/// record of what was there, since nothing else keeps one.
+///
+/// **No focus readings, and their absence is the policy's shape rather than an omission.**
+/// `CommandReport` and `SelectReport` both carry `focusedPaneBefore`/`After` because both policies
+/// promise not to move the keyboard, and an argument in a header is a claim where two readings are
+/// a measurement. `SpoolNamePolicy` makes no such promise because naming cannot move the keyboard
+/// at all — there is nothing here for a canary to catch.
+package struct NameReport: Codable, Equatable {
+    /// The pane, echoed rather than assumed from the request: a caller reading only the result
+    /// file learns what happened without holding onto what it sent.
+    package let pane: TerminalID
+    /// What the pane was called immediately before, or nil when nothing had named it. **helm's own
+    /// derived label reads as a name here**, because it is what was on the tab — the provenance
+    /// that let this request through is `SpoolNamePolicy`'s business, not a caller's.
+    package let previousName: String?
+    /// What it is called now, **read back off the bench after the mutation** rather than copied
+    /// from the request.
+    package let name: String
+
+    package init(pane: TerminalID, previousName: String?, name: String) {
+        self.pane = pane
+        self.previousName = previousName
+        self.name = name
     }
 }
 

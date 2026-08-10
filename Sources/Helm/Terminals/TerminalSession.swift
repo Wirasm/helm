@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyTerminal
+import HelmWire
 import SwiftUI
 
 // MARK: - TerminalSession
@@ -98,9 +99,28 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// through it any more, which is what let `selectedID` be deleted outright.
     weak var manager: TerminalManager?
 
-    /// Tab-strip label: the shell-reported title, or "shell N" until one arrives.
+    /// What the pane holding this session is called (#313), pushed in by `WorkbenchModel` on
+    /// every bench change exactly as `isVisible` is — the bench owns it and persists it, and a
+    /// session has no way to ask.
+    ///
+    /// `@Published`, because the tab observes this object directly and a rename has to redraw
+    /// that tab the way a title change already does.
+    @Published var name: PaneName = .unnamed
+
+    /// Tab-strip label, in precedence order: **a name somebody chose, then a name helm derived,
+    /// then what the shell says about itself, then the ordinal.**
+    ///
+    /// **The derived name outranking the OSC title is the whole of #313's concrete trigger, and
+    /// it is deliberate rather than incidental.** Since #93 an agent's first message is a *path*,
+    /// so Claude Code titles its session after the pointer and every spool-spawned tab read a
+    /// variant of *"Read and act on spool prompt file"*. That string is exactly the one being
+    /// outranked. An agent that wants a live, meaningful title says so through `helm-name`, which
+    /// lands above both.
+    ///
+    /// `PaneName` collapses its first two cases here on purpose: a renderer has no opinion about
+    /// who chose the words, and `SpoolNamePolicy` is the only thing that does.
     var displayTitle: String {
-        title.isEmpty ? "shell \(ordinal)" : title
+        name.text ?? (title.isEmpty ? "shell \(ordinal)" : title)
     }
 
     /// The long-lived ghostty NSView (Metal-rendered; keyboard/IME/mouse/resize

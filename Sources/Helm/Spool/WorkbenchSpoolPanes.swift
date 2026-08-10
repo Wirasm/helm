@@ -1,25 +1,27 @@
 import Foundation
 import HelmWire
 
-/// The addressed edge: answers what helm can see about one pane, takes it off the bench, and
-/// brings it forward.
+/// The addressed edge: answers what helm can see about one pane, takes it off the bench, brings it
+/// forward, and calls it something.
 ///
 /// The inverse of `WorkbenchSpoolSpawner`, and it lives beside it for the same reason — it is
 /// the spool's adapter onto the bench, not a bench feature (`AGENTS.md`).
 ///
-/// **One adapter for both requests that name a pane, and that is why it is no longer called a
-/// closer (#284).** `pane(_:)` was never close-specific: it reports where the operator is and what
-/// the pane holds, which is what *any* addressed request has to be judged against. Splitting it in
-/// two would mean two lookups of the same pane, two copies of the `sysctl` this file makes, and
-/// two answers to "where is the operator" — the seam defect `AGENTS.md` names.
+/// **One adapter for every request that names a pane, and that is why it is no longer called a
+/// closer (#284, and a third verb since #313).** `pane(_:)` was never close-specific: it reports
+/// where the operator is, what the pane holds and what it is already called, which is what *any*
+/// addressed request has to be judged against. Splitting it up would mean N lookups of the same
+/// pane, N copies of the `sysctl` this file makes, and N answers to "where is the operator" — the
+/// seam defect `AGENTS.md` names.
 ///
-/// **It decides nothing.** Whether a pane may go is `SpoolClosePolicy`'s and whether it may be
-/// shown is `SpoolSelectPolicy`'s, both on the far side of a protocol, where they are reachable
-/// from `swift test`. Everything here is a fact helm can only read from a live bench: what the
-/// pane holds, where the keyboard is, what the pty's foreground process is. Putting a rule in
-/// here would put it exactly where a test cannot go.
+/// **It decides nothing.** Whether a pane may go is `SpoolClosePolicy`'s, whether it may be shown
+/// is `SpoolSelectPolicy`'s and whether it may be renamed is `SpoolNamePolicy`'s, all on the far
+/// side of a protocol, where they are reachable from `swift test`. Everything here is a fact helm
+/// can only read from a live bench: what the pane holds, where the keyboard is, what it is called,
+/// what the pty's foreground process is. Putting a rule in here would put it exactly where a test
+/// cannot go.
 @MainActor
-final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting {
+final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting, SpoolNaming {
     private let workbench: WorkbenchModel
     private let terminals: TerminalManager
 
@@ -43,6 +45,10 @@ final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting {
         return SpoolPaneState(
             holdsTerminal: holdsTerminal,
             keyboard: Self.keyboard(for: id, in: bench),
+            // Read off the *pane*, not off the session, and for a canvas there is no session to
+            // read. `TerminalSession.name` is a copy `reconcileSessions` pushes for rendering;
+            // the bench is where it lives and what persists it.
+            name: pane.name,
             foreground: foreground,
             foregroundParent: foreground.flatMap(Self.parent),
             sessionLeader: foreground.flatMap(Self.sessionLeader))
@@ -83,6 +89,40 @@ final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting {
                 pane: TerminalID(id), isVisible: visible,
                 focusedPaneBefore: before.map(TerminalID.init),
                 focusedPaneAfter: focusedAfter.map(TerminalID.init)))
+    }
+
+    /// **Reports the bench's answer, not the request's hope** — `select`'s rule and `close`'s,
+    /// for their reason: `name` below re-reads the pane *after* the mutation rather than echoing
+    /// what it was asked for, so a `named` result about a pane that did not change would be the
+    /// same silence #176 and #284 each removed once.
+    func name(_ id: UUID, to name: PaneName) -> Result<NameReport, SpoolRefusal> {
+        guard workbench.bench != nil else {
+            return .failure(
+                SpoolRefusal(
+                    "helm has no bench to name a pane on. Open a workspace, or send a spawn — "
+                        + "its cwd is what opens one."))
+        }
+        guard let previous = workbench.name(id, to: name) else {
+            // Unreachable through the spool — `SpoolNamePolicy` has already refused a uuid this
+            // bench has no pane for — and reported rather than assumed away, exactly as
+            // `SpoolModel`'s `staysHidden` branch is.
+            return .failure(
+                SpoolRefusal(
+                    "helm's bench has no pane \(id.uuidString) to name. Nothing was changed"))
+        }
+        let applied: String
+        if let confirmed = workbench.bench?.pane(id)?.name.text {
+            applied = confirmed
+        } else {
+            // Falling back to what was *asked for*, which is the one thing this method's header
+            // says it does not do — so it is a branch rather than a third `??`, and it says why
+            // it is here. `SpoolModel` only ever passes `.chosen`, whose `text` is never nil, and
+            // the pane was on the bench a line ago; this is a bench that lost it in between.
+            applied = name.text ?? ""
+        }
+        return .success(
+            NameReport(
+                pane: TerminalID(id), previousName: previous.text, name: applied))
     }
 
     /// **Reports the bench's answer, not the request's hope.** `WorkbenchModel.close` returns

@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 // MARK: - Workbench
 
@@ -330,6 +331,25 @@ struct Workbench: Codable, Equatable {
         guard self.slot(slot) != nil else { return }
         focusedSlot = slot
         normalize()
+    }
+
+    /// Call a pane something (#313), and report what it was called before.
+    ///
+    /// **There is no `name(offering:)` twin, and its absence is the whole shape of the verb.**
+    /// `select` and `splitRight` each needed one because the operator's version moves focus and an
+    /// agent's must not — a name moves nothing, so both callers want the identical mutation and a
+    /// second entry point would differ in no line at all. Whether the name may *replace* what is
+    /// there is `SpoolNamePolicy`'s, on the far side of the spool's seam, exactly as this type's
+    /// `select(offering:)` leaves its own safety to `SpoolSelectPolicy`.
+    ///
+    /// nil when the bench holds no such pane — told apart from *"it had no name"*, which is
+    /// `.some(.unnamed)`.
+    @discardableResult
+    mutating func name(_ pane: Pane.ID, to name: PaneName) -> PaneName? {
+        guard let address = address(of: pane) else { return nil }
+        let previous = columns[address.column].slots[address.slot].panes[address.pane].name
+        columns[address.column].slots[address.slot].panes[address.pane].name = name
+        return previous
     }
 
     /// ⌘D — a new column immediately right of the focused one, holding this pane, and
@@ -912,10 +932,19 @@ struct Pane: Codable, Equatable, Identifiable {
     /// pre-bench context is a straight read.
     let id: UUID
     var content: Content
+    /// What this pane is called, and who called it that (#313).
+    ///
+    /// **Beside `content` rather than inside it**, unlike `face` and `agent`: a name means the
+    /// same thing for a terminal and for a canvas, and `Pane.id` is already one namespace across
+    /// both (#284). `TerminalFace`'s header argues the opposite way for its own field, and the
+    /// distinction is exactly the one it draws — a canvas *has no face*, so asking it for one must
+    /// not compile, where a canvas plainly can be called something.
+    var name: PaneName = .unnamed
 
-    init(id: UUID = UUID(), content: Content) {
+    init(id: UUID = UUID(), content: Content, name: PaneName = .unnamed) {
         self.id = id
         self.content = content
+        self.name = name
     }
 
     enum Content: Equatable {
@@ -945,6 +974,43 @@ enum TerminalFace: String, Codable, Equatable {
 }
 
 // MARK: - Codable
+
+/// **Hand-written only because of `name`, and only because absence has to be tolerated (#313).**
+/// The synthesized decoder calls `decode(_:forKey:)` for a non-optional property, which *throws*
+/// on a bench written by any build before #313 — and `Slot.init(from:)` **skips a pane it cannot
+/// read**. Synthesizing here would therefore have cost the operator every pane in every persisted
+/// workspace on the first launch after upgrade, to save a word on a tab. `Pane.Content` makes the
+/// same trade one type down for a malformed `agent`, and for the same reason.
+///
+/// `.unnamed` is not written at all, so an un-named bench's blob is byte-identical to what every
+/// build before this one produced.
+extension Pane {
+    private enum CodingKeys: String, CodingKey { case id, content, name }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        content = try container.decode(Content.self, forKey: .content)
+        // Two different absences, and both mean `.unnamed`. `decodeIfPresent` returning nil is the
+        // key missing entirely, which is every bench on disk today; the `try?` is `name` holding
+        // something that is not a keyed container at all, which `PaneName`'s own decoder cannot
+        // catch because it throws before it can look. Spelled as two branches rather than
+        // `(try? …) ?? nil ?? .unnamed`, whose middle `nil` is a double-optional flatten that
+        // reads like dead code.
+        if let decoded = try? container.decodeIfPresent(PaneName.self, forKey: .name) {
+            name = decoded ?? .unnamed
+        } else {
+            name = .unnamed
+        }
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(content, forKey: .content)
+        if name != .unnamed { try container.encode(name, forKey: .name) }
+    }
+}
 
 /// Hand-written with a string discriminator, for the reason `CanvasSource`'s encoder
 /// gives: the synthesized shape uses positional `_0` keys, which break on any reordering

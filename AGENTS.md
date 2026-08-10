@@ -506,6 +506,41 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `select.focusedPaneAfter` are two readings of `Workbench.focusedPane` taken either side of the
     mutation, and the script warns loudly if they differ. Exit codes are 2 no answer, 3 refused,
     4 helm could not act, 6 abandoned.
+- **To call a pane something, `swift tools/helm-name.swift <pane-uuid> <name> [--rename]`** — the
+  sixth spool kind (#313), needing what the other five need: nothing. The name goes on the tab and
+  **survives the restart the pane already survives** — it is persisted on `Pane`, not on the
+  session. Same uuid namespace and the same three ways to know one as `helm-close`; a canvas is
+  named exactly as a terminal is.
+  - **Where it can be read back, exactly, because the first draft of this bullet overclaimed it.**
+    The result's own `name` block always carries it. `snapshot.json` carries it only for a **live
+    terminal** pane, as `terminal.title`: `BenchSnapshot` reaches a name through
+    `TerminalSession.displayTitle`, so a pane whose session is gone reports `title: null`, and
+    `CanvasRecord` has never had a title field at all. So a named canvas shows its name on the tab
+    and reports it in the result, and is silent in the snapshot — read the result. Giving the
+    snapshot a name field of its own is `BenchSnapshot`'s change to make.
+  - **It exists because #93 made the tab useless, and the trigger is fixed without it.** An agent is
+    handed a *path* rather than a prompt, so Claude Code titles its session after the pointer and
+    every spool-spawned tab read *"Read and act on spool prompt file"*. helm wrote the request, so it
+    already knows which agent is starting and where: a spawned pane now arrives called
+    `claude · <tree>` (`PaneName.derived(for:)`), and **a name outranks the shell's OSC title**.
+  - **The rule is one sentence, and it is about ownership rather than the keyboard: an agent may
+    name a pane nobody is already calling something.** The operator's ruling — *"by default they
+    name new panes, and by default they dont rename if editing existing, but i can ask for a
+    rename"* — and the half helm can **check** is *"is anybody already calling this pane
+    something?"*, answered from its own state rather than from a did-I-spawn-this ledger that would
+    not survive a restart (`CloseRequest`'s header rejects that shape at length). helm's own derived
+    label is **not** somebody's choice, so an agent replacing it needs no flag — which is why
+    `PaneName` carries provenance and is not a `String?`: without it the agent helm had just spawned
+    would be refused when it named its own pane.
+  - **`--rename` is the caller saying the operator asked, and helm cannot check that.** It is
+    `helm-close --force`'s shape, defaulting to off for its reason. Unlike `force` it overrides no
+    other rule, **because there is no other rule** — a rename moves no keyboard and destroys
+    nothing, so `SpoolNamePolicy` never reads `SpoolPaneState.keyboard` at all, and naming the pane
+    the operator is typing in is ordinary. A caller that lies costs a wrong word on a tab, and the
+    fix is another rename.
+  - **The result is the measurement**: `name.previousName` (absent when nothing had named it) and
+    `name.name`, **read back off the bench** rather than echoed. Exit codes are 2 no answer,
+    3 refused, 4 helm could not act, 6 abandoned.
 - **To drive the bench in between, `swift tools/helm-command.swift <command>`** — the fourth
   spool kind (#269), needing what the other three need: nothing. helm has twenty typed
   commands (`HelmCommand`, #219, #287 and #289) and **will take four of them from an agent**:
@@ -773,12 +808,13 @@ single-file script needs no `Package.swift` resolved and no cwd inside this repo
 whole reason the spool is a script rather than an SPM target — see "Why the spool is a script,
 and must stay one", above, for what #221 measured when it tried the other way. So the format is
 typed once in `HelmWire` and spelled out once more in `tools/helm-spool.swift`/`helm-close.swift`/
-`helm-capture.swift`/`helm-command.swift`/`helm-select.swift`, on purpose. A duplicate is honest
+`helm-capture.swift`/`helm-command.swift`/`helm-select.swift`/`helm-name.swift`, on purpose. A
+duplicate is honest
 only when a runtime boundary makes
 sharing impossible, and two wire formats now earn that carve-out: the mailbox's, written twice
 — in Swift (`hooks/`) and TypeScript/JavaScript (`pi/`), both separate processes `HelmWire`
 cannot reach — and the spool's own, written twice — once in `HelmWire`, once by hand across the
-five scripts, for the reasons just given. Neither is left to drift unnoticed by nothing at all
+six scripts, for the reasons just given. Neither is left to drift unnoticed by nothing at all
 — `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) runs each spool script as a real
 subprocess and checks both directions of the spool format (the request it writes and, against
 every `SpoolResult.Status`, its exit code and stderr) plus the `HELM_DEFAULTS_SUITE` branch of

@@ -5,23 +5,29 @@ import XCTest
 /// Proves the standalone spool scripts and `HelmWire` still agree on the wire format — the
 /// detectable half of the duplication `AGENTS.md` argues is honest (#221).
 ///
-/// **Why the duplication exists at all.** `tools/helm-spool.swift`, `helm-close.swift`,
-/// `helm-capture.swift`, `helm-command.swift` and `helm-select.swift` cannot `import HelmWire`: a single-file
-/// `swift tools/…swift` script resolves no `Package.swift` and runs from any cwd, which is the
-/// whole reason the spool is a script rather than an SPM target (`AGENTS.md`'s "Why the spool is
-/// a script, and must stay one" has the measurements). So the request JSON, the result JSON and
-/// the spool's own
+/// **Why the duplication exists at all.** The `tools/*.swift` spool scripts cannot `import
+/// HelmWire`: a single-file `swift tools/…swift` script resolves no `Package.swift` and runs from
+/// any cwd, which is the whole reason the spool is a script rather than an SPM target
+/// (`AGENTS.md`'s "Why the spool is a script, and must stay one" has the measurements). So the
+/// request JSON, the result JSON and the spool's own
 /// directory-resolution rules are each spelled out twice — once here as `HelmWire` types and
 /// functions, once by hand in each script. A duplicate is honest only when a runtime boundary
 /// makes sharing impossible — this is that boundary — but honest still means it has to be
 /// *watched*, not merely excused.
 ///
+/// **Which scripts those are is `AGENTS.md`'s list, and deliberately not restated here** — the
+/// same reason `SpoolRequest`'s own header stopped restating it. This file named and counted five
+/// of them while spending six methods on the sixth, which is the drift in its purest form: a
+/// conformance test whose header was itself unconformant. **Nothing enumerates `tools/*.swift` in
+/// this suite**, so no gate catches that the way the tests below catch drift in the actual wire
+/// bytes; a test that reads the directory and checks it against one list is tracked separately.
+///
 /// **This file covers three of the spool's four boundaries, and says which one it does not:**
 ///
 /// 1. **The request direction** (script → helm): a script writes `<id>.json`, helm's
-///    `SpoolDirectory.request(at:)` decodes it. Covered by the five `testHelm*WritesWhat
-///    *RequestDecodes` tests below, unchanged from #221's first pass but for #269's fourth kind
-///    and #284's fifth.
+///    `SpoolDirectory.request(at:)` decodes it. Covered by the `testHelm*WritesWhat
+///    *RequestDecodes` tests below — one per script, unchanged in shape from #221's first pass,
+///    with a new one added by each kind since (#269's, #284's, #313's).
 /// 2. **The result direction** (helm → script): helm writes `results/<id>.json`, the script
 ///    reads `json["status"] as? String` and switches on it by hand — one `switch status` per
 ///    script, none of which
@@ -191,6 +197,38 @@ final class SpoolWireConformanceTests: XCTestCase {
         XCTAssertEqual(select.pane, pane.uuidString)
     }
 
+    /// **The whole payload, because a name is the first addressed request that carries more than
+    /// an id** (#313). `rename` in particular has to arrive as a real boolean the decoder reads:
+    /// a script that wrote it as the string `"false"` would decode as `false` too (via
+    /// `decodeIfPresent(Bool.self)` failing into the default) and look correct, while
+    /// `--rename` — the flag that says the operator asked — silently did nothing.
+    func testHelmNameWritesWhatNameRequestDecodes() throws {
+        let id = "conformance-name"
+        let pane = UUID()
+        try run("helm-name.swift", [pane.uuidString, "review the diff", "--id", id])
+
+        guard case .name(let name) = try decodedRequest(id: id) else {
+            return XCTFail("helm-name.swift wrote a request HelmWire did not decode as a name")
+        }
+        XCTAssertEqual(name.pane, pane.uuidString)
+        XCTAssertEqual(name.name, "review the diff")
+        XCTAssertFalse(name.rename, "the safe default has to survive the wire, not just the type")
+    }
+
+    func testHelmNameCarriesTheRenameFlagAsABooleanTheDecoderReads() throws {
+        let id = "conformance-name-rename"
+        let pane = UUID()
+        try run("helm-name.swift", [pane.uuidString, "the plan", "--rename", "--id", id])
+
+        guard case .name(let name) = try decodedRequest(id: id) else {
+            return XCTFail("helm-name.swift wrote a request HelmWire did not decode as a name")
+        }
+        XCTAssertTrue(
+            name.rename,
+            "--rename is the caller saying the operator asked; if it does not survive the wire "
+                + "the flag is decoration and every rename is refused")
+    }
+
     func testHelmCaptureWritesWhatCaptureRequestDecodes() throws {
         let id = "conformance-capture"
         try run(
@@ -231,6 +269,7 @@ final class SpoolWireConformanceTests: XCTestCase {
         case .closed: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
         case .ran: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
         case .selected: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
+        case .named: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
         case .unclaimed: return ResultExpectation(exitCode: 5, stderrContains: "no mailbox")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
         case .failed: return ResultExpectation(exitCode: 4, stderrContains: "could not act")
@@ -256,6 +295,8 @@ final class SpoolWireConformanceTests: XCTestCase {
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ran")
         case .selected:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status selected")
+        case .named:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status named")
         case .unclaimed:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
@@ -281,6 +322,8 @@ final class SpoolWireConformanceTests: XCTestCase {
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ran")
         case .selected:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status selected")
+        case .named:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status named")
         case .unclaimed:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
@@ -306,6 +349,8 @@ final class SpoolWireConformanceTests: XCTestCase {
             return ResultExpectation(exitCode: 0, stderrContains: "splitRight ran")
         case .selected:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status selected")
+        case .named:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status named")
         case .unclaimed:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
@@ -331,6 +376,35 @@ final class SpoolWireConformanceTests: XCTestCase {
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ran")
         case .selected:
             return ResultExpectation(exitCode: 0, stderrContains: "is visible")
+        case .named:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status named")
+        case .unclaimed:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
+        case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
+        case .failed: return ResultExpectation(exitCode: 4, stderrContains: "could not act")
+        case .abandoned: return ResultExpectation(exitCode: 6, stderrContains: "stopped mid-flight")
+        }
+    }
+
+    /// helm-name.swift's own `Exit` enum — ok=0, refused=3, failed=4, abandoned=6 (#313).
+    /// Same shape as the four above: a name is one write, so everything but `named` falls to
+    /// `default:`.
+    private func helmNameExpectation(for status: SpoolResult.Status) -> ResultExpectation {
+        switch status {
+        case .started:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status started")
+        case .ready:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ready")
+        case .captured:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status captured")
+        case .closed:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status closed")
+        case .ran:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ran")
+        case .selected:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status selected")
+        case .named:
+            return ResultExpectation(exitCode: 0, stderrContains: "is now")
         case .unclaimed:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
@@ -374,6 +448,12 @@ final class SpoolWireConformanceTests: XCTestCase {
                     pane: TerminalID(terminal), isVisible: true,
                     focusedPaneBefore: TerminalID(terminal),
                     focusedPaneAfter: TerminalID(terminal)))
+        case .named:
+            return SpoolResult(
+                id: id, status: .named, terminalId: TerminalID(terminal),
+                name: NameReport(
+                    pane: TerminalID(terminal), previousName: "claude · helm",
+                    name: "review the diff"))
         case .unclaimed:
             return SpoolResult(
                 id: id, status: .unclaimed, terminalId: TerminalID(terminal), pid: 4242,
@@ -512,6 +592,28 @@ final class SpoolWireConformanceTests: XCTestCase {
             XCTAssertTrue(
                 stderr.contains(expectation.stderrContains),
                 "helm-select.swift on status \(status.rawValue): expected stderr to contain "
+                    + "\"\(expectation.stderrContains)\", got \"\(stderr)\"")
+        }
+    }
+
+    func testHelmNameExitCodeAndStderrForEveryResultStatus() throws {
+        for status in SpoolResult.Status.allCases {
+            let pane = UUID()
+            let id = "name-result-\(status.rawValue)"
+            SpoolDirectory(root: spoolDir).write(
+                result(id: id, status: status, terminal: pane))
+
+            let (exitCode, stderr) = try runAndCapture(
+                "helm-name.swift", [pane.uuidString, "review the diff", "--id", id])
+
+            let expectation = helmNameExpectation(for: status)
+            XCTAssertEqual(
+                exitCode, expectation.exitCode,
+                "helm-name.swift on status \(status.rawValue): exit \(exitCode), stderr: \(stderr)"
+            )
+            XCTAssertTrue(
+                stderr.contains(expectation.stderrContains),
+                "helm-name.swift on status \(status.rawValue): expected stderr to contain "
                     + "\"\(expectation.stderrContains)\", got \"\(stderr)\"")
         }
     }
@@ -724,6 +826,82 @@ final class SpoolWireConformanceTests: XCTestCase {
             stderr.contains(after.uuidString),
             "…and must name where the keyboard went, so the warning is actionable; got "
                 + "\"\(stderr)\"")
+    }
+
+    /// **helm-name.swift must name every route to a pane uuid that `HelmWire` names**, for
+    /// `testHelmSelectNamesEveryRouteToAPaneUuidThatHelmWireDoes`'s reason exactly — a third
+    /// hand-copy of `CloseRequest.waysToKnowAPane` that no constant can reach, in the ticket that
+    /// made the third one exist.
+    func testHelmNameNamesEveryRouteToAPaneUuidThatHelmWireDoes() throws {
+        let (exitCode, _, stderr) = try runAndCaptureBoth(
+            "helm-name.swift", ["not-a-uuid", "a name"])
+        XCTAssertEqual(exitCode, 1, "a non-uuid is a usage error, caught before the spool")
+
+        for marker in ["terminalId", "HELM_PANE", "snapshot.json"] {
+            XCTAssertTrue(
+                CloseRequest.waysToKnowAPane.contains(marker),
+                "HelmWire stopped naming \(marker) as a route to a pane uuid — if that is "
+                    + "deliberate, this test and helm-name.swift both have to hear about it")
+            XCTAssertTrue(
+                stderr.contains(marker),
+                "helm-name.swift's refusal does not name \(marker), which HelmWire's "
+                    + "CloseRequest.waysToKnowAPane does; got \"\(stderr)\"")
+        }
+    }
+
+    /// **The name a `named` result reports is the one the script prints, not the one it sent**
+    /// (#313) — `helm-name.swift` reads `name.name` out of a nested object by name, with no
+    /// compiler link to `NameReport`, exactly as `helm-select` reads its two focus fields. Rename
+    /// the field and the cast returns `nil`, the script quietly falls back to echoing its own
+    /// argument, and the one thing that made the report a *measurement* stops working.
+    ///
+    /// The result it is given deliberately disagrees with what was asked for, which is the only
+    /// way to tell "read it back" from "echoed the request".
+    func testHelmNamePrintsWhatHelmSaysThePaneIsCalledRatherThanWhatItAskedFor() throws {
+        let id = "wire-shape-name-readback"
+        let pane = UUID()
+        SpoolDirectory(root: spoolDir).write(
+            SpoolResult(
+                id: id, status: .named, terminalId: TerminalID(pane),
+                name: NameReport(
+                    pane: TerminalID(pane), previousName: "claude · helm", name: "what helm says"
+                )))
+
+        let (exitCode, stderr) = try runAndCapture(
+            "helm-name.swift", [pane.uuidString, "what the caller asked for", "--id", id])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertTrue(
+            stderr.contains("what helm says"),
+            "helm-name.swift must report the name out of the result, which is what the tab "
+                + "actually says; got \"\(stderr)\"")
+        XCTAssertTrue(
+            stderr.contains("claude · helm"),
+            "…and must say what it replaced, which is the fact the operator who asked for the "
+                + "rename needs; got \"\(stderr)\"")
+    }
+
+    /// The control for the test above, and named as one: a script that read neither field would
+    /// still print its own argument, so this is what stops that passing. `previousName` is
+    /// legitimately absent for a pane nothing had named, and the script must say nothing about
+    /// what it replaced rather than inventing a phrase.
+    func testHelmNameSaysNothingAboutAPreviousNameWhenThereWasNone() throws {
+        let id = "wire-shape-name-first"
+        let pane = UUID()
+        SpoolDirectory(root: spoolDir).write(
+            SpoolResult(
+                id: id, status: .named, terminalId: TerminalID(pane),
+                name: NameReport(pane: TerminalID(pane), previousName: nil, name: "the plan")))
+
+        let (exitCode, stderr) = try runAndCapture(
+            "helm-name.swift", [pane.uuidString, "the plan", "--id", id])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertTrue(stderr.contains("the plan"))
+        XCTAssertFalse(
+            stderr.contains("was "),
+            "a first naming replaced nothing, and saying otherwise would be the script inventing "
+                + "a fact; got \"\(stderr)\"")
     }
 
     /// The control for the test above, and named as one: it passes whether or not the warning

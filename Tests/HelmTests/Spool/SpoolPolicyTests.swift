@@ -489,6 +489,143 @@ final class SpoolPolicyTests: XCTestCase {
         XCTAssertEqual(accepted.pane.uuidString, "1E5B7B1C-0000-4000-8000-00000000ABCD")
     }
 
+    // MARK: - Name (#313)
+
+    func testANameNamesAPaneAndCarriesWhatToCallIt() throws {
+        let request = try JSONDecoder().decode(
+            SpoolRequest.self,
+            from: Data(
+                #"{"id":"x","kind":"name","pane":"1E5B7B1C-0000-4000-8000-00000000ABCD","name":"review the diff"}"#
+                    .utf8))
+        XCTAssertEqual(
+            request,
+            .name(
+                NameRequest(
+                    id: "x", pane: "1E5B7B1C-0000-4000-8000-00000000ABCD",
+                    name: "review the diff")))
+        guard case .name(let accepted) = try work(request) else {
+            return XCTFail("expected a name")
+        }
+        XCTAssertEqual(accepted.pane.uuidString, "1E5B7B1C-0000-4000-8000-00000000ABCD")
+        XCTAssertEqual(accepted.name, "review the diff")
+        XCTAssertFalse(
+            accepted.rename,
+            "an absent `rename` is the safe answer, exactly as an absent `force` is on a close")
+    }
+
+    func testANameThatIsNotAPaneUuidIsRefusedRatherThanMatchingNothing() {
+        // The third copy of an argument that is now written once — `SpoolPolicy.pane` — and the
+        // test is per kind because the *field name* in the refusal is per kind.
+        for pane in ["", "not-a-uuid", "1E5B7B1C-0000-4000-8000", "  "] {
+            XCTAssertNotNil(
+                refusal(.name(NameRequest(id: "x", pane: pane, name: "anything"))),
+                "\(pane) must be refused as a pane id")
+        }
+    }
+
+    func testANameHelmWillNotDrawIsRefusedWithItsOwnReason() throws {
+        // `SpoolPolicy`'s half of #313 — the shape of the value, where `SpoolNamePolicy` owns who
+        // may replace what. Both are refusals, and telling them apart is what the reasons do.
+        let pane = "1E5B7B1C-0000-4000-8000-00000000ABCD"
+        let empty = try XCTUnwrap(
+            refusal(.name(NameRequest(id: "x", pane: pane, name: "   "))))
+        XCTAssertTrue(
+            empty.contains("has to be something"),
+            "an empty name is not read as *clear it* — nothing asked for that, and helm cannot "
+                + "tell it from a caller that forgot the argument")
+
+        let long = String(repeating: "a", count: SpoolPolicy.maxNameLength + 1)
+        XCTAssertNotNil(refusal(.name(NameRequest(id: "x", pane: pane, name: long))))
+        XCTAssertNil(
+            refusal(
+                .name(
+                    NameRequest(
+                        id: "x", pane: pane,
+                        name: String(repeating: "a", count: SpoolPolicy.maxNameLength)))),
+            "…and the bound itself is allowed, or the message would be off by one")
+
+        XCTAssertNotNil(
+            refusal(.name(NameRequest(id: "x", pane: pane, name: "two\nlines"))),
+            "a control character in a value drawn on a tab and read back out of a result file is "
+                + "refused, exactly as one in a spawn's args is")
+    }
+
+    func testANameIsTrimmedOnceHereRatherThanAtEveryReader() throws {
+        // `AcceptedCaptureRequest.path`'s argument: the one place that decides what a pane will
+        // be called is the one place that checked whether it may be.
+        guard
+            case .name(let accepted) = try work(
+                .name(
+                    NameRequest(
+                        id: "x", pane: "1E5B7B1C-0000-4000-8000-00000000ABCD",
+                        name: "  review the diff  ")))
+        else { return XCTFail("expected a name") }
+        XCTAssertEqual(accepted.name, "review the diff")
+    }
+
+    func testANameIsRoutedByItsKindAndCarriesNoCommandOfItsOwn() throws {
+        // The pinning every kind gets, and for the same reason: a `name` that could take the
+        // spawn arm on the strength of a stray `command` would be a file that starts `sh` and
+        // never met `allowedCommands`.
+        let smuggled = try JSONDecoder().decode(
+            SpoolRequest.self,
+            from: Data(
+                #"{"id":"x","kind":"name","pane":"1E5B7B1C-0000-4000-8000-00000000ABCD","name":"n","command":"sh","cwd":"/tmp","force":true}"#
+                    .utf8))
+        guard case .name(let accepted) = try work(smuggled) else {
+            return XCTFail("a name must stay a name whatever else the file carries")
+        }
+        // And there is nowhere for a command — or a `force` — to survive to: `AcceptedNameRequest`
+        // has neither field, which the compiler enforces rather than this assertion.
+        XCTAssertEqual(accepted.pane.uuidString, "1E5B7B1C-0000-4000-8000-00000000ABCD")
+    }
+
+    // MARK: - What the three addressed kinds now share (#313)
+
+    func testEveryAddressedKindNamesTheSameRoutesToAPaneUuid() {
+        // The extraction, held: `SpoolPolicy.pane` is one function, and before #313 the same
+        // eight lines were written twice with one word changed. A third copy is what this stops.
+        let bad = "not-a-uuid"
+        let reasons = [
+            refusal(.close(CloseRequest(id: "x", terminal: bad))),
+            refusal(.select(SelectRequest(id: "x", pane: bad))),
+            refusal(.name(NameRequest(id: "x", pane: bad, name: "n"))),
+        ]
+        for reason in reasons {
+            let reason = reason ?? ""
+            XCTAssertTrue(
+                reason.contains(CloseRequest.waysToKnowAPane),
+                "every addressed kind hands back the one list of routes; got \"\(reason)\"")
+        }
+        XCTAssertTrue(reasons[0]?.contains("terminal \"not-a-uuid\"") == true)
+        XCTAssertTrue(
+            reasons[1]?.contains("pane \"not-a-uuid\"") == true,
+            "…while still naming the field the caller actually wrote, which is the one thing the "
+                + "shared helper takes as a parameter")
+        XCTAssertTrue(reasons[2]?.contains("pane \"not-a-uuid\"") == true)
+    }
+
+    func testTheNoSuchPaneRefusalIsOneSentenceForAllThreePolicies() {
+        // The second extraction, held. Before #313 the close's copy was missing the
+        // parked-workspace sentence the select's carried, and it was true of both.
+        let pane = TerminalID(UUID())
+        let reasons = [
+            SpoolClosePolicy.refusal(
+                for: AcceptedCloseRequest(id: "x", terminal: pane, force: false), pane: nil),
+            SpoolSelectPolicy.refusal(
+                for: AcceptedSelectRequest(id: "x", pane: pane), pane: nil),
+            SpoolNamePolicy.refusal(
+                for: AcceptedNameRequest(id: "x", pane: pane, name: "n", rename: false),
+                pane: nil),
+        ]
+        for reason in reasons {
+            XCTAssertEqual(reason, SpoolRefusal.noSuchPane(pane))
+        }
+        XCTAssertTrue(
+            SpoolRefusal.noSuchPane(pane).reason.contains("parked"),
+            "including the sentence a close used to be missing")
+    }
+
     /// **The refusal for a file that does not parse at all has to describe every kind**, because
     /// it is the one answer with no `kind` to route on — the caller's JSON was never readable, so
     /// helm cannot know which shape they were aiming at.
