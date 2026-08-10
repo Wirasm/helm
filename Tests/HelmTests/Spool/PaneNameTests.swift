@@ -11,7 +11,8 @@ final class PaneNameTests: XCTestCase {
     // MARK: - What helm calls a spawned pane
 
     private func spawn(command: String = "claude", cwd: String) -> AcceptedSpawnRequest {
-        AcceptedSpawnRequest(id: "s", cwd: cwd, command: command, args: [], prompt: nil)
+        AcceptedSpawnRequest(
+            id: RequestID(validating: "s")!, cwd: cwd, command: command, args: [], prompt: nil)
     }
 
     func testASpawnedPaneIsNamedForItsAgentAndItsTree() {

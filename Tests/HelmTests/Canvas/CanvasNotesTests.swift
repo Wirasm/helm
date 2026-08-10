@@ -43,10 +43,10 @@ final class CanvasNotesTests: XCTestCase {
 
     // MARK: - What
 
-    func testAnElementAnchorNamesTheIDTheAgentCanEdit() {
+    func testAnElementAnchorNamesTheIDTheAgentCanEdit() throws {
         let entry = CanvasNotes.entry(
-            CanvasAnnotation(
-                anchor: .element(id: "phase-2", text: "Phase 2 — migrate the store"),
+            try annotation(
+                selecting: "Phase 2 — migrate the store", id: "phase-2",
                 comment: "this ordering is wrong, the store move has to come first"),
             at: stamp)
 
@@ -56,17 +56,17 @@ final class CanvasNotesTests: XCTestCase {
             entry.contains("this ordering is wrong, the store move has to come first"), entry)
     }
 
-    func testAQuoteAnchorNamesTheTextAlone() {
+    func testAQuoteAnchorNamesTheTextAlone() throws {
         let entry = CanvasNotes.entry(
-            CanvasAnnotation(anchor: .quote("the store move"), comment: "why?"), at: stamp)
+            try annotation(selecting: "the store move", comment: "why?"), at: stamp)
 
         XCTAssertTrue(entry.contains("## \"the store move\""), entry)
         XCTAssertFalse(entry.contains("#`"), "there was no id to name")
     }
 
-    func testAMultiLineSelectionStaysOnOneHeadingLine() {
+    func testAMultiLineSelectionStaysOnOneHeadingLine() throws {
         let entry = CanvasNotes.entry(
-            CanvasAnnotation(anchor: .quote("first line\nsecond line"), comment: "hm"), at: stamp)
+            try annotation(selecting: "first line\nsecond line", comment: "hm"), at: stamp)
 
         let heading = entry.split(separator: "\n").first { $0.hasPrefix("## ") }
         XCTAssertEqual(
@@ -83,7 +83,7 @@ final class CanvasNotesTests: XCTestCase {
         try existing.write(to: sidecar, atomically: true, encoding: .utf8)
 
         try CanvasNotes.append(
-            CanvasAnnotation(anchor: .quote("later"), comment: "a second note"),
+            try annotation(selecting: "later", comment: "a second note"),
             for: canvas, at: stamp)
 
         let written = try String(contentsOf: sidecar, encoding: .utf8)
@@ -98,7 +98,7 @@ final class CanvasNotesTests: XCTestCase {
         let canvas = directory.appendingPathComponent("plan.md")
 
         try CanvasNotes.append(
-            CanvasAnnotation(anchor: .quote("a passage"), comment: "first"), for: canvas,
+            try annotation(selecting: "a passage", comment: "first"), for: canvas,
             at: stamp)
 
         let written = try XCTUnwrap(CanvasNotes.markdown(in: CanvasNotes.sidecarURL(for: canvas)))
@@ -107,21 +107,20 @@ final class CanvasNotesTests: XCTestCase {
 
     /// A canvas opened through Browse… can live somewhere not writable. The failure has to
     /// reach the pane; it must never be swallowed.
-    func testAnUnwritableDirectoryThrowsRatherThanFailingQuietly() {
+    func testAnUnwritableDirectoryThrowsRatherThanFailingQuietly() throws {
         let canvas = URL(fileURLWithPath: "/System/helm-should-not-write-here/plan.md")
+        let mark = try annotation(selecting: "x", comment: "y")
 
-        XCTAssertThrowsError(
-            try CanvasNotes.append(
-                CanvasAnnotation(anchor: .quote("x"), comment: "y"), for: canvas, at: stamp))
+        XCTAssertThrowsError(try CanvasNotes.append(mark, for: canvas, at: stamp))
     }
 
     func testHeadingsAndMarkdownReadBackWhatWasWritten() throws {
         let canvas = directory.appendingPathComponent("tasks.html")
         try CanvasNotes.append(
-            CanvasAnnotation(anchor: .element(id: "a", text: "A"), comment: "one"), for: canvas,
+            try annotation(selecting: "A", id: "a", comment: "one"), for: canvas,
             at: stamp)
         try CanvasNotes.append(
-            CanvasAnnotation(anchor: .quote("B"), comment: "two"), for: canvas, at: stamp)
+            try annotation(selecting: "B", comment: "two"), for: canvas, at: stamp)
 
         let sidecar = CanvasNotes.sidecarURL(for: canvas)
         let written = try XCTUnwrap(CanvasNotes.markdown(in: sidecar))
@@ -142,7 +141,7 @@ final class CanvasNotesTests: XCTestCase {
     func testTheDrawerReadsTheTimestampAsAFootnoteRatherThanAsTags() throws {
         let canvas = directory.appendingPathComponent("plan.md")
         try CanvasNotes.append(
-            CanvasAnnotation(anchor: .quote("a passage"), comment: "first"), for: canvas,
+            try annotation(selecting: "a passage", comment: "first"), for: canvas,
             at: stamp)
 
         let written = try XCTUnwrap(CanvasNotes.markdown(in: CanvasNotes.sidecarURL(for: canvas)))
@@ -166,59 +165,81 @@ final class CanvasNotesTests: XCTestCase {
 final class CanvasNotesMarkTests: XCTestCase {
     private let stamp = Date(timeIntervalSince1970: 1_700_000_000)
 
-    private func heading(_ mark: CanvasAnnotation.Mark) -> String {
+    /// **The gesture as the page posts it, decoded** (#326) — see `CanvasAnnotationFixture`.
+    /// These were `CanvasAnnotation.Mark` values assembled by hand, which is a shape no page can
+    /// post and the decoder never saw: the heading being asserted was rendered from a mark that
+    /// had never been through the rules that produce one.
+    private func heading(
+        _ body: [String: Any], file: StaticString = #filePath, line: UInt = #line
+    ) throws -> String {
         let entry = CanvasNotes.entry(
-            CanvasAnnotation(mark: mark, comment: "this shouldn't talk to that"), at: stamp)
+            try annotation(
+                marking: body, comment: "this shouldn't talk to that", file: file, line: line),
+            at: stamp)
         return entry.split(separator: "\n").first.map(String.init) ?? ""
     }
 
-    func testACircleReadsAsCircled() {
+    func testACircleReadsAsCircled() throws {
         XCTAssertEqual(
-            heading(.enclosure(covering: [.element(id: "phase-2", text: "Phase 2: Ship")])),
+            try heading([
+                "kind": "enclosure",
+                "targets": [["id": "phase-2", "text": "Phase 2: Ship"] as [String: Any]],
+            ]),
             "## circled `#phase-2` — \"Phase 2: Ship\"")
     }
 
-    func testCirclingSeveralListsThemWithoutTheirLabels() {
+    func testCirclingSeveralListsThemWithoutTheirLabels() throws {
         // A heading carrying three quoted labels is a paragraph, not a heading.
         XCTAssertEqual(
-            heading(
-                .enclosure(covering: [
-                    .element(id: "phase-1", text: "One"), .element(id: "phase-2", text: "Two"),
-                ])),
+            try heading([
+                "kind": "enclosure",
+                "targets": [
+                    ["id": "phase-1", "text": "One"] as [String: Any],
+                    ["id": "phase-2", "text": "Two"] as [String: Any],
+                ],
+            ]),
             "## circled `#phase-1`, `#phase-2`")
     }
 
-    func testAnArrowReadsAsAnArrow() {
+    func testAnArrowReadsAsAnArrow() throws {
         XCTAssertEqual(
-            heading(
-                .relation(
-                    from: .element(id: "phase-1", text: "One"),
-                    to: .element(id: "phase-3", text: "Three"))),
+            try heading([
+                "kind": "relation",
+                "from": ["id": "phase-1", "text": "One"] as [String: Any],
+                "to": ["id": "phase-3", "text": "Three"] as [String: Any],
+            ]),
             "## arrow `#phase-1` → `#phase-3`")
     }
 
-    func testAnArrowIntoEmptySpaceSaysSo() {
+    func testAnArrowIntoEmptySpaceSaysSo() throws {
         XCTAssertEqual(
-            heading(.relation(from: .element(id: "phase-1", text: "One"), to: nil)),
+            try heading([
+                "kind": "relation", "from": ["id": "phase-1", "text": "One"] as [String: Any],
+            ]),
             "## arrow `#phase-1` → (empty space)")
     }
 
-    func testATapReadsAsPointedAt() {
+    func testATapReadsAsPointedAt() throws {
         XCTAssertEqual(
-            heading(.point(.element(id: "phase-2", text: "Phase 2"))),
+            try heading(["kind": "point", "id": "phase-2", "text": "Phase 2"]),
             "## pointed at `#phase-2` — \"Phase 2\"")
     }
 
-    func testASelectionIsUnchangedFromBeforeThisSlice() {
+    func testASelectionIsUnchangedFromBeforeThisSlice() throws {
         XCTAssertEqual(
-            heading(.selection(.element(id: "phase-2", text: "Phase 2"))),
+            try heading(["kind": "selection", "id": "phase-2", "text": "Phase 2"]),
             "## `#phase-2` — \"Phase 2\"")
-        XCTAssertEqual(heading(.selection(.quote("the store move"))), "## \"the store move\"")
+        XCTAssertEqual(
+            try heading(["kind": "selection", "text": "the store move"]),
+            "## \"the store move\"")
     }
 
-    func testADegradedMarkStillReadsAsTheGesture() {
+    func testADegradedMarkStillReadsAsTheGesture() throws {
         // A mindmap node has no anchor, but the operator still circled something.
         XCTAssertEqual(
-            heading(.enclosure(covering: [.quote("branchA")])), "## circled \"branchA\"")
+            try heading([
+                "kind": "enclosure", "targets": [["text": "branchA"] as [String: Any]],
+            ]),
+            "## circled \"branchA\"")
     }
 }

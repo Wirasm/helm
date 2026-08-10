@@ -24,7 +24,9 @@ final class SpoolNamePolicyTests: XCTestCase {
     )
         -> AcceptedNameRequest
     {
-        AcceptedNameRequest(id: "n", pane: TerminalID(pane), name: name, rename: rename)
+        AcceptedNameRequest(
+            id: RequestID(validating: "n")!, pane: TerminalID(pane), name: name,
+            rename: rename)
     }
 
     /// A pane as `WorkbenchSpoolPanes` reports one. The pids and the keyboard are deliberately

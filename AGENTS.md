@@ -523,7 +523,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   (`Tests/HelmTests/Spool/`) is for: it runs each real script as a subprocess and checks both
   directions — the request it writes, decoded with the real type, and its exit code and stderr
   against a real `SpoolResult` for **every** `Status` case, not a sample — plus `helm-command`'s
-  hand-copied allowlist against `SpoolCommandPolicy` itself, plus the
+  hand-copied allowlist against `SpoolCommandPolicy` itself, plus each script's hand-copied
+  **id pattern** against `RequestID.pattern` and the refusal it drives (#260), plus the
   `HELM_DEFAULTS_SUITE` half of directory resolution against a real, disposable suite. The one
   branch it cannot reach is the bare default (no override, no suite), which resolves to the
   operator's actual `~/.helm/spool` and cannot be redirected — the test file's own header has
@@ -998,7 +999,8 @@ cannot reach — and the spool's own, written twice — once in `HelmWire`, once
 six scripts, for the reasons just given. Neither is left to drift unnoticed by nothing at all
 — `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) runs each spool script as a real
 subprocess and checks both directions of the spool format (the request it writes and, against
-every `SpoolResult.Status`, its exit code and stderr) plus the `HELM_DEFAULTS_SUITE` branch of
+every `SpoolResult.Status`, its exit code and stderr) plus each script's hand-copied id pattern
+against `RequestID.pattern` (#260) plus the `HELM_DEFAULTS_SUITE` branch of
 directory resolution, so a drift anywhere in that surface fails a test rather than shipping
 silently. The one branch it cannot reach is the bare default resolution, which the test file's
 own header explains — it resolves to the operator's live spool, and a test does not get to write
@@ -1038,34 +1040,53 @@ a request is decoded permissively in shape and judged strictly afterwards — th
 malformed uuid a `refused` result naming the reason rather than unreadable JSON under the wrong id.
 Each of those argues itself in its own header; do not "fix" them.
 
-**What is still loose today is the spool request `id`.** It is gated as the filename it is — *"`..`
-and `/` are the whole reason: an ungated id writes wherever the caller likes"*
-(`Sources/HelmWire/Spool/SpoolRequest.swift:318`) — by a regex applied at exactly one edge,
-`SpoolPolicy.accept` (`SpoolRequest.swift:338`), while the value itself stays a bare `String` in
-seven declarations with open initializers (`SpoolRequest.swift:85`, `:129`, `:183`, `:236`, `:261`,
-`:276`, `SpoolResult.swift:82`). So every site that needs the guarantee has to **ask again, by
-hand** — which is the exact defect `SpoolWork`'s own header, in that same file, says its shape
-exists to prevent: *"so that 'has this been checked?' is answered by the compiler at every call site
-instead of by reading upwards"* (`SpoolRequest.swift:227`). `id` is the field in those structs that
-is still answered by reading upwards.
+**Nothing in the spool is loose today, and #260 is where the last one was closed.** That is a real
+state worth recording rather than a gap to leave unmentioned — #250 established as much when it
+found this file's previous evidence list had expired. The spool request `id` was the last field
+answered by reading upwards: gated as the filename it is — *"`..` and `/` are the whole reason: an
+ungated id writes wherever the caller likes"* — by a regex applied at exactly one edge, while the
+value itself stayed a bare `String` in seven declarations with open initializers.
 
-Note what this is **not**: `SpoolPolicy.idPattern` is defined exactly once (`SpoolRequest.swift:320`)
-and *referenced* by both sites, so `SpoolModel.refuse` (`Sources/Helm/Spool/SpoolModel.swift:232`) is
-a second **guard**, not a second **spelling** — it is not the two-hand-maintained-copies defect
-`Handle`'s header describes, and it is there for a real reason: `refuse` is also reached with
-`fallbackID` (`SpoolModel.swift:195`), an id derived from the *filename* when the JSON would not
-parse and `SpoolPolicy.accept` never ran.
+**The cost was reachable in two launches, with no crash involved, and it is now a red test rather
+than an argument.** `answerAbandoned` took an id straight out of a claimed request's JSON via
+`SpoolDirectory.abandoned()` — decoded with no pattern check — and handed it to a path builder;
+`appendingPathComponent` does not collapse `..`, so `results/../../../../tmp/pwned.json` was a real
+write to `/tmp/pwned.json`. `SpoolModelTests
+.testAClaimedRequestWithATraversalIdWritesNothingOutsideTheSpool` is that route, and it failed on
+`development` before `RequestID` existed.
 
-The cost lands where nobody asked at all. `answerAbandoned` (`SpoolModel.swift:173`) takes an id
-straight out of a claimed request's JSON via `SpoolDirectory.abandoned()` (`SpoolDirectory.swift:176`,
-decoded with no pattern check) and hands it to the path builder at `SpoolDirectory.swift:132` — and
-`appendingPathComponent` does not collapse `..` (measured: `results/../../../../tmp/pwned.json`).
-The three scripts do not ask either: `tools/helm-close.swift:113` hand-validates the *terminal*
-uuid, not the id, then interpolates the id into a path. Two sites ask, four do not — and a guard
-that has to be remembered is what a type exists to stop being a memory test. The fix is the one this
-file already made five lines below, in the same struct: `AcceptedCloseRequest.terminal` got
-`TerminalID` for exactly the "a parse a caller could forget" argument, and `id` — the field whose own
-comment says it writes wherever the caller likes — did not. Tracked as #260.
+**The fix is the one this file already knew: make the unchecked value unrepresentable at the path
+builder, not add a third place to remember.** `RequestID`
+(`Sources/HelmWire/Spool/RequestID.swift`) holds the pattern and `init?(validating:)` is the only
+unrestricted route in. `SpoolDirectory`'s three builders — `write`, `result(id:)`, `stagePrompt` —
+take it, and `abandoned()` returns it, so there is no `String` overload left to reach them by. That
+is `AcceptedCloseRequest.terminal`'s argument applied to the field five lines above it, which is
+where #260 said it belonged.
+
+**Two asymmetries in it are deliberate, and both are the shape this file already argues for.** The
+six *request* types keep their bare `String` under the standing carve-out — a request is decoded
+permissively in shape and judged strictly afterwards, so a malformed id is still a `refused` result
+naming the reason rather than unreadable JSON under the wrong id, and `SpoolPolicy.accept` is still
+the single site that turns the string into a `RequestID`. `SpoolResult.id` **does** become the
+newtype, because a result is written by helm rather than read from a caller: there is no refusal to
+produce and nothing to be permissive about, and it is what closes `write`.
+
+`SpoolModel.refuse` is still a second **guard** and still not a second **spelling** — it is reached
+with `fallbackID`, an id derived from the *filename* when the JSON would not parse and `accept`
+never ran. What changed is that it no longer re-applies a shared regex by hand: it asks `RequestID`
+for one. Its sibling overload, taking a `RequestID`, carries no guard at all, and which of the two a
+call site gets is now decided by the compiler from the type it is holding.
+
+**The six scripts gate their own `--id` too, and that is a seventh hand-copy that earns its
+carve-out.** helm's gate is still the authority, but its refusal cannot be *read* from the caller's
+side: a `..` writes the request outside the spool where no helm is watching, so the caller burns its
+whole timeout — or, under `--no-wait`, exits 0 having landed the file nowhere. Measured before the
+guard: an opaque `NSCocoaErrorDomain Code=4` about `mktemp`, and exit 4. So each script refuses
+locally, exactly as `helm-close` already refuses a non-uuid pane, and
+`SpoolWireConformanceTests.testEverySpoolScriptGatesItsIdWithHelmWiresOwnPattern` reads the literal
+out of each script's source and compares it to `RequestID.pattern`, while its sibling runs the
+refusal against a real subprocess — because a pattern that is present and never applied would pass
+the first assertion alone.
 
 Prefer a newtype the day the comment gets written, not the day it is disbelieved.
 

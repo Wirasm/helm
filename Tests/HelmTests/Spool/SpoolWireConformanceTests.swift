@@ -417,7 +417,15 @@ final class SpoolWireConformanceTests: XCTestCase {
     /// (`ready`, `closed`, `captured`) has everything it reads (`pid`, `capture.path`, …), and
     /// that its failure paths (`refused`, `failed`, `unclaimed`, `abandoned`) have a `reason`
     /// this test can look for in stderr.
-    private func result(id: String, status: SpoolResult.Status, terminal: UUID) -> SpoolResult {
+    private func result(
+        id rawID: String, status: SpoolResult.Status, terminal: UUID
+    )
+        -> SpoolResult
+    {
+        // The scripts write the id as a bare string and read `results/<id>.json` back by hand,
+        // and checking those two halves agree is this suite's whole job — so a fixture result is
+        // built through the same validating route helm's own writer goes through (#260).
+        let id = RequestID(validating: rawID)!
         switch status {
         case .started:
             return SpoolResult(id: id, status: .started, terminalId: TerminalID(terminal))
@@ -747,7 +755,8 @@ final class SpoolWireConformanceTests: XCTestCase {
         let id = "wire-shape-closed-no-pid"
         let pane = UUID()
         SpoolDirectory(root: spoolDir).write(
-            SpoolResult(id: id, status: .closed, terminalId: TerminalID(pane)))
+            SpoolResult(
+                id: RequestID(validating: id)!, status: .closed, terminalId: TerminalID(pane)))
 
         let (exitCode, stdout, stderr) = try runAndCaptureBoth(
             "helm-close.swift", [pane.uuidString, "--id", id])
@@ -809,7 +818,7 @@ final class SpoolWireConformanceTests: XCTestCase {
         let after = UUID()
         SpoolDirectory(root: spoolDir).write(
             SpoolResult(
-                id: id, status: .selected, terminalId: TerminalID(pane),
+                id: RequestID(validating: id)!, status: .selected, terminalId: TerminalID(pane),
                 select: SelectReport(
                     pane: TerminalID(pane), isVisible: true,
                     focusedPaneBefore: TerminalID(pane), focusedPaneAfter: TerminalID(after))))
@@ -862,7 +871,7 @@ final class SpoolWireConformanceTests: XCTestCase {
         let pane = UUID()
         SpoolDirectory(root: spoolDir).write(
             SpoolResult(
-                id: id, status: .named, terminalId: TerminalID(pane),
+                id: RequestID(validating: id)!, status: .named, terminalId: TerminalID(pane),
                 name: NameReport(
                     pane: TerminalID(pane), previousName: "claude · helm", name: "what helm says"
                 )))
@@ -890,7 +899,7 @@ final class SpoolWireConformanceTests: XCTestCase {
         let pane = UUID()
         SpoolDirectory(root: spoolDir).write(
             SpoolResult(
-                id: id, status: .named, terminalId: TerminalID(pane),
+                id: RequestID(validating: id)!, status: .named, terminalId: TerminalID(pane),
                 name: NameReport(pane: TerminalID(pane), previousName: nil, name: "the plan")))
 
         let (exitCode, stderr) = try runAndCapture(
@@ -980,7 +989,7 @@ final class SpoolWireConformanceTests: XCTestCase {
         let after = UUID()
         SpoolDirectory(root: spoolDir).write(
             SpoolResult(
-                id: id, status: .ran,
+                id: RequestID(validating: id)!, status: .ran,
                 command: CommandReport(
                     command: .splitRight, paneCreated: nil,
                     focusedPaneBefore: TerminalID(before), focusedPaneAfter: TerminalID(after),
@@ -1086,6 +1095,81 @@ final class SpoolWireConformanceTests: XCTestCase {
                     + "at \(url.path) — it resolved somewhere SpoolDirectory.resolve did not")
         }
     }
+
+    // MARK: - 5. The id gate, in six hand-copies (#260)
+
+    /// **Every spool script gates its `--id` with `RequestID`'s own pattern, and this is what
+    /// stops that being six copies nobody compares.**
+    ///
+    /// The id names three files a script builds by hand — `<id>.json`, `.staging-<id>.json` and
+    /// `results/<id>.json` — and `appendingPathComponent` does not collapse `..`. helm's gate is
+    /// still the authority (`SpoolPolicy.accept`), but its refusal is unreadable from the caller's
+    /// side: a hostile id writes the request outside the spool where no helm is watching, so the
+    /// caller either burns its whole timeout or, under `--no-wait`, exits 0 having landed the file
+    /// nowhere. So each script refuses locally, exactly as `helm-close` already refuses a
+    /// non-uuid pane.
+    ///
+    /// **Both halves are asserted, because either alone is satisfiable by a script that does
+    /// nothing.** The literal is read out of the source and compared to `RequestID.pattern`, so a
+    /// tightened rule in `HelmWire` cannot leave six stale copies behind; and the refusal is run
+    /// against a real subprocess, so a pattern that is present but never applied still fails.
+    func testEverySpoolScriptGatesItsIdWithHelmWiresOwnPattern() throws {
+        for script in Self.spoolScripts {
+            let source = try String(
+                contentsOf: repositoryRoot.appendingPathComponent("tools/\(script.name)"),
+                encoding: .utf8)
+            XCTAssertTrue(
+                source.contains("let idPattern = \"\(RequestID.pattern)\""),
+                "tools/\(script.name) does not carry HelmWire's own id pattern "
+                    + "(\(RequestID.pattern)) — it cannot import HelmWire, so the copy is the "
+                    + "carve-out and this assertion is what keeps it honest")
+        }
+    }
+
+    /// The behavioural half: the pattern is actually applied, before anything is written.
+    ///
+    /// **`..` is checked rather than merely "some invalid string"**, because it is the one that
+    /// escapes: `results/../../../../tmp/pwned.json` standardizes to `/tmp/pwned.json`, measured.
+    /// The refusal must be a **usage** error (exit 1, before the spool is touched), and the spool
+    /// must be untouched afterwards — a script that refused *after* writing has still written.
+    func testEverySpoolScriptRefusesATraversalIdBeforeWritingAnything() throws {
+        for script in Self.spoolScripts {
+            let (exitCode, _, stderr) = try runAndCaptureBoth(
+                script.name, script.arguments + ["--id", "../../../../tmp/ws260-pwned"])
+            XCTAssertEqual(
+                exitCode, 1,
+                "\(script.name) must refuse a traversal id as a usage error, before the spool: "
+                    + "\(stderr)")
+            XCTAssertTrue(
+                stderr.contains(RequestID.pattern),
+                "\(script.name)'s refusal must name the rule it applied, so a caller can fix the "
+                    + "id rather than guess; got \"\(stderr)\"")
+            // `setUpWithError` has already made the four spool subdirectories, so the question
+            // is whether a *file* landed: the request itself, or the `.staging-<id>.json` it is
+            // renamed from. A script that refused after writing has still written.
+            let written = try FileManager.default
+                .contentsOfDirectory(atPath: spoolDir.path)
+                .filter { $0.hasSuffix(".json") }
+            XCTAssertEqual(
+                written, [],
+                "\(script.name) wrote \(written) into the spool before refusing the id")
+        }
+    }
+
+    /// Every spool script, with the smallest valid argument list that reaches the id gate — so a
+    /// refusal in these tests is about the id and never about a missing pane or command.
+    ///
+    /// **Written out rather than globbed**, for the reason this file's own header gives: nothing
+    /// enumerates `tools/*.swift`, so a seventh script has to be added here by hand and a reviewer
+    /// gets to notice it.
+    private static let spoolScripts: [(name: String, arguments: [String])] = [
+        ("helm-spool.swift", ["/tmp", "--command", "claude"]),
+        ("helm-capture.swift", []),
+        ("helm-close.swift", [UUID().uuidString]),
+        ("helm-command.swift", ["splitRight"]),
+        ("helm-select.swift", [UUID().uuidString]),
+        ("helm-name.swift", [UUID().uuidString, "a name"]),
+    ]
 
     // MARK: - Running the real script
 

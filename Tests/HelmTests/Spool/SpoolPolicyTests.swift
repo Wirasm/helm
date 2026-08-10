@@ -223,7 +223,7 @@ final class SpoolPolicyTests: XCTestCase {
 
     func testTheLaunchLineHandsOverAPathRatherThanThePromptItself() {
         let accepted = AcceptedSpawnRequest(
-            id: "r", cwd: "/tmp", command: "claude",
+            id: RequestID(validating: "r")!, cwd: "/tmp", command: "claude",
             args: ["--dangerously-skip-permissions"], prompt: "/review the diff")
         let line = SpoolLaunchLine.compose(accepted, promptPath: "/tmp/spool/prompts/r.txt")
         XCTAssertEqual(
@@ -240,7 +240,8 @@ final class SpoolPolicyTests: XCTestCase {
         // fully expanded prompt became an argv element of the agent (#93). The old test asserted
         // on the *line* and passed, because the defect is in what the shell makes of the line.
         let accepted = AcceptedSpawnRequest(
-            id: "r", cwd: "/tmp", command: "claude", args: [], prompt: "secret")
+            id: RequestID(validating: "r")!, cwd: "/tmp", command: "claude", args: [],
+            prompt: "secret")
         let line = SpoolLaunchLine.compose(accepted, promptPath: "/tmp/spool/prompts/r.txt")
         XCTAssertFalse(
             line.contains("$("),
@@ -283,7 +284,8 @@ final class SpoolPolicyTests: XCTestCase {
             [.posixPermissions: 0o700], ofItemAtPath: agent.path)
 
         let accepted = AcceptedSpawnRequest(
-            id: "r", cwd: directory.path, command: agent.path, args: [], prompt: secret)
+            id: RequestID(validating: "r")!, cwd: directory.path, command: agent.path, args: [],
+            prompt: secret)
         let line = SpoolLaunchLine.compose(accepted, promptPath: promptPath.path)
 
         let process = Process()
@@ -307,7 +309,7 @@ final class SpoolPolicyTests: XCTestCase {
 
     func testNoPromptMeansNoTrailingArgument() {
         let accepted = AcceptedSpawnRequest(
-            id: "r", cwd: "/tmp", command: "pi", args: [], prompt: nil)
+            id: RequestID(validating: "r")!, cwd: "/tmp", command: "pi", args: [], prompt: nil)
         XCTAssertEqual(SpoolLaunchLine.compose(accepted, promptPath: nil), "'pi'")
     }
 
@@ -611,11 +613,13 @@ final class SpoolPolicyTests: XCTestCase {
         let pane = TerminalID(UUID())
         let reasons = [
             SpoolClosePolicy.refusal(
-                for: AcceptedCloseRequest(id: "x", terminal: pane, force: false), pane: nil),
+                for: AcceptedCloseRequest(
+                    id: RequestID(validating: "x")!, terminal: pane, force: false), pane: nil),
             SpoolSelectPolicy.refusal(
-                for: AcceptedSelectRequest(id: "x", pane: pane), pane: nil),
+                for: AcceptedSelectRequest(id: RequestID(validating: "x")!, pane: pane), pane: nil),
             SpoolNamePolicy.refusal(
-                for: AcceptedNameRequest(id: "x", pane: pane, name: "n", rename: false),
+                for: AcceptedNameRequest(
+                    id: RequestID(validating: "x")!, pane: pane, name: "n", rename: false),
                 pane: nil),
         ]
         for reason in reasons {
