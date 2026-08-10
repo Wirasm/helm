@@ -33,7 +33,7 @@ final class WorkbenchSpoolSpawnerTests: XCTestCase {
         let (spawner, terminals) = spawner()
         let before = terminals.sessions(for: mounted).count
 
-        let result = spawner.openTerminal(cwd: mounted.value)
+        let result = spawner.openTerminal(cwd: mounted.value, named: .derived("claude · fixture"))
 
         guard case let .success(id) = result else {
             return XCTFail("a spawn naming the mounted workspace must succeed, got \(result)")
@@ -50,7 +50,7 @@ final class WorkbenchSpoolSpawnerTests: XCTestCase {
         let (spawner, terminals) = spawner(activate: { _ in })
         let before = terminals.sessions.count
 
-        let result = spawner.openTerminal(cwd: elsewhere.value)
+        let result = spawner.openTerminal(cwd: elsewhere.value, named: .derived("claude · fixture"))
 
         guard case let .failure(refusal) = result else {
             return XCTFail("a spawn naming an unmounted workspace must be refused")

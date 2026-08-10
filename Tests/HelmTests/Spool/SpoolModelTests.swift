@@ -24,6 +24,7 @@ final class SpoolModelTests: XCTestCase {
     private var closer: FakeCloser!
     private var commander: FakeCommander!
     private var selector: FakeSelector!
+    private var namer: FakeNamer!
 
     override func setUp() async throws {
         let base = FileManager.default.temporaryDirectory
@@ -40,6 +41,7 @@ final class SpoolModelTests: XCTestCase {
         closer = FakeCloser()
         commander = FakeCommander()
         selector = FakeSelector()
+        namer = FakeNamer()
     }
 
     override func tearDown() async throws {
@@ -52,6 +54,7 @@ final class SpoolModelTests: XCTestCase {
         closer = nil
         commander = nil
         selector = nil
+        namer = nil
     }
 
     // MARK: - Fixtures
@@ -67,6 +70,7 @@ final class SpoolModelTests: XCTestCase {
         model.attach(closer: closer)
         model.attach(commander: commander)
         model.attach(selector: selector)
+        model.attach(namer: namer)
         return model
     }
 
@@ -97,6 +101,12 @@ final class SpoolModelTests: XCTestCase {
 
     private func select(id: String = "show") -> String {
         #"{"id":"\#(id)","kind":"select","pane":"\#(selector.pane.uuidString)"}"#
+    }
+
+    private func name(
+        id: String = "call", to name: String = "review the diff", rename: Bool = false
+    ) -> String {
+        #"{"id":"\#(id)","kind":"name","pane":"\#(namer.pane.uuidString)","name":"\#(name)","rename":\#(rename)}"#
     }
 
     private func mailbox(_ handle: String, pid: pid_t, sessionId: String) throws {
@@ -234,6 +244,17 @@ final class SpoolModelTests: XCTestCase {
         let ready = await awaitResult(is: .ready)
         XCTAssertEqual(spawner.opened, [FileManager.default.temporaryDirectory.path])
         XCTAssertEqual(ready?.terminalId?.uuidString, spawner.terminal.uuidString)
+
+        // **#313's concrete trigger, fixed on the way in and needing no wire format.** Since #93
+        // the agent's first message is a path, so its own OSC title reads "Read and act on spool
+        // prompt file"; the pane is named before that ever arrives. `.derived`, not `.chosen`,
+        // so this agent's own `helm-name` replaces it without claiming the operator asked.
+        let derived = try XCTUnwrap(spawner.openedAs.first)
+        XCTAssertEqual(
+            derived,
+            .derived(
+                "claude · "
+                    + (FileManager.default.temporaryDirectory.path as NSString).lastPathComponent))
 
         // The line went to *this* surface — not through the keyboard, not at whatever pane
         // held focus. And what it carries is the staged file's PATH, so the prompt touches
@@ -465,7 +486,7 @@ final class SpoolModelTests: XCTestCase {
         // honest answer to "what did I just destroy" — the artifact file and its `.notes.md`
         // sidecar are exactly where they were.
         closer.state = SpoolPaneState(
-            holdsTerminal: false, keyboard: .elsewhere, foreground: nil,
+            holdsTerminal: false, keyboard: .elsewhere, name: .chosen("the plan"), foreground: nil,
             foregroundParent: nil, sessionLeader: nil)
         let model = self.model()
         try submit(close(), named: "bye.json")
@@ -481,7 +502,7 @@ final class SpoolModelTests: XCTestCase {
         // The control for the change above: #284 removed one refusal, not the policy. A canvas
         // the operator is looking at is still theirs, and `force` still does not reach it.
         closer.state = SpoolPaneState(
-            holdsTerminal: false, keyboard: .here, foreground: nil,
+            holdsTerminal: false, keyboard: .here, name: .chosen("the plan"), foreground: nil,
             foregroundParent: nil, sessionLeader: nil)
         let model = self.model()
         try submit(close(force: true), named: "bye.json")
@@ -497,7 +518,8 @@ final class SpoolModelTests: XCTestCase {
         // never closed out from under them*. And it is a REFUSAL, with a reason — a teardown
         // that silently did nothing is indistinguishable from helm not running.
         closer.state = SpoolPaneState(
-            holdsTerminal: true, keyboard: .here, foreground: FakeCloser.shellPid,
+            holdsTerminal: true, keyboard: .here, name: .chosen("the plan"),
+            foreground: FakeCloser.shellPid,
             foregroundParent: FakeCloser.loginPid, sessionLeader: FakeCloser.loginPid)
         let model = self.model()
         try submit(close(force: true), named: "bye.json")
@@ -510,7 +532,8 @@ final class SpoolModelTests: XCTestCase {
 
     func testALivePaneIsRefusedUntilTheRequestSaysForce() async throws {
         closer.state = SpoolPaneState(
-            holdsTerminal: true, keyboard: .elsewhere, foreground: FakeCloser.agentPid,
+            holdsTerminal: true, keyboard: .elsewhere, name: .chosen("the plan"),
+            foreground: FakeCloser.agentPid,
             foregroundParent: FakeCloser.shellPid, sessionLeader: FakeCloser.loginPid)
         let model = self.model()
         try submit(close(), named: "bye.json")
@@ -623,7 +646,8 @@ final class SpoolModelTests: XCTestCase {
         // would make it the focused pane, so it is refused — and it is a REFUSAL with a reason,
         // because a select that silently did nothing is indistinguishable from helm not running.
         selector.state = SpoolPaneState(
-            holdsTerminal: false, keyboard: .inItsSlot, foreground: nil, foregroundParent: nil,
+            holdsTerminal: false, keyboard: .inItsSlot, name: .chosen("the plan"), foreground: nil,
+            foregroundParent: nil,
             sessionLeader: nil)
         let model = self.model()
         try submit(select(), named: "show.json")
@@ -688,6 +712,132 @@ final class SpoolModelTests: XCTestCase {
 
         _ = await awaitResult(id: "show", is: .selected)
         XCTAssertEqual(selector.shown.count + second.shown.count, 1)
+    }
+
+    // MARK: - Name (#313)
+
+    func testWithTheWatcherOffANameTouchesNothing() async throws {
+        // The negative control, per kind: it is what gives every other claim in this section
+        // its meaning.
+        let model = self.model(isOff: true)
+        try submit(name(), named: "call.json")
+        model.start()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(namer.named.count, 0, "no pane may be renamed")
+        XCTAssertNil(directory.result(id: "call"), "no result may be written")
+        XCTAssertEqual(directory.pending().count, 1, "and the request is still sitting there")
+    }
+
+    func testAPaneWearingHelmsOwnLabelIsNamedAndTheResultSaysWhatItReplaced() async throws {
+        // The ordinary case end to end, and the one #313 exists for: helm named this pane
+        // `claude · helm` at spawn, and the agent running in it replaces that with something
+        // that says what the pane is for — no flag, no claim about the operator.
+        let model = self.model()
+        try submit(name(), named: "call.json")
+        model.start()
+
+        let result = await awaitResult(id: "call", is: .named)
+        XCTAssertEqual(namer.named.map(\.pane), [namer.pane], "the name reached the bench")
+        XCTAssertEqual(result?.terminalId?.uuidString, namer.pane.uuidString)
+        XCTAssertEqual(result?.name?.name, "review the diff")
+        XCTAssertEqual(
+            result?.name?.previousName, "claude · helm",
+            "…and the caller learns what it replaced, which is the fact an operator who asked "
+                + "for a rename actually needs")
+        XCTAssertEqual(spawner.opened, [], "a name starts nothing")
+        XCTAssertEqual(closer.closed, [], "…closes nothing")
+        XCTAssertEqual(selector.shown, [], "…and shows nothing")
+    }
+
+    func testAnAgentsNameIsAlwaysChosenRatherThanDerived() async throws {
+        // **Load-bearing, and invisible from the result.** `.derived` is helm's own label, and it
+        // is what makes the *first* naming free. If an agent's name were recorded as derived too,
+        // every pane would stay re-namable by anybody for ever and the ownership rule would be
+        // vacuous — while every test above still passed.
+        let model = self.model()
+        try submit(name(), named: "call.json")
+        model.start()
+
+        _ = await awaitResult(id: "call", is: .named)
+        guard case .chosen = namer.named.first?.name else {
+            return XCTFail("an agent's name must reach the bench as somebody's choice")
+        }
+    }
+
+    func testAPaneSomebodyHasNamedIsRefusedUntilTheRequestSaysRename() async throws {
+        // The operator's ruling, end to end. A refusal with a reason rather than silence: a
+        // rename that quietly did nothing is indistinguishable from helm not running.
+        namer.state = SpoolPaneState(
+            holdsTerminal: true, keyboard: .elsewhere, name: .chosen("watching the deploy"),
+            foreground: 93001, foregroundParent: 93000, sessionLeader: 93000)
+        let model = self.model()
+        try submit(name(), named: "call.json")
+        model.start()
+
+        let refused = await awaitResult(id: "call", is: .refused)
+        XCTAssertEqual(refused?.reason?.contains("watching the deploy") == true, true)
+        XCTAssertEqual(namer.named.count, 0, "nothing reached the bench")
+
+        try submit(name(id: "call2", rename: true), named: "call2.json")
+        model.drain()
+        let named = await awaitResult(id: "call2", is: .named)
+        XCTAssertEqual(named?.name?.previousName, "watching the deploy")
+        XCTAssertEqual(namer.named.count, 1, "…and the second one did")
+    }
+
+    func testANameHelmWillNotPutOnATabIsRefusedBeforeTheBenchIsTouched() async throws {
+        // `SpoolPolicy` rather than `SpoolNamePolicy`: the shape of the value, not who owns the
+        // pane. Both are `refused` results, and telling them apart is what the reasons are for.
+        let model = self.model()
+        try submit(name(to: "   "), named: "call.json")
+        model.start()
+
+        let result = await awaitResult(id: "call", is: .refused)
+        XCTAssertEqual(result?.reason?.contains("has to be something") == true, true)
+        XCTAssertEqual(namer.named.count, 0)
+    }
+
+    func testAPaneHelmDoesNotHaveIsRefusedRatherThanIgnoredOnAName() async throws {
+        namer.state = nil
+        let model = self.model()
+        try submit(name(), named: "call.json")
+        model.start()
+
+        let result = await awaitResult(id: "call", is: .refused)
+        XCTAssertEqual(result?.reason?.contains(namer.pane.uuidString) == true, true)
+        XCTAssertEqual(namer.named.count, 0)
+    }
+
+    func testANameWithNoNamerAttachedIsAHelmDefectAndSaysSo() async throws {
+        // `failed`, not `refused` — the same distinction the close, select and command paths draw.
+        let model = SpoolModel(
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
+            shellDeadline: .seconds(5), claimDeadline: .seconds(3))
+        try submit(name(), named: "call.json")
+        model.start()
+
+        let result = await awaitResult(id: "call", is: .failed)
+        XCTAssertEqual(result?.reason?.contains("helm defect") == true, true)
+    }
+
+    func testANameIsActedOnAtMostOnce() async throws {
+        // Two windows draining one spool must not both mutate the bench.
+        let second = FakeNamer()
+        second.pane = namer.pane
+        let other = SpoolModel(
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
+            shellDeadline: .seconds(5), claimDeadline: .seconds(3))
+        other.attach(namer: second)
+
+        let model = self.model()
+        try submit(name(), named: "call.json")
+        model.start()
+        other.start()
+        model.drain()
+        other.drain()
+
+        _ = await awaitResult(id: "call", is: .named)
+        XCTAssertEqual(namer.named.count + second.named.count, 1)
     }
 
     // MARK: - Command (#269)
@@ -816,6 +966,9 @@ private final class FakeSpawner: SpoolSpawning {
 
     let terminal = UUID()
     var opened: [String] = []
+    /// What helm asked the pane be called on the way in (#313) — the derived name, which the
+    /// model computes from the request rather than leaving to this side of the seam.
+    var openedAs: [PaneName] = []
     var sent: [(line: String, terminal: UUID)] = []
     var pids: [UUID: pid_t] = [:]
     var refusal: String?
@@ -823,9 +976,10 @@ private final class FakeSpawner: SpoolSpawning {
     /// real agent that is still starting up.
     var claimsOnSend = true
 
-    func openTerminal(cwd: String) -> Result<UUID, SpoolRefusal> {
+    func openTerminal(cwd: String, named: PaneName) -> Result<UUID, SpoolRefusal> {
         if let refusal { return .failure(SpoolRefusal(refusal)) }
         opened.append(cwd)
+        openedAs.append(named)
         pids[terminal] = Self.shellPid
         return .success(terminal)
     }
@@ -855,7 +1009,7 @@ private final class FakeCloser: SpoolClosing {
     var terminal = UUID()
     /// An idle terminal nobody is looking at, unless a test says otherwise.
     var state: SpoolPaneState? = SpoolPaneState(
-        holdsTerminal: true, keyboard: .elsewhere, foreground: shellPid,
+        holdsTerminal: true, keyboard: .elsewhere, name: .chosen("the plan"), foreground: shellPid,
         foregroundParent: loginPid, sessionLeader: loginPid)
     /// The bench refusing to let go — `Workbench.canClose` and its last pane.
     var refuses = false
@@ -883,7 +1037,8 @@ private final class FakeSelector: SpoolSelecting {
     /// A canvas in a slot the operator is not in, unless a test says otherwise — the pushed
     /// artifact #284 is about.
     var state: SpoolPaneState? = SpoolPaneState(
-        holdsTerminal: false, keyboard: .elsewhere, foreground: nil, foregroundParent: nil,
+        holdsTerminal: false, keyboard: .elsewhere, name: .chosen("the plan"), foreground: nil,
+        foregroundParent: nil,
         sessionLeader: nil)
     /// The bench being asked and the pane still not being the one its slot shows. Nothing known
     /// makes this reachable in the real adapter, which is exactly why the branch needs a fake to
@@ -902,6 +1057,40 @@ private final class FakeSelector: SpoolSelecting {
             SelectReport(
                 pane: TerminalID(id), isVisible: !staysHidden,
                 focusedPaneBefore: TerminalID(focused), focusedPaneAfter: TerminalID(focused)))
+    }
+}
+
+/// A bench that is not there, from the naming side (#313). It reports whatever the test wants one
+/// pane to already be called, and remembers what it was asked to call it.
+///
+/// Deliberately a **separate** fake from `FakeCloser` and `FakeSelector`, for `FakeSelector`'s
+/// stated reason: one real object implements all three seams, and a shared fake could not say
+/// which kind touched the bench — "a name closes nothing and shows nothing" is an assertion this
+/// suite actually makes.
+@MainActor
+private final class FakeNamer: SpoolNaming {
+    var pane = UUID()
+    /// A pane helm spawned for an agent and nobody has since renamed — the ordinary case, and
+    /// the one the ownership rule has to let through.
+    var state: SpoolPaneState? = SpoolPaneState(
+        holdsTerminal: true, keyboard: .elsewhere, name: .derived("claude · helm"),
+        foreground: 93001, foregroundParent: 93000, sessionLeader: 93000)
+    var named: [(pane: UUID, name: PaneName)] = []
+
+    func pane(_ id: UUID) -> SpoolPaneState? { id == pane ? state : nil }
+
+    func name(_ id: UUID, to name: PaneName) -> Result<NameReport, SpoolRefusal> {
+        named.append((id, name))
+        let previous = state?.name.text
+        state = state.map {
+            SpoolPaneState(
+                holdsTerminal: $0.holdsTerminal, keyboard: $0.keyboard, name: name,
+                foreground: $0.foreground, foregroundParent: $0.foregroundParent,
+                sessionLeader: $0.sessionLeader)
+        }
+        return .success(
+            NameReport(
+                pane: TerminalID(id), previousName: previous, name: name.text ?? ""))
     }
 }
 

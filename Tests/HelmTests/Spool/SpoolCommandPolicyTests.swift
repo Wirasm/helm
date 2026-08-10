@@ -231,7 +231,7 @@ final class SpoolCommandPolicyTests: XCTestCase {
     /// changes, and both would break every caller.
     func testTheEnvelopeStillAdvertisesEveryKindHelmKnows() {
         XCTAssertEqual(
-            SpoolRequest.kinds, ["spawn", "capture", "close", "command", "select"],
+            SpoolRequest.kinds, ["spawn", "capture", "close", "command", "select", "name"],
             "the refusal for an unknown kind lists these, so an older helm's answer and a newer "
                 + "one's have to differ in exactly this line")
         XCTAssertEqual(

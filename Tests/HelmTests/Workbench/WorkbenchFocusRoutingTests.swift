@@ -118,7 +118,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     // MARK: - What a click must NOT do
 
     /// Clicking where you already are is not a change, and must not be written as one: `commit`
-    /// runs `reconcileVisibility` and drives the save to `UserDefaults`, so an unguarded
+    /// runs `reconcileSessions` and drives the save to `UserDefaults`, so an unguarded
     /// `focus` would persist the whole workspace context on every click in the pane you are
     /// typing in.
     func testClickingTheAlreadyFocusedPaneRewritesNothing() throws {

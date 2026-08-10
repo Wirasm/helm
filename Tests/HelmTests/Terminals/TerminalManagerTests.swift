@@ -212,7 +212,7 @@ final class TerminalManagerTests: XCTestCase {
 
         XCTAssertFalse(
             session.hasBell,
-            "reconcileVisibility runs on every bench change, so a re-push of the same value "
+            "reconcileSessions runs on every bench change, so a re-push of the same value "
                 + "must not be an event")
     }
 

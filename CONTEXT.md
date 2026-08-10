@@ -43,6 +43,15 @@ _Avoid_: cell, tab group, split
 A workbench tenant. Two types: **terminal** and **canvas**.
 _Avoid_: view, widget, dock
 
+**name**:
+What a pane is called on its slot's tab strip, and **who called it that**. helm *derives* one
+for a pane it opens for an agent; an agent *chooses* one through the spool, and may replace a
+derived one freely but not a chosen one unless the request says the operator asked. A pane with
+no name falls back to what it can say about itself — a terminal to its shell's **title**, a
+canvas to the file or host it is showing. Persisted on the pane, so it survives a relaunch.
+_Avoid_: title (that word is the shell's, one level down — OSC 0/2 — and outranked by a name),
+label, caption, tab name
+
 **face**:
 Which of a terminal pane's two presentations is drawn — the terminal, or the agent's
 writing over it. A property of the pane, so two terminals side by side can show different
@@ -188,7 +197,8 @@ _Avoid_: callback, event, message (nothing is delivered — the agent reads a fi
 **request**:
 One file in the spool, of one **kind**: a `spawn` (`{id, cwd, command, args, prompt}`), a
 `capture` (`{id, kind, path, window}`), a `close` (`{id, kind, terminal, force}`), a `command`
-(`{id, kind, command}`) or a `select` (`{id, kind, pane}`). Acted on
+(`{id, kind, command}`), a `select` (`{id, kind, pane}`) or a `name`
+(`{id, kind, pane, name, rename}`). Acted on
 **at most once** — claimed by rename into `claimed/`, which is a graveyard and never re-read,
 so a restart mid-spawn cannot double-open. Only the agents in `SpoolPolicy.allowedCommands` may
 be named, and only by a spawn. `SpoolRequest.kinds` is the list, and the refusal for a kind helm

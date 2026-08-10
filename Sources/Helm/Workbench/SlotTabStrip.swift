@@ -98,6 +98,9 @@ struct SlotTabStrip: View {
         case let .canvas(source):
             CanvasTab(
                 source: source,
+                // A terminal's name reaches its tab through its session (`reconcileSessions`);
+                // a canvas has no session, so it comes from the pane this file already holds.
+                name: pane.name.text,
                 isSelected: isSelected,
                 canClose: canClose,
                 onSelect: { model.select(pane.id) },

@@ -131,4 +131,88 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
         }
         XCTAssertTrue(refusal.reason.contains("no bench"))
     }
+
+    // MARK: - Calling it something (#313)
+
+    /// **`SpoolNamePolicyTests` proves the rule and cannot prove this**, for the reason this
+    /// file's header gives about `.inItsSlot`: it is handed a `SpoolPaneState` and asks what the
+    /// policy says. An adapter that reported `.unnamed` for every pane would leave every test
+    /// there green while making every pane on the bench renamable by anybody for ever.
+    func testAPaneReportsTheNameTheBenchIsHoldingForIt() {
+        let pushed = Pane(content: .canvas(plan), name: .chosen("the plan"))
+        let (panes, _, terminal) = bench(pushing: pushed, at: { _ in .column })
+
+        XCTAssertEqual(panes.pane(pushed.id)?.name, .chosen("the plan"))
+        XCTAssertEqual(
+            panes.pane(terminal)?.name, .unnamed,
+            "and a pane nothing has named says so, which is what makes the first naming free")
+    }
+
+    func testNamingAPaneChangesTheBenchAndReportsWhatItReplaced() {
+        // The end of #313's chain against a real bench. `previousName` is read *before* the
+        // mutation and `name` *after* it, both off the bench — a report that echoed the request
+        // would pass a fake and fail here the moment the bench refused.
+        let pushed = Pane(content: .canvas(plan), name: .derived("claude · helm"))
+        let (panes, model, _) = bench(pushing: pushed, at: { _ in .column })
+
+        guard case .success(let report) = panes.name(pushed.id, to: .chosen("review the diff"))
+        else {
+            return XCTFail("a pane on the bench must be namable")
+        }
+        XCTAssertEqual(report.pane.uuid, pushed.id)
+        XCTAssertEqual(report.previousName, "claude · helm")
+        XCTAssertEqual(report.name, "review the diff")
+        XCTAssertEqual(model.bench?.pane(pushed.id)?.name, .chosen("review the diff"))
+    }
+
+    func testNamingAPaneMovesNeitherTheKeyboardNorTheSelection() {
+        // The reason `SpoolNamePolicy` has no focus rule, held rather than only argued: naming
+        // the pane the operator is *typing in* must leave the bench arranged exactly as it was.
+        // If this ever stopped being true the policy would need a rule it does not have.
+        let pushed = Pane(content: .canvas(plan))
+        let (panes, model, terminal) = bench(pushing: pushed, at: { _ in .column })
+        let focusedBefore = model.bench?.focusedPane?.id
+        let visibleBefore = model.bench?.visiblePaneIDs
+
+        _ = panes.name(terminal, to: .chosen("the operator's own pane"))
+
+        XCTAssertEqual(model.bench?.focusedPane?.id, focusedBefore)
+        XCTAssertEqual(model.bench?.visiblePaneIDs, visibleBefore)
+    }
+
+    func testANamedTerminalPaneReachesItsSessionSoTheTabAndTheSnapshotAgree() {
+        // **The push `reconcileSessions` does, measured.** `TerminalSession.displayTitle` is spent
+        // by the tab, by `TerminalNotifier` and by `BenchSnapshot.TerminalRecord` — so a name that
+        // reached only the view would leave `snapshot.json` reporting the OSC title while the tab
+        // beside it read something else, which is two answers to one question.
+        let pushed = Pane(content: .canvas(plan))
+        let terminal = UUID()
+        var arrangement = Workbench(
+            panes: [Pane(id: terminal, content: .terminal(face: .terminal))])
+        arrangement.offer(pushed, at: .column)
+        let terminals = TerminalManager()
+        let model = WorkbenchModel(terminals: terminals)
+        model.activate(workspacePath: workspace, restoring: arrangement)
+        let panes = WorkbenchSpoolPanes(workbench: model, terminals: terminals)
+        let session = terminals.sessions.first { $0.id == terminal }
+
+        XCTAssertNotNil(session, "the restore has to have built a session under the pane's id")
+        _ = panes.name(terminal, to: .chosen("review the diff"))
+
+        XCTAssertEqual(session?.name, .chosen("review the diff"))
+        XCTAssertEqual(
+            session?.displayTitle, "review the diff",
+            "…and it outranks the shell's own OSC title, which since #93 is a pointer at a file")
+    }
+
+    func testWithNoBenchMountedANameSaysSoRatherThanReportingSuccess() {
+        let terminals = TerminalManager()
+        let model = WorkbenchModel(terminals: terminals)
+        let panes = WorkbenchSpoolPanes(workbench: model, terminals: terminals)
+
+        guard case .failure(let refusal) = panes.name(UUID(), to: .chosen("anything")) else {
+            return XCTFail("with nothing open there is no pane to name")
+        }
+        XCTAssertTrue(refusal.reason.contains("no bench"))
+    }
 }

@@ -30,9 +30,14 @@ final class SpoolClosePolicyTests: XCTestCase {
     /// answer, so every rule below reads exactly what it read before. The third value —
     /// `.inItsSlot` — exists for the select policy and is invisible to this one, which is what
     /// `testAPaneSharingTheOperatorsSlotIsStillCloseable` pins.
+    ///
+    /// **`name:` is `.chosen` in every fixture below for the same reason the pids are real
+    /// (#313)**: a close must not consult what the pane is called, and a fixture that left it
+    /// `.unnamed` could not tell "ignored" from "absent". `SpoolNamePolicy` is the only rule that
+    /// reads it.
     private func idle(keyboard: SpoolPaneState.Keyboard = .elsewhere) -> SpoolPaneState {
         SpoolPaneState(
-            holdsTerminal: true, keyboard: keyboard,
+            holdsTerminal: true, keyboard: keyboard, name: .chosen("the plan"),
             foreground: Self.shell, foregroundParent: Self.login, sessionLeader: Self.login)
     }
 
@@ -40,7 +45,7 @@ final class SpoolClosePolicyTests: XCTestCase {
     /// than an idle prompt, in the same session.
     private func busy(keyboard: SpoolPaneState.Keyboard = .elsewhere) -> SpoolPaneState {
         SpoolPaneState(
-            holdsTerminal: true, keyboard: keyboard,
+            holdsTerminal: true, keyboard: keyboard, name: .chosen("the plan"),
             foreground: Self.agent, foregroundParent: Self.shell, sessionLeader: Self.login)
     }
 
@@ -48,7 +53,7 @@ final class SpoolClosePolicyTests: XCTestCase {
     /// no pty and none of the three pids that describe one.
     private func canvas(keyboard: SpoolPaneState.Keyboard = .elsewhere) -> SpoolPaneState {
         SpoolPaneState(
-            holdsTerminal: false, keyboard: keyboard,
+            holdsTerminal: false, keyboard: keyboard, name: .chosen("the plan"),
             foreground: nil, foregroundParent: nil, sessionLeader: nil)
     }
 
@@ -101,7 +106,8 @@ final class SpoolClosePolicyTests: XCTestCase {
         // reads `foreground` out of the terminal sessions, so a canvas arrives with nil today —
         // this pins that the rule does not depend on that lookup staying that way.
         let odd = SpoolPaneState(
-            holdsTerminal: false, keyboard: .elsewhere, foreground: Self.agent,
+            holdsTerminal: false, keyboard: .elsewhere, name: .chosen("the plan"),
+            foreground: Self.agent,
             foregroundParent: nil, sessionLeader: nil)
         XCTAssertFalse(odd.isBusy)
         XCTAssertNil(SpoolClosePolicy.refusal(for: request(), pane: odd))
@@ -168,7 +174,8 @@ final class SpoolClosePolicyTests: XCTestCase {
         // a layout helm does not recognise, and an unrecognised layout refuses rather than
         // destroys.
         let leaderIsForeground = SpoolPaneState(
-            holdsTerminal: true, keyboard: .elsewhere, foreground: Self.shell,
+            holdsTerminal: true, keyboard: .elsewhere, name: .chosen("the plan"),
+            foreground: Self.shell,
             foregroundParent: 1, sessionLeader: Self.shell)
         XCTAssertTrue(leaderIsForeground.isBusy)
     }
@@ -177,7 +184,8 @@ final class SpoolClosePolicyTests: XCTestCase {
         // A pane whose shell never started or has already exited holds no work to destroy.
         XCTAssertFalse(
             SpoolPaneState(
-                holdsTerminal: true, keyboard: .elsewhere, foreground: nil,
+                holdsTerminal: true, keyboard: .elsewhere, name: .chosen("the plan"),
+                foreground: nil,
                 foregroundParent: nil, sessionLeader: nil
             ).isBusy)
     }
@@ -186,7 +194,8 @@ final class SpoolClosePolicyTests: XCTestCase {
         // A syscall that cannot answer means helm does not know whether it would be destroying
         // work. Unknown is not idle — and the caller that wants it gone anyway can say `force`.
         let unknown = SpoolPaneState(
-            holdsTerminal: true, keyboard: .elsewhere, foreground: Self.agent,
+            holdsTerminal: true, keyboard: .elsewhere, name: .chosen("the plan"),
+            foreground: Self.agent,
             foregroundParent: nil, sessionLeader: nil)
         XCTAssertTrue(unknown.isBusy)
         XCTAssertNotNil(SpoolClosePolicy.refusal(for: request(), pane: unknown))

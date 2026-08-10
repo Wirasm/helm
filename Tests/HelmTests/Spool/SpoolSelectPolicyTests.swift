@@ -24,16 +24,19 @@ final class SpoolSelectPolicyTests: XCTestCase {
     /// A pane as `WorkbenchSpoolPanes` reports one. The pids are a terminal's, and they are
     /// deliberately present in every fixture: a select must not consult them, and a fixture that
     /// left them nil could not tell "ignored" from "absent".
+    /// `name` is `.chosen` in every fixture for the reason the pids are present: a select must
+    /// not consult it, and a fixture that left it `.unnamed` could not tell "ignored" from
+    /// "absent" (#313).
     private func state(_ keyboard: SpoolPaneState.Keyboard) -> SpoolPaneState {
         SpoolPaneState(
-            holdsTerminal: true, keyboard: keyboard, foreground: 5001, foregroundParent: 5000,
-            sessionLeader: 5000)
+            holdsTerminal: true, keyboard: keyboard, name: .chosen("the plan"), foreground: 5001,
+            foregroundParent: 5000, sessionLeader: 5000)
     }
 
     private func canvas(_ keyboard: SpoolPaneState.Keyboard) -> SpoolPaneState {
         SpoolPaneState(
-            holdsTerminal: false, keyboard: keyboard, foreground: nil, foregroundParent: nil,
-            sessionLeader: nil)
+            holdsTerminal: false, keyboard: keyboard, name: .chosen("the plan"), foreground: nil,
+            foregroundParent: nil, sessionLeader: nil)
     }
 
     // MARK: - What is shown
@@ -52,8 +55,8 @@ final class SpoolSelectPolicyTests: XCTestCase {
         // had copied `SpoolClosePolicy.isBusy` across would refuse a pane with an agent running
         // in it, which is precisely the pane an agent most often wants to put on screen.
         let busy = SpoolPaneState(
-            holdsTerminal: true, keyboard: .elsewhere, foreground: 5002, foregroundParent: 5001,
-            sessionLeader: 5000)
+            holdsTerminal: true, keyboard: .elsewhere, name: .chosen("the plan"), foreground: 5002,
+            foregroundParent: 5001, sessionLeader: 5000)
         XCTAssertTrue(busy.isBusy, "the fixture must really look busy for this to prove anything")
         XCTAssertNil(SpoolSelectPolicy.refusal(for: request(), pane: busy))
     }
