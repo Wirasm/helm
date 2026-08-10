@@ -9,6 +9,11 @@
 # (#184 exists because the instruction was verified by reading rather than by using). So
 # the last case here emits for real and asserts only that delivery was attempted and
 # reported success — the operator confirms the pane.
+#
+# What it CAN prove, since #282, is which pty gets written to, and that is the part that
+# used to be untested. The three staged cases at the bottom give push.sh a pty helm owns, a
+# pty it does not, and no pty at all, and pin one exit code to each. They are staged rather
+# than observed so the gate answers the same from a helm pane and from CI.
 
 set -uo pipefail
 
@@ -83,9 +88,11 @@ evil=$(printf '%s/eviltitle\033]0;PWNED\007.md' "$tmp")
 for ext in md markdown mdown html htm; do
     printf 'x\n' >"$tmp/a.$ext"
     code=$(run_code "$tmp/a.$ext")
-    # 0 when a terminal is reachable, 6 when this runs somewhere with no pty at all (CI).
+    # Past the extension gate, so anything but 5 means the extension was accepted. Which of
+    # 0/6/8 comes back depends on where the gate is being run — a helm pane, a Ghostty
+    # window, or CI — and that is the staged trio's job below, not this one's.
     case "$code" in
-        0 | 6) pass=$((pass + 1)); printf '  ok    .%s is renderable\n' "$ext" ;;
+        0 | 6 | 8) pass=$((pass + 1)); printf '  ok    .%s is renderable\n' "$ext" ;;
         *) fail=$((fail + 1)); printf '  FAIL  .%s rejected with %s\n' "$ext" "$code" ;;
     esac
 done
@@ -96,37 +103,83 @@ done
 printf '# probe\n' >"$tmp/probe.md"
 out=$("$push" "$tmp/probe.md" 2>&1 | cat)
 code=${PIPESTATUS[0]:-0}
+# Printed on delivery, and named in both refusals — so the operator has the path either way.
 check_contains "the path is printed for the operator" "$tmp/probe.md" "$out"
 case "$code" in
     0) pass=$((pass + 1)); printf '  ok    delivered with stdout captured\n' ;;
     6) pass=$((pass + 1)); printf '  ok    refused loudly — no pty here, nothing emitted\n' ;;
+    8) pass=$((pass + 1)); printf '  ok    refused loudly — pty is not helm'"'"'s, nothing emitted\n' ;;
     *) fail=$((fail + 1)); printf '  FAIL  unexpected exit %s with stdout captured\n' "$code" ;;
 esac
 
-# The case above accepts 0 OR 6, so it cannot fail a resolve_sink that never finds
-# anything — which is precisely the regression this whole script exists to prevent. This
-# one can: `script` guarantees a pty in the ancestor chain while the pipe keeps push.sh's
-# own stdout off a terminal, which is the agent-tool-call shape. Exit 0 exactly.
+# --- which pty, which exit code (#282) --------------------------------------------------
+# The case above accepts 0, 6 OR 8, so on its own it is satisfied by refusing everything —
+# which is the failure mode opposite to the one being fixed, and just as silent. These
+# three pin it, one exit code each, by STAGING the pty rather than observing whatever the
+# gate happens to be run under.
+#
+# The double-fork is the load-bearing part of each. It reparents the run to pid 1 and cuts
+# the ancestor chain, so the answer does not depend on the gate itself running inside a
+# helm pane. Without it, a `script` pty started from a pane is correctly walked PAST to the
+# pane's own pty and every case here would come back 0 — which is exactly how the previous
+# version of this check ended up asserting the bug: it wrapped push.sh in `script`, got the
+# 0 it expected, and could not tell "found a pty" from "found helm's".
+#
+# `</dev/null` is load-bearing too: script(1) tcgetattr's its own stdin, and nested inside
+# an agent's tool call that is a SOCKET — "Operation not supported on socket", no pty, no
+# code file. It ran fine by hand, which is the same trap this whole file is about.
 if command -v script >/dev/null 2>&1; then
-    # The exit code goes to a FILE, not to stdout. Under `script` the pty is captured too,
-    # so the OSC push.sh just emitted lands in that stream — parsing a status out of it
-    # means parsing around the very sequence under test.
-    # `</dev/null` is load-bearing: script(1) tcgetattr's its own stdin, and nested inside an
-    # agent's tool call that is a SOCKET — "Operation not supported on socket", no pty, no
-    # code file. It ran fine by hand, which is the same trap this whole PR is about.
-    rm -f "$tmp/code"
-    script -q /dev/null bash -c \
-        "'$push' '$tmp/probe.md' >/dev/null 2>&1 | cat; \
-         printf '%s' \${PIPESTATUS[0]} > '$tmp/code'" >/dev/null 2>&1 </dev/null
-    if [ -f "$tmp/code" ]; then
-        check "pty discovery works when one IS reachable" 0 "$(cat "$tmp/code")"
-    else
-        # Could not stage a pty at all — say so rather than passing, which is how the
-        # permissive version of this check hid a broken walk.
-        printf '  skip  script(1) could not allocate a pty here\n'
-    fi
+    # One runner, so the three cases below differ only in the pty they are handed and not
+    # in three layers of shell quoting. $1 is where the exit code goes — a FILE, because
+    # under `script` the pty stream is captured too and parsing a status out of it would
+    # mean parsing around the very escape sequence under test.
+    cat >"$tmp/run" <<EOF
+#!/usr/bin/env bash
+"$push" "$tmp/probe.md" >/dev/null 2>&1
+printf '%s' \$? >"\$1"
+EOF
+
+    detach() { ( ( "$@" >/dev/null 2>&1 </dev/null & ) & ); }
+
+    await_code() {
+        local out=$1 waited=0
+        while [ ! -f "$out" ] && [ "$waited" -lt 100 ]; do
+            sleep 0.1
+            waited=$((waited + 1))
+        done
+        cat "$out" 2>/dev/null
+    }
+
+    rm -f "$tmp/c_helm" "$tmp/c_foreign" "$tmp/c_none" "$tmp/ts"
+
+    # `exec -a helm` makes the pty's owning process report as `helm` to `ps`, which is the
+    # whole of what push.sh asks. Copying script(1) to a file named `helm` is the obvious
+    # alternative and does not work — the copy loses its Apple signature and macOS answers
+    # `Killed: 9` (measured).
+    detach bash -c 'exec -a helm script -q /dev/null bash "$0" "$1"' "$tmp/run" "$tmp/c_helm"
+    # A real pty, no helm anywhere above it: the Ghostty teammate of #282.
+    detach script -q "$tmp/ts" bash "$tmp/run" "$tmp/c_foreign"
+    # No pty anywhere in the chain: CI, or a daemon.
+    detach bash "$tmp/run" "$tmp/c_none"
+
+    # THE CONTROL AGAINST OVERSHOOT. A fix that simply refuses more passes the two negative
+    # cases below and fails this one. It needs no running helm — only a pty whose owner
+    # answers to the name — so it holds in CI too.
+    check "a pty helm owns is delivered to"          0 "$(await_code "$tmp/c_helm")"
+
+    # THE NEGATIVE CONTROL, and the whole of #282: a terminal that is not helm's.
+    check "a pty helm does not own is refused"       8 "$(await_code "$tmp/c_foreign")"
+
+    # Refusing has to be silent on the wire, not merely nonzero — the damage in #282 was an
+    # escape sequence written into a terminal that never asked for one. Counting ESC bytes
+    # rather than grepping for the marker keeps this honest if the marker is ever renamed.
+    check "and emits no escape sequence into it"     0 \
+        "$(LC_ALL=C tr -dc '\033' <"$tmp/ts" 2>/dev/null | wc -c | tr -d ' ')"
+
+    # Distinct from the case above, because the operator's next move differs.
+    check "no pty at all is a different refusal"     6 "$(await_code "$tmp/c_none")"
 else
-    printf '  skip  no script(1) — cannot guarantee a pty ancestor here\n'
+    printf '  skip  no script(1) — cannot stage a pty here\n'
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"

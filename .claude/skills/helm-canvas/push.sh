@@ -11,7 +11,16 @@
 # It works from a shell the operator typed into, which is exactly how it was tested and
 # why it shipped wrong. Twice, counting the ⌘-click it replaced (#124, #166).
 #
-# So: resolve a pty we can actually write to, refuse loudly when there is none, check the
+# And a third time (#282), which is the reason for `pty_owner` below. Writable is not the
+# same question as helm's: outside a pane the walk found a real tty, wrote a real escape
+# sequence, and a terminal that has never heard of `helm.canvas` consumed it. Every layer
+# succeeded and nothing was pushed — the same shape as #184, one step out. So the check is
+# now about the PTY rather than about the process asking, and it has to be: `$HELM_PANE` is
+# inherited by everything a pane's agent spawns, so inside `script(1)` started from a pane
+# it still names the pane while the tty is script's (measured 2026-08-10 — the variable said
+# yes about a terminal helm cannot see).
+#
+# So: resolve a pty helm is actually parsing, refuse loudly when there is none, check the
 # path before emitting rather than letting helm refuse it after — and never report success
 # for a write that did not happen, which is the whole guarantee this script sells.
 #
@@ -23,8 +32,13 @@
 #   3  path is not absolute
 #   4  no such file
 #   5  helm has no renderer for that extension
-#   6  no reachable terminal, or the write to it failed — nothing was emitted
+#   6  no terminal reachable at all, or the write failed — nothing was emitted
 #   7  path contains control characters
+#   8  a terminal is reachable but helm does not own it — nothing was emitted
+#
+# 6 and 8 are split because the operator's next move differs. 6 is headless: no tty anywhere
+# in the process tree, so hand over the path. 8 is a Ghostty, Terminal, tmux or ssh shell —
+# there IS somewhere to type, just not somewhere helm reads.
 
 set -uo pipefail
 
@@ -75,22 +89,76 @@ case "$ext" in
     *) die 5 "helm renders .md .markdown .mdown .html .htm — not: ${ext:-(no extension)}" ;;
 esac
 
-# Where can we actually write bytes the terminal will parse?
+# Who opened this pty?
+#
+# libghostty opens one pty per pane and spawns one `/usr/bin/login` on it, holding the
+# master itself — so walking up from a process ON that tty until the tty CHANGES lands on
+# whoever opened it. helm for a pane; Ghostty, Terminal, `script(1)` or a tmux server for
+# anything else. Measured in a live pane: `login`(ttys005) → `Helm`(??).
+#
+# `$1` is a pid known to be on tty `$2`. Prints the owner's command basename.
+pty_owner() {
+    local pid=$1 tty=$2 parent parent_tty owner
+    while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
+        parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+        [ -n "$parent" ] || return 1
+        [ "$parent" = "$pid" ] && return 1
+        [ "$parent" -gt 1 ] 2>/dev/null || return 1
+        parent_tty=$(ps -o tty= -p "$parent" 2>/dev/null | tr -d ' ')
+        if [ "$parent_tty" != "$tty" ]; then
+            # `ps -o comm=` pads nothing and keeps spaces in argv[0], unlike `-o tty=`
+            # above — so a basename is the whole of the cleanup.
+            owner=$(ps -o comm= -p "$parent" 2>/dev/null)
+            printf '%s\n' "${owner##*/}"
+            return 0
+        fi
+        pid=$parent
+    done
+    return 1
+}
+
+# `/Applications/Helm.app/Contents/MacOS/Helm` from `make install`, `.build/debug/helm`
+# from `swift run`. A second helm instance is deliberately good enough: if you are in the
+# worktree build's pane, that is the helm you want the artifact in.
+#
+# This is a delivery check and not a security boundary — argv[0] is spoofable, and anything
+# able to spoof it can already write to your pty directly. A false accept is only the old
+# behaviour; a false refusal is loud and says what it refused.
+is_helm() {
+    case "$1" in
+        helm | Helm) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Where can we write bytes that helm will parse?
 #
 # Walk up the process tree: the harness's shell is detached, but the agent process one or
 # more hops up still owns the pty helm gave it. Ancestors only, bounded at pid 1, and every
-# candidate still has to pass a real writability check — so this cannot wander into an
-# unrelated session's terminal.
+# candidate has to be writable AND helm's.
+#
+# A foreign terminal does not stop the walk, it is walked PAST — an agent working inside a
+# nested pty inside a pane then still delivers to the pane's own pty, which is a real
+# terminal helm really is parsing. Only when the walk ends with nothing helm owns is this a
+# refusal, and it says which of the two refusals it is:
+#
+#   0  the helm pty, on stdout
+#   2  no helm pty, but a terminal was reachable — its owner's name, on stdout
+#   1  no terminal at all
 resolve_sink() {
-    local pid parent tty
+    local pid parent tty foreign="" owner
     pid=$$
     while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
         tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
         case "$tty" in
             ttys* | tty*[0-9])
                 if [ -w "/dev/$tty" ]; then
-                    printf '/dev/%s\n' "$tty"
-                    return 0
+                    owner=$(pty_owner "$pid" "$tty") || owner=""
+                    if [ -n "$owner" ] && is_helm "$owner"; then
+                        printf '/dev/%s\n' "$tty"
+                        return 0
+                    fi
+                    [ -n "$foreign" ] || foreign=${owner:-unknown}
                 fi
                 ;;
         esac
@@ -98,28 +166,41 @@ resolve_sink() {
         [ "$parent" = "$pid" ] && break
         pid=$parent
     done
+    if [ -n "$foreign" ]; then
+        printf '%s\n' "$foreign"
+        return 2
+    fi
     return 1
 }
 
-# `[ -t 1 ]` has to be asked HERE, in the main body. Inside `$(...)` fd 1 is the pipe bash
-# uses to capture the output, never the caller's stdout — so the same test inside
-# resolve_sink is unconditionally false and the branch would be dead code wearing a
-# comment that claims otherwise.
-if [ -t 1 ]; then
-    # The operator's own invocation from a real shell. That path was never broken; do not
-    # go hunting for a terminal when we are already sitting in one.
-    sink=/dev/stdout
-elif ! sink=$(resolve_sink); then
-    die 6 "no writable terminal in this process tree — nothing was emitted. \
-You are probably not running inside a helm terminal; open the artifact with ⌘O instead, \
-or hand the operator this path: $artifact"
-fi
+# There is no `[ -t 1 ] → /dev/stdout` fast path any more, and its absence is the fix.
+# `/dev/stdout` has no name to ask `ps` about, so ownership cannot be proved for it — and
+# that branch is exactly where the operator's own Ghostty window landed, emitting into a
+# terminal helm does not read and calling it delivery (#282). The walk starts at `$$`, whose
+# tty IS the controlling terminal in the operator's own shell, so that case is covered by
+# the one code path rather than by a second one that cannot be checked.
+resolved=$(resolve_sink)
+case $? in
+    0) sink=$resolved ;;
+    2)
+        die 8 "the reachable terminal is owned by '$resolved', not by helm — nothing was \
+emitted. The OSC only means anything to the pty helm is parsing, so a Ghostty, Terminal, tmux \
+or ssh shell swallows it and nothing appears on the bench. Run this from a helm pane, or hand \
+the operator this path: $artifact"
+        ;;
+    *)
+        die 6 "no writable terminal in this process tree — nothing was emitted. \
+Open the artifact with ⌘O instead, or hand the operator this path: $artifact"
+        ;;
+esac
 
 # OSC 777 — the only sequence ghostty both parses from OUTPUT and lets carry arbitrary
 # text. Title is the discriminator, body the payload.
 #
-# In a terminal that is NOT helm this degrades to an ordinary desktop notification rather
-# than doing nothing, which is the right failure: the operator still sees the path.
+# This used to say that a non-helm terminal degrades to an ordinary desktop notification,
+# "which is the right failure: the operator still sees the path". It is not, and that
+# sentence is what #282 overturned: a notification is not a canvas, the artifact is not on
+# the bench, and the caller was told zero. Nothing but a helm pty gets here now.
 #
 # The status IS checked. `-w` proved a permission bit at check time, not that an open and
 # write will succeed now — the reading end can be gone, and the whole point of this script

@@ -162,6 +162,19 @@ the TUI eats before helm sees it (#124), then a bare `printf` whose stdout the h
 (#184). Its gate needs bash and `ps`, which is why it is not in the Swift gate. **What no gate can
 prove is that a pane appeared — run it against a live helm before believing it.**
 
+**The third one shipped broken in the same shape, and #282 is the fix: writable is not the same
+question as helm's.** Outside a pane the walk found a real tty, wrote a real OSC into it, and exited
+`0` — every layer succeeded and nothing reached the bench, with an escape sequence left in a
+terminal that never asked for one. So the check is now about the **pty** rather than the process
+asking: libghostty opens one pty per pane and holds the master, so walking up from the tty until it
+*changes* lands on whoever opened it, and only `helm` is accepted. `$HELM_PANE` is deliberately not
+the check — it is inherited by everything a pane's agent spawns, so inside a nested pty it still
+names the pane while the bytes go where helm cannot see (measured). A foreign terminal is walked
+*past*, not refused at, so a nested pty inside a pane still delivers to the pane's own. **Exit `8`
+is new and means a terminal is reachable that helm does not own** — distinct from `6`, no terminal
+at all, because the operator's next move differs. **A paneless agent has no canvas route at all
+today**: the spool has no `canvas` kind, so `8` means hand over the path.
+
 `hooks/` is the **Claude Code** half of the mailbox — `claude-session-start` claims a mailbox so
 a session can be addressed, `claude-user-prompt-submit` delivers waiting mail by writing the notice
 to **stdout**, which Claude Code feeds to the model as context for the turn about to run. Delivery
