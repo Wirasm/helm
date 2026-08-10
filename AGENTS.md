@@ -399,6 +399,17 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     the flag buys the same behaviour without handing the allowlist's meaning away. The full
     argument, including the costs that were weighed and overruled, is in
     `Sources/HelmWire/Spool/SpoolRequest.swift`; read it before changing a posture.
+  - **A posture cannot remove every prompt, and no flag will fix that — #283 is the measurement.**
+    Claude Code marks some of its own guardrails **bypass-immune**: in the shipped 2.1.226 binary,
+    `CIRCUIT_BREAKER_TRAITS.dangerousRemoval = { bypassImmune: true }`, and the refusal says so
+    itself — *"This requires explicit approval and cannot be auto-allowed by permission rules."*
+    Reproduced 2026-08-10 under `claude --dangerously-skip-permissions`, which is the posture
+    verbatim: a plain `rm "$d"/*.json` raised *"Dangerous rm operation on possibly-empty variable
+    path"* and sat there. In the incident it sat there for **six and a half hours**. So when a
+    spool-spawned agent goes quiet, do **not** reach for a new flag — the posture is applied and
+    working. Read the pane's `agent` record in `snapshot.json` instead (see the bench-snapshot
+    bullet below); it is the agent's own report of being blocked, and it is the only thing outside
+    the process that can see this.
   - **The launch line is pasted and then submitted separately, and it has to be.** libghostty
     wraps *every* `sendText` in bracketed-paste markers when the shell has enabled mode 2004 —
     fish, zsh and bash all do — so a line ending in `\r` lands on the command line and simply
@@ -448,6 +459,27 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   `isVisible` says it is on screen and `isFocused` says it has the keyboard. Parked workspaces
   preserve arrangement and terminal identity but cannot claim visibility or focus. Read on
   demand—do not watch the file inode across replacements.
+  - **A terminal pane carries `agent`, which is how you find an agent that has stopped and is
+    never going to start again (#283).** `{status, waitingFor, statusUpdatedAt}`, straight out of
+    Claude Code's own registry row: `status` is `busy`/`shell`/`idle`/`waiting`, `waitingFor` is
+    its own words for what it is blocked on — `"permission prompt"`, `"input needed"`,
+    `"dialog open"` — and `statusUpdatedAt` is when that last **changed**.
+  - **`waiting` alone is not a stall; `waitingFor` plus age is.** An agent that finished its turn
+    is also `waiting`, and that is healthy. `waitingFor: "permission prompt"` on a pane **nobody
+    is sitting at** is the failure — subtract `statusUpdatedAt` from now and judge. Six and a half
+    hours is what #283 cost.
+  - **You do not have to poll `writtenAt` for this, and that is deliberate.** `statusUpdatedAt` is
+    an absolute instant, so it keeps aging correctly in a snapshot nobody rewrote; a status
+    transition is content, so the last write of the file *is* the moment the stall began. A
+    precomputed *"quiet for N minutes"* would have been wrong the instant it was written down.
+  - **Claude Code only, and absence is absence.** pi and codex publish no registry, so their panes
+    carry no `agent` at all — never a false `idle`. A `status` this build does not model is absent
+    too, and `waitingFor` still comes through.
+  - **helm cannot answer this from the pty, which is why it asks the agent.** The vendored ghostty
+    wrapper surfaces parsed *actions* — title, bell, OSC 9;4 progress, OSC 133 command-finished,
+    OSC 9/777 — and never bytes, so "this pane has produced nothing for N minutes" is not a
+    question helm can ask at all, and *waiting at a prompt* versus *thinking hard* is not
+    something it can see from outside. It does not need to: the agent says so itself.
 - **To close a pane again, `swift tools/helm-close.swift <pane-uuid> [--force]`.** The
   inverse of `helm-spool`, needing what it needs — nothing: a file appears, helm acts, helm
   writes a file back (#176). **It names a pane, and a pane holds a terminal or a canvas** — one
