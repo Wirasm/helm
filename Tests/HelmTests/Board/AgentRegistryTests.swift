@@ -97,10 +97,23 @@ final class AgentRegistryTests: XCTestCase {
     }
 
     /// A busy agent names nothing, and that must not be read as a stall with an empty reason.
-    func testARowThatIsNotWaitingCarriesNoWaitingFor() throws {
+    ///
+    /// **Two rows in one directory, because one row proves less than it looks like it does.** A
+    /// busy row alone decodes to `waitingFor == nil` by construction of `decodeIfPresent`,
+    /// whatever the surrounding logic — the assertion cannot fail on a plausible regression. What
+    /// can fail, and is what this pins, is a decoder that carries a field from one file into the
+    /// next: two panes side by side, one working and one blocked on a prompt, is the normal state
+    /// of this machine and the case a coordinator acts on.
+    func testAWaitingRowsReasonIsNotCarriedOntoAWorkingOne() throws {
         try write(row(pid: 9139, status: "busy"), as: "9139.json")
+        try write(
+            #"{"pid":41436,"cwd":"/tmp/ws","status":"waiting","waitingFor":"permission prompt"}"#,
+            as: "41436.json")
 
-        XCTAssertNil(AgentRegistry.sessions(in: root).first?.waitingFor)
+        let byPid = AgentRegistry.rows(in: root)
+
+        XCTAssertNil(byPid[9139]?.waitingFor, "the working pane is not blocked on anything")
+        XCTAssertEqual(byPid[41436]?.waitingFor, "permission prompt")
     }
 
     /// A row mid-write, or one from a Claude Code that stops stamping the field, must decode to

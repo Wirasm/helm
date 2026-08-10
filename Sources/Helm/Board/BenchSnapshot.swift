@@ -36,6 +36,15 @@ struct BenchSnapshot: Codable, Equatable {
         terminals: TerminalManager,
         addressBook: AddressBook,
         foregroundPid: (TerminalSession) -> pid_t? = { $0.hostView.foregroundPid },
+        // **Defaulted here and nowhere below, and the asymmetry is the guard.** Omitting it means
+        // *the registry said nothing*, which is a real and safe answer — the same thing
+        // `sessionFor: { _ in nil }` means to the book beside it — and it is what a test that is
+        // not about agents wants to say. The five nested initializers this is handed down through
+        // take it with **no default**, exactly as `foregroundPid` does, so a level that forgets to
+        // forward it fails to compile rather than quietly reporting every pane under it as having
+        // no agent — which is #283's own failure, an agent that has stopped reading as one that
+        // was never there. `SpoolWork`'s rule: *"has this been checked?"* is answered by the
+        // compiler at every call site instead of by reading upwards.
         agents: [pid_t: AgentSession] = [:]
     ) -> BenchSnapshot {
         let mountedPath = workbench.workspacePath
@@ -102,7 +111,7 @@ struct BenchSnapshot: Codable, Equatable {
             sessions: [TerminalSession],
             addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?,
-            agents: [pid_t: AgentSession] = [:]
+            agents: [pid_t: AgentSession]
         ) {
             path = workspace.path
             name = workspace.name
@@ -162,7 +171,7 @@ struct BenchSnapshot: Codable, Equatable {
             resumeOffers: [Pane.ID: AgentResumeOffer],
             addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?,
-            agents: [pid_t: AgentSession] = [:]
+            agents: [pid_t: AgentSession]
         ) {
             id = column.id
             width = column.width
@@ -195,7 +204,7 @@ struct BenchSnapshot: Codable, Equatable {
             resumeOffers: [Pane.ID: AgentResumeOffer],
             addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?,
-            agents: [pid_t: AgentSession] = [:]
+            agents: [pid_t: AgentSession]
         ) {
             id = slot.id
             height = slot.height
@@ -236,7 +245,7 @@ struct BenchSnapshot: Codable, Equatable {
             offer: AgentResumeOffer? = nil,
             addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?,
-            agents: [pid_t: AgentSession] = [:]
+            agents: [pid_t: AgentSession]
         ) {
             id = pane.id
             isSelected = selected
@@ -334,7 +343,7 @@ struct BenchSnapshot: Codable, Equatable {
             offer: AgentResumeOffer? = nil,
             addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?,
-            agents: [pid_t: AgentSession] = [:]
+            agents: [pid_t: AgentSession]
         ) {
             sessionId = id
             isLive = session != nil
@@ -441,6 +450,16 @@ struct BenchSnapshot: Codable, Equatable {
         /// keeps growing correctly with no further writes, and a coordinator never has to poll
         /// `writtenAt` to notice. A precomputed *"quiet for N seconds"* would have been wrong the
         /// instant it was written down.
+        ///
+        /// **The cost, said plainly rather than discovered later: `snapshot.json` is now rewritten
+        /// about as often as a watched agent changes state, bounded by the two-second poll.** This
+        /// field is ordinary content, so it goes through `sameContent(as:)` like everything else,
+        /// and while an agent is actively turning over its `busy`/`idle` flips are real changes —
+        /// so #267's dedupe stops suppressing much for the duration. That is the trade #283 asks
+        /// for by name and not a regression of #267: what #267 removed was a `writtenAt` that
+        /// advanced when **nothing had happened**, and an agent stopping is the thing that
+        /// happened. `BenchSnapshotModelTests` holds both halves — the no-change control still
+        /// writes nothing, and a status transition alone still writes.
         let statusUpdatedAt: Date?
 
         /// `nil` when the row says nothing at all, so an empty record is never written.
