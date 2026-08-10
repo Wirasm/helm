@@ -287,8 +287,14 @@ final class CanvasModel: ObservableObject {
     /// it would replace that file with nothing.
     func write() {
         guard let editable, draft == nil else { return }
-        let existing = try? String(contentsOf: editable.url, encoding: .utf8)
-        guard let text = existing ?? emptyIfAbsent(editable) else {
+        let text: String
+        // The same three-way question `saveDraft` asks, asked with the same type. It was a
+        // hand-rolled `emptyIfAbsent` here and a bare `try?` there, and that is exactly how the
+        // two sites came to disagree about what an unreadable file means.
+        switch editable.diskContents() {
+        case let .bytes(existing): text = existing
+        case .absent: text = ""
+        case .unreadable:
             writeFailure =
                 "Could not read \(editable.url.lastPathComponent) — helm will not write over a "
                 + "file it cannot read."
@@ -296,15 +302,6 @@ final class CanvasModel: ObservableObject {
         }
         writeFailure = nil
         draft = CanvasDraft(text: text, saved: text)
-    }
-
-    /// "" for a file that is not there, nil for one that is there and would not read.
-    ///
-    /// The distinction is the whole of the guard above: a missing file is one helm is about to
-    /// create by saving — which is what a note created a moment ago and then deleted looks like —
-    /// and an unreadable one is somebody else's bytes.
-    private func emptyIfAbsent(_ file: EditableFile) -> String? {
-        FileManager.default.fileExists(atPath: file.url.path) ? nil : ""
     }
 
     /// Stop writing and go back to the rendered page.
@@ -373,6 +370,12 @@ final class CanvasModel: ObservableObject {
     /// compares is what is on disk *now*, so the watcher's lag stops mattering. It costs one read
     /// per save, which is once per typing pause on a file small enough to render as a document.
     ///
+    /// **That read has three outcomes and all three are answered, which the first version of it
+    /// did not do.** It was `if let disk = try? …, disk != draft.saved`, and a failed read fell
+    /// through to the write — helm replacing bytes it never managed to look at. `EditableFile
+    /// .DiskContents` is the type that stopped the two cases sharing a branch; its header has the
+    /// measurement and the two reachable ways in.
+    ///
     /// What remains is the microseconds between that read and the write, which needs file locking
     /// rather than a check — recorded rather than claimed away.
     ///
@@ -385,15 +388,24 @@ final class CanvasModel: ObservableObject {
         saveTask?.cancel()
         saveTask = nil
         guard let editable, var draft, draft.isDirty, draft.conflict == nil else { return }
-        // nil is a file that is absent or unreadable, and neither is bytes to protect: an absent
-        // one is what a note deleted under the operator looks like and the write below recreates
-        // it, and an unreadable one could not have been opened for writing in the first place
-        // (`write()` refuses) so it became unreadable after the fact — where the write itself
-        // fails and is reported, rather than being silently allowed through here.
-        if let disk = try? String(contentsOf: editable.url, encoding: .utf8), disk != draft.saved {
+        switch editable.diskContents() {
+        case let .bytes(disk) where disk != draft.saved:
             draft.conflict = CanvasConflict(theirs: disk)
             self.draft = draft
             return
+        case .unreadable:
+            // **Not knowing is not permission.** There is something there and helm could not read
+            // it, so it cannot say whether writing would replace the operator's own last save or
+            // an agent's document mid-stream. It is not a `CanvasConflict` either — that offers
+            // *"take theirs"*, and there is no decodable `theirs` to offer. The draft stays dirty,
+            // so the next keystroke and every later flush try again, which is what makes the
+            // ordinary case of this — a read that landed inside a streaming write — heal itself.
+            writeFailure =
+                "Could not save \(editable.url.lastPathComponent) — helm could not read what is "
+                + "there now, and will not write over bytes it has not seen."
+            return
+        case .bytes, .absent:
+            break
         }
         do {
             try draft.text.write(to: editable.url, atomically: true, encoding: .utf8)

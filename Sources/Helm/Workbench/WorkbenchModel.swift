@@ -345,9 +345,17 @@ final class WorkbenchModel: ObservableObject {
         resumeOffers = [:]
         // **Flushed before they are dropped** (#289). Unlike `closeWorkspace`, this does not call
         // `close()` on each model — that is deliberate and predates notes — so nothing else here
-        // would give a note being typed in its last chance to be written. A pending save holds
-        // its model weakly, so dropping the cache mid-debounce is the one path that could lose
-        // the keystrokes since the last write.
+        // would give a draft being typed in its last chance to be written. A pending save holds
+        // its model weakly, so dropping the cache mid-debounce would lose the keystrokes since
+        // the last write.
+        //
+        // **The flush is not the same as a save, and this is the second thing that can be lost
+        // here.** `saveDraft` refuses while a `CanvasConflict` is up — somebody else wrote the
+        // file and helm will not overwrite bytes the operator has not been shown — so switching
+        // workspace with the strip on screen drops that buffer. Deliberate, argued at
+        // `CanvasModel.saveDraft`, and the same position `close()` and ⌘Q take; pinned per exit by
+        // `CanvasEditorTests` and `WorkbenchNoteTests` rather than asserted in three comments and
+        // checked in one, which is how it stood when the guard was added.
         flushNotes()
         canvases.removeAll()
         // Keyed by canvas pane id, so it goes exactly when the cache does — a leftover entry

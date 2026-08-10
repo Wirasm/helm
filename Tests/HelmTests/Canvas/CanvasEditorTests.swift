@@ -278,6 +278,24 @@ final class CanvasEditorTests: XCTestCase {
             "closing is the last moment a save can happen at all")
     }
 
+    /// **The cost of the conflict guard at a teardown, on the exit the operator reaches with one
+    /// click.** `close()` flushes through `saveDraft`, which refuses while somebody else's bytes
+    /// are on disk — so the buffer goes with the pane.
+    ///
+    /// It is the same weighed decision `saveDraft`'s header argues and ⌘Q takes: writing what is
+    /// usually a sentence over what is usually a whole rewrite, where nobody can be asked, would
+    /// destroy more than it saved. **One test per exit**, because "these three take the same
+    /// position" was claimed in three comments and checked in one.
+    func testClosingThePaneWithAnUnresolvedConflictKeepsTheFile() throws {
+        let (model, file) = try conflicted(mine: "mine", theirs: "theirs")
+
+        model.close()
+
+        XCTAssertEqual(
+            try contents(of: file), "theirs",
+            "closing must not become a way a conflict gets decided by a write")
+    }
+
     func testPointingTheCanvasAtAnotherFileSavesTheOneItIsLeaving() throws {
         let file = try note()
         let other = try note("2026-08-08-note.md")
@@ -391,6 +409,55 @@ final class CanvasEditorTests: XCTestCase {
         XCTAssertEqual(try contents(of: file), "theirs, and the watcher has not fired yet")
         XCTAssertNotNil(model.draft?.conflict, "and he is told, rather than it merely not saving")
         XCTAssertEqual(model.draft?.text, "mine")
+    }
+
+    /// **"Could not read it" is not "it has not changed", and collapsing the two is a clobber.**
+    ///
+    /// The pre-write check above asks the file what it holds. A bare `try?` on that read makes a
+    /// failure indistinguishable from a match, and falls through to the write — over bytes helm
+    /// never managed to look at.
+    ///
+    /// **Reachable, and this codebase names the case itself.** `FileWatcher` debounces 120ms
+    /// precisely because an agent may stream a long document non-atomically; a read landing inside
+    /// that window hits a torn multi-byte sequence and throws, while the write that follows
+    /// succeeds — `write(to:atomically:)` needs the *directory*, not a decodable file to replace.
+    /// So the read failing says nothing about the write failing, which is what the comment
+    /// licensing the fallthrough assumed.
+    func testASaveWillNotProceedOverAFileHelmCouldNotRead() throws {
+        let file = try plan(contents: "# Plan\n")
+        let model = canvas(on: file, debounce: .seconds(30))
+        model.write()
+        model.edit("mine, typed while they were streaming")
+
+        // "# " then the first two bytes of a three-byte UTF-8 sequence: exactly what a read lands
+        // on mid-stream. Valid to write, impossible to decode.
+        let torn = Data([0x23, 0x20, 0xE2, 0x82])
+        try torn.write(to: file)
+        model.saveDraft()
+
+        XCTAssertEqual(
+            try Data(contentsOf: file), torn,
+            "helm must not write over bytes it could not read — not knowing is not permission")
+        XCTAssertEqual(
+            model.draft?.text, "mine, typed while they were streaming", "and his text is still his")
+        XCTAssertEqual(model.draft?.isDirty, true, "still owed, so the next attempt retries")
+        XCTAssertNotNil(model.writeFailure, "and it says so rather than looking like a save")
+    }
+
+    /// The other half of that read: a file that is genuinely **absent** is not "could not tell".
+    /// There is nothing to protect and the write creates it — which is what a note deleted under
+    /// the operator, and a note `write()` seeded empty, both depend on.
+    func testAnAbsentFileIsStillWrittenRatherThanTreatedAsUnknown() throws {
+        let file = try note(contents: "on disk")
+        let model = canvas(on: file, debounce: .seconds(30))
+        model.write()
+        model.edit("typed after it vanished")
+        try FileManager.default.removeItem(at: file)
+
+        model.saveDraft()
+
+        XCTAssertEqual(try contents(of: file), "typed after it vanished")
+        XCTAssertNil(model.writeFailure)
     }
 
     /// A refusal nobody can see is the silence this repository has paid for repeatedly. The strip

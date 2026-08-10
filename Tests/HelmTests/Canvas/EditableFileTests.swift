@@ -65,6 +65,32 @@ final class EditableFileTests: XCTestCase {
             "and the pairing has to hold whatever CanvasNotes names its sidecars")
     }
 
+    // MARK: - What is actually there
+
+    /// **Three outcomes, and the middle one is the whole reason the type exists.** A bare
+    /// `try? String(contentsOf:)` answers `nil` for both "nothing is there" and "there is
+    /// something and I could not read it" — and those want opposite handling: the first is safe to
+    /// write over, the second is the one case with no safe default.
+    func testDiskContentsTellsAbsentFromUnreadable() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-disk-contents-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = try XCTUnwrap(EditableFile(directory.appendingPathComponent("a.md")))
+
+        XCTAssertEqual(file.diskContents(), .absent, "nothing there is not an unknown")
+
+        try "# Plan\n".write(to: file.url, atomically: true, encoding: .utf8)
+        XCTAssertEqual(file.diskContents(), .bytes("# Plan\n"))
+
+        // The first two bytes of a three-byte UTF-8 sequence — what a read lands on while an agent
+        // streams a long document, which is the very case `FileWatcher`'s debounce exists for.
+        try Data([0x23, 0x20, 0xE2, 0x82]).write(to: file.url)
+        XCTAssertEqual(
+            file.diskContents(), .unreadable,
+            "present and undecodable is its own answer, not the absent one")
+    }
+
     // MARK: - Identity
 
     /// `Workbench.pane(showing:)` compares canvas sources by value, so two spellings of one path

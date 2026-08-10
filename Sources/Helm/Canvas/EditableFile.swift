@@ -51,3 +51,46 @@ struct EditableFile: Equatable {
         path = StandardizedPath(url)
     }
 }
+
+// MARK: - What is actually there
+
+extension EditableFile {
+    /// What is on disk right now, as far as helm can tell.
+    ///
+    /// **Three cases because a read has three outcomes, and collapsing two of them is a clobber.**
+    /// The first version of the pre-write check in `CanvasModel.saveDraft` was
+    /// `if let disk = try? String(contentsOf:…), disk != draft.saved` — which makes *"the read
+    /// failed"* land in the same branch as *"the file is what I left there"*, and falls through
+    /// to the write. helm then replaced bytes it had never managed to look at, with no strip and
+    /// no notice: the exact clobber `CanvasConflict` exists to prevent, reached through the check
+    /// built to close it.
+    ///
+    /// **It is reachable, and this codebase names the case itself.** `FileWatcher` debounces 120ms
+    /// *because* an agent may stream a long document non-atomically; a read landing inside that
+    /// window hits a torn multi-byte sequence and throws. A writer saving in Latin-1 or UTF-16 is
+    /// the other way — a complete, valid, atomic write that is simply not UTF-8. The comment that
+    /// licensed the fallthrough reasoned that an unreadable file would fail the write too, and
+    /// that is false: `write(to:atomically:)` writes a temp file and renames, so it needs the
+    /// **directory**, not a decodable file to replace.
+    ///
+    /// So the type carries the distinction the `try?` threw away, and every reader has to say what
+    /// it does about not knowing.
+    enum DiskContents: Equatable {
+        /// Read and decoded. These are the bytes, and they can be compared.
+        case bytes(String)
+        /// Nothing is there. **Not an unknown**: there is nothing to protect, and a save creates
+        /// the file — which is what a note deleted under the operator, and one `write()` seeded
+        /// empty, both depend on.
+        case absent
+        /// Present, and helm could not read or decode it. The only case with no safe default:
+        /// there is something there, and helm does not know what.
+        case unreadable
+    }
+
+    /// Ask the file. The read is attempted first and `fileExists` only settles a failure, so the
+    /// ordinary case costs one open rather than two.
+    func diskContents() -> DiskContents {
+        if let text = try? String(contentsOf: url, encoding: .utf8) { return .bytes(text) }
+        return FileManager.default.fileExists(atPath: url.path) ? .unreadable : .absent
+    }
+}

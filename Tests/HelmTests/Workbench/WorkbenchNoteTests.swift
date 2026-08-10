@@ -132,6 +132,34 @@ final class WorkbenchNoteTests: XCTestCase {
                 + "never runs, because the run loop is stopping")
     }
 
+    /// **The third exit that takes the same position, and the one whose own comment used to say
+    /// the debounce race was the only thing it could lose.** `deactivate` flushes through
+    /// `saveDraft`, which refuses while a conflict is up, so switching workspace with the strip on
+    /// screen drops that buffer exactly as closing the pane and quitting do.
+    ///
+    /// One test per exit: it was claimed in three comments and checked in one.
+    func testClosingTheLastWorkspaceWithAnUnresolvedConflictKeepsTheFile() throws {
+        let model = mounted()
+        let id = try XCTUnwrap(model.newNote(on: day("2026-08-07")))
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+        guard case let .canvas(.file(path)) = pane.content else {
+            return XCTFail("a note is a canvas pane pointed at its own file")
+        }
+        let canvas = model.canvas(for: pane)
+        canvas.edit("typed, and never resolved")
+        try "somebody else got here first".write(
+            toFile: path.value, atomically: true, encoding: .utf8)
+        canvas.refresh()
+        XCTAssertNotNil(canvas.draft?.conflict, "the arrangement is the conflict, so it must exist")
+
+        model.deactivate()
+
+        XCTAssertEqual(
+            try String(contentsOfFile: path.value, encoding: .utf8),
+            "somebody else got here first",
+            "switching workspace must not become a way a conflict gets decided by a write")
+    }
+
     /// **The cost of the conflict guard at the one exit that cannot ask, stated as a test rather
     /// than discovered later** (#289). ⌘Q flushes every open draft through `saveDraft`, which
     /// refuses while somebody else's bytes are on disk — so the buffer goes with the process.
