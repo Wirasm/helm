@@ -215,9 +215,29 @@ enum CanvasHTML {
     ///
     /// **Same-origin only.** A `data:` URI has this document's bytes in it and a `blob:` one is
     /// the page's own object — appending a query to either would break the image outright, so
-    /// the scheme and host have to match the document's before anything is touched. Two things
-    /// are deliberately **out of scope** and would want their own measurement first: `srcset`,
-    /// which `marked` never emits, and CSS `background-image`, which is not an element at all.
+    /// the scheme and host have to match the document's before anything is touched. A
+    /// protocol-relative `//host/x.png` resolves to this scheme on a *different* host, and is
+    /// excluded by the same test.
+    ///
+    /// **`srcset` is stamped as well, because the platform defines two attributes and an image
+    /// has one URL.** When an `<img>` carries an applicable `srcset` candidate, WebKit loads
+    /// **that** and treats `src` as the legacy fallback — measured in
+    /// `testAnImageSelectedFromSrcsetIsRePointedToo`, where `src` and `srcset` name different
+    /// files and the first load reports the `srcset` one. Stamping `src` alone therefore rewrote
+    /// an attribute the loaded image never consults, and left the stale decode exactly where it
+    /// was. **Silently, which is the whole of what #279 is.** It is not an exotic shape either:
+    /// a diagram shipped at 1x and 2x is arguably the *better* authoring pattern for a
+    /// regenerate-the-picture workflow, markdown passes raw HTML straight through
+    /// (`marked.parse` is called with no sanitizer), and an `.html` artifact has no parser
+    /// between it and the page at all.
+    ///
+    /// **A `srcset` is rewritten whole or not at all, and a refusal is counted rather than
+    /// swallowed.** Candidates are separated by commas, and a URL may legally contain one
+    /// (a `data:` URI always does), so a naive split can produce halves that would be rejoined
+    /// into something corrupt. Rather than guess, any candidate whose URL will not parse
+    /// abandons that attribute untouched and adds to the number this script **returns** —
+    /// `CanvasFileCoordinator.restampImages` logs it. A miss helm cannot fix is at least a miss
+    /// helm reports, and #279 is the record of what an unreported one costs.
     ///
     /// **An empty `src` is skipped, and it has to be checked on the *attribute*.** `img[src]`
     /// matches `<img src="">`, and reading `image.src` back gives **the document's own URL** —
@@ -226,23 +246,59 @@ enum CanvasHTML {
     /// Measured (`testTheRestampScriptStampsASiblingAndLeavesADataURIAlone`), because the
     /// plausible reading is that `new URL("")` throws and catches it, and that is not what
     /// happens — nothing empty ever reaches `new URL`.
+    ///
+    /// **CSS `background-image` is still out of scope**, and it is a real gap rather than an
+    /// impossible one: it is not an element, so it wants its own measurement and its own
+    /// mechanism. Nothing here reports it.
     static func restampImagesScript(generation: Int) -> String {
         """
         (function () {
           var stamp = \(jsString(String(generation)));
-          var images = document.querySelectorAll("img[src]");
+          var param = \(jsString(imageStampParameter));
+
+          // The URL a sibling should carry this refresh, or null when helm may not touch it.
+          function restamped(declared) {
+            if (!declared || !declared.trim()) { return null; }
+            var url;
+            try { url = new URL(declared, document.baseURI); } catch (e) { return null; }
+            if (url.protocol !== location.protocol) { return null; }
+            if (url.host !== location.host) { return null; }
+            url.searchParams.set(param, stamp);
+            return url.href;
+          }
+
+          // Every candidate rewritten, or null when one of them could not be read at all —
+          // a srcset rebuilt from halves would be worse than one left alone.
+          function restampedSet(declared) {
+            var candidates = declared.split(",");
+            var out = [];
+            for (var c = 0; c < candidates.length; c++) {
+              var candidate = candidates[c].trim();
+              if (!candidate) { continue; }
+              var parts = candidate.split(/\\s+/);
+              var url = restamped(parts[0]);
+              if (!url) { return null; }
+              parts[0] = url;
+              out.push(parts.join(" "));
+            }
+            return out.length ? out.join(", ") : null;
+          }
+
+          var unreachable = 0;
+          var images = document.querySelectorAll("img[src], img[srcset]");
           for (var i = 0; i < images.length; i++) {
             var image = images[i];
-            var declared = image.getAttribute("src");
-            if (!declared || !declared.trim()) { continue; }
-            var url;
-            try { url = new URL(image.src); } catch (e) { continue; }
-            if (url.protocol !== location.protocol) { continue; }
-            if (url.host !== location.host) { continue; }
-            if (url.searchParams.get(\(jsString(imageStampParameter))) === stamp) { continue; }
-            url.searchParams.set(\(jsString(imageStampParameter)), stamp);
-            image.src = url.href;
+            var set = image.getAttribute("srcset");
+            if (set && set.trim()) {
+              var nextSet = restampedSet(set);
+              if (nextSet === null) { unreachable++; } else if (nextSet !== set) {
+                image.srcset = nextSet;
+              }
+            }
+            var next = restamped(image.getAttribute("src"));
+            if (next !== null && next !== image.src) { image.src = next; }
           }
+          return unreachable;
         })();
         """
     }

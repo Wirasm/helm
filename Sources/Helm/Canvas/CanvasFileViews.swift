@@ -570,9 +570,26 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// image on the page in exchange for nothing. The honest cost of saying it that way: a
     /// webview SwiftUI rebuilds at a later generation stamps once for nothing — one extra read
     /// of a local file, on a path that has just built a whole `WKWebView`.
+    ///
+    /// **The answer is read rather than discarded, and that is why this does not use
+    /// `evaluate(_:in:)`.** The script returns how many images it had to leave alone — a
+    /// `srcset` it could not parse — and a picture helm knowingly failed to refresh is exactly
+    /// the silent staleness #279 is about. Named in the log, never swallowed: the bridge's
+    /// dropped messages are reported the same way, one screen up, for the same reason. There is
+    /// no operator-facing surface for it on purpose — a strip over the artifact would report an
+    /// author's `srcset` to somebody who cannot act on it, and `log show` reaches whoever can.
     func restampImages(in webView: WKWebView) {
         guard let generation = loadedKey?.generation, generation > 0 else { return }
-        evaluate(CanvasHTML.restampImagesScript(generation: generation), in: webView)
+        webView.evaluateJavaScript(
+            CanvasHTML.restampImagesScript(generation: generation), in: nil, in: Self.bridgeWorld
+        ) { result in
+            guard case let .success(value) = result,
+                let unreachable = (value as? NSNumber)?.intValue, unreachable > 0
+            else { return }
+            NSLog(
+                "helm: canvas left \(unreachable) image(s) unstamped — a `srcset` helm could not "
+                    + "read, so an edited picture there may still be the old one")
+        }
     }
 
     /// Take the mark down when the comment field closes — submitted or dismissed. Pushed

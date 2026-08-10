@@ -51,6 +51,7 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
     private var artifact: URL!
     private var sibling: URL!
     private var image: URL!
+    private var retina: URL!
 
     override func setUpWithError() throws {
         directory = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -59,6 +60,7 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
         artifact = directory.appendingPathComponent("page.html")
         sibling = directory.appendingPathComponent("data.json")
         image = directory.appendingPathComponent("probe.svg")
+        retina = directory.appendingPathComponent("retina.svg")
     }
 
     override func tearDownWithError() throws {
@@ -236,6 +238,7 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
         try Self.svg(width: 11).write(to: image, atomically: true, encoding: .utf8)
         try Self.pageWithASiblingAndADataURI.write(to: artifact, atomically: true, encoding: .utf8)
 
+        let host = CanvasAddress.host(for: StandardizedPath(artifact.path))
         let page = try Page(artifact: artifact)
         _ = try await page.load()
 
@@ -263,6 +266,23 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
                 + "`new URL('')` throws and catches it, and it is wrong — nothing empty ever "
                 + "reaches `new URL`. Got \(empty)")
 
+        let set = await page.attribute("srcset", of: "#responsive")
+        XCTAssertEqual(
+            set,
+            "helm-canvas://\(host)/probe.svg?helm=7 1x, "
+                + "helm-canvas://\(host)/retina.svg?helm=7 2x",
+            "every candidate is stamped and every descriptor survives — a `srcset` rebuilt "
+                + "without its `1x`/`2x` would silently change which file the page picks. "
+                + "Got \(set)")
+
+        let unreadable = await page.attribute("srcset", of: "#unreadable")
+        XCTAssertTrue(
+            unreadable.hasPrefix("data:image/svg+xml"),
+            "a candidate helm cannot read leaves the WHOLE attribute alone — candidates are "
+                + "comma-separated and a `data:` URI contains commas, so a naive split would "
+                + "rejoin it into something corrupt. Got \(unreadable)")
+        XCTAssertFalse(unreadable.contains("helm=7"), "and nothing in it is rewritten")
+
         await page.runInBridgeWorld(CanvasHTML.restampImagesScript(generation: 7))
         let again = await page.attribute("src", of: "#sibling")
         XCTAssertEqual(
@@ -270,9 +290,94 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
             "running it twice at one generation must change nothing — both delivery points can "
                 + "fire for the same refresh, and a second fetch per image is the cost of "
                 + "forgetting that")
+        let setAgain = await page.attribute("srcset", of: "#responsive")
+        XCTAssertEqual(setAgain, set, "idempotent for `srcset` too, for the same reason")
+    }
+
+    /// **A `srcset` helm could not read is counted and returned, not swallowed.**
+    ///
+    /// #279 is a stale picture nobody was told about. A fix that leaves a stale picture on a
+    /// path it cannot handle has not finished that job unless the miss is *loud* — so the script
+    /// returns how many images it gave up on, and `CanvasFileCoordinator.restampImages` logs it.
+    /// This is the far half of that: the number is real and is not always zero.
+    func testTheScriptReportsAnImageItCouldNotStamp() async throws {
+        try Self.svg(width: 11).write(to: image, atomically: true, encoding: .utf8)
+        try Self.svg(width: 33).write(to: retina, atomically: true, encoding: .utf8)
+        try Self.pageWithASiblingAndADataURI.write(to: artifact, atomically: true, encoding: .utf8)
+
+        let page = try Page(artifact: artifact)
+        _ = try await page.load()
+
+        let reported = await page.numberFrom(CanvasHTML.restampImagesScript(generation: 7))
+        XCTAssertEqual(
+            reported, 1,
+            "exactly the `data:` candidate — the sibling and the plain `srcset` are stamped and "
+                + "must not be counted, or the log cries wolf on every ordinary page")
+    }
+
+    /// **`src` is not the only place an image's URL lives, and the first pass at #279 acted as
+    /// if it were.**
+    ///
+    /// The platform defines two attributes. When an `<img>` carries a `srcset` with an
+    /// applicable candidate, WebKit loads **that** URL and treats `src` as the legacy fallback —
+    /// so stamping `src` alone rewrites an attribute the loaded image never consults, and the
+    /// stale decode survives. Silently, which is the exact complaint #279 is.
+    ///
+    /// **(0) is measured rather than cited**, because everything else here rests on it: the page
+    /// gives `src` and `srcset` two *different* files, and a first load that reports the
+    /// `srcset` one is what proves WebKit ignores `src`. If that assertion ever flips, this test
+    /// is measuring nothing and the `srcset` handling below is dead weight to be removed.
+    ///
+    /// **It is not an exotic authoring shape.** An agent regenerating a diagram that ships at 1x
+    /// and 2x and naming both is arguably the *better* pattern for exactly the
+    /// regenerate-the-picture workflow this whole ticket is about — and markdown reaches it too,
+    /// since `marked` passes raw HTML straight through and `.html` artifacts have no parser
+    /// between them and the page at all.
+    func testAnImageSelectedFromSrcsetIsRePointedToo() async throws {
+        try Self.svg(width: 11).write(to: image, atomically: true, encoding: .utf8)
+        try Self.svg(width: 33).write(to: retina, atomically: true, encoding: .utf8)
+        try Self.pageWithASrcsetImage.write(to: artifact, atomically: true, encoding: .utf8)
+
+        let page = try Page(artifact: artifact)
+        let first = try await page.load()
+        XCTAssertEqual(
+            first, "33",
+            "(0) WebKit selects the URL from `srcset` and uses `src` only as the legacy "
+                + "fallback. `11` — the `src` file — would mean this test measures nothing and "
+                + "the `srcset` handling can be deleted")
+
+        try Self.svg(width: 44).write(to: retina, atomically: true, encoding: .utf8)
+
+        let afterNavigating = try await page.navigateAgain()
+        XCTAssertEqual(
+            afterNavigating, "33",
+            "(1) a `srcset` candidate goes stale across a navigation exactly as a `src` does — "
+                + "same cache, same key, nothing special about the attribute it came from")
+
+        await page.runInBridgeWorld(CanvasHTML.restampImagesScript(generation: 5))
+        let afterStamp = await page.imageWidth(settlingOn: "44")
+        XCTAssertEqual(
+            afterStamp, "44",
+            "(2) and helm's stamp has to reach it. `33` is the whole of this finding: `src` was "
+                + "re-pointed, the loaded image never consulted `src`, and the operator kept "
+                + "looking at a diagram that no longer exists on disk")
     }
 
     // MARK: - The page, and the harness that drives it
+
+    /// `src` and `srcset` naming **different** files, so a first load says which one WebKit
+    /// actually consults rather than leaving it to be argued from the spec.
+    private static let pageWithASrcsetImage = """
+        <!doctype html><html><body>
+        <img src="./probe.svg" srcset="./retina.svg 1x">
+        <script>
+        var img = document.querySelector('img');
+        img.decode()
+          .then(function () { return String(img.naturalWidth); })
+          .catch(function (e) { return 'THREW ' + e; })
+          .then(function (t) { window.webkit.messageHandlers.probe.postMessage(t); });
+        </script></body></html>
+        """
 
     /// **The markdown canvas's shape**: the `<img>` is created by script, exactly as
     /// `marked.parse` creates one when it writes an artifact into `innerHTML`. Reports what the
@@ -302,14 +407,19 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
         </script></body></html>
         """
 
-    /// One image served over `helm-canvas://`, one carrying its own bytes, and one pointing
-    /// nowhere. The script has to tell them apart with no idea what any of them points at.
+    /// Every URL shape the script has to tell apart, with no idea what any of them points at:
+    /// a sibling, a `data:` URI carrying its own bytes, an empty attribute, a `srcset` of two
+    /// siblings with descriptors, and a `srcset` holding a `data:` URI — whose commas are the
+    /// reason the whole attribute is rewritten or left alone rather than rebuilt from halves.
     private static let pageWithASiblingAndADataURI = """
         <!doctype html><html><body>
         <img id="sibling" src="./probe.svg">
         <img id="inline" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'\
         %20width='3'%20height='3'%3E%3C/svg%3E">
         <img id="empty" src="">
+        <img id="responsive" srcset="./probe.svg 1x, ./retina.svg 2x">
+        <img id="unreadable" srcset="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'\
+        %20width='3'%20height='3'%3E%3C/svg%3E 1x">
         <script>window.webkit.messageHandlers.probe.postMessage('up');</script>
         </body></html>
         """
@@ -421,11 +531,39 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
         /// point is that the page's own JavaScript cannot see it. A DOM edit made from there is
         /// the thing under test, since the two worlds share one document and nothing else.
         func runInBridgeWorld(_ script: String) async {
+            _ = await numberFrom(script)
+        }
+
+        /// What the script **returned**, which for the re-stamp is how many images it had to
+        /// give up on. Read rather than discarded, because that number is the whole of the
+        /// "a miss helm cannot fix is a miss helm reports" half of #279.
+        func numberFrom(_ script: String) async -> Int? {
             await withCheckedContinuation { continuation in
                 webView.evaluateJavaScript(
                     script, in: nil, in: CanvasFileCoordinator.bridgeWorld
-                ) { _ in continuation.resume() }
+                ) { result in
+                    guard case let .success(value) = result else {
+                        return continuation.resume(returning: nil)
+                    }
+                    continuation.resume(returning: (value as? NSNumber)?.intValue)
+                }
             }
+        }
+
+        /// What the page's `<img>` decoded to, polled — a stamp has to be fetched and decoded
+        /// before the element reports the new number, so reading once is a race. Returns
+        /// whatever it last saw, so a failure names the width rather than a bare `false`.
+        func imageWidth(settlingOn wanted: String, timeout: Duration = .seconds(5)) async -> String
+        {
+            let script = "String((document.querySelector('img') || {}).naturalWidth)"
+            let deadline = ContinuousClock.now + timeout
+            var last = ""
+            while ContinuousClock.now < deadline {
+                last = await ask(script)
+                if last == wanted { return last }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+            return last
         }
 
         func attribute(_ name: String, of selector: String) async -> String {
