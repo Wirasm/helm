@@ -21,10 +21,13 @@ import Foundation
 ///
 /// Encodes as a bare string through a single-value container, exactly like `WorkspacePath`, and
 /// that shape must not change. **No script parses `terminalId` itself**, so the obligation is not
-/// the `json["terminalId"] as? String` this comment used to claim (#240): all three scripts read
-/// only `status` and `reason` and print the whole result blob verbatim on stdout
-/// (`helm-spool.swift:186`, `helm-close.swift:153`, `helm-capture.swift:150`), and the agent that
-/// invoked the script reads the field out of that printed JSON. `SpoolWireConformanceTests`
+/// the `json["terminalId"] as? String` this comment used to claim (#240): every spool script
+/// prints the whole result blob verbatim on stdout and then reads only what it needs to choose an
+/// exit code and a one-line summary — `status`, `reason`, and at most its own kind's report
+/// object. The agent that invoked the script reads this field out of that printed JSON.
+/// **Which scripts those are is `AGENTS.md`'s list, and deliberately not restated here**: this
+/// comment said "all three" with three line numbers beside it, and stayed at three through
+/// `helm-command`, `helm-select` and `helm-name`. `SpoolWireConformanceTests`
 /// `.testHelmSpoolPrintsHandleAndTerminalIdAsBareStringsOnceReady` and
 /// `.testHelmClosePrintsTerminalIdAsABareStringOnceClosed` are what hold it, against the real
 /// scripts as subprocesses. (`BenchSnapshot.OwnerRecord.handle` is a `Handle` since #233, not the

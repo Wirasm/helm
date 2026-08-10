@@ -21,10 +21,12 @@ import Foundation
 ///
 /// **Lives in `HelmWire` (#221)** — `Helm`'s own `SpoolModel` and `SpoolWatcher` resolve their
 /// spool through this rather than restating it. `resolve` is also "the three resolution rules a
-/// CLI must not guess at" that `AGENTS.md` documents for `tools/helm-spool.swift`,
-/// `helm-close.swift` and `helm-capture.swift` — those three cannot `import HelmWire` (see
-/// `AGENTS.md`'s "Why the spool is a script, and must stay one") and so still reimplement this
-/// exact function by hand, each carrying a comment pointing back here for the reasoning.
+/// CLI must not guess at" that `AGENTS.md` documents for the standalone spool scripts — **which
+/// scripts those are is `AGENTS.md`'s list, and deliberately not restated here**, because this
+/// comment named three of them for as long as there were three and then stayed at three through
+/// `helm-command`, `helm-select` and `helm-name`. None of them can `import HelmWire` (see
+/// `AGENTS.md`'s "Why the spool is a script, and must stay one") and so each still reimplements
+/// this exact function by hand, carrying a comment pointing back here for the reasoning.
 package struct SpoolDirectory: Equatable {
     /// Points helm's spool somewhere else outright. For tests, and for a caller that wants to
     /// address one specific instance. Mirrors `HELM_MAIL_DIR`, which the mail hooks honour.

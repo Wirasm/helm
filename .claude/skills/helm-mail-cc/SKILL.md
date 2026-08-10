@@ -232,8 +232,9 @@ yours to make.
 ## Arm — the part only this runtime needs
 
 Mail delivered by the hook arrives **at the start of your next turn**. If nobody prompts you, you
-never see it. Nothing outside a Claude Code session can start a turn in one — but a watch **you**
-arm can, because being notified *is* the wake.
+never see it. Nothing outside this session can be *relied on* to start a turn in it — a peer's
+socket poke is **held**, not delivered, in the permission posture helm spawns you under (helm
+#320) — but a watch **you** arm can, because being notified *is* the wake.
 
 Arm a background watch on your own mailbox, one notification per message:
 

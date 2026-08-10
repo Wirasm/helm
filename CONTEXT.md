@@ -83,6 +83,23 @@ _Avoid_: artifact pane, webview, browser, draw-on pane
 
 ### What helm looks like
 
+**board**:
+The workspace bar's answer to *which workspace has an agent that needs you* — one mark per
+workspace tab, from the agent registry alone. Three renderings and not two: nothing where there is
+no agent, a quiet dot where every agent is working, an attention dot where one has stopped.
+helm holds **no state of its own** here — the registry file's lifecycle is the mark's lifecycle,
+so nothing acknowledges, decays or expires, and there is nothing to clear. It never hides,
+including on the workspace being looked at.
+_Avoid_: **drawing board** (a different thing — see below), status bar, badge, notification centre,
+calling the attention dot an "unread"
+
+**drawing board**:
+A **canvas** an agent authors as labelled shapes and the operator draws on by hand, their marks
+coming back as named records. It is a kind of canvas and nothing structural: helm has no board
+pane, and nothing in the **board** above knows it exists. Owned by the `helm-board` skill, not by
+Swift.
+_Avoid_: board unqualified (that word is the workspace marks), whiteboard, sketch pane, diagram
+
 **rail**:
 The remembered, default-hidden strip to the right of the workbench: **somewhere to start work
 that is not your current work**. It holds the Archon and Worktrees tenants. Archon renders a
