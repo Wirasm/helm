@@ -925,7 +925,8 @@ test is simple: two people building two features should not have to edit the sam
 **The slices, largest first, so a stranger knows where to look**: `Canvas/` (6.1k lines) is the
 document surface; `Workbench/` (3.8k) is columns, slots, panes and the offer/insert distinction;
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
-libghostty seam; `Chat/` (1.7k) is the agent face; then `Spool/`, `App/`, `Board/`, `Workspaces/`,
+libghostty seam — sessions, the host view, the pane environment, and `push.sh`'s landing site;
+`Chat/` (1.7k) is the agent face; then `Spool/`, `App/`, `Board/`, `Workspaces/`,
 `Design/`, `Artifacts/`, `StatusBar/`, `Build/`, `Shared/`, `Capture/`, `Mail/`. Three of those
 have no bullet anywhere above and are the easiest to be surprised by:
 
@@ -947,9 +948,10 @@ have no bullet anywhere above and are the easiest to be surprised by:
 - **`Board/` is agent presence and the bench snapshot — it is not the drawable board.** The
   collision is real and worth knowing before a grep sends you to the wrong one. `Sources/Helm/Board/`
   is `BoardModel`, `AgentDot` and `BenchSnapshot`: which workspace tab has an agent that has
-  stopped, plus the JSON report an agent reads the bench from. helm holds **no state of its own**
-  there — the registry file's lifecycle is the mark's lifecycle, which is what makes it safe to
-  poll and republish rather than accumulate. The **drawable** board is
+  stopped, plus the JSON report an agent reads the bench from. On the presence half helm holds
+  **no state of its own** — the registry file's lifecycle *is* the mark's lifecycle, so nothing
+  acknowledges, decays or expires, which is what makes it safe to poll and republish rather than
+  accumulate. The **drawable** board is
   `.claude/skills/helm-board/`, a kind of canvas an agent authors and the operator draws on; no
   Swift in `Board/` knows it exists. `CONTEXT.md` now defines both senses.
 
@@ -1087,7 +1089,8 @@ cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 `.claude/skills/` holds twelve; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
 not a change. The other five are hand-written, helm-local, and are the surface an agent hosted in
-helm actually uses. Each has its own gate, listed in *Working here* above.
+helm actually uses. Four gates cover the five, all listed in *Working here* above — the two mail
+skills share one, because the send and the mailbox listing are documented identically in each.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
   artifact gets onto the bench. Read it before writing one; it deliberately says nothing about
@@ -1106,8 +1109,8 @@ find. Neither modifies files.
 
 - **`house-rules-auditor`** audits a change against **this project's own written rules** —
   `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md` — and against nothing else. It reports only findings it
-  can trace to a quoted line, which is what makes it the right reviewer for a documentation change
-  like this one.
+  can trace to a quoted line, which makes it the reviewer to reach for when the change *is* one of
+  those documents, or when a diff is being judged against them rather than against taste.
 - **`seam-analyzer`** hunts one defect: a **missing type at a seam** — structure flattened and
   rebuilt downstream, hand-maintained lists held together by KEEP IN SYNC comments, a second route
   that skips the validator, an invariant carried by a comment. That is the rule the architecture
