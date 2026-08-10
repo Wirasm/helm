@@ -43,9 +43,11 @@ way in, and it never involves the helper at all. Useful against a bundle you did
 build — including an old one, which is how #192 was settled.
 
 **What the gate guarantees when several agents share the machine — which is now the normal
-state here, not the exception.** `swift test` is *not* load-sensitive and a red keyboard test
-is *not* evidence that the machine is busy. That was assumed once, cost two confident wrong
-diagnoses in an afternoon, and #192 is the measurement that disproved it: a test bundle built
+state here, not the exception.** `swift test` is *broadly* not load-sensitive — the two
+documented exceptions are named immediately below, and everything else in the suite is not one
+— and a red keyboard test is *not* evidence that the machine is busy. That was assumed once, cost
+two confident wrong diagnoses in an afternoon, and #192 is the measurement that disproved it: a
+test bundle built
 at 13:19 and never rebuilt was green at 13:19 and red at 19:00, and every worktree on the
 machine went red within the same second (17:17:19). Concurrency did not do that; nothing in
 any diff did.
@@ -135,6 +137,30 @@ control run, or both.
 command a fresh worktree runs, and every dependency added to it is a dependency every
 contributor now needs.
 
+**CI is not this gate, in both directions, and neither difference is stated anywhere but in
+`.github/workflows/gate.yml`'s own comments.** It runs **three** jobs — `build · test · format`,
+`mailbox hooks · conformance`, and `skill gates` — kept apart because the last two need node and
+the Swift gate must not.
+
+- **Narrower on the Swift job**, by exactly the two suites this section spends forty lines
+  teaching you to diagnose: `INJECTION_NOGENERICS=1 swift test --skip TerminalKeyboardTests
+  --skip WorkbenchFocusRoutingTests`. A runner has no active display and those two need a real
+  ghostty surface (#253) — excluded rather than tolerated, since a gate whose red is sometimes
+  meaningless is a gate nobody reads. So **a green CI is not a green local gate**: a regression in
+  either suite passes CI, and running the full command before the PR is the only thing that
+  catches it.
+- **Broader on everything else**, and this is the half that surprises people: CI runs
+  `hooks/test.sh`, `helm-mail-cc/test.sh`, `helm-canvas/test.sh` and `helm-board/test.sh`
+  **unconditionally, on every PR**, where the rules above ask you to run each only when you
+  touched what it covers. *"A gate that exists, is documented in `AGENTS.md`, and runs only when
+  somebody remembers is the drift this workflow exists to stop."* The `pi-extensions` gate is the
+  one with no CI job — it needs an `npm install` in `pi/` — so that one really is only run by
+  whoever remembers.
+- **And a green local gate is not a green CI either**, for a third reason: CI runs against the
+  **merge commit** rather than your branch tip. That is why it exists — two PRs merged 56 seconds
+  apart on 2026-08-06, both green on their own branches, both reviewed, touching different files,
+  and `development` did not compile.
+
 **If you touched `pi/`, run its gate too — it is separate on purpose:**
 
 ```
@@ -159,7 +185,8 @@ bash .claude/skills/helm-canvas/test.sh
 bash .claude/skills/helm-board/test.sh
 ```
 
-That skill is the drawable canvas (#111): `@quickdrawjs/core` 0.2.0 vendored, copied *beside*
+That skill is the drawable board (#111) — the word `CONTEXT.md` now defines against
+`Sources/Helm/Board/`, which is a different thing: `@quickdrawjs/core` 0.2.0 vendored, copied *beside*
 an artifact rather than injected, so it is a skill asset and not a bundle resource. Its gate
 **executes** `board-core.js` in node — the ownership diff, the overlap resolution and the state
 report all live there rather than in the DOM glue, precisely so a browser is not needed to test
@@ -260,16 +287,49 @@ through its `context` event.
 
 **An idle agent is woken, and the two runtimes get there differently.** pi's extension is a live
 event loop inside the session, so it watches its own mailbox and calls `sendUserMessage` — a turn
-starts from nothing. Nothing outside a Claude Code session can do that, so the notice instead
-**tells the agent to arm its own watch**; being notified is the wake. Both are capped at 3
-consecutive wakes, because waking spends a turn and two agents replying to each other would
-otherwise burn until the money ran out. Both are wired by hand into `~/.claude/settings.json` and
+starts from nothing. Claude Code has no equivalent helm can call, so the notice instead **tells
+the agent to arm its own watch**; being notified is the wake.
+
+**Only pi caps that, and the asymmetry is a consequence rather than an oversight.**
+`WAKE_CAP = 3` in `pi/extensions/helm-mail/index.ts` is kild's cap, back for kild's reason:
+`sendUserMessage` *starts a turn*, so two agents replying to each other would burn until the money
+ran out. `hooks/helm-mail.mjs` has no cap and says so in a block of its own — delivering on
+`UserPromptSubmit` rides a prompt the operator just typed and spends nothing, so there is no
+runaway to cap and no `.wakes` file to keep beside the mailbox. **Do not "fix" the asymmetry by
+adding a cap to the hook**; read that block first.
+
+**The premise under all of this is no longer settled, and #320 is where it is being settled.**
+This file used to state flatly that nothing outside a Claude Code session can start a turn in it.
+Claude Code 2.1.224+ ships per-session sockets and a message delivered to an idle session's socket
+arrives as a new user turn — measured at **0.12s**, no watch armed. So take the sentence above as
+*"helm does not do this today"* rather than as a fact about the runtime. **The verdict is
+CONDITIONAL and the condition is helm's own posture**: under `--dangerously-skip-permissions`,
+which `SpoolUnattendedPolicy` gives every spawned `claude`, the poke is accepted, returns cleanly,
+and is **held** behind a modal in a pane nobody is watching — #179 arriving through a new door.
+Nothing is built, the arm-a-watch notice is still the working mechanism, and #322 is the same
+shape: also CONDITIONAL, also unbuilt. **Read both before designing against either.**
+
+Both hooks are wired by hand into `~/.claude/settings.json` and
 never write themselves there; `hooks/helm-mail.mjs` is the convention, and it is a **deliberate
 duplicate** of `pi/extensions/helm-mail/index.ts` — there is no shared module because pi loads a
 `.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice,
 the on-disk shape or **which mailroom it all happens in** (#285) has to be made in both — and
 `hooks/mailbox-conformance.mjs` is what makes that detectable rather than trusted. Needs node,
 which is why it is not in the Swift gate.
+
+**Two variables, and they are the spool's two by design** (`hooks/helm-mail.mjs:40-41`, which
+`SpoolDirectory` points at by name from the other side). `HELM_MAIL_DIR` names a mailroom outright
+and wins over everything, which is what a test claims into instead of the operator's; `HELM_MAIL_OFF`
+switches claiming and delivery off without switching the agent off, and it is **the negative control
+for any claim about the mailbox** — with it set, a send must produce no notice. Resolution is those
+two and then the suite: `HELM_MAIL_DIR`, else `~/.helm/mail-<suite>`, else the shared root.
+
+**Which agent is in a pane is one question with one answer, `AddressBook`
+(`Sources/HelmWire/Spool/MailboxDirectory.swift`, #247).** Three callers ask it — `SpoolModel`,
+`BenchSnapshot.TerminalRecord` and `CanvasNoteCourier` — and before #247 the first two each joined
+on the pid by hand. **A registry-backed owner is matched only by its session; everyone else by its
+recorded pid**, which is what makes a recycled pid harmless and an agent resumed into a new process
+still resolvable. Do not add a fourth join.
 
 Only when `pi/` changed. It needs node, and `tsc` from an `npm install` in `pi/`, which is
 why it is not part of the Swift gate: `swift test` cannot run TypeScript and should not
@@ -385,6 +445,12 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   is what an ungated spool would actually be. `HELM_SPOOL_OFF=1` turns the watcher off, which
   is the negative control for any claim about it. A second instance gets its own spool
   automatically under `HELM_DEFAULTS_SUITE`.
+  - **`--no-wait` writes the request, prints its path and exits 0 without reading a result**
+    (`tools/helm-spool.swift:171`) — so **exit 0 means the file landed, and nothing more**. There
+    is no terminal, no pid, no handle and no refusal: helm has not looked at it yet, and a request
+    it goes on to refuse still exited 0 here. Use it to fan out several spawns and collect
+    `results/<id>.json` yourself (pass `--id` so you know what to read); do **not** use it to
+    decide an agent started. The default waits for exactly that reason.
   - **helm answers the "nobody is at the pane" question for you, per agent, in
     `SpoolUnattendedPolicy`.** A bare `claude` stops at a permission prompt, and a prompt in a
     pane nobody is watching is indistinguishable from an agent that never started — measured on
@@ -670,6 +736,39 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     directory: writing there is still wrong, for a reason about ownership rather than about what
     helm will let anyone type into. Artifacts go to `plans/`, `research/`, … and reach the bench
     through `push.sh`.
+- **A canvas talks back on three channels, and none of them is a notification.** `push.sh` is the
+  way out; these are the ways in, and an agent that pushed a page and then waited for something to
+  happen has misread all three. **Nothing wakes you.** The skill (`.claude/skills/helm-canvas/`)
+  is the capability surface; this is which mechanisms exist and where each is argued.
+  - **The state latch — a page reporting on itself** (`Sources/Helm/Canvas/CanvasState.swift`,
+    #110, and `CONTEXT.md`'s *canvas state latch*). The page posts `{kind: "canvas.state", state:
+    {…}}` and helm writes it to `<name>.state.json` **beside the artifact** —
+    `motions.html` → `motions.state.json`, the same placement rule as `CanvasNotes.sidecarURL`.
+    **helm never reads what is in it**: the state is whatever the agent that wrote the page decided
+    those words mean, carried verbatim. A top-level **object**, at most **64 KB**, latest-wins —
+    the cap is about the reader, not the disk, because every byte lands in the next turn's context.
+    An array, a scalar or an oversize body is refused, and the refusal is in `log show` rather
+    than in the page.
+  - **`window.helmCanvasUpdate` — helm telling a live page its file changed**
+    (`CanvasUpdate.swift`). **The contract is one sentence: a page that defines it is never
+    reloaded by helm.** Not "reloaded less often" — never. Defining the function is the page saying
+    *I hold state; tell me instead of replacing me*, and returning `false` from it means "not now",
+    which puts an **Updated — reload** affordance in front of the operator instead. It is a global
+    in the **page** world on purpose: the annotation bridge lives in a named content world (#164)
+    exactly so an artifact's own JavaScript cannot post to helm, and Swift is the only thing that
+    can reach both worlds.
+  - **A mark the operator makes is mailed to the agent that pushed the canvas**
+    (`CanvasNoteRoute.swift`, `CanvasNoteCourier.swift`, #205). This is the one channel where
+    something arrives without you asking, and it arrives as **mail** — so it reaches you the way
+    all mail does, and the wake rules above are its wake rules. The route resolves **late**: helm
+    records which *pane* pushed the canvas (`CanvasOrigin`), never a pid or a handle, and asks that
+    pane who is in it at the moment the mark is made — a handle read at push time is stale the
+    moment that agent restarts, and stale silently, because mail to a retired mailbox is never read
+    and never bounces. Not persisted, for the same reason: a restored terminal pane is a fresh
+    empty shell, so an origin surviving a relaunch could only name somebody else. **With no route
+    the note goes to the clipboard and the pane says which of the two failures it was** — nobody
+    pushed this canvas, or the agent that did is gone. A silent no-op is the worst outcome here,
+    because the operator believes the note was sent.
 - **`helm-spawn` is the GUI path, and still there** — `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`
   (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
   type `cls`, wait, type the prompt, submit — with every step waiting on something observable
@@ -824,6 +923,39 @@ feature's directory — including its keyboard shortcuts and notification handli
 that genuinely spans features stays in `App/`, which is composition and nothing else. The
 test is simple: two people building two features should not have to edit the same file.
 
+**The slices, largest first, so a stranger knows where to look**: `Canvas/` (6.1k lines) is the
+document surface; `Workbench/` (3.8k) is columns, slots, panes and the offer/insert distinction;
+`Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
+libghostty seam — sessions, the host view, the pane environment, and `push.sh`'s landing site;
+`Chat/` (1.7k) is the agent face; then `Spool/`, `App/`, `Board/`, `Workspaces/`,
+`Design/`, `Artifacts/`, `StatusBar/`, `Build/`, `Shared/`, `Capture/`, `Mail/`. Three of those
+have no bullet anywhere above and are the easiest to be surprised by:
+
+- **`Archon/` and `Worktrees/` are the rail, and the rail is *somewhere to start work that is not
+  your current work*.** Nothing docks there and nothing opens from it — run detail is read in
+  Archon's own web UI. Archon's tenant is deliberately a **reduction** of one that was built, used
+  and cut back on the operator's verdict *"too much bloat"*: three lists (gates, running,
+  finished), one input field, and a dismissible line per finished run rather than a tally. Read
+  `ArchonRailModel`'s header before adding anything to it — several of the obvious additions are
+  things that were removed. Worktrees is `git worktree list --porcelain` and nothing else: helm
+  reads no Archon database, and "merged" means Git reachability from a resolved remote default
+  branch, never pull-request state. `CONTEXT.md` has both.
+- **`Chat/` is the agent *face*, read from the transcript file, and it is structurally behind.**
+  `ChatModel` **polls** rather than watching — a status change rewrites an existing file, which a
+  directory-level `DispatchSource` does not reliably see, and `BoardModel` polls for the same
+  reason. The limit is measured in `docs/direction.md` and is not a bug to fix in passing: the
+  grain is one content block per record, a median 8.8s behind, and an agent blocked on a question
+  writes **nothing** — so the moment most demanding attention is exactly when the file is silent.
+- **`Board/` is agent presence and the bench snapshot — it is not the drawable board.** The
+  collision is real and worth knowing before a grep sends you to the wrong one. `Sources/Helm/Board/`
+  is `BoardModel`, `AgentDot` and `BenchSnapshot`: which workspace tab has an agent that has
+  stopped, plus the JSON report an agent reads the bench from. On the presence half helm holds
+  **no state of its own** — the registry file's lifecycle *is* the mark's lifecycle, so nothing
+  acknowledges, decays or expires, which is what makes it safe to poll and republish rather than
+  accumulate. The **drawable** board is
+  `.claude/skills/helm-board/`, a kind of canvas an agent authors and the operator draws on; no
+  Swift in `Board/` knows it exists. `CONTEXT.md` now defines both senses.
+
 **Put a command handler where its lifetime is right, not where it looks tidy.** A subscription
 that has to work while its view is closed belongs on the model, which outlives the
 presentation. Attaching it to the view means it is dead in exactly the state it exists for.
@@ -953,9 +1085,34 @@ GitHub issues on `Wirasm/helm`, via `gh`. See `docs/agents/issue-tracker.md`.
 Single-context; vocabulary is canonical in `CONTEXT.md`, with `../GLOSSARY.md` for the
 cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
-### pi extensions
+### The five helm-local skills
 
-How to build one without taking the pi CLI down, how to read the installed pi rather than guess
-at its API, and how to test one without spending a model call. See
-`.claude/skills/pi-extensions/`. Hand-written and helm-local — not vendored, so not in
-`skills-lock.json`.
+`.claude/skills/` holds twelve; **seven are vendored** from `mattpocock/skills` and pinned in
+`skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
+not a change. The other five are hand-written, helm-local, and are the surface an agent hosted in
+helm actually uses. Four gates cover the five, all listed in *Working here* above — the two mail
+skills share one, because the send and the mailbox listing are documented identically in each.
+
+- **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
+  artifact gets onto the bench. Read it before writing one; it deliberately says nothing about
+  *what* to put in a canvas.
+- **`helm-board`** — the drawable board (#111): an agent authors labelled shapes, the operator
+  draws on it by hand, and what they drew comes back as named records. Not `Sources/Helm/Board/`.
+- **`helm-mail-cc`** and **`helm-mail-pi`** — sending and reading mail from each runtime. One gate
+  covers both, and it **executes the snippets out of `SKILL.md`** rather than restating them.
+- **`pi-extensions`** — how to build one without taking the pi CLI down, how to read the installed
+  pi rather than guess at its API, and how to test one without spending a model call.
+
+### The two helm-local subagents
+
+`.claude/agents/` holds two, and both exist because a general reviewer does not find what they
+find. Neither modifies files.
+
+- **`house-rules-auditor`** audits a change against **this project's own written rules** —
+  `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md` — and against nothing else. It reports only findings it
+  can trace to a quoted line, which makes it the reviewer to reach for when the change *is* one of
+  those documents, or when a diff is being judged against them rather than against taste.
+- **`seam-analyzer`** hunts one defect: a **missing type at a seam** — structure flattened and
+  rebuilt downstream, hand-maintained lists held together by KEEP IN SYNC comments, a second route
+  that skips the validator, an invariant carried by a comment. That is the rule the architecture
+  section above spends its longest passage on, and this is the reviewer that applies it.

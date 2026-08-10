@@ -3,9 +3,11 @@ import Foundation
 /// The decision `HELM_DEFAULTS_SUITE` asks for, extracted from `DefaultsDomain`
 /// (`Sources/Helm/App/DefaultsDomain.swift`) so `SpoolDirectory.resolve` can make the identical
 /// call a running helm makes, from inside `HelmWire` where `DefaultsDomain` itself cannot be
-/// reached. The standalone `tools/helm-spool.swift`, `helm-close.swift` and `helm-capture.swift`
-/// scripts cannot call this either — they cannot `import HelmWire` at all (`AGENTS.md`'s "Why
-/// the spool is a script, and must stay one") — so each carries its own hand-written copy of
+/// reached. The standalone spool scripts cannot call this either — they cannot `import HelmWire`
+/// at all (`AGENTS.md`'s "Why the spool is a script, and must stay one"), and **which scripts
+/// those are is `AGENTS.md`'s list, deliberately not restated here**: this comment named three of
+/// them for as long as there were three, and stayed at three through `helm-command`, `helm-select`
+/// and `helm-name` — so each carries its own hand-written copy of
 /// just the boolean this decision reduces to for their purposes: is a suite name set, and is it
 /// not `canonical`. That is a narrower duplicate than `Override` (no refusal reasons, no
 /// `NSGlobalDomain`/path/legacy checks), on the same honest-duplicate footing as the rest of the
