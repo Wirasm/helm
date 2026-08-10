@@ -591,13 +591,20 @@ run "$root" claude-user-prompt-submit '{"session_id":"aaaa-bbbb-cccc-1234","cwd"
 # construction rather than by care, which is the same rule `scratch` follows in the conformance
 # harness.
 home=$(fresh)
+# `-u HELM_DEFAULTS_SUITE` FIRST and then the assignment, because this gate is very often run by
+# an agent hosted in an isolated helm — which exports exactly this variable. Measured: `env -u X
+# X=v` applies the unset, then the assignment, so the empty first argument really does mean "no
+# suite" rather than "whatever the shell that ran the gate is in". Without it the control below
+# claims in the developer's own suite and reports the default branch as gone.
 isolated_claim() {
-	printf '{"session_id":"%s","cwd":"/tmp/isolated-instance"}' "$2" |
-		env -u HELM_MAIL_DIR HOME="$home" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" $1 \
+	local suite=$1 session=$2
+	printf '{"session_id":"%s","cwd":"/tmp/isolated-instance"}' "$session" |
+		env -u HELM_MAIL_DIR -u HELM_DEFAULTS_SUITE HOME="$home" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" \
+			${suite:+HELM_DEFAULTS_SUITE="$suite"} \
 			"$HOOKS/claude-session-start" >/dev/null 2>&1
 }
 
-isolated_claim "HELM_DEFAULTS_SUITE=drivetest" "019fc78b-f108-7c69-b602-1d44f7639531"
+isolated_claim "drivetest" "019fc78b-f108-7c69-b602-1d44f7639531"
 suite_handle=$(ls "$home/.helm/mail-drivetest" 2>/dev/null | head -1)
 [ -n "$suite_handle" ] && [ -f "$home/.helm/mail-drivetest/$suite_handle/owner.json" ] &&
 	ok "an agent under HELM_DEFAULTS_SUITE claims in ~/.helm/mail-<suite> (#285)" ||

@@ -115,6 +115,14 @@ function capturingStderr(body) {
 	return lines;
 }
 
+/** Put back exactly what was there, including "it was not set at all". */
+function restoreEnv(saved) {
+	for (const [name, value] of Object.entries(saved)) {
+		if (value === undefined) delete process.env[name];
+		else process.env[name] = value;
+	}
+}
+
 const roots = [];
 
 /** A fresh mailbox root for one test. Read by the extension when the factory runs. */
@@ -955,7 +963,14 @@ await test("an isolated instance's session claims where the operator's agents ne
 	freshRoot();
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mail-home-"));
 	roots.push(home);
-	const restore = { HOME: process.env.HOME, HELM_MAIL_DIR: process.env.HELM_MAIL_DIR };
+	// `HELM_DEFAULTS_SUITE` is SAVED rather than merely deleted afterwards: this gate is very often
+	// run by an agent hosted in an isolated helm, which exports exactly this variable, and a bare
+	// `delete` in the `finally` would unset the developer's own for every test after this one.
+	const restore = {
+		HOME: process.env.HOME,
+		HELM_MAIL_DIR: process.env.HELM_MAIL_DIR,
+		HELM_DEFAULTS_SUITE: process.env.HELM_DEFAULTS_SUITE,
+	};
 	delete process.env.HELM_MAIL_DIR;
 	process.env.HOME = home;
 	process.env.HELM_DEFAULTS_SUITE = "drivetest";
@@ -973,9 +988,7 @@ await test("an isolated instance's session claims where the operator's agents ne
 		// hold a different mailbox, it must never have been touched.
 		check(!fs.existsSync(path.join(home, ".helm", "mail")), "an isolated session still reached the shared ~/.helm/mail");
 	} finally {
-		process.env.HOME = restore.HOME;
-		process.env.HELM_MAIL_DIR = restore.HELM_MAIL_DIR;
-		delete process.env.HELM_DEFAULTS_SUITE;
+		restoreEnv(restore);
 	}
 });
 
@@ -984,8 +997,14 @@ await test("and with no suite set it claims in the shared ~/.helm/mail, as it al
 	freshRoot();
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mail-home-"));
 	roots.push(home);
-	const restore = { HOME: process.env.HOME, HELM_MAIL_DIR: process.env.HELM_MAIL_DIR };
+	const restore = {
+		HOME: process.env.HOME,
+		HELM_MAIL_DIR: process.env.HELM_MAIL_DIR,
+		HELM_DEFAULTS_SUITE: process.env.HELM_DEFAULTS_SUITE,
+	};
 	delete process.env.HELM_MAIL_DIR;
+	// The control is "no suite", not "whatever suite this gate happens to be running inside".
+	delete process.env.HELM_DEFAULTS_SUITE;
 	process.env.HOME = home;
 	try {
 		const { pi, record } = recordingPi();
@@ -999,8 +1018,7 @@ await test("and with no suite set it claims in the shared ~/.helm/mail, as it al
 		);
 		check(!fs.existsSync(path.join(home, ".helm", "mail-drivetest")), "claimed in a suite's mailroom with no suite set");
 	} finally {
-		process.env.HOME = restore.HOME;
-		process.env.HELM_MAIL_DIR = restore.HELM_MAIL_DIR;
+		restoreEnv(restore);
 	}
 });
 
