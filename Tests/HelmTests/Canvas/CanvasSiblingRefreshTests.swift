@@ -146,15 +146,13 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     /// now. Both, because either alone is ambiguous: a fresh mark with stale bytes and a stale
     /// mark with fresh bytes are different bugs.
     ///
-    /// **A measured aside, because it cost an hour and would cost the next reader the same.**
-    /// The obvious probe here — put `![probe](./probe.svg)` in the markdown and read
-    /// `naturalWidth` — reports the **old** width after a reload that demonstrably happened:
-    /// `window.__mark` is gone and a `fetch` of the identical URL returns the new bytes, so the
-    /// handler is serving correctly and WebKit is reusing its in-memory copy of the *image*. It
-    /// clears on a second webview (a new pane, a relaunch), which is why nothing about it
-    /// survives a restart. That is a real effect and it is **not** #261 — the pane does reload,
-    /// which is all this fix claims — so it is recorded here rather than asserted, and it wants
-    /// a ticket of its own.
+    /// **The aside this used to carry is now a ticket and a test.** It recorded that the obvious
+    /// probe — read `naturalWidth` off the `![probe](./probe.svg)` this very source names —
+    /// reported the **old** width after a reload that demonstrably happened, and left it
+    /// unasserted because it is not #261: the pane does reload, which is all that fix claimed.
+    /// That is #279, and `testARePushPutsAnEditedImageSiblingOnTheMarkdownCanvas` below asserts
+    /// it. This test keeps `fetch` as its instrument on purpose — the two failures are
+    /// different, and a single test that could go red for either would name neither.
     func testARePushRefreshesAMarkdownCanvasSiblingToo() async throws {
         let markdownArtifact = directory.appendingPathComponent("report.md")
         let sibling = directory.appendingPathComponent("probe.svg")
@@ -196,6 +194,55 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         XCTAssertTrue(
             second.contains(#"width="22""#),
             "and the new document must get the new sibling bytes — got \(second)")
+    }
+
+    /// **#279, across the same join**: edit only the picture, push again, and the picture on
+    /// the page is the new one.
+    ///
+    /// **`fetch` and `<img>` are two different questions and this file needs both.** The test
+    /// above asks what the page *can get*, and it went green the day #261 landed. This asks what
+    /// the operator *can see*, and it stayed red for eleven weeks after it — a plan with a
+    /// regenerated `./diagram.png` beside it reloaded, refetched, and showed the old diagram,
+    /// because WebKit answers the identical URL with the copy it already decoded. Nothing in the
+    /// bench, the watcher or the handler is wrong in that story, which is exactly why no test
+    /// spanning less than this distance could see it.
+    ///
+    /// The width is **polled**: helm's re-stamp lands on `didFinish`, and the image then has to
+    /// be fetched and decoded again, so reading once would be a race lost for a reason that has
+    /// nothing to do with the fix.
+    func testARePushPutsAnEditedImageSiblingOnTheMarkdownCanvas() async throws {
+        let markdownArtifact = directory.appendingPathComponent("report.md")
+        let sibling = directory.appendingPathComponent("probe.svg")
+        let source = "# Report\n\n![probe](./probe.svg)\n"
+        try Self.svg(width: 11).write(to: sibling, atomically: true, encoding: .utf8)
+        try source.write(to: markdownArtifact, atomically: true, encoding: .utf8)
+
+        let (model, manager) = mounted()
+        let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
+        try await push(markdownArtifact, from: terminal.id)
+
+        let canvas = try self.canvas(showing: markdownArtifact, in: model)
+        let page = LiveMarkdownPane(artifact: markdownArtifact)
+        page.render(try document(of: canvas), markdown: source)
+        await page.waitForRender()
+        let first = await page.imageWidth(settlingOn: "11")
+        XCTAssertEqual(
+            first, "11",
+            "precondition: the picture is on the page at all — if this fails the rest measures "
+                + "nothing")
+
+        // ONLY the picture. `report.md` is byte-identical, so its watcher fires nothing and the
+        // re-push is the only signal helm gets.
+        try Self.svg(width: 22).write(to: sibling, atomically: true, encoding: .utf8)
+
+        try await push(markdownArtifact, from: terminal.id)
+        page.render(try document(of: canvas), markdown: source)
+
+        let second = await page.imageWidth(settlingOn: "22")
+        XCTAssertEqual(
+            second, "22",
+            "#279: the operator regenerated the diagram, re-pushed, watched the pane reload, and "
+                + "was shown the old picture. `11` here is that, exactly")
     }
 
     // MARK: - The bench half, without WebKit
@@ -389,6 +436,24 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         /// False after the deadline means no navigation happened at all, which is #261's shape.
         func didNavigateAwayFromTheMarkedDocument(timeout: Duration = .seconds(5)) async -> Bool {
             await poll(until: "String(!!window.__helmTestMark)", equals: "false", timeout)
+        }
+
+        /// What the page's `<img>` decoded to — which version of the picture is on screen,
+        /// read off the element and never off a pixel (#279).
+        ///
+        /// **It returns whatever it last saw rather than a verdict**, so a failure reports the
+        /// width the operator would have been looking at instead of a bare `false`.
+        func imageWidth(settlingOn wanted: String, timeout: Duration = .seconds(5)) async -> String
+        {
+            let script = "String((document.querySelector('img') || {}).naturalWidth)"
+            let deadline = ContinuousClock.now + timeout
+            var last = ""
+            while ContinuousClock.now < deadline {
+                last = await ask(script)
+                if last == wanted { return last }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+            return last
         }
 
         private func poll(
