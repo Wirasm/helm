@@ -67,7 +67,9 @@ _Avoid_: active, current, selected, first responder (that word is AppKit's, one 
 
 **canvas**:
 The pane type that renders content — a markdown file, an HTML file, or a URL — and accepts
-annotation on it. Modular by source; extendable to further formats.
+annotation on it. Modular by source; extendable to further formats. A **markdown** canvas also
+has a writing face the operator enters deliberately; **read is the default**, and helm stops
+saving rather than overwrite a file somebody else wrote since it last looked.
 _Avoid_: artifact pane, webview, browser, draw-on pane
 
 ### What helm looks like

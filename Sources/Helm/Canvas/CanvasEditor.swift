@@ -1,8 +1,27 @@
 import SwiftUI
 
+// MARK: - Somebody else's bytes
+
+/// The file changed under an open draft, and helm did not do it (#289).
+///
+/// **A type rather than a `Bool`, because the bytes are the evidence and both ways out are
+/// expressed against them.** `CanvasModel.takeTheirs` adopts *this* string rather than re-reading
+/// the file, so the version the operator accepts is exactly the version the strip told him about
+/// — re-reading at the moment of the click would hand him a third version he never saw. A flag
+/// could not do that, and a bare `String?` would say nothing at the call site about what the
+/// string is.
+///
+/// **Held only while a conflict is live.** A newer write replaces it, so the strip is always about
+/// the newest thing helm has seen; resolving it clears it.
+struct CanvasConflict: Equatable {
+    /// What was on disk when helm noticed.
+    let theirs: String
+}
+
 // MARK: - What is in the editor, and what is on disk
 
-/// The operator's note as it stands: what they have typed, and what helm last saw on disk.
+/// The open draft: what the operator has typed, what helm last saw on disk, and — when somebody
+/// else has written the file since — what is there now.
 ///
 /// **Two strings rather than one plus a dirty flag**, because the interesting question is not
 /// *"has something changed"* but *"is what I am looking at what is in the file"* — and the honest
@@ -13,35 +32,49 @@ import SwiftUI
 /// `saved` moves only when a write **succeeded**, so a failed save leaves `isDirty` true and the
 /// next keystroke schedules another attempt. That is the whole of "saving must not lose work":
 /// nothing is ever thrown away on the strength of a write helm did not see finish.
-struct NoteDraft: Equatable {
+///
+/// **And `saved` is what makes the second writer detectable at all**, which is why widening the
+/// scope to every markdown canvas (#289) needed no second mechanism. It is *what helm believes is
+/// on disk* — so bytes on disk that differ from it are, by definition, bytes helm did not put
+/// there. `CanvasModel.reconcile` is that one comparison.
+struct CanvasDraft: Equatable {
     /// What is in the editor right now.
     var text: String
     /// What helm believes is on disk — what it wrote, or what it read when the editor opened.
     var saved: String
     /// When `saved` was written. nil until the first successful save, which is also the state a
-    /// note the operator has typed nothing into is in.
+    /// file the operator has typed nothing into is in.
     var savedAt: Date?
+    /// Somebody else's bytes, when there are some. nil the rest of the time, which is every draft
+    /// on a file only helm is writing.
+    var conflict: CanvasConflict?
 
     var isDirty: Bool { text != saved }
 
-    init(text: String, saved: String, savedAt: Date? = nil) {
+    init(text: String, saved: String, savedAt: Date? = nil, conflict: CanvasConflict? = nil) {
         self.text = text
         self.saved = saved
         self.savedAt = savedAt
+        self.conflict = conflict
     }
 
     /// What the footer says about the file, in the operator's terms.
     ///
-    /// **It says "Unsaved" while a save is pending, and that is deliberate rather than pessimistic
-    /// wording.** helm writes a beat after typing stops, so for most of a sentence the file on
-    /// disk genuinely is behind the screen — a label claiming otherwise would be the reassurance
-    /// that makes an operator close the lid.
+    /// **"Not saving" comes first and outranks "Unsaved", because they are different promises.**
+    /// Unsaved means helm is about to write; not saving means it has stopped and is waiting to be
+    /// told what to do. A footer that said the first while meaning the second is the reassurance
+    /// that makes an operator walk away from a conflict.
+    ///
+    /// **It says "Unsaved" while a save is merely pending, and that is deliberate rather than
+    /// pessimistic wording.** helm writes a beat after typing stops, so for most of a sentence the
+    /// file on disk genuinely is behind the screen.
     ///
     /// A property on the value rather than a string built in the view, so the rule is reachable
     /// from `swift test` and there is one place it is written.
     var status: String {
+        if conflict != nil { return "Not saving" }
         if isDirty { return "Unsaved" }
-        guard let savedAt else { return "Empty note" }
+        guard let savedAt else { return "No changes" }
         return "Saved \(Self.timeFormatter.string(from: savedAt))"
     }
 
@@ -55,8 +88,8 @@ struct NoteDraft: Equatable {
 
 // MARK: - The writing face
 
-/// A note the operator is writing: the markdown source in a plain text view, with the file's own
-/// path under it.
+/// A markdown canvas the operator is writing in: the source in a plain text view, with the file's
+/// own path under it.
 ///
 /// **A `TextEditor` over the markdown source, not an editable rendering — and the reason is what
 /// the two things ARE.** A markdown canvas is a page helm *generates*: `marked` converts the
@@ -66,14 +99,15 @@ struct NoteDraft: Equatable {
 /// what is typed is what is written, byte for byte, and `Read` renders it with exactly the
 /// renderer that has always rendered it.
 ///
-/// **It also means the annotation bridge is not involved at all.** With `.select` armed, dragging
-/// over text on the page is a mark; that is what makes editing *on the page* the wrong shape today
-/// and it is being split apart in parallel. This surface never has the page on screen, so it needs
-/// nothing from that work and does not have to wait for it.
-struct NoteEditorView: View {
+/// **It also means the annotation bridge is not involved at all.** With a marking tool held,
+/// dragging over text on the page is a mark; this surface never has the page on screen, and the
+/// header hides the picker while a draft is open. `.read` being the default tool (#302/#306) is
+/// what made an inert canvas possible in the first place, and an inert canvas is the precondition
+/// this whole surface was waiting on.
+struct CanvasEditorView: View {
     @ObservedObject var model: CanvasModel
-    let note: OperatorNote
-    let draft: NoteDraft
+    let file: EditableFile
+    let draft: CanvasDraft
 
     /// **The point of ⌘⇧N is that the cursor is already in it.** A new note that needs a click
     /// before it takes a character is a blank pane, not a place to think.
@@ -110,7 +144,7 @@ struct NoteEditorView: View {
 
     /// The editor writes through the model, never into a local `@State`.
     ///
-    /// A `@State` copy would be a second place the note lives, and the one that is not saved. The
+    /// A `@State` copy would be a second place the text lives, and the one that is not saved. The
     /// model owns the draft because it also owns the file, the save timer and the watcher — and
     /// because it outlives this view, which SwiftUI rebuilds on any churn in a sibling pane.
     private var text: Binding<String> {
@@ -121,17 +155,17 @@ struct NoteEditorView: View {
     /// The operator's own words in #289 are *"I can just send the path to you of the file"*, so
     /// the minimum this surface owes him is a path he can read and take.
     ///
-    /// **It is not put on the clipboard when the note is created.** Taking a note is not asking
-    /// for the clipboard to change, and a clipboard that changes under an act nobody asked for
-    /// destroys whatever was in it. `CopyableLabel` is the affordance the canvas header already
-    /// uses for exactly this, so the gesture is one the operator has already learned here.
+    /// **It is not put on the clipboard when the file is opened for writing.** Editing is not
+    /// asking for the clipboard to change, and a clipboard that changes under an act nobody asked
+    /// for destroys whatever was in it. `CopyableLabel` is the affordance the canvas header
+    /// already uses for exactly this, so the gesture is one the operator has already learned here.
     private var footer: some View {
         HStack(spacing: 8) {
             CopyableLabel(
-                value: Pasteboard.path(of: note.url),
-                hint: "Click to copy \(Pasteboard.path(of: note.url))"
+                value: Pasteboard.path(of: file.url),
+                hint: "Click to copy \(Pasteboard.path(of: file.url))"
             ) {
-                Text(Pasteboard.path(of: note.url))
+                Text(Pasteboard.path(of: file.url))
                     .font(.system(size: 10, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)

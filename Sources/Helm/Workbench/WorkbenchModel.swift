@@ -130,10 +130,12 @@ final class WorkbenchModel: ObservableObject {
 
     /// Where the project stores are — `~/.prp` in production (#289).
     ///
-    /// **One value, handed to both halves of the note seam.** `newNote` decides where a note is
-    /// written; `CanvasModel.note` decides whether an open file *is* one. Two roots that
-    /// disagreed would create a note the pane then refused to open for writing, with nothing
-    /// anywhere saying why — so the model that makes the one hands the same value to the other.
+    /// **One reader now, and that is the widening.** It used to be handed to `CanvasModel` too,
+    /// because editability was a question about where the stores were and a pane that disagreed
+    /// with `newNote` would create a note it then refused to open. `EditableFile` judges the file
+    /// in front of the canvas instead, so the only thing that still needs this is deciding where
+    /// a *new* note lands — and there is no second answer left to disagree with.
+    ///
     /// Injected for `notes`' and `agents`' reason exactly: every rule below is then reachable
     /// from `swift test` against a temporary directory, with nothing written near the operator's
     /// own `~/.prp`.
@@ -501,10 +503,7 @@ final class WorkbenchModel: ObservableObject {
         let model = CanvasModel(
             source: {
                 if case let .canvas(source) = pane.content { source } else { nil }
-            }(),
-            // The same root `newNote` writes into, so "is this a note?" has one answer per model
-            // rather than one per call site.
-            artifactRoot: artifactRoot)
+            }())
         // The other direction, and the half that was missing: a canvas that goes somewhere
         // has to take its pane with it, or the bench persists where the pane *started*
         // (#89). Wired here because this is the only place a `CanvasModel` is made — and
@@ -916,13 +915,13 @@ final class WorkbenchModel: ObservableObject {
         return reading.count == 1 ? reading[0].id : nil
     }
 
-    /// Write every open note now (#289).
+    /// Write every open draft now (#289).
     ///
     /// **Named rather than written twice, because the two callers are unrelated**: a workspace
     /// teardown that is about to drop these models, and the app being quit. Both are moments
     /// after which a debounced save can no longer happen, and neither knows about the other.
     func flushNotes() {
-        for cached in canvases.values { cached.model.saveNote() }
+        for cached in canvases.values { cached.model.saveDraft() }
     }
 
     func closeFocusedPane() {

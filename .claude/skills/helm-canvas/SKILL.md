@@ -250,23 +250,34 @@ These are properties of the platform. They are not preferences, and you cannot c
 canvas, helm writes their notes to a sidecar file — precisely because you rewrite the artifact and
 would clobber anything kept inside. Read the notes if they appear; only ever write the artifact.
 
-**A canvas is read-only to *you* and to the operator, with exactly one exception: his own notes.**
-He can start a markdown note in helm (⌘⇧N) and type in it. It lands in **`~/.prp/<key>/notes/`** —
-the store of the workspace he is in, the same store your artifacts go to — named for the day,
-`2026-08-07-note.md`. Everything else on a canvas is rendered and cannot be edited, including every
-artifact you write: helm decides that from the **path**, and `notes/` is the only directory it will
-write into on his behalf.
+**A markdown canvas is a file the operator can edit, including one you wrote.** The canvas header
+carries a Write ⇄ Read toggle; Read is where it starts, so nothing changes until he presses it.
+Then he is typing in the markdown **source** — the file itself, byte for byte — and it autosaves.
 
-Three things follow, and they are the whole of what you need to know:
+What that is for is the small edit: a corrected sentence, an extra acceptance criterion, a struck
+item. His normal loop is still to mark a passage and ask you to rewrite it.
 
-- **He hands you the path; you read the file.** That is the interface. There is no notification and
-  no push — the same as the state latch, for the same reason: nothing wakes your session.
-- **Never write into `notes/`.** It is his directory. An agent rewriting a file he may have open in
-  the editor is the one case helm has no answer for, and helm will not stop you. Your artifacts go
-  to `plans/`, `research/`, `reviews/`, `canvas/` — wherever your own skill says — and reach the
-  bench through `push.sh`.
-- **Nothing tells you a note changed since you last read it.** If it matters, `cat` it again on
-  your next turn rather than assuming the copy in your context is current.
+**Not every canvas.** An `.html` artifact is a page whose own scripts run, so it is not editable at
+all, and neither is anything helm renders as plain text, nor a `.notes.md` sidecar (it is the
+memory of every comment made on that canvas, and an overwriting editor would replace the lot).
+
+⌘⇧N still starts a blank note of his own in **`~/.prp/<key>/notes/`** — the store of the workspace
+he is in, the same store your artifacts go to — named for the day, `2026-08-07-note.md`.
+
+Four things follow, and they are the whole of what you need to know:
+
+- **Read the file again before you rewrite it.** He may have edited it since you last read it, and
+  **nothing will tell you** — no notification, no push, same as the state latch, for the same
+  reason: nothing wakes your session. The file's own mtime is the only fact available, and it is
+  the filesystem's rather than helm's. A rewrite from a stale copy silently deletes his edit.
+- **Your rewrite always lands, and helm protects him rather than blocking you.** If he happens to
+  be editing that file when you write it, helm notices, stops saving his buffer, and asks him
+  which version wins. You are never refused and never told; write your artifact as you always did.
+- **Never write into `notes/`.** It is his directory — a matter of ownership, not of what helm
+  permits. Your artifacts go to `plans/`, `research/`, `reviews/`, `canvas/` — wherever your own
+  skill says — and reach the bench through `push.sh`.
+- **He hands you the path; you read the file.** That is the interface, for his notes and for an
+  artifact of yours he has changed.
 
 **A mermaid node is addressable in four families only.** helm hands back the identifier from your
 ```mermaid fence — name a node `phase2` and a mark comes back as `phase2`, which you can grep for

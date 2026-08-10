@@ -485,29 +485,54 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     argument; it is **exhaustive over `HelmCommandName`**, so a command cannot be added without
     a verdict — `movePane` (#287) and `newNote` (#289) are the two since, and both arrived
     refused because the compiler asked. Read it before widening the list.
-- **The operator writes here too now, and only in one place: `~/.prp/<key>/notes/`** (#289).
-  ⌘⇧N starts a dated markdown note in the store of the workspace he is in — matched by
-  `WorkspaceStore` where a store exists, keyed by prp's own derivation where none does yet, and
-  registered with prp's own `project.json` when helm is the first thing to touch the store. It
-  opens straight into a `TextEditor` over the markdown **source** (not the rendered page — that
-  would be an HTML→markdown round trip over a document nobody asked helm to reformat), autosaves
-  600ms after typing stops, and flushes on Read, on close, on the canvas being pointed elsewhere,
-  and on the last workspace closing (`WorkbenchModel.deactivate`, which drops the canvas cache
-  without closing what is in it — the one teardown that would otherwise take a note being typed
-  with it). The path is on the editor's footer as a `CopyableLabel`; **it is not put on the
-  clipboard when the note is created** — a clipboard that changes under an act nobody asked for
-  destroys whatever was in it.
-  - **`OperatorNote` is the scope line, carried as a type.** A file is editable only if it is a
-    markdown file exactly at `<artifact root>/<key>/notes/<name>.md`, so **every artifact an
-    agent writes stays as read-only as it was**. That is deliberate and it is half of #289: the
-    other half — the operator editing a file an agent also rewrites — needs an answer to the
-    question `CanvasNotes` avoided, and is not built. Do not build machinery that only makes
-    sense for it.
-  - **For an agent, `notes/` is read-only by convention.** He hands you a path; read it. Nothing
-    tells you a note changed, and nothing wakes you when one does — same as the state latch.
-    Writing into it would be an agent rewriting a file the operator may have open in the editor,
-    which is exactly the case with no answer. Artifacts still go to `plans/`, `research/`, … and
-    reach the bench through `push.sh`.
+- **The operator writes on the bench now, and every markdown canvas is a file he can write in**
+  (#289). The header carries a **Write ⇄ Read** toggle; **Read is where it starts**, so an
+  editable canvas is indistinguishable from a read-only one until he presses it. Write opens a
+  `TextEditor` over the markdown **source** (not the rendered page — that would be an
+  HTML→markdown round trip over a document nobody asked helm to reformat), autosaves 600ms after
+  typing stops, and flushes on Read, on close, on the canvas being pointed elsewhere, on the last
+  workspace closing (`WorkbenchModel.deactivate`, which drops the canvas cache without closing
+  what is in it) and on ⌘Q. The path is on the editor's footer as a `CopyableLabel`; **it is not
+  put on the clipboard** — a clipboard that changes under an act nobody asked for destroys
+  whatever was in it.
+  - **`EditableFile` is the scope line, carried as a type**, and it asks about the file rather
+    than about where it lives: **markdown, and not a `.notes.md` sidecar**. An `.html` canvas is a
+    page whose own scripts run, so an editor there is a web app rather than a text view; a sidecar
+    is excluded because `CanvasNotes.append` only ever appends — it is the memory of every comment
+    made on that canvas, and one keystroke through an overwriting editor would replace the lot.
+  - **⌘⇧N still starts a dated note** in `~/.prp/<key>/notes/` of the workspace he is in — matched
+    by `WorkspaceStore` where a store exists, keyed by prp's own derivation where none does yet,
+    and registered with prp's own `project.json` when helm is the first thing to touch the store.
+    `OperatorNote` is now **only** that: where a new note lands and what it is called. It stopped
+    being the editability rule when the rule widened.
+  - **What happens when an agent rewrites a file the operator is editing — the question #307
+    deferred, and the reason it could.** helm cannot stop the write: an agent writes the file
+    directly and nothing in helm is in that path. What helm guarantees is the other direction —
+    **it never writes over bytes it has not shown the operator, and it never discards his buffer.**
+    `CanvasModel.reconcile` runs on every `refresh()` (the `FileWatcher`'s call and `offer`'s, so
+    neither route can miss it) and compares what is on disk against `draft.saved`, which is
+    *helm's own belief about the file*:
+    - **the same** — helm's own save firing its own watcher. Nothing happens, which is what lets
+      autosave and a live watcher share one file at all.
+    - **different, nothing typed since the last write** — adopted silently. Reading an agent's
+      plan with the editor open is the ordinary case, and there is provably nothing to lose.
+    - **different, with unsaved text** — a `CanvasConflict`. helm **stops saving** and raises a
+      strip with two buttons, both the operator's: **Keep mine** writes his text over theirs,
+      **Take theirs** adopts *exactly the version the strip was about* (the bytes are held for
+      that reason — re-reading at the click would hand him a third version he never saw).
+  - **Two honest limits, and neither is silent while it is happening.** Closing the pane with a
+    conflict unresolved takes the buffer with it — the strip has been up since the moment it
+    happened, and making the close ask would put a modal on a path `helm-close` also reaches,
+    where there is nobody at the pane to answer. And a file **deleted** under an open draft is not
+    a conflict: it loads as a notice rather than markdown, the draft stays, and the next save
+    recreates the file.
+  - **Nothing tells an agent the operator edited, and that is the answer rather than an
+    oversight.** He hands you a path; read it, and **read it again before you rewrite it** — the
+    file's own mtime is the only fact, and it is the filesystem's rather than helm's. Nothing
+    wakes you when a file changes, same as the state latch. `notes/` in particular is his
+    directory: writing there is still wrong, for a reason about ownership rather than about what
+    helm will let anyone type into. Artifacts go to `plans/`, `research/`, … and reach the bench
+    through `push.sh`.
 - **`helm-spawn` is the GUI path, and still there** — `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`
   (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
   type `cls`, wait, type the prompt, submit — with every step waiting on something observable
