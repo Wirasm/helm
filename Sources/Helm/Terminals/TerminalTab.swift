@@ -134,6 +134,16 @@ struct TerminalTab: View {
 /// report a bell, an exit code or a progress sequence.
 struct CanvasTab: View {
     let source: CanvasSource
+    /// What the pane is called (#313), or nil when nothing has named it.
+    ///
+    /// **Handed in, where a terminal's name is pushed onto its session** — and the asymmetry is
+    /// the pane types', not this file's. A terminal has an `ObservableObject` that three readers
+    /// already spend for its label, so a name that lived anywhere else would give
+    /// `snapshot.json` a different answer from the tab beside it. A canvas has no such object at
+    /// all: `label` below is recomputed from `CanvasSource` every render and stored nowhere, and
+    /// there is nothing in the snapshot to disagree with — `BenchSnapshot.CanvasRecord` carries
+    /// the source and has never carried a title.
+    let name: String?
     let isSelected: Bool
     let canClose: Bool
     let onSelect: () -> Void
@@ -144,7 +154,7 @@ struct CanvasTab: View {
             Image(systemName: icon)
                 .font(.system(size: 9))
                 .foregroundStyle(Color.textMuted)
-            Text(label)
+            Text(name ?? label)
                 .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -171,7 +181,7 @@ struct CanvasTab: View {
     }
 
     /// The filename for a file, the host for a URL — the shortest thing that still
-    /// tells two open canvases apart.
+    /// tells two open canvases apart, and what the tab shows when nothing has named the pane.
     private var label: String {
         switch source {
         case let .file(path): (path.value as NSString).lastPathComponent

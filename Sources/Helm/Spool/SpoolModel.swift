@@ -10,9 +10,15 @@ import HelmWire
 /// handle, writing a result — does not, and is tested without any of them.
 @MainActor
 protocol SpoolSpawning: AnyObject {
-    /// Open a terminal running a login shell in `cwd`, and return the pane's id. Synchronous:
-    /// the session exists the moment it is made, long before its surface attaches.
-    func openTerminal(cwd: String) -> Result<UUID, SpoolRefusal>
+    /// Open a terminal running a login shell in `cwd`, call the pane `named`, and return the
+    /// pane's id. Synchronous: the session exists the moment it is made, long before its surface
+    /// attaches.
+    ///
+    /// **The name is computed on *this* side of the seam** (`PaneName.derived(for:)`, in
+    /// `HelmWire`) and handed over, rather than derived from `cwd` over there — so what a spawned
+    /// pane ends up called is a rule `swift test` can read with no bench, no surface and no pty,
+    /// which is the trade this whole protocol exists to make.
+    func openTerminal(cwd: String, named: PaneName) -> Result<UUID, SpoolRefusal>
     /// The pty's foreground pid — nil until the surface exists and has a process under it.
     func foregroundPid(of terminal: UUID) -> pid_t?
     /// Write bytes into that pty. Not a keystroke: it goes to *this* surface directly, so it
@@ -69,6 +75,25 @@ protocol SpoolSelecting: AnyObject {
     /// bench then looked like. The failure is helm having no bench to show anything on; every
     /// question about whether it *may* be shown was already answered by `SpoolSelectPolicy`.
     func select(_ id: UUID) -> Result<SelectReport, SpoolRefusal>
+}
+
+/// Calling a pane something, as a seam — `SpoolClosing`'s and `SpoolSelecting`'s third sibling,
+/// and the same trade (#313).
+///
+/// **It repeats `pane(_:)` for the reason `SpoolSelecting` does, and the reason has not changed
+/// with a third caller.** `WorkbenchSpoolPanes` is still the only implementation of any of them,
+/// so a shared base protocol would buy a third name for a lookup with one caller per kind, and
+/// every fake in `SpoolModelTests` would still have to implement it. What matters is that a name
+/// is judged against **the same value** a close and a select are: `SpoolPaneState` is read once
+/// per request, and `SpoolNamePolicy` decides on this side of the protocol with no bench at all.
+@MainActor
+protocol SpoolNaming: AnyObject {
+    /// What helm can see about one pane right now, or nil when no pane has that id.
+    func pane(_ id: UUID) -> SpoolPaneState?
+    /// Call it that, and report what it was called before and what it is called now — **read back
+    /// off the bench**, not echoed. The failure is helm having no bench to name a pane on; whether
+    /// it *may* be renamed was already answered by `SpoolNamePolicy`.
+    func name(_ id: UUID, to name: PaneName) -> Result<NameReport, SpoolRefusal>
 }
 
 /// Driving the bench, as a seam — the same trade `SpoolSpawning`, `SpoolCapturing` and
@@ -145,6 +170,10 @@ final class SpoolModel: ObservableObject {
     /// not: an adapter `RootView` builds inline is retained by nothing else, so a weak reference
     /// would be gone before the first request and every select would answer "helm has no bench".
     private var selector: (any SpoolSelecting)?
+    /// Held strongly for the same reason as the five above, and it is the same failure if it is
+    /// not: an adapter `RootView` builds inline is retained by nothing else, so a weak reference
+    /// would be gone before the first request and every name would answer "helm has no bench".
+    private var namer: (any SpoolNaming)?
     private var watcher: SpoolWatcher?
 
     /// Requests acted on in this process, by result id — so a second window's `drain` and this
@@ -186,6 +215,10 @@ final class SpoolModel: ObservableObject {
 
     func attach(selector: any SpoolSelecting) {
         self.selector = selector
+    }
+
+    func attach(namer: any SpoolNaming) {
+        self.namer = namer
     }
 
     /// Begin watching. Idempotent, and a no-op under `HELM_SPOOL_OFF`.
@@ -280,6 +313,8 @@ final class SpoolModel: ObservableObject {
             case .success(.command(let accepted)):
                 act(on: accepted)
             case .success(.select(let accepted)):
+                act(on: accepted)
+            case .success(.name(let accepted)):
                 act(on: accepted)
             }
         }
@@ -413,6 +448,44 @@ final class SpoolModel: ObservableObject {
         }
     }
 
+    /// Call a pane something, or say why not (#313).
+    ///
+    /// **Synchronous, and one write** — naming is applied to the bench value and there is no
+    /// second party to wait for, exactly as a close, a capture and a select are.
+    ///
+    /// **The refusals are `refused` rather than `failed`, and the split is the other two addressed
+    /// verbs'.** A pane somebody has already named and a uuid helm holds no pane for are decisions
+    /// the caller can read and do something about; helm having no bench at all is helm's own
+    /// state, which is `failed`.
+    ///
+    /// **`.chosen`, always — an agent's name is somebody's choice by definition.** `.derived` is
+    /// what helm gives a pane it opened for an agent, and it exists precisely so that the agent's
+    /// own first naming is *not* treated as a rename. A request that produced a `.derived` name
+    /// would make every pane re-namable for ever and the ownership rule vacuous.
+    private func act(on request: AcceptedNameRequest) {
+        guard let namer else {
+            answer(
+                request.id, .failed,
+                reason: "helm has no bench to name a pane on. It is running, and it answered "
+                    + "this request — so the namer was never attached, which is a helm defect "
+                    + "rather than anything the caller can fix.")
+            return
+        }
+        // `SpoolNaming` is the app-side seam and stays `UUID`-typed, exactly as `SpoolClosing` and
+        // `SpoolSelecting` do: `TerminalID` is the wire's currency, not the live bench's.
+        let pane = namer.pane(request.pane.uuid)
+        if let refusal = SpoolNamePolicy.refusal(for: request, pane: pane) {
+            refuse(id: request.id, reason: refusal.reason)
+            return
+        }
+        switch namer.name(request.pane.uuid, to: .chosen(request.name)) {
+        case .success(let report):
+            answer(request.id, .named, terminalId: request.pane, name: report)
+        case .failure(let refusal):
+            answer(request.id, .failed, reason: refusal.reason)
+        }
+    }
+
     /// Drive the bench with one of helm's own commands, and say what it did (#269).
     ///
     /// **Whether this command may be sent at all was settled before we got here.**
@@ -460,7 +533,12 @@ final class SpoolModel: ObservableObject {
         }
 
         let terminal: UUID
-        switch spawner.openTerminal(cwd: request.cwd) {
+        // **The fix for #313's concrete trigger, and it needs no wire format at all**: helm wrote
+        // this request, so it already knows which agent is starting and where. `.derived` rather
+        // than `.chosen`, deliberately — nobody picked these words, so the agent's own first
+        // `helm-name` replaces them without having to claim the operator asked
+        // (`SpoolNamePolicy`).
+        switch spawner.openTerminal(cwd: request.cwd, named: .derived(for: request)) {
         case .failure(let refusal):
             answer(request.id, .failed, reason: refusal.reason)
             return
@@ -538,20 +616,21 @@ final class SpoolModel: ObservableObject {
         _ id: String, _ status: SpoolResult.Status, terminalId: TerminalID? = nil,
         pid: pid_t? = nil, sessionId: String? = nil, handle: Handle? = nil,
         runtime: String? = nil, reason: String? = nil, capture: CaptureReport? = nil,
-        command: CommandReport? = nil, select: SelectReport? = nil
+        command: CommandReport? = nil, select: SelectReport? = nil, name: NameReport? = nil
     ) {
         directory.write(
             SpoolResult(
                 id: id, status: status, terminalId: terminalId, pid: pid,
                 sessionId: sessionId, handle: handle, runtime: runtime, reason: reason,
-                capture: capture, command: command, select: select))
+                capture: capture, command: command, select: select, name: name))
         NSLog(
-            "helm: spool request %@ is %@%@%@%@%@", id, status.rawValue,
+            "helm: spool request %@ is %@%@%@%@%@%@", id, status.rawValue,
             handle.map { " — reachable at \($0.value)" } ?? "",
             capture.map { " — \($0.path), terminal content \($0.terminalContent.rawValue)" } ?? "",
             command.map { " — \($0.command.rawValue), \($0.panes) panes in \($0.columns) columns" }
                 ?? "",
-            select.map { " — pane \($0.pane.uuidString), visible \($0.isVisible)" } ?? "")
+            select.map { " — pane \($0.pane.uuidString), visible \($0.isVisible)" } ?? "",
+            name.map { " — pane \($0.pane.uuidString) is now \"\($0.name)\"" } ?? "")
     }
 
     /// Re-ask `probe` until it answers or the deadline passes.

@@ -39,6 +39,7 @@ package enum SpoolRequest: Equatable {
     case close(CloseRequest)
     case command(CommandRequest)
     case select(SelectRequest)
+    case name(NameRequest)
     /// A `kind` helm does not know. **Kept rather than thrown away**: a decoder that threw here
     /// would make "helm is older than this request" indistinguishable from "this file is not
     /// JSON", and the caller would be told the wrong thing about what to fix.
@@ -54,6 +55,7 @@ package enum SpoolRequest: Equatable {
         case .close(let request): request.id
         case .command(let request): request.id
         case .select(let request): request.id
+        case .name(let request): request.id
         case .unrecognised(let id, _): id
         }
     }
@@ -63,7 +65,7 @@ package enum SpoolRequest: Equatable {
     /// would otherwise arrive with a refusal message that still says there are two.
     package static let kinds = [
         SpawnRequest.kind, CaptureRequest.kind, CloseRequest.kind, CommandRequest.kind,
-        SelectRequest.kind,
+        SelectRequest.kind, NameRequest.kind,
     ]
 
     /// What each kind's file looks like, for the one refusal a caller gets when their JSON does
@@ -88,6 +90,7 @@ package enum SpoolRequest: Equatable {
             "a close is \(CloseRequest.wireShape)",
             "a command is \(CommandRequest.wireShape)",
             "a select is \(SelectRequest.wireShape)",
+            "a name is \(NameRequest.wireShape)",
         ].joined(separator: ", ")
     }
 }
@@ -107,6 +110,7 @@ extension SpoolRequest: Decodable {
         case CloseRequest.kind: self = .close(try CloseRequest(from: decoder))
         case CommandRequest.kind: self = .command(try CommandRequest(from: decoder))
         case SelectRequest.kind: self = .select(try SelectRequest(from: decoder))
+        case NameRequest.kind: self = .name(try NameRequest(from: decoder))
         default:
             self = .unrecognised(id: try container.decode(String.self, forKey: .id), kind: kind)
         }
@@ -420,6 +424,93 @@ package struct SelectRequest: Codable, Equatable {
     }
 }
 
+/// Call a pane something (#313).
+///
+/// **The trigger is narrow and the ruling is narrower.** Since #93 an agent's first message is a
+/// *path*, so Claude Code names its session after the pointer and every spool-spawned pane's tab
+/// reads a variant of *"Read and act on spool prompt file"*. helm created that pane and holds the
+/// request that produced it, so the pointer is fixed by `PaneName.derived(for:)` with no wire
+/// format at all. This kind is the general capability the operator asked for on top of it:
+///
+/// > naming and renaming from agents should be possible, by default they name new panes, and by
+/// > default they dont rename if editing existing, but i can ask for a rename
+///
+/// **The third addressed verb, on `CloseRequest`'s template.** A pane uuid, `waysToKnowAPane` for
+/// where a caller gets one, one `Pane.id` namespace so a canvas is named exactly as a terminal is.
+/// What is new is the rule, and it is neither of the two that came before.
+///
+/// **The rule, and which half of it helm can actually check.** #313 asks that "the operator asked"
+/// be *checkable rather than assertable where possible*, and it splits cleanly:
+/// - **Checkable, from helm's own state:** *is anybody already calling this pane something?* A
+///   pane nobody has named has no label the operator has been reading, so naming it takes nothing
+///   from anyone. That is what "a new pane" means in a form helm can verify — and it is strictly
+///   better than the ledger form ("did I spawn this?"), which `CloseRequest`'s header rejects at
+///   length: it buys no safety, does not survive a restart, and forbids the legitimate cases.
+///   `PaneName` carries the provenance that makes it answerable.
+/// - **Not checkable, and no protocol makes it so:** *the operator asked for this rename.* helm
+///   cannot see the conversation the request came out of. So `rename` takes `CloseRequest.force`'s
+///   shape, which is the shape this repo already settled for this class of fact.
+///
+/// **There is no focus rule here, and the absence is a decision rather than an oversight.** A close
+/// refuses the pane holding the keyboard because it destroys work; a select refuses the focused
+/// slot because showing one of its tabs *moves* the keyboard. Naming moves nothing and destroys
+/// nothing — it changes a word of chrome, and it is as legitimate on the pane the operator is
+/// typing in as on any other. So `SpoolNamePolicy` never reads `SpoolPaneState.keyboard`, and
+/// `NameReport` carries no focus readings, because there is no promise about focus to make
+/// checkable.
+///
+/// **What a caller that lies can do, said plainly.** It can rename a pane the operator never asked
+/// about. The cost is a wrong word on a tab strip, and the fix is another rename — which the same
+/// request already allows, so the operator is never stuck with it. That is a very different weight
+/// from `force`, whose lie kills a process, and it is why this defaults to safe without also
+/// needing a rule nothing can override.
+package struct NameRequest: Codable, Equatable {
+    package static let kind = "name"
+    /// See `SpoolRequest.wireShapes`.
+    package static let wireShape = #"{"id","kind":"name","pane","name","rename"}"#
+
+    package let id: String
+    /// The pane to name: `Pane.id`, spelled as `SelectRequest.pane` spells it and for that
+    /// field's reason — it has no wire history to keep faith with, so it gets the name the value
+    /// has actually had since a pane could hold a canvas. `CloseRequest.waysToKnowAPane` is where
+    /// a caller comes by one, and stays the only place that list is written.
+    package let pane: String
+    /// What to call it. Judged by `SpoolPolicy`, which is where "that is not a usable name"
+    /// becomes a refusal with a reason rather than a tab nobody can read.
+    ///
+    /// Spelled `name` under `"kind": "name"`, which is `CommandRequest`'s precedent exactly
+    /// (`{"kind":"command","command"}`) rather than a collision to tidy.
+    package let name: String
+    /// The caller saying *"the operator asked me to change this"*.
+    ///
+    /// **`CloseRequest.force`'s shape, for `CloseRequest.force`'s reason**: the default is safe
+    /// and the caller can say otherwise; what it cannot do is say otherwise without saying it.
+    /// A pane nothing has named, and a pane wearing only helm's own derived label, are named
+    /// **without** this — those are the "new pane" cases, and requiring it there would withhold
+    /// the capability in its main case exactly as refusing a busy pane outright would.
+    ///
+    /// Unlike `force` it overrides no other rule, because there is no other rule. See the type's
+    /// header.
+    package var rename: Bool = false
+
+    private enum CodingKeys: String, CodingKey { case id, pane, name, rename }
+
+    package init(id: String, pane: String, name: String, rename: Bool = false) {
+        self.id = id
+        self.pane = pane
+        self.name = name
+        self.rename = rename
+    }
+
+    package init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        pane = try container.decode(String.self, forKey: .pane)
+        name = try container.decode(String.self, forKey: .name)
+        rename = try container.decodeIfPresent(Bool.self, forKey: .rename) ?? false
+    }
+}
+
 /// Why helm will not do what a request asked.
 ///
 /// A named type rather than a bare `String` because `Result`'s failure has to be an `Error` —
@@ -428,6 +519,21 @@ package struct SelectRequest: Codable, Equatable {
 package struct SpoolRefusal: Error, Equatable {
     package let reason: String
     package init(_ reason: String) { self.reason = reason }
+
+    /// The answer every request that **names** a pane gives when helm holds no such pane.
+    ///
+    /// **Written once because #313 was about to write it a third time**, and the copies had
+    /// already drifted: `SpoolClosePolicy`'s omitted the parked-workspace sentence that
+    /// `SpoolSelectPolicy`'s carried, which is true of a close and a name in exactly the same way
+    /// — `WorkbenchSpoolPanes.pane` reads the *mounted* bench, so a parked workspace's panes are
+    /// invisible to all three. One sentence, and nobody has to notice it is missing from theirs.
+    package static func noSuchPane(_ pane: TerminalID) -> SpoolRefusal {
+        SpoolRefusal(
+            "helm has no pane \(pane.uuidString). It may have been closed already, or it belongs "
+                + "to a different helm — an instance under HELM_DEFAULTS_SUITE watches its own "
+                + "spool and holds its own panes. A parked workspace's panes are not on the bench "
+                + "either: only the mounted one has slots")
+    }
 }
 
 /// A request that has passed every gate, and therefore the only thing helm will act on.
@@ -440,6 +546,7 @@ package enum SpoolWork: Equatable {
     case close(AcceptedCloseRequest)
     case command(AcceptedCommandRequest)
     case select(AcceptedSelectRequest)
+    case name(AcceptedNameRequest)
 }
 
 package struct AcceptedSpawnRequest: Equatable {
@@ -534,6 +641,25 @@ package struct AcceptedSelectRequest: Equatable {
     }
 }
 
+package struct AcceptedNameRequest: Equatable {
+    package let id: String
+    /// **A real `TerminalID`** — `AcceptedCloseRequest.terminal`'s argument, and deliberately the
+    /// same type: the wire has one pane-id newtype over one `Pane.id` namespace.
+    package let pane: TerminalID
+    /// **Trimmed and checked, never the raw string that was in the file.** The same move
+    /// `AcceptedCaptureRequest.path` makes by resolving its default here: the one place that
+    /// decides what a pane will be called is the one place that checked whether it may be.
+    package let name: String
+    package let rename: Bool
+
+    package init(id: String, pane: TerminalID, name: String, rename: Bool) {
+        self.id = id
+        self.pane = pane
+        self.name = name
+        self.rename = rename
+    }
+}
+
 /// Which requests helm will act on.
 ///
 /// **Deliberately a strict allowlist, exactly like `TerminalURLPolicy`** — and for a stronger
@@ -569,6 +695,10 @@ package enum SpoolPolicy {
     package static let maxArgs = 32
     package static let maxArgLength = 4096
     package static let maxPromptLength = 200_000
+    /// A pane name is chrome, and the tab truncates at 180pt whatever this says — so this is not
+    /// a fitting rule, it is the same bound `maxArgLength` is: a malformed or hostile file costs a
+    /// refusal rather than a megabyte in a `Text` and in every `snapshot.json` written after it.
+    package static let maxNameLength = 200
 
     /// The verdict on one decoded request.
     ///
@@ -598,6 +728,8 @@ package enum SpoolPolicy {
             return accept(command).map(SpoolWork.command)
         case .select(let select):
             return accept(select).map(SpoolWork.select)
+        case .name(let name):
+            return accept(name).map(SpoolWork.name)
         case .unrecognised(_, let kind):
             return .failure(
                 SpoolRefusal(
@@ -710,14 +842,9 @@ package enum SpoolPolicy {
     private static func accept(
         _ request: CloseRequest
     ) -> Result<AcceptedCloseRequest, SpoolRefusal> {
-        guard let terminal = TerminalID(validating: request.terminal) else {
-            return .failure(
-                SpoolRefusal(
-                    "terminal \"\(request.terminal)\" is not a pane id. It is "
-                        + CloseRequest.waysToKnowAPane + " — a uuid whichever route you took"))
+        pane(request.terminal, field: "terminal").map {
+            AcceptedCloseRequest(id: request.id, terminal: $0, force: request.force)
         }
-        return .success(
-            AcceptedCloseRequest(id: request.id, terminal: terminal, force: request.force))
     }
 
     /// **A select carries one uuid and nothing else, so this layer has exactly one thing to
@@ -727,13 +854,77 @@ package enum SpoolPolicy {
     private static func accept(
         _ request: SelectRequest
     ) -> Result<AcceptedSelectRequest, SpoolRefusal> {
-        guard let pane = TerminalID(validating: request.pane) else {
+        pane(request.pane, field: "pane").map {
+            AcceptedSelectRequest(id: request.id, pane: $0)
+        }
+    }
+
+    /// **A name carries a uuid and a string, so this layer has two things to say** — the uuid,
+    /// through the same helper the other two addressed kinds use, and whether the string is
+    /// usable as a name at all. Whether it may *replace* what the pane is already called needs
+    /// the live bench and is `SpoolNamePolicy`'s, so a refusal about ownership is never mistaken
+    /// for a refusal about a malformed file.
+    ///
+    /// **Trimmed, non-empty, bounded, and no control characters.** The last is `SpawnRequest`'s
+    /// own rule and lands here for a stronger reason than it does there: single-quoting makes a
+    /// stray newline in an argument merely literal, where this value goes into a SwiftUI `Text`
+    /// and into the `snapshot.json` other agents read. An **empty** name is refused rather than
+    /// read as *"clear it"* — nothing asked for a way to un-name a pane, and helm cannot tell a
+    /// caller that meant it from one that forgot the argument.
+    private static func accept(
+        _ request: NameRequest
+    ) -> Result<AcceptedNameRequest, SpoolRefusal> {
+        pane(request.pane, field: "pane").flatMap { pane in
+            let name = request.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else {
+                return .failure(
+                    SpoolRefusal(
+                        "a name has to be something. helm cannot tell an empty one from a caller "
+                            + "that forgot the argument, and there is no way to un-name a pane — "
+                            + "close it, or name it something else"))
+            }
+            guard name.count <= maxNameLength else {
+                return .failure(
+                    SpoolRefusal(
+                        "name is longer than \(maxNameLength) characters. A tab is 180pt wide; "
+                            + "say what the pane is for in a few words"))
+            }
+            guard
+                name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+            else {
+                return .failure(
+                    SpoolRefusal(
+                        "a name may not contain control characters — it is drawn on a tab and "
+                            + "written into ~/.helm/bench/snapshot.json"))
+            }
+            return .success(
+                AcceptedNameRequest(
+                    id: request.id, pane: pane, name: name, rename: request.rename))
+        }
+    }
+
+    /// The one place a caller's pane uuid is judged, for **every** request that names one.
+    ///
+    /// **Written once because #313 was about to write it a third time.** `close` and `select` each
+    /// carried their own copy of this parse and their own copy of the refusal, identical but for
+    /// the field name — and the refusal is the sentence that tells a caller where a pane uuid
+    /// comes from, which `CloseRequest.waysToKnowAPane` already exists to keep in one place. Two
+    /// spellings of a list-of-one-place is the drift #284 had to remove once already.
+    ///
+    /// `field` is the wire's own spelling — `terminal` for a close, `pane` for the other two —
+    /// because a refusal that names a field the caller did not write is a refusal they cannot act
+    /// on. See `CloseRequest.terminal` for why those two spellings are not an inconsistency to
+    /// tidy.
+    private static func pane(
+        _ raw: String, field: String
+    ) -> Result<TerminalID, SpoolRefusal> {
+        guard let pane = TerminalID(validating: raw) else {
             return .failure(
                 SpoolRefusal(
-                    "pane \"\(request.pane)\" is not a pane id. It is "
+                    "\(field) \"\(raw)\" is not a pane id. It is "
                         + CloseRequest.waysToKnowAPane + " — a uuid whichever route you took"))
         }
-        return .success(AcceptedSelectRequest(id: request.id, pane: pane))
+        return .success(pane)
     }
 
     /// **Two questions, two refusals, and telling them apart is the point.** *"That is not a
@@ -1022,6 +1213,14 @@ package struct SpoolPaneState: Equatable {
     /// with a comment explaining it wants a type carrying it.* This is that type, and the nonsense
     /// is unconstructable rather than merely undocumented.
     package let keyboard: Keyboard
+    /// What the pane is already called, and **who called it that** (#313).
+    ///
+    /// The one fact `SpoolNamePolicy` needs, and the only one on this value that neither of the
+    /// other two addressed policies reads — which is the honest shape: a name request asks about
+    /// ownership, where a close asks about work and a select asks about the keyboard. It lives
+    /// here rather than in a fourth struct for the reason this type's own header gives: one value
+    /// for one pane, read once, whichever addressed request asked.
+    package let name: PaneName
 
     /// Where the keyboard is, from this pane's point of view.
     package enum Keyboard: Equatable, Sendable {
@@ -1047,12 +1246,17 @@ package struct SpoolPaneState: Equatable {
     /// `getsid(foreground)` — the pty session's leader. Nil when it could not be asked.
     package let sessionLeader: pid_t?
 
+    /// **`name` has no default, deliberately.** Every other field here is one an adapter must
+    /// read off the live bench, and so is this one; a default would make "did anybody actually
+    /// ask the pane what it is called?" answerable by reading upwards, which is the shape
+    /// `SpoolWork`'s own header says this file exists to avoid.
     package init(
-        holdsTerminal: Bool, keyboard: Keyboard, foreground: pid_t?, foregroundParent: pid_t?,
-        sessionLeader: pid_t?
+        holdsTerminal: Bool, keyboard: Keyboard, name: PaneName, foreground: pid_t?,
+        foregroundParent: pid_t?, sessionLeader: pid_t?
     ) {
         self.holdsTerminal = holdsTerminal
         self.keyboard = keyboard
+        self.name = name
         self.foreground = foreground
         self.foregroundParent = foregroundParent
         self.sessionLeader = sessionLeader
@@ -1158,12 +1362,7 @@ package enum SpoolClosePolicy {
     )
         -> SpoolRefusal?
     {
-        guard let pane else {
-            return SpoolRefusal(
-                "helm has no pane \(request.terminal.uuidString). It may have been closed "
-                    + "already, or it belongs to a different helm — an instance under "
-                    + "HELM_DEFAULTS_SUITE watches its own spool and holds its own panes")
-        }
+        guard let pane else { return .noSuchPane(request.terminal) }
         guard !pane.holdsKeyboard else {
             return SpoolRefusal(
                 "the operator is working in pane \(request.terminal.uuidString) — it is the "
@@ -1209,14 +1408,7 @@ package enum SpoolSelectPolicy {
     package static func refusal(
         for request: AcceptedSelectRequest, pane: SpoolPaneState?
     ) -> SpoolRefusal? {
-        guard let pane else {
-            return SpoolRefusal(
-                "helm has no pane \(request.pane.uuidString). It may have been closed already, "
-                    + "or it belongs to a different helm — an instance under HELM_DEFAULTS_SUITE "
-                    + "watches its own spool and holds its own panes. A parked workspace's panes "
-                    + "are not on the bench either: only the mounted one has slots to show "
-                    + "anything in")
-        }
+        guard let pane else { return .noSuchPane(request.pane) }
         switch pane.keyboard {
         case .elsewhere:
             return nil
@@ -1235,6 +1427,60 @@ package enum SpoolSelectPolicy {
                     + "they can reach, which is what #125's *appear, don't seize* buys; wait "
                     + "until they are somewhere else, or push the artifact where it gets a slot "
                     + "of its own")
+        }
+    }
+}
+
+/// Whether a pane may be called something else — the ownership half of #313.
+///
+/// **The third addressed verb, and the first whose rule is not about the operator's keyboard.**
+/// `SpoolClosePolicy` refuses the pane holding it because closing destroys work;
+/// `SpoolSelectPolicy` generalises that to the focused slot because showing a tab of it *moves*
+/// the keyboard. Naming does neither: it changes a word of chrome, on a pane the operator may
+/// well be typing in, and nothing about where their eyes are makes that better or worse. So this
+/// policy never reads `SpoolPaneState.keyboard` at all, and the absence of that guard is the
+/// design rather than a gap in it.
+///
+/// **What it reads instead is whether anybody is already calling the pane something**, which is
+/// the operator's ruling in the only form helm can actually check:
+///
+/// > naming and renaming from agents should be possible, by default they name new panes, and by
+/// > default they dont rename if editing existing, but i can ask for a rename
+///
+/// A pane nobody has named has no label the operator has been reading for an hour, so naming it
+/// takes nothing from anyone — that is what *"a new pane"* means as a question about state rather
+/// than about history. **And helm's own derived label is not somebody's choice**: nobody picked
+/// those words, so replacing them is still a first naming. Those two are `PaneName.unnamed` and
+/// `.derived`, and both pass without the caller asserting anything.
+///
+/// **`.chosen` is the one that needs the ask**, and that half is not checkable by anything —
+/// helm cannot see the conversation the request came out of. `NameRequest.rename` is therefore
+/// `CloseRequest.force`'s shape: a caller asserting a fact about work it owns, defaulting to the
+/// safe answer, unable to assert it without saying so out loud. The type's header records what a
+/// caller that lies achieves (a wrong word, fixable by another rename) and why that is a
+/// different weight from `force`.
+///
+/// **Exhaustive over `PaneName`**, so a fourth provenance cannot be added without a verdict here —
+/// the property `SpoolCommandPolicy` holds over `HelmCommandName` and `SpoolSelectPolicy` holds
+/// over `Keyboard`, for the same reason: silence would default a new case to *allowed*, which
+/// sounds harmless and is actually just undecided.
+package enum SpoolNamePolicy {
+    /// nil when the pane may be named; the reason when it may not.
+    package static func refusal(
+        for request: AcceptedNameRequest, pane: SpoolPaneState?
+    ) -> SpoolRefusal? {
+        guard let pane else { return .noSuchPane(request.pane) }
+        switch pane.name {
+        case .unnamed, .derived:
+            return nil
+        case .chosen(let existing):
+            guard !request.rename else { return nil }
+            return SpoolRefusal(
+                "pane \(request.pane.uuidString) is already called \"\(existing)\", and helm does "
+                    + "not rename what somebody chose — a label the operator has been reading is "
+                    + "part of how they find their work. Send it again with \"rename\": true if "
+                    + "they asked you to change it. A pane nothing has named, or one wearing only "
+                    + "helm's own derived label, needs no such thing")
         }
     }
 }

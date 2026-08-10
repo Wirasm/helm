@@ -403,7 +403,7 @@ final class WorkbenchModelTests: XCTestCase {
                 + "means, and what one app-level selectedID could not express")
     }
 
-    /// `reconcileVisibility` walks every session in the app, not just this workspace's,
+    /// `reconcileSessions` walks every session in the app, not just this workspace's,
     /// because a parked workspace's terminals are off screen by definition.
     func testAParkedWorkspacesTerminalsAreNotVisible() {
         let manager = TerminalManager()

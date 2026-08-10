@@ -43,7 +43,11 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
     /// applied to a spool request that means a hidden tab on whatever had focus, canvas
     /// included. A spawn gets a pane of its own, and takes neither the selection nor the
     /// keyboard.
-    func openTerminal(cwd: String) -> Result<UUID, SpoolRefusal> {
+    /// **The pane is named before it is returned (#313).** `SpoolModel` derived the name from the
+    /// request it holds; this only applies it, so a spool-spawned tab reads `claude · <tree>`
+    /// rather than whatever OSC title the agent's first message produces — which since #93 is a
+    /// pointer at a file.
+    func openTerminal(cwd: String, named: PaneName) -> Result<UUID, SpoolRefusal> {
         let workspace = Workspace(path: cwd)
         if workbench.workspacePath != workspace.path {
             activate(workspace)
@@ -67,6 +71,7 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
             return .failure(
                 SpoolRefusal("helm could not open a terminal in \(workspace.path.value)"))
         }
+        workbench.name(session.id, to: named)
         return .success(session.id)
     }
 
