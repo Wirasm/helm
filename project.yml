@@ -87,6 +87,19 @@ targets:
       # Edit Assets/icon/helm.svg and run Assets/icon/build-icon.sh to change it.
       - path: Assets/helm.icns
         buildPhase: resources
+    # Writes the commit into the built Info.plist, so an installed helm can tell whether the
+    # build waiting on disk is a different one (see scripts/stamp-build.sh, and `RunningBuild`
+    # for what reads it back). A *post*-build script still runs before Xcode's implicit
+    # code-signing task, which is what makes editing the plist here safe — `make release`
+    # verifies the signature afterwards rather than trusting that.
+    #
+    # `basedOnDependencyAnalysis: false` because this phase declares no inputs or outputs: with
+    # it left on, Xcode considers the phase up to date and skips it, and the second build of a
+    # new commit ships the previous commit's identity.
+    postBuildScripts:
+      - name: Stamp build identity
+        script: bash "$SRCROOT/scripts/stamp-build.sh"
+        basedOnDependencyAnalysis: false
     dependencies:
       - target: HelmWire
       - package: libghostty-spm

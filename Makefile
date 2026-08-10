@@ -8,7 +8,7 @@ APP := $(DERIVED_DATA)/Build/Products/Debug/Helm.app
 RELEASE_APP := $(DERIVED_DATA)/Build/Products/Release/Helm.app
 INSTALLED := /Applications/Helm.app
 
-.PHONY: build app install run test clean
+.PHONY: build app release install run test clean
 
 build:
 	swift build
@@ -34,12 +34,30 @@ install:
 		echo "helm is running — quit it first (replacing a live bundle fails quietly)"; \
 		exit 1; \
 	fi
-	xcodegen generate
-	xcodebuild -project Helm.xcodeproj -scheme Helm -configuration Release \
-		-derivedDataPath $(DERIVED_DATA) build
+	$(MAKE) release
 	rm -rf $(INSTALLED)
 	cp -R $(RELEASE_APP) $(INSTALLED)
 	@echo "Installed: $(INSTALLED) — it is a copy, re-run after every rebuild"
+
+# Build the Release product and announce it, WITHOUT installing it.
+#
+# This is the half of `install` that can run while helm is running, and it exists because the
+# other half cannot: `install` refuses against a live bundle, so an agent that only had
+# `install` could never tell a working operator that a newer build was ready. `make release`
+# leaves the product in DerivedData and a note in ~/.helm/build/latest.json; the running helm
+# polls that and offers the swap on a badge in the status bar. Nothing here touches the
+# installed app, so it is safe to run mid-session.
+#
+# `codesign --verify` is not ceremony: the stamping build phase edits Info.plist inside the
+# product, and it is only safe because that phase runs before Xcode signs. This is what would
+# catch it if that ordering ever changed.
+release:
+	xcodegen generate
+	xcodebuild -project Helm.xcodeproj -scheme Helm -configuration Release \
+		-derivedDataPath $(DERIVED_DATA) build
+	@codesign --verify --strict $(RELEASE_APP) \
+		&& echo "signature intact after stamping"
+	@bash scripts/announce-build.sh $(abspath $(RELEASE_APP))
 
 run:
 	swift run helm
