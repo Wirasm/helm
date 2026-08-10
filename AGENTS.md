@@ -463,15 +463,20 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     never going to start again (#283).** `{status, waitingFor, statusUpdatedAt}`, straight out of
     Claude Code's own registry row: `status` is `busy`/`shell`/`idle`/`waiting`, `waitingFor` is
     its own words for what it is blocked on — `"permission prompt"`, `"input needed"`,
-    `"dialog open"` — and `statusUpdatedAt` is when that last **changed**.
+    `"dialog open"` — and `statusUpdatedAt` is when **either of those two** last changed. A `-p`
+    print-mode session publishes none of them and so carries no `agent` at all.
   - **`waiting` alone is not a stall; `waitingFor` plus age is.** An agent that finished its turn
     is also `waiting`, and that is healthy. `waitingFor: "permission prompt"` on a pane **nobody
     is sitting at** is the failure — subtract `statusUpdatedAt` from now and judge. Six and a half
     hours is what #283 cost.
   - **You do not have to poll `writtenAt` for this, and that is deliberate.** `statusUpdatedAt` is
-    an absolute instant, so it keeps aging correctly in a snapshot nobody rewrote; a status
-    transition is content, so the last write of the file *is* the moment the stall began. A
-    precomputed *"quiet for N minutes"* would have been wrong the instant it was written down.
+    an absolute instant, so it keeps aging correctly in a snapshot nobody rewrote; a transition is
+    content, so the last write of the file *is* the moment the stall began. A precomputed *"quiet
+    for N minutes"* would have been wrong the instant it was written down. **It is a transition
+    time and not a heartbeat, measured**: a forced non-status write (`/rename`) moved Claude Code's
+    `updatedAt` and left `statusUpdatedAt` alone, and twelve minutes of a continuously working
+    session moved it not at all. A prompt replaced by a *different* prompt does restart the age —
+    which is what you want, since the question is *waiting for **this** since when*.
   - **Claude Code only, and absence is absence.** pi and codex publish no registry, so their panes
     carry no `agent` at all — never a false `idle`. A `status` this build does not model is absent
     too, and `waitingFor` still comes through.

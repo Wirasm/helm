@@ -442,7 +442,13 @@ struct BenchSnapshot: Codable, Equatable {
         let status: String?
         /// What it is waiting for, in Claude Code's own words. See `AgentSession.waitingFor`.
         let waitingFor: String?
-        /// When `status` last changed — **a transition time, not a heartbeat**.
+        /// When `status` **or `waitingFor`** last changed — **a transition time, not a
+        /// heartbeat**. `AgentSession.statusUpdatedAt` has the measurements behind both halves.
+        ///
+        /// **That it also moves on a `waitingFor` change is better for this use, not worse**, and
+        /// worth stating rather than glossing: #283 is *waiting for **this** since T*, so a prompt
+        /// replaced by a different prompt **should** restart the age. A reader told only "when
+        /// `status` changed" would conclude the opposite.
         ///
         /// **It is published as an absolute instant on purpose, and that is what makes this
         /// signal survive a snapshot nobody rewrote.** A stalled agent stops changing, so the
@@ -463,6 +469,13 @@ struct BenchSnapshot: Codable, Equatable {
         let statusUpdatedAt: Date?
 
         /// `nil` when the row says nothing at all, so an empty record is never written.
+        ///
+        /// **That branch is reached in practice, which is worth saying because it looks like an
+        /// omission until someone checks.** A `-p` print-mode session registers a pid file with no
+        /// `status`, no `updatedAt` and no `statusUpdatedAt` at all — verified against a live one —
+        /// because the status writer is the interactive TUI's effect and print mode never mounts
+        /// it. Those rows are correctly skipped here rather than published as an agent whose state
+        /// is unknown and whose age is `null`.
         init?(_ session: AgentSession) {
             guard session.status != nil || session.waitingFor != nil else { return nil }
             status = session.status?.rawValue

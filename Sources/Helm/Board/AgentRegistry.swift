@@ -55,10 +55,27 @@ struct AgentSession: Equatable {
     /// reason: this is a free-form label Claude Code composes, and a reason this build has never
     /// heard of is something a reader can still print.
     var waitingFor: String? = nil
-    /// When `status` last **changed** — not a heartbeat, and `BoardModel` says so in as many
-    /// words. Claude Code stamps it only on a status transition, which is exactly what makes it
-    /// the useful thing to publish: *waiting since T* survives a snapshot that is never rewritten,
-    /// where *waiting for N seconds* would go stale the moment it was written down.
+    /// When `status` **or `waitingFor`** last changed — a transition time, not a heartbeat.
+    ///
+    /// **Both halves of that sentence are load-bearing, and the second one is easy to get wrong.**
+    /// The writer stamps this whenever the payload carries a `status` at all —
+    /// `{...e, updatedAt: r, ...e.status !== undefined && { statusUpdatedAt: r }}` — and the
+    /// interactive caller's effect fires on `[status, waitingFor]`, so a change to *what* it is
+    /// blocked on moves this even when it stays `waiting`. That is **better** for the use here
+    /// rather than a caveat: #283 asks *waiting for **this** since T*, so a prompt replaced by a
+    /// different prompt should restart the age, and it does.
+    ///
+    /// **Not a heartbeat, measured rather than assumed.** The discriminating case is a forced
+    /// **non-status** write: a `/rename` moved `updatedAt` by 9 ms and left this field alone.
+    /// Corroborated three more ways — twelve minutes of a continuously working session produced
+    /// zero writes to it, a captured `idle → busy → idle` moved it exactly at each transition, and
+    /// all eight call sites in the shipped 2.1.226 source were enumerated with none of them
+    /// periodic. So `now - statusUpdatedAt` really is an age, which is what
+    /// `BenchSnapshot.AgentRecord.statusUpdatedAt` spends.
+    ///
+    /// **The one theoretical way it resets without the agent moving**, recorded because it belongs
+    /// beside the claim rather than being discovered later: a REPL remount would re-run that
+    /// effect and rewrite an unchanged status. Not observed, and nothing remounts periodically.
     ///
     /// Claude Code writes epoch **milliseconds**; this is the `Date` they name.
     var statusUpdatedAt: Date? = nil
