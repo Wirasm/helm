@@ -48,20 +48,29 @@ final class CanvasModelTests: XCTestCase {
     /// writes the note"* across three tests while Enter was working perfectly. Going through the
     /// decoder makes the next wire change fail **here**, at construction, quoting the decoder's
     /// own refusal. `init` is `fileprivate` now, so this is the only door there is.
-    private func selection(_ payload: [String: Any]) throws -> CanvasPageSelection {
+    ///
+    /// `file`/`line` default from the caller, so a refusal is reported at the test that asked
+    /// rather than at this line — `XCTFail`'s own defaults are captured where it is written, and
+    /// a whole suite pointing here would be the drift's location rather than its subject.
+    private func selection(
+        _ payload: [String: Any], file: StaticString = #filePath, line: UInt = #line
+    ) throws -> CanvasPageSelection {
         var payload = payload
         payload["kind"] = payload["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
         switch CanvasPageSelection.decode(payload) {
         case let .success(.selected(selection)):
             return .selected(selection)
         case .success(.cleared):
-            XCTFail("this helper builds a selection, and \(payload) decoded as a dismissal")
+            XCTFail(
+                "this helper builds a selection, and \(payload) decoded as a dismissal",
+                file: file, line: line)
             throw CanvasPageSelection.Refusal.malformed(.selection)
         case let .failure(refusal):
             XCTFail(
                 "the page-selection fixture these tests are built on is not a message helm "
                     + "accepts any more — \(refusal.reason). Rebuild it to the shape "
-                    + "`CanvasPageSelection.decode` takes; do not loosen the decoder.")
+                    + "`CanvasPageSelection.decode` takes; do not loosen the decoder.",
+                file: file, line: line)
             throw refusal
         }
     }
