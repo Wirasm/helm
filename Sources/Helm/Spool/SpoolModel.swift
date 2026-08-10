@@ -333,13 +333,18 @@ final class SpoolModel: ObservableObject {
     /// `SpoolRequest.id` that `accept` has just refused. What changed is that it no longer
     /// re-applies a shared regex by hand — it asks `RequestID`, which is the same question
     /// `accept` asks, expressed once in the type instead of twice at two call sites.
-    private func refuse(id: String, reason: String) {
+    private func refuse(id raw: String, reason: String) {
         // An id that is not a filename cannot name a result file, so there is nowhere to put
         // the answer. The log is all that is left, and it says so rather than pretending.
-        guard let id = RequestID(validating: id) else {
+        //
+        // `raw` rather than shadowing `id`, which is the idiom `SpoolDirectory.abandoned()` uses
+        // for the identical guard: shadowing is valid here — the `else` branch still sees the
+        // `String` — but only to a reader who knows that rule, and this line has to print the
+        // string the caller sent rather than anything derived from it.
+        guard let id = RequestID(validating: raw) else {
             NSLog(
                 "helm: spool request refused and UNANSWERABLE (id %@ is not a filename): %@",
-                id, reason)
+                raw, reason)
             return
         }
         refuse(id: id, reason: reason)
@@ -351,8 +356,8 @@ final class SpoolModel: ObservableObject {
     ///
     /// **It carries no guard, and the overload is how that becomes a fact rather than a claim
     /// (#260).** These ids came out of an `Accepted*` request, so they are `RequestID`s and there
-    /// is nothing left to check; the guarded route above exists for the one caller that genuinely
-    /// has a raw string. Which of the two a call site gets is decided by the compiler from the
+    /// is nothing left to check; the guarded route above exists for the two callers that genuinely
+    /// have a raw string. Which of the two a call site gets is decided by the compiler from the
     /// type it is holding, instead of by a reader working out whether a check upstream already ran.
     private func refuse(id: RequestID, reason: String) {
         directory.write(SpoolResult(id: id, status: .refused, reason: reason))
