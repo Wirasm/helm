@@ -126,25 +126,33 @@ package struct SpoolDirectory: Equatable {
     }
 
     /// Write the result, atomically, so a caller watching the file never reads half of one.
+    ///
+    /// **The id it builds a path from is a `RequestID`, and that is the whole of #260's fix
+    /// here.** `appendingPathComponent` does not collapse `..`, so this line was a real write
+    /// outside the spool for any id that reached it ungated — and one did, through
+    /// `abandoned()`. The guarantee is now the parameter's type rather than a rule every caller
+    /// had to remember.
     @discardableResult
     package func write(_ result: SpoolResult) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(result) else { return false }
-        let destination = results.appendingPathComponent("\(result.id).json")
+        let destination = results.appendingPathComponent("\(result.id.value).json")
         do {
             try data.write(to: destination, options: [.atomic])
             try? FileManager.default.setAttributes(
                 [.posixPermissions: 0o600], ofItemAtPath: destination.path)
             return true
         } catch {
-            NSLog("helm: could not write spool result %@: %@", result.id, String(describing: error))
+            NSLog(
+                "helm: could not write spool result %@: %@", result.id.value,
+                String(describing: error))
             return false
         }
     }
 
-    package func result(id: String) -> SpoolResult? {
-        let url = results.appendingPathComponent("\(id).json")
+    package func result(id: RequestID) -> SpoolResult? {
+        let url = results.appendingPathComponent("\(id.value).json")
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(SpoolResult.self, from: data)
     }
@@ -158,15 +166,15 @@ package struct SpoolDirectory: Equatable {
     /// thinking about the request. A cleanup pass over `prompts/` would have to prove the agent
     /// had already read it, which nothing here can see; the honest bound is that these are small
     /// text files in a `0700` directory the operator owns.
-    package func stagePrompt(_ text: String, for id: String) -> String? {
-        let url = prompts.appendingPathComponent("\(id).txt")
+    package func stagePrompt(_ text: String, for id: RequestID) -> String? {
+        let url = prompts.appendingPathComponent("\(id.value).txt")
         do {
             try text.write(to: url, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600], ofItemAtPath: url.path)
             return url.path
         } catch {
-            NSLog("helm: could not stage spool prompt %@: %@", id, String(describing: error))
+            NSLog("helm: could not stage spool prompt %@: %@", id.value, String(describing: error))
             return nil
         }
     }
@@ -174,7 +182,19 @@ package struct SpoolDirectory: Equatable {
     /// Requests that were claimed and never answered — helm stopped between the rename and the
     /// result. Returns their ids so the caller can be told, which is the alternative to leaving
     /// it waiting on a file that is never coming.
-    package func abandoned() -> [String] {
+    ///
+    /// **This is the route #260 was filed over, and the `compactMap` is where it was closed.** The
+    /// id comes out of a claimed request's JSON, and `SpoolRequest`'s decode does no pattern check
+    /// — so before `RequestID` this handed `SpoolModel.answerAbandoned` a string that had never
+    /// been near `SpoolPolicy.accept`, which then built a result path from it.
+    ///
+    /// **An id that fails `validating:` is dropped, and that is the only thing it could be.** It
+    /// can never have a result file, because there is nowhere to put one — `SpoolModel.refuse`
+    /// reaches the identical conclusion and logs `UNANSWERABLE` for it. So the file stays in
+    /// `claimed/`, unanswerable and inert, and it gets a line of its own rather than vanishing
+    /// silently: an agent waiting on that id is waiting on a result that is never coming, and the
+    /// log is the only place that can say so.
+    package func abandoned() -> [RequestID] {
         guard
             let entries = try? FileManager.default.contentsOfDirectory(
                 at: claimed, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
@@ -182,8 +202,18 @@ package struct SpoolDirectory: Equatable {
         return
             entries
             .filter { $0.pathExtension == "json" }
-            .compactMap { request(at: $0)?.id }
+            .compactMap { url -> RequestID? in
+                guard let raw = request(at: url)?.id else { return nil }
+                guard let id = RequestID(validating: raw) else {
+                    NSLog(
+                        "helm: claimed spool request %@ is UNANSWERABLE (id %@ is not a filename) "
+                            + "— it stays claimed and nothing will be written for it",
+                        url.lastPathComponent, raw)
+                    return nil
+                }
+                return id
+            }
             .filter { result(id: $0) == nil }
-            .sorted()
+            .sorted { $0.value < $1.value }
     }
 }

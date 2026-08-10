@@ -12,7 +12,8 @@ final class SpoolClosePolicyTests: XCTestCase {
     private let terminal = UUID()
 
     private func request(force: Bool = false) -> AcceptedCloseRequest {
-        AcceptedCloseRequest(id: "c", terminal: TerminalID(terminal), force: force)
+        AcceptedCloseRequest(
+            id: RequestID(validating: "c")!, terminal: TerminalID(terminal), force: force)
     }
 
     /// The pty layout every helm pane really has, measured live: `login` is the session

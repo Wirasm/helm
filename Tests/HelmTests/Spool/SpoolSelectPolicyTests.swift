@@ -18,7 +18,7 @@ final class SpoolSelectPolicyTests: XCTestCase {
     private let pane = UUID()
 
     private func request() -> AcceptedSelectRequest {
-        AcceptedSelectRequest(id: "s", pane: TerminalID(pane))
+        AcceptedSelectRequest(id: RequestID(validating: "s")!, pane: TerminalID(pane))
     }
 
     /// A pane as `WorkbenchSpoolPanes` reports one. The pids are a terminal's, and they are

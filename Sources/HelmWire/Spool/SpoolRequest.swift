@@ -558,7 +558,7 @@ package enum SpoolWork: Equatable {
 }
 
 package struct AcceptedSpawnRequest: Equatable {
-    package let id: String
+    package let id: RequestID
     package let cwd: String
     package let command: String
     /// **What will actually be on the command line**, not what the caller asked for: the
@@ -573,7 +573,7 @@ package struct AcceptedSpawnRequest: Equatable {
     // init at `internal` regardless of the type's own access level, and `SpoolPolicyTests`
     // (a different module) constructs one directly to exercise `SpoolModel`-shaped call sites
     // without going through `SpoolPolicy.accept`.
-    package init(id: String, cwd: String, command: String, args: [String], prompt: String?) {
+    package init(id: RequestID, cwd: String, command: String, args: [String], prompt: String?) {
         self.id = id
         self.cwd = cwd
         self.command = command
@@ -583,14 +583,14 @@ package struct AcceptedSpawnRequest: Equatable {
 }
 
 package struct AcceptedCaptureRequest: Equatable {
-    package let id: String
+    package let id: RequestID
     /// **Resolved, never optional.** The default is applied here rather than at the edge, so
     /// no call site downstream can re-derive it differently — and so the one place that decides
     /// where a PNG lands is the one place that checked whether it may.
     package let path: String
     package let window: String?
 
-    package init(id: String, path: String, window: String?) {
+    package init(id: RequestID, path: String, window: String?) {
         self.id = id
         self.path = path
         self.window = window
@@ -598,7 +598,7 @@ package struct AcceptedCaptureRequest: Equatable {
 }
 
 package struct AcceptedCloseRequest: Equatable {
-    package let id: String
+    package let id: RequestID
     /// **A real `TerminalID`, not the string that was in the file.** Parsing it here is what
     /// makes "that is not a pane id" a refusal with a reason instead of a lookup that quietly
     /// matches nothing — the two are indistinguishable to a caller, and one of them is a typo
@@ -613,7 +613,7 @@ package struct AcceptedCloseRequest: Equatable {
     package let terminal: TerminalID
     package let force: Bool
 
-    package init(id: String, terminal: TerminalID, force: Bool) {
+    package init(id: RequestID, terminal: TerminalID, force: Bool) {
         self.id = id
         self.terminal = terminal
         self.force = force
@@ -621,7 +621,7 @@ package struct AcceptedCloseRequest: Equatable {
 }
 
 package struct AcceptedCommandRequest: Equatable {
-    package let id: String
+    package let id: RequestID
     /// **A real `HelmCommandName`, not the string that was in the file** — and one
     /// `SpoolCommandPolicy` has already allowed. The same argument `AcceptedCloseRequest
     /// .terminal` makes for `TerminalID`: parsing here is what makes "that is not a command"
@@ -629,28 +629,28 @@ package struct AcceptedCommandRequest: Equatable {
     /// different reasons, instead of one lookup that quietly matches nothing.
     package let command: HelmCommandName
 
-    package init(id: String, command: HelmCommandName) {
+    package init(id: RequestID, command: HelmCommandName) {
         self.id = id
         self.command = command
     }
 }
 
 package struct AcceptedSelectRequest: Equatable {
-    package let id: String
+    package let id: RequestID
     /// **A real `TerminalID`, not the string that was in the file** — the same argument
     /// `AcceptedCloseRequest.terminal` makes, and deliberately the same *type*: the wire has one
     /// pane-id newtype over one `Pane.id` namespace, and a second one would be a distinction with
     /// no difference behind it.
     package let pane: TerminalID
 
-    package init(id: String, pane: TerminalID) {
+    package init(id: RequestID, pane: TerminalID) {
         self.id = id
         self.pane = pane
     }
 }
 
 package struct AcceptedNameRequest: Equatable {
-    package let id: String
+    package let id: RequestID
     /// **A real `TerminalID`** — `AcceptedCloseRequest.terminal`'s argument, and deliberately the
     /// same type: the wire has one pane-id newtype over one `Pane.id` namespace.
     package let pane: TerminalID
@@ -660,7 +660,7 @@ package struct AcceptedNameRequest: Equatable {
     package let name: String
     package let rename: Bool
 
-    package init(id: String, pane: TerminalID, name: String, rename: Bool) {
+    package init(id: RequestID, pane: TerminalID, name: String, rename: Bool) {
         self.id = id
         self.pane = pane
         self.name = name
@@ -695,10 +695,6 @@ package enum SpoolPolicy {
     /// inheriting an answer nobody meant to give it.
     package static let allowedCommands: Set<String> = ["claude", "pi", "codex"]
 
-    /// An id is a filename component — `results/<id>.json` — so it is gated as one. `..` and
-    /// `/` are the whole reason: an ungated id writes wherever the caller likes.
-    package static let idPattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
-
     /// Bounds, so a malformed or hostile file costs a refusal rather than memory.
     package static let maxArgs = 32
     package static let maxArgLength = 4096
@@ -719,25 +715,30 @@ package enum SpoolPolicy {
         captures: URL,
         isDirectory: (String) -> Bool
     ) -> Result<SpoolWork, SpoolRefusal> {
-        guard request.id.range(of: idPattern, options: .regularExpression) != nil else {
+        // **The one place a raw id becomes a `RequestID` (#260)**, which is exactly where the
+        // regex was already applied — what changed is that everything downstream now takes the
+        // type rather than the string, so a path builder cannot be reached by an id that never
+        // got here. See `RequestID` for the route this closed.
+        guard let id = RequestID(validating: request.id) else {
             return .failure(
                 SpoolRefusal(
-                    "id must match \(idPattern) — it names the result file, so it is a filename"))
+                    "id must match \(RequestID.pattern) — it names the result file, so it is a "
+                        + "filename"))
         }
         switch request {
         case .spawn(let spawn):
-            return accept(spawn, isDirectory: isDirectory).map(SpoolWork.spawn)
+            return accept(spawn, id: id, isDirectory: isDirectory).map(SpoolWork.spawn)
         case .capture(let capture):
-            return accept(capture, captures: captures, isDirectory: isDirectory)
+            return accept(capture, id: id, captures: captures, isDirectory: isDirectory)
                 .map(SpoolWork.capture)
         case .close(let close):
-            return accept(close).map(SpoolWork.close)
+            return accept(close, id: id).map(SpoolWork.close)
         case .command(let command):
-            return accept(command).map(SpoolWork.command)
+            return accept(command, id: id).map(SpoolWork.command)
         case .select(let select):
-            return accept(select).map(SpoolWork.select)
+            return accept(select, id: id).map(SpoolWork.select)
         case .name(let name):
-            return accept(name).map(SpoolWork.name)
+            return accept(name, id: id).map(SpoolWork.name)
         case .unrecognised(_, let kind):
             return .failure(
                 SpoolRefusal(
@@ -747,7 +748,7 @@ package enum SpoolPolicy {
     }
 
     private static func accept(
-        _ request: SpawnRequest, isDirectory: (String) -> Bool
+        _ request: SpawnRequest, id: RequestID, isDirectory: (String) -> Bool
     ) -> Result<AcceptedSpawnRequest, SpoolRefusal> {
         guard allowedCommands.contains(request.command) else {
             return .failure(
@@ -794,7 +795,7 @@ package enum SpoolPolicy {
         }
         return .success(
             AcceptedSpawnRequest(
-                id: request.id, cwd: cwd, command: request.command,
+                id: id, cwd: cwd, command: request.command,
                 // Bounds above are judged on what the caller sent; the posture is helm's own
                 // and is added after, so a request cannot spend its argument budget on flags
                 // helm was going to supply anyway.
@@ -811,9 +812,9 @@ package enum SpoolPolicy {
     /// because helm creating directories on a caller's word is a different capability than the
     /// one #174 asks for.
     private static func accept(
-        _ request: CaptureRequest, captures: URL, isDirectory: (String) -> Bool
+        _ request: CaptureRequest, id: RequestID, captures: URL, isDirectory: (String) -> Bool
     ) -> Result<AcceptedCaptureRequest, SpoolRefusal> {
-        var destination = captures.appendingPathComponent("\(request.id).png").path
+        var destination = captures.appendingPathComponent("\(id.value).png").path
         if let raw = request.path?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
             let path = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath).standardized
             guard path.path.hasPrefix("/") else {
@@ -837,7 +838,7 @@ package enum SpoolPolicy {
         let window = request.window?.trimmingCharacters(in: .whitespacesAndNewlines)
         return .success(
             AcceptedCaptureRequest(
-                id: request.id, path: destination,
+                id: id, path: destination,
                 window: window.flatMap { $0.isEmpty ? nil : $0 }))
     }
 
@@ -848,10 +849,10 @@ package enum SpoolPolicy {
     /// `SpoolClosePolicy`'s — kept apart so this one stays pure and so a refusal about a pane
     /// is never mistaken for a refusal about a file.
     private static func accept(
-        _ request: CloseRequest
+        _ request: CloseRequest, id: RequestID
     ) -> Result<AcceptedCloseRequest, SpoolRefusal> {
         pane(request.terminal, field: "terminal").map {
-            AcceptedCloseRequest(id: request.id, terminal: $0, force: request.force)
+            AcceptedCloseRequest(id: id, terminal: $0, force: request.force)
         }
     }
 
@@ -860,10 +861,10 @@ package enum SpoolPolicy {
     /// actually be shown needs the live bench and is `SpoolSelectPolicy`'s, so a refusal about a
     /// pane is never mistaken for a refusal about a file.
     private static func accept(
-        _ request: SelectRequest
+        _ request: SelectRequest, id: RequestID
     ) -> Result<AcceptedSelectRequest, SpoolRefusal> {
         pane(request.pane, field: "pane").map {
-            AcceptedSelectRequest(id: request.id, pane: $0)
+            AcceptedSelectRequest(id: id, pane: $0)
         }
     }
 
@@ -880,7 +881,7 @@ package enum SpoolPolicy {
     /// read as *"clear it"* — nothing asked for a way to un-name a pane, and helm cannot tell a
     /// caller that meant it from one that forgot the argument.
     private static func accept(
-        _ request: NameRequest
+        _ request: NameRequest, id: RequestID
     ) -> Result<AcceptedNameRequest, SpoolRefusal> {
         // Unwrapped with a `switch` rather than threaded through `flatMap`, so the three guards
         // below sit at the same depth as every other kind's — and so nothing here is called
@@ -913,7 +914,7 @@ package enum SpoolPolicy {
         }
         return .success(
             AcceptedNameRequest(
-                id: request.id, pane: addressed, name: name, rename: request.rename))
+                id: id, pane: addressed, name: name, rename: request.rename))
     }
 
     /// The one place a caller's pane uuid is judged, for **every** request that names one.
@@ -949,7 +950,7 @@ package enum SpoolPolicy {
     /// for the same reason `SpoolClosePolicy` does: this type answers *"is this request well
     /// formed"*, and that one answers *"may an agent ask for this at all"*.
     private static func accept(
-        _ request: CommandRequest
+        _ request: CommandRequest, id: RequestID
     ) -> Result<AcceptedCommandRequest, SpoolRefusal> {
         let raw = request.command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let command = HelmCommandName(rawValue: raw) else {
@@ -962,7 +963,7 @@ package enum SpoolPolicy {
         if case .refused(let reason) = SpoolCommandPolicy.verdict(for: command) {
             return .failure(SpoolRefusal(reason))
         }
-        return .success(AcceptedCommandRequest(id: request.id, command: command))
+        return .success(AcceptedCommandRequest(id: id, command: command))
     }
 }
 

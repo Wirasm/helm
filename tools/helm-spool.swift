@@ -143,6 +143,25 @@ let cwd = URL(fileURLWithPath: (cwdArgument as NSString).expandingTildeInPath).s
 
 // MARK: - Submit
 
+// **The id names three files — `<id>.json`, `.staging-<id>.json` and `results/<id>.json` — so it
+// is gated as the filename it is, here as well as in helm (#260).** helm's own gate is the
+// authority and refuses the same strings; this one exists because that refusal cannot be *read*
+// from here. A `..` in an id writes the request outside the spool, where no helm is watching, so
+// the caller either burns the whole timeout waiting on a result path that was never going to
+// appear, or — under `--no-wait` — exits 0 having landed the file nowhere.
+//
+// **A hand-copy of `RequestID.pattern`, under the carve-out this script already lives by**: it
+// cannot `import HelmWire` (see AGENTS.md, "Why the spool is a script, and must stay one"), the
+// same as the JSON below and the spool-root rules above. What makes it honest rather than drift is
+// `SpoolWireConformanceTests.testEverySpoolScriptGatesItsIdWithHelmWiresOwnPattern`, which reads
+// this literal out of the source and runs the refusal against a real subprocess.
+let idPattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+guard id.range(of: idPattern, options: .regularExpression) != nil else {
+    die(
+        "--id \"\(id)\" is not a filename — it must match \(idPattern), because it names the "
+            + "request file and the result file helm answers in", .usage)
+}
+
 let root = spoolRoot(spoolOverride)
 guard FileManager.default.fileExists(atPath: root.path) else {
     die(
