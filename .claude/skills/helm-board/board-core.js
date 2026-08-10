@@ -105,17 +105,30 @@ export function candidatesFor(markId, records, boundsOf) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Pressure — the one thing that separates a hand from a script
+// Pressure — what the standard field says, which on macOS is nothing
 // ---------------------------------------------------------------------------------------------
 
-// `props.pts` is a flat `[x, y, pressure, x, y, pressure, …]` run.
+// `props.pts` is a flat `[x, y, pressure, x, y, pressure, …]` run, filled by quickdraw from
+// `e.pressure || 0.5` (`quickdraw/editor.js:661,686`).
 //
-// **A synthetic `PointerEvent` reports a constant pressure of 0.5; a trackpad varies.** That is
-// the discriminator the quickdraw spike closed its last leg with, and it is reported here for
-// one reason: an agent reading this latch can say what the page observed, and cannot claim to
-// have drawn it. `varies: false` on a stroke is not proof of forgery and `varies: true` is not
-// proof of a hand — it is the number, and the operator is the only one who can say whose hand
-// it was.
+// **This header used to say "a synthetic `PointerEvent` reports a constant pressure of 0.5; a
+// trackpad varies", and the second half is false on macOS.** A trackpad is a mouse-class pointer
+// there — `pointerType: "mouse"`, `maxTouchPoints: 0` — and the Pointer Events spec fixes
+// `pressure` at 0.5 for a mouse-class device while a button is down, 0 when it is not. So the
+// field never moves however hard anyone presses, and an agent told to read `varies` here was
+// being sent to the one number that cannot answer.
+//
+// Measured on a live board 2026-08-10: five real trackpad strokes, the longest 70 held samples,
+// `pressure` 0.5 on every one of them. The force was real and it was on another channel —
+// `forceRange`, below.
+//
+// **It is still reported, and deleting it would be the wrong fix.** "The standard field was
+// flat" is a fact about the platform, and a reader who finds `force` present and `pressure`
+// flat can tell that apart from a build that never looked. It stays honest for a stylus too,
+// where `pointerType` is `"pen"` and pressure does vary.
+//
+// `varies: false` is not proof of forgery and `varies: true` is not proof of a hand — it is the
+// number, and the operator is the only one who can say whose hand it was.
 export function pressureRange(pts) {
   const list = [];
   for (let i = 2; i < (pts || []).length; i += 3) {
@@ -134,6 +147,43 @@ export function pressureRange(pts) {
 // How many points a stroke has, from the same flat run.
 export function pointCount(pts) {
   return Math.floor((pts || []).length / 3);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Force — where a hand actually shows up on macOS
+// ---------------------------------------------------------------------------------------------
+
+// Apple's Force Touch channel, which is **not** `PointerEvent.pressure` and never was: it rides
+// on MOUSE events as `webkitForce`, and changes arrive as `webkitmouseforcechanged`. `board.js`
+// collects the samples per gesture and hands them here; nothing in this file touches the DOM.
+//
+// The scale is named by the platform's own constants rather than guessed at:
+// `MouseEvent.WEBKIT_FORCE_AT_MOUSE_DOWN` is 1 — an ordinary click — and
+// `WEBKIT_FORCE_AT_FORCE_MOUSE_DOWN` is 2, the second click you feel. Between and past them is
+// the analogue range. Verified on this machine 2026-08-10: both constants present, a stroke
+// running 1 → 1.9998 over 254 change events.
+//
+// **This is a stronger discriminator than the one it replaces, not a weaker one.** A synthetic
+// `PointerEvent` does not produce a wrong force value — it produces no force events at all, so
+// `null` here is the honest answer for a script and for a plain mouse alike. Neither is proof of
+// anything on its own; it is the number, and it is the operator who knows whose hand it was.
+export const FORCE_AT_MOUSE_DOWN = 1;
+export const FORCE_AT_FORCE_MOUSE_DOWN = 2;
+
+export function forceRange(samples) {
+  const list = (samples || []).filter((v) => typeof v === "number" && Number.isFinite(v));
+  if (!list.length) return null;
+  const min = Math.min(...list);
+  const max = Math.max(...list);
+  return {
+    // Rounded the way `pressureRange` rounds, so a reader comparing the two is comparing like
+    // with like. The signal is `varies` and `samples`; the third decimal of a force reading is
+    // not something anyone acts on.
+    min: Math.round(min * 100) / 100,
+    max: Math.round(max * 100) / 100,
+    varies: list.length > 1 && max - min > 0.001,
+    samples: list.length,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -156,7 +206,7 @@ export const MAX_SHAPES = 96;
 // shape arrives. helm's canvas has paid the other bill once already: the page→helm bridge
 // shipped `{id, text, rect}` with no `kind`, and the gate that had to infer the shape dropped
 // every geometry mark for months (#216).
-export function boardReport({ records, boundsOf, ownedIds, generation, warnings }) {
+export function boardReport({ records, boundsOf, ownedIds, generation, warnings, forceById }) {
   const owned = new Set(ownedIds || []);
   const shapes = records.filter((rec) => rec.typeName !== "asset");
   const drawn = shapes.filter((rec) => !owned.has(rec.id));
@@ -175,6 +225,13 @@ export function boardReport({ records, boundsOf, ownedIds, generation, warnings 
       mark.points = pointCount(rec.props && rec.props.pts);
       mark.pressure = pressure;
     }
+    // **Force belongs to the gesture, not to the ink** — so it is attached whatever the record
+    // turned out to be. A box the operator dragged out under pressure is as much a hand as a
+    // scribble is, and it carries no `pts` for `pressureRange` to read. Absent when nobody
+    // reported any, rather than a fabricated null: a build that never looked and a gesture that
+    // produced no force are different facts, and only the second one has a `force: null`.
+    const force = forceRange(forceById && forceById[rec.id]);
+    if (force) mark.force = force;
     const name = nameOf(rec);
     if (name) mark.label = name;
     return mark;
