@@ -1,0 +1,173 @@
+#!/usr/bin/env node
+// SPIKE #322 — throwaway. `bench mail` as one command, importing ONE copy of the convention.
+//
+// Verbs: whoami | list | send | check | claim
+//
+// The risk this file exists to attack is not "can node write a JSON file" — it is
+// **who am I?**, which today is answered by a per-runtime integration (a Claude Code hook that
+// is handed `session_id`, a pi extension that asks `sessionManager`). A CLI is handed neither.
+// So it walks its own ancestry and looks for the first ancestor that already owns a mailbox.
+// That is the same join `AddressBook.owner(foregroundPid:shellPid:ancestors:)` makes in Swift.
+
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+	OWNER_FILE,
+	READ_DIR,
+	allHandles,
+	claim,
+	consume,
+	mailRoot,
+	peers,
+	queued,
+	readJson,
+	send,
+	slug,
+} from "./bench-mail-core.mjs";
+
+/** Every ancestor pid of this process, nearest first. One `ps` call, no per-pid loop. */
+function ancestry(start = process.pid) {
+	let table;
+	try {
+		table = execFileSync("/bin/ps", ["-Ao", "pid=,ppid=,comm="], { encoding: "utf8" });
+	} catch {
+		return [];
+	}
+	const parent = new Map();
+	const comm = new Map();
+	for (const line of table.split("\n")) {
+		const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+		if (!m) continue;
+		parent.set(Number(m[1]), Number(m[2]));
+		comm.set(Number(m[1]), m[3]);
+	}
+	const chain = [];
+	let pid = start;
+	for (let i = 0; i < 64 && pid && pid > 1; i += 1) {
+		pid = parent.get(pid);
+		if (!pid || pid <= 1) break;
+		chain.push({ pid, comm: comm.get(pid) ?? "" });
+	}
+	return chain;
+}
+
+/** Claude Code's own registry: pid -> sessionId. pi and codex publish no such thing. */
+function claudeSessionForPid(pid) {
+	const base = process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), ".claude");
+	const row = readJson(path.join(base, "sessions", `${pid}.json`));
+	return row?.sessionId;
+}
+
+/**
+ * Which mailbox is the caller's? Three answers, in confidence order — and the third is the
+ * one that makes this work with no integration at all.
+ */
+function whoami(root) {
+	const pinned = process.env.HELM_MAIL_HANDLE?.trim();
+	if (pinned) return { handle: slug(pinned), how: "HELM_MAIL_HANDLE" };
+
+	const chain = ancestry();
+	const owners = allHandles(root)
+		.map((handle) => ({ handle, owner: readJson(path.join(root, handle, OWNER_FILE)) }))
+		.filter(({ owner }) => owner && !owner.retiredAt);
+
+	// 1. an ancestor's pid is recorded in a live owner.json
+	for (const { pid } of chain) {
+		const hit = owners.find(({ owner }) => owner.pid === pid);
+		if (hit) return { handle: hit.handle, how: `ancestor pid ${pid}`, ancestor: pid };
+	}
+	// 2. an ancestor is a Claude Code session whose id an owner.json claims
+	for (const { pid } of chain) {
+		const session = claudeSessionForPid(pid);
+		if (!session) continue;
+		const hit = owners.find(({ owner }) => owner.sessionId === session);
+		if (hit) return { handle: hit.handle, how: `ancestor pid ${pid} → session ${session}`, ancestor: pid };
+	}
+	return { handle: undefined, how: "no ancestor owns a mailbox", chain };
+}
+
+const root = mailRoot();
+const [verb, ...rest] = process.argv.slice(2);
+
+function die(message, code = 1) {
+	process.stderr.write(`bench mail: ${message}\n`);
+	process.exit(code);
+}
+
+if (!verb || verb === "whoami") {
+	const me = whoami(root);
+	process.stdout.write(`root: ${root}\n`);
+	process.stdout.write(`handle: ${me.handle ?? "(none — this session has no mailbox)"}\n`);
+	process.stdout.write(`how: ${me.how}\n`);
+	if (!me.handle && me.chain) {
+		process.stdout.write(`ancestry: ${me.chain.map((c) => `${c.pid}:${c.comm}`).join(" < ")}\n`);
+	}
+	process.exit(me.handle ? 0 : 4);
+}
+
+if (verb === "list") {
+	const me = whoami(root);
+	const rows = peers(root, me.handle ?? "");
+	process.stdout.write(rows.length ? `${rows.join("\n")}\n` : `no mailboxes under ${root}\n`);
+	process.exit(0);
+}
+
+if (verb === "send") {
+	// `bench mail send <handle> <subject> [body-file|-]`
+	const [to, subject, bodyArg] = rest;
+	if (!to || !subject) die("usage: bench mail send <handle> <subject> [body-file|-]", 2);
+	const me = whoami(root);
+	if (!me.handle) die(`I have no mailbox, so I cannot say who this is from (${me.how})`, 4);
+	let body = "";
+	if (bodyArg === "-") body = fs.readFileSync(0, "utf8");
+	else if (bodyArg) body = fs.readFileSync(bodyArg, "utf8");
+	try {
+		const message = send(root, { to: slug(to), from: me.handle, subject, body });
+		process.stdout.write(`sent ${message.id} to ${message.to} (from ${message.from})\n`);
+		process.exit(0);
+	} catch (error) {
+		die(error.message, 3);
+	}
+}
+
+if (verb === "check") {
+	const me = whoami(root);
+	if (!me.handle) die(`I have no mailbox (${me.how})`, 4);
+	const dir = path.join(root, me.handle);
+	const waiting = queued(dir);
+	if (waiting.length === 0) {
+		process.stdout.write(`no mail waiting for ${me.handle}\n`);
+		process.exit(0);
+	}
+	const taken = consume(dir, waiting);
+	process.stdout.write(`${taken.length} message(s) for ${me.handle}:\n`);
+	for (const { message, file } of taken) {
+		process.stdout.write(`  from ${message.from} — ${message.subject}\n    ${file}\n`);
+	}
+	process.exit(0);
+}
+
+if (verb === "claim") {
+	// The codex case: no hook, no extension. The agent claims for itself, and the pid recorded
+	// is an ANCESTOR's — this process is dead before the file it wrote is read.
+	const [runtime] = rest;
+	const chain = ancestry();
+	const agent = chain.find(({ comm }) => /codex|claude|pi$|node/.test(comm)) ?? chain[0];
+	if (!agent) die("could not find an ancestor to record as the owner", 4);
+	const cwd = process.cwd();
+	const sessionId = claudeSessionForPid(agent.pid) ?? "";
+	const handle = `${slug(path.basename(cwd))}-${String(agent.pid).slice(-4)}`;
+	const made = claim(root, {
+		handle,
+		runtime: runtime || "codex",
+		pid: agent.pid,
+		sessionId,
+		cwd,
+	});
+	process.stdout.write(`claimed ${made.handle} (pid ${agent.pid}, ${agent.comm}) in ${root}\n`);
+	process.exit(0);
+}
+
+die(`unknown verb "${verb}" — try whoami | list | send | check | claim`, 2);

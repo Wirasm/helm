@@ -1,0 +1,5 @@
+#!/bin/bash
+# SPIKE #322 — a logging shim so every invocation of the poll is timestamped and countable,
+# whoever ran it and whenever. $SPIKE322_LOG is the ledger.
+printf '%s pid=%s ppid=%s argv=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$PPID" "$*" >> "${SPIKE322_LOG:-/tmp/spike322-invocations.log}"
+exec /Users/rasmus/Projects/mine/sild/helm/.claude/worktrees/agent-a8fd5cb1964e14a8d/spike322/bench-mail "$@"
