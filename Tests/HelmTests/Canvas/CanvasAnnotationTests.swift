@@ -132,16 +132,21 @@ final class CanvasAnnotationTests: XCTestCase {
     /// is no field here that could carry one, so a page sending image data has nowhere to
     /// put it. Nothing wider is meant by that — the rendered canvas is screenshotted
     /// elsewhere, and that is how an agent validates what it wrote.
-    func testNothingFromTheBodyIsCarriedBeyondTheAnchorAndComment() {
-        let annotation = decode([
-            "id": "phase-2", "text": "Phase 2", "screenshot": "data:image/png;base64,AAAA",
-            "rect": ["x": 1, "y": 2],
-        ])
+    ///
+    /// The expected value is asserted field by field rather than against a hand-built
+    /// `CanvasAnnotation` (#326): that construction is gone, and this suite is the one place that
+    /// must not reach for `CanvasAnnotationFixture` — its subject IS `decode`, and a gate checked
+    /// against a helper that goes through the gate asserts nothing. Nothing is weakened by the
+    /// change, because `Equatable` here is synthesized over exactly these two fields, so the whole
+    /// value and the pair are the same assertion.
+    func testNothingFromTheBodyIsCarriedBeyondTheAnchorAndComment() throws {
+        let annotation = try XCTUnwrap(
+            decode([
+                "id": "phase-2", "text": "Phase 2", "screenshot": "data:image/png;base64,AAAA",
+                "rect": ["x": 1, "y": 2],
+            ]))
 
-        XCTAssertEqual(
-            annotation,
-            CanvasAnnotation(
-                anchor: .element(id: "phase-2", text: "Phase 2"), comment: "this ordering is wrong")
-        )
+        XCTAssertEqual(annotation.mark, .selection(.element(id: "phase-2", text: "Phase 2")))
+        XCTAssertEqual(annotation.comment, "this ordering is wrong")
     }
 }

@@ -46,14 +46,44 @@ struct CanvasAnnotation: Equatable {
 
     var mark: Mark
     var comment: String
+
+    /// **`private` is the gate's exclusivity, said by the compiler instead of by a comment**
+    /// (#326). `decode` below promises *"every field is type-checked and bounded… never a crash,
+    /// never a half-written note"*, and while the memberwise initializer was synthesized at
+    /// `internal` that promise was prose: anything in the module could assemble a mark the gate
+    /// would have refused. Fifteen fixtures across five test files already did.
+    ///
+    /// **That is `StandardizedPath`'s lesson two seams over** — a doc comment asking callers to
+    /// prefer a helper, taken around by a test anyway (#88), fixed by making the unchecked value
+    /// unconstructable rather than by asking again. `@testable import` raises `internal` and does
+    /// **not** raise `private`, so a fixture cannot take the shortcut either.
+    ///
+    /// **`private`, chosen rather than inherited from #323, which used `fileprivate` for the
+    /// sibling type one file over.** The two cases are not the same shape, and that is what
+    /// decides it: `CanvasSelection`'s gate is `CanvasPageSelection.decode` — a **different
+    /// type** — so `private` would have shut its own gate out and `fileprivate` was the tightest
+    /// available. This gate is `CanvasAnnotation.decode`, a static member of *this* type in a
+    /// same-file extension, and SE-0169 gives those access to `private` members. So the wider
+    /// scope buys nothing here and costs a door: measured, a sibling declaration **in this very
+    /// file** is refused under `private` and admitted under `fileprivate`.
+    ///
+    /// A nested type with a `private` init was the other candidate and is the same scope by a
+    /// longer road — it is what you reach for when the gate lives on a different type and
+    /// `fileprivate` is too wide. Here the plain member modifier already is that scope, so
+    /// nesting would rename the type at every use site and buy nothing.
+    ///
+    /// This is now the **only** initializer. `init(anchor:comment:)` — *"a selection is the
+    /// ordinary construction, and was the only one before #112"* — went with the bypasses it
+    /// existed for: `decode` never called it, so once the fixtures went through the gate it had
+    /// no caller left in either target, and a private initializer nothing calls is not a second
+    /// door but litter behind the first.
+    private init(mark: Mark, comment: String) {
+        self.mark = mark
+        self.comment = comment
+    }
 }
 
 extension CanvasAnnotation {
-    /// A selection is the ordinary construction, and was the only one before #112.
-    init(anchor: Anchor, comment: String) {
-        self.init(mark: .selection(anchor), comment: comment)
-    }
-
     /// An enclosure may not cover an unbounded number of things — a drag across a whole
     /// document is not a mark, it is a mistake.
     static let maximumEnclosureCount = 32
