@@ -15,24 +15,39 @@ You are in **pi**. The `helm-mail` extension already claimed your mailbox, watch
 when mail arrives. **You only need this skill to SEND.** The Claude Code side is `helm-mail-cc`, and
 it has to do more work — mention that if you are asked about the difference.
 
-**Every snippet below opens with the same line, and it is not boilerplate.**
+**Every snippet below opens with these three lines, and they are not boilerplate.**
 
 ```bash
-ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+SUITE=${HELM_DEFAULTS_SUITE:-}
+case "$SUITE" in "" | com.wirasm.helm | helm | */*) SUITE= ;; esac
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${SUITE:+-$SUITE}}
 ```
 
-`~/.helm/mail` is the mailroom of the operator's own helm. If `$HELM_DEFAULTS_SUITE` is set you are
-hosted by an **isolated** helm and yours is `~/.helm/mail-$HELM_DEFAULTS_SUITE` — a whole separate
-mailroom, not a prefix: his agents are not in it, cannot see you, and you must not write to them
-(#285). Resolving it into `$ROOT` rather than asking you to remember the substitution is the point;
-a snippet that named the literal would list and *send into* his mailroom from a throwaway instance,
-silently and successfully. It is deliberately simpler than helm's own rule in the cases helm refuses
-to launch under at all, and simpler only in the direction that keeps you out of the shared root.
+`~/.helm/mail` is the mailroom of the operator's own helm. If `$HELM_DEFAULTS_SUITE` names an
+**isolated** helm, yours is `~/.helm/mail-<suite>` — a whole separate mailroom, not a prefix: his
+agents are not in it, cannot see you, and you must not write to them (#285). Resolving it into
+`$ROOT` rather than asking you to remember the substitution is the point; a snippet that named the
+literal would list and *send into* his mailroom from a throwaway instance, silently and
+successfully.
+
+**The `case` line is the half that is easy to leave out, and leaving it out fails the other way.**
+Three names are *not* a suite: the canonical domain `com.wirasm.helm` (which helm runs under
+perfectly normally — it means "no suite"), the legacy domain `helm`, and anything with a `/` in it.
+The real writers send all three to `~/.helm/mail`, so an expression that honoured them would put
+you in an empty `~/.helm/mail-com.wirasm.helm` while your own mailbox sat in the shared root: your
+sends succeed into a directory nobody reads, and your own box never seems to receive anything.
+Measured against the real `mailRoot()` in all three shells and every case — the gate does it on
+every run.
+
+The one thing it does not copy is helm's whitespace trim, and that cannot bite what helm publishes:
+helm declares the *decided* suite name into the pane, already trimmed.
 
 ## Who is reachable
 
 ```bash
-ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+SUITE=${HELM_DEFAULTS_SUITE:-}
+case "$SUITE" in "" | com.wirasm.helm | helm | */*) SUITE= ;; esac
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${SUITE:+-$SUITE}}
 find "$ROOT" -maxdepth 2 -name owner.json -type f 2>/dev/null | while read -r f; do
   python3 - "$f" <<'PY'
 import json, os, sys
@@ -133,7 +148,9 @@ the uuid of the pane, which outlives any one agent in it, so it is not a handle 
 own process ancestry:
 
 ```bash
-ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+SUITE=${HELM_DEFAULTS_SUITE:-}
+case "$SUITE" in "" | com.wirasm.helm | helm | */*) SUITE= ;; esac
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${SUITE:+-$SUITE}}
 p=$$; while [ "$p" -gt 1 ]; do
   grep -l "\"pid\": $p," "$ROOT"/*/owner.json 2>/dev/null && break
   p=$(ps -o ppid= -p "$p" | tr -d ' ')
@@ -149,7 +166,9 @@ nothing rather than half a message:
 
 ```bash
 TO=claude-a3f9; FROM=<your handle>
-ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+SUITE=${HELM_DEFAULTS_SUITE:-}
+case "$SUITE" in "" | com.wirasm.helm | helm | */*) SUITE= ;; esac
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${SUITE:+-$SUITE}}
 ID="$(date +%s000)-$(openssl rand -hex 3)"
 D=$ROOT/$TO
 python3 -c "

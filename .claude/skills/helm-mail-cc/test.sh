@@ -169,20 +169,41 @@ printf '\nthe documented mail root (both skills, #285)\n'
 # So the root is a value the snippets resolve, and this is the check that it resolves to the right
 # directory. Extracted from the doc rather than retyped, for this file's founding reason: a test
 # that restates the expression is a second copy of it and would keep passing while the doc said
-# something else. Three cases, and the middle one is the ticket.
-root_expr=$(grep -h '^ROOT=' "$cc" | sort -u)
-if [ "$(printf '%s\n' "$root_expr" | wc -l | tr -d ' ')" != 1 ] || [ -z "$root_expr" ]; then
-    bad "the skills spell the ROOT= line more than one way, or not at all: $root_expr"
+# something else.
+#
+# The WHOLE preamble is taken, not just its last line. The `case` line is what refuses the three
+# names that are not a suite, and a check that lifted only `ROOT=` would run it with `$SUITE`
+# unset — which resolves the shared root for every input and would pass every row below while
+# measuring nothing at all.
+root_expr=$(extract_block "$cc" '^\*\*Every snippet below opens')
+if [ -z "$root_expr" ]; then
+    bad "could not extract the root preamble from helm-mail-cc/SKILL.md — every check below would be vacuous"
+elif [ "$(extract_block "$pi" '^\*\*Every snippet below opens')" != "$root_expr" ]; then
+    # The two skills are documented identically by design, which is why one gate covers both; a
+    # root that diverged would put the two runtimes in different mailrooms.
+    bad "helm-mail-pi's root preamble differs from helm-mail-cc's"
 else
-    ok "both skills open every snippet with one spelling of the root"
+    ok "both skills state one root preamble, and it is the same one"
 fi
-# The pi skill must use the SAME line — the two are documented identically by design, which is why
-# one gate covers both, and a root that diverged would put the two runtimes in different mailrooms.
-if [ "$(grep -h '^ROOT=' "$pi" | sort -u)" = "$root_expr" ]; then
-    ok "helm-mail-pi resolves the root exactly as helm-mail-cc does"
-else
-    bad "helm-mail-pi's ROOT= line differs from helm-mail-cc's"
-fi
+
+# …and every snippet in both files must open with all of it, which is the failure the extraction
+# above cannot see: a block that kept `ROOT=` and dropped the `case` line is exactly the leak, and
+# it would sit in a file whose stated preamble is still correct.
+for f in "$cc" "$pi"; do
+    name=$(basename "$(dirname "$f")")
+    counts=$(while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        grep -Fxc -- "$line" "$f"
+    done <<EOF
+$root_expr
+EOF
+    )
+    if [ "$(printf '%s\n' "$counts" | sort -u | wc -l | tr -d ' ')" = 1 ]; then
+        ok "$name repeats the whole preamble in every snippet ($(printf '%s\n' "$counts" | head -1) of each line)"
+    else
+        bad "$name has snippets carrying only part of the preamble: line counts $(printf '%s' "$counts" | tr '\n' ' ')"
+    fi
+done
 
 resolves_root() {
     printf '%s\nprintf "%%s" "$ROOT"\n' "$root_expr" >"$tmp/root.zsh"
@@ -194,6 +215,30 @@ check "inside an isolated helm, it reads that instance's mailroom instead (#285)
     "$tmp/fakehome/.helm/mail-drivetest" "$(resolves_root "HELM_DEFAULTS_SUITE=drivetest")"
 check "and an explicit HELM_MAIL_DIR still beats both, or no test could redirect one" \
     "/tmp/somewhere-else" "$(resolves_root "HELM_MAIL_DIR=/tmp/somewhere-else")"
+
+# THE THREE NAMES THAT ARE NOT A SUITE, and they are the whole reason this group exists rather
+# than being three rows of the same thing.
+#
+# The real writers refuse all three — `DefaultsSuite.override` maps the canonical domain to
+# `.none` and the other two to `.refused`, and `mailRoot()` sends every one of them to the SHARED
+# root. A documented expression that honoured them anyway is a silent, one-way leak in the
+# direction that costs most: a session whose mailbox was correctly claimed at `~/.helm/mail` by the
+# real hook reads an empty `~/.helm/mail-<name>`, sends into it "successfully", and watches a box
+# nothing will ever deliver to. No error on any path.
+#
+# And `com.wirasm.helm` is not an exotic value. It is the literal `AGENTS.md` tells contributors to
+# `defaults read`, helm LAUNCHES NORMALLY under it — `.none`, not `.refused`, so nothing stops it —
+# and `claude-session-start` fires for every Claude Code session on this machine, helm pane or not.
+# `helm` is both the obvious guess at a suite name and the legacy domain anyone testing the refusal
+# would export. The fixtures are the same two strings `MAIL_ROOT_CASES` and
+# `MailboxDirectoryTests.testTheSuiteMovesTheMailroomOnlyWhenHelmWouldHonourIt` run against the
+# real implementation, on purpose: this is that check, one language over.
+check "naming the canonical domain is naming no suite, here as in helm" \
+    "$tmp/fakehome/.helm/mail" "$(resolves_root "HELM_DEFAULTS_SUITE=com.wirasm.helm")"
+check "and so is the legacy domain helm refuses to run under" \
+    "$tmp/fakehome/.helm/mail" "$(resolves_root "HELM_DEFAULTS_SUITE=helm")"
+check "and a name with a path in it, which this doc would otherwise mkdir into" \
+    "$tmp/fakehome/.helm/mail" "$(resolves_root "HELM_DEFAULTS_SUITE=path/with/slash")"
 
 printf '\nthe documented mailbox listing (both skills)\n'
 

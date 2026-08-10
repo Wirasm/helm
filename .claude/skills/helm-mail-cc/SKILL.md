@@ -15,24 +15,39 @@ You are in **Claude Code**. A `SessionStart` hook already claimed your mailbox a
 `UserPromptSubmit` hook delivers waiting mail at the start of each of your turns. **The one thing
 nobody can do for you is wake you** — see *Arm*, below. pi's side is `helm-mail-pi`.
 
-**Every snippet below opens with the same line, and it is not boilerplate.**
+**Every snippet below opens with these three lines, and they are not boilerplate.**
 
 ```bash
-ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+SUITE=${HELM_DEFAULTS_SUITE:-}
+case "$SUITE" in "" | com.wirasm.helm | helm | */*) SUITE= ;; esac
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${SUITE:+-$SUITE}}
 ```
 
-`~/.helm/mail` is the mailroom of the operator's own helm. If `$HELM_DEFAULTS_SUITE` is set you are
-hosted by an **isolated** helm and yours is `~/.helm/mail-$HELM_DEFAULTS_SUITE` — a whole separate
-mailroom, not a prefix: his agents are not in it, cannot see you, and you must not write to them
-(#285). Resolving it into `$ROOT` rather than asking you to remember the substitution is the point;
-a snippet that named the literal would list and *send into* his mailroom from a throwaway instance,
-silently and successfully. It is deliberately simpler than helm's own rule in the cases helm refuses
-to launch under at all, and simpler only in the direction that keeps you out of the shared root.
+`~/.helm/mail` is the mailroom of the operator's own helm. If `$HELM_DEFAULTS_SUITE` names an
+**isolated** helm, yours is `~/.helm/mail-<suite>` — a whole separate mailroom, not a prefix: his
+agents are not in it, cannot see you, and you must not write to them (#285). Resolving it into
+`$ROOT` rather than asking you to remember the substitution is the point; a snippet that named the
+literal would list and *send into* his mailroom from a throwaway instance, silently and
+successfully.
+
+**The `case` line is the half that is easy to leave out, and leaving it out fails the other way.**
+Three names are *not* a suite: the canonical domain `com.wirasm.helm` (which helm runs under
+perfectly normally — it means "no suite"), the legacy domain `helm`, and anything with a `/` in it.
+The real writers send all three to `~/.helm/mail`, so an expression that honoured them would put
+you in an empty `~/.helm/mail-com.wirasm.helm` while your own mailbox sat in the shared root: your
+sends succeed into a directory nobody reads, and your own box never seems to receive anything.
+Measured against the real `mailRoot()` in all three shells and every case — the gate does it on
+every run.
+
+The one thing it does not copy is helm's whitespace trim, and that cannot bite what helm publishes:
+helm declares the *decided* suite name into the pane, already trimmed.
 
 ## Who is reachable
 
 ```bash
-ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+SUITE=${HELM_DEFAULTS_SUITE:-}
+case "$SUITE" in "" | com.wirasm.helm | helm | */*) SUITE= ;; esac
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${SUITE:+-$SUITE}}
 find "$ROOT" -maxdepth 2 -name owner.json -type f 2>/dev/null | while read -r f; do
   python3 - "$f" <<'PY'
 import json, os, sys
@@ -150,7 +165,9 @@ match that against the mailboxes:
 p=$$; while [ "$p" -gt 1 ] && [ ! -f ~/.claude/sessions/$p.json ]; do
   p=$(ps -o ppid= -p "$p" | tr -d ' ')
 done
-ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+SUITE=${HELM_DEFAULTS_SUITE:-}
+case "$SUITE" in "" | com.wirasm.helm | helm | */*) SUITE= ;; esac
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${SUITE:+-$SUITE}}
 python3 - "$p" "$ROOT" <<'PY'
 import glob, json, os, sys
 me = json.load(open(os.path.expanduser("~/.claude/sessions/%s.json" % sys.argv[1])))["sessionId"]
@@ -178,7 +195,9 @@ nothing rather than half a message:
 
 ```bash
 TO=sild-611a; FROM=<your handle>
-ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+SUITE=${HELM_DEFAULTS_SUITE:-}
+case "$SUITE" in "" | com.wirasm.helm | helm | */*) SUITE= ;; esac
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${SUITE:+-$SUITE}}
 ID="$(date +%s000)-$(openssl rand -hex 3)"
 D=$ROOT/$TO
 python3 -c "
@@ -219,7 +238,9 @@ arm can, because being notified *is* the wake.
 Arm a background watch on your own mailbox, one notification per message:
 
 ```bash
-ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+SUITE=${HELM_DEFAULTS_SUITE:-}
+case "$SUITE" in "" | com.wirasm.helm | helm | */*) SUITE= ;; esac
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${SUITE:+-$SUITE}}
 BOX=$ROOT/<your handle>
 while true; do
   find "$BOX" -maxdepth 1 -name '*.json' ! -name 'owner.json' -type f 2>/dev/null | while read -r f; do

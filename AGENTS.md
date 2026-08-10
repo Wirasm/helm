@@ -156,15 +156,32 @@ Bash tool runs, and no gate read a skill file at all until this one. Needs bash,
 which is why it is not in the Swift gate.
 
 **Since #285 it also executes the root those snippets resolve**, and that is a fifth copy of the
-mailbox's directory rule rather than a fourth. Every snippet in both skills opens with
-`ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}`, because a
-documented literal is not merely stale inside an isolated instance — it is an agent in a throwaway
-helm **listing and sending into the operator's own mailroom**, successfully and silently, which is
-the cross-talk the code fix closes. Prose asking the reader to substitute the suite themselves was
-the first attempt and is not a mechanism. The gate resolves the doc's own expression against a fake
-`HOME` for all three cases, and runs every other snippet with both variables taken **out** of the
-environment — this gate is very often run by an agent hosted in an isolated helm, which exports the
-second one.
+mailbox's directory rule rather than a fourth. Every snippet in both skills opens with a three-line
+preamble that resolves `$ROOT`, because a documented literal is not merely stale inside an isolated
+instance — it is an agent in a throwaway helm **listing and sending into the operator's own
+mailroom**, successfully and silently, which is the cross-talk the code fix closes. Prose asking the
+reader to substitute the suite themselves was the first attempt and is not a mechanism.
+
+**The line of that preamble that matters is the one it is tempting to drop.** The first cut was a
+single `${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}`, which honours **every** value — and the
+three the real writers refuse are exactly the reachable ones: `com.wirasm.helm` is the canonical
+domain, which `DefaultsSuite.override` maps to `.none` so **helm launches perfectly normally under
+it**, it is the literal this file tells you to `defaults read`, and `claude-session-start` fires for
+every Claude Code session on the machine rather than only those in a helm pane; `helm` is the legacy
+domain and the obvious guess at a suite name; a `/` makes a path. All three sent the reader to an
+empty `~/.helm/mail-<name>` while the real hook had claimed their mailbox in the shared root — sends
+that succeed into a directory nobody reads, and a box that never receives. **The escape hatch the
+first version wrote for itself — *"simpler only in the cases helm refuses to launch under"* — was
+false for the case that needed it most.** So the preamble carries the same four textual guards the
+writers do, and the gate runs the doc's own expression against all six fixtures. The one rule it
+does not copy is the whitespace trim, which cannot bite what helm publishes: `PaneEnvironment`
+declares the *decided* name.
+
+The gate also requires both skills to state one preamble and **every snippet to repeat all of it** —
+a block that kept `ROOT=` and dropped the `case` line is the leak, sitting in a file whose stated
+preamble is still correct — and it runs every other snippet with both variables taken **out** of the
+environment, because this gate is very often run by an agent hosted in an isolated helm, which
+exports the second one.
 
 `push.sh` is how an agent puts an artifact on the bench, and it is the third mechanism to hold
 that job — the first two shipped broken. Both were verified from a shell the operator typed into,
