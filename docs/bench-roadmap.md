@@ -91,6 +91,42 @@ Each is argued in the audit doc; this is the checklist form.
 **Goal:** `daemon/` exists, runs, and is safe to develop against on the machine that
 hosts the developers.
 
+**Repo structure (decided — this is part of M0, not up for redesign):** Swift stays at
+the root exactly where it is; `daemon/` is added beside it; nothing else moves. No
+grand `apps/`-and-`crates/` reorganization — the strangler ethos applies to the
+directory tree too, and the end state (a Swift face + a Rust daemon + sensors + skills)
+already reads correctly from this layout.
+
+```
+helm/
+├── AGENTS.md              # entry point; gains a short "daemon/" section
+├── CONTEXT.md             # grows the bench vocabulary as terms land
+├── docs/                  # this roadmap + the audit doc
+├── Package.swift          # the face — the root Swift package never moves
+├── Sources/ Tests/        # the face; slices shrink as verticals unwire
+├── daemon/                # NEW — self-contained cargo workspace, own gate
+│   ├── Cargo.toml         # [workspace]
+│   ├── AGENTS.md          # gate command, conventions, invariants pointer
+│   ├── test.sh            # cargo fmt --check, clippy, test, conformance
+│   └── crates/
+│       ├── benchd/        # the daemon
+│       ├── bench/         # the CLI — the agent surface
+│       └── bench-wire/    # every wire type, single spelling
+├── hooks/  pi/            # taps stay in their runtime homes; contents thin, addresses never move
+├── tools/                 # unwired at M3, then deleted
+├── scripts/               # + wire-gen (bench-wire → generated Sources/BenchWire/)
+├── Patches/               # dies at M5
+└── .claude/skills/        # + bench/ skill beside helm-canvas et al.
+```
+
+Rules carried by the structure: `daemon/` is the `pi/`-style carve-out (own gate, own
+CI job on `daemon/**`, the Swift gate keeps needing only the Swift toolchain); there is
+deliberately **no root `Cargo.toml`** (cargo at the repo root should fail loudly, not
+half-work); generated Swift wire types land in `Sources/BenchWire/` marked
+generated-never-edited, with the conformance-pinned duplicate as the per-type fallback;
+the bench skill lives in `.claude/skills/bench/` with its snippets executed by its gate
+against the real CLI.
+
 - Cargo workspace `daemon/` with three crates: `benchd` (the daemon), `bench` (the CLI,
   which is also the future agent skill surface), `bench-wire` (every wire type, single
   spelling).
