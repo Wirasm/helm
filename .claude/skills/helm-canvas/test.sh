@@ -55,6 +55,48 @@ run_code() {
     printf '%s' $?
 }
 
+# --- staging, so the gate for a delivery mechanism does not itself deliver ---------------
+#
+# Every case that gets past the extension check reaches push.sh's emit — and an agent runs
+# this gate from inside a helm pane, so those cases used to write a real OSC into the
+# OPERATOR'S terminal: five times for the extension loop, once more for the probe, each
+# leaving a canvas tab pointing into a `mktemp` directory this file then deleted on exit.
+# He watched a row of dead `a.md` tabs pile up while #282 was being fixed.
+#
+# That is #282 wearing the other face, and a better argument for the guard than the one the
+# issue opens with because it happened rather than being hypothetical: push.sh resolved *a*
+# pty rather than the intended one, and nothing about the call said which bench was meant.
+#
+# So every emitting case is staged. `detach` double-forks, which reparents to pid 1 and cuts
+# the ancestor chain — the answer then does not depend on where the gate is run (a pane, a
+# Ghostty window and CI all agree) and nothing can reach the operator. The one case that has
+# to prove a REAL emit gives push.sh a pty of its own instead, so the bytes land in a
+# captured stream rather than on a bench; that needs no live helm and no disposable
+# `HELM_DEFAULTS_SUITE` instance to keep clean.
+#
+# `</dev/null` is load-bearing: script(1) tcgetattr's its own stdin, and nested inside an
+# agent's tool call that is a SOCKET — "Operation not supported on socket", no pty, no code
+# file. It ran fine by hand, which is the same trap this whole file is about.
+
+# $1 exit-code file, $2 artifact, $3 file for stdout+stderr. Sending stdout to a FILE is
+# also the #184 shape — the caller's stdout is not a terminal, exactly as under a harness.
+cat >"$tmp/run" <<EOF
+#!/usr/bin/env bash
+"$push" "\$2" >"\$3" 2>&1
+printf '%s' \$? >"\$1"
+EOF
+
+detach() { ( ( "$@" >/dev/null 2>&1 </dev/null & ) & ); }
+
+await_code() {
+    local out=$1 waited=0 max_wait=100 # 100 * 0.1s = a 10s ceiling
+    while [ ! -f "$out" ] && [ "$waited" -lt "$max_wait" ]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    cat "$out" 2>/dev/null
+}
+
 printf 'push.sh\n'
 
 # --- refusals, each with its own code so a caller can act on it -------------------------
@@ -85,86 +127,54 @@ evil=$(printf '%s/eviltitle\033]0;PWNED\007.md' "$tmp")
 }
 
 # --- the renderable extensions are all accepted -----------------------------------------
+# Staged with no pty anywhere, so each is 6 on any machine and none of them emits. What the
+# case is about is the extension being ACCEPTED — anything but 5 — and 6 is the proof it got
+# all the way to sink resolution. Launched together, then collected, so five detached runs
+# cost one wait rather than five.
 for ext in md markdown mdown html htm; do
     printf 'x\n' >"$tmp/a.$ext"
-    code=$(run_code "$tmp/a.$ext")
-    # Past the extension gate, so anything but 5 means the extension was accepted. Which of
-    # 0/6/8 comes back depends on where the gate is being run — a helm pane, a Ghostty
-    # window, or CI — and that is the staged trio's job below, not this one's.
-    case "$code" in
-        0 | 6 | 8) pass=$((pass + 1)); printf '  ok    .%s is renderable\n' "$ext" ;;
-        *) fail=$((fail + 1)); printf '  FAIL  .%s rejected with %s\n' "$ext" "$code" ;;
-    esac
+    detach bash "$tmp/run" "$tmp/rc.$ext" "$tmp/a.$ext" "$tmp/out.$ext"
+done
+for ext in md markdown mdown html htm; do
+    check ".$ext is renderable" 6 "$(await_code "$tmp/rc.$ext")"
 done
 
-# --- delivery, for real ------------------------------------------------------------------
-# The case #184 is about: run from a context whose stdout is NOT a terminal, which is what
-# an agent's tool call looks like. Piping to cat is exactly that.
+# --- no pty at all: refused, and the caller still gets the path --------------------------
 printf '# probe\n' >"$tmp/probe.md"
-out=$("$push" "$tmp/probe.md" 2>&1 | cat)
-code=${PIPESTATUS[0]:-0}
+detach bash "$tmp/run" "$tmp/c_none" "$tmp/probe.md" "$tmp/out_none"
+check "no pty at all is refused, nothing emitted" 6 "$(await_code "$tmp/c_none")"
 # Printed on delivery, and named in both refusals — so the operator has the path either way.
-check_contains "the path is printed for the operator" "$tmp/probe.md" "$out"
-case "$code" in
-    0) pass=$((pass + 1)); printf '  ok    delivered with stdout captured\n' ;;
-    6) pass=$((pass + 1)); printf '  ok    refused loudly — no pty here, nothing emitted\n' ;;
-    8) pass=$((pass + 1)); printf '  ok    refused loudly — pty is not helm'"'"'s, nothing emitted\n' ;;
-    *) fail=$((fail + 1)); printf '  FAIL  unexpected exit %s with stdout captured\n' "$code" ;;
-esac
+check_contains "the path is printed for the operator" "$tmp/probe.md" \
+    "$(cat "$tmp/out_none" 2>/dev/null)"
 
 # --- which pty, which exit code (#282) --------------------------------------------------
-# The case above accepts 0, 6 OR 8, so on its own it is satisfied by refusing everything —
-# which is the failure mode opposite to the one being fixed, and just as silent. These
-# three pin it, one exit code each, by STAGING the pty rather than observing whatever the
-# gate happens to be run under.
+# The case above is one exit code out of three that mean "not refused for its extension", so
+# on its own it is satisfied by refusing everything — the failure mode opposite to the one
+# being fixed, and just as silent. These two pin the other half, one exit code each, by
+# STAGING the pty rather than observing whatever the gate happens to be run under.
 #
-# The double-fork is the load-bearing part of each. It reparents the run to pid 1 and cuts
-# the ancestor chain, so the answer does not depend on the gate itself running inside a
-# helm pane. Without it, a `script` pty started from a pane is correctly walked PAST to the
-# pane's own pty and every case here would come back 0 — which is exactly how the previous
-# version of this check ended up asserting the bug: it wrapped push.sh in `script`, got the
-# 0 it expected, and could not tell "found a pty" from "found helm's".
-#
-# `</dev/null` is load-bearing too: script(1) tcgetattr's its own stdin, and nested inside
-# an agent's tool call that is a SOCKET — "Operation not supported on socket", no pty, no
-# code file. It ran fine by hand, which is the same trap this whole file is about.
+# Both are detached for the reason at the top of the file, and detaching is also what makes
+# them mean anything: without it, a `script` pty started from a pane is correctly walked PAST
+# to the pane's own pty and both would come back 0 — which is exactly how the previous
+# version of this check ended up asserting the bug. It wrapped push.sh in `script`, got the 0
+# it expected, and could not tell "found a pty" from "found helm's".
 if command -v script >/dev/null 2>&1; then
-    # One runner, so the three cases below differ only in the pty they are handed and not
-    # in three layers of shell quoting. $1 is where the exit code goes — a FILE, because
-    # under `script` the pty stream is captured too and parsing a status out of it would
-    # mean parsing around the very escape sequence under test.
-    cat >"$tmp/run" <<EOF
-#!/usr/bin/env bash
-"$push" "$tmp/probe.md" >/dev/null 2>&1
-printf '%s' \$? >"\$1"
-EOF
-
-    detach() { ( ( "$@" >/dev/null 2>&1 </dev/null & ) & ); }
-
-    await_code() {
-        local out=$1 waited=0
-        while [ ! -f "$out" ] && [ "$waited" -lt 100 ]; do
-            sleep 0.1
-            waited=$((waited + 1))
-        done
-        cat "$out" 2>/dev/null
-    }
-
-    rm -f "$tmp/c_helm" "$tmp/c_foreign" "$tmp/c_none" "$tmp/ts"
+    rm -f "$tmp/c_helm" "$tmp/c_foreign" "$tmp/ts"
 
     # `exec -a helm` makes the pty's owning process report as `helm` to `ps`, which is the
     # whole of what push.sh asks. Copying script(1) to a file named `helm` is the obvious
     # alternative and does not work — the copy loses its Apple signature and macOS answers
-    # `Killed: 9` (measured).
-    detach bash -c 'exec -a helm script -q /dev/null bash "$0" "$1"' "$tmp/run" "$tmp/c_helm"
-    # A real pty, no helm anywhere above it: the Ghostty teammate of #282.
-    detach script -q "$tmp/ts" bash "$tmp/run" "$tmp/c_foreign"
-    # No pty anywhere in the chain: CI, or a daemon.
-    detach bash "$tmp/run" "$tmp/c_none"
+    # `Killed: 9` (measured). The pty's own stream goes to /dev/null, so the emit this case
+    # provokes is real and lands nowhere.
+    detach bash -c 'exec -a helm script -q /dev/null bash "$0" "$1" "$2" "$3"' \
+        "$tmp/run" "$tmp/c_helm" "$tmp/probe.md" "$tmp/out_helm"
+    # A real pty, no helm anywhere above it: the Ghostty teammate of #282. Its stream is
+    # captured, so the next check can read what did or did not reach it.
+    detach script -q "$tmp/ts" bash "$tmp/run" "$tmp/c_foreign" "$tmp/probe.md" "$tmp/out_foreign"
 
-    # THE CONTROL AGAINST OVERSHOOT. A fix that simply refuses more passes the two negative
-    # cases below and fails this one. It needs no running helm — only a pty whose owner
-    # answers to the name — so it holds in CI too.
+    # THE CONTROL AGAINST OVERSHOOT. A fix that simply refuses more passes the negative
+    # cases and fails this one. It needs no running helm — only a pty whose owner answers to
+    # the name — so it holds in CI, and it never touches the operator's bench.
     check "a pty helm owns is delivered to"          0 "$(await_code "$tmp/c_helm")"
 
     # THE NEGATIVE CONTROL, and the whole of #282: a terminal that is not helm's.
@@ -175,9 +185,6 @@ EOF
     # rather than grepping for the marker keeps this honest if the marker is ever renamed.
     check "and emits no escape sequence into it"     0 \
         "$(LC_ALL=C tr -dc '\033' <"$tmp/ts" 2>/dev/null | wc -c | tr -d ' ')"
-
-    # Distinct from the case above, because the operator's next move differs.
-    check "no pty at all is a different refusal"     6 "$(await_code "$tmp/c_none")"
 else
     printf '  skip  no script(1) — cannot stage a pty here\n'
 fi

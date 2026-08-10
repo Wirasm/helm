@@ -89,6 +89,14 @@ case "$ext" in
     *) die 5 "helm renders .md .markdown .mdown .html .htm — not: ${ext:-(no extension)}" ;;
 esac
 
+# The two walks below share these three. `ps` prints nothing for a pid it no longer knows
+# about, and `tr -d ' '` turns that into an empty string rather than an error — which every
+# caller already reads as "stop walking". `-o tty=` pads its column and `-o comm=` does not,
+# which is why only these two are trimmed.
+walkable() { [ -n "$1" ] && [ "$1" -gt 1 ] 2>/dev/null; }
+ppid_of() { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
+tty_of() { ps -o tty= -p "$1" 2>/dev/null | tr -d ' '; }
+
 # Who opened this pty?
 #
 # libghostty opens one pty per pane and spawns one `/usr/bin/login` on it, holding the
@@ -99,15 +107,14 @@ esac
 # `$1` is a pid known to be on tty `$2`. Prints the owner's command basename.
 pty_owner() {
     local pid=$1 tty=$2 parent parent_tty owner
-    while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
-        parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-        [ -n "$parent" ] || return 1
+    while walkable "$pid"; do
+        parent=$(ppid_of "$pid")
         [ "$parent" = "$pid" ] && return 1
-        [ "$parent" -gt 1 ] 2>/dev/null || return 1
-        parent_tty=$(ps -o tty= -p "$parent" 2>/dev/null | tr -d ' ')
+        walkable "$parent" || return 1
+        parent_tty=$(tty_of "$parent")
         if [ "$parent_tty" != "$tty" ]; then
-            # `ps -o comm=` pads nothing and keeps spaces in argv[0], unlike `-o tty=`
-            # above — so a basename is the whole of the cleanup.
+            # Untrimmed on purpose: an argv[0] may contain spaces, so a basename is the
+            # whole of the cleanup.
             owner=$(ps -o comm= -p "$parent" 2>/dev/null)
             printf '%s\n' "${owner##*/}"
             return 0
@@ -148,13 +155,15 @@ is_helm() {
 resolve_sink() {
     local pid parent tty foreign="" owner
     pid=$$
-    while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
-        tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+    while walkable "$pid"; do
+        tty=$(tty_of "$pid")
         case "$tty" in
             ttys* | tty*[0-9])
                 if [ -w "/dev/$tty" ]; then
-                    owner=$(pty_owner "$pid" "$tty") || owner=""
-                    if [ -n "$owner" ] && is_helm "$owner"; then
+                    # Every failure path in pty_owner returns without printing, so this is
+                    # empty on failure — and `is_helm ""` already refuses.
+                    owner=$(pty_owner "$pid" "$tty")
+                    if is_helm "$owner"; then
                         printf '/dev/%s\n' "$tty"
                         return 0
                     fi
@@ -162,7 +171,7 @@ resolve_sink() {
                 fi
                 ;;
         esac
-        parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+        parent=$(ppid_of "$pid")
         [ "$parent" = "$pid" ] && break
         pid=$parent
     done
