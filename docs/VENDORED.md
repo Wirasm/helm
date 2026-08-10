@@ -134,10 +134,26 @@ clones and patches it.
   revision `b0930320739324886590e865d571eb5dd7073912` — the same exact pin
   docs/SPIKE.md records. The patch does not touch the binary target, so the
   `GhosttyKit.xcframework.zip` URL and checksum are upstream's, unchanged.
-- **Patch**: `Patches/libghostty-spm-multi-surface-wakeup.patch` (a `git
-  format-patch` output; apply with `git am`). 3 files, +184/−16, of which 120
-  lines are tests.
+- **Patches**, applied in this order by `scripts/patch-libghostty.sh` (both are `git
+  format-patch` output; applied with `git am`):
+  1. `Patches/libghostty-spm-multi-surface-wakeup.patch` — 3 files, +184/−16, of which
+     120 lines are tests.
+  2. `Patches/libghostty-spm-clipboard-destination.patch` — 4 files, +161/−3, of which
+     49 lines are tests.
 - **License**: MIT (libghostty-spm, © Lakr233).
+
+**Each patch carries its own marker.** The script verifies an existing `vendor/` by
+grepping for a symbol each patch introduces — one per patch, not one for the set. That is
+not tidiness: a `vendor/` left over from before patch 2 still contains patch 1's marker, so
+a single check reports `OK ... patch applied` and exit 0 while helm builds against a tree
+that eats the operator's clipboard. Measured both ways on 2026-08-10 against exactly that
+tree — the old script said OK, the current one names the missing patch and exits 1.
+
+**Adding a third patch is three lines**: drop the file in `Patches/` and add its
+`<file>|<marker>|<marker file>` row to the `patches` array. Nothing else in the script
+knows how many there are.
+
+## Patch 1 — multi-surface wakeup
 
 **What it fixes.** `TerminalController.onWakeup` / `.shouldProcessWakeup` were
 single-valued closures. A `TerminalSurfaceCoordinator` claimed both on
@@ -156,32 +172,96 @@ the patch every terminal tab carried a full libghostty runtime; with it, helm
 runs one runtime with N surfaces the way Ghostty.app does. `TerminalManager`'s
 header documents the ownership model that depends on this.
 
+## Patch 2 — the clipboard a request names (#297)
+
+**What it fixes.** `writeClipboard` bound its `clipboard: ghostty_clipboard_e` argument to
+`_`, so every write — whichever clipboard it named — landed on `NSPasteboard.general`. A
+program running in a pane could therefore replace the operator's system clipboard with
+`OSC 52` at the *selection* target, silently. Reproduced live before the fix; fixed and
+re-measured after, with `OSC 52 ;c;` still working as the negative control:
+
+```
+before                                        after
+;c;  -> WROTE the pasteboard                  ;c;  -> WROTE the pasteboard
+;s;  -> WROTE the pasteboard                  ;s;  -> pasteboard UNTOUCHED
+;p;  -> WROTE the pasteboard                  ;p;  -> pasteboard UNTOUCHED
+```
+
+The patch resolves the argument once, through a new public
+`TerminalClipboardDestination`, and writes only for `.standard` — Apple platforms have
+exactly one pasteboard, `selection` and `primary` are X11 buffers with nothing to map them
+onto, so a write aimed at one is **refused rather than redirected**. It also stops the
+runtime config claiming a selection clipboard, which is what Ghostty.app answers.
+
+**Three things worth knowing before touching it, each of which cost a measurement:**
+
+- **`supports_selection_clipboard = false` does not close the OSC 52 route** and was never
+  going to. ghostty reads that flag in exactly two places — the copy-on-select target
+  (`Surface.zig:2381`) and the middle-click paste source (`:4035`), both mouse routes.
+  `Surface.clipboardWrite` calls straight through to `setClipboard` without asking. Hence
+  the resolution in the callback; the flag is there because it is the truth, not because
+  it is the fix.
+- **`unknown` is reachable, not defensive.** `ghostty.h` declares two constants while
+  ghostty's own `apprt.Clipboard` has three (`standard = 0`, `selection = 1`,
+  `primary = 2`) and passes `@intFromEnum` across the boundary — so `OSC 52 ;p;` arrives as
+  a raw `2` naming no C constant, and reached the pasteboard before this.
+- **The read direction is not fixed here and cannot be.** The symmetric guard is the
+  obvious thing to add and it is a trap. ghostty calls
+  `startClipboardRequest(.standard, .{ .osc_52_read = clipboard })` (`Surface.zig:1049`),
+  carrying the requested kind only to pick the reply's `c`/`s`/`p` byte — so every read
+  arrives at the callback as `.standard` whatever the program asked for. Measured by
+  inverting the guard: refusing `.standard` stopped `;c;?`, `;s;?` and `;p;?` alike. The
+  one caller that passes a real choice is middle-click paste, and it consults
+  `supportsClipboard(.selection)` first, so with the flag above it resolves to `.standard`
+  too — meaning a guard there could only ever silently break a paste the operator asked for.
+
+**Known limits, stated rather than hidden.** `writeClipboard` still does not read
+`confirm`; it is `true` only under `clipboard-write = ask` (never ghostty's default), and
+both honest answers — prompt, or refuse — are a policy for the embedding app rather than
+for a wrapper. Separately, `confirmReadClipboard` answers `confirmed: true` with no prompt
+at all, which makes ghostty's `clipboard-read = ask` **default** behave as `allow`: a
+program in a pane can still read the operator's clipboard with `OSC 52 ;c;?`, measured
+before and after this patch. Both are out of #297's scope — the second needs a prompt helm
+owns — and are tracked separately.
+
+**Why helm needs it.** helm hosts agents in its panes and the clipboard is the operator's.
+`Sources/Helm/Terminals/TerminalSession.swift` carries the mouse half of the same story
+(#299), and `Tests/HelmTests/Terminals/TerminalClipboardDestinationTests.swift` executes
+this decision from helm's own gate — a marker grep proves a patch was applied and says
+nothing about what it decides.
+
+## Where the pin lives, and how it retires
+
 **Where the pin lives now.** A local path dependency is not recorded in
 `Package.resolved` — SPM dropped the libghostty-spm entry when the manifests
 stopped naming a URL. The exact revision therefore lives HERE and in
-`scripts/patch-libghostty.sh` (`tag=1.3.1`), and nowhere else. Retiring the
+`scripts/patch-libghostty.sh` (`base_tag=1.3.1`), and nowhere else. Retiring the
 local pin puts it back into `Package.resolved` where the rest of the deps are.
 
 **RETIREMENT CONDITION** — this local pin is temporary. In order of preference:
 
-1. Upstream merges the patch → drop `vendor/`, `Patches/` and
+1. Upstream merges the patches → drop `vendor/`, `Patches/` and
    `scripts/patch-libghostty.sh`, and return BOTH manifests to
    `exact: "<new tag>"`.
-2. Upstream declines or goes quiet → push `helm/multi-surface-wakeup` to a fork
+2. Upstream declines or goes quiet → push `helm/patches` to a fork
    and pin both manifests to the fork URL + an exact `revision:` (never a
    branch). Record the fork URL and PR link here.
 
+They retire independently: upstream taking one and not the other leaves `Patches/` holding
+whichever is left, and the script's array is already per-patch.
+
 Until one of those happens the branch does not build from a clean clone without
-running `scripts/patch-libghostty.sh` first. Verify the patch with:
+running `scripts/patch-libghostty.sh` first. Verify the patches with:
 
 ```sh
 scripts/patch-libghostty.sh
 (cd vendor/libghostty-spm && swift test --filter TerminalLifecycle)
+(cd vendor/libghostty-spm && swift test --filter TerminalClipboardDestination)
 ```
 
 Four tests in `TerminalThemeConfigurationTests` fail in that suite both with and
-without the patch — a pre-existing upstream/environment failure at tag 1.3.1,
-not something this patch introduced.
+without the patches — a pre-existing upstream/environment failure at tag 1.3.1,
+not something they introduced.
 
 ## InjectionNext 2.0.1 + Inject 1.6.0 — hot reload (SPM, DEBUG only)
 

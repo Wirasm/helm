@@ -1,0 +1,273 @@
+From 0400f9e51ad74d5191b02744eaf705c23efb03d4 Mon Sep 17 00:00:00 2001
+From: Rasmus Widing <rasmus.widing@gmail.com>
+Date: Mon, 10 Aug 2026 23:33:28 +0300
+Subject: [PATCH] fix(clipboard): honour the clipboard a write names
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+`writeClipboard` bound its `clipboard: ghostty_clipboard_e` argument to
+`_`, so every write — whichever clipboard it named — landed on
+`NSPasteboard.general`. A program emitting `OSC 52` at the selection
+target therefore replaced the user's system clipboard, silently.
+
+Apple platforms have exactly one pasteboard. `selection` and `primary`
+are X11 buffers with nothing to map them onto, so a write aimed at one
+is now refused rather than redirected — resolved once through a new
+`TerminalClipboardDestination` instead of by a parameter nobody reads.
+
+`unknown` is reachable rather than defensive: ghostty.h declares two
+constants while ghostty's own `apprt.Clipboard` has three and passes
+`@intFromEnum` across the boundary, so `OSC 52 ;p;` arrives as a raw
+`2` matching neither — and reached the pasteboard before this.
+
+Also stops claiming a selection clipboard in the runtime config, which
+is what Ghostty.app answers and what makes `copy-on-select = true`
+target the pasteboard this host can actually address. That flag alone
+does not close the OSC 52 route: ghostty consults it only for the
+copy-on-select target and the middle-click paste source, never in
+`Surface.clipboardWrite` — hence the resolution in the callback.
+
+The read direction deliberately gets no matching guard. ghostty calls
+`startClipboardRequest(.standard, .{ .osc_52_read = clipboard })`, so
+every read arrives as `.standard` whatever the program asked for —
+verified by inverting the guard, which stopped `;c;?`, `;s;?` and
+`;p;?` alike. The only caller that passes a real choice is middle-click
+paste, and it consults `supportsClipboard(.selection)` first, so with
+the flag above it resolves to `.standard` too. A guard there could only
+ever break a paste the user asked for.
+
+`confirm` is likewise still unread; its two honest answers are both a
+policy for the embedding app rather than for this wrapper.
+---
+ .../TerminalClipboardDestination.swift        | 71 +++++++++++++++++++
+ .../TerminalController+Callbacks.swift        | 41 ++++++++++-
+ .../TerminalController+Config.swift           | 12 +++-
+ .../TerminalClipboardDestinationTests.swift   | 49 +++++++++++++
+ 4 files changed, 171 insertions(+), 2 deletions(-)
+ create mode 100644 Sources/GhosttyTerminal/Controller/TerminalClipboardDestination.swift
+ create mode 100644 Tests/GhosttyKitTest/TerminalClipboardDestinationTests.swift
+
+diff --git a/Sources/GhosttyTerminal/Controller/TerminalClipboardDestination.swift b/Sources/GhosttyTerminal/Controller/TerminalClipboardDestination.swift
+new file mode 100644
+index 0000000..9e19215
+--- /dev/null
++++ b/Sources/GhosttyTerminal/Controller/TerminalClipboardDestination.swift
+@@ -0,0 +1,71 @@
++//
++//  TerminalClipboardDestination.swift
++//  libghostty-spm
++//
++
++import Foundation
++import GhosttyKit
++
++/// Which clipboard a ghostty request named.
++///
++/// libghostty hands every clipboard callback a `ghostty_clipboard_e` saying where the
++/// request is aimed. This type is that argument, resolved once, so that "which clipboard
++/// was this?" is answered by the compiler at the call site instead of by a parameter bound
++/// to `_`.
++///
++/// **Apple platforms have exactly one pasteboard.** `selection` and `primary` are X11
++/// buffers — the middle-click buffer and its predecessor — and neither AppKit nor UIKit has
++/// anything to map them onto. A *write* aimed at one is therefore refused, never
++/// redirected: a program asking for the selection clipboard is not asking for the system
++/// clipboard, and silently treating it as though it were is how a program that never asked
++/// for the user's clipboard ends up replacing it.
++///
++/// **This is a write-side rule, and deliberately only that.** ghostty resolves the
++/// destination itself before any read callback runs — see `readClipboard`'s header for the
++/// measurement — so there is nothing here for a read to decide.
++///
++/// **`unknown` is reachable, not defensive.** The C header declares two constants —
++/// `GHOSTTY_CLIPBOARD_STANDARD` and `GHOSTTY_CLIPBOARD_SELECTION` — while ghostty's own
++/// `apprt.Clipboard` has three (`standard = 0`, `selection = 1`, `primary = 2`) and passes
++/// `@intFromEnum` straight across the boundary. So `OSC 52 ;p;` arrives here as a raw `2`
++/// that matches neither declared constant, and before this type existed it reached the
++/// pasteboard anyway. A decoder that quietly folded an unrecognised value into `standard`
++/// would be the same defect wearing a new name.
++public enum TerminalClipboardDestination: Sendable, Equatable {
++    /// The system pasteboard: `NSPasteboard.general` / `UIPasteboard.general`.
++    case standard
++    /// X11's selection clipboard. No Apple equivalent.
++    case selection
++    /// X11's primary clipboard. No Apple equivalent, and no C constant either.
++    case primary
++    /// A clipboard kind this build does not model, carrying the raw value for the log.
++    case unknown(Int32)
++
++    public init(_ clipboard: ghostty_clipboard_e) {
++        switch clipboard {
++        case GHOSTTY_CLIPBOARD_STANDARD: self = .standard
++        case GHOSTTY_CLIPBOARD_SELECTION: self = .selection
++        default:
++            // `primary` has no C constant to match on, so it lands here by its raw value.
++            let raw = Int32(clipboard.rawValue)
++            self = raw == 2 ? .primary : .unknown(raw)
++        }
++    }
++
++    /// True only for the clipboard this platform actually has.
++    ///
++    /// This is the whole rule, and it is deliberately a property of the *request* and of the
++    /// *platform* rather than of any host UI: it needs no window, no focus, and nothing to
++    /// ask the user.
++    public var isSupported: Bool { self == .standard }
++
++    /// What the debug log calls it.
++    public var name: String {
++        switch self {
++        case .standard: "standard"
++        case .selection: "selection"
++        case .primary: "primary"
++        case let .unknown(raw): "unknown(\(raw))"
++        }
++    }
++}
+diff --git a/Sources/GhosttyTerminal/Controller/TerminalController+Callbacks.swift b/Sources/GhosttyTerminal/Controller/TerminalController+Callbacks.swift
+index 3147816..76632aa 100644
+--- a/Sources/GhosttyTerminal/Controller/TerminalController+Callbacks.swift
++++ b/Sources/GhosttyTerminal/Controller/TerminalController+Callbacks.swift
+@@ -56,13 +56,32 @@ private enum TerminalCallbacks {
+         }
+     }
+ 
++    /// **The destination is honoured, not discarded** — see `TerminalClipboardDestination`.
++    /// A write aimed at a clipboard this platform does not have goes nowhere rather than
++    /// landing on the one it does; that is the difference between a program setting the
++    /// clipboard it asked for and a program replacing the user's.
++    ///
++    /// `confirm` is still not read, and that is a stated limit rather than an oversight.
++    /// It is `true` only when the embedder's config says `clipboard-write = ask`, and the
++    /// two honest answers — put a prompt in front of the user, or refuse outright — are
++    /// both a policy for the embedding app to choose, not for this wrapper to pick on its
++    /// behalf. Under ghostty's default (`allow`) it is never `true`.
+     static func writeClipboard(
+         userdata _: UnsafeMutableRawPointer?,
+-        clipboard _: ghostty_clipboard_e,
++        clipboard: ghostty_clipboard_e,
+         contents: UnsafePointer<ghostty_clipboard_content_s>?,
+         contentsLen: Int,
+         confirm _: Bool
+     ) {
++        let destination = TerminalClipboardDestination(clipboard)
++        guard destination.isSupported else {
++            TerminalDebugLog.log(
++                .input,
++                "clipboard write refused: this platform has no \(destination.name) clipboard"
++            )
++            return
++        }
++
+         guard contentsLen > 0 else { return }
+         guard let content = contents?.pointee else { return }
+         guard let data = content.data else { return }
+@@ -77,6 +96,26 @@ private enum TerminalCallbacks {
+         #endif
+     }
+ 
++    /// **The read direction gets no such check, and that is measured rather than an
++    /// oversight.** The symmetric guard is the obvious thing to write here and it would be
++    /// dead code at best and a broken paste at worst:
++    ///
++    /// - **ghostty collapses the destination before this is called.** An `OSC 52 ;s;?`
++    ///   reaches `Surface.handleMessage`, which calls
++    ///   `startClipboardRequest(.standard, .{ .osc_52_read = clipboard })` — the requested
++    ///   kind is carried only to pick the `c`/`s`/`p` byte in the reply, never to choose
++    ///   what is read. Verified by inverting the guard: refusing `.standard` here stopped
++    ///   `;c;?`, `;s;?` and `;p;?` alike, so all three arrive as `.standard`.
++    /// - **The one caller that does pass a real choice is middle-click paste**, and it asks
++    ///   `supportsClipboard(.selection)` first — which now answers `false`, so it too
++    ///   resolves to `.standard`. A guard here could therefore only ever fire on a paste
++    ///   the user asked for, silently.
++    ///
++    /// So refusing a read on this argument buys nothing and risks a silent no-op. Reads are
++    /// governed by the embedder's `clipboard-read` config instead; note that
++    /// `confirmReadClipboard` below answers `confirmed: true` unconditionally, which makes
++    /// `clipboard-read = ask` behave as `allow`. That is a separate defect and needs a
++    /// prompt the embedding app owns.
+     static func readClipboard(
+         userdata: UnsafeMutableRawPointer?,
+         clipboard _: ghostty_clipboard_e,
+diff --git a/Sources/GhosttyTerminal/Controller/TerminalController+Config.swift b/Sources/GhosttyTerminal/Controller/TerminalController+Config.swift
+index 60a35a8..644bcd5 100644
+--- a/Sources/GhosttyTerminal/Controller/TerminalController+Config.swift
++++ b/Sources/GhosttyTerminal/Controller/TerminalController+Config.swift
+@@ -101,7 +101,17 @@ extension TerminalController {
+ 
+         var runtimeConfig = ghostty_runtime_config_s()
+         runtimeConfig.userdata = userdata
+-        runtimeConfig.supports_selection_clipboard = true
++        // Apple platforms have no selection clipboard — that is X11's middle-click buffer.
++        // Claiming one made `copy-on-select = true` (ghostty's own default) target a
++        // clipboard this host cannot address, and the write then landed on the system
++        // pasteboard. Ghostty.app answers `false` here for the same reason.
++        //
++        // Note what this flag does NOT do, because it is easy to expect more of it:
++        // ghostty consults it only when choosing a target for copy-on-select and a source
++        // for middle-click paste. `OSC 52` never asks — `Surface.clipboardWrite` calls
++        // straight through to `setClipboard` — which is why the callbacks resolve the
++        // destination themselves rather than trusting this.
++        runtimeConfig.supports_selection_clipboard = false
+         runtimeConfig.wakeup_cb = terminalControllerWakeupCallback
+         runtimeConfig.action_cb = terminalControllerActionCallback
+         runtimeConfig.close_surface_cb = terminalControllerCloseSurfaceCallback
+diff --git a/Tests/GhosttyKitTest/TerminalClipboardDestinationTests.swift b/Tests/GhosttyKitTest/TerminalClipboardDestinationTests.swift
+new file mode 100644
+index 0000000..070d32a
+--- /dev/null
++++ b/Tests/GhosttyKitTest/TerminalClipboardDestinationTests.swift
+@@ -0,0 +1,49 @@
++import GhosttyKit
++import Testing
++
++@testable import GhosttyTerminal
++
++/// The clipboard callbacks used to bind their `clipboard:` argument to `_`, so every
++/// request — whichever clipboard it named — landed on the one pasteboard Apple platforms
++/// have. These pin the resolution that replaced it.
++struct TerminalClipboardDestinationTests {
++    @Test
++    func `the standard clipboard is the one this platform has`() {
++        let destination = TerminalClipboardDestination(GHOSTTY_CLIPBOARD_STANDARD)
++        #expect(destination == .standard)
++        #expect(destination.isSupported)
++    }
++
++    @Test
++    func `the selection clipboard is refused rather than redirected`() {
++        let destination = TerminalClipboardDestination(GHOSTTY_CLIPBOARD_SELECTION)
++        #expect(destination == .selection)
++        #expect(
++            !destination.isSupported,
++            "macOS and iOS have no selection clipboard; answering with the system one is how a program that asked for the selection buffer replaces the user's clipboard"
++        )
++    }
++
++    /// `primary` has no C constant at all: `ghostty.h` declares two values while ghostty's
++    /// own `apprt.Clipboard` has three and passes `@intFromEnum` across the boundary. So
++    /// this arrives as a bare `2` — and it reached the pasteboard before this type existed.
++    @Test
++    func `the primary clipboard arrives as a value the C header cannot name`() {
++        let destination = TerminalClipboardDestination(ghostty_clipboard_e(rawValue: 2))
++        #expect(destination == .primary)
++        #expect(!destination.isSupported)
++    }
++
++    @Test
++    func `a kind this build does not model is refused, never folded into standard`() {
++        let destination = TerminalClipboardDestination(ghostty_clipboard_e(rawValue: 99))
++        #expect(destination == .unknown(99))
++        #expect(!destination.isSupported)
++    }
++
++    @Test
++    func `exactly one destination is supported`() {
++        let all: [TerminalClipboardDestination] = [.standard, .selection, .primary, .unknown(7)]
++        #expect(all.filter(\.isSupported) == [.standard])
++    }
++}
+-- 
+2.49.0
+
