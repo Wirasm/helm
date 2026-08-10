@@ -769,6 +769,21 @@ final class WorkbenchModel: ObservableObject {
         commit(bench)
     }
 
+    /// A tab click asked for **from outside** — the spool's `select` kind (#284), which is to
+    /// `select(_:)` what `offerSplitRight()` is to `splitRight()`: the same selection with focus
+    /// left where the operator put it (`Workbench.select(offering:)`).
+    ///
+    /// Reports whether the pane is **visible** afterwards rather than whether it was asked for,
+    /// for `WorkbenchSpoolPanes.close`'s reason: the spool's result must say what the bench did,
+    /// and "I asked" is not that.
+    @discardableResult
+    func offerSelect(_ pane: Pane.ID) -> Bool {
+        guard var bench, bench.pane(pane) != nil else { return false }
+        bench.select(offering: pane)
+        commit(bench)
+        return self.bench?.visiblePaneIDs.contains(pane) ?? false
+    }
+
     /// ⌘1–⌘9 — select by position **within the focused slot**. It was by position within
     /// the workspace; a bench has no single row for that to mean.
     func selectTab(_ index: Int) {

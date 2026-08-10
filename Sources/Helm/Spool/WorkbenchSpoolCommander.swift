@@ -3,7 +3,7 @@ import HelmWire
 
 /// The driving edge: carries out a command an agent asked for, and reports what it did (#269).
 ///
-/// It lives beside `WorkbenchSpoolSpawner` and `WorkbenchSpoolCloser` for the same reason both
+/// It lives beside `WorkbenchSpoolSpawner` and `WorkbenchSpoolPanes` for the same reason both
 /// of those do — it is the spool's adapter onto the bench, not a bench feature (`AGENTS.md`).
 ///
 /// **It decides nothing about *whether*.** `SpoolCommandPolicy` (`HelmWire`) has already refused

@@ -19,8 +19,9 @@ A **canvas** is a pane beside the terminal that renders a markdown or HTML file.
 there by writing a file and asking helm to show it.
 
 **It appears; it does not seize.** The artifact arrives as a tab the operator can reach. It does not
-take the keyboard and does not replace whatever they are currently reading. Bringing it forward
-stays their action.
+take the keyboard and does not replace whatever they are currently reading. On a busy bench that
+means it can land **hidden**, which is what `helm-select.swift` is for — see *Showing it, and
+taking it away* below.
 
 ## Opening one
 
@@ -54,6 +55,33 @@ survive, Claude Code's TUI captures the mouse (`?1000h ?1002h ?1003h`) and eats 
 helm sees it. `pi` and `codex` set no mouse tracking, so a link printed in one of *their* panes is
 clickable — but do not build on that either: `push.sh` needs no click, no mouse and nobody at the
 pane.
+
+## Showing it, and taking it away
+
+`push.sh` hands back no id, so both of these start by reading the pane's `id` out of the
+`"kind": "canvas"` record in `~/.helm/bench/snapshot.json` — matched on the `canvas.source` path
+you pushed.
+
+```bash
+swift <helm>/tools/helm-select.swift <pane-uuid>   # bring it forward
+swift <helm>/tools/helm-close.swift  <pane-uuid>   # take it off the bench
+```
+
+`<helm>` is helm's own checkout — these are single-file scripts, so they need no build and no cwd
+inside it, but they are not on your `PATH` and this skill cannot know where the checkout is. Ask
+the operator once if you do not.
+
+- **`helm-select` makes it the pane its slot is showing** and leaves the keyboard exactly where
+  it was. Read `select.isVisible` in the result — that is the operator actually being able to see
+  it, read back off the bench rather than assumed. Send it after a **re-push** too: the artifact
+  refreshes in place, and this is how you learn the refresh reached a screen.
+- **It refuses a pane in the slot the operator is working in**, whether that pane holds their
+  keyboard or is merely a tab behind the one that does — showing either would move where their
+  next keystroke lands. There is no override, and the refusal (exit 3) says so. Leave it as a tab
+  they can reach; that is what pushing without seizing buys.
+- **`helm-close` takes it off the bench and destroys nothing** — the artifact file and its
+  `.notes.md` sidecar outlive the tab, and a re-push re-opens the same source. A canvas never
+  needs `--force`. Use it rather than accumulating a tab per revision.
 
 ## The two renderers
 

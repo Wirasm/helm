@@ -155,7 +155,58 @@ final class WorkbenchOfferTests: XCTestCase {
         XCTAssertEqual(heights[2], 1 / 3.0, accuracy: 1e-9)
     }
 
+    // MARK: - Showing a pane that is already here (#284)
+
+    func testAnOfferedSelectShowsThePaneWithoutMovingBenchFocus() {
+        // The focus half of #284, at the bench level: a pushed artifact landed as a background
+        // tab in a slot the operator is not in, and an agent may bring it forward there.
+        var bench = Workbench(terminal: UUID())
+        let pushed = Pane(content: .canvas(plan))
+        bench.offer(pushed, at: .column)
+        let operatorsSlot = bench.focusedSlot
+        let operatorsPane = bench.focusedPane?.id
+
+        bench.select(offering: pushed.id)
+
+        XCTAssertTrue(
+            bench.visiblePaneIDs.contains(pushed.id),
+            "the pane must be the one its slot is showing — that is what `visible` means")
+        XCTAssertEqual(
+            bench.focusedSlot, operatorsSlot,
+            "…and bench focus is what every bench command acts on; an agent may not take it")
+        XCTAssertEqual(
+            bench.focusedPane?.id, operatorsPane,
+            "…so the pane holding the keyboard is the one that held it before")
+    }
+
+    func testAnOfferedSelectOfAPaneTheBenchDoesNotHaveChangesNothing() {
+        var bench = Workbench(terminal: UUID())
+        let before = bench
+
+        bench.select(offering: UUID())
+
+        XCTAssertEqual(bench, before, "a uuid the bench does not hold is a no-op, not a repair")
+    }
+
     // MARK: - The contrast that makes the guarantee legible
+
+    func testTheOperatorsOwnTabClickStillSelectsAndFocuses() {
+        // The contrast for `select(offering:)` specifically, and the control that would fail if
+        // #284 had been implemented by making `select(_:)` itself stop moving focus: a tab click
+        // is the operator saying "this is the pane I mean now", and it still is.
+        var bench = Workbench(terminal: UUID())
+        let pushed = Pane(content: .canvas(plan))
+        bench.offer(pushed, at: .column)
+        let operatorsSlot = bench.focusedSlot
+
+        bench.select(pushed.id)
+
+        XCTAssertEqual(bench.focusedPane?.id, pushed.id)
+        XCTAssertNotEqual(
+            bench.focusedSlot, operatorsSlot,
+            "when the operator asks, the slot holding the pane takes focus — offering is the "
+                + "exception, and this is what it is an exception to")
+    }
 
     func testTheOperatorsOwnOpenStillSelectsAndFocuses() {
         var bench = Workbench(terminal: UUID())

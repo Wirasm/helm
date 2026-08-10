@@ -107,6 +107,18 @@ final class SpoolCommandPolicyTests: XCTestCase {
             "closePane's refusal must point at helm-close, which names a pane and refuses the "
                 + "one holding the keyboard; got \"\(closePane)\"")
 
+        // #284 gave the other direction an addressed route too, so `selectTerminal`'s refusal
+        // stopped being a dead end — it said *"to make a pane of your own current, there is
+        // nothing yet"* and there now is.
+        guard case .refused(let selectTerminal) = SpoolCommandPolicy.verdict(for: .selectTerminal)
+        else {
+            return XCTFail("selectTerminal must be refused — it carries an index, not a pane")
+        }
+        XCTAssertTrue(
+            selectTerminal.contains("helm-select"),
+            "selectTerminal's refusal must point at helm-select, which names a pane and refuses "
+                + "one in the operator's own slot; got \"\(selectTerminal)\"")
+
         guard case .refused(let push) = SpoolCommandPolicy.verdict(for: .openCanvasFile) else {
             return XCTFail("openCanvasFile must be refused — Workbench.insert selects and focuses")
         }
@@ -135,7 +147,10 @@ final class SpoolCommandPolicyTests: XCTestCase {
             .deletingLastPathComponent()  // Tests/
             .deletingLastPathComponent()  // repo root
             .appendingPathComponent("tools")
-        let routes = ["helm-close": "helm-close.swift", "helm-spool": "helm-spool.swift"]
+        let routes = [
+            "helm-close": "helm-close.swift", "helm-spool": "helm-spool.swift",
+            "helm-select": "helm-select.swift",
+        ]
         var named: Set<String> = []
         for command in HelmCommandName.allCases {
             guard case .refused(let reason) = SpoolCommandPolicy.verdict(for: command) else {
@@ -152,7 +167,7 @@ final class SpoolCommandPolicyTests: XCTestCase {
         }
         XCTAssertEqual(
             named, Set(routes.keys),
-            "both routes should be reachable from some refusal — if one stopped being named, "
+            "every route should be reachable from some refusal — if one stopped being named, "
                 + "the headers claiming it is are now wrong too")
     }
 
@@ -216,7 +231,7 @@ final class SpoolCommandPolicyTests: XCTestCase {
     /// changes, and both would break every caller.
     func testTheEnvelopeStillAdvertisesEveryKindHelmKnows() {
         XCTAssertEqual(
-            SpoolRequest.kinds, ["spawn", "capture", "close", "command"],
+            SpoolRequest.kinds, ["spawn", "capture", "close", "command", "select"],
             "the refusal for an unknown kind lists these, so an older helm's answer and a newer "
                 + "one's have to differ in exactly this line")
         XCTAssertEqual(
