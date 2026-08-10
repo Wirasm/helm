@@ -157,10 +157,37 @@ check("a text shape is named by its text", core.nameOf({ type: "text", props: { 
 // --- pressure ---------------------------------------------------------------------------------
 
 console.log("pressure");
-check("a synthetic pointer reports one constant value", core.pressureRange([0, 0, 0.5, 1, 1, 0.5]), { min: 0.5, max: 0.5, varies: false });
-check("a hand varies", core.pressureRange([0, 0, 0.21, 1, 1, 0.68]), { min: 0.21, max: 0.68, varies: true });
+check("a mouse-class pointer reports one constant value — every macOS trackpad stroke, and every script", core.pressureRange([0, 0, 0.5, 1, 1, 0.5]), { min: 0.5, max: 0.5, varies: false });
+check("a device that does report pressure is passed through — a stylus, where pointerType is pen", core.pressureRange([0, 0, 0.21, 1, 1, 0.68]), { min: 0.21, max: 0.68, varies: true });
 check("no points is no answer, never a fabricated zero", core.pressureRange([]), null);
 check("points count in threes", core.pointCount([0, 0, 0.5, 1, 1, 0.5, 2, 2, 0.5]), 3);
+
+// --- force ------------------------------------------------------------------------------------
+
+// Measured on a live board 2026-08-10, five real trackpad strokes: `pressure` was 0.5 for all 70
+// held samples of the longest one and `webkitForce` ran 1 → 1.9998 across the same gesture, with
+// 254 `webkitmouseforcechanged` events. So the discriminator is here, not in `pressureRange`.
+
+console.log("force");
+check("no samples is no answer, never a fabricated zero", core.forceRange([]), null);
+check("nor when nobody passed any", core.forceRange(undefined), null);
+check("one sample cannot vary", core.forceRange([1]), { min: 1, max: 1, varies: false, samples: 1 });
+check(
+  "a plain click sits at the mouse-down constant and stays there",
+  core.forceRange([1, 1, 1]),
+  { min: 1, max: 1, varies: false, samples: 3 }
+);
+check(
+  "a hand pressing varies, rounded the way pressure is",
+  core.forceRange([1, 1.42, 1.9998]),
+  { min: 1, max: 2, varies: true, samples: 3 }
+);
+check("and a value that is not a number is not a sample", core.forceRange([1, null, "2", 1.6]), {
+  min: 1,
+  max: 1.6,
+  varies: true,
+  samples: 2,
+});
 
 // --- the report -------------------------------------------------------------------------------
 
@@ -201,6 +228,52 @@ console.log("the report");
   check("an operator's labelled box is reported as theirs", report.shapes[0].owner, "operator");
   check("and it is a mark too", report.marks.map((m) => m.id), ["theirs"]);
   ok("with no pressure invented for a shape that is not ink", report.marks[0].pressure === undefined);
+}
+{
+  // The whole point, in one report: what macOS puts on `PointerEvent.pressure` is flat, and the
+  // hand shows up on the force channel beside it. Both are carried, because "pressure was flat"
+  // is itself a fact about the platform and deleting it would leave a reader guessing.
+  const records = [
+    geo("auth-service", 0, 0, 200, 90, "Auth"),
+    stroke("mark:hand", 10, 10, 180, 70, [0.5, 0.5, 0.5]),
+  ];
+  const report = core.boardReport({
+    records,
+    boundsOf,
+    ownedIds: ["auth-service"],
+    generation: null,
+    forceById: { "mark:hand": [1, 1.42, 1.9998] },
+  });
+  check("pressure is flat, exactly as macOS reports a trackpad", report.marks[0].pressure, {
+    min: 0.5,
+    max: 0.5,
+    varies: false,
+  });
+  check("and the force channel is the one that moved", report.marks[0].force.varies, true);
+  check("carrying its range", [report.marks[0].force.min, report.marks[0].force.max], [1, 2]);
+  check("and how many samples it saw", report.marks[0].force.samples, 3);
+}
+{
+  const records = [stroke("mark:quiet", 0, 0, 10, 10, [0.5])];
+  const report = core.boardReport({ records, boundsOf, ownedIds: [], generation: null });
+  ok(
+    "a mark nobody reported force for carries no force field, rather than a fabricated null",
+    report.marks[0].force === undefined
+  );
+}
+{
+  // Force belongs to the GESTURE, not to ink — a labelled box the operator dragged out under
+  // pressure is as much a hand as a scribble is, and it carries no `pts` for pressureRange.
+  const records = [geo("theirs", 0, 0, 10, 10, "Mine")];
+  const report = core.boardReport({
+    records,
+    boundsOf,
+    ownedIds: [],
+    generation: null,
+    forceById: { theirs: [1, 1.7] },
+  });
+  ok("a shape that is not ink still reports the force it was drawn with", report.marks[0].force.varies === true);
+  ok("and still invents no pressure", report.marks[0].pressure === undefined);
 }
 {
   const many = [];
@@ -248,6 +321,16 @@ console.log("SKILL.md");
     "auth-service",
     "auth-to-db-label",
   ]);
+
+  // The doc used to teach `pressure.varies` as the way to tell a hand from a script. That is
+  // false on macOS — measured — and a skill that still taught it would send every agent reading
+  // it to the one field that cannot answer. So the gate holds the doc to what the code reports.
+  ok("the doc names the force channel", /webkitForce/.test(skill), "SKILL.md never mentions webkitForce");
+  ok(
+    "and does not still teach pressure.varies as the discriminator",
+    !/`pressure\.varies` is (what a hand looks like|the discriminator)/.test(skill),
+    "SKILL.md still points agents at pressure.varies"
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -123,7 +123,8 @@ interrupts — the file is simply current when you next look.
     "shapes": [ { "id": "auth-service", "type": "geo", "label": "Auth", "owner": "agent" } ],
     "marks": [
       { "id": "shape:m9x0q2a1", "type": "draw", "points": 29,
-        "pressure": { "min": 0.21, "max": 0.68, "varies": true },
+        "pressure": { "min": 0.5, "max": 0.5, "varies": false },
+        "force": { "min": 1, "max": 2, "varies": true, "samples": 254 },
         "over": { "id": "auth-service", "label": "Auth", "overlap": 17840 },
         "runnerUp": { "id": "session-store", "label": "Sessions", "overlap": 210 } }
     ]
@@ -141,9 +142,17 @@ interrupts — the file is simply current when you next look.
   unambiguous; two close scores mean the mark sits between two things and you should ask.
 - **`overlap` is raw intersection area in page units**, so compare the two numbers to each other
   and not to a threshold.
-- **`pressure.varies` is what a hand looks like.** A synthetic pointer event reports a constant
-  `0.5`; a trackpad varies. Report it if it is relevant — never claim from it that you watched
-  someone draw. It is a number the page observed, and only the operator can say whose hand it was.
+- **`force.varies` is what a hand looks like — not `pressure.varies`.** On macOS a trackpad is a
+  mouse-class pointer, so `PointerEvent.pressure` is pinned at `0.5` for the whole stroke however
+  hard anyone presses; the real signal is Apple's `webkitForce`, which the page collects from
+  `webkitmouseforcechanged`. `1` is an ordinary click and `2` is a force click, so a range of
+  `1 → 2` is someone leaning on it.
+- **`pressure` is still reported, and flat is the expected answer.** It says what the standard
+  field observed, which is a fact about the platform rather than about the hand — and it does
+  vary for a stylus, where `pointerType` is `pen`.
+- **`force` is absent when no force events arrived at all**, which is what a script and a plain
+  mouse both look like. Never claim from any of this that you watched someone draw: they are
+  numbers the page observed, and only the operator can say whose hand it was.
 - **`warnings` appears only when something went wrong** in the page — a document file that would
   not load, a drawing that could not be cached. Its presence is the signal.
 - `writtenAt` is a **change signal**: an identical report is not written, so it answers *when did
@@ -187,7 +196,7 @@ Say so when it matters, rather than letting someone find out:
 the report — as functions over plain values, and `bash .claude/skills/helm-board/test.sh` runs
 them in node. Run it after touching anything here.
 
-What no test reaches: that a real trackpad stroke crosses AppKit → WebKit into quickdraw. The
-spike closed that leg once, by the operator's own hand, and it is his to repeat — a synthetic
-pointer event is produced inside the page and never crosses that boundary, which is exactly what
-`pressure.varies` is the discriminator for.
+What no test reaches: that a real trackpad stroke crosses AppKit → WebKit into quickdraw. It is
+the operator's to run, and `force` is the discriminator — a synthetic pointer event is produced
+inside the page, so it does not produce a wrong force reading, it produces **no force events at
+all**. `pressure` cannot do this job on macOS and the skill used to say it could.

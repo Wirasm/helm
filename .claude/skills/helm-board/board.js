@@ -159,6 +159,78 @@ function cacheOperatorRecords() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Force, which is the only channel a hand reaches this page on
+// ---------------------------------------------------------------------------------------------
+
+// **`PointerEvent.pressure` is a dead end on macOS and this is what replaces it.** A trackpad is
+// a mouse-class pointer there, so pressure is pinned at 0.5 while a button is down no matter how
+// hard anyone presses — measured on a live board, five strokes, 70 held samples, all 0.5. The
+// force is real and arrives on Apple's own channel: `webkitForce` on mouse events, changing
+// through `webkitmouseforcechanged`. `board-core.js` turns the samples into a range; collecting
+// them needs the DOM, so it happens here.
+//
+// Samples are attributed to the records a gesture CREATED, found by diffing the store's ids
+// across the gesture rather than by reading quickdraw's change payload — the diff depends on
+// nothing but `store.all()`, which is already this file's only view of the store.
+const forceById = {};
+let gesture = null;
+
+// **`capture: true`, and it is load-bearing.** quickdraw creates the stroke record on its own
+// `pointerdown`; a bubble-phase listener here would run after that and snapshot a store that
+// already contains the record, so the diff would be empty and every gesture would report no
+// force at all.
+container.addEventListener(
+  "pointerdown",
+  () => {
+    gesture = { before: new Set(store.all().map((rec) => rec.id)), samples: [] };
+  },
+  { capture: true }
+);
+
+// **`capture: true` again, and for a different reason than above.** quickdraw mounts its own
+// `<canvas>` inside this container, so a force event's target is a descendant rather than the
+// container itself. `webkitmouseforce*` is a non-standard family and whether it bubbles is not
+// something to take on trust from a listener that would simply never fire; the capture phase
+// visits every ancestor on the way down whatever the answer is.
+container.addEventListener(
+  "webkitmouseforcechanged",
+  (event) => {
+    if (gesture && typeof event.webkitForce === "number") gesture.samples.push(event.webkitForce);
+  },
+  { capture: true }
+);
+
+// On `window`, because quickdraw takes pointer capture during a drag and a release outside the
+// container would otherwise never reach a listener bound to it — leaving `gesture` open and the
+// next stroke's samples appended to the last one's.
+for (const type of ["pointerup", "pointercancel"]) {
+  window.addEventListener(
+    type,
+    () => {
+      const done = gesture;
+      gesture = null;
+      if (!done) return;
+      const live = new Set();
+      for (const rec of store.all()) {
+        live.add(rec.id);
+        if (done.samples.length && !done.before.has(rec.id)) forceById[rec.id] = done.samples;
+      }
+      // Undo takes the record away; its force reading goes with it rather than accumulating in a
+      // page that stays open all day. Outside the `samples.length` guard on purpose: a gesture
+      // that produced no force is exactly what an undo is, and it still has to sweep.
+      for (const id of Object.keys(forceById)) if (!live.has(id)) delete forceById[id];
+    },
+    { capture: true }
+  );
+}
+
+// A force click is macOS offering to look something up, and the gesture this page is inviting is
+// exactly the one that triggers it. There is nothing on a board to look up.
+container.addEventListener("webkitmouseforcewillbegin", (event) => event.preventDefault(), {
+  capture: true,
+});
+
+// ---------------------------------------------------------------------------------------------
 // Telling helm what is on the board
 // ---------------------------------------------------------------------------------------------
 
@@ -170,6 +242,7 @@ function report() {
     ownedIds,
     generation,
     warnings,
+    forceById,
   });
   latch.postMessage({ kind: "canvas.state", state });
 }
