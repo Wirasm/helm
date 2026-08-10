@@ -298,6 +298,18 @@ ran out. `hooks/helm-mail.mjs` has no cap and says so in a block of its own — 
 runaway to cap and no `.wakes` file to keep beside the mailbox. **Do not "fix" the asymmetry by
 adding a cap to the hook**; read that block first.
 
+**And the port could not work even if that reason changed — #320 measured it, so this is the
+stronger half.** pi's cap is correct only because pi's waker and pi's counter are the **same
+process**: an in-process `waking` flag (`index.ts:762`, set at `:883`, read at `:985`) is what
+stops a run pi *itself* started from clearing the counter that limits it. For Claude Code they
+would be two processes — helm pokes, a hook counts — and there is no flag to carry between them,
+because the `UserPromptSubmit` payload is **shape-identical** for a socket wake and for the
+operator typing: same seven keys, no `origin`, no sender, and `prompt` is the raw body. So a naive
+port **resets on every wake and can never trip** — present, counting, counting nothing, which is
+worse than the absence it was added to fix. The distinction does exist, but not anywhere a cap can
+reach it: one layer in, in transcript JSONL that Anthropic documents as internal and
+version-dependent, and in the agent's **own context** as prose. Legible is not countable.
+
 **The premise under all of this is no longer settled, and #320 is where it is being settled.**
 This file used to state flatly that nothing outside a Claude Code session can start a turn in it.
 Claude Code 2.1.224+ ships per-session sockets and a message delivered to an idle session's socket
