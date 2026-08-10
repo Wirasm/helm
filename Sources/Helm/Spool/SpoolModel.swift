@@ -327,10 +327,12 @@ final class SpoolModel: ObservableObject {
     }
 
     /// **Still a second guard, and still not a second spelling (#260).** It takes a raw `String`
-    /// because it has to: one of its callers passes `fallbackID`, derived from the *filename* when
-    /// the JSON would not parse and `SpoolPolicy.accept` therefore never ran. What changed is that
-    /// it no longer re-applies a shared regex by hand — it asks `RequestID` for one, which is the
-    /// same question `accept` asks, expressed once in the type instead of twice at two call sites.
+    /// because it has to, and both of its callers are in `drain`, before anything has been
+    /// validated: one passes `fallbackID`, derived from the *filename* when the JSON would not
+    /// parse and `SpoolPolicy.accept` therefore never ran, and the other passes a decoded
+    /// `SpoolRequest.id` that `accept` has just refused. What changed is that it no longer
+    /// re-applies a shared regex by hand — it asks `RequestID`, which is the same question
+    /// `accept` asks, expressed once in the type instead of twice at two call sites.
     private func refuse(id: String, reason: String) {
         // An id that is not a filename cannot name a result file, so there is nowhere to put
         // the answer. The log is all that is left, and it says so rather than pretending.
@@ -630,9 +632,9 @@ final class SpoolModel: ObservableObject {
             handle: Handle(readingFrom: resolved.owner), runtime: resolved.owner.runtime)
     }
 
-    /// Every success path funnels here, and the id it takes is a `RequestID` — so the 20 call
-    /// sites below hand over the one their `Accepted*` request already carries, and none of them
-    /// can produce one any other way (#260).
+    /// Every success path funnels here, and the id it takes is a `RequestID` — so all 21 call
+    /// sites hand over the one their `Accepted*` request already carries, and none of them can
+    /// produce one any other way (#260).
     private func answer(
         _ id: RequestID, _ status: SpoolResult.Status, terminalId: TerminalID? = nil,
         pid: pid_t? = nil, sessionId: String? = nil, handle: Handle? = nil,
