@@ -136,10 +136,15 @@ clones and patches it.
   `GhosttyKit.xcframework.zip` URL and checksum are upstream's, unchanged.
 - **Patches**, applied in this order by `scripts/patch-libghostty.sh` (both are `git
   format-patch` output; applied with `git am`):
-  1. `Patches/libghostty-spm-multi-surface-wakeup.patch` — 3 files, +184/−16, of which
-     120 lines are tests.
-  2. `Patches/libghostty-spm-clipboard-destination.patch` — 4 files, +161/−3, of which
-     49 lines are tests.
+  1. `Patches/libghostty-spm-multi-surface-wakeup.patch` — the multi-surface wakeup fix.
+  2. `Patches/libghostty-spm-clipboard-destination.patch` — the clipboard-destination fix (#297).
+
+  **Their diffstats are deliberately not restated here.** `git format-patch` already writes one
+  into each patch file, so a copy in this document is a second spelling of a number nothing
+  checks — and it drifted on its first outing: the clipboard entry said `+161/−3` against an
+  actual `+171/−2`, wrong from the moment the patch was amended, and caught by a reviewer
+  running the command rather than by any gate. Ask the patch instead:
+  `git apply --stat Patches/<name>.patch | tail -1`.
 - **License**: MIT (libghostty-spm, © Lakr233).
 
 **Each patch carries its own marker.** The script verifies an existing `vendor/` by
@@ -149,9 +154,11 @@ a single check reports `OK ... patch applied` and exit 0 while helm builds again
 that eats the operator's clipboard. Measured both ways on 2026-08-10 against exactly that
 tree — the old script said OK, the current one names the missing patch and exits 1.
 
-**Adding a third patch is three lines**: drop the file in `Patches/` and add its
-`<file>|<marker>|<marker file>` row to the `patches` array. Nothing else in the script
-knows how many there are.
+**Adding a third patch is one row**: drop the file in `Patches/` and add its
+`<file>|<marker>|<marker file>` row to the `patches` array. Nothing else in the script knows
+how many there are — and you cannot forget the row, because the script also checks the
+reverse direction and refuses a `.patch` in `Patches/` that no row names. `Patches/` and that
+array are one enumeration, not two kept in step by whoever remembers.
 
 ## Patch 1 — multi-surface wakeup
 

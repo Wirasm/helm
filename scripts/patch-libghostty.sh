@@ -34,15 +34,36 @@ for entry in "${patches[@]}"; do
   [ -f "$patch_file" ] || { echo "missing $patch_file" >&2; exit 1; }
 done
 
+# And the same question the other way round, because the loop above only asks it
+# in one direction. A .patch file sitting in Patches/ with no row here is never
+# applied, never grepped for, and never missed — the script prints OK and exits 0,
+# which is the identical silence a single shared marker used to produce for a
+# half-patched vendor/. Patches/ and this array are one enumeration; the gate says
+# so rather than the comment above asking whoever adds patch 3 to remember.
+for patch_path in "$root"/Patches/*.patch; do
+  [ -e "$patch_path" ] || continue
+  # NOT `base` — that is the pinned commit SHA above, and shadowing it made the
+  # next check report the pin as a filename. Caught by running this guard before
+  # trusting it.
+  patch_name=$(basename "$patch_path")
+  listed=no
+  for entry in "${patches[@]}"; do
+    if [ "${entry%%|*}" = "$patch_name" ]; then listed=yes; fi
+  done
+  if [ "$listed" = no ]; then
+    echo "ERROR: Patches/$patch_name is not listed in this script's patches array," >&2
+    echo "       so it would never be applied. Add its" >&2
+    echo "       <file>|<marker symbol>|<file the symbol is in> row." >&2
+    exit 1
+  fi
+done
+
 # Every patch's marker is present in the tree at "$1", or a nonzero return says
 # which one is missing.
 check_markers() {
-  local tree="$1" entry rest name marker marker_file
+  local tree="$1" entry name marker marker_file
   for entry in "${patches[@]}"; do
-    name="${entry%%|*}"
-    rest="${entry#*|}"
-    marker="${rest%%|*}"
-    marker_file="${rest#*|}"
+    IFS='|' read -r name marker marker_file <<< "$entry"
     if ! grep -q "$marker" "$tree/$marker_file" 2>/dev/null; then
       echo "$name"
       return 1
