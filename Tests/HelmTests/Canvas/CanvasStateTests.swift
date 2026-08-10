@@ -119,11 +119,10 @@ final class CanvasStateTests: XCTestCase {
             CanvasStateLatch.sidecarURL(for: artifact), CanvasNotes.sidecarURL(for: artifact),
             "one file for both would let a page overwrite the operator's comments")
 
-        let annotation = CanvasAnnotation(
-            mark: .selection(.quote("game")), comment: "make the timer longer")
-        try CanvasNotes.append(annotation, for: artifact, at: Date(timeIntervalSince1970: 0))
+        let marked = try annotation(selecting: "game", comment: "make the timer longer")
+        try CanvasNotes.append(marked, for: artifact, at: Date(timeIntervalSince1970: 0))
         try CanvasStateLatch.write(body(["score": 9]), for: artifact, at: Date())
-        try CanvasNotes.append(annotation, for: artifact, at: Date(timeIntervalSince1970: 60))
+        try CanvasNotes.append(marked, for: artifact, at: Date(timeIntervalSince1970: 60))
 
         let notes = try XCTUnwrap(CanvasNotes.markdown(in: CanvasNotes.sidecarURL(for: artifact)))
         XCTAssertEqual(
