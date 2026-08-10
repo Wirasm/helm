@@ -520,12 +520,16 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
       strip with two buttons, both the operator's: **Keep mine** writes his text over theirs,
       **Take theirs** adopts *exactly the version the strip was about* (the bytes are held for
       that reason — re-reading at the click would hand him a third version he never saw).
-  - **Two honest limits, and neither is silent while it is happening.** Closing the pane with a
-    conflict unresolved takes the buffer with it — the strip has been up since the moment it
-    happened, and making the close ask would put a modal on a path `helm-close` also reaches,
-    where there is nobody at the pane to answer. And a file **deleted** under an open draft is not
-    a conflict: it loads as a notice rather than markdown, the draft stays, and the next save
-    recreates the file.
+  - **Two honest limits, and neither is silent while it is happening.** Closing the pane **or
+    quitting** with a conflict unresolved takes the buffer with it — the strip has been up since
+    the moment it happened, and neither path can ask: `helm-close` reaches the first with nobody at
+    the pane, and the build-update badge quits helm on the second. **The tempting fix is worse than
+    the limit**: treating those exits as an implicit *keep mine* would write what is usually a
+    sentence over what is usually a whole rewrite, at the one moment nobody can be asked which — so
+    helm keeps the copy another process can reproduce and loses the one it cannot, and
+    `WorkbenchNoteTests` pins that so it stays a decision. And a file **deleted** under an open
+    draft is not a conflict: it loads as a notice rather than markdown, the draft stays, and the
+    next save recreates the file.
   - **Nothing tells an agent the operator edited, and that is the answer rather than an
     oversight.** He hands you a path; read it, and **read it again before you rewrite it** — the
     file's own mtime is the only fact, and it is the filesystem's rather than helm's. Nothing

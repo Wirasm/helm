@@ -51,12 +51,20 @@ struct CanvasDraft: Equatable {
 
     var isDirty: Bool { text != saved }
 
-    init(text: String, saved: String, savedAt: Date? = nil, conflict: CanvasConflict? = nil) {
-        self.text = text
-        self.saved = saved
-        self.savedAt = savedAt
-        self.conflict = conflict
-    }
+    /// Whether this draft is still holding something nobody has decided about.
+    ///
+    /// **`isDirty` alone is not that question once a conflict exists, and reading it as though it
+    /// were is a third way out of a conflict that presses neither button.** A conflict raised
+    /// while the operator was typing survives him undoing back to what helm last wrote — at that
+    /// moment `text == saved`, so `isDirty` is false while the strip is still up, and a guard
+    /// spelled `isDirty` would let `read()` drop the draft and take the strip with it. helm would
+    /// then have decided the conflict itself, silently, which is the one thing the two buttons
+    /// exist to stop it doing.
+    ///
+    /// A property on the value rather than a compound condition at the call site, because it was
+    /// a *comment* claiming `saveDraft` guaranteed this "by construction" that carried it before —
+    /// and the two fields are independent, so nothing did.
+    var isUnresolved: Bool { isDirty || conflict != nil }
 
     /// What the footer says about the file, in the operator's terms.
     ///
@@ -160,12 +168,10 @@ struct CanvasEditorView: View {
     /// for destroys whatever was in it. `CopyableLabel` is the affordance the canvas header
     /// already uses for exactly this, so the gesture is one the operator has already learned here.
     private var footer: some View {
-        HStack(spacing: 8) {
-            CopyableLabel(
-                value: Pasteboard.path(of: file.url),
-                hint: "Click to copy \(Pasteboard.path(of: file.url))"
-            ) {
-                Text(Pasteboard.path(of: file.url))
+        let path = Pasteboard.path(of: file.url)
+        return HStack(spacing: 8) {
+            CopyableLabel(value: path, hint: "Click to copy \(path)") {
+                Text(path)
                     .font(.system(size: 10, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)

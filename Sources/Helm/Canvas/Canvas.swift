@@ -266,7 +266,9 @@ final class CanvasModel: ObservableObject {
     /// the canvas at another file, closing the last workspace (`WorkbenchModel.deactivate`), and
     /// **quitting** — `WorkbenchModel` subscribes to `NSApplication.willTerminateNotification`
     /// for exactly this reason, because ⌘Q is the ordinary way to leave and reached none of the
-    /// others. What remains is `kill -9`, which nothing can cover.
+    /// others. What remains is `kill -9`, which nothing can cover — **and an unresolved conflict,
+    /// where calling `saveDraft()` is no longer the same thing as saving.** That is argued at the
+    /// guard itself; it is named here because this list is the sentence a reader trusts.
     ///
     /// Long enough that a run of typing is one write rather than one per character, short enough
     /// that a pause between sentences has already saved. Injectable for `FileWatcher`'s reason
@@ -313,11 +315,16 @@ final class CanvasModel: ObservableObject {
     /// saying why, and the operator's route out is to fix the file, resolve the conflict, or copy
     /// the text.
     ///
-    /// An unresolved conflict is covered by the same line, and by construction rather than by a
-    /// second condition: `saveDraft` refuses while one is up, so `isDirty` is still true here.
+    /// **An unresolved conflict holds it too, and `isUnresolved` rather than `isDirty` is what
+    /// says so.** The tempting version of this line reasons that `saveDraft` refuses while a
+    /// conflict is up, so the draft must still be dirty — which is true when the conflict is
+    /// raised and stops being true the moment he undoes his edit back to what helm last wrote.
+    /// `text == saved` then, the strip is still on screen, and a guard spelled `isDirty` would
+    /// drop the draft and take the strip with it: helm deciding the conflict itself, silently,
+    /// through a third way out that pressed neither button.
     func read() {
         saveDraft()
-        guard draft?.isDirty != true else { return }
+        guard draft?.isUnresolved != true else { return }
         draft = nil
     }
 
@@ -342,6 +349,20 @@ final class CanvasModel: ObservableObject {
     /// Somebody else wrote this file since helm last saw it, so writing now would replace bytes
     /// the operator has not been shown. `keepMine()` is the one route through, and it is a button
     /// he presses.
+    ///
+    /// **What that costs at ⌘Q, weighed rather than discovered.** Quitting flushes every open
+    /// draft through here, so a conflict nobody resolved means the buffer goes with the process.
+    /// The alternative — treating quit as an implicit *keep mine* — is not the safer default it
+    /// first looks like: the operator's own description of this feature is *"a sentence or two"*
+    /// on top of what the file already said, while an agent's rewrite is a whole document. Writing
+    /// his buffer over it would destroy more than it saved, at the one moment nobody can be asked
+    /// which. So helm keeps the copy that another process can reproduce and loses the one it
+    /// cannot — deliberately, with the strip having said *"helm has stopped saving"* since the
+    /// moment it happened, and pinned by `WorkbenchNoteTests`
+    /// `.testQuittingWithAnUnresolvedConflictKeepsTheFileAndLosesTheBuffer` so it stays a decision
+    /// rather than becoming an accident. `close()` takes the same position for the same reason,
+    /// and a confirmation is what neither path has: `helm-close` reaches one of them with nobody
+    /// at the pane, and the build-update badge quits helm on the other.
     ///
     /// **The other half is the read directly below it, and without it the guarantee is only
     /// probable.** `reconcile` learns about a second writer through `FileWatcher`, which debounces
@@ -409,24 +430,22 @@ final class CanvasModel: ObservableObject {
     /// file, which is the same answer `write()` gives for a file that was already absent.
     private func reconcile(_ content: Content) {
         guard case let .markdown(disk) = content, var draft else { return }
-        guard disk != draft.saved else {
+        // Three branches in the order the doc comment lists them, rather than a chain of guards
+        // whose else-arms carry the work — and one write-back at the end instead of three.
+        if disk == draft.saved {
             // helm and the file agree again. A conflict somebody resolved on disk — by putting
             // back what helm last wrote — has nothing left to refuse, so it is not left up.
             guard draft.conflict != nil else { return }
             draft.conflict = nil
-            self.draft = draft
-            return
-        }
-        guard draft.isDirty else {
+        } else if !draft.isDirty {
             draft.text = disk
             draft.saved = disk
             draft.conflict = nil
-            self.draft = draft
-            return
+        } else {
+            // A second write while a conflict is already up replaces it, so the strip is always
+            // about the newest bytes helm has seen — and so is what `takeTheirs` adopts.
+            draft.conflict = CanvasConflict(theirs: disk)
         }
-        // A second write while a conflict is already up replaces it, so the strip is always about
-        // the newest bytes helm has seen — and therefore so is what `takeTheirs` adopts.
-        draft.conflict = CanvasConflict(theirs: disk)
         self.draft = draft
     }
 

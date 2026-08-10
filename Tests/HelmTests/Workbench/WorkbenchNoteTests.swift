@@ -132,6 +132,40 @@ final class WorkbenchNoteTests: XCTestCase {
                 + "never runs, because the run loop is stopping")
     }
 
+    /// **The cost of the conflict guard at the one exit that cannot ask, stated as a test rather
+    /// than discovered later** (#289). ⌘Q flushes every open draft through `saveDraft`, which
+    /// refuses while somebody else's bytes are on disk — so the buffer goes with the process.
+    ///
+    /// That is the decision and not an oversight. The alternative, treating quit as an implicit
+    /// *keep mine*, would write what is usually a sentence over what is usually a whole rewrite,
+    /// at the moment nobody can be asked which. helm keeps the copy another process can reproduce
+    /// and loses the one it cannot, with the strip having said so since the conflict appeared.
+    ///
+    /// Posted as the real notification, like the test above it, so what is measured is the
+    /// subscription rather than a simulation of it.
+    func testQuittingWithAnUnresolvedConflictKeepsTheFileAndLosesTheBuffer() throws {
+        let model = mounted()
+        let id = try XCTUnwrap(model.newNote(on: day("2026-08-07")))
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+        guard case let .canvas(.file(path)) = pane.content else {
+            return XCTFail("a note is a canvas pane pointed at its own file")
+        }
+        let canvas = model.canvas(for: pane)
+        canvas.edit("typed, and never resolved")
+        try "somebody else got here first".write(
+            toFile: path.value, atomically: true, encoding: .utf8)
+        canvas.refresh()
+        XCTAssertNotNil(canvas.draft?.conflict, "the arrangement is the conflict, so it must exist")
+
+        NotificationCenter.default.post(
+            name: NSApplication.willTerminateNotification, object: NSApplication.shared)
+
+        XCTAssertEqual(
+            try String(contentsOfFile: path.value, encoding: .utf8),
+            "somebody else got here first",
+            "quitting must not become the third way a conflict gets decided by a write")
+    }
+
     // MARK: - When it cannot
 
     /// A keystroke that silently does nothing is the failure shape `AGENTS.md` records paying for

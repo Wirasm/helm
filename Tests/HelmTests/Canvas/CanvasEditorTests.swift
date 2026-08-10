@@ -57,6 +57,27 @@ final class CanvasEditorTests: XCTestCase {
         try String(contentsOf: file, encoding: .utf8)
     }
 
+    /// A plan with a live conflict on it: `mine` typed into the editor, `theirs` written to the
+    /// file instead, and `refresh()` already run — so the strip is up before the test acts.
+    ///
+    /// **Both strings are the caller's**, because the assertions name them: a helper that chose
+    /// them would leave each test asserting a literal it does not state, which is the readability
+    /// this file is worth more than the six lines it would save.
+    ///
+    /// Two tests below deliberately do not use it, and their reasons are their subject:
+    /// `testASaveThatBeatsTheWatcherStillDoesNotClobber` must not call `refresh()` at all, and
+    /// `testAConflictClearsWhenTheDiskAgreesWithHelmAgain` needs to name the original bytes.
+    private func conflicted(mine: String, theirs: String) throws -> (CanvasModel, URL) {
+        let file = try plan(contents: "# Plan\n")
+        // Long enough that no debounce fires during a test — every save here is asked for.
+        let model = canvas(on: file, debounce: .seconds(30))
+        model.write()
+        model.edit(mine)
+        try write(theirs, to: file)
+        model.refresh()
+        return (model, file)
+    }
+
     // MARK: - What may be written in at all
 
     /// **The scope line, inverted, and that inversion is the ticket.** Until this change an agent's
@@ -375,13 +396,7 @@ final class CanvasEditorTests: XCTestCase {
     /// A refusal nobody can see is the silence this repository has paid for repeatedly. The strip
     /// names the file and says what helm has stopped doing.
     func testTheOperatorIsToldRatherThanTheSaveJustNotHappening() throws {
-        let file = try plan(contents: "# Plan\n")
-        let model = canvas(on: file, debounce: .seconds(30))
-        model.write()
-        model.edit("mine")
-
-        try write("theirs", to: file)
-        model.refresh()
+        let (model, _) = try conflicted(mine: "mine", theirs: "theirs")
 
         let notice = try XCTUnwrap(model.conflictNotice)
         XCTAssertTrue(notice.contains("feature.plan.md"), notice)
@@ -391,12 +406,7 @@ final class CanvasEditorTests: XCTestCase {
 
     /// **Keep mine**: the operator, having been told, chooses to replace what is there.
     func testKeepMineWritesTheBufferOverTheirVersion() throws {
-        let file = try plan(contents: "# Plan\n")
-        let model = canvas(on: file, debounce: .seconds(30))
-        model.write()
-        model.edit("mine")
-        try write("theirs", to: file)
-        model.refresh()
+        let (model, file) = try conflicted(mine: "mine", theirs: "theirs")
 
         model.keepMine()
 
@@ -409,12 +419,7 @@ final class CanvasEditorTests: XCTestCase {
     /// button meaning "replace what you told me about"; replacing something else instead is the
     /// same silent overwrite one turn later.
     func testKeepMineIsRefusedAgainWhenAThirdVersionArrivedFirst() throws {
-        let file = try plan(contents: "# Plan\n")
-        let model = canvas(on: file, debounce: .seconds(30))
-        model.write()
-        model.edit("mine")
-        try write("the version he was shown", to: file)
-        model.refresh()
+        let (model, file) = try conflicted(mine: "mine", theirs: "the version he was shown")
 
         try write("a third version nobody has seen", to: file)
         model.keepMine()
@@ -431,12 +436,7 @@ final class CanvasEditorTests: XCTestCase {
     /// between the strip going up and the button being pressed must not be adopted silently, and
     /// re-reading the file at the click is exactly how that would happen.
     func testTakeTheirsAdoptsTheVersionTheStripWasAbout() throws {
-        let file = try plan(contents: "# Plan\n")
-        let model = canvas(on: file, debounce: .seconds(30))
-        model.write()
-        model.edit("mine")
-        try write("the version he was shown", to: file)
-        model.refresh()
+        let (model, file) = try conflicted(mine: "mine", theirs: "the version he was shown")
 
         try write("a third version nobody has seen", to: file)
         model.takeTheirs()
@@ -449,12 +449,7 @@ final class CanvasEditorTests: XCTestCase {
     /// It refuses for the reason a failed write refuses: `saveDraft` did not write, so the draft
     /// is still dirty, and dropping it would be the data loss this design is arranged around.
     func testHelmWillNotLeaveTheEditorWhileAConflictIsUnresolved() throws {
-        let file = try plan(contents: "# Plan\n")
-        let model = canvas(on: file, debounce: .seconds(30))
-        model.write()
-        model.edit("mine")
-        try write("theirs", to: file)
-        model.refresh()
+        let (model, _) = try conflicted(mine: "mine", theirs: "theirs")
 
         model.read()
 
@@ -462,15 +457,27 @@ final class CanvasEditorTests: XCTestCase {
         XCTAssertNotNil(model.draft?.conflict)
     }
 
+    /// **Undoing back to what helm last wrote must not become a third way out of a conflict.**
+    ///
+    /// At that moment `text == saved`, so the draft looks clean while the strip is still up — and
+    /// a `read()` guarded on `isDirty` would drop the draft and take the strip with it, resolving
+    /// the conflict by neither button. That is helm deciding, silently, which is the one thing the
+    /// two buttons exist to stop it doing. `isUnresolved` is what carries it.
+    func testUndoingBackToTheSavedTextIsNotAWayOutOfAConflict() throws {
+        let (model, _) = try conflicted(mine: "mine", theirs: "theirs")
+        model.edit("# Plan\n")
+        XCTAssertEqual(model.draft?.isDirty, false, "the arrangement is a clean draft, so check it")
+
+        model.read()
+
+        XCTAssertNotNil(model.draft, "the strip is still up, so there is still something to answer")
+        XCTAssertNotNil(model.draft?.conflict)
+    }
+
     /// A second write while the strip is up replaces what it is about, so the operator always
     /// chooses between his text and the newest bytes helm has actually seen.
     func testASecondRewriteReplacesWhatTheStripIsAbout() throws {
-        let file = try plan(contents: "# Plan\n")
-        let model = canvas(on: file, debounce: .seconds(30))
-        model.write()
-        model.edit("mine")
-        try write("first rewrite", to: file)
-        model.refresh()
+        let (model, file) = try conflicted(mine: "mine", theirs: "first rewrite")
 
         try write("second rewrite", to: file)
         model.refresh()
