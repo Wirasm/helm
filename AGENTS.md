@@ -50,6 +50,33 @@ at 13:19 and never rebuilt was green at 13:19 and red at 19:00, and every worktr
 machine went red within the same second (17:17:19). Concurrency did not do that; nothing in
 any diff did.
 
+**Two tests are the documented exceptions to that line, and the shape they share is the thing
+to recognise rather than the list to memorise: an assertion whose truth depends on a
+`Task.sleep` staying *inside* a deadline.** `Task.sleep(for:)` is a floor and not a promise, so
+a contended machine overshoots it, the behaviour under test happens **correctly**, and the test
+calls that a failure.
+
+- `FileWatcherTests.testAWriteThatArrivesInChunksRendersOnceAndOnlyWhenItIsWhole` — chunks that
+  must all land inside one debounce window (#305).
+- `CanvasEditorTests.testARunOfTypingIsOneSave` — the same shape on the editor's autosave, and
+  it went red in CI on #314 while every other test passed (#289).
+
+Both now carry margins of 50× or more and say so in their own headers. **The direction is what
+makes the rest of the suite safe**: a test that sleeps to let a window *elapse* is only made
+more certain by an overshoot, which is why the sibling tests beside both of these have never
+flaked — say which direction yours sleeps in before adding a third.
+
+`SpoolWireConformanceTests` is a maybe rather than a member: it was put under suspicion by
+#291's nine hours of runaway load, and its waits are on subprocesses rather than on a window,
+so it has never been reproduced deliberately.
+
+**Reproduce one by inverting its parameters, not by adding load.** Measured twice, on two
+different tests: #305's six bounded burners reached load 7.68 and the old values passed three
+times, and #314's twelve reached load 43 with the fixed values passing 6/6. Setting the window
+*below* the gap failed byte-identically to CI, first time, on both. Load is the slowest way to
+find out and the least conclusive; **if you do reach for burners, `timeout`-bound them** — the
+rule further down is there because twelve of them once outlived their script by nine hours.
+
 So before suspecting your diff, or the load, ask ghostty — **by absolute path, and asking
 CoreVideo at the same time**:
 

@@ -191,6 +191,10 @@ final class CanvasEditorTests: XCTestCase {
     }
 
     /// The debounce, driven for real: nothing but typing, and then a wait.
+    ///
+    /// **This one sleeps to let the window *elapse*, so an overshooting sleep only makes it more
+    /// certain.** That is the safe direction, and it is what distinguishes it from the test below
+    /// — which is the only one in this file that has to stay *inside* a deadline.
     func testTypingSavesItselfWithNoExplicitSave() async throws {
         let file = try note()
         let model = canvas(on: file, debounce: .milliseconds(20))
@@ -204,9 +208,26 @@ final class CanvasEditorTests: XCTestCase {
 
     /// One write per pause, not one per keystroke — the same coalescing `FileWatcher` does from
     /// the other side of the same file.
+    ///
+    /// **The one test in this file whose first assertion must stay *under* a deadline, and the
+    /// margin is the whole of why it is 2 seconds against a 40ms wait.** `Task.sleep(for:)` is a
+    /// floor, not a promise: on a contended machine the 40ms overshoots freely, and if it reaches
+    /// the debounce then a save has *correctly* happened and this test calls it a failure. It went
+    /// red in CI on exactly that (`("abcd") is not equal to ("")`) while every other test in the
+    /// suite passed, on a base whose merged changes — mail-root resolution and a spool select
+    /// request — go nowhere near the editor.
+    ///
+    /// Reproduced deterministically rather than by load, which is the method #305 arrived at for
+    /// the same shape in `FileWatcherTests`: six bounded CPU burners took this machine to load
+    /// 10.4 and it still passed 6/6, so the window was set *below* the gap instead
+    /// (`debounce: .milliseconds(10)`) and it failed byte-identically to CI, first time. Same
+    /// failure, so the margin is the fix — **50×** now, where the old values gave 3×.
+    ///
+    /// The settle afterwards has to *exceed* the debounce for the same reason it did there: a
+    /// settle shorter than the window measures a save that has not happened yet.
     func testARunOfTypingIsOneSave() async throws {
         let file = try note()
-        let model = canvas(on: file, debounce: .milliseconds(120))
+        let model = canvas(on: file, debounce: .seconds(2))
         model.write()
 
         for text in ["a", "ab", "abc", "abcd"] { model.edit(text) }
@@ -215,7 +236,7 @@ final class CanvasEditorTests: XCTestCase {
             try contents(of: file), "",
             "nothing is written while the keys are still coming")
 
-        try await Task.sleep(for: .milliseconds(500))
+        try await Task.sleep(for: .milliseconds(2500))
         XCTAssertEqual(try contents(of: file), "abcd")
     }
 
