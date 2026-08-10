@@ -828,7 +828,30 @@ struct CanvasSelection {
     /// Presentation only; never persisted, and never part of an anchor.
     let rect: CGRect
 
-    init?(_ body: Any) {
+    /// **`fileprivate` is the gate's exclusivity, said by the compiler instead of by a comment**
+    /// (#298). This checks one thing — that the body is a dictionary — and every check that
+    /// matters lives in `CanvasPageSelection.decode` below: a declared `kind`, a known one, and a
+    /// `selection` that carries text. While this was `internal`, "decode is the only maker" was
+    /// prose, and anything in the module could hand it a raw dictionary and hold a selection the
+    /// gate would have refused.
+    ///
+    /// **That is `StandardizedPath`'s lesson one seam over** — a doc comment asking callers to
+    /// prefer a helper, taken around by a test anyway (#88), fixed by making the unchecked value
+    /// unconstructable rather than by asking again. `@testable import` raises `internal` and does
+    /// **not** raise `fileprivate`, so a fixture cannot take the shortcut either. Two of them
+    /// were: `CanvasModelTests` and `CanvasNotesDrawerTests` both built `.selected(...)` by hand.
+    ///
+    /// **What it cost while it was open**, twice, in one shape. #216: the gate inferred the shape
+    /// from which fields were present, and every geometry mark was dropped for months with the
+    /// decoder tests green either side. #293: a fixture built through this door went stale the
+    /// moment #288 made `kind` a discriminator, and CI reported *"Enter no longer writes the
+    /// note"* across three tests while Enter worked perfectly. That PR fixed its own fixture,
+    /// which is right as far as it goes — this is the door.
+    ///
+    /// `fileprivate` rather than `private`: `private` on a member is scoped to the enclosing
+    /// declaration and its same-file extensions, which would shut `decode` out too. The gate and
+    /// this initializer share a file precisely so the only maker is a compile-time fact.
+    fileprivate init?(_ body: Any) {
         guard let payload = body as? [String: Any] else { return nil }
         self.body = payload
         let raw = payload["rect"] as? [String: Any] ?? [:]

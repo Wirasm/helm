@@ -29,10 +29,33 @@ final class CanvasNotesDrawerTests: XCTestCase {
 
     /// What the bridge reports when the operator selects `text` on the page — `kind` filled in,
     /// as every bridge message has carried one since #109.
-    private func selection(_ payload: [String: Any]) throws -> CanvasPageSelection {
+    ///
+    /// **Built through `CanvasPageSelection.decode`, not around it** (#298), for the reason
+    /// `CanvasModelTests.selection(_:)`'s header gives at length: a fixture assembled beside the
+    /// gate goes stale silently when the wire moves, and reports the drift as whatever behaviour
+    /// the test was about. Through the decoder it fails here, at construction, naming the refusal
+    /// — reported at the caller, since `file`/`line` default from it.
+    private func selection(
+        _ payload: [String: Any], file: StaticString = #filePath, line: UInt = #line
+    ) throws -> CanvasPageSelection {
         var payload = payload
         payload["kind"] = payload["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
-        return .selected(try XCTUnwrap(CanvasSelection(payload)))
+        switch CanvasPageSelection.decode(payload) {
+        case let .success(.selected(selection)):
+            return .selected(selection)
+        case .success(.cleared):
+            XCTFail(
+                "this helper builds a selection, and \(payload) decoded as a dismissal",
+                file: file, line: line)
+            throw CanvasPageSelection.Refusal.malformed(.selection)
+        case let .failure(refusal):
+            XCTFail(
+                "the page-selection fixture these tests are built on is not a message helm "
+                    + "accepts any more — \(refusal.reason). Rebuild it to the shape "
+                    + "`CanvasPageSelection.decode` takes; do not loosen the decoder.",
+                file: file, line: line)
+            throw refusal
+        }
     }
 
     private func writeSidecar(_ text: String) throws {
