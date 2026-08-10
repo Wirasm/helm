@@ -35,11 +35,35 @@ final class CanvasModelTests: XCTestCase {
 
     /// What the bridge reports when the operator selects `payload["text"]` on the page — with
     /// `kind: "selection"` filled in, because every message has declared one since #109 and
-    /// `annotate` decodes this body again downstream.
+    /// `annotate` decodes this body again downstream. Filling the kind in here rather than in a
+    /// dozen fixtures keeps these tests about their own subjects;
+    /// `testTheGateAsksTheKindAndRefusesOneItDoesNotKnow` is where the kind itself is the subject.
+    ///
+    /// **Built through `CanvasPageSelection.decode`, not around it** (#298). This used to call
+    /// `CanvasSelection.init` and wrap the result in `.selected` itself, which held the fixture to
+    /// nothing at all — the decoder's rules are `kind`, a known one, and text on a `selection`,
+    /// and a fixture assembled beside the gate keeps constructing a body no page can post long
+    /// after the wire has moved. `CanvasCommentFieldReturnTests` paid that in #293: the fixture
+    /// went stale the moment #288 made `kind` the discriminator, and CI said *"Enter no longer
+    /// writes the note"* across three tests while Enter was working perfectly. Going through the
+    /// decoder makes the next wire change fail **here**, at construction, quoting the decoder's
+    /// own refusal. `init` is `fileprivate` now, so this is the only door there is.
     private func selection(_ payload: [String: Any]) throws -> CanvasPageSelection {
         var payload = payload
         payload["kind"] = payload["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
-        return .selected(try XCTUnwrap(CanvasSelection(payload)))
+        switch CanvasPageSelection.decode(payload) {
+        case let .success(.selected(selection)):
+            return .selected(selection)
+        case .success(.cleared):
+            XCTFail("this helper builds a selection, and \(payload) decoded as a dismissal")
+            throw CanvasPageSelection.Refusal.malformed(.selection)
+        case let .failure(refusal):
+            XCTFail(
+                "the page-selection fixture these tests are built on is not a message helm "
+                    + "accepts any more — \(refusal.reason). Rebuild it to the shape "
+                    + "`CanvasPageSelection.decode` takes; do not loosen the decoder.")
+            throw refusal
+        }
     }
 
     // MARK: - File source or URL source
@@ -276,14 +300,17 @@ final class CanvasModelTests: XCTestCase {
 
     // MARK: - Geometry marks reach the model (#216)
 
-    // `CanvasMarkTests` drives `CanvasAnnotation.decode` directly with hand-built enclosure
-    // and relation dictionaries; the tests above drive `CanvasPageSelection` through a helper
-    // that constructs `.selected(CanvasSelection(...))` itself, bypassing `CanvasPageSelection
-    // .init?` entirely. Neither pushes a geometry payload through the ACTUAL gate the bridge's
-    // message goes through — `CanvasPageSelection(message.body)` at `CanvasFileViews.swift`.
-    // That gate required a top-level `text`, which an enclosure and a relation never carry, so
-    // both were silently dropped before decode ever saw them. These two go through the real
-    // gate, exactly as the page posts them, and would have failed before the fix.
+    // `CanvasMarkTests` drives `CanvasAnnotation.decode` directly with hand-built enclosure and
+    // relation dictionaries; the tests above go through the real gate — `CanvasPageSelection
+    // .decode` at `CanvasFileViews.swift` — but only ever as a `selection`, because that is the
+    // kind the helper fills in. Neither pushes a GEOMETRY payload through it. That gate required
+    // a top-level `text`, which an enclosure and a relation never carry, so both were silently
+    // dropped before decode ever saw them. These two go through it exactly as the page posts
+    // them, and would have failed before the fix.
+    //
+    // The helper stopped being a way *around* that gate in #298: `CanvasSelection.init` is
+    // `fileprivate`, so `decode` is the only thing that can make one. What these two still buy
+    // that it cannot is the kinds it does not post.
 
     /// The page's freehand tool: `bridge.postMessage({ kind: "enclosure", targets, rect })`.
     func testAnEnclosurePayloadReachesTheNoteThroughTheRealGate() throws {
