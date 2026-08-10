@@ -14,8 +14,9 @@ import Foundation
 ///
 /// **Lives in `HelmWire` (#221)**, alongside `SpoolRequest`, for the same reason: `Helm`'s own
 /// `SpoolModel` writes this and `HelmTests` decodes it, both against one definition. The
-/// standalone `helm-spool`/`helm-close`/`helm-capture`/`helm-command` scripts still read
-/// `json["status"] as? String` — they cannot `import HelmWire` (`AGENTS.md`'s "Why the spool is a script, and must
+/// standalone `helm-spool`/`helm-close`/`helm-capture`/`helm-command`/`helm-select` scripts still
+/// read `json["status"] as? String` — they cannot `import HelmWire` (`AGENTS.md`'s "Why the spool
+/// is a script, and must
 /// stay one") — so a new `Status` case is not automatically visible to them; a caller adding one
 /// has to update the scripts' string switches by hand, same as before #221.
 package struct SpoolResult: Codable, Equatable {
@@ -77,6 +78,18 @@ package struct SpoolResult: Codable, Equatable {
         /// this build does not have. The two are told apart by their `reason`, which is the
         /// whole of `SpoolCommandPolicy`.
         case ran
+        /// The pane is the one its slot is showing, and the keyboard did not move (#284).
+        /// **One write**, like `captured`, `closed` and `ran`: selecting is applied synchronously
+        /// to the bench value and there is no second party to wait for. `select` says which pane,
+        /// whether it is now visible, and where the keyboard was on each side of it.
+        ///
+        /// Written just as readily when the pane was **already** showing. That is not a lie about
+        /// having done something: the caller asked for a state, the state holds, and the report
+        /// says so — which is what an agent re-pushing an artifact (#272) actually wants to know.
+        ///
+        /// A select that was **refused** is `refused`, not this — a pane in the operator's own
+        /// slot, or a uuid helm holds no pane for.
+        case selected
         /// The terminal is alive but no mailbox appeared before the deadline. Deliberately
         /// **not** a failure and deliberately not cleaned up: the agent may be running
         /// perfectly well without the mail hooks installed. It exists; it cannot be
@@ -128,6 +141,10 @@ package struct SpoolResult: Codable, Equatable {
     /// these fields only mean anything together, and none of them belongs on a type that is
     /// otherwise about spawning.
     package var command: CommandReport?
+    /// What a `selected` result did to the bench (#284) — whether the pane is now visible, and
+    /// where the keyboard was on each side of it. A nested value for `capture`'s and `command`'s
+    /// reason: these fields only mean anything together.
+    package var select: SelectReport?
     /// Seconds since the epoch, so a caller watching for the `started` → `ready` change has
     /// something that always differs between the two writes.
     package var updatedAt: Double
@@ -136,6 +153,7 @@ package struct SpoolResult: Codable, Equatable {
         id: String, status: Status, terminalId: TerminalID? = nil, pid: Int32? = nil,
         sessionId: String? = nil, handle: Handle? = nil, runtime: String? = nil,
         reason: String? = nil, capture: CaptureReport? = nil, command: CommandReport? = nil,
+        select: SelectReport? = nil,
         updatedAt: Double = Date().timeIntervalSince1970
     ) {
         self.id = id
@@ -148,7 +166,51 @@ package struct SpoolResult: Codable, Equatable {
         self.reason = reason
         self.capture = capture
         self.command = command
+        self.select = select
         self.updatedAt = updatedAt
+    }
+}
+
+/// What bringing a pane forward actually did — observed after the fact, never asserted (#284).
+///
+/// **The same promise `CommandReport` makes, for the request that most needs it.** #284 is a
+/// ticket about an effect an agent could not observe: a re-pushed artifact refreshed a pane the
+/// agent had no way to see. A result that only said *"selected"* would answer half of it, so this
+/// carries the two facts the caller would otherwise have to re-read `snapshot.json` for — and
+/// race it, since the snapshot is written on its own schedule.
+///
+/// **`focusedPaneBefore`/`focusedPaneAfter` are `SpoolSelectPolicy`'s argument made checkable.**
+/// That policy argues at length that showing a pane in another slot cannot move the keyboard. An
+/// argument in a header is a claim; two readings of `Workbench.focusedPane` taken either side of
+/// the mutation are a measurement, and the caller gets to make it rather than trusting this
+/// repo's comments. They are equal on every select helm allows — `WorkbenchTests` and
+/// `SpoolSelectPolicyTests` both pin it — and a change that broke it would say so in its own
+/// result rather than only in a review.
+package struct SelectReport: Codable, Equatable {
+    /// The pane, echoed rather than assumed from the request: a caller reading only the result
+    /// file learns what happened without holding onto what it sent.
+    package let pane: TerminalID
+    /// Whether the operator can now actually see it — **read back off the bench, not asserted
+    /// from having asked**. `CONTEXT.md` is exact about the word: *visible* is its slot's
+    /// selection in the mounted workspace, which is one step stronger than *selected*.
+    ///
+    /// It is what #284's *"real but unobservable"* finding asked for, and the honest reason it is
+    /// a field rather than a guarantee: `WorkbenchSpoolPanes` reports what the bench says
+    /// afterwards, exactly as it reports whether a close really removed the pane.
+    package let isVisible: Bool
+    /// The pane holding the keyboard immediately before the select, and immediately after. nil
+    /// when there is no bench mounted at all.
+    package let focusedPaneBefore: TerminalID?
+    package let focusedPaneAfter: TerminalID?
+
+    package init(
+        pane: TerminalID, isVisible: Bool, focusedPaneBefore: TerminalID?,
+        focusedPaneAfter: TerminalID?
+    ) {
+        self.pane = pane
+        self.isVisible = isVisible
+        self.focusedPaneBefore = focusedPaneBefore
+        self.focusedPaneAfter = focusedPaneAfter
     }
 }
 

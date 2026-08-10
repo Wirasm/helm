@@ -387,14 +387,34 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     Both outlive the tab, a re-push re-opens the same source, and a `closed` result for one
     carries **no `pid`** — the honest answer to "what did I just destroy". Before this,
     `push.sh` was add-only and a re-pushed artifact left orphan tabs only the operator could ⌘W.
-    Bringing a canvas *forward* is a separate, unanswered question — it is a focus question, and
-    the focus rule below still refuses it.
+    Bringing a canvas *forward* is the other half of #284, and it is `helm-select` below.
   - **It stops at the pane — no worktree, no branch, no git at all.** #141's rail already owns
     that, and its safety *is* an operator confirming a modal against eligibility rules; a spool
     request has nobody at the pane by construction, so reaching that rail from here could only
     mean a dialog no one will answer or a confirmation skipped. That is the strongest possible
     guarantee that unmerged work is never destroyed. `SpoolClosePolicy`'s header has the
     argument and the shape a later worktree kind would have to take.
+- **To bring a pane forward, `swift tools/helm-select.swift <pane-uuid>`** — the fifth spool
+  kind (#284), needing what the other four need: nothing. It makes the pane the one its slot is
+  **showing**, which is what *visible* means, and leaves **focus** where the operator put it
+  (`Workbench.select(offering:)`, the non-seizing twin of the tab click). Same uuid namespace and
+  the same three ways to know one as `helm-close`.
+  - **It exists because `push.sh` offers rather than inserts.** On a busy bench a pushed artifact
+    lands as a background tab — `isSelected: false`, `isVisible: false` — so #272's re-push
+    refresh was real and *unobservable to the agent that triggered it*. The `selected` result
+    carries `select.isVisible`, read back off the bench, which is the answer that was missing.
+  - **The rule is one sentence: an agent may show a pane in a slot the operator is not in**, and
+    there is no override — `helm-select` has no `--force`, because `CloseRequest.force` is a
+    caller asserting about work *it* owns and where the operator's eyes are was never that.
+    Refused: the pane holding the keyboard, and — the case a close's rule cannot see — **a
+    background tab of that same slot**, because the focused slot's *selection* is the focused
+    pane, so showing one of its tabs takes the keyboard. `SpoolPaneState.keyboard` is three-valued
+    for exactly that reason (`elsewhere` / `inItsSlot` / `here`), and `SpoolSelectPolicy` is
+    exhaustive over it.
+  - **The result proves the promise rather than asserting it**: `select.focusedPaneBefore` and
+    `select.focusedPaneAfter` are two readings of `Workbench.focusedPane` taken either side of the
+    mutation, and the script warns loudly if they differ. Exit codes are 2 no answer, 3 refused,
+    4 helm could not act, 6 abandoned.
 - **To drive the bench in between, `swift tools/helm-command.swift <command>`** — the fourth
   spool kind (#269), needing what the other three need: nothing. helm has twenty typed
   commands (`HelmCommand`, #219, #287 and #289) and **will take four of them from an agent**:
@@ -404,16 +424,20 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     #125's *appear, don't seize* on a channel that can now ask for anything the keymap can — an
     agent selecting your active tab mid-thought is the wrong-terminal click arriving through a
     supported API. The other sixteen are `refused` results **naming the reason and, where one
-    exists, the route to use instead**: `closePane` and `selectTerminal` point at `helm-close`,
+    exists, the route to use instead**: `closePane` points at `helm-close`, `selectTerminal` at
+    `helm-select` (#284),
     `openCanvasFile` and `openArtifact` at `push.sh`, `openWorkspace` at `helm-spool` — a
     spawn's `cwd` is the workspace helm opens for it. The rest name no route because there
     isn't one yet, and say so by saying what an addressed version would have to carry.
   - **Every command that is still refused is one with no address**, and that is #176's rule
     extended rather than reinvented. `helm-close` names a pane and refuses the one holding the
-    keyboard; `selectTerminal`, `closePane`, `toggleChat`, `adjustFontSize` and `jumpToPrompt`
+    keyboard, and `helm-select` does the same for the other direction; `selectTerminal`
+    (an *index* into the focused slot), `closePane`, `toggleChat`, `adjustFontSize` and
+    `jumpToPrompt`
     name nothing, so they act on whichever pane the operator is in and there is nothing for a
     policy to check. An addressed version would carry a pane and refuse it when
-    `SpoolPaneState.holdsKeyboard` — the shape is `CloseRequest`'s, and it is not built.
+    `SpoolPaneState.holdsKeyboard` — the shape is `CloseRequest`'s, and for `movePane` it is
+    still not built.
   - **An allowed command routes to helm's own non-seizing twin**, which is a distinction helm
     has drawn since #125 and named both halves of: `Workbench.insert` is the operator asking,
     `Workbench.offer` is an agent offering. `newTerminal` → `WorkbenchModel.spawnTerminal()`
@@ -604,12 +628,12 @@ single-file script needs no `Package.swift` resolved and no cwd inside this repo
 whole reason the spool is a script rather than an SPM target — see "Why the spool is a script,
 and must stay one", above, for what #221 measured when it tried the other way. So the format is
 typed once in `HelmWire` and spelled out once more in `tools/helm-spool.swift`/`helm-close.swift`/
-`helm-capture.swift`/`helm-command.swift`, on purpose. A duplicate is honest only when a runtime
-boundary makes
+`helm-capture.swift`/`helm-command.swift`/`helm-select.swift`, on purpose. A duplicate is honest
+only when a runtime boundary makes
 sharing impossible, and two wire formats now earn that carve-out: the mailbox's, written twice
 — in Swift (`hooks/`) and TypeScript/JavaScript (`pi/`), both separate processes `HelmWire`
 cannot reach — and the spool's own, written twice — once in `HelmWire`, once by hand across the
-four scripts, for the reasons just given. Neither is left to drift unnoticed by nothing at all
+five scripts, for the reasons just given. Neither is left to drift unnoticed by nothing at all
 — `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) runs each spool script as a real
 subprocess and checks both directions of the spool format (the request it writes and, against
 every `SpoolResult.Status`, its exit code and stderr) plus the `HELM_DEFAULTS_SUITE` branch of

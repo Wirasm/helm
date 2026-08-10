@@ -297,9 +297,32 @@ struct Workbench: Codable, Equatable {
     /// Select a pane, and focus the slot holding it — clicking a tab is also saying
     /// "this is the pane I mean now".
     mutating func select(_ pane: Pane.ID) {
+        select(pane, movingFocus: true)
+    }
+
+    /// Show a pane **without moving focus** — an agent asking (#284), as against `select(_:)`,
+    /// which is the operator clicking a tab.
+    ///
+    /// *Appear, don't seize*, exactly as `offer(_:at:)` is to `insert(_:at:)` and
+    /// `splitRight(offering:)` is to `splitRight(with:)`. The pane becomes its slot's
+    /// **selection** — which in the mounted workspace is what *visible* means — and `focusedSlot`
+    /// stays where the operator put it.
+    ///
+    /// **Which makes this safe only in a slot the operator is not in, and that is not this type's
+    /// call.** In the focused slot the selection *is* the focused pane, so this would move the
+    /// keyboard however carefully it left `focusedSlot` alone. `SpoolSelectPolicy` refuses that
+    /// case before anything reaches here; the bench stays a value that does what it is told.
+    mutating func select(offering pane: Pane.ID) {
+        select(pane, movingFocus: false)
+    }
+
+    /// One body for both, because the two differ in exactly one line — the same shape
+    /// `splitRight` uses, and for the same reason. The flag is private; the difference is spelled
+    /// at the two entry points, where a reader is.
+    private mutating func select(_ pane: Pane.ID, movingFocus: Bool) {
         guard let address = address(of: pane) else { return }
         columns[address.column].slots[address.slot].selected = pane
-        focusedSlot = columns[address.column].slots[address.slot].id
+        if movingFocus { focusedSlot = columns[address.column].slots[address.slot].id }
         normalize()
     }
 
