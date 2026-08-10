@@ -489,6 +489,29 @@ final class SpoolPolicyTests: XCTestCase {
         XCTAssertEqual(accepted.pane.uuidString, "1E5B7B1C-0000-4000-8000-00000000ABCD")
     }
 
+    /// **The refusal for a file that does not parse at all has to describe every kind**, because
+    /// it is the one answer with no `kind` to route on — the caller's JSON was never readable, so
+    /// helm cannot know which shape they were aiming at.
+    ///
+    /// `SpoolRequest.wireShapes` is what `SpoolModel.drain` sends, and this is `kinds`' own test
+    /// one level down: the list that says *which* kinds exist is already pinned above, and this
+    /// pins that each of them also says *what its file looks like*. Before #284 those shapes were
+    /// five string literals inside `SpoolModel`, so a sixth kind could arrive with a message
+    /// describing five and nothing anywhere would notice.
+    func testEveryKindHelmKnowsDescribesItsOwnFileShape() {
+        for kind in SpoolRequest.kinds {
+            XCTAssertTrue(
+                SpoolRequest.wireShapes.contains(kind),
+                "\(kind) is a kind helm knows but wireShapes does not describe it, so a caller "
+                    + "whose JSON would not parse is told about every kind except theirs")
+        }
+        // Each shape names the one field every request carries, which is what makes the entries
+        // descriptions of a *file* rather than a list of kind names a second time.
+        XCTAssertEqual(
+            SpoolRequest.wireShapes.components(separatedBy: "\"id\"").count - 1,
+            SpoolRequest.kinds.count)
+    }
+
     func testEveryKindHelmKnowsIsNamedInTheRefusalForTheOnesItDoesNot() throws {
         // A third kind arriving with a refusal message that still says there are two is the
         // drift this list exists to stop.

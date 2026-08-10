@@ -210,6 +210,16 @@ final class SpoolModelTests: XCTestCase {
         model.start()
         let result = await awaitResult(id: "broken", is: .refused)
         XCTAssertTrue(result?.reason?.contains("JSON") == true)
+        // …and it describes every kind, because a file that would not parse carries no `kind`
+        // for helm to guess which one the caller meant. The shapes come from the request types
+        // themselves (`SpoolRequest.wireShapes`); this is the assertion that the model actually
+        // sends them rather than a sentence of its own.
+        for kind in SpoolRequest.kinds {
+            XCTAssertTrue(
+                result?.reason?.contains(kind) == true,
+                "the unreadable-JSON refusal must describe \(kind); got "
+                    + String(describing: result?.reason))
+        }
     }
 
     // MARK: - Starting an agent

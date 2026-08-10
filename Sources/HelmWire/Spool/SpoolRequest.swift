@@ -65,6 +65,31 @@ package enum SpoolRequest: Equatable {
         SpawnRequest.kind, CaptureRequest.kind, CloseRequest.kind, CommandRequest.kind,
         SelectRequest.kind,
     ]
+
+    /// What each kind's file looks like, for the one refusal a caller gets when their JSON does
+    /// not parse **at all** — there is no `kind` to route on then, so the answer has to describe
+    /// every shape helm knows.
+    ///
+    /// **`kinds`' argument, one level down.** That list exists so a new kind cannot arrive with a
+    /// refusal that still says there are two; this exists so it cannot arrive with a refusal that
+    /// still describes four. `SpoolModel.drain` spelled all five out by hand in another module,
+    /// correct today and tied to nothing — and the shape of a request is the request type's own
+    /// fact, so each `wireShape` now lives beside the fields it describes.
+    ///
+    /// **What it still cannot catch, said rather than implied**: a renamed *field*. These are
+    /// prose, not `CodingKeys`, so `SelectRequest.pane` becoming `paneId` would leave the
+    /// sentence describing the old name. What it does catch is the drift that was actually
+    /// possible here — a kind added in one place and not the other — and it moves the remaining
+    /// risk to one line from the fields instead of one module away.
+    package static var wireShapes: String {
+        [
+            "a spawn is \(SpawnRequest.wireShape)",
+            "a capture is \(CaptureRequest.wireShape)",
+            "a close is \(CloseRequest.wireShape)",
+            "a command is \(CommandRequest.wireShape)",
+            "a select is \(SelectRequest.wireShape)",
+        ].joined(separator: ", ")
+    }
 }
 
 extension SpoolRequest: Decodable {
@@ -91,6 +116,8 @@ extension SpoolRequest: Decodable {
 /// Start an agent: a directory, an agent, and the first thing to say to it.
 package struct SpawnRequest: Codable, Equatable {
     package static let kind = "spawn"
+    /// See `SpoolRequest.wireShapes`. No `kind` in it, because a request without one is a spawn.
+    package static let wireShape = #"{"id","cwd","command","args","prompt"}"#
 
     package let id: String
     /// Where the agent runs. Becomes the terminal's working directory, and the workspace helm
@@ -135,6 +162,8 @@ package struct SpawnRequest: Codable, Equatable {
 /// helm drawing itself is not screen capture. See `WindowCapture` (`Sources/Helm/Capture`).
 package struct CaptureRequest: Codable, Equatable {
     package static let kind = "capture"
+    /// See `SpoolRequest.wireShapes`.
+    package static let wireShape = #"{"id","kind":"capture","path","window"}"#
 
     package let id: String
     /// Where to put the PNG. Absolute, ending in `.png`, in a directory that already exists.
@@ -218,6 +247,8 @@ package struct CaptureRequest: Codable, Equatable {
 /// beside it.
 package struct CloseRequest: Codable, Equatable {
     package static let kind = "close"
+    /// See `SpoolRequest.wireShapes`.
+    package static let wireShape = #"{"id","kind":"close","terminal","force"}"#
 
     /// Every honest way a caller comes by a pane uuid, **written once** because it is both this
     /// type's documentation and the sentence `SpoolPolicy.accept` hands back when a caller sends
@@ -300,6 +331,8 @@ package struct CloseRequest: Codable, Equatable {
 /// `HelmCommandName` in `HelmWire` and a field lands here; it does not get restated on the wire.
 package struct CommandRequest: Codable, Equatable {
     package static let kind = "command"
+    /// See `SpoolRequest.wireShapes`.
+    package static let wireShape = #"{"id","kind":"command","command"}"#
 
     package let id: String
     /// The command, by the raw value of `HelmCommandName` — `splitRight`, `toggleRail`, …
@@ -356,6 +389,8 @@ package struct CommandRequest: Codable, Equatable {
 /// nothing left for one to mean.
 package struct SelectRequest: Codable, Equatable {
     package static let kind = "select"
+    /// See `SpoolRequest.wireShapes`.
+    package static let wireShape = #"{"id","kind":"select","pane"}"#
 
     package let id: String
     /// The pane to show: `Pane.id`, exactly as `CloseRequest.terminal` is.

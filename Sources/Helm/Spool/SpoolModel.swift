@@ -253,15 +253,15 @@ final class SpoolModel: ObservableObject {
             guard let claimed = directory.claim(url) else { continue }
             let fallbackID = claimed.deletingPathExtension().lastPathComponent
             guard let request = directory.request(at: claimed) else {
+                // **The shapes come from the request types, not from a sentence here.** This
+                // used to restate every kind's fields by hand, one module away from the structs
+                // that define them, and nothing tied the two together — so a kind added without
+                // touching this line would answer a caller with a description of the four that
+                // came before it. See `SpoolRequest.wireShapes`.
                 refuse(
                     id: fallbackID,
                     reason: "the request file is not readable JSON of the form "
-                        + "{\"id\",\"kind\",…} — a spawn is "
-                        + "{\"id\",\"cwd\",\"command\",\"args\",\"prompt\"}, a capture is "
-                        + "{\"id\",\"kind\":\"capture\",\"path\",\"window\"}, a close is "
-                        + "{\"id\",\"kind\":\"close\",\"terminal\",\"force\"}, a command is "
-                        + "{\"id\",\"kind\":\"command\",\"command\"}, a select is "
-                        + "{\"id\",\"kind\":\"select\",\"pane\"}")
+                        + "{\"id\",\"kind\",…} — " + SpoolRequest.wireShapes)
                 continue
             }
             guard !handled.contains(request.id) else { continue }
