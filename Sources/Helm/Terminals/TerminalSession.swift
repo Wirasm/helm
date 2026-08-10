@@ -312,26 +312,30 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// a line while reading, press ⌘V, and paste "does not work at all". It works
     /// perfectly; the clipboard it pastes is simply no longer the one that was copied.
     ///
-    /// **The lie is one layer down and helm cannot reach it.** ghostty's default is
+    /// **The lie was one layer down, and #297 went and fixed it there.** ghostty's default is
     /// `copy-on-select = true`, which means *the selection clipboard* — X11's middle-click
     /// buffer, which macOS does not have. Ghostty asks the host whether it has one, and the
-    /// vendored AppKit wrapper answers yes (`supports_selection_clipboard = true`,
-    /// `TerminalController+Config.swift`) and then ignores the parameter naming which
-    /// clipboard to write, putting every selection on `NSPasteboard.general`
-    /// (`TerminalController+Callbacks.swift`, `writeClipboard(userdata:clipboard:…)` —
-    /// the `clipboard` argument is `_`). Ghostty.app answers no, which is why
-    /// `copy-on-select = true` is a harmless no-op in a real macOS ghostty window and a
-    /// clipboard eater in this one. `runtimeConfig` is private to the vendored controller,
-    /// so turning the claim off is a vendor patch; turning the *feature* off is a config
-    /// line, and it lands helm on exactly the behaviour Ghostty.app already has.
+    /// vendored AppKit wrapper used to answer yes and then ignore the parameter naming which
+    /// clipboard to write, putting every selection on `NSPasteboard.general`. Ghostty.app
+    /// answers no, which is why `copy-on-select = true` was a harmless no-op in a real macOS
+    /// ghostty window and a clipboard eater in this one.
+    ///
+    /// `Patches/libghostty-spm-clipboard-destination.patch` now answers no as well, and the
+    /// callbacks honour the destination rather than discarding it — so this config line is no
+    /// longer the only thing standing between a selection and the operator's clipboard, and a
+    /// program in a pane can no longer take it with `OSC 52` either. **It stays a default
+    /// anyway**, for the reason below rather than for safety: `copy-on-select = false` is the
+    /// behaviour helm wants out of the box, and an operator who wants otherwise says so.
     ///
     /// **A default rather than a session override, deliberately.** An operator who wants
     /// selections on the clipboard writes `copy-on-select = clipboard` — ghostty's own
     /// spelling for the system clipboard, which routes through the standard channel and is
     /// correct here — and their config layers over this one (`GhosttyConfig.swift` tier 2).
-    /// Forcing it in `sessionOverrides` would take a real preference away to fix a bug
-    /// that is not theirs. ⌘C is untouched either way: `copy_to_clipboard` always names
-    /// the standard clipboard.
+    /// Since the patch, plain `copy-on-select = true` reaches the same place: with no
+    /// selection clipboard claimed, ghostty falls back to the standard one, exactly as it
+    /// does in Ghostty.app. Forcing either in `sessionOverrides` would take a real preference
+    /// away. ⌘C is untouched either way: `copy_to_clipboard` always names the standard
+    /// clipboard.
     static let defaultConfiguration = TerminalConfiguration { builder in
         builder.withFontSize(baseFontSize)
         builder.withFontThicken(true)
