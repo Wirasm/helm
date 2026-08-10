@@ -155,6 +155,34 @@ is a documented loop that was correct in bash and fatal in zsh, which is the she
 Bash tool runs, and no gate read a skill file at all until this one. Needs bash, zsh and python3,
 which is why it is not in the Swift gate.
 
+**Since #285 it also executes the root those snippets resolve**, and that is a fifth copy of the
+mailbox's directory rule rather than a fourth. Every snippet in both skills opens with a three-line
+preamble that resolves `$ROOT`, because a documented literal is not merely stale inside an isolated
+instance — it is an agent in a throwaway helm **listing and sending into the operator's own
+mailroom**, successfully and silently, which is the cross-talk the code fix closes. Prose asking the
+reader to substitute the suite themselves was the first attempt and is not a mechanism.
+
+**The line of that preamble that matters is the one it is tempting to drop.** The first cut was a
+single `${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}`, which honours **every** value — and the
+three the real writers refuse are exactly the reachable ones: `com.wirasm.helm` is the canonical
+domain, which `DefaultsSuite.override` maps to `.none` so **helm launches perfectly normally under
+it**, it is the literal this file tells you to `defaults read`, and `claude-session-start` fires for
+every Claude Code session on the machine rather than only those in a helm pane; `helm` is the legacy
+domain and the obvious guess at a suite name; a `/` makes a path. All three sent the reader to an
+empty `~/.helm/mail-<name>` while the real hook had claimed their mailbox in the shared root — sends
+that succeed into a directory nobody reads, and a box that never receives. **The escape hatch the
+first version wrote for itself — *"simpler only in the cases helm refuses to launch under"* — was
+false for the case that needed it most.** So the preamble carries the same four textual guards the
+writers do, and the gate runs the doc's own expression against all six fixtures. The one rule it
+does not copy is the whitespace trim, which cannot bite what helm publishes: `PaneEnvironment`
+declares the *decided* name.
+
+The gate also requires both skills to state one preamble and **every snippet to repeat all of it** —
+a block that kept `ROOT=` and dropped the `case` line is the leak, sitting in a file whose stated
+preamble is still correct — and it runs every other snippet with both variables taken **out** of the
+environment, because this gate is very often run by an agent hosted in an isolated helm, which
+exports the second one.
+
 `push.sh` is how an agent puts an artifact on the bench, and it is the third mechanism to hold
 that job — the first two shipped broken. Both were verified from a shell the operator typed into,
 where they worked, and both were silent from an agent's tool call, where they did not: a ⌘-click
@@ -177,8 +205,10 @@ consecutive wakes, because waking spends a turn and two agents replying to each 
 otherwise burn until the money ran out. Both are wired by hand into `~/.claude/settings.json` and
 never write themselves there; `hooks/helm-mail.mjs` is the convention, and it is a **deliberate
 duplicate** of `pi/extensions/helm-mail/index.ts` — there is no shared module because pi loads a
-`.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice
-or the on-disk shape has to be made in both. Needs node, which is why it is not in the Swift gate.
+`.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice,
+the on-disk shape or **which mailroom it all happens in** (#285) has to be made in both — and
+`hooks/mailbox-conformance.mjs` is what makes that detectable rather than trusted. Needs node,
+which is why it is not in the Swift gate.
 
 Only when `pi/` changed. It needs node, and `tsc` from an `npm install` in `pi/`, which is
 why it is not part of the Swift gate: `swift test` cannot run TypeScript and should not
@@ -597,6 +627,31 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   when two helms are running. The legacy-domain migration never fires under it, and the window
   frame is not autosaved: that last one is AppKit's write rather than helm's, and the only one a
   suite cannot catch by itself.
+  - **"No reachable path" is a promise about four directories, not one, and the fourth was a
+    lie until #285.** The suite moves the defaults, the spool (`~/.helm/spool-<name>`), the bench
+    snapshot (`~/.helm/bench-<name>`) — and now the **mailbox**, `~/.helm/mail-<name>`. It did not
+    move mail, so a capability test launched under `HELM_DEFAULTS_SUITE=drivetest` spawned an
+    agent that claimed `helm-31b1` in the operator's live `~/.helm/mail` beside his real ones:
+    addressable by them, listed to them, widening handles against them (#262) and sweeping their
+    mailboxes with the reaper on every session start (#236). Isolation is the whole reason those
+    tests are safe to run on a live machine, so the promise was fixed rather than narrowed.
+  - **It could not be fixed in helm alone, and that shape recurs.** helm only *reads* the mailbox;
+    it is **claimed** by `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts`, two
+    processes helm does not run and cannot import from. So helm **declares** the suite into every
+    pty child (`PaneEnvironment.suiteDeclaration` — the decided name, never a raw value helm would
+    itself refuse) and both writers resolve it with the same three rules `SpoolDirectory.resolve`
+    follows: `HELM_MAIL_DIR` first, then the suite, then the shared root. That is one rule in three
+    languages, which is the mailbox's standing carve-out and its standing obligation —
+    `hooks/mailbox-conformance.mjs` now extracts `MailboxDirectory.resolve` and
+    `DefaultsSuite.override` from the Swift and runs all three copies against one fixture set, so a
+    divergence is a red gate rather than a helm that cannot see the agents it is hosting.
+    **The writers' copy is deliberately narrower in one clause**: `UserDefaults(suiteName:) != nil`
+    is a framework call JavaScript cannot make, and for a name refused on that ground alone helm
+    refuses to *launch*, so no running helm can disagree. The harness asserts that clause is still
+    the only one.
+  - **The negative control, and it is what a claim here has to bring.** `hooks/test.sh` and
+    `pi/tests/helm-mail.mjs` each claim under a suite with `HOME` redirected and then assert the
+    shared `~/.helm/mail` **was never created** — not that it holds a different mailbox.
 - Conventional commits, written as a human — no AI attribution.
 
 ## Architecture — how to think about where code goes

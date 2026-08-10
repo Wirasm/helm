@@ -1,3 +1,4 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -56,6 +57,56 @@ final class PaneEnvironmentTests: XCTestCase {
 
         XCTAssertEqual(environment["COLORTERM"], "truecolor")
         XCTAssertEqual(environment["TERM_PROGRAM"], "ghostty")
+    }
+
+    // MARK: - Which instance the child belongs to (#285)
+
+    /// **The half of #285 that is helm's.** The mailbox is claimed by a Claude Code hook and a pi
+    /// extension, neither of which helm runs and neither of which can ask it anything — so the
+    /// only way an isolated instance's agents can claim somewhere the operator's agents never see
+    /// is for helm to say which instance they are in. Declared rather than inherited, for the
+    /// reason `terminalDeclaration` gives about `COLORTERM`.
+    func testAnIsolatedInstanceTellsItsChildrenWhichInstanceTheyAreIn() {
+        let environment = PaneEnvironment.forPane(
+            UUID(), environment: ["HELM_DEFAULTS_SUITE": "drivetest"])
+
+        XCTAssertEqual(environment["HELM_DEFAULTS_SUITE"], "drivetest")
+    }
+
+    /// The other half, and the one that keeps the ordinary case ordinary: with no suite there is
+    /// nothing to say, and a variable saying "no suite" would be a second way to spell the
+    /// default for the two writers to disagree about.
+    func testTheOperatorsOwnHelmDeclaresNoSuiteAtAll() {
+        XCTAssertNil(PaneEnvironment.forPane(UUID(), environment: [:])["HELM_DEFAULTS_SUITE"])
+        XCTAssertNil(
+            PaneEnvironment.forPane(UUID(), environment: ["HELM_DEFAULTS_SUITE": ""])[
+                "HELM_DEFAULTS_SUITE"])
+    }
+
+    /// **The wiring, which no fixture can prove.** `TerminalSession` calls `forPane(id)` with no
+    /// environment argument, so the default parameter *is* the mechanism — and every test above
+    /// hands in a dictionary and would go on passing if that default were `[:]`. This one asks
+    /// the process the app asks.
+    func testAPaneReadsTheSuiteFromTheProcessTheAppActuallyRunsIn() {
+        setenv(DefaultsSuite.suiteVariable, "helm-tests-pane-suite", 1)
+        defer { unsetenv(DefaultsSuite.suiteVariable) }
+
+        XCTAssertEqual(
+            PaneEnvironment.forPane(UUID())[DefaultsSuite.suiteVariable], "helm-tests-pane-suite",
+            "the default argument must read this process's environment, not an empty one")
+    }
+
+    /// **A child is never told a suite helm itself refused.** `DefaultsDomain.resolve` stops the
+    /// launch on one, so publishing the raw value would be helm handing an agent a name it would
+    /// not run under — and the writers would then claim in a mailroom no helm reads.
+    func testASuiteHelmWouldRefuseIsNeverDeclaredToAChild() {
+        for refused in ["   ", "com.wirasm.helm", "helm", "/Users/nobody/somewhere"] {
+            XCTAssertNil(
+                PaneEnvironment.forPane(UUID(), environment: ["HELM_DEFAULTS_SUITE": refused])[
+                    "HELM_DEFAULTS_SUITE"],
+                "\(refused.debugDescription) is not a suite helm runs under; a pane must not be told it is"
+            )
+        }
     }
 
     // MARK: - The identity helm refuses to pass on (#139)

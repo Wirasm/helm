@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 /// The environment a pane's pty child gets: what helm **publishes** into it, and what helm
 /// refuses to let it **inherit**.
@@ -40,18 +41,45 @@ enum PaneEnvironment {
         "TERM_PROGRAM": "ghostty",
     ]
 
-    /// What a pane's pty child is spawned with: the terminal declaration, plus this pane's
-    /// own identity.
+    /// The suite an isolated instance runs under, declared into the child rather than left to
+    /// be inherited — #285.
+    ///
+    /// **It is the same argument `terminalDeclaration` makes about `COLORTERM`, on a variable
+    /// that is now load-bearing.** helm's own `environ` already carries this, and ghostty builds
+    /// each surface's child environment from `environ`, so a hosted agent can read it today —
+    /// which is why `staleIdentityKeys` deliberately leaves it alone ("helm telling the child
+    /// the truth"). But that is inheritance, and inheritance is what `COLORTERM` was: correct by
+    /// coincidence, one refactor away from ending, and silent when it does. Since #285 the
+    /// mailbox's two writers resolve their root from this variable — an agent that cannot see it
+    /// claims in the **operator's** `~/.helm/mail` instead of the instance's own, which is the
+    /// exact leak #285 exists to close, restored with nothing to see.
+    ///
+    /// **The decided name, never the raw value.** `DefaultsSuite.override` is what helm itself
+    /// obeyed at launch, so a child can never be told a suite helm refused — and under no suite
+    /// nothing is published at all, because the default *is* the default and a variable saying
+    /// so would be a second way to spell it.
+    static func suiteDeclaration(
+        in environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        guard case .suite(let name) = DefaultsSuite.override(in: environment) else { return [:] }
+        return [DefaultsSuite.suiteVariable: name]
+    }
+
+    /// What a pane's pty child is spawned with: the terminal declaration, the instance's suite
+    /// when there is one, plus this pane's own identity.
     ///
     /// Set once, at `TerminalSession.init`, and baked into the child at spawn — so it costs
     /// nothing at the two moments #94 asks about. A pane **moved** between containers keeps
     /// it because moving does not respawn the surface; a pane **restored** after a relaunch
     /// gets the persisted uuid back because `TerminalSession.id` is injected on restore, and
     /// the child is new anyway.
-    static func forPane(_ id: UUID) -> [String: String] {
-        var environment = terminalDeclaration
-        environment[paneVariable] = id.uuidString
-        return environment
+    static func forPane(
+        _ id: UUID, environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var result = terminalDeclaration
+        result.merge(suiteDeclaration(in: environment)) { _, suite in suite }
+        result[paneVariable] = id.uuidString
+        return result
     }
 
     // MARK: - What helm refuses to pass on

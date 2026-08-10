@@ -94,6 +94,10 @@ SANDBOX=
 # The operator's REAL roots, read from the inherited environment BEFORE it is overwritten —
 # `HELM_MAIL_DIR` may already point somewhere that is not `~/.helm`, and that is the directory
 # the guard has to protect.
+#
+# `HELM_DEFAULTS_SUITE` (#285) moves the mail root too, and deliberately does NOT get a second
+# spelling here: `sandbox()` exports `HELM_MAIL_DIR`, which beats a suite in both writers, so
+# nothing this gate runs can resolve a suite's mailroom in the first place.
 REAL_MAIL_ROOT=${HELM_MAIL_DIR:-"${HOME:-/nonexistent}/.helm/mail"}
 
 sandbox() {

@@ -41,6 +41,26 @@ const OFF_ENV = "HELM_MAIL_OFF";
 const ROOT_ENV = "HELM_MAIL_DIR";
 const HANDLE_ENV = "HELM_MAIL_HANDLE";
 
+/**
+ * helm's own isolation switch, honoured here so an isolated instance's agents claim somewhere
+ * the operator's agents never see — #285.
+ *
+ * `HELM_DEFAULTS_SUITE=<name>` already moves every default helm owns and its whole spool
+ * (`~/.helm/spool-<name>`). It did not move the mailbox, and `AGENTS.md` promises that variable
+ * leaves "no reachable path to the operator's state" — so a throwaway helm's agent claimed
+ * `helm-31b1` in the operator's live `~/.helm/mail`, alongside his real agents. Measured.
+ *
+ * helm declares this into every pty child (`PaneEnvironment.suiteDeclaration`), so an agent it
+ * hosts reads the same answer helm did.
+ */
+const SUITE_ENV = "HELM_DEFAULTS_SUITE";
+
+/** The defaults domain a helm with no suite persists to. Naming it IS naming no suite. */
+const CANONICAL_DOMAIN = "com.wirasm.helm";
+
+/** What `swift run helm` persisted to before #45. helm refuses to run under it — it gets drained. */
+const LEGACY_DOMAIN = "helm";
+
 /** Bounds on another agent's text, identical to the pi side. See #127. */
 const SUBJECT_MAX = 80;
 const FROM_MAX = 64;
@@ -73,10 +93,44 @@ const OPERATOR_SENDER = "operator";
 
 // ── the convention (keep in step with pi/extensions/helm-mail/index.ts) ───────────────────
 
+/**
+ * The isolated instance this process belongs to, or `""` for the operator's own helm — #285.
+ *
+ * `Sources/HelmWire/DefaultsSuite.swift` is where this decision is authoritative, and this is a
+ * NARROWER copy of it, by the same carve-out the rest of this file lives under: helm cannot
+ * reach a hook, so the rule is written twice and `hooks/mailbox-conformance.mjs` executes both
+ * against the Swift it is copied from. Swift's four textual guards are all here — unset or
+ * blank, the canonical domain, the legacy domain, and a name carrying `/` — and the fifth is
+ * not, because it cannot be: `UserDefaults(suiteName:) != nil` is a framework call, and its one
+ * documented refusal beyond the two domains above is `NSGlobalDomain`.
+ *
+ * **What that costs, exactly, and why it is the safe direction.** For a name Swift refuses on
+ * that ground alone, helm refuses to LAUNCH (`DefaultsDomain.resolve`), so there is no running
+ * helm whose reader could disagree — the divergence is a directory nobody ever reads, never the
+ * operator's shared root. Every doubt here resolves toward isolation rather than toward the one
+ * directory his live agents are addressable in.
+ *
+ * The `/` guard is not decoration either: unlike helm, this file MKDIRS the root it resolves, so
+ * a suite name with a slash in it would create directories wherever it pointed.
+ */
+function suiteName() {
+	const raw = (process.env[SUITE_ENV] ?? "").trim();
+	if (!raw) return "";
+	if (raw === CANONICAL_DOMAIN || raw === LEGACY_DOMAIN) return "";
+	if (raw.includes("/")) return "";
+	return raw;
+}
+
+/**
+ * Where the whole convention lives. Three rules, and they are `SpoolDirectory.resolve`'s to the
+ * letter, one directory over: an explicit `HELM_MAIL_DIR` wins, else an isolated instance gets
+ * `~/.helm/mail-<suite>`, else `~/.helm/mail`.
+ */
 function mailRoot() {
 	const override = process.env[ROOT_ENV];
 	if (override && override.trim()) return path.resolve(override.trim());
-	return path.join(os.homedir(), ".helm", "mail");
+	const suite = suiteName();
+	return path.join(os.homedir(), ".helm", suite ? `mail-${suite}` : "mail");
 }
 
 /** Lowercase: a handle is a directory name, and the macOS default filesystem folds case. */
