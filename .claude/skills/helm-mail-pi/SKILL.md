@@ -15,6 +15,12 @@ You are in **pi**. The `helm-mail` extension already claimed your mailbox, watch
 when mail arrives. **You only need this skill to SEND.** The Claude Code side is `helm-mail-cc`, and
 it has to do more work — mention that if you are asked about the difference.
 
+**One `~/.helm/mail` below is conditional, and it is the only one.** If `$HELM_DEFAULTS_SUITE` is
+set you are hosted by an **isolated** helm, and your mailroom is `~/.helm/mail-$HELM_DEFAULTS_SUITE`
+— read every `~/.helm/mail` in this file as that directory instead. It is a whole separate mailroom
+rather than a prefix: the operator's own agents are not in it, cannot see you, and you cannot write
+to them (#285). Unset, which is the ordinary case, nothing changes.
+
 ## Who is reachable
 
 ```bash

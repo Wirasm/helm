@@ -15,6 +15,12 @@ You are in **Claude Code**. A `SessionStart` hook already claimed your mailbox a
 `UserPromptSubmit` hook delivers waiting mail at the start of each of your turns. **The one thing
 nobody can do for you is wake you** — see *Arm*, below. pi's side is `helm-mail-pi`.
 
+**One `~/.helm/mail` below is conditional, and it is the only one.** If `$HELM_DEFAULTS_SUITE` is
+set you are hosted by an **isolated** helm, and your mailroom is `~/.helm/mail-$HELM_DEFAULTS_SUITE`
+— read every `~/.helm/mail` in this file as that directory instead. It is a whole separate mailroom
+rather than a prefix: the operator's own agents are not in it, cannot see you, and you cannot write
+to them (#285). Unset, which is the ordinary case, nothing changes.
+
 ## Who is reachable
 
 ```bash

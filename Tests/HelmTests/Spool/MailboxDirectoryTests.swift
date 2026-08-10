@@ -313,4 +313,68 @@ final class MailboxDirectoryTests: XCTestCase {
             MailboxDirectory.resolve(environment: ["HELM_MAIL_DIR": "/tmp/mail"], home: home).path,
             "/tmp/mail")
     }
+
+    // MARK: - #285: an isolated instance has a mailroom of its own
+
+    /// **The leak, as an assertion.** A helm under `HELM_DEFAULTS_SUITE` used to read — and its
+    /// agents used to claim in — the operator's own `~/.helm/mail`, which is a reachable path to
+    /// his state under a variable `AGENTS.md` promises leaves none. The suite moves the mailbox
+    /// exactly as it moves the spool.
+    func testAnIsolatedInstanceReadsItsOwnMailroom() {
+        let home = URL(fileURLWithPath: "/Users/nobody")
+        XCTAssertEqual(
+            MailboxDirectory.resolve(
+                environment: ["HELM_DEFAULTS_SUITE": "drivetest"], home: home
+            ).path,
+            "/Users/nobody/.helm/mail-drivetest")
+        XCTAssertNotEqual(
+            MailboxDirectory.resolve(
+                environment: ["HELM_DEFAULTS_SUITE": "drivetest"], home: home
+            ).path,
+            MailboxDirectory.resolve(environment: [:], home: home).path,
+            "a throwaway instance must not be able to reach the operator's mailroom at all")
+    }
+
+    /// The three rules in their documented order, and the two that must NOT move it. An explicit
+    /// `HELM_MAIL_DIR` still wins — that is what keeps every gate here hermetic under a suite —
+    /// and a name helm itself refuses falls back rather than inventing a mailroom from a value
+    /// no running helm could ever have been launched with.
+    func testTheSuiteMovesTheMailroomOnlyWhenHelmWouldHonourIt() {
+        let home = URL(fileURLWithPath: "/Users/nobody")
+        XCTAssertEqual(
+            MailboxDirectory.resolve(
+                environment: ["HELM_MAIL_DIR": "/tmp/mail", "HELM_DEFAULTS_SUITE": "drivetest"],
+                home: home
+            ).path,
+            "/tmp/mail",
+            "an explicit override beats the suite, or no test could redirect one")
+        for refused in ["", "   ", "com.wirasm.helm", "helm", "/Users/nobody/somewhere"] {
+            XCTAssertEqual(
+                MailboxDirectory.resolve(
+                    environment: ["HELM_DEFAULTS_SUITE": refused], home: home
+                ).path,
+                "/Users/nobody/.helm/mail",
+                "\(refused.debugDescription) is not a suite helm runs under, so it names no mailroom"
+            )
+        }
+    }
+
+    /// **The rule is `SpoolDirectory`'s, and it stays that way.** Two directories one variable
+    /// moves, resolved by two functions: the day they disagree, an isolated helm answers spawns
+    /// from one instance's spool with the other instance's handles.
+    func testTheMailroomAndTheSpoolFollowTheSuiteTogether() {
+        let home = URL(fileURLWithPath: "/Users/nobody")
+        for environment in [
+            [:], ["HELM_DEFAULTS_SUITE": "drivetest"], ["HELM_DEFAULTS_SUITE": "helm"],
+        ]
+            as [[String: String]]
+        {
+            let mail = MailboxDirectory.resolve(environment: environment, home: home)
+            let spool = SpoolDirectory.resolve(environment: environment, home: home).root
+            XCTAssertEqual(
+                mail.lastPathComponent.replacingOccurrences(of: "mail", with: "spool"),
+                spool.lastPathComponent,
+                "the mailroom and the spool must be isolated by the same decision, not by two")
+        }
+    }
 }

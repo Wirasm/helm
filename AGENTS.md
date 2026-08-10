@@ -177,8 +177,10 @@ consecutive wakes, because waking spends a turn and two agents replying to each 
 otherwise burn until the money ran out. Both are wired by hand into `~/.claude/settings.json` and
 never write themselves there; `hooks/helm-mail.mjs` is the convention, and it is a **deliberate
 duplicate** of `pi/extensions/helm-mail/index.ts` — there is no shared module because pi loads a
-`.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice
-or the on-disk shape has to be made in both. Needs node, which is why it is not in the Swift gate.
+`.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice,
+the on-disk shape or **which mailroom it all happens in** (#285) has to be made in both — and
+`hooks/mailbox-conformance.mjs` is what makes that detectable rather than trusted. Needs node,
+which is why it is not in the Swift gate.
 
 Only when `pi/` changed. It needs node, and `tsc` from an `npm install` in `pi/`, which is
 why it is not part of the Swift gate: `swift test` cannot run TypeScript and should not
@@ -573,6 +575,31 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   when two helms are running. The legacy-domain migration never fires under it, and the window
   frame is not autosaved: that last one is AppKit's write rather than helm's, and the only one a
   suite cannot catch by itself.
+  - **"No reachable path" is a promise about four directories, not one, and the fourth was a
+    lie until #285.** The suite moves the defaults, the spool (`~/.helm/spool-<name>`), the bench
+    snapshot (`~/.helm/bench-<name>`) — and now the **mailbox**, `~/.helm/mail-<name>`. It did not
+    move mail, so a capability test launched under `HELM_DEFAULTS_SUITE=drivetest` spawned an
+    agent that claimed `helm-31b1` in the operator's live `~/.helm/mail` beside his real ones:
+    addressable by them, listed to them, widening handles against them (#262) and sweeping their
+    mailboxes with the reaper on every session start (#236). Isolation is the whole reason those
+    tests are safe to run on a live machine, so the promise was fixed rather than narrowed.
+  - **It could not be fixed in helm alone, and that shape recurs.** helm only *reads* the mailbox;
+    it is **claimed** by `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts`, two
+    processes helm does not run and cannot import from. So helm **declares** the suite into every
+    pty child (`PaneEnvironment.suiteDeclaration` — the decided name, never a raw value helm would
+    itself refuse) and both writers resolve it with the same three rules `SpoolDirectory.resolve`
+    follows: `HELM_MAIL_DIR` first, then the suite, then the shared root. That is one rule in three
+    languages, which is the mailbox's standing carve-out and its standing obligation —
+    `hooks/mailbox-conformance.mjs` now extracts `MailboxDirectory.resolve` and
+    `DefaultsSuite.override` from the Swift and runs all three copies against one fixture set, so a
+    divergence is a red gate rather than a helm that cannot see the agents it is hosting.
+    **The writers' copy is deliberately narrower in one clause**: `UserDefaults(suiteName:) != nil`
+    is a framework call JavaScript cannot make, and for a name refused on that ground alone helm
+    refuses to *launch*, so no running helm can disagree. The harness asserts that clause is still
+    the only one.
+  - **The negative control, and it is what a claim here has to bring.** `hooks/test.sh` and
+    `pi/tests/helm-mail.mjs` each claim under a suite with `HOME` redirected and then assert the
+    shared `~/.helm/mail` **was never created** — not that it holds a different mailbox.
 - Conventional commits, written as a human — no AI attribution.
 
 ## Architecture — how to think about where code goes
