@@ -5,23 +5,29 @@ import XCTest
 /// Proves the standalone spool scripts and `HelmWire` still agree on the wire format — the
 /// detectable half of the duplication `AGENTS.md` argues is honest (#221).
 ///
-/// **Why the duplication exists at all.** `tools/helm-spool.swift`, `helm-close.swift`,
-/// `helm-capture.swift`, `helm-command.swift` and `helm-select.swift` cannot `import HelmWire`: a single-file
-/// `swift tools/…swift` script resolves no `Package.swift` and runs from any cwd, which is the
-/// whole reason the spool is a script rather than an SPM target (`AGENTS.md`'s "Why the spool is
-/// a script, and must stay one" has the measurements). So the request JSON, the result JSON and
-/// the spool's own
+/// **Why the duplication exists at all.** The `tools/*.swift` spool scripts cannot `import
+/// HelmWire`: a single-file `swift tools/…swift` script resolves no `Package.swift` and runs from
+/// any cwd, which is the whole reason the spool is a script rather than an SPM target
+/// (`AGENTS.md`'s "Why the spool is a script, and must stay one" has the measurements). So the
+/// request JSON, the result JSON and the spool's own
 /// directory-resolution rules are each spelled out twice — once here as `HelmWire` types and
 /// functions, once by hand in each script. A duplicate is honest only when a runtime boundary
 /// makes sharing impossible — this is that boundary — but honest still means it has to be
 /// *watched*, not merely excused.
 ///
+/// **Which scripts those are is `AGENTS.md`'s list, and deliberately not restated here** — the
+/// same reason `SpoolRequest`'s own header stopped restating it. This file named and counted five
+/// of them while spending six methods on the sixth, which is the drift in its purest form: a
+/// conformance test whose header was itself unconformant. **Nothing enumerates `tools/*.swift` in
+/// this suite**, so no gate catches that the way the tests below catch drift in the actual wire
+/// bytes; a test that reads the directory and checks it against one list is tracked separately.
+///
 /// **This file covers three of the spool's four boundaries, and says which one it does not:**
 ///
 /// 1. **The request direction** (script → helm): a script writes `<id>.json`, helm's
-///    `SpoolDirectory.request(at:)` decodes it. Covered by the five `testHelm*WritesWhat
-///    *RequestDecodes` tests below, unchanged from #221's first pass but for #269's fourth kind
-///    and #284's fifth.
+///    `SpoolDirectory.request(at:)` decodes it. Covered by the `testHelm*WritesWhat
+///    *RequestDecodes` tests below — one per script, unchanged in shape from #221's first pass,
+///    with a new one added by each kind since (#269's, #284's, #313's).
 /// 2. **The result direction** (helm → script): helm writes `results/<id>.json`, the script
 ///    reads `json["status"] as? String` and switches on it by hand — one `switch status` per
 ///    script, none of which

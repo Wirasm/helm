@@ -20,15 +20,23 @@ import Foundation
 /// on the channel #54 already justified needs no new argument.
 ///
 /// **Lives in `HelmWire` (#221), not in `Helm`.** `Helm` and `HelmTests` compile against this
-/// for one definition instead of restating it. `tools/helm-spool.swift`, `helm-close.swift`,
-/// `helm-capture.swift`, `helm-command.swift` and `helm-select.swift` cannot join them — a
-/// single-file `swift tools/…swift` script resolves no `Package.swift`
-/// and runs from any cwd, which is the whole reason the spool is a script rather
-/// than an SPM target (`AGENTS.md`'s "Why the spool is a script, and must stay one" has the
-/// measurements from the attempt that broke both). So those five still hand-roll the JSON by
-/// hand, on purpose — the runtime boundary `AGENTS.md`'s own rule carves out — and
-/// `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) is what keeps that duplicate honest: it
-/// runs each script as a real subprocess and decodes what it wrote with these same types.
+/// for one definition instead of restating it. **The `tools/*.swift` spool scripts cannot join
+/// them** — a single-file `swift tools/…swift` script resolves no `Package.swift` and runs from
+/// any cwd, which is the whole reason the spool is a script rather than an SPM target
+/// (`AGENTS.md`'s "Why the spool is a script, and must stay one" has the measurements from the
+/// attempt that broke both). So each of them still hand-rolls the JSON by hand, on purpose — the
+/// runtime boundary `AGENTS.md`'s own rule carves out — and `SpoolWireConformanceTests`
+/// (`Tests/HelmTests/Spool/`) is what keeps that duplicate honest: it runs each script as a real
+/// subprocess and decodes what it wrote with these same types.
+///
+/// **Which scripts those are is `AGENTS.md`'s list, and deliberately not restated here.** This
+/// header named them and counted them, so did the conformance test's, so did `Package.swift`'s —
+/// three copies of one number, and #316's review found `Package.swift` still saying *four* while
+/// there were five. A count that has to be incremented in three places is a count that will be
+/// wrong again on the seventh script, and unlike the wire bytes below **nothing enumerates
+/// `tools/*.swift` in the test suite**, so no gate catches the drift. Naming the canonical list
+/// once is the cheap half of that; a test that reads the directory is the durable half and is
+/// tracked separately.
 ///
 /// Decoded permissively in shape and judged strictly afterwards — see `SpoolPolicy`. Splitting
 /// those apart is what lets a malformed request be *refused with a reason* rather than dropped
