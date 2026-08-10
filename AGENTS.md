@@ -175,6 +175,16 @@ is new and means a terminal is reachable that helm does not own** — distinct f
 at all, because the operator's next move differs. **A paneless agent has no canvas route at all
 today**: the spool has no `canvas` kind, so `8` means hand over the path.
 
+**And its gate must never deliver, which it did for as long as it existed.** Six of `test.sh`'s
+cases ran the real `push.sh` from the gate's own process tree, so every run by an agent inside a
+pane pushed six artifacts onto the **operator's** bench, each a tab onto a `mktemp` directory the
+gate then deleted — he watched the dead tabs pile up. That is #282 from the other side and the
+better argument for the guard, because it happened rather than being hypothetical. Every emitting
+case is staged now: detached by a double fork for the refusals, and given a pty of its own
+(`exec -a helm script`, stream to `/dev/null`) for the one case that must prove a real emit. Check
+it the way it was checked — diff the canvas panes in `~/.helm/bench/snapshot.json` around a run,
+and expect zero new ones even while a *broken* `push.sh` is the thing under test.
+
 `hooks/` is the **Claude Code** half of the mailbox — `claude-session-start` claims a mailbox so
 a session can be addressed, `claude-user-prompt-submit` delivers waiting mail by writing the notice
 to **stdout**, which Claude Code feeds to the model as context for the turn about to run. Delivery
