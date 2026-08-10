@@ -874,33 +874,38 @@ package enum SpoolPolicy {
     private static func accept(
         _ request: NameRequest
     ) -> Result<AcceptedNameRequest, SpoolRefusal> {
-        pane(request.pane, field: "pane").flatMap { pane in
-            let name = request.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty else {
-                return .failure(
-                    SpoolRefusal(
-                        "a name has to be something. helm cannot tell an empty one from a caller "
-                            + "that forgot the argument, and there is no way to un-name a pane — "
-                            + "close it, or name it something else"))
-            }
-            guard name.count <= maxNameLength else {
-                return .failure(
-                    SpoolRefusal(
-                        "name is longer than \(maxNameLength) characters. A tab is 180pt wide; "
-                            + "say what the pane is for in a few words"))
-            }
-            guard
-                name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
-            else {
-                return .failure(
-                    SpoolRefusal(
-                        "a name may not contain control characters — it is drawn on a tab and "
-                            + "written into ~/.helm/bench/snapshot.json"))
-            }
-            return .success(
-                AcceptedNameRequest(
-                    id: request.id, pane: pane, name: name, rename: request.rename))
+        // Unwrapped with a `switch` rather than threaded through `flatMap`, so the three guards
+        // below sit at the same depth as every other kind's — and so nothing here is called
+        // `pane`, which inside a closure would shadow the helper it was just called on.
+        let addressed: TerminalID
+        switch pane(request.pane, field: "pane") {
+        case .failure(let refusal): return .failure(refusal)
+        case .success(let value): addressed = value
         }
+        let name = request.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            return .failure(
+                SpoolRefusal(
+                    "a name has to be something. helm cannot tell an empty one from a caller "
+                        + "that forgot the argument, and there is no way to un-name a pane — "
+                        + "close it, or name it something else"))
+        }
+        guard name.count <= maxNameLength else {
+            return .failure(
+                SpoolRefusal(
+                    "name is longer than \(maxNameLength) characters. A tab is 180pt wide; "
+                        + "say what the pane is for in a few words"))
+        }
+        guard name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+        else {
+            return .failure(
+                SpoolRefusal(
+                    "a name may not contain control characters — it is drawn on a tab and read "
+                        + "back out of a result file"))
+        }
+        return .success(
+            AcceptedNameRequest(
+                id: request.id, pane: addressed, name: name, rename: request.rename))
     }
 
     /// The one place a caller's pane uuid is judged, for **every** request that names one.

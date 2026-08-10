@@ -110,7 +110,16 @@ final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting, SpoolNaming {
                 SpoolRefusal(
                     "helm's bench has no pane \(id.uuidString) to name. Nothing was changed"))
         }
-        let applied = workbench.bench?.pane(id)?.name.text ?? name.text ?? ""
+        let applied: String
+        if let confirmed = workbench.bench?.pane(id)?.name.text {
+            applied = confirmed
+        } else {
+            // Falling back to what was *asked for*, which is the one thing this method's header
+            // says it does not do — so it is a branch rather than a third `??`, and it says why
+            // it is here. `SpoolModel` only ever passes `.chosen`, whose `text` is never nil, and
+            // the pane was on the bench a line ago; this is a bench that lost it in between.
+            applied = name.text ?? ""
+        }
         return .success(
             NameReport(
                 pane: TerminalID(id), previousName: previous.text, name: applied))

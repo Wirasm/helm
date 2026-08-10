@@ -991,16 +991,24 @@ extension Pane {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         content = try container.decode(Content.self, forKey: .content)
-        // `PaneName`'s own decoder already answers `.unnamed` for a shape it does not recognise;
-        // this is the key being absent entirely, which is every bench on disk today.
-        name = (try? container.decodeIfPresent(PaneName.self, forKey: .name)) ?? nil ?? .unnamed
+        // Two different absences, and both mean `.unnamed`. `decodeIfPresent` returning nil is the
+        // key missing entirely, which is every bench on disk today; the `try?` is `name` holding
+        // something that is not a keyed container at all, which `PaneName`'s own decoder cannot
+        // catch because it throws before it can look. Spelled as two branches rather than
+        // `(try? …) ?? nil ?? .unnamed`, whose middle `nil` is a double-optional flatten that
+        // reads like dead code.
+        if let decoded = try? container.decodeIfPresent(PaneName.self, forKey: .name) {
+            name = decoded ?? .unnamed
+        } else {
+            name = .unnamed
+        }
     }
 
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(content, forKey: .content)
-        if case .unnamed = name {} else { try container.encode(name, forKey: .name) }
+        if name != .unnamed { try container.encode(name, forKey: .name) }
     }
 }
 

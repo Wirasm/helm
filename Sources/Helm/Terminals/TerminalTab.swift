@@ -143,6 +143,11 @@ struct CanvasTab: View {
     /// all: `label` below is recomputed from `CanvasSource` every render and stored nowhere, and
     /// there is nothing in the snapshot to disagree with — `BenchSnapshot.CanvasRecord` carries
     /// the source and has never carried a title.
+    ///
+    /// **The cost of that, stated rather than left to be discovered**: a named canvas is named on
+    /// its tab and **absent from `snapshot.json`**, so an agent that named one reads the name back
+    /// out of its own `helm-name` result rather than off the bench. Giving `CanvasRecord` a name
+    /// is that type's change to make, not this one's.
     let name: String?
     let isSelected: Bool
     let canClose: Bool

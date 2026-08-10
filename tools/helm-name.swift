@@ -18,6 +18,14 @@
 // since `push.sh` hands back no id — the `id` of the `"kind": "canvas"` record in
 // `~/.helm/bench/snapshot.json`.
 //
+// **Where the name can be read back, said exactly, because the first draft of this text overclaimed
+// it.** The `name` block of this script's own result always carries it. `snapshot.json` carries it
+// only for a **live terminal** pane, via `terminal.title` — `BenchSnapshot` reaches a name through
+// `TerminalSession.displayTitle`, so a pane whose session is gone reports `title: null`, and
+// `CanvasRecord` has never had a title field at all. So a canvas you name shows the name on its tab
+// and reports it here, and is silent in the snapshot. Giving the snapshot a name field of its own
+// is `BenchSnapshot`'s change to make, not this one's.
+//
 // helm REFUSES a pane somebody has already named, unless you pass `--rename`. A pane nothing has
 // named, and a pane wearing only helm's own derived label, need no such thing — that is the whole
 // rule, and it is about ownership rather than about the keyboard: naming moves nothing and
@@ -77,8 +85,11 @@ let usage = """
                            [--id NAME] [--spool DIR] [--timeout SECONDS]
 
     Asks the running helm to call a pane — a terminal or a canvas — something. The name goes on
-    its tab, on its notifications, and into ~/.helm/bench/snapshot.json, and it survives a
-    restart. No display, no keystrokes.
+    its tab, and it survives a restart. No display, no keystrokes.
+
+    What reads it back, exactly: the `name` block of THIS result always. A live terminal pane's
+    name also reaches its notifications and `terminal.title` in ~/.helm/bench/snapshot.json. A
+    CANVAS pane's name does not reach the snapshot at all — read it out of the result here.
 
     The uuid is a spawn or command result's `terminalId`, the `HELM_PANE` of the pane you are
     in, or a pane's `id` in ~/.helm/bench/snapshot.json.
@@ -115,11 +126,11 @@ while let flag = arguments.first {
         print(usage)
         exit(Exit.ok.rawValue)
     default:
-        // A name may legitimately start with `-` once the pane is known — "-- draft --" is a
-        // name — so the flag check applies only while the positional slot it would fill is the
-        // pane's. After that, anything is the name.
-        guard !flag.hasPrefix("-") || pane != nil else { die("unknown flag \(flag)", .usage) }
         if pane == nil {
+            // A name may legitimately start with `-` once the pane is known — "-- draft --" is a
+            // name — so this check lives inside the branch that fills the pane's slot rather than
+            // being a `||` a reader has to run De Morgan over.
+            guard !flag.hasPrefix("-") else { die("unknown flag \(flag)", .usage) }
             pane = flag
         } else if name == nil {
             name = flag

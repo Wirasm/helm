@@ -796,9 +796,15 @@ final class WorkbenchModel: ObservableObject {
     /// has no such pane.
     ///
     /// **No offering twin, for `Workbench.name`'s reason**: a name moves nothing, so the
-    /// operator's version and an agent's would be the same mutation. `commit` is what pushes the
-    /// new name onto the session, which is what puts it on the tab, in a notification and in
-    /// `snapshot.json` — see `reconcileSessions`.
+    /// operator's version and an agent's would be the same mutation.
+    ///
+    /// **The bench is where the name lives; the session is a copy for rendering.** `commit` pushes
+    /// it onto the session (`reconcileSessions`), which is what puts a *terminal's* name on its
+    /// tab, in its notifications and — through `TerminalSession.displayTitle` —  in
+    /// `snapshot.json`. A **canvas** has no session, so its name reaches its tab straight off the
+    /// pane (`SlotTabStrip`) and reaches `snapshot.json` not at all: `BenchSnapshot.CanvasRecord`
+    /// carries only a source. That is a real limit rather than a hedge, and `helm-name`'s own help
+    /// text says so, because a caller reads the name back out of its result either way.
     @discardableResult
     func name(_ pane: Pane.ID, to name: PaneName) -> PaneName? {
         guard var bench else { return nil }

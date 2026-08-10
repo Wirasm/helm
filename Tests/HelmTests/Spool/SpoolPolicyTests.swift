@@ -546,7 +546,7 @@ final class SpoolPolicyTests: XCTestCase {
 
         XCTAssertNotNil(
             refusal(.name(NameRequest(id: "x", pane: pane, name: "two\nlines"))),
-            "a control character in a value drawn on a tab and written into snapshot.json is "
+            "a control character in a value drawn on a tab and read back out of a result file is "
                 + "refused, exactly as one in a spawn's args is")
     }
 

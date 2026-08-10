@@ -507,10 +507,17 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     mutation, and the script warns loudly if they differ. Exit codes are 2 no answer, 3 refused,
     4 helm could not act, 6 abandoned.
 - **To call a pane something, `swift tools/helm-name.swift <pane-uuid> <name> [--rename]`** — the
-  sixth spool kind (#313), needing what the other five need: nothing. The name goes on the tab, on
-  the pane's notifications and into `snapshot.json`, and it **survives the restart the pane already
-  survives** — it is persisted on `Pane`, not on the session. Same uuid namespace and the same three
-  ways to know one as `helm-close`; a canvas is named exactly as a terminal is.
+  sixth spool kind (#313), needing what the other five need: nothing. The name goes on the tab and
+  **survives the restart the pane already survives** — it is persisted on `Pane`, not on the
+  session. Same uuid namespace and the same three ways to know one as `helm-close`; a canvas is
+  named exactly as a terminal is.
+  - **Where it can be read back, exactly, because the first draft of this bullet overclaimed it.**
+    The result's own `name` block always carries it. `snapshot.json` carries it only for a **live
+    terminal** pane, as `terminal.title`: `BenchSnapshot` reaches a name through
+    `TerminalSession.displayTitle`, so a pane whose session is gone reports `title: null`, and
+    `CanvasRecord` has never had a title field at all. So a named canvas shows its name on the tab
+    and reports it in the result, and is silent in the snapshot — read the result. Giving the
+    snapshot a name field of its own is `BenchSnapshot`'s change to make.
   - **It exists because #93 made the tab useless, and the trigger is fixed without it.** An agent is
     handed a *path* rather than a prompt, so Claude Code titles its session after the pointer and
     every spool-spawned tab read *"Read and act on spool prompt file"*. helm wrote the request, so it
