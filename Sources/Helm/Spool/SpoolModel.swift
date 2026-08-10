@@ -263,8 +263,8 @@ final class SpoolModel: ObservableObject {
     /// on. So the caller is told why nothing happened, which beats it waiting on a file that
     /// was never coming.
     private func answerAbandoned() {
-        for id in directory.abandoned() where !handled.contains(id) {
-            handled.insert(id)
+        for id in directory.abandoned() where !handled.contains(id.value) {
+            handled.insert(id.value)
             directory.write(
                 SpoolResult(
                     id: id, status: .abandoned,
@@ -272,7 +272,7 @@ final class SpoolModel: ObservableObject {
                         "helm stopped while this request was in flight. It was NOT re-run: a "
                         + "request is acted on at most once, so a restart must not double-open. "
                         + "Send it again if you still want it."))
-            NSLog("helm: spool request %@ was abandoned by a restart", id)
+            NSLog("helm: spool request %@ was abandoned by a restart", id.value)
         }
     }
 
@@ -326,17 +326,35 @@ final class SpoolModel: ObservableObject {
         return exists && directory.boolValue
     }
 
+    /// **Still a second guard, and still not a second spelling (#260).** It takes a raw `String`
+    /// because it has to: one of its callers passes `fallbackID`, derived from the *filename* when
+    /// the JSON would not parse and `SpoolPolicy.accept` therefore never ran. What changed is that
+    /// it no longer re-applies a shared regex by hand — it asks `RequestID` for one, which is the
+    /// same question `accept` asks, expressed once in the type instead of twice at two call sites.
     private func refuse(id: String, reason: String) {
         // An id that is not a filename cannot name a result file, so there is nowhere to put
         // the answer. The log is all that is left, and it says so rather than pretending.
-        guard id.range(of: SpoolPolicy.idPattern, options: .regularExpression) != nil else {
+        guard let id = RequestID(validating: id) else {
             NSLog(
                 "helm: spool request refused and UNANSWERABLE (id %@ is not a filename): %@",
                 id, reason)
             return
         }
+        refuse(id: id, reason: reason)
+    }
+
+    /// The same refusal for a request that **already passed `SpoolPolicy.accept`** and is being
+    /// turned down by a policy afterwards — a close on the operator's own pane, a select on the
+    /// focused slot, a name somebody already chose.
+    ///
+    /// **It carries no guard, and the overload is how that becomes a fact rather than a claim
+    /// (#260).** These ids came out of an `Accepted*` request, so they are `RequestID`s and there
+    /// is nothing left to check; the guarded route above exists for the one caller that genuinely
+    /// has a raw string. Which of the two a call site gets is decided by the compiler from the
+    /// type it is holding, instead of by a reader working out whether a check upstream already ran.
+    private func refuse(id: RequestID, reason: String) {
         directory.write(SpoolResult(id: id, status: .refused, reason: reason))
-        NSLog("helm: spool request %@ refused — %@", id, reason)
+        NSLog("helm: spool request %@ refused — %@", id.value, reason)
     }
 
     /// Draw helm's own window, then say what is in the PNG — **including what is not**.
@@ -612,8 +630,11 @@ final class SpoolModel: ObservableObject {
             handle: Handle(readingFrom: resolved.owner), runtime: resolved.owner.runtime)
     }
 
+    /// Every success path funnels here, and the id it takes is a `RequestID` — so the 20 call
+    /// sites below hand over the one their `Accepted*` request already carries, and none of them
+    /// can produce one any other way (#260).
     private func answer(
-        _ id: String, _ status: SpoolResult.Status, terminalId: TerminalID? = nil,
+        _ id: RequestID, _ status: SpoolResult.Status, terminalId: TerminalID? = nil,
         pid: pid_t? = nil, sessionId: String? = nil, handle: Handle? = nil,
         runtime: String? = nil, reason: String? = nil, capture: CaptureReport? = nil,
         command: CommandReport? = nil, select: SelectReport? = nil, name: NameReport? = nil
@@ -624,7 +645,7 @@ final class SpoolModel: ObservableObject {
                 sessionId: sessionId, handle: handle, runtime: runtime, reason: reason,
                 capture: capture, command: command, select: select, name: name))
         NSLog(
-            "helm: spool request %@ is %@%@%@%@%@%@", id, status.rawValue,
+            "helm: spool request %@ is %@%@%@%@%@%@", id.value, status.rawValue,
             handle.map { " — reachable at \($0.value)" } ?? "",
             capture.map { " — \($0.path), terminal content \($0.terminalContent.rawValue)" } ?? "",
             command.map { " — \($0.command.rawValue), \($0.panes) panes in \($0.columns) columns" }

@@ -130,6 +130,14 @@ final class SpoolModelTests: XCTestCase {
                 encoding: .utf8)
     }
 
+    /// The result file for an id spelled as a literal, which is how every test in this file names
+    /// one. `RequestID(validating:)!` is the spelling the suite already uses for `Handle`, and the
+    /// force-unwrap is safe for the reason it is there: the string is written right here, so a
+    /// `nil` would be a typo in the test rather than a condition to handle (#260).
+    private func result(for id: String) -> SpoolResult? {
+        directory.result(id: RequestID(validating: id)!)
+    }
+
     /// Wait for the answer to reach a state, or give up loudly. The budget is the test's, not
     /// the model's — it has to outlast the model's own deadlines.
     private func awaitResult(
@@ -138,12 +146,12 @@ final class SpoolModelTests: XCTestCase {
     ) async -> SpoolResult? {
         let expiry = ContinuousClock.now.advanced(by: budget)
         while ContinuousClock.now < expiry {
-            if let result = directory.result(id: id), result.status == status { return result }
+            if let result = result(for: id), result.status == status { return result }
             try? await Task.sleep(for: .milliseconds(25))
         }
         XCTFail(
             "no \(status.rawValue) result for \(id) within \(budget) — last was "
-                + String(describing: directory.result(id: id)?.status),
+                + String(describing: result(for: id)?.status),
             file: file, line: line)
         return nil
     }
@@ -158,7 +166,7 @@ final class SpoolModelTests: XCTestCase {
         model.start()
         try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(spawner.opened, [], "no terminal may be opened")
-        XCTAssertNil(directory.result(id: "r"), "no result may be written")
+        XCTAssertNil(result(for: "r"), "no result may be written")
         XCTAssertEqual(
             directory.pending().count, 1, "and the request is still sitting there, unclaimed")
     }
@@ -172,7 +180,7 @@ final class SpoolModelTests: XCTestCase {
         model.start()
         try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(capturer.captured, [], "nothing may be drawn")
-        XCTAssertNil(directory.result(id: "shot"), "no result may be written")
+        XCTAssertNil(result(for: "shot"), "no result may be written")
         XCTAssertEqual(directory.pending().count, 1, "and the request is still sitting there")
     }
 
@@ -464,7 +472,7 @@ final class SpoolModelTests: XCTestCase {
         model.start()
         try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(closer.closed, [], "no pane may be closed")
-        XCTAssertNil(directory.result(id: "bye"), "no result may be written")
+        XCTAssertNil(result(for: "bye"), "no result may be written")
         XCTAssertEqual(directory.pending().count, 1, "and the request is still sitting there")
     }
 
@@ -617,7 +625,7 @@ final class SpoolModelTests: XCTestCase {
         model.start()
         try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(selector.shown, [], "no pane may be brought forward")
-        XCTAssertNil(directory.result(id: "show"), "no result may be written")
+        XCTAssertNil(result(for: "show"), "no result may be written")
         XCTAssertEqual(directory.pending().count, 1, "and the request is still sitting there")
     }
 
@@ -724,7 +732,7 @@ final class SpoolModelTests: XCTestCase {
         model.start()
         try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(namer.named.count, 0, "no pane may be renamed")
-        XCTAssertNil(directory.result(id: "call"), "no result may be written")
+        XCTAssertNil(result(for: "call"), "no result may be written")
         XCTAssertEqual(directory.pending().count, 1, "and the request is still sitting there")
     }
 
@@ -850,7 +858,7 @@ final class SpoolModelTests: XCTestCase {
         model.start()
         try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(commander.ran, [], "no command may run")
-        XCTAssertNil(directory.result(id: "go"), "no result may be written")
+        XCTAssertNil(result(for: "go"), "no result may be written")
         XCTAssertEqual(directory.pending().count, 1, "and the request is still sitting there")
     }
 
@@ -951,6 +959,41 @@ final class SpoolModelTests: XCTestCase {
         let result = await awaitResult(id: "stranded", is: .abandoned)
         XCTAssertTrue(result?.reason?.contains("NOT re-run") == true)
         XCTAssertEqual(spawner.opened, [], "nothing may be re-opened after a restart")
+    }
+
+    /// The one route that reached a path builder without ever passing the id gate (#260).
+    ///
+    /// **Reachable in two launches, and no crash is needed.** A request with a hostile id lands;
+    /// `drain` claims it by rename; `SpoolPolicy.accept` refuses on the id and `refuse` writes
+    /// nothing, because there is nowhere to write it — so the file stays in `claimed/` forever.
+    /// On the *next* launch `answerAbandoned` reads that id straight back out of the claimed
+    /// JSON, which `SpoolRequest`'s decode never pattern-checks, and hands it to
+    /// `SpoolDirectory.write`. `appendingPathComponent` does not collapse `..`, so before #260
+    /// the result landed outside the spool entirely — measured at
+    /// `results/../../../../tmp/pwned.json`.
+    ///
+    /// The escape target is a sibling of the spool root rather than somewhere real, so the
+    /// assertion is a genuine escape and `tearDown` still cleans it up.
+    func testAClaimedRequestWithATraversalIdWritesNothingOutsideTheSpool() async throws {
+        // `results/` is <base>/spool/results, so `../../` from there lands in <base> — outside
+        // the spool root, and nothing helm may ever write to.
+        let hostile = "../../ws260-pwned"
+        let escaped = directory.root.deletingLastPathComponent()
+            .appendingPathComponent("ws260-pwned.json")
+        let stranded = try submit(request(id: hostile), named: "hostile.json")
+        XCTAssertNotNil(directory.claim(stranded), "the claim itself is by filename, not by id")
+
+        let model = self.model()
+        model.start()
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: escaped.path),
+            "an id that never passed the gate wrote \(escaped.path), outside the spool root")
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.results.path), [],
+            "and it wrote no result inside the spool either — there is nowhere to put one")
+        XCTAssertEqual(spawner.opened, [], "nothing may be opened for a request never accepted")
     }
 }
 

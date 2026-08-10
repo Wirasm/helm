@@ -89,8 +89,8 @@ final class SpoolDirectoryTests: XCTestCase {
     func testOnlyTopLevelJsonCountsAsARequest() throws {
         _ = try writeRequest("r.json", "{}")
         _ = try writeRequest("notes.txt", "hello")
-        directory.write(SpoolResult(id: "other", status: .started))
-        _ = directory.stagePrompt("hi", for: "other")
+        directory.write(SpoolResult(id: RequestID(validating: "other")!, status: .started))
+        _ = directory.stagePrompt("hi", for: RequestID(validating: "other")!)
         XCTAssertEqual(directory.pending().map(\.lastPathComponent), ["r.json"])
     }
 
@@ -99,11 +99,11 @@ final class SpoolDirectoryTests: XCTestCase {
     func testAResultRoundTrips() {
         directory.write(
             SpoolResult(
-                id: "r", status: .ready,
+                id: RequestID(validating: "r")!, status: .ready,
                 terminalId: TerminalID(validating: "E621E1F8-C36C-495A-93FC-0C247A3E6E5F"),
                 pid: 4242, sessionId: "f9e4639d", handle: Handle(validating: "helm-48c4"),
                 runtime: "claude"))
-        let read = directory.result(id: "r")
+        let read = directory.result(id: RequestID(validating: "r")!)
         XCTAssertEqual(read?.status, .ready)
         XCTAssertEqual(read?.handle?.value, "helm-48c4")
         XCTAssertEqual(read?.pid, 4242)
@@ -113,9 +113,30 @@ final class SpoolDirectoryTests: XCTestCase {
         // helm stopped between the rename and the answer. Nothing else can see that, because
         // from outside a claimed file looks exactly like one being worked on.
         _ = directory.claim(try writeRequest("r.json", #"{"id":"r","cwd":"/tmp","command":"pi"}"#))
-        XCTAssertEqual(directory.abandoned(), ["r"])
-        directory.write(SpoolResult(id: "r", status: .started))
+        XCTAssertEqual(directory.abandoned(), [RequestID(validating: "r")!])
+        directory.write(SpoolResult(id: RequestID(validating: "r")!, status: .started))
         XCTAssertEqual(directory.abandoned(), [], "an answered request was not abandoned")
+    }
+
+    /// **The id in a claimed file has never been through `SpoolPolicy.accept`, and this is where
+    /// that stopped mattering (#260).** `request(at:)` decodes with no pattern check at all, so
+    /// before `RequestID` this handed its caller a string that then named a result file.
+    ///
+    /// It is dropped rather than reported, because there is nothing else it could be: an id that
+    /// is not a filename cannot have a result file, so the request is unanswerable and stays
+    /// claimed. `SpoolModel.refuse` reaches the identical conclusion by the other route.
+    func testAClaimedRequestWhoseIdIsNotAFilenameIsNotOfferedAsAbandoned() throws {
+        _ = directory.claim(
+            try writeRequest(
+                "hostile.json", #"{"id":"../../pwned","cwd":"/tmp","command":"pi"}"#))
+        XCTAssertEqual(
+            directory.abandoned(), [],
+            "an id that never passed the gate must not reach a caller that builds paths from it")
+
+        // The benign one beside it still comes through, so the guard rejects rather than
+        // giving up on the whole directory the moment one file in it is hostile.
+        _ = directory.claim(try writeRequest("r.json", #"{"id":"r","cwd":"/tmp","command":"pi"}"#))
+        XCTAssertEqual(directory.abandoned(), [RequestID(validating: "r")!])
     }
 }
 

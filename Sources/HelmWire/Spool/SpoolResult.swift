@@ -119,7 +119,13 @@ package struct SpoolResult: Codable, Equatable {
         case abandoned
     }
 
-    package let id: String
+    /// **A `RequestID`, because this is the field the result file is named after (#260).** A
+    /// result is written by helm rather than read from a caller, so there is nothing to be
+    /// permissive about here and no refusal to produce — which is what lets it be the validated
+    /// type where `SpawnRequest.id` and its five siblings stay bare `String`s. It is what makes
+    /// `SpoolDirectory.write`'s path builder unreachable by an id that never passed the gate; see
+    /// `RequestID` for the route that closed.
+    package let id: RequestID
     package var status: Status
     /// `TerminalSession.id` — the same uuid the pane is persisted under, and the same one the
     /// child reads as `HELM_PANE` (`PaneEnvironment`). A `TerminalID` rather than a `UUID`
@@ -167,7 +173,7 @@ package struct SpoolResult: Codable, Equatable {
     package var updatedAt: Double
 
     package init(
-        id: String, status: Status, terminalId: TerminalID? = nil, pid: Int32? = nil,
+        id: RequestID, status: Status, terminalId: TerminalID? = nil, pid: Int32? = nil,
         sessionId: String? = nil, handle: Handle? = nil, runtime: String? = nil,
         reason: String? = nil, capture: CaptureReport? = nil, command: CommandReport? = nil,
         select: SelectReport? = nil, name: NameReport? = nil,
