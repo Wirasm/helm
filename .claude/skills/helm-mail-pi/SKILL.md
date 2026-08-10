@@ -15,16 +15,25 @@ You are in **pi**. The `helm-mail` extension already claimed your mailbox, watch
 when mail arrives. **You only need this skill to SEND.** The Claude Code side is `helm-mail-cc`, and
 it has to do more work — mention that if you are asked about the difference.
 
-**One `~/.helm/mail` below is conditional, and it is the only one.** If `$HELM_DEFAULTS_SUITE` is
-set you are hosted by an **isolated** helm, and your mailroom is `~/.helm/mail-$HELM_DEFAULTS_SUITE`
-— read every `~/.helm/mail` in this file as that directory instead. It is a whole separate mailroom
-rather than a prefix: the operator's own agents are not in it, cannot see you, and you cannot write
-to them (#285). Unset, which is the ordinary case, nothing changes.
+**Every snippet below opens with the same line, and it is not boilerplate.**
+
+```bash
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+```
+
+`~/.helm/mail` is the mailroom of the operator's own helm. If `$HELM_DEFAULTS_SUITE` is set you are
+hosted by an **isolated** helm and yours is `~/.helm/mail-$HELM_DEFAULTS_SUITE` — a whole separate
+mailroom, not a prefix: his agents are not in it, cannot see you, and you must not write to them
+(#285). Resolving it into `$ROOT` rather than asking you to remember the substitution is the point;
+a snippet that named the literal would list and *send into* his mailroom from a throwaway instance,
+silently and successfully. It is deliberately simpler than helm's own rule in the cases helm refuses
+to launch under at all, and simpler only in the direction that keeps you out of the shared root.
 
 ## Who is reachable
 
 ```bash
-find ~/.helm/mail -maxdepth 2 -name owner.json -type f 2>/dev/null | while read -r f; do
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+find "$ROOT" -maxdepth 2 -name owner.json -type f 2>/dev/null | while read -r f; do
   python3 - "$f" <<'PY'
 import json, os, sys
 
@@ -124,8 +133,9 @@ the uuid of the pane, which outlives any one agent in it, so it is not a handle 
 own process ancestry:
 
 ```bash
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
 p=$$; while [ "$p" -gt 1 ]; do
-  grep -l "\"pid\": $p," ~/.helm/mail/*/owner.json 2>/dev/null && break
+  grep -l "\"pid\": $p," "$ROOT"/*/owner.json 2>/dev/null && break
   p=$(ps -o ppid= -p "$p" | tr -d ' ')
 done
 ```
@@ -139,8 +149,9 @@ nothing rather than half a message:
 
 ```bash
 TO=claude-a3f9; FROM=<your handle>
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
 ID="$(date +%s000)-$(openssl rand -hex 3)"
-D=~/.helm/mail/$TO
+D=$ROOT/$TO
 python3 -c "
 import json,sys
 json.dump({'id':sys.argv[1],'from':sys.argv[2],'to':sys.argv[3],

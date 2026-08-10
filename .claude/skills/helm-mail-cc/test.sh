@@ -68,6 +68,19 @@ extract_block() {
     ' "$1"
 }
 
+# Run a documented snippet under zsh — the shell Claude Code's own Bash tool runs — with the two
+# variables that MOVE THE MAILROOM taken out of the environment first (#285).
+#
+# Not tidiness: since #285 the snippets resolve their root through
+# `${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}`, and this gate is
+# very often run by an agent hosted in an isolated helm, which exports exactly the second one. The
+# checks below point the snippet at a temp root by rewriting the literal inside that expression, so
+# an inherited `HELM_MAIL_DIR` would beat the rewrite outright and an inherited suite would append
+# to it — either way the snippet reads a directory this file never wrote to, and every assertion
+# about what it printed becomes an assertion about an empty directory. `resolves_root` below tests
+# the expression itself, with these set on purpose.
+run_zsh() { env -u HELM_MAIL_DIR -u HELM_DEFAULTS_SUITE zsh "$@"; }
+
 # Is a background watch still running after it has had time to die? The broken form exits in
 # milliseconds — the glob fails on the first pass, before the first sleep — so a one-second
 # budget is two orders of magnitude of margin rather than a race. `alive` is asserted in BOTH
@@ -103,7 +116,7 @@ else
 fi
 
 # THE acceptance criterion of #237: a mailbox directory containing no .json at all.
-zsh "$tmp/watch.zsh" >"$tmp/watch.out" 2>&1 &
+run_zsh "$tmp/watch.zsh" >"$tmp/watch.out" 2>&1 &
 watch_pid=$!
 sleep 1
 check "survives a mailbox with no .json in it, under zsh" alive "$(alive "$watch_pid")"
@@ -121,7 +134,7 @@ while true; do
   sleep 2
 done
 EOF
-zsh "$tmp/broken.zsh" >/dev/null 2>&1 &
+run_zsh "$tmp/broken.zsh" >/dev/null 2>&1 &
 broken_pid=$!
 sleep 1
 check "the pre-#237 glob form dies on the same box (proves this harness can tell)" dead "$(alive "$broken_pid")"
@@ -142,6 +155,46 @@ check "moves what it delivered into read/" "1-a.json" "$(ls "$tmp/box/read" 2>/d
 check "leaves owner.json alone" "owner.json" "$(ls "$tmp/box" | grep '^owner')"
 check "is still running after delivering" alive "$(alive "$watch_pid")"
 
+printf '\nthe documented mail root (both skills, #285)\n'
+
+# WHICH MAILROOM THE DOC SENDS AN AGENT TO, executed rather than read.
+#
+# `HELM_DEFAULTS_SUITE` moves the mailbox: an agent hosted by an isolated helm claims in
+# `~/.helm/mail-<suite>` and the operator's `~/.helm/mail` holds his own live agents (#285). Before
+# this, every snippet in these two files named `~/.helm/mail` outright and a paragraph above them
+# asked the reader to remember the substitution — so an agent in a throwaway instance that followed
+# the block literally would LIST and SEND INTO his mailroom, successfully and silently. That is the
+# cross-talk the code fix exists to close, reintroduced by the documentation of the fix.
+#
+# So the root is a value the snippets resolve, and this is the check that it resolves to the right
+# directory. Extracted from the doc rather than retyped, for this file's founding reason: a test
+# that restates the expression is a second copy of it and would keep passing while the doc said
+# something else. Three cases, and the middle one is the ticket.
+root_expr=$(grep -h '^ROOT=' "$cc" | sort -u)
+if [ "$(printf '%s\n' "$root_expr" | wc -l | tr -d ' ')" != 1 ] || [ -z "$root_expr" ]; then
+    bad "the skills spell the ROOT= line more than one way, or not at all: $root_expr"
+else
+    ok "both skills open every snippet with one spelling of the root"
+fi
+# The pi skill must use the SAME line — the two are documented identically by design, which is why
+# one gate covers both, and a root that diverged would put the two runtimes in different mailrooms.
+if [ "$(grep -h '^ROOT=' "$pi" | sort -u)" = "$root_expr" ]; then
+    ok "helm-mail-pi resolves the root exactly as helm-mail-cc does"
+else
+    bad "helm-mail-pi's ROOT= line differs from helm-mail-cc's"
+fi
+
+resolves_root() {
+    printf '%s\nprintf "%%s" "$ROOT"\n' "$root_expr" >"$tmp/root.zsh"
+    env -u HELM_MAIL_DIR -u HELM_DEFAULTS_SUITE HOME="$tmp/fakehome" $1 zsh "$tmp/root.zsh"
+}
+check "with no suite, the doc reads the operator's own mailroom" \
+    "$tmp/fakehome/.helm/mail" "$(resolves_root "")"
+check "inside an isolated helm, it reads that instance's mailroom instead (#285)" \
+    "$tmp/fakehome/.helm/mail-drivetest" "$(resolves_root "HELM_DEFAULTS_SUITE=drivetest")"
+check "and an explicit HELM_MAIL_DIR still beats both, or no test could redirect one" \
+    "/tmp/somewhere-else" "$(resolves_root "HELM_MAIL_DIR=/tmp/somewhere-else")"
+
 printf '\nthe documented mailbox listing (both skills)\n'
 
 # The OTHER glob. `for f in ~/.helm/mail/*/owner.json` is the same fatal-under-zsh shape as the
@@ -158,7 +211,7 @@ for f in "$cc" "$pi"; do
         continue
     fi
     printf '%s\n' "$listing" | sed "s|~/.helm/mail|$tmp/emptyroot|g" >"$tmp/listing.zsh"
-    zsh "$tmp/listing.zsh" >/dev/null 2>&1
+    run_zsh "$tmp/listing.zsh" >/dev/null 2>&1
     check "$name lists reachable agents without dying on a mail root with none" 0 "$?"
 done
 
@@ -173,7 +226,7 @@ mkdir -p "$tmp/emptyroot/a-1111"
 printf '{"handle":"a-1111"}\n' >"$tmp/emptyroot/a-1111/owner.json"
 printf '%s\n' "$(extract_block "$cc" '^## Who is reachable')" | sed "s|~/.helm/mail|$tmp/emptyroot|g" >"$tmp/listing.zsh"
 check "and still prints a mailbox that is there" \
-    'dead {"handle": "a-1111"}' "$(zsh "$tmp/listing.zsh" 2>/dev/null)"
+    'dead {"handle": "a-1111"}' "$(run_zsh "$tmp/listing.zsh" 2>/dev/null)"
 
 printf '\nretired mailboxes in the documented listing (both skills)\n'
 
@@ -231,7 +284,7 @@ state_of() { printf '%s\n' "$2" | grep -F "\"$1\"" | awk '{print $1}'; }
 for f in "$cc" "$pi"; do
     name=$(basename "$(dirname "$f")")
     printf '%s\n' "$(extract_block "$f" '^## Who is reachable')" | sed "s|~/.helm/mail|$tmp/states|g" >"$tmp/listing.zsh"
-    out=$(zsh "$tmp/listing.zsh" 2>/dev/null)
+    out=$(run_zsh "$tmp/listing.zsh" 2>/dev/null)
 
     # The acceptance criterion of #248. The pid is alive, so anything asking the pid first says
     # `live` about a mailbox that will never be read again.
@@ -270,7 +323,7 @@ owner_file "$tmp/broken" intact-0002 "$live_pid" ""
 for f in "$cc" "$pi"; do
     name=$(basename "$(dirname "$f")")
     printf '%s\n' "$(extract_block "$f" '^## Who is reachable')" | sed "s|~/.helm/mail|$tmp/broken|g" >"$tmp/listing.zsh"
-    out=$(zsh "$tmp/listing.zsh" 2>/dev/null)
+    out=$(run_zsh "$tmp/listing.zsh" 2>/dev/null)
     check "$name reports an unparseable owner.json instead of dropping it" \
         unreadable "$(printf '%s\n' "$out" | grep -F torn-0001 | awk '{print $1}')"
     # CONTROL — must pass either way, and is what says the check above is not satisfied by a
@@ -304,7 +357,7 @@ for f in "$cc" "$pi"; do
         bad "$name — could not point the send block at a temp box; the TO= line changed shape"
     fi
 
-    sent=$(zsh "$tmp/send.zsh" 2>/dev/null)
+    sent=$(run_zsh "$tmp/send.zsh" 2>/dev/null)
     check "$name — the send REPORTS SUCCESS into a retired mailbox" "" "$sent"
     check "$name — and the message really did land there, unread" 1 \
         "$(find "$tmp/sendroot/$box" -maxdepth 1 -name '*.json' ! -name owner.json -type f | wc -l | tr -d ' ')"

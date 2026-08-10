@@ -155,6 +155,17 @@ is a documented loop that was correct in bash and fatal in zsh, which is the she
 Bash tool runs, and no gate read a skill file at all until this one. Needs bash, zsh and python3,
 which is why it is not in the Swift gate.
 
+**Since #285 it also executes the root those snippets resolve**, and that is a fifth copy of the
+mailbox's directory rule rather than a fourth. Every snippet in both skills opens with
+`ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}`, because a
+documented literal is not merely stale inside an isolated instance — it is an agent in a throwaway
+helm **listing and sending into the operator's own mailroom**, successfully and silently, which is
+the cross-talk the code fix closes. Prose asking the reader to substitute the suite themselves was
+the first attempt and is not a mechanism. The gate resolves the doc's own expression against a fake
+`HOME` for all three cases, and runs every other snippet with both variables taken **out** of the
+environment — this gate is very often run by an agent hosted in an isolated helm, which exports the
+second one.
+
 `push.sh` is how an agent puts an artifact on the bench, and it is the third mechanism to hold
 that job — the first two shipped broken. Both were verified from a shell the operator typed into,
 where they worked, and both were silent from an agent's tool call, where they did not: a ⌘-click

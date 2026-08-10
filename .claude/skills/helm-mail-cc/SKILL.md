@@ -15,16 +15,25 @@ You are in **Claude Code**. A `SessionStart` hook already claimed your mailbox a
 `UserPromptSubmit` hook delivers waiting mail at the start of each of your turns. **The one thing
 nobody can do for you is wake you** — see *Arm*, below. pi's side is `helm-mail-pi`.
 
-**One `~/.helm/mail` below is conditional, and it is the only one.** If `$HELM_DEFAULTS_SUITE` is
-set you are hosted by an **isolated** helm, and your mailroom is `~/.helm/mail-$HELM_DEFAULTS_SUITE`
-— read every `~/.helm/mail` in this file as that directory instead. It is a whole separate mailroom
-rather than a prefix: the operator's own agents are not in it, cannot see you, and you cannot write
-to them (#285). Unset, which is the ordinary case, nothing changes.
+**Every snippet below opens with the same line, and it is not boilerplate.**
+
+```bash
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+```
+
+`~/.helm/mail` is the mailroom of the operator's own helm. If `$HELM_DEFAULTS_SUITE` is set you are
+hosted by an **isolated** helm and yours is `~/.helm/mail-$HELM_DEFAULTS_SUITE` — a whole separate
+mailroom, not a prefix: his agents are not in it, cannot see you, and you must not write to them
+(#285). Resolving it into `$ROOT` rather than asking you to remember the substitution is the point;
+a snippet that named the literal would list and *send into* his mailroom from a throwaway instance,
+silently and successfully. It is deliberately simpler than helm's own rule in the cases helm refuses
+to launch under at all, and simpler only in the direction that keeps you out of the shared root.
 
 ## Who is reachable
 
 ```bash
-find ~/.helm/mail -maxdepth 2 -name owner.json -type f 2>/dev/null | while read -r f; do
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+find "$ROOT" -maxdepth 2 -name owner.json -type f 2>/dev/null | while read -r f; do
   python3 - "$f" <<'PY'
 import json, os, sys
 
@@ -141,10 +150,11 @@ match that against the mailboxes:
 p=$$; while [ "$p" -gt 1 ] && [ ! -f ~/.claude/sessions/$p.json ]; do
   p=$(ps -o ppid= -p "$p" | tr -d ' ')
 done
-python3 - "$p" <<'PY'
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+python3 - "$p" "$ROOT" <<'PY'
 import glob, json, os, sys
 me = json.load(open(os.path.expanduser("~/.claude/sessions/%s.json" % sys.argv[1])))["sessionId"]
-for f in glob.glob(os.path.expanduser("~/.helm/mail/*/owner.json")):
+for f in glob.glob(os.path.join(sys.argv[2], "*/owner.json")):
     o = json.load(open(f))
     if o.get("sessionId") == me:
         print(o["handle"]); break
@@ -168,8 +178,9 @@ nothing rather than half a message:
 
 ```bash
 TO=sild-611a; FROM=<your handle>
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
 ID="$(date +%s000)-$(openssl rand -hex 3)"
-D=~/.helm/mail/$TO
+D=$ROOT/$TO
 python3 -c "
 import json,sys
 json.dump({'id':sys.argv[1],'from':sys.argv[2],'to':sys.argv[3],
@@ -208,7 +219,8 @@ arm can, because being notified *is* the wake.
 Arm a background watch on your own mailbox, one notification per message:
 
 ```bash
-BOX=~/.helm/mail/<your handle>
+ROOT=${HELM_MAIL_DIR:-~/.helm/mail${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}}
+BOX=$ROOT/<your handle>
 while true; do
   find "$BOX" -maxdepth 1 -name '*.json' ! -name 'owner.json' -type f 2>/dev/null | while read -r f; do
     echo "MAIL $(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['from'])" "$f") — $f"
