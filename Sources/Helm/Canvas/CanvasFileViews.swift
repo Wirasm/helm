@@ -554,6 +554,44 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
         evaluate(CanvasHTML.setMarkTool(tool, theme: theme), in: webView)
     }
 
+    /// **Point every image on the page at a URL this refresh has not used before** (#279).
+    ///
+    /// Into `bridgeWorld` like everything else helm says to a page, and that costs nothing here:
+    /// content worlds share one DOM, so a script there can re-point an `<img>` without helm's
+    /// name ever appearing in the artifact's own `window`.
+    ///
+    /// **The generation comes from `loadedKey` rather than from a parameter**, because that is
+    /// the one place both delivery points already agree on which refresh is on screen — the
+    /// counter `CanvasReloadKey` carries for exactly the reason this needs it: *"the same path,
+    /// the same theme, different bytes on disk"*.
+    ///
+    /// **Generation 0 is never stamped.** It is the first document this webview has put up, so
+    /// there is no earlier decode to defeat, and stamping would buy a second request for every
+    /// image on the page in exchange for nothing. The honest cost of saying it that way: a
+    /// webview SwiftUI rebuilds at a later generation stamps once for nothing — one extra read
+    /// of a local file, on a path that has just built a whole `WKWebView`.
+    ///
+    /// **The answer is read rather than discarded, and that is why this does not use
+    /// `evaluate(_:in:)`.** The script returns how many images it had to leave alone — a
+    /// `srcset` it could not parse — and a picture helm knowingly failed to refresh is exactly
+    /// the silent staleness #279 is about. Named in the log, never swallowed: the bridge's
+    /// dropped messages are reported the same way, one screen up, for the same reason. There is
+    /// no operator-facing surface for it on purpose — a strip over the artifact would report an
+    /// author's `srcset` to somebody who cannot act on it, and `log show` reaches whoever can.
+    func restampImages(in webView: WKWebView) {
+        guard let generation = loadedKey?.generation, generation > 0 else { return }
+        webView.evaluateJavaScript(
+            CanvasHTML.restampImagesScript(generation: generation), in: nil, in: Self.bridgeWorld
+        ) { result in
+            guard case let .success(value) = result,
+                let unreachable = (value as? NSNumber)?.intValue, unreachable > 0
+            else { return }
+            NSLog(
+                "helm: canvas left \(unreachable) image(s) unstamped — a `srcset` helm could not "
+                    + "read, so an edited picture there may still be the old one")
+        }
+    }
+
     /// Take the mark down when the comment field closes — submitted or dismissed. Pushed
     /// only on the transition, so an ordinary SwiftUI re-render never wipes a mark the
     /// operator is still looking at.
@@ -585,7 +623,14 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
                 case let .failure(error): .unreadable(error.localizedDescription)
                 }
             self?.onUpdate?(answer)
-            if answer.reloads { reload() }
+            if answer.reloads {
+                reload()
+            } else if answer.restampsImages {
+                // The branch a navigation can never reach, and the reason #279 is a script
+                // rather than a rebuilt webview: this page kept its document, so nothing here
+                // will fetch its images again unless helm asks it to.
+                self?.restampImages(in: webView)
+            }
         }
     }
 
@@ -653,6 +698,18 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
         controller.removeScriptMessageHandler(
             forName: CanvasPageState.handlerName, contentWorld: .page)
         stateChannel = nil
+    }
+
+    /// **The other half of #279: a navigation is not enough.** A fresh document asks for the
+    /// same image URL and WebKit answers it with the copy it already decoded — measured in
+    /// `CanvasSiblingFreshnessLiveTests`, on an `<img>` in the markup and on one built by script
+    /// alike. So the images have to be re-pointed once the document is here.
+    ///
+    /// **Here rather than in `load`**, because `load` returns before the page exists: at this
+    /// moment `marked` has run and every `<img>` it made is in the DOM. It fires on the
+    /// operator's Reload too, which is what makes that button the honest route out of a decline.
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        restampImages(in: webView)
     }
 
     func webView(

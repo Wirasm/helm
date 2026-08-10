@@ -2,29 +2,23 @@ import Foundation
 
 // MARK: - The note
 
-/// A markdown file the operator started **in helm**, and therefore the only kind of file the
-/// canvas will let them write into (#289).
+/// A markdown file the operator started **in helm** — where it lands, and what it is called
+/// (#289).
 ///
-/// **The type is the scope line, and the scope line is the whole design.** #289 is two features
-/// wearing one sentence: *edit an artifact an agent wrote*, and *start a note of my own*. The
-/// first one needs an answer to a question `CanvasNotes`' header deliberately avoided — what
-/// happens when the operator has edits open and an agent rewrites the file underneath — and the
-/// second needs none at all, because nothing but the operator writes it. So only the second is
-/// built, and *"only files the operator created are editable"* is not a rule written in a comment
-/// for somebody to remember: it is this type, and `CanvasModel.note` returning nil is what leaves
-/// an agent's plan exactly as read-only as it was yesterday.
+/// **This type used to be the scope line as well, and it is not any more.** It answered *"which
+/// files may the operator write into?"* with `<artifact root>/<key>/notes/<name>.md`, because the
+/// other half of #289 — editing a file an agent also rewrites — needed an answer to the question
+/// `CanvasNotes`' header avoided, and only note-taking had one. That answer is built now
+/// (`CanvasConflict`, `CanvasModel.reconcile`) and the operator has ruled that every markdown
+/// canvas is editable, so the line moved to `EditableFile` and this type kept the half that was
+/// always its own: **creating** one.
 ///
-/// **A path is all it takes to recognise one, which is what makes it survive a relaunch.** A bench
-/// pane persists a `CanvasSource`, not a flag — so if "is this the operator's?" were a second
-/// stored fact, a restored note would come back un-editable and nothing would say why. The rule is
-/// therefore about *where the file is*: `<artifact root>/<key>/notes/<name>.md`, exactly three
-/// components under `~/.prp`, and `notes/` is the one directory in a project store that helm
-/// writes into on the operator's behalf.
+/// What remains here is entirely about *where a new note goes*, and none of it is reachable except
+/// through ⌘⇧N. Nothing asks "is this file a note?" any more, because nothing needs to — an
+/// editable file is judged by what it is, not by who started it.
 ///
-/// **Standardized, because `Workbench.pane(showing:)` compares sources by value.** Holding a
-/// `StandardizedPath` rather than a `URL` composes the two invariants instead of restating one:
-/// `/a/./notes/x.md` and `/a/notes/x.md` are one note here for the same reason they are one canvas
-/// pane there (#88).
+/// **Standardized, because `Workbench.pane(showing:)` compares sources by value** (#88) — the same
+/// invariant `EditableFile` carries, for the same reason.
 struct OperatorNote: Equatable {
     /// The note's own file.
     let path: StandardizedPath
@@ -38,38 +32,11 @@ struct OperatorNote: Equatable {
     /// an agent is told about in `.claude/skills/helm-canvas/SKILL.md`: read what is in here when
     /// the operator names it, never write into it. It is a convention rather than a lock, and
     /// saying so is more honest than implying helm could enforce it.
+    ///
+    /// **It is no longer what makes a file editable** — see the type's own header — so an agent
+    /// writing here is still wrong, and it is wrong for a reason about ownership rather than about
+    /// what helm will let anyone type into.
     static let directoryName = "notes"
-
-    /// Recognise a note by its path — the only route in.
-    ///
-    /// nil for everything else a canvas can be pointed at: an agent's artifact, a `.notes.md`
-    /// sidecar two directories up, a file chosen through Browse… from anywhere on disk, an
-    /// `.html` page, a URL canvas. Each of those is read-only, which is what it was before this
-    /// existed.
-    ///
-    /// - Parameter artifactRoot: where the stores live. A parameter rather than a constant so
-    ///   every rule below is exercisable against a temporary directory — the same trade
-    ///   `ArtifactBrowser` already makes with its `root`.
-    init?(_ url: URL, under artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot) {
-        guard RenderableFile.isMarkdown(url) else { return nil }
-        // **A note's own annotation sidecar lands in `notes/` and is a `.md` file, so shape alone
-        // would let it pass for a note.** It is not one: `CanvasNotes.append` only ever appends,
-        // because the sidecar is the memory of every comment made on that canvas, and the writing
-        // face `saveNote()` drives overwrites. Asked of `CanvasNotes` rather than spelled here,
-        // so the two cannot drift.
-        guard !CanvasNotes.isSidecar(url) else { return nil }
-        let candidate = StandardizedPath(url)
-        let root = StandardizedPath(artifactRoot).value
-        // Both sides standardized before the compare, so `~/.prp/../.prp/k/notes/a.md` is the
-        // same note as `~/.prp/k/notes/a.md` — a path is judged by where it resolves to, never
-        // by how it is spelled.
-        guard candidate.value.hasPrefix(root + "/") else { return nil }
-        let components = candidate.value.dropFirst(root.count + 1).split(separator: "/")
-        // Exactly `<key>/notes/<name>.md`. Three is the check: a deeper path is some other
-        // directory an agent made inside `notes/`, and helm does not claim those.
-        guard components.count == 3, components[1] == Self.directoryName else { return nil }
-        path = candidate
-    }
 }
 
 // MARK: - Starting one
@@ -92,7 +59,7 @@ extension OperatorNote {
             case let .couldNotWrite(reason):
                 "Could not start a note: \(reason)"
             case let .notARecognisableNote(path):
-                "helm wrote \(path) but does not recognise it as a note. This is a bug."
+                "helm wrote \(path) but will not let you edit it. This is a bug."
             }
         }
     }
@@ -171,14 +138,16 @@ extension OperatorNote {
             // ago: a second helm, or the operator's own editor, could have claimed it since, and
             // silently truncating somebody's file is not a cost worth paying to save a retry.
             try Data().write(to: file, options: .withoutOverwriting)
-            guard let note = OperatorNote(file, under: artifactRoot) else {
-                // Unreachable: `file` was built as `<artifactRoot>/<key>/notes/<name>.md`, which
-                // is exactly the shape the initialiser recognises. Checked rather than
-                // force-unwrapped so that a later change to either half surfaces as a sentence
-                // the operator can read instead of a crash in the middle of their work.
+            guard let editable = EditableFile(file) else {
+                // Unreachable: `file` was built with a `.md` extension and is not a sidecar, which
+                // is exactly what `EditableFile` recognises. Checked rather than assumed so that a
+                // later change to either half surfaces as a sentence the operator can read instead
+                // of a note that opens and then refuses to take a character — ⌘⇧N goes straight
+                // into the writing face, so a note helm would not let him edit is the one failure
+                // this whole path exists to make impossible.
                 throw Failure.notARecognisableNote(file.path)
             }
-            return note
+            return OperatorNote(path: editable.path)
         } catch let failure as Failure {
             throw failure
         } catch {

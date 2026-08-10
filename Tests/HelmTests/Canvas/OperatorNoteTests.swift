@@ -2,11 +2,16 @@ import XCTest
 
 @testable import Helm
 
-/// Where a note the operator starts lands, and which files helm will let him write in (#289).
+/// Where a note the operator starts lands, and what it is called (#289).
+///
+/// **The recogniser half of this suite moved to `EditableFileTests`, and the rule it pinned is
+/// inverted there.** It asserted that an agent's plan is not a note and therefore not editable —
+/// #307's scope line, drawn because the conflict question had no answer. That answer is built now,
+/// so `OperatorNote` no longer decides what may be written into and there is nothing here left to
+/// ask it. What stayed is the half that was always its own: creating one.
 ///
 /// Every test here runs against a **temporary artifact root**, never `~/.prp` — the whole reason
-/// `OperatorNote`'s initialiser and `create` take one. Nothing in this file can touch the
-/// operator's own store.
+/// `create` takes one. Nothing in this file can touch the operator's own store.
 final class OperatorNoteTests: XCTestCase {
     /// Stands in for `~/.prp`.
     private var root: URL!
@@ -24,58 +29,6 @@ final class OperatorNoteTests: XCTestCase {
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: root.deletingLastPathComponent())
-    }
-
-    private func note(_ path: String) -> OperatorNote? {
-        OperatorNote(root.appendingPathComponent(path), under: root)
-    }
-
-    // MARK: - Which files are the operator's
-
-    func testANoteIsAMarkdownFileInAStoresNotesDirectory() {
-        XCTAssertNotNil(note("helm-3ec376/notes/2026-08-07-note.md"))
-        XCTAssertNotNil(note("helm-3ec376/notes/anything.markdown"))
-    }
-
-    /// **The scope line of #289, as assertions.** helm edits the operator's notes and nothing
-    /// else; every artifact an agent rewrites stays exactly as read-only as it was.
-    func testNothingElseIsANoteHoweverMuchItLooksLikeOne() {
-        XCTAssertNil(note("helm-3ec376/plans/feature.plan.md"), "an agent's plan is not a note")
-        XCTAssertNil(note("helm-3ec376/notes.md"), "a file called notes is not the directory")
-        XCTAssertNil(note("helm-3ec376/notes/nested/deeper.md"), "exactly <key>/notes/<name>.md")
-        XCTAssertNil(note("notes/loose.md"), "a notes directory at the root belongs to no store")
-        XCTAssertNil(note("helm-3ec376/notes/page.html"), "an .html canvas is a page, not a note")
-        XCTAssertNil(
-            OperatorNote(URL(fileURLWithPath: "/Users/x/Desktop/scratch.md"), under: root),
-            "a file opened through Browse… from anywhere on disk is somebody else's")
-    }
-
-    /// **A note can accumulate an annotation sidecar of its own, and that sidecar is not a note.**
-    ///
-    /// It lands in `notes/`, it is a `.md` file, and it is three components under the artifact
-    /// root — so shape alone lets it pass. Letting it would put the writing face over it, and
-    /// `CanvasModel.saveNote` overwrites where `CanvasNotes.append` must only append: one
-    /// keystroke would replace every comment ever made on that canvas. The browser lists
-    /// sidecars deliberately (`CanvasNotes`' own header), so opening one is an ordinary act.
-    func testACanvassOwnSidecarIsNotItselfANote() {
-        let note = try? XCTUnwrap(self.note("helm-3ec376/notes/2026-08-07-note.md"))
-
-        XCTAssertNil(
-            self.note("helm-3ec376/notes/2026-08-07-note.notes.md"),
-            "a sidecar in notes/ passes every shape check and is still not the operator's note")
-        // Derived from `CanvasNotes` rather than spelled again, so a change to the suffix is
-        // still measured here instead of quietly passing.
-        XCTAssertNil(
-            note.map { OperatorNote(CanvasNotes.sidecarURL(for: $0.url), under: root) } ?? nil,
-            "and the pairing has to hold whatever CanvasNotes names its sidecars")
-    }
-
-    /// `Workbench.pane(showing:)` compares canvas sources by value, so two spellings of one path
-    /// have to be one note for the same reason they are one pane (#88).
-    func testAPathIsJudgedByWhereItResolvesRatherThanHowItIsSpelled() {
-        XCTAssertEqual(
-            note("helm-3ec376/./notes/../notes/a.md")?.path,
-            note("helm-3ec376/notes/a.md")?.path)
     }
 
     // MARK: - Which store
@@ -129,6 +82,17 @@ final class OperatorNoteTests: XCTestCase {
         XCTAssertEqual(
             try String(contentsOf: note.url, encoding: .utf8), "",
             "empty rather than templated — the first line is the one the operator already has")
+    }
+
+    /// **A note that opens and then refuses to take a character is the one failure ⌘⇧N cannot
+    /// survive**, because it goes straight into the writing face. So the file `create` makes has
+    /// to be one `EditableFile` recognises — which is what `create` checks for itself, and what
+    /// this pins from the outside.
+    func testTheNoteHelmMakesIsOneItWillLetHimWriteIn() throws {
+        let note = try OperatorNote.create(
+            inWorkspaceAt: workspace.path, under: root, on: day("2026-08-07"))
+
+        XCTAssertNotNil(EditableFile(note.url))
     }
 
     /// **Without a registration the note would be invisible.** `ArtifactStoreDiscovery` lists a

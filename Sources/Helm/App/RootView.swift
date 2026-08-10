@@ -81,10 +81,14 @@ struct RootView: View {
             // `NSApp` at capture time — so it is attached here only because this is where the
             // spool is wired, and a second seam for one line would be worse.
             spool.attach(capturer: AppWindowCapturer())
-            // #176's teardown. Same two objects the spawner takes and no `activate`: closing a
-            // pane never opens a workspace, so it needs nothing from this view at all.
-            spool.attach(
-                closer: WorkbenchSpoolCloser(workbench: workbench, terminals: terminalManager))
+            // #176's teardown and #284's bring-forward — **one object, attached twice**, because
+            // both requests name a pane and are judged against the same reading of it
+            // (`WorkbenchSpoolPanes`). Same two objects the spawner takes and no `activate`:
+            // neither closing a pane nor showing one opens a workspace, so it needs nothing from
+            // this view at all.
+            let panes = WorkbenchSpoolPanes(workbench: workbench, terminals: terminalManager)
+            spool.attach(closer: panes)
+            spool.attach(selector: panes)
             // #269's driver. It takes the rail as well as the bench because `toggleRail` is the
             // one allowed command that touches neither a pane nor a pty — and both objects are
             // this view's `@StateObject`s, which is why the wiring is here with the rest.

@@ -19,8 +19,9 @@ A **canvas** is a pane beside the terminal that renders a markdown or HTML file.
 there by writing a file and asking helm to show it.
 
 **It appears; it does not seize.** The artifact arrives as a tab the operator can reach. It does not
-take the keyboard and does not replace whatever they are currently reading. Bringing it forward
-stays their action.
+take the keyboard and does not replace whatever they are currently reading. On a busy bench that
+means it can land **hidden**, which is what `helm-select.swift` is for — see *Showing it, and
+taking it away* below.
 
 ## Opening one
 
@@ -68,6 +69,33 @@ survive, Claude Code's TUI captures the mouse (`?1000h ?1002h ?1003h`) and eats 
 helm sees it. `pi` and `codex` set no mouse tracking, so a link printed in one of *their* panes is
 clickable — but do not build on that either: `push.sh` needs no click, no mouse and nobody at the
 pane.
+
+## Showing it, and taking it away
+
+`push.sh` hands back no id, so both of these start by reading the pane's `id` out of the
+`"kind": "canvas"` record in `~/.helm/bench/snapshot.json` — matched on the `canvas.source` path
+you pushed.
+
+```bash
+swift <helm>/tools/helm-select.swift <pane-uuid>   # bring it forward
+swift <helm>/tools/helm-close.swift  <pane-uuid>   # take it off the bench
+```
+
+`<helm>` is helm's own checkout — these are single-file scripts, so they need no build and no cwd
+inside it, but they are not on your `PATH` and this skill cannot know where the checkout is. Ask
+the operator once if you do not.
+
+- **`helm-select` makes it the pane its slot is showing** and leaves the keyboard exactly where
+  it was. Read `select.isVisible` in the result — that is the operator actually being able to see
+  it, read back off the bench rather than assumed. Send it after a **re-push** too: the artifact
+  refreshes in place, and this is how you learn the refresh reached a screen.
+- **It refuses a pane in the slot the operator is working in**, whether that pane holds their
+  keyboard or is merely a tab behind the one that does — showing either would move where their
+  next keystroke lands. There is no override, and the refusal (exit 3) says so. Leave it as a tab
+  they can reach; that is what pushing without seizing buys.
+- **`helm-close` takes it off the bench and destroys nothing** — the artifact file and its
+  `.notes.md` sidecar outlive the tab, and a re-push re-opens the same source. A canvas never
+  needs `--force`. Use it rather than accumulating a tab per revision.
 
 ## The two renderers
 
@@ -236,23 +264,34 @@ These are properties of the platform. They are not preferences, and you cannot c
 canvas, helm writes their notes to a sidecar file — precisely because you rewrite the artifact and
 would clobber anything kept inside. Read the notes if they appear; only ever write the artifact.
 
-**A canvas is read-only to *you* and to the operator, with exactly one exception: his own notes.**
-He can start a markdown note in helm (⌘⇧N) and type in it. It lands in **`~/.prp/<key>/notes/`** —
-the store of the workspace he is in, the same store your artifacts go to — named for the day,
-`2026-08-07-note.md`. Everything else on a canvas is rendered and cannot be edited, including every
-artifact you write: helm decides that from the **path**, and `notes/` is the only directory it will
-write into on his behalf.
+**A markdown canvas is a file the operator can edit, including one you wrote.** The canvas header
+carries a Write ⇄ Read toggle; Read is where it starts, so nothing changes until he presses it.
+Then he is typing in the markdown **source** — the file itself, byte for byte — and it autosaves.
 
-Three things follow, and they are the whole of what you need to know:
+What that is for is the small edit: a corrected sentence, an extra acceptance criterion, a struck
+item. His normal loop is still to mark a passage and ask you to rewrite it.
 
-- **He hands you the path; you read the file.** That is the interface. There is no notification and
-  no push — the same as the state latch, for the same reason: nothing wakes your session.
-- **Never write into `notes/`.** It is his directory. An agent rewriting a file he may have open in
-  the editor is the one case helm has no answer for, and helm will not stop you. Your artifacts go
-  to `plans/`, `research/`, `reviews/`, `canvas/` — wherever your own skill says — and reach the
-  bench through `push.sh`.
-- **Nothing tells you a note changed since you last read it.** If it matters, `cat` it again on
-  your next turn rather than assuming the copy in your context is current.
+**Not every canvas.** An `.html` artifact is a page whose own scripts run, so it is not editable at
+all, and neither is anything helm renders as plain text, nor a `.notes.md` sidecar (it is the
+memory of every comment made on that canvas, and an overwriting editor would replace the lot).
+
+⌘⇧N still starts a blank note of his own in **`~/.prp/<key>/notes/`** — the store of the workspace
+he is in, the same store your artifacts go to — named for the day, `2026-08-07-note.md`.
+
+Four things follow, and they are the whole of what you need to know:
+
+- **Read the file again before you rewrite it.** He may have edited it since you last read it, and
+  **nothing will tell you** — no notification, no push, same as the state latch, for the same
+  reason: nothing wakes your session. The file's own mtime is the only fact available, and it is
+  the filesystem's rather than helm's. A rewrite from a stale copy silently deletes his edit.
+- **Your rewrite always lands, and helm protects him rather than blocking you.** If he happens to
+  be editing that file when you write it, helm notices, stops saving his buffer, and asks him
+  which version wins. You are never refused and never told; write your artifact as you always did.
+- **Never write into `notes/`.** It is his directory — a matter of ownership, not of what helm
+  permits. Your artifacts go to `plans/`, `research/`, `reviews/`, `canvas/` — wherever your own
+  skill says — and reach the bench through `push.sh`.
+- **He hands you the path; you read the file.** That is the interface, for his notes and for an
+  artifact of yours he has changed.
 
 **A mermaid node is addressable in four families only.** helm hands back the identifier from your
 ```mermaid fence — name a node `phase2` and a mark comes back as `phase2`, which you can grep for
@@ -270,8 +309,8 @@ for one the boundary refuses — so `res.ok` and `res.status` mean what they mea
 
 **Pushing the same path again is what refreshes it** (helm #261). The pane re-renders where it
 already is — no tab switch, no focus move, nothing pulled forward — and the reload refetches every
-sibling with it. Rewriting the artifact works too and always did, but you no longer have to touch a
-file you did not change.
+sibling with it, pictures included. Rewriting the artifact works too and always did, but you no
+longer have to touch a file you did not change.
 
 It costs the page's **scroll position**, so push again when something changed rather than on a
 timer.
@@ -282,6 +321,24 @@ on those two paths is served stale: measured six ways, including a plain `fetch`
 quit-and-relaunch of the real app (helm #228). `./app.js?v=2` appears in older canvases and was
 never busting a cache — it worked because editing the import URL edits the **artifact**, which was
 the only file helm watched. Pushing again is the supported way, and it needs no edit at all.
+
+**That holds for a picture too, and it takes helm one extra step to make it hold** (helm #279).
+An `<img>` is the one sibling a reload does not refresh: WebKit answers a repeated image URL with
+the copy it already decoded, so a regenerated `./diagram.png` used to come back looking exactly as
+it did before. helm now re-points every image on the page — **both `src` and every candidate in a
+`srcset`** — at a `helm=` query of its own on each refresh, on a reloaded page and on one that took
+`window.helmCanvasUpdate` and was therefore never reloaded. **So the rule above is unchanged: you
+never write a cache-buster.** A `?helm=…` you see on an image URL is helm's, added at render time;
+it is not in your artifact and is not yours to maintain.
+
+Two gaps in that, stated because a stale picture nobody mentions is the whole of #279:
+
+- **A `srcset` helm cannot parse is left entirely alone**, which means its picture can still go
+  stale. Candidates are comma-separated and a `data:` URI contains commas, so rewriting one from
+  halves risks corrupting it — helm refuses instead, and says so in `log show` (*"canvas left N
+  image(s) unstamped"*). Name siblings by path in a `srcset` and this never arises.
+- **CSS `background-image` is not covered at all.** It is not an element, and nothing reports it.
+  If a picture has to refresh when you re-push, put it in an `<img>`.
 
 A live page is a different question again — all of this is about what a *reload* fetches, not about
 pushing data into a page that is already open. See **A page that holds state**, above: a page that

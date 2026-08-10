@@ -13,7 +13,8 @@
 #         "command": "/abs/path/to/helm/hooks/claude-session-start", "timeout": 5 } ] } ] } }
 #
 # `HELM_MAIL_OFF=1` switches it off; `HELM_MAIL_DIR` points the whole convention elsewhere,
-# which is what makes a test hermetic.
+# which is what makes a test hermetic. `HELM_DEFAULTS_SUITE` moves it too, without being asked:
+# a session inside an isolated helm claims in `~/.helm/mail-<suite>` (#285).
 #
 # Silence and exit 0 are the only acceptable failures: no node, no home, no anything. A
 # session that cannot claim a mailbox is unreachable by mail, which is bad — a session that

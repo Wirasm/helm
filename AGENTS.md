@@ -50,6 +50,33 @@ at 13:19 and never rebuilt was green at 13:19 and red at 19:00, and every worktr
 machine went red within the same second (17:17:19). Concurrency did not do that; nothing in
 any diff did.
 
+**Two tests are the documented exceptions to that line, and the shape they share is the thing
+to recognise rather than the list to memorise: an assertion whose truth depends on a
+`Task.sleep` staying *inside* a deadline.** `Task.sleep(for:)` is a floor and not a promise, so
+a contended machine overshoots it, the behaviour under test happens **correctly**, and the test
+calls that a failure.
+
+- `FileWatcherTests.testAWriteThatArrivesInChunksRendersOnceAndOnlyWhenItIsWhole` — chunks that
+  must all land inside one debounce window (#305).
+- `CanvasEditorTests.testARunOfTypingIsOneSave` — the same shape on the editor's autosave, and
+  it went red in CI on #314 while every other test passed (#289).
+
+Both now carry margins of 50× or more and say so in their own headers. **The direction is what
+makes the rest of the suite safe**: a test that sleeps to let a window *elapse* is only made
+more certain by an overshoot, which is why the sibling tests beside both of these have never
+flaked — say which direction yours sleeps in before adding a third.
+
+`SpoolWireConformanceTests` is a maybe rather than a member: it was put under suspicion by
+#291's nine hours of runaway load, and its waits are on subprocesses rather than on a window,
+so it has never been reproduced deliberately.
+
+**Reproduce one by inverting its parameters, not by adding load.** Measured twice, on two
+different tests: #305's six bounded burners reached load 7.68 and the old values passed three
+times, and #314's twelve reached load 43 with the fixed values passing 6/6. Setting the window
+*below* the gap failed byte-identically to CI, first time, on both. Load is the slowest way to
+find out and the least conclusive; **if you do reach for burners, `timeout`-bound them** — the
+rule further down is there because twelve of them once outlived their script by nine hours.
+
 So before suspecting your diff, or the load, ask ghostty — **by absolute path, and asking
 CoreVideo at the same time**:
 
@@ -155,6 +182,34 @@ is a documented loop that was correct in bash and fatal in zsh, which is the she
 Bash tool runs, and no gate read a skill file at all until this one. Needs bash, zsh and python3,
 which is why it is not in the Swift gate.
 
+**Since #285 it also executes the root those snippets resolve**, and that is a fifth copy of the
+mailbox's directory rule rather than a fourth. Every snippet in both skills opens with a three-line
+preamble that resolves `$ROOT`, because a documented literal is not merely stale inside an isolated
+instance — it is an agent in a throwaway helm **listing and sending into the operator's own
+mailroom**, successfully and silently, which is the cross-talk the code fix closes. Prose asking the
+reader to substitute the suite themselves was the first attempt and is not a mechanism.
+
+**The line of that preamble that matters is the one it is tempting to drop.** The first cut was a
+single `${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}`, which honours **every** value — and the
+three the real writers refuse are exactly the reachable ones: `com.wirasm.helm` is the canonical
+domain, which `DefaultsSuite.override` maps to `.none` so **helm launches perfectly normally under
+it**, it is the literal this file tells you to `defaults read`, and `claude-session-start` fires for
+every Claude Code session on the machine rather than only those in a helm pane; `helm` is the legacy
+domain and the obvious guess at a suite name; a `/` makes a path. All three sent the reader to an
+empty `~/.helm/mail-<name>` while the real hook had claimed their mailbox in the shared root — sends
+that succeed into a directory nobody reads, and a box that never receives. **The escape hatch the
+first version wrote for itself — *"simpler only in the cases helm refuses to launch under"* — was
+false for the case that needed it most.** So the preamble carries the same four textual guards the
+writers do, and the gate runs the doc's own expression against all six fixtures. The one rule it
+does not copy is the whitespace trim, which cannot bite what helm publishes: `PaneEnvironment`
+declares the *decided* name.
+
+The gate also requires both skills to state one preamble and **every snippet to repeat all of it** —
+a block that kept `ROOT=` and dropped the `case` line is the leak, sitting in a file whose stated
+preamble is still correct — and it runs every other snippet with both variables taken **out** of the
+environment, because this gate is very often run by an agent hosted in an isolated helm, which
+exports the second one.
+
 `push.sh` is how an agent puts an artifact on the bench, and it is the third mechanism to hold
 that job — the first two shipped broken. Both were verified from a shell the operator typed into,
 where they worked, and both were silent from an agent's tool call, where they did not: a ⌘-click
@@ -211,8 +266,10 @@ consecutive wakes, because waking spends a turn and two agents replying to each 
 otherwise burn until the money ran out. Both are wired by hand into `~/.claude/settings.json` and
 never write themselves there; `hooks/helm-mail.mjs` is the convention, and it is a **deliberate
 duplicate** of `pi/extensions/helm-mail/index.ts` — there is no shared module because pi loads a
-`.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice
-or the on-disk shape has to be made in both. Needs node, which is why it is not in the Swift gate.
+`.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice,
+the on-disk shape or **which mailroom it all happens in** (#285) has to be made in both — and
+`hooks/mailbox-conformance.mjs` is what makes that detectable rather than trusted. Needs node,
+which is why it is not in the Swift gate.
 
 Only when `pi/` changed. It needs node, and `tsc` from an `npm install` in `pi/`, which is
 why it is not part of the Swift gate: `swift test` cannot run TypeScript and should not
@@ -421,14 +478,34 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     Both outlive the tab, a re-push re-opens the same source, and a `closed` result for one
     carries **no `pid`** — the honest answer to "what did I just destroy". Before this,
     `push.sh` was add-only and a re-pushed artifact left orphan tabs only the operator could ⌘W.
-    Bringing a canvas *forward* is a separate, unanswered question — it is a focus question, and
-    the focus rule below still refuses it.
+    Bringing a canvas *forward* is the other half of #284, and it is `helm-select` below.
   - **It stops at the pane — no worktree, no branch, no git at all.** #141's rail already owns
     that, and its safety *is* an operator confirming a modal against eligibility rules; a spool
     request has nobody at the pane by construction, so reaching that rail from here could only
     mean a dialog no one will answer or a confirmation skipped. That is the strongest possible
     guarantee that unmerged work is never destroyed. `SpoolClosePolicy`'s header has the
     argument and the shape a later worktree kind would have to take.
+- **To bring a pane forward, `swift tools/helm-select.swift <pane-uuid>`** — the fifth spool
+  kind (#284), needing what the other four need: nothing. It makes the pane the one its slot is
+  **showing**, which is what *visible* means, and leaves **focus** where the operator put it
+  (`Workbench.select(offering:)`, the non-seizing twin of the tab click). Same uuid namespace and
+  the same three ways to know one as `helm-close`.
+  - **It exists because `push.sh` offers rather than inserts.** On a busy bench a pushed artifact
+    lands as a background tab — `isSelected: false`, `isVisible: false` — so #272's re-push
+    refresh was real and *unobservable to the agent that triggered it*. The `selected` result
+    carries `select.isVisible`, read back off the bench, which is the answer that was missing.
+  - **The rule is one sentence: an agent may show a pane in a slot the operator is not in**, and
+    there is no override — `helm-select` has no `--force`, because `CloseRequest.force` is a
+    caller asserting about work *it* owns and where the operator's eyes are was never that.
+    Refused: the pane holding the keyboard, and — the case a close's rule cannot see — **a
+    background tab of that same slot**, because the focused slot's *selection* is the focused
+    pane, so showing one of its tabs takes the keyboard. `SpoolPaneState.keyboard` is three-valued
+    for exactly that reason (`elsewhere` / `inItsSlot` / `here`), and `SpoolSelectPolicy` is
+    exhaustive over it.
+  - **The result proves the promise rather than asserting it**: `select.focusedPaneBefore` and
+    `select.focusedPaneAfter` are two readings of `Workbench.focusedPane` taken either side of the
+    mutation, and the script warns loudly if they differ. Exit codes are 2 no answer, 3 refused,
+    4 helm could not act, 6 abandoned.
 - **To drive the bench in between, `swift tools/helm-command.swift <command>`** — the fourth
   spool kind (#269), needing what the other three need: nothing. helm has twenty typed
   commands (`HelmCommand`, #219, #287 and #289) and **will take four of them from an agent**:
@@ -438,16 +515,20 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     #125's *appear, don't seize* on a channel that can now ask for anything the keymap can — an
     agent selecting your active tab mid-thought is the wrong-terminal click arriving through a
     supported API. The other sixteen are `refused` results **naming the reason and, where one
-    exists, the route to use instead**: `closePane` and `selectTerminal` point at `helm-close`,
+    exists, the route to use instead**: `closePane` points at `helm-close`, `selectTerminal` at
+    `helm-select` (#284),
     `openCanvasFile` and `openArtifact` at `push.sh`, `openWorkspace` at `helm-spool` — a
     spawn's `cwd` is the workspace helm opens for it. The rest name no route because there
     isn't one yet, and say so by saying what an addressed version would have to carry.
   - **Every command that is still refused is one with no address**, and that is #176's rule
     extended rather than reinvented. `helm-close` names a pane and refuses the one holding the
-    keyboard; `selectTerminal`, `closePane`, `toggleChat`, `adjustFontSize` and `jumpToPrompt`
+    keyboard, and `helm-select` does the same for the other direction; `selectTerminal`
+    (an *index* into the focused slot), `closePane`, `toggleChat`, `adjustFontSize` and
+    `jumpToPrompt`
     name nothing, so they act on whichever pane the operator is in and there is nothing for a
     policy to check. An addressed version would carry a pane and refuse it when
-    `SpoolPaneState.holdsKeyboard` — the shape is `CloseRequest`'s, and it is not built.
+    `SpoolPaneState.holdsKeyboard` — the shape is `CloseRequest`'s, and for `movePane` it is
+    still not built.
   - **An allowed command routes to helm's own non-seizing twin**, which is a distinction helm
     has drawn since #125 and named both halves of: `Workbench.insert` is the operator asking,
     `Workbench.offer` is an agent offering. `newTerminal` → `WorkbenchModel.spawnTerminal()`
@@ -465,29 +546,58 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     argument; it is **exhaustive over `HelmCommandName`**, so a command cannot be added without
     a verdict — `movePane` (#287) and `newNote` (#289) are the two since, and both arrived
     refused because the compiler asked. Read it before widening the list.
-- **The operator writes here too now, and only in one place: `~/.prp/<key>/notes/`** (#289).
-  ⌘⇧N starts a dated markdown note in the store of the workspace he is in — matched by
-  `WorkspaceStore` where a store exists, keyed by prp's own derivation where none does yet, and
-  registered with prp's own `project.json` when helm is the first thing to touch the store. It
-  opens straight into a `TextEditor` over the markdown **source** (not the rendered page — that
-  would be an HTML→markdown round trip over a document nobody asked helm to reformat), autosaves
-  600ms after typing stops, and flushes on Read, on close, on the canvas being pointed elsewhere,
-  and on the last workspace closing (`WorkbenchModel.deactivate`, which drops the canvas cache
-  without closing what is in it — the one teardown that would otherwise take a note being typed
-  with it). The path is on the editor's footer as a `CopyableLabel`; **it is not put on the
-  clipboard when the note is created** — a clipboard that changes under an act nobody asked for
-  destroys whatever was in it.
-  - **`OperatorNote` is the scope line, carried as a type.** A file is editable only if it is a
-    markdown file exactly at `<artifact root>/<key>/notes/<name>.md`, so **every artifact an
-    agent writes stays as read-only as it was**. That is deliberate and it is half of #289: the
-    other half — the operator editing a file an agent also rewrites — needs an answer to the
-    question `CanvasNotes` avoided, and is not built. Do not build machinery that only makes
-    sense for it.
-  - **For an agent, `notes/` is read-only by convention.** He hands you a path; read it. Nothing
-    tells you a note changed, and nothing wakes you when one does — same as the state latch.
-    Writing into it would be an agent rewriting a file the operator may have open in the editor,
-    which is exactly the case with no answer. Artifacts still go to `plans/`, `research/`, … and
-    reach the bench through `push.sh`.
+- **The operator writes on the bench now, and every markdown canvas is a file he can write in**
+  (#289). The header carries a **Write ⇄ Read** toggle; **Read is where it starts**, so an
+  editable canvas is indistinguishable from a read-only one until he presses it. Write opens a
+  `TextEditor` over the markdown **source** (not the rendered page — that would be an
+  HTML→markdown round trip over a document nobody asked helm to reformat), autosaves 600ms after
+  typing stops, and flushes on Read, on close, on the canvas being pointed elsewhere, on the last
+  workspace closing (`WorkbenchModel.deactivate`, which drops the canvas cache without closing
+  what is in it) and on ⌘Q. The path is on the editor's footer as a `CopyableLabel`; **it is not
+  put on the clipboard** — a clipboard that changes under an act nobody asked for destroys
+  whatever was in it.
+  - **`EditableFile` is the scope line, carried as a type**, and it asks about the file rather
+    than about where it lives: **markdown, and not a `.notes.md` sidecar**. An `.html` canvas is a
+    page whose own scripts run, so an editor there is a web app rather than a text view; a sidecar
+    is excluded because `CanvasNotes.append` only ever appends — it is the memory of every comment
+    made on that canvas, and one keystroke through an overwriting editor would replace the lot.
+  - **⌘⇧N still starts a dated note** in `~/.prp/<key>/notes/` of the workspace he is in — matched
+    by `WorkspaceStore` where a store exists, keyed by prp's own derivation where none does yet,
+    and registered with prp's own `project.json` when helm is the first thing to touch the store.
+    `OperatorNote` is now **only** that: where a new note lands and what it is called. It stopped
+    being the editability rule when the rule widened.
+  - **What happens when an agent rewrites a file the operator is editing — the question #307
+    deferred, and the reason it could.** helm cannot stop the write: an agent writes the file
+    directly and nothing in helm is in that path. What helm guarantees is the other direction —
+    **it never writes over bytes it has not shown the operator, and it never discards his buffer.**
+    `CanvasModel.reconcile` runs on every `refresh()` (the `FileWatcher`'s call and `offer`'s, so
+    neither route can miss it) and compares what is on disk against `draft.saved`, which is
+    *helm's own belief about the file*:
+    - **the same** — helm's own save firing its own watcher. Nothing happens, which is what lets
+      autosave and a live watcher share one file at all.
+    - **different, nothing typed since the last write** — adopted silently. Reading an agent's
+      plan with the editor open is the ordinary case, and there is provably nothing to lose.
+    - **different, with unsaved text** — a `CanvasConflict`. helm **stops saving** and raises a
+      strip with two buttons, both the operator's: **Keep mine** writes his text over theirs,
+      **Take theirs** adopts *exactly the version the strip was about* (the bytes are held for
+      that reason — re-reading at the click would hand him a third version he never saw).
+  - **Two honest limits, and neither is silent while it is happening.** Closing the pane **or
+    quitting** with a conflict unresolved takes the buffer with it — the strip has been up since
+    the moment it happened, and neither path can ask: `helm-close` reaches the first with nobody at
+    the pane, and the build-update badge quits helm on the second. **The tempting fix is worse than
+    the limit**: treating those exits as an implicit *keep mine* would write what is usually a
+    sentence over what is usually a whole rewrite, at the one moment nobody can be asked which — so
+    helm keeps the copy another process can reproduce and loses the one it cannot, and
+    `WorkbenchNoteTests` pins that so it stays a decision. And a file **deleted** under an open
+    draft is not a conflict: it loads as a notice rather than markdown, the draft stays, and the
+    next save recreates the file.
+  - **Nothing tells an agent the operator edited, and that is the answer rather than an
+    oversight.** He hands you a path; read it, and **read it again before you rewrite it** — the
+    file's own mtime is the only fact, and it is the filesystem's rather than helm's. Nothing
+    wakes you when a file changes, same as the state latch. `notes/` in particular is his
+    directory: writing there is still wrong, for a reason about ownership rather than about what
+    helm will let anyone type into. Artifacts go to `plans/`, `research/`, … and reach the bench
+    through `push.sh`.
 - **`helm-spawn` is the GUI path, and still there** — `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`
   (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
   type `cls`, wait, type the prompt, submit — with every step waiting on something observable
@@ -607,6 +717,31 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   when two helms are running. The legacy-domain migration never fires under it, and the window
   frame is not autosaved: that last one is AppKit's write rather than helm's, and the only one a
   suite cannot catch by itself.
+  - **"No reachable path" is a promise about four directories, not one, and the fourth was a
+    lie until #285.** The suite moves the defaults, the spool (`~/.helm/spool-<name>`), the bench
+    snapshot (`~/.helm/bench-<name>`) — and now the **mailbox**, `~/.helm/mail-<name>`. It did not
+    move mail, so a capability test launched under `HELM_DEFAULTS_SUITE=drivetest` spawned an
+    agent that claimed `helm-31b1` in the operator's live `~/.helm/mail` beside his real ones:
+    addressable by them, listed to them, widening handles against them (#262) and sweeping their
+    mailboxes with the reaper on every session start (#236). Isolation is the whole reason those
+    tests are safe to run on a live machine, so the promise was fixed rather than narrowed.
+  - **It could not be fixed in helm alone, and that shape recurs.** helm only *reads* the mailbox;
+    it is **claimed** by `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts`, two
+    processes helm does not run and cannot import from. So helm **declares** the suite into every
+    pty child (`PaneEnvironment.suiteDeclaration` — the decided name, never a raw value helm would
+    itself refuse) and both writers resolve it with the same three rules `SpoolDirectory.resolve`
+    follows: `HELM_MAIL_DIR` first, then the suite, then the shared root. That is one rule in three
+    languages, which is the mailbox's standing carve-out and its standing obligation —
+    `hooks/mailbox-conformance.mjs` now extracts `MailboxDirectory.resolve` and
+    `DefaultsSuite.override` from the Swift and runs all three copies against one fixture set, so a
+    divergence is a red gate rather than a helm that cannot see the agents it is hosting.
+    **The writers' copy is deliberately narrower in one clause**: `UserDefaults(suiteName:) != nil`
+    is a framework call JavaScript cannot make, and for a name refused on that ground alone helm
+    refuses to *launch*, so no running helm can disagree. The harness asserts that clause is still
+    the only one.
+  - **The negative control, and it is what a claim here has to bring.** `hooks/test.sh` and
+    `pi/tests/helm-mail.mjs` each claim under a suite with `HOME` redirected and then assert the
+    shared `~/.helm/mail` **was never created** — not that it holds a different mailbox.
 - Conventional commits, written as a human — no AI attribution.
 
 ## Architecture — how to think about where code goes
@@ -638,12 +773,12 @@ single-file script needs no `Package.swift` resolved and no cwd inside this repo
 whole reason the spool is a script rather than an SPM target — see "Why the spool is a script,
 and must stay one", above, for what #221 measured when it tried the other way. So the format is
 typed once in `HelmWire` and spelled out once more in `tools/helm-spool.swift`/`helm-close.swift`/
-`helm-capture.swift`/`helm-command.swift`, on purpose. A duplicate is honest only when a runtime
-boundary makes
+`helm-capture.swift`/`helm-command.swift`/`helm-select.swift`, on purpose. A duplicate is honest
+only when a runtime boundary makes
 sharing impossible, and two wire formats now earn that carve-out: the mailbox's, written twice
 — in Swift (`hooks/`) and TypeScript/JavaScript (`pi/`), both separate processes `HelmWire`
 cannot reach — and the spool's own, written twice — once in `HelmWire`, once by hand across the
-four scripts, for the reasons just given. Neither is left to drift unnoticed by nothing at all
+five scripts, for the reasons just given. Neither is left to drift unnoticed by nothing at all
 — `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) runs each spool script as a real
 subprocess and checks both directions of the spool format (the request it writes and, against
 every `SpoolResult.Status`, its exit code and stderr) plus the `HELM_DEFAULTS_SUITE` branch of

@@ -237,6 +237,50 @@ final class CanvasLiveUpdateTests: XCTestCase {
                 + "model actually stands at")
     }
 
+    // MARK: - The picture on a page that was never reloaded (#279)
+
+    /// **The branch nothing else could ever have reached.** A page with a handler keeps its
+    /// document forever by contract, so the edited `./probe.svg` beside it has no navigation
+    /// coming to refresh it — which is the whole reason #279 is a re-stamp rather than a rebuilt
+    /// webview. A rebuild reaches only the `navigate()` branch, so on this page it would do
+    /// nothing at all, for as long as the operator kept it open.
+    ///
+    /// Both halves are asserted together, because either alone is satisfied by the wrong fix:
+    /// the picture is the new one **and** the document was never taken away.
+    func testAPageThatKeepsItsDocumentStillGetsTheEditedPicture() async throws {
+        let sibling = directory.appendingPathComponent("probe.svg")
+        try Self.svg(width: 11).write(to: sibling, atomically: true, encoding: .utf8)
+        let handler = "window.__offers.push(u); return true;"
+        try Self.page(handler: handler, body: Self.picture).write(
+            to: artifact, atomically: true, encoding: .utf8)
+
+        let pane = try Pane(artifact: artifact)
+        try await pane.firstLoad()
+        await pane.leaveAMark()
+        let before = await pane.imageWidth(settlingOn: "11")
+        XCTAssertEqual(before, "11", "precondition: the picture is on the page at all")
+
+        // The agent regenerates the diagram and rewrites the artifact. The `<img>` tag is
+        // byte-identical across the rewrite, exactly as it is in real life.
+        try Self.svg(width: 22).write(to: sibling, atomically: true, encoding: .utf8)
+        try Self.page(handler: handler, body: Self.picture + "rewritten").write(
+            to: artifact, atomically: true, encoding: .utf8)
+        let answer = await pane.rewriteReachedThePage()
+        XCTAssertEqual(answer, .applied, "precondition: the page took the update")
+
+        let after = await pane.imageWidth(settlingOn: "22")
+        XCTAssertEqual(
+            after, "22",
+            "the page applied the update and refetched its state, and the one thing it cannot "
+                + "refresh for itself is a picture WebKit already decoded under that URL. `11` "
+                + "is a canvas showing a diagram that no longer exists on disk")
+        let survived = await pane.markSurvived()
+        XCTAssertTrue(
+            survived,
+            "and it must still be the same document — a re-stamp that reached the picture by "
+                + "reloading the page would have destroyed exactly what the handler protects")
+    }
+
     // MARK: - The artifact
 
     /// An `.html` artifact, optionally holding state and taking updates. `__offers` is the page's
@@ -255,6 +299,19 @@ final class CanvasLiveUpdateTests: XCTestCase {
             window.webkit.messageHandlers.probe.postMessage("loaded");
             </script></body></html>
             """
+    }
+
+    /// A regenerated diagram beside the artifact, which is the ordinary shape an agent produces.
+    private static let picture = #"<img src="./probe.svg">"#
+
+    /// A sibling image whose width says which version of it the page got. SVG because it is
+    /// text, and `naturalWidth` reads the declared width — the same instrument
+    /// `CanvasSiblingRefreshTests` and `CanvasSiblingFreshnessLiveTests` use.
+    private static func svg(width: Int) -> String {
+        """
+        <svg xmlns="http://www.w3.org/2000/svg" width="\(width)" height="\(width)">\
+        <rect width="\(width)" height="\(width)" fill="#7cf"/></svg>
+        """
     }
 
     // MARK: - The pane that hosts it
@@ -347,6 +404,23 @@ final class CanvasLiveUpdateTests: XCTestCase {
 
         func bodyText() async -> String {
             await ask("document.body.innerText.trim()")
+        }
+
+        /// What the page's `<img>` decoded to — which version of the picture is on screen (#279),
+        /// read off the element and never off a pixel. Polled, because helm's re-stamp is an
+        /// `evaluateJavaScript` that then has to be fetched and decoded; returns whatever it last
+        /// saw, so a failure names the width rather than saying only that it never arrived.
+        func imageWidth(settlingOn wanted: String, timeout: Duration = .seconds(5)) async -> String
+        {
+            let script = "String((document.querySelector('img') || {}).naturalWidth)"
+            let deadline = ContinuousClock.now + timeout
+            var last = ""
+            while ContinuousClock.now < deadline {
+                last = await ask(script)
+                if last == wanted { return last }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+            return last
         }
 
         private func waitForLoad(count: Int, timeout: Duration = .seconds(5)) async throws {

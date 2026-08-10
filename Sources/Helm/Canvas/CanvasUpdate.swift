@@ -148,6 +148,30 @@ enum CanvasUpdateAnswer: Equatable {
         }
     }
 
+    /// Whether helm may re-point the page's images at a URL this refresh has not used
+    /// before (#279).
+    ///
+    /// **`reloads`' twin, and deliberately the narrower of the two.** A re-stamp destroys no
+    /// state — it is a `src` attribute, not a document — so it is the smallest delivery helm
+    /// has, and `applied` is exactly where it earns its keep: the page took the update, refetched
+    /// whatever the agent rewrote, and the one thing it cannot refresh for itself is a decoded
+    /// image WebKit is holding under the URL it already has.
+    ///
+    /// **`declined` and `failed` are not re-stamped, and that is the point of asking here rather
+    /// than at the call site.** Both mean *helm did not get to change this page*, and quietly
+    /// swapping a picture underneath a page that said "not now" would be helm acting on a
+    /// refusal it just accepted — while the notice above it still reads *"Reload to see the new
+    /// version"*. The operator's Reload is the route, and it navigates, and a navigation stamps.
+    ///
+    /// `unhandled` and `unreadable` reload, so there is nothing for this to do: the fresh
+    /// document is stamped by `CanvasFileCoordinator` when it finishes loading.
+    var restampsImages: Bool {
+        switch self {
+        case .applied: true
+        case .declined, .failed, .unhandled, .unreadable: false
+        }
+    }
+
     /// What to put in the notice strip, or nil when there is nothing to say — the page took the
     /// update, or helm is about to reload and the reload is the message.
     var notice: String? {

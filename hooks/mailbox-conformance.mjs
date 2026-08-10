@@ -93,8 +93,13 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOOKS_SOURCE = path.join(REPO, "hooks", "helm-mail.mjs");
 const PI_SOURCE = path.join(REPO, "pi", "extensions", "helm-mail", "index.ts");
 const HANDLE_SOURCE = path.join(REPO, "Sources", "HelmWire", "Spool", "Handle.swift");
-// `MailboxOwner` — the OTHER Swift reader of the mailbox's on-disk shape — lives here.
+// `MailboxOwner` — the OTHER Swift reader of the mailbox's on-disk shape — lives here. So does
+// `MailboxDirectory.resolve`, helm's own answer to "which mailroom is this?" — see
+// `checkTheMailRootAgrees`.
 const OWNER_SOURCE = path.join(REPO, "Sources", "HelmWire", "Spool", "MailboxDirectory.swift");
+// The isolation decision `MailboxDirectory.resolve` defers to, and that both writers copy: is
+// this process an isolated instance, and under what name (#285).
+const SUITE_SOURCE = path.join(REPO, "Sources", "HelmWire", "DefaultsSuite.swift");
 // The one Swift WRITER into the mailbox: `CanvasNoteCourier` sends the operator's canvas note.
 // It is here for `OPERATOR_SENDER` — see `checkTheOperatorSenderAgrees`.
 const COURIER_SOURCE = path.join(REPO, "Sources", "Helm", "Canvas", "CanvasNoteCourier.swift");
@@ -320,9 +325,13 @@ const SHARED_NAMES = [
 	"OFF_ENV",
 	"ROOT_ENV",
 	"HANDLE_ENV",
+	"SUITE_ENV",
+	"CANONICAL_DOMAIN",
+	"LEGACY_DOMAIN",
 	"SUBJECT_MAX",
 	"FROM_MAX",
 	"OPERATOR_SENDER",
+	"suiteName",
 	"mailRoot",
 	"slug",
 	"tail",
@@ -547,6 +556,218 @@ function extractSwiftOperatorSender(source) {
 		);
 	}
 	return match[1];
+}
+
+/**
+ * Read `MailboxDirectory.resolve`'s three rules — where helm itself looks for the mailroom — out
+ * of the Swift source.
+ *
+ * **Why a FOURTH Swift extraction, and the one where a divergence costs the most.** Since #285
+ * the mail root is not a constant in any of the three files: it follows `HELM_DEFAULTS_SUITE`, so
+ * an isolated instance's agents claim in `~/.helm/mail-<suite>` and never in the operator's
+ * `~/.helm/mail`. Swift is the READER and both JavaScript halves are the writers, so a drift does
+ * not produce an error anywhere — it produces a helm hosting agents it cannot see, in a directory
+ * nothing joins against, with `snapshot.json` reporting every pane as unclaimed. The failure mode
+ * is precisely the one this file exists for: silent, and invisible until someone wonders why mail
+ * stopped arriving.
+ *
+ * Strict like the other three: every statement in the body must be recognised, and one that is
+ * not is a hard failure naming the leftover text.
+ */
+function extractSwiftMailRoot(source) {
+	const enumAt = source.indexOf("package enum MailboxDirectory");
+	if (enumAt < 0) throw new Error("MailboxDirectory.swift: no `package enum MailboxDirectory` — the mail-root check is measuring nothing");
+	const region = source.slice(enumAt);
+
+	const variable = region.match(/package static let directoryVariable = "([^"]*)"/);
+	if (!variable) throw new Error("MailboxDirectory: `directoryVariable` is not a plain string literal this harness can read");
+
+	const lines = region.split("\n");
+	const start = lines.findIndex((line) => /^\s*package static func resolve\($/.test(line));
+	if (start < 0) throw new Error("MailboxDirectory: no `package static func resolve(` — the mail-root check is measuring nothing");
+	const indent = lines[start].match(/^\s*/)[0];
+	const open = lines.findIndex((line, i) => i > start && line === `${indent}) -> URL {`);
+	if (open < 0) throw new Error("MailboxDirectory.resolve no longer has a `) -> URL {` this harness can find");
+	const end = lines.findIndex((line, i) => i > open && line === `${indent}}`);
+	if (end < 0) throw new Error("MailboxDirectory.resolve has no closing brace at its own indentation");
+
+	let rest = `${lines
+		.slice(open + 1, end)
+		.map((line) => line.replace(/\/\/.*$/, ""))
+		.join(" ")
+		.replace(/\s+/g, " ")
+		.replace(/\(\s+/g, "(")
+		.trim()} `;
+
+	const eat = (pattern, what) => {
+		const match = rest.match(pattern);
+		if (!match) throw new Error(`MailboxDirectory.resolve ${what} — it continues: ${rest.slice(0, 110)}`);
+		rest = rest.slice(match[0].length);
+		return match;
+	};
+	// 1. The explicit override, first and unconditional — `HELM_MAIL_DIR` beats everything.
+	eat(
+		new RegExp(`^if let (\\w+) = environment\\[directoryVariable\\]\\?\\.trimmingCharacters\\(in: \\.whitespacesAndNewlines\\), !\\1\\.isEmpty \\{ return URL\\(fileURLWithPath: \\(\\1 as NSString\\)\\.expandingTildeInPath\\) \\} `),
+		"no longer honours the explicit directory override first",
+	);
+	// 2. …then a base directory, 3. the suite decision, 4/5. the two roots it chooses between.
+	const base = eat(/^let (\w+) = home\.appendingPathComponent\("([^"]*)"\) /, "no longer builds its roots under one base directory");
+	eat(/^switch DefaultsSuite\.override\(in: environment\) \{ /, "no longer asks `DefaultsSuite.override` which instance this is (#285)");
+	const isolated = eat(
+		new RegExp(`^case \\.suite\\(let (\\w+)\\): return ${base[1]}\\.appendingPathComponent\\("([^"\\\\]*)\\\\\\((\\w+)\\)"\\) `),
+		"no longer gives an isolated instance a mailroom of its own (#285)",
+	);
+	if (isolated[3] !== isolated[1]) throw new Error(`MailboxDirectory.resolve interpolates \`${isolated[3]}\` rather than the bound suite name \`${isolated[1]}\``);
+	const shared = eat(
+		new RegExp(`^case \\.none, \\.refused: return ${base[1]}\\.appendingPathComponent\\("([^"\\\\]*)"\\) \\} $`),
+		"no longer falls back to the shared mailroom for a helm with no suite",
+	);
+	if (rest.trim()) throw new Error(`MailboxDirectory.resolve grew a statement this harness does not understand: ${rest.slice(0, 110)}`);
+
+	return { directoryVariable: variable[1], base: base[2], isolatedPrefix: isolated[2], shared: shared[1] };
+}
+
+/**
+ * Read `DefaultsSuite.override` — the decision `MailboxDirectory.resolve` defers to and both
+ * writers copy by hand — out of the Swift source, as an ordered list of rules.
+ *
+ * **The list is what matters, not any one rule.** A `suiteName()` in the two JavaScript files is
+ * a copy of this function with the framework call left out, and the way a copy like that goes
+ * wrong is by NOT GROWING when the original does: Swift gains a refusal, the writers keep
+ * honouring the name, and an isolated instance's agents go back to the operator's root for
+ * exactly the inputs the new rule was added for. So an unrecognised clause is a hard failure
+ * telling the reader to teach this harness — the same contract `extractSwiftHandleRule` has.
+ */
+function extractSwiftSuiteRule(source) {
+	const literal = (name) => {
+		const found = source.match(new RegExp(`package static let ${name} = "([^"]*)"`));
+		if (!found) throw new Error(`DefaultsSuite: \`${name}\` is not a plain string literal this harness can read`);
+		return found[1];
+	};
+	const names = { canonical: literal("canonical"), legacy: literal("legacy"), suiteVariable: literal("suiteVariable") };
+
+	const lines = source.split("\n");
+	const start = lines.findIndex((line) => /^\s*package static func override\($/.test(line));
+	if (start < 0) throw new Error("DefaultsSuite: no `package static func override(` — the suite check is measuring nothing");
+	const indent = lines[start].match(/^\s*/)[0];
+	const open = lines.findIndex((line, i) => i > start && line === `${indent}) -> Override {`);
+	if (open < 0) throw new Error("DefaultsSuite.override no longer has a `) -> Override {` this harness can find");
+	const end = lines.findIndex((line, i) => i > open && line === `${indent}}`);
+	if (end < 0) throw new Error("DefaultsSuite.override has no closing brace at its own indentation");
+
+	let rest = `${lines
+		.slice(open + 1, end)
+		.map((line) => line.replace(/\/\/.*$/, ""))
+		.join(" ")
+		.replace(/\s+/g, " ")
+		.trim()} `;
+
+	const rules = [];
+	while (rest.trim()) {
+		if (rest.startsWith("guard ")) {
+			const elseAt = rest.indexOf(" else {");
+			if (elseAt < 0) throw new Error(`DefaultsSuite.override has a \`guard\` with no \`else {\` this harness can find: ${rest.slice(0, 110)}`);
+			rules.push({ kind: "guard", condition: rest.slice("guard ".length, elseAt).trim() });
+			// Skip the refusal itself by counting braces: what it SAYS is prose, and prose is the
+			// one part of this decision the writers do not copy.
+			let depth = 0;
+			let i = elseAt + " else ".length;
+			for (; i < rest.length; i++) {
+				if (rest[i] === "{") depth += 1;
+				else if (rest[i] === "}") {
+					depth -= 1;
+					if (depth === 0) break;
+				}
+			}
+			if (depth !== 0) throw new Error(`DefaultsSuite.override has an unbalanced \`else\` block this harness cannot skip: ${rest.slice(elseAt, elseAt + 110)}`);
+			rest = rest.slice(i + 1).replace(/^\s+/, "");
+			continue;
+		}
+		const trim = rest.match(/^let (\w+) = (\w+)\.trimmingCharacters\(in: \.whitespacesAndNewlines\) /);
+		if (trim) {
+			rules.push({ kind: "trim", to: trim[1], from: trim[2] });
+			rest = rest.slice(trim[0].length);
+			continue;
+		}
+		const tail = rest.match(/^return \.suite\((\w+)\) $/);
+		if (tail) {
+			rules.push({ kind: "honour", of: tail[1] });
+			rest = "";
+			continue;
+		}
+		throw new Error(`DefaultsSuite.override grew a statement this harness does not understand: \`${rest.slice(0, 110)}\` — teach it, or the mail-root check is measuring less than the rule`);
+	}
+	if (!rules.some((rule) => rule.kind === "honour")) throw new Error("DefaultsSuite.override no longer ends by honouring a suite name — the mail-root check is measuring nothing");
+	return { names, rules: rules.map((rule) => (rule.kind === "guard" ? classifySuiteGuard(rule.condition, names) : rule)) };
+}
+
+/**
+ * One `guard` of `DefaultsSuite.override`, as something JavaScript can run — or as the one this
+ * harness deliberately cannot, named rather than skipped.
+ *
+ * `UserDefaults(suiteName:) != nil` is a framework call with no JavaScript equivalent, and the
+ * writers do not copy it. That is a real divergence, and `checkTheMailRootAgrees` states its cost
+ * out loud rather than letting it sit here as an omission.
+ */
+function classifySuiteGuard(condition, names) {
+	const present = condition.match(/^let (\w+) = environment\[suiteVariable\]$/);
+	if (present) return { kind: "present", to: present[1] };
+	const nonEmpty = condition.match(/^!(\w+)\.isEmpty$/);
+	if (nonEmpty) return { kind: "non-empty", of: nonEmpty[1] };
+	const notDomain = condition.match(/^(\w+) != (canonical|legacy)$/);
+	if (notDomain) return { kind: "not-domain", of: notDomain[1], domain: names[notDomain[2]] };
+	const noSlash = condition.match(/^!(\w+)\.contains\("([^"]*)"\)$/);
+	if (noSlash) return { kind: "excludes", of: noSlash[1], text: noSlash[2] };
+	const usable = condition.match(/^UserDefaults\(suiteName: (\w+)\) != nil$/);
+	if (usable) return { kind: "unmodelled", condition };
+	throw new Error(`DefaultsSuite.override grew a clause this harness does not understand: \`${condition}\` — teach it, or the mail-root check is measuring less than the rule`);
+}
+
+/**
+ * Swift's own answer to "where is this process's mail", run in JavaScript from the extracted
+ * rules. The unmodelled clause is skipped, which is why no fixture may turn on it — see
+ * `checkTheMailRootAgrees`.
+ */
+function swiftMailRoot(mailRule, suiteRule, environment, homedir) {
+	const override = environment[mailRule.directoryVariable];
+	// `expandingTildeInPath`, which `path.resolve` does not do — see `MAIL_ROOT_CASES` for why no
+	// fixture here carries a tilde.
+	if (override !== undefined && override.trim()) return path.resolve(override.trim().replace(/^~(?=$|\/)/, homedir));
+	const base = path.join(homedir, mailRule.base);
+	const shared = path.join(base, mailRule.shared);
+	// The bindings are tracked BY NAME rather than as one rolling value: `!raw.isEmpty` and
+	// `!name.isEmpty` are two different guards over two different strings, and a model that
+	// conflated them would keep agreeing after Swift reordered the trim.
+	const bound = {};
+	for (const rule of suiteRule.rules) {
+		switch (rule.kind) {
+			case "present": {
+				const raw = environment[suiteRule.names.suiteVariable];
+				if (raw === undefined) return shared;
+				bound[rule.to] = raw;
+				break;
+			}
+			case "non-empty":
+				if (!bound[rule.of]) return shared;
+				break;
+			case "trim":
+				bound[rule.to] = bound[rule.from].trim();
+				break;
+			case "not-domain":
+				if (bound[rule.of] === rule.domain) return shared;
+				break;
+			case "excludes":
+				if (bound[rule.of].includes(rule.text)) return shared;
+				break;
+			case "unmodelled":
+				break;
+			case "honour":
+				return path.join(base, `${mailRule.isolatedPrefix}${bound[rule.of]}`);
+			default:
+				throw new Error(`the mail-root model has no case for a \`${rule.kind}\` rule`);
+		}
+	}
+	throw new Error("DefaultsSuite.override fell out of its own rules without honouring or refusing a name");
 }
 
 /** How a Swift type in that schema constrains the JSON a writer may put there. */
@@ -793,7 +1014,7 @@ function livenessCases() {
  * Everything a caller can vary about a run, so `selfChecks` can point the whole suite at a
  * mutated copy of any one source and require it to go red.
  */
-async function runConformance({ hooksSource, piSource, handleSource, ownerSource, courierSource }) {
+async function runConformance({ hooksSource, piSource, handleSource, ownerSource, courierSource, suiteSource }) {
 	// The extractions are NOT in a group: if one of them cannot find its implementation there is
 	// nothing to compare at all, and carrying on would be the silent zero itself.
 	const hooks = await loadHooks(hooksSource);
@@ -801,12 +1022,15 @@ async function runConformance({ hooksSource, piSource, handleSource, ownerSource
 	const rules = extractSwiftHandleRule(handleSource);
 	const schema = extractSwiftOwnerSchema(ownerSource);
 	const swiftSender = extractSwiftOperatorSender(courierSource);
+	const mailRule = extractSwiftMailRoot(ownerSource);
+	const suiteRule = extractSwiftSuiteRule(suiteSource);
 
 	// Each group is isolated, because a rule that diverges far enough to THROW — a `retire` that
 	// deletes the file the next line reads, say — would otherwise cancel every check after it
 	// and report a smaller, quieter failure than the truth.
 	group("the shared surface", () => checkTheSharedSurfaceIsCovered(hooksSource, piSource));
 	group("constants", () => checkTheConstantsAgree(hooks, pi));
+	group("the mail root", () => checkTheMailRootAgrees(hooks, pi, mailRule, suiteRule));
 	group("slug/tail", () => checkSlugAndTailAgree(hooks, pi));
 	group("deriveHandle", () => checkDerivationAgrees(hooks, pi));
 	group("the handle alphabet", () => checkSwiftAcceptsWhatTheWritersEmit(hooks, pi, rules));
@@ -820,7 +1044,7 @@ async function runConformance({ hooksSource, piSource, handleSource, ownerSource
 	group("the notice", () => checkTheNoticeAgrees(hooks, pi));
 	group("the operator sender", () => checkTheOperatorSenderAgrees(hooks, pi, swiftSender));
 	group("the deliberate divergences", () => checkTheDeliberateDivergences(hooks, pi));
-	reportTheSwiftRule(rules, schema);
+	reportTheSwiftRule(rules, schema, mailRule, suiteRule);
 }
 
 /** Run one check group. A throw is that group's failure and nobody else's. */
@@ -868,26 +1092,97 @@ function checkTheSharedSurfaceIsCovered(hooksSource, piSource) {
 /** The on-disk shape's names and the bounds on another agent's text — #127's numbers. */
 function checkTheConstantsAgree(hooks, pi) {
 	let ran = 0;
-	for (const name of ["NAME", "READ_DIR", "OWNER_FILE", "OFF_ENV", "ROOT_ENV", "HANDLE_ENV", "SUBJECT_MAX", "FROM_MAX", "OPERATOR_SENDER"]) {
+	for (const name of ["NAME", "READ_DIR", "OWNER_FILE", "OFF_ENV", "ROOT_ENV", "HANDLE_ENV", "SUITE_ENV", "CANONICAL_DOMAIN", "LEGACY_DOMAIN", "SUBJECT_MAX", "FROM_MAX", "OPERATOR_SENDER"]) {
 		ran += 1;
 		check(
 			hooks[name] === pi[name],
 			`${name} agrees across the runtimes (hooks ${JSON.stringify(hooks[name])}, pi ${JSON.stringify(pi[name])})`,
 		);
 	}
-	// Where the whole convention lives, which is the one constant that is computed. Both the
-	// override and the default: a divergence in the default would put the two runtimes in
-	// different mailrooms, which no other check here could see.
-	ran += 1;
-	withEnv({ [hooks.ROOT_ENV]: "/tmp/some-root/" }, () =>
-		check(hooks.mailRoot() === pi.mailRoot() && hooks.mailRoot() === "/tmp/some-root", `${hooks.ROOT_ENV} resolves identically and is normalised in both`),
-	);
-	ran += 1;
-	// Read only — `mailRoot()` resolves a path and nothing here writes to it. See `scratch`.
-	withEnv({ [hooks.ROOT_ENV]: undefined }, () =>
-		check(hooks.mailRoot() === pi.mailRoot() && hooks.mailRoot() === path.join(os.homedir(), ".helm", "mail"), "and unset, both fall back to ~/.helm/mail"),
-	);
 	ranAtLeast(ran, 10, "constants");
+}
+
+/**
+ * Every environment worth resolving, and what the mailroom is under it. Read only: `mailRoot()`
+ * returns a path and nothing in this group writes to one, so the operator's real `~/.helm/mail`
+ * is named here and never touched — see `scratch`.
+ *
+ * **No fixture carries a `~`.** helm expands one (`expandingTildeInPath`) and `path.resolve` does
+ * not, so `HELM_MAIL_DIR=~/mail` already resolves differently in helm and in its writers. That is
+ * older than #285, is not what #285 is about, and asserting it either way here would be this
+ * harness taking a position on a defect nobody has filed. Named so the gap is visible.
+ */
+const MAIL_ROOT_CASES = [
+	{ what: "no override and no suite — the operator's own helm", env: {}, folder: "mail" },
+	{ what: "the suite the ticket was measured under (#285)", env: { HELM_DEFAULTS_SUITE: "drivetest" }, folder: "mail-drivetest" },
+	{ what: "the suite AGENTS.md documents", env: { HELM_DEFAULTS_SUITE: "helm-bench" }, folder: "mail-helm-bench" },
+	{ what: "a suite name with space around it", env: { HELM_DEFAULTS_SUITE: "  helm-bench  " }, folder: "mail-helm-bench" },
+	{ what: "an empty suite means no suite", env: { HELM_DEFAULTS_SUITE: "" }, folder: "mail" },
+	{ what: "so does one that is only whitespace", env: { HELM_DEFAULTS_SUITE: "   " }, folder: "mail" },
+	{ what: "naming the canonical domain is naming no suite", env: { HELM_DEFAULTS_SUITE: "com.wirasm.helm" }, folder: "mail" },
+	{ what: "the legacy domain helm refuses to run under", env: { HELM_DEFAULTS_SUITE: "helm" }, folder: "mail" },
+	{ what: "a path, which helm refuses — and this file MKDIRS what it resolves", env: { HELM_DEFAULTS_SUITE: "../../tmp/evil" }, folder: "mail" },
+	{ what: "an explicit override beats a suite", env: { HELM_MAIL_DIR: "/tmp/helm-conformance-root", HELM_DEFAULTS_SUITE: "helm-bench" }, absolute: "/tmp/helm-conformance-root" },
+	{ what: "and is normalised", env: { HELM_MAIL_DIR: "/tmp/helm-conformance-root/" }, absolute: "/tmp/helm-conformance-root" },
+];
+
+/**
+ * WHERE THE MAIL IS, ACROSS ALL THREE COPIES OF THE RULE — #285.
+ *
+ * This is the surface where a duplicate costs most, because helm is the READER and the two
+ * JavaScript halves are the writers. Since #285 the root follows `HELM_DEFAULTS_SUITE`, so the
+ * rule is no longer a constant anyone can eyeball: a throwaway instance's agents claim in
+ * `~/.helm/mail-<suite>` and the operator's `~/.helm/mail` is left alone. Drift in either
+ * direction is silent — helm hosting agents it cannot see, or a throwaway instance claiming
+ * beside the operator's live ones, which is the leak the ticket was filed for.
+ *
+ * The Swift half is not restated: `swiftMailRoot` runs the rules `extractSwiftMailRoot` and
+ * `extractSwiftSuiteRule` read out of `MailboxDirectory.swift` and `DefaultsSuite.swift`.
+ */
+function checkTheMailRootAgrees(hooks, pi, mailRule, suiteRule) {
+	const home = os.homedir();
+	for (const fixture of MAIL_ROOT_CASES) {
+		const expected = fixture.absolute ?? path.join(home, ".helm", fixture.folder);
+		const environment = { HELM_MAIL_DIR: undefined, HELM_DEFAULTS_SUITE: undefined, ...fixture.env };
+		withEnv(environment, () => {
+			const answers = { hooks: hooks.mailRoot(), pi: pi.mailRoot(), helm: swiftMailRoot(mailRule, suiteRule, fixture.env, home) };
+			check(
+				answers.hooks === expected && answers.pi === expected && answers.helm === expected,
+				`${fixture.what}: all three resolve ${JSON.stringify(expected)} (hooks ${JSON.stringify(answers.hooks)}, pi ${JSON.stringify(answers.pi)}, helm ${JSON.stringify(answers.helm)})`,
+			);
+		});
+	}
+
+	// THE CONTROL, and it is the ticket's acceptance line rather than a restatement of the rows
+	// above: a `mailRoot` that ignored the suite entirely would satisfy nothing here, but one that
+	// returned the shared root for SOME suite would slip past a spot check. Every honoured suite
+	// must land somewhere the operator's agents are not.
+	const shared = path.join(home, ".helm", "mail");
+	const isolated = MAIL_ROOT_CASES.filter((fixture) => fixture.folder?.startsWith("mail-"));
+	check(
+		isolated.every((fixture) =>
+			withEnv({ HELM_MAIL_DIR: undefined, HELM_DEFAULTS_SUITE: undefined, ...fixture.env }, () => hooks.mailRoot() !== shared && pi.mailRoot() !== shared),
+		),
+		`and an isolated instance's agents never claim in the operator's ${JSON.stringify(shared)} (${isolated.length} suites)`,
+	);
+
+	// The one clause of Swift's decision the writers deliberately do not copy, asserted to still be
+	// the only one. `UserDefaults(suiteName:) != nil` is a framework call; JavaScript has no
+	// equivalent, and for a name Swift refuses on that ground alone helm refuses to LAUNCH, so
+	// there is no running helm to disagree with. If that list ever grows, this goes red and the
+	// writers' `suiteName` has to answer for the new one.
+	const unmodelled = suiteRule.rules.filter((rule) => rule.kind === "unmodelled").map((rule) => rule.condition);
+	check(
+		unmodelled.length === 1 && unmodelled[0] === "UserDefaults(suiteName: name) != nil",
+		`DefaultsSuite.override has exactly one clause the writers cannot copy, and it is the framework call: [${unmodelled.join(", ")}]`,
+	);
+	// And the writers' own constants are Swift's literals, not a memory of them.
+	check(
+		hooks.SUITE_ENV === suiteRule.names.suiteVariable && hooks.CANONICAL_DOMAIN === suiteRule.names.canonical && hooks.LEGACY_DOMAIN === suiteRule.names.legacy,
+		`the writers copy DefaultsSuite's own literals: ${suiteRule.names.suiteVariable}, ${suiteRule.names.canonical}, ${suiteRule.names.legacy}`,
+	);
+	check(hooks.ROOT_ENV === mailRule.directoryVariable, `and MailboxDirectory's override variable is the one they honour: ${mailRule.directoryVariable}`);
+	ranAtLeast(MAIL_ROOT_CASES.length, 8, "the mail root");
 }
 
 function checkSlugAndTailAgree(hooks, pi) {
@@ -1642,12 +1937,16 @@ function checkTheDeliberateDivergences(hooks, pi) {
 }
 
 /** Say what was actually enforced, so a weakened rule is visible in the output, not only in a diff. */
-function reportTheSwiftRule(rules, schema) {
+function reportTheSwiftRule(rules, schema, mailRule, suiteRule) {
 	const described = rules
 		.map((rule) => (rule.kind === "alphabet" ? `${rule.kind} ${JSON.stringify([...rule.characters].join(""))}` : rule.kind))
 		.join(", ");
 	ok(`Handle.init?(validating:) enforces: ${described}`);
 	ok(`MailboxOwner decodes: ${schema.map((field) => `${field.key}: ${field.type}${field.required ? "" : "?"}`).join(", ")}`);
+	ok(
+		`MailboxDirectory.resolve: ${mailRule.directoryVariable} wins, else ~/${mailRule.base}/${mailRule.isolatedPrefix}<suite>, else ~/${mailRule.base}/${mailRule.shared}`,
+	);
+	ok(`DefaultsSuite.override decides on: ${suiteRule.rules.map((rule) => (rule.kind === "unmodelled" ? `${rule.kind} (${rule.condition})` : rule.kind)).join(", ")}`);
 }
 
 // ── the self-checks ──────────────────────────────────────────────────────────────────────
@@ -1668,34 +1967,65 @@ async function selfChecks() {
 	const handleSource = fs.readFileSync(HANDLE_SOURCE, "utf8");
 	const ownerSource = fs.readFileSync(OWNER_SOURCE, "utf8");
 	const courierSource = fs.readFileSync(COURIER_SOURCE, "utf8");
+	const suiteSource = fs.readFileSync(SUITE_SOURCE, "utf8");
+	// Every mutation is this, with one source replaced — spelled once, so adding a source to the
+	// harness cannot leave a mutation quietly running against the wrong set. It did have to be
+	// spelled out in every entry, and #285 added the sixth.
+	const pristine = { hooksSource, piSource, handleSource, ownerSource, courierSource, suiteSource };
 	const mutations = [
 		{
 			what: "a function the harness names is gone from hooks/helm-mail.mjs",
-			sources: { hooksSource: hooksSource.replace(/^function ownerGone\(/m, "function ownerIsGone("), piSource, handleSource, ownerSource, courierSource },
+			sources: { ...pristine, hooksSource: hooksSource.replace(/^function ownerGone\(/m, "function ownerIsGone(") },
 			expect: /no top-level declaration named ownerGone/,
 		},
 		{
 			what: "a function the harness names is gone from pi's index.ts",
-			sources: { hooksSource, piSource: piSource.replace(/^function sessionPid\(/m, "function sessionPidOf("), handleSource, ownerSource, courierSource },
+			sources: { ...pristine, piSource: piSource.replace(/^function sessionPid\(/m, "function sessionPidOf(") },
 			expect: /no top-level declaration named sessionPid/,
 		},
 		{
 			what: "pi's ownerGone stops asking the registry — the exact shape of the #236 bug",
 			sources: {
-				hooksSource,
+				...pristine,
 				piSource: piSource.replace(
 					'if (owner.runtime === "claude" && owner.sessionId && sessionPid(owner.sessionId)) return false;',
 					"",
 				),
-				handleSource,
-				ownerSource, courierSource,
 			},
 			expect: /ownerGone disagrees|both reapers leave the SAME shared root/,
 		},
 		{
 			what: "the hook's slug emits a character no mailbox directory can carry",
-			sources: { hooksSource: hooksSource.replace('.replace(/[^a-z0-9]+/g, "-")', '.replace(/[^a-z0-9]+/g, "_")'), piSource, handleSource, ownerSource, courierSource },
+			sources: { ...pristine, hooksSource: hooksSource.replace('.replace(/[^a-z0-9]+/g, "-")', '.replace(/[^a-z0-9]+/g, "_")') },
 			expect: /slug agrees|deriveHandle agrees|accepts all/,
+		},
+		{
+			// #285 ITSELF, from the writers' side: a `suiteName` that stops reading the variable is
+			// every isolated instance's agent claiming in the operator's mailroom again.
+			what: "the hook stops honouring the defaults suite and claims in the shared root (#285)",
+			sources: { ...pristine, hooksSource: hooksSource.replace("\tconst raw = (process.env[SUITE_ENV] ?? \"\").trim();", '\tconst raw = "";') },
+			expect: /all three resolve|never claim in the operator's/,
+		},
+		{
+			// And from helm's side, which is the half no JS-to-JS check could ever see: a reader
+			// looking in the shared root while its agents write to the isolated one.
+			what: "MailboxDirectory.resolve stops following the suite the writers follow (#285)",
+			sources: { ...pristine, ownerSource: ownerSource.replace('return base.appendingPathComponent("mail-\\(name)")', 'return base.appendingPathComponent("mail")') },
+			expect: /no longer gives an isolated instance a mailroom of its own/,
+		},
+		{
+			// The list-that-must-grow. A new refusal in Swift that the writers do not copy sends an
+			// isolated instance's agents back to the shared root for exactly the names it was added
+			// for, and nothing else here would notice.
+			what: "DefaultsSuite.override grows a refusal the writers were never told about (#285)",
+			sources: { ...pristine, suiteSource: suiteSource.replace("guard !name.contains(\"/\") else {", 'guard !name.hasPrefix("."), !name.contains("/") else {') },
+			expect: /does not understand/,
+		},
+		{
+			// The literals the writers copy, from the side that owns them.
+			what: "DefaultsSuite renames the variable the writers read (#285)",
+			sources: { ...pristine, suiteSource: suiteSource.replace('package static let suiteVariable = "HELM_DEFAULTS_SUITE"', 'package static let suiteVariable = "HELM_INSTANCE_SUITE"') },
+			expect: /the writers copy DefaultsSuite's own literals|all three resolve/,
 		},
 		{
 			// #262 ITSELF, as a mutation — which is what makes deleting the old carve-out
@@ -1703,13 +2033,7 @@ async function selfChecks() {
 			// own candidate list and this suite must go red where it used to say "a known
 			// asymmetry, not this harness".
 			what: "the hook goes back to returning a handle heldByAnother just called held (#262)",
-			sources: {
-				hooksSource: hooksSource.replace("return `${where}-${full}-${process.pid}`;", "return `${where}-${full}`;"),
-				piSource,
-				handleSource,
-				ownerSource,
-				courierSource,
-			},
+			sources: { ...pristine, hooksSource: hooksSource.replace("return `${where}-${full}-${process.pid}`;", "return `${where}-${full}`;") },
 			expect: /both runtimes answer the same|neither hands back a handle a live agent holds/,
 		},
 		{
@@ -1717,25 +2041,20 @@ async function selfChecks() {
 			// agent that the operator's own instruction is another agent's words.
 			what: "the hook's notice stops depending on who sent the message (#257)",
 			sources: {
+				...pristine,
 				hooksSource: hooksSource.replace(
 					"const operator = taken.filter(({ message }) => isFromOperator(message.from)).length;",
 					"const operator = 0;",
 				),
-				piSource,
-				handleSource,
-				ownerSource,
-				courierSource,
 			},
 			expect: /byte-identical across the runtimes for an operator note|say different things about whose words/,
 		},
 		{
 			what: "a fourth rule is added to both mailbox files and nobody tells this harness",
 			sources: {
+				...pristine,
 				hooksSource: `${hooksSource}\nfunction aFourthSharedRule() {\n\treturn 1;\n}\n`,
 				piSource: `${piSource}\nfunction aFourthSharedRule() {\n\treturn 1;\n}\n`,
-				handleSource,
-				ownerSource,
-				courierSource,
 			},
 			expect: /not classified: aFourthSharedRule/,
 		},
@@ -1744,39 +2063,31 @@ async function selfChecks() {
 			// nothing about it — that gap is what review found, and `OFF_ENV` is what it hid.
 			what: "a fourth shared CONST is added to both mailbox files and nobody tells this harness",
 			sources: {
+				...pristine,
 				hooksSource: `${hooksSource}\nconst A_FOURTH_SHARED_CONST = "x";\n`,
 				piSource: `${piSource}\nconst A_FOURTH_SHARED_CONST = "x";\n`,
-				handleSource,
-				ownerSource,
-				courierSource,
 			},
 			expect: /not classified: A_FOURTH_SHARED_CONST/,
 		},
 		{
 			what: "MailboxOwner starts requiring a field neither writer's claim() writes",
 			sources: {
-				hooksSource,
-				piSource,
-				handleSource,
+				...pristine,
 				ownerSource: ownerSource.replace(
 					"retiredAt = try container.decodeIfPresent(Double.self, forKey: .retiredAt)",
 					"retiredAt = try container.decode(Double.self, forKey: .retiredAt)",
 				),
-				courierSource,
 			},
 			expect: /MailboxOwner requires "retiredAt"/,
 		},
 		{
 			what: "MailboxOwner's init grows a statement the harness cannot model",
 			sources: {
-				hooksSource,
-				piSource,
-				handleSource,
+				...pristine,
 				ownerSource: ownerSource.replace(
 					"        pid = try container.decode(pid_t.self, forKey: .pid)",
 					"        pid = pid_t(try container.decode(String.self, forKey: .pid)) ?? 0",
 				),
-				courierSource,
 			},
 			expect: /grew a statement this harness does not understand/,
 		},
@@ -1786,32 +2097,18 @@ async function selfChecks() {
 			// announced as another agent's words and the reserved handle stops covering the name
 			// helm writes — #257 reintroduced from a side nothing used to watch.
 			what: "helm's Swift renames the sender it writes and the JS readers do not follow (#257)",
-			sources: {
-				hooksSource,
-				piSource,
-				handleSource,
-				ownerSource,
-				courierSource: courierSource.replace('nonisolated static let sender = "operator"', 'nonisolated static let sender = "the-operator"'),
-			},
+			sources: { ...pristine, courierSource: courierSource.replace('nonisolated static let sender = "operator"', 'nonisolated static let sender = "the-operator"') },
 			expect: /the sender helm's Swift writes is the one both readers reserve|recognise a message actually carrying that sender/,
 		},
 		{
 			what: "helm's Swift stops declaring its sender as a plain string literal",
-			sources: {
-				hooksSource,
-				piSource,
-				handleSource,
-				ownerSource,
-				courierSource: courierSource.replace('nonisolated static let sender = "operator"', "nonisolated static let sender = Self.defaultSender"),
-			},
+			sources: { ...pristine, courierSource: courierSource.replace('nonisolated static let sender = "operator"', "nonisolated static let sender = Self.defaultSender") },
 			expect: /the operator-sender check is measuring nothing/,
 		},
 		{
 			what: "Handle's rule grows a clause the harness cannot model",
 			sources: {
-				hooksSource,
-				piSource,
-				ownerSource, courierSource,
+				...pristine,
 				handleSource: handleSource.replace(
 					"guard !trimmed.isEmpty",
 					"guard !trimmed.isEmpty, trimmed.count < 64",
@@ -1826,12 +2123,7 @@ async function selfChecks() {
 		// self-check pass for exactly the wrong reason. Caught here rather than left to look like
 		// a harness that has lost its teeth. (It fires for real: mutating the hook's `slug` is a
 		// no-op if pi's has already been mutated the same way, which is how this was measured.)
-		const changed =
-			mutation.sources.hooksSource !== hooksSource ||
-			mutation.sources.piSource !== piSource ||
-			mutation.sources.handleSource !== handleSource ||
-			mutation.sources.ownerSource !== ownerSource ||
-			mutation.sources.courierSource !== courierSource;
+		const changed = Object.keys(pristine).some((name) => mutation.sources[name] !== pristine[name]);
 		if (!check(changed, `self-check: the mutation for "${mutation.what}" still applies to today's source`)) continue;
 
 		const real = report;
@@ -1870,7 +2162,7 @@ function requireTypeStripping() {
 
 async function main() {
 	requireTypeStripping();
-	for (const [what, file] of [["hooks", HOOKS_SOURCE], ["pi", PI_SOURCE], ["Handle", HANDLE_SOURCE], ["MailboxOwner", OWNER_SOURCE], ["CanvasNoteCourier", COURIER_SOURCE]]) {
+	for (const [what, file] of [["hooks", HOOKS_SOURCE], ["pi", PI_SOURCE], ["Handle", HANDLE_SOURCE], ["MailboxOwner", OWNER_SOURCE], ["CanvasNoteCourier", COURIER_SOURCE], ["DefaultsSuite", SUITE_SOURCE]]) {
 		if (!fs.existsSync(file)) {
 			bad(`the ${what} implementation is not at ${file} — refusing to pass with nothing to compare`);
 			say("# 1 of 1 check(s) failed");
@@ -1885,6 +2177,7 @@ async function main() {
 			handleSource: fs.readFileSync(HANDLE_SOURCE, "utf8"),
 			ownerSource: fs.readFileSync(OWNER_SOURCE, "utf8"),
 			courierSource: fs.readFileSync(COURIER_SOURCE, "utf8"),
+			suiteSource: fs.readFileSync(SUITE_SOURCE, "utf8"),
 		});
 	} catch (error) {
 		bad(`the harness could not run: ${error.message}`);

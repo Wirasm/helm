@@ -6,7 +6,7 @@ import XCTest
 /// detectable half of the duplication `AGENTS.md` argues is honest (#221).
 ///
 /// **Why the duplication exists at all.** `tools/helm-spool.swift`, `helm-close.swift`,
-/// `helm-capture.swift` and `helm-command.swift` cannot `import HelmWire`: a single-file
+/// `helm-capture.swift`, `helm-command.swift` and `helm-select.swift` cannot `import HelmWire`: a single-file
 /// `swift tools/…swift` script resolves no `Package.swift` and runs from any cwd, which is the
 /// whole reason the spool is a script rather than an SPM target (`AGENTS.md`'s "Why the spool is
 /// a script, and must stay one" has the measurements). So the request JSON, the result JSON and
@@ -19,11 +19,12 @@ import XCTest
 /// **This file covers three of the spool's four boundaries, and says which one it does not:**
 ///
 /// 1. **The request direction** (script → helm): a script writes `<id>.json`, helm's
-///    `SpoolDirectory.request(at:)` decodes it. Covered by the four `testHelm*WritesWhat
-///    *RequestDecodes` tests below, unchanged from #221's first pass but for #269's fourth kind.
+///    `SpoolDirectory.request(at:)` decodes it. Covered by the five `testHelm*WritesWhat
+///    *RequestDecodes` tests below, unchanged from #221's first pass but for #269's fourth kind
+///    and #284's fifth.
 /// 2. **The result direction** (helm → script): helm writes `results/<id>.json`, the script
-///    reads `json["status"] as? String` and switches on it by hand — `helm-spool.swift:180`,
-///    `helm-close.swift:151`, `helm-capture.swift:148`, `helm-command.swift:167`, none of which
+///    reads `json["status"] as? String` and switches on it by hand — one `switch status` per
+///    script, none of which
 ///    decode through `SpoolResult`. Covered by `testHelm*ExitCodeAndStderrForEveryResultStatus`
 ///    below, over **every** `SpoolResult.Status` case for every script — `Status: CaseIterable`
 ///    plus an
@@ -175,6 +176,21 @@ final class SpoolWireConformanceTests: XCTestCase {
         XCTAssertEqual(command.command, "splitRight")
     }
 
+    /// **`pane` is the assertion here, where the close test's is `terminal`** — the two requests
+    /// carry the same value under different keys, deliberately (#284): a close keeps the name
+    /// every helm since #176 decodes, and a select has no wire history to keep faith with. A
+    /// script that had copied the close's key would fail on the decode, not on the value.
+    func testHelmSelectWritesWhatSelectRequestDecodes() throws {
+        let id = "conformance-select"
+        let pane = UUID()
+        try run("helm-select.swift", [pane.uuidString, "--id", id])
+
+        guard case .select(let select) = try decodedRequest(id: id) else {
+            return XCTFail("helm-select.swift wrote a request HelmWire did not decode as a select")
+        }
+        XCTAssertEqual(select.pane, pane.uuidString)
+    }
+
     func testHelmCaptureWritesWhatCaptureRequestDecodes() throws {
         let id = "conformance-capture"
         try run(
@@ -214,6 +230,7 @@ final class SpoolWireConformanceTests: XCTestCase {
         case .captured: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
         case .closed: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
         case .ran: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
+        case .selected: return ResultExpectation(exitCode: 4, stderrContains: "unknown status")
         case .unclaimed: return ResultExpectation(exitCode: 5, stderrContains: "no mailbox")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
         case .failed: return ResultExpectation(exitCode: 4, stderrContains: "could not act")
@@ -237,6 +254,8 @@ final class SpoolWireConformanceTests: XCTestCase {
             return ResultExpectation(exitCode: 0, stderrContains: "is gone")
         case .ran:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ran")
+        case .selected:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status selected")
         case .unclaimed:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
@@ -260,6 +279,8 @@ final class SpoolWireConformanceTests: XCTestCase {
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status closed")
         case .ran:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ran")
+        case .selected:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status selected")
         case .unclaimed:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
@@ -283,6 +304,33 @@ final class SpoolWireConformanceTests: XCTestCase {
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status closed")
         case .ran:
             return ResultExpectation(exitCode: 0, stderrContains: "splitRight ran")
+        case .selected:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status selected")
+        case .unclaimed:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
+        case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
+        case .failed: return ResultExpectation(exitCode: 4, stderrContains: "could not act")
+        case .abandoned: return ResultExpectation(exitCode: 6, stderrContains: "stopped mid-flight")
+        }
+    }
+
+    /// helm-select.swift's own `Exit` enum — ok=0, refused=3, failed=4, abandoned=6 (#284).
+    /// Same shape as the three above: a select is one write, so everything but `selected` falls
+    /// to `default:`.
+    private func helmSelectExpectation(for status: SpoolResult.Status) -> ResultExpectation {
+        switch status {
+        case .started:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status started")
+        case .ready:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ready")
+        case .captured:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status captured")
+        case .closed:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status closed")
+        case .ran:
+            return ResultExpectation(exitCode: 4, stderrContains: "unexpected status ran")
+        case .selected:
+            return ResultExpectation(exitCode: 0, stderrContains: "is visible")
         case .unclaimed:
             return ResultExpectation(exitCode: 4, stderrContains: "unexpected status unclaimed")
         case .refused: return ResultExpectation(exitCode: 3, stderrContains: "not an agent")
@@ -319,6 +367,13 @@ final class SpoolWireConformanceTests: XCTestCase {
                     command: .splitRight, paneCreated: TerminalID(terminal),
                     focusedPaneBefore: TerminalID(terminal), focusedPaneAfter: TerminalID(terminal),
                     columns: 2, panes: 2))
+        case .selected:
+            return SpoolResult(
+                id: id, status: .selected, terminalId: TerminalID(terminal),
+                select: SelectReport(
+                    pane: TerminalID(terminal), isVisible: true,
+                    focusedPaneBefore: TerminalID(terminal),
+                    focusedPaneAfter: TerminalID(terminal)))
         case .unclaimed:
             return SpoolResult(
                 id: id, status: .unclaimed, terminalId: TerminalID(terminal), pid: 4242,
@@ -435,6 +490,28 @@ final class SpoolWireConformanceTests: XCTestCase {
             XCTAssertTrue(
                 stderr.contains(expectation.stderrContains),
                 "helm-command.swift on status \(status.rawValue): expected stderr to contain "
+                    + "\"\(expectation.stderrContains)\", got \"\(stderr)\"")
+        }
+    }
+
+    func testHelmSelectExitCodeAndStderrForEveryResultStatus() throws {
+        for status in SpoolResult.Status.allCases {
+            let pane = UUID()
+            let id = "select-result-\(status.rawValue)"
+            SpoolDirectory(root: spoolDir).write(
+                result(id: id, status: status, terminal: pane))
+
+            let (exitCode, stderr) = try runAndCapture(
+                "helm-select.swift", [pane.uuidString, "--id", id])
+
+            let expectation = helmSelectExpectation(for: status)
+            XCTAssertEqual(
+                exitCode, expectation.exitCode,
+                "helm-select.swift on status \(status.rawValue): exit \(exitCode), stderr: \(stderr)"
+            )
+            XCTAssertTrue(
+                stderr.contains(expectation.stderrContains),
+                "helm-select.swift on status \(status.rawValue): expected stderr to contain "
                     + "\"\(expectation.stderrContains)\", got \"\(stderr)\"")
         }
     }
@@ -588,6 +665,82 @@ final class SpoolWireConformanceTests: XCTestCase {
             json["pid"],
             "…and the blob it prints verbatim carries no pid either, which is what the agent "
                 + "reading it acts on")
+    }
+
+    /// **helm-select.swift must name every route to a pane uuid that `HelmWire` names**, for
+    /// `testHelmCloseNamesEveryRouteToAPaneUuidThatHelmWireDoes`'s reason exactly: the script is a
+    /// copy of `CloseRequest.waysToKnowAPane` that no constant can reach, and #284 is the ticket
+    /// where that enumeration proved able to disagree with itself.
+    ///
+    /// It matters slightly more here than on the close, because the third route — reading the id
+    /// out of `snapshot.json` — is the *only* one an agent that pushed an artifact has: `push.sh`
+    /// hands back no id, and this script exists precisely for artifacts pushed that way.
+    func testHelmSelectNamesEveryRouteToAPaneUuidThatHelmWireDoes() throws {
+        let (exitCode, _, stderr) = try runAndCaptureBoth("helm-select.swift", ["not-a-uuid"])
+        XCTAssertEqual(exitCode, 1, "a non-uuid is a usage error, caught before the spool")
+
+        for marker in ["terminalId", "HELM_PANE", "snapshot.json"] {
+            XCTAssertTrue(
+                CloseRequest.waysToKnowAPane.contains(marker),
+                "HelmWire stopped naming \(marker) as a route to a pane uuid — if that is "
+                    + "deliberate, this test and helm-select.swift both have to hear about it")
+            XCTAssertTrue(
+                stderr.contains(marker),
+                "helm-select.swift's refusal does not name \(marker), which HelmWire's "
+                    + "CloseRequest.waysToKnowAPane does; got \"\(stderr)\"")
+        }
+    }
+
+    /// The focus canary, on the fifth script (#284) — and the reason it is duplicated rather than
+    /// assumed from `helm-command`'s: `helm-select.swift` reads `select.focusedPaneBefore` and
+    /// `focusedPaneAfter` **by name**, out of a *different* nested object, with no compiler link
+    /// to `SelectReport`. Rename either field and both casts return `nil`, `nil == nil` is `true`,
+    /// and the one line that would tell a human the focus rule had been broken stops printing.
+    ///
+    /// The result it is given is a deliberate impossibility — `SpoolSelectPolicy` refuses every
+    /// pane whose selection could move the keyboard — which is the point: the branch exists for
+    /// the day something slips past, and a branch a real run cannot reach is exactly the one a
+    /// test has to.
+    func testHelmSelectWarnsWhenAResultSaysFocusMoved() throws {
+        let id = "wire-shape-select-focus-moved"
+        let pane = UUID()
+        let after = UUID()
+        SpoolDirectory(root: spoolDir).write(
+            SpoolResult(
+                id: id, status: .selected, terminalId: TerminalID(pane),
+                select: SelectReport(
+                    pane: TerminalID(pane), isVisible: true,
+                    focusedPaneBefore: TerminalID(pane), focusedPaneAfter: TerminalID(after))))
+
+        let (exitCode, stderr) = try runAndCapture(
+            "helm-select.swift", [pane.uuidString, "--id", id])
+
+        XCTAssertEqual(exitCode, 0, "helm did show it, so the script still succeeds — it warns")
+        XCTAssertTrue(
+            stderr.contains("WARNING: focus MOVED"),
+            "helm-select.swift must warn when the two focus readings differ, which is the only "
+                + "thing that proves it read them as two fields at all; got \"\(stderr)\"")
+        XCTAssertTrue(
+            stderr.contains(after.uuidString),
+            "…and must name where the keyboard went, so the warning is actionable; got "
+                + "\"\(stderr)\"")
+    }
+
+    /// The control for the test above, and named as one: it passes whether or not the warning
+    /// works, because a script that never warns satisfies it. It is here so the test above cannot
+    /// be made green by warning unconditionally, which would cry wolf on every ordinary select.
+    func testHelmSelectDoesNotWarnWhenFocusStayedPut() throws {
+        let id = "wire-shape-select-focus-kept"
+        let pane = UUID()
+        SpoolDirectory(root: spoolDir).write(result(id: id, status: .selected, terminal: pane))
+
+        let (exitCode, stderr) = try runAndCapture(
+            "helm-select.swift", [pane.uuidString, "--id", id])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertFalse(
+            stderr.contains("WARNING"),
+            "a select that kept focus must not warn; got \"\(stderr)\"")
     }
 
     /// The same property for a `ran` result (#269), and it matters more here than in the two

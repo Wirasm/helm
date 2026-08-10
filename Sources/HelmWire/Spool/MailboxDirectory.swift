@@ -141,6 +141,31 @@ package enum MailboxDirectory {
     /// honour it — a test that redirects one and not the other is testing nothing.
     package static let directoryVariable = "HELM_MAIL_DIR"
 
+    /// Where this process's mail is, from its environment alone — the same three rules
+    /// `SpoolDirectory.resolve` follows, one directory over.
+    ///
+    /// # The suite moves the mail too (#285)
+    ///
+    /// `AGENTS.md` promises an isolated instance has *"no reachable path to the operator's
+    /// state"*, and mail was one: a throwaway helm under `HELM_DEFAULTS_SUITE=drivetest` spawned
+    /// an agent that claimed `helm-31b1` in the operator's live `~/.helm/mail`, beside his real
+    /// agents. Measured. Everything that root buys then went with it — the throwaway appears in
+    /// every listing the operator's agents read, can address them and be addressed, widens
+    /// handles against them (#262), and its `SessionStart` sweeps their mailboxes with the
+    /// reaper (#236). So the suite moves the mailbox exactly as it moves the spool:
+    /// `HELM_DEFAULTS_SUITE=helm-bench` reads and writes `~/.helm/mail-helm-bench`.
+    ///
+    /// **This half alone fixes nothing, and that is the shape of the ticket.** helm only *reads*
+    /// the mailbox; the two writers are `hooks/helm-mail.mjs` and
+    /// `pi/extensions/helm-mail/index.ts`, neither of which is Swift or can reach this file. They
+    /// carry the same three rules by hand, `PaneEnvironment` declares `HELM_DEFAULTS_SUITE` into
+    /// every pty child so they can see it, and `hooks/mailbox-conformance.mjs` executes all three
+    /// copies against one fixture set so a divergence is red rather than silent — the same
+    /// honest-duplicate bargain `AGENTS.md` strikes for the spool's scripts.
+    ///
+    /// **A helm that resolved this differently from its agents would be worse than the leak.**
+    /// Every agent it hosts would be unaddressable and invisible in `snapshot.json`, with no
+    /// error anywhere — so `MailboxDirectory` and the writers move together or not at all.
     package static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -151,7 +176,17 @@ package enum MailboxDirectory {
         {
             return URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
         }
-        return home.appendingPathComponent(".helm/mail")
+        let base = home.appendingPathComponent(".helm")
+        // `SpoolDirectory.resolve`'s reasoning, unchanged and deliberately not restated: one
+        // parser answers "is this the operator's helm?", and `.refused` falls back to the shared
+        // root because a running helm never gets here with one — `DefaultsDomain.resolve` stops
+        // the launch first.
+        switch DefaultsSuite.override(in: environment) {
+        case .suite(let name):
+            return base.appendingPathComponent("mail-\(name)")
+        case .none, .refused:
+            return base.appendingPathComponent("mail")
+        }
     }
 
     /// Every **addressable** owner under `root`. A missing directory, an unreadable file or a
