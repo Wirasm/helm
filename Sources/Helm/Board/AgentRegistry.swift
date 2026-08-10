@@ -40,16 +40,46 @@ struct AgentSession: Equatable {
     /// default so the memberwise initializer stays source-compatible for callers
     /// that only care about the board's three fields.
     var sessionId: String? = nil
+    /// What the agent says it is waiting **for**, in Claude Code's own words — `"permission
+    /// prompt"`, `"input needed"`, `"dialog open"`, `"sandbox request"`, … Absent unless
+    /// `status` is `waiting`.
+    ///
+    /// **This is the field #283 turns on, and it is why `status` alone was not enough.** The
+    /// board collapses `waiting` and `idle` into one answer on purpose — see `AgentStatus` —
+    /// because both mean *it is your turn*. For a coordinator reading `snapshot.json` they are
+    /// opposites: `idle` is an agent that finished, `waiting` on a **permission prompt** is an
+    /// agent that cannot finish and that nobody is going to answer, because the spool's whole
+    /// premise is that nobody is at the pane.
+    ///
+    /// A bare `String` rather than an enum, for `BenchSnapshot.ResumableRecord.blockedReason`'s
+    /// reason: this is a free-form label Claude Code composes, and a reason this build has never
+    /// heard of is something a reader can still print.
+    var waitingFor: String? = nil
+    /// When `status` last **changed** — not a heartbeat, and `BoardModel` says so in as many
+    /// words. Claude Code stamps it only on a status transition, which is exactly what makes it
+    /// the useful thing to publish: *waiting since T* survives a snapshot that is never rewritten,
+    /// where *waiting for N seconds* would go stale the moment it was written down.
+    ///
+    /// Claude Code writes epoch **milliseconds**; this is the `Date` they name.
+    var statusUpdatedAt: Date? = nil
 }
 
 extension AgentSession: Decodable {
-    private enum CodingKeys: String, CodingKey { case pid, cwd, status, sessionId }
+    private enum CodingKeys: String, CodingKey {
+        case pid, cwd, status, sessionId, waitingFor, statusUpdatedAt
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         pid = try container.decode(pid_t.self, forKey: .pid)
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        waitingFor = try container.decodeIfPresent(String.self, forKey: .waitingFor)
+        // Milliseconds, and a non-finite one is dropped rather than turned into a `Date` no
+        // arithmetic can survive — Claude Code's own reader range-checks this field too.
+        statusUpdatedAt =
+            try container.decodeIfPresent(Double.self, forKey: .statusUpdatedAt)
+            .flatMap { $0.isFinite ? Date(timeIntervalSince1970: $0 / 1000) : nil }
         // Unknown and absent collapse to the same nil. Synthesised `Decodable`
         // would instead throw on an unknown value and drop the whole row — the
         // same outcome by accident rather than by rule, and it would take a
@@ -123,8 +153,20 @@ enum AgentRegistry {
     /// is not new exposure: the pre-#247 join reached the very same wrong mailbox by the very
     /// same pid, with no registry involved at all.
     static func sessionLookup(in root: URL = defaultRoot) -> (pid_t) -> String? {
-        let rows = rows(in: root)
-        return { pid in rows[pid]?.sessionId }
+        sessionLookup(over: rows(in: root))
+    }
+
+    /// The same closure over rows a caller already read.
+    ///
+    /// **It exists so that reading the registry once and reading it twice cannot disagree
+    /// (#283).** `BenchSnapshotModel` needs the whole row per pane now — the agent's own
+    /// `status`/`waitingFor` go into `snapshot.json` — as well as this pid→session lookup, and
+    /// calling `sessionLookup(in:)` beside `rows(in:)` would list the same directory twice per
+    /// publish and let one publish's `owner` join disagree with the same publish's `agent`
+    /// record. That is `row(in:)`'s defect exactly, one level up, and this is `row(in:)`'s answer
+    /// to it: the rule is a function over rows the caller holds.
+    static func sessionLookup(over rows: [pid_t: AgentSession]) -> (pid_t) -> String? {
+        { pid in rows[pid]?.sessionId }
     }
 
     /// The same read, keyed by pid, for the caller that needs the whole row rather than the

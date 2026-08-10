@@ -35,7 +35,8 @@ struct BenchSnapshot: Codable, Equatable {
         workbench: WorkbenchModel,
         terminals: TerminalManager,
         addressBook: AddressBook,
-        foregroundPid: (TerminalSession) -> pid_t? = { $0.hostView.foregroundPid }
+        foregroundPid: (TerminalSession) -> pid_t? = { $0.hostView.foregroundPid },
+        agents: [pid_t: AgentSession] = [:]
     ) -> BenchSnapshot {
         let mountedPath = workbench.workspacePath
         return BenchSnapshot(
@@ -63,7 +64,8 @@ struct BenchSnapshot: Codable, Equatable {
                     resumeOffers: mounted ? workbench.resumeOffers : [:],
                     sessions: terminals.sessions(for: workspace.path),
                     addressBook: addressBook,
-                    foregroundPid: foregroundPid)
+                    foregroundPid: foregroundPid,
+                    agents: agents)
             })
     }
 
@@ -99,7 +101,8 @@ struct BenchSnapshot: Codable, Equatable {
             resumeOffers: [Pane.ID: AgentResumeOffer] = [:],
             sessions: [TerminalSession],
             addressBook: AddressBook,
-            foregroundPid: (TerminalSession) -> pid_t?
+            foregroundPid: (TerminalSession) -> pid_t?,
+            agents: [pid_t: AgentSession] = [:]
         ) {
             path = workspace.path
             name = workspace.name
@@ -119,7 +122,8 @@ struct BenchSnapshot: Codable, Equatable {
                     live: live,
                     resumeOffers: resumeOffers,
                     addressBook: addressBook,
-                    foregroundPid: foregroundPid)
+                    foregroundPid: foregroundPid,
+                    agents: agents)
             }
         }
     }
@@ -157,7 +161,8 @@ struct BenchSnapshot: Codable, Equatable {
             live: [UUID: TerminalSession],
             resumeOffers: [Pane.ID: AgentResumeOffer],
             addressBook: AddressBook,
-            foregroundPid: (TerminalSession) -> pid_t?
+            foregroundPid: (TerminalSession) -> pid_t?,
+            agents: [pid_t: AgentSession] = [:]
         ) {
             id = column.id
             width = column.width
@@ -169,7 +174,8 @@ struct BenchSnapshot: Codable, Equatable {
                     live: live,
                     resumeOffers: resumeOffers,
                     addressBook: addressBook,
-                    foregroundPid: foregroundPid)
+                    foregroundPid: foregroundPid,
+                    agents: agents)
             }
         }
     }
@@ -188,7 +194,8 @@ struct BenchSnapshot: Codable, Equatable {
             live: [UUID: TerminalSession],
             resumeOffers: [Pane.ID: AgentResumeOffer],
             addressBook: AddressBook,
-            foregroundPid: (TerminalSession) -> pid_t?
+            foregroundPid: (TerminalSession) -> pid_t?,
+            agents: [pid_t: AgentSession] = [:]
         ) {
             id = slot.id
             height = slot.height
@@ -202,7 +209,8 @@ struct BenchSnapshot: Codable, Equatable {
                     live: live[pane.id],
                     offer: resumeOffers[pane.id],
                     addressBook: addressBook,
-                    foregroundPid: foregroundPid)
+                    foregroundPid: foregroundPid,
+                    agents: agents)
             }
         }
     }
@@ -227,22 +235,24 @@ struct BenchSnapshot: Codable, Equatable {
             live: TerminalSession?,
             offer: AgentResumeOffer? = nil,
             addressBook: AddressBook,
-            foregroundPid: (TerminalSession) -> pid_t?
+            foregroundPid: (TerminalSession) -> pid_t?,
+            agents: [pid_t: AgentSession] = [:]
         ) {
             id = pane.id
             isSelected = selected
             isVisible = visible
             isFocused = focused
             switch pane.content {
-            case let .terminal(_, agent):
+            case let .terminal(_, resumable):
                 kind = .terminal
                 terminal = TerminalRecord(
                     id: pane.id,
                     session: live,
-                    agent: agent,
+                    resumable: resumable,
                     offer: offer,
                     addressBook: addressBook,
-                    foregroundPid: foregroundPid)
+                    foregroundPid: foregroundPid,
+                    agents: agents)
                 canvas = nil
             case let .canvas(source):
                 kind = .canvas
@@ -310,28 +320,32 @@ struct BenchSnapshot: Codable, Equatable {
         /// it, so the only way to see the offer was a screenshot.
         ///
         /// `resumeOffers` is one workspace's live question, so `isOffered` is only ever true on
-        /// the mounted one. `agent` is on the bench, so a **parked** workspace still reports what
-        /// its panes were holding.
+        /// the mounted one. `resumable` is on the bench, so a **parked** workspace still reports
+        /// what its panes were holding.
         let resumable: ResumableRecord?
+        /// What the agent running in this pane says **it** is doing (#283). See `AgentRecord`.
+        let agent: AgentRecord?
 
         @MainActor
         init(
             id: UUID,
             session: TerminalSession?,
-            agent: ResumableAgent? = nil,
+            resumable: ResumableAgent? = nil,
             offer: AgentResumeOffer? = nil,
             addressBook: AddressBook,
-            foregroundPid: (TerminalSession) -> pid_t?
+            foregroundPid: (TerminalSession) -> pid_t?,
+            agents: [pid_t: AgentSession] = [:]
         ) {
             sessionId = id
             isLive = session != nil
-            resumable = agent.map { ResumableRecord($0, offer: offer) }
+            self.resumable = resumable.map { ResumableRecord($0, offer: offer) }
             guard let session else {
                 status = nil
                 failure = nil
                 title = nil
                 self.foregroundPid = nil
                 owner = nil
+                agent = nil
                 return
             }
             switch session.status {
@@ -358,6 +372,83 @@ struct BenchSnapshot: Codable, Equatable {
             // outside the process are told to trust. Two joins, one rule, spelled once in
             // `AddressBook`.
             owner = pid.flatMap { addressBook.owner(forPid: $0) }.map(OwnerRecord.init)
+            // **The same pid, joined the direct way, and deliberately not through
+            // `AddressBook`.** That value answers *which mailbox belongs to this process*, and
+            // it earns its indirection because a recorded pid is neither identity nor liveness
+            // (#247). This asks the registry about the pid helm is watching **right now**, which
+            // is the direction `AgentRegistry.sessionLookup`'s own header says needs no liveness
+            // check: the caller supplies a live foreground pid, so a row that matches carries
+            // that same live number.
+            agent = pid.flatMap { agents[$0] }.flatMap(AgentRecord.init)
+        }
+    }
+
+    /// What the agent running in this pane says **it** is doing — its own report, not helm's
+    /// guess (#283).
+    ///
+    /// # Why this exists
+    ///
+    /// #179 gave every spool-spawned agent the operator's unattended posture, because *"a prompt
+    /// in a pane nobody is watching is indistinguishable from an agent that never started"*. A
+    /// posture removes prompts; it turns out it cannot remove all of them. Claude Code marks some
+    /// of its own guardrails **bypass-immune** — measured in the shipped 2.1.226 binary,
+    /// `CIRCUIT_BREAKER_TRAITS.dangerousRemoval = { bypassImmune: true }` — and the refusal says
+    /// so in its own words: *"This requires explicit approval and cannot be auto-allowed by
+    /// permission rules."* Reproduced 2026-08-10 under `claude --dangerously-skip-permissions`,
+    /// which is the posture verbatim: `rm "$d"/*.json` raised *"Dangerous rm operation on
+    /// possibly-empty variable path"* and sat there. In the incident it sat there for **six and a
+    /// half hours**. So this is not a posture that is missing a flag, and no flag would have
+    /// helped — the answer had to be **detection**.
+    ///
+    /// # Why it is the agent's word and not a heuristic
+    ///
+    /// #283 asks whether helm can tell *waiting at a prompt* from *thinking hard*, and answers
+    /// that from the outside it may not be able to. From the **pty** it cannot: the vendored
+    /// wrapper surfaces parsed actions, not bytes — title, bell, OSC 9;4 progress, OSC 133
+    /// command-finished, OSC 9/777 — and an agent frozen on a modal emits none of them, so
+    /// "nothing has been written for N minutes" is not a question helm can ask at all.
+    ///
+    /// It does not have to. Claude Code publishes the answer itself, in the registry helm
+    /// **already reads every publish** to join a pane to its mailbox: a session blocked on a
+    /// dialog writes `status: "waiting"` with `waitingFor: "permission prompt"` into
+    /// `~/.claude/sessions/<pid>.json`. Measured on a real stall, same run as the reproduction
+    /// above. helm modelled that value in `AgentStatus` and then dropped it on the floor here,
+    /// taking only `sessionId` out of the registry — so the only tell left outside the process
+    /// was the whole snapshot's `writtenAt` going stale, which is second-order, and which #267
+    /// deliberately made quiet.
+    ///
+    /// # The honest limits, because a reader has to know them
+    ///
+    /// - **Claude Code only.** pi and codex publish no registry, so their panes carry no record
+    ///   at all — absence, never a false `idle`, which is `AgentRegistry`'s standing rule.
+    /// - **`status` is one of the four names helm models**, and absent when the registry said
+    ///   something this build does not. `waitingFor` still comes through in that case, and it is
+    ///   the field that names the stall.
+    /// - **`waiting` is not by itself a stall.** An agent that finished its turn and is waiting
+    ///   for the operator is the healthy case. What distinguishes them is `waitingFor` — a
+    ///   permission prompt is a question nobody at a spool-spawned pane will ever answer — and
+    ///   how long it has been true.
+    struct AgentRecord: Codable, Equatable {
+        /// `busy`, `shell`, `idle` or `waiting`. See `AgentStatus`.
+        let status: String?
+        /// What it is waiting for, in Claude Code's own words. See `AgentSession.waitingFor`.
+        let waitingFor: String?
+        /// When `status` last changed — **a transition time, not a heartbeat**.
+        ///
+        /// **It is published as an absolute instant on purpose, and that is what makes this
+        /// signal survive a snapshot nobody rewrote.** A stalled agent stops changing, so the
+        /// last write of `snapshot.json` is the moment the stall began; `now - statusUpdatedAt`
+        /// keeps growing correctly with no further writes, and a coordinator never has to poll
+        /// `writtenAt` to notice. A precomputed *"quiet for N seconds"* would have been wrong the
+        /// instant it was written down.
+        let statusUpdatedAt: Date?
+
+        /// `nil` when the row says nothing at all, so an empty record is never written.
+        init?(_ session: AgentSession) {
+            guard session.status != nil || session.waitingFor != nil else { return nil }
+            status = session.status?.rawValue
+            waitingFor = session.waitingFor
+            statusUpdatedAt = session.statusUpdatedAt
         }
     }
 

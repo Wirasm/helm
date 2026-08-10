@@ -123,6 +123,12 @@ final class BenchSnapshotModel: ObservableObject {
 
     private func publish() {
         guard isStarted, let workspaces, let workbench, let terminals else { return }
+        // **One read of the registry per publish, spent twice.** It answers two questions about
+        // the same pane — which session is in this pid, which is how the mailbox join works
+        // (#247), and what that agent says it is doing (#283) — and listing the directory once
+        // per question would let one publish's `owner` disagree with the same publish's `agent`.
+        // `AgentRegistry.sessionLookup(over:)` exists for exactly this.
+        let registry = AgentRegistry.rows(in: registryRoot)
         let snapshot = BenchSnapshot.project(
             writtenAt: now(),
             workspaces: workspaces,
@@ -133,8 +139,9 @@ final class BenchSnapshotModel: ObservableObject {
             // and this file is republished every two seconds precisely to notice that.
             addressBook: AddressBook(
                 owners: MailboxDirectory.owners(in: mailboxRoot),
-                sessionFor: AgentRegistry.sessionLookup(in: registryRoot)),
-            foregroundPid: foregroundPid)
+                sessionFor: AgentRegistry.sessionLookup(over: registry)),
+            foregroundPid: foregroundPid,
+            agents: registry)
 
         // **An identical snapshot is not written, so `writtenAt` means what every reader assumes
         // it means.** The file is rebuilt on a timer as well as on change — deliberately, see the

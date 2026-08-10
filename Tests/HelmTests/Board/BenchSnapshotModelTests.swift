@@ -232,6 +232,90 @@ final class BenchSnapshotModelTests: XCTestCase {
         model.stop()
     }
 
+    /// The registry row a real stall writes, reproduced 2026-08-10 under
+    /// `claude --dangerously-skip-permissions` — the spool's unattended posture verbatim — with
+    /// the guardrail that posture cannot remove. Kept beside the working row it is told apart
+    /// from, because that comparison is the whole point of both.
+    private static let stalledRow =
+        #"{"pid":41436,"sessionId":"s-1","cwd":"/tmp","status":"waiting","#
+        + #""statusUpdatedAt":1786362950614,"waitingFor":"permission prompt"}"#
+    private static let workingRow =
+        #"{"pid":41436,"sessionId":"s-1","cwd":"/tmp","status":"busy","#
+        + #""statusUpdatedAt":1786362900000}"#
+
+    /// **The wiring #283 turns on, end to end through the real model.** `BenchSnapshotTests`
+    /// pins the projection rule; a model that passed `agents: [:]` would satisfy every one of
+    /// those and still publish a file with nothing in it — which is the state helm was already
+    /// in, since it read this very registry every publish and kept only `sessionId`.
+    ///
+    /// The row is the one a real stall writes, reproduced 2026-08-10 under the spool's own
+    /// unattended posture.
+    func testTheSnapshotCarriesWhatTheAgentInThePaneSaysItIsWaitingFor() throws {
+        let sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try Self.stalledRow.write(
+            to: sessions.appendingPathComponent("41436.json"), atomically: true, encoding: .utf8)
+
+        var writes: [BenchSnapshot] = []
+        let (model, workspaces, workbench, terminals) = fixture(
+            foregroundPid: { _ in 41436 },
+            writer: {
+                writes.append($0)
+                return true
+            })
+        model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
+
+        let agent = writes.last?.workspaces[0].columns[0].slots[0].panes[0].terminal?.agent
+        XCTAssertEqual(agent?.status, "waiting")
+        XCTAssertEqual(agent?.waitingFor, "permission prompt")
+        XCTAssertEqual(
+            try XCTUnwrap(agent?.statusUpdatedAt).timeIntervalSince1970, 1_786_362_950.614,
+            accuracy: 0.001)
+        model.stop()
+    }
+
+    /// **An agent going quiet is news, and #267's dedupe must not swallow it.**
+    ///
+    /// This is the property the ticket asks for in as many words: the signal is in the snapshot
+    /// and reading it *"does not require a coordinator to poll `writtenAt`"*. Both halves are
+    /// here. Nothing on the bench moved — same workspaces, same panes, same everything the
+    /// dedupe compares — and the file is still rewritten, so the last write is the moment the
+    /// stall began; after that the record stops changing and `now - statusUpdatedAt` keeps
+    /// growing on its own.
+    func testAnAgentBlockingOnAPromptIsWrittenEvenThoughNothingOnTheBenchMoved() throws {
+        let sessions = root.appendingPathComponent("sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let row = sessions.appendingPathComponent("41436.json")
+        try Self.workingRow.write(to: row, atomically: true, encoding: .utf8)
+
+        var writes: [BenchSnapshot] = []
+        let (model, workspaces, workbench, terminals) = fixture(
+            foregroundPid: { _ in 41436 },
+            writer: {
+                writes.append($0)
+                return true
+            })
+        model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
+        XCTAssertEqual(writes.count, 1)
+
+        // The control: nothing changed anywhere, so nothing is written. Without this the
+        // assertion below is satisfied by a model that writes on every publish.
+        model.refresh()
+        XCTAssertEqual(writes.count, 1, "an unchanged bench and an unchanged agent are not news")
+
+        try Self.stalledRow.write(to: row, atomically: true, encoding: .utf8)
+        model.refresh()
+
+        XCTAssertEqual(
+            writes.count, 2,
+            "the agent stopping is the only thing that changed, and it is the thing a "
+                + "coordinator has to be able to see")
+        XCTAssertEqual(
+            writes.last?.workspaces[0].columns[0].slots[0].panes[0].terminal?.agent?.waitingFor,
+            "permission prompt")
+        model.stop()
+    }
+
     func testStopPreventsFutureWritesAndFailureCanRetry() async {
         var attempts = 0
         let (model, workspaces, workbench, terminals) = fixture(writer: { _ in
