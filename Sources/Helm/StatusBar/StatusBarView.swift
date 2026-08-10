@@ -24,12 +24,15 @@ struct StatusBarView: View {
     /// A `@StateObject` because the subscription's lifetime should be this bar's, not a
     /// render's — the mistake `AGENTS.md` records twice over.
     @StateObject private var focus = TerminalFocusWatch()
+    /// Same reasoning, and the same lifetime: a badge nobody can see is a poll nobody needs.
+    @StateObject private var builds = BuildUpdateModel()
 
     var body: some View {
         HStack(spacing: 12) {
             hints
             stats
         }
+        .task { await builds.poll() }
         .font(.system(size: 10.5))
         // Sets the base every `.secondary` inside resolves against, so the whole bar reads
         // out of the palette rather than out of the system's label colours.
@@ -69,6 +72,7 @@ struct StatusBarView: View {
         )
         HStack(spacing: 6) {
             isolationBadge
+            buildBadge
             if let label = summary.agentLabel {
                 AgentDot(presence: summary.agents)
                 Text(label).foregroundStyle(Color.textMuted)
@@ -102,6 +106,40 @@ struct StatusBarView: View {
                 .padding(.vertical, 1)
                 .background(Color.accent, in: Capsule())
                 .help("Isolated instance — persisting to the \(DefaultsDomain.activeDomain) suite")
+        }
+    }
+
+    /// A newer build is on disk, and pressing this takes it.
+    ///
+    /// **The one thing in this bar that is a control rather than a reading**, which is why it
+    /// gets a capsule and a colour while everything around it is muted grey text. It is also
+    /// the only shape this feature was allowed to take: the operator asked not to be
+    /// interrupted by a dialog, and helm's own rule since #125 is *appear, don't seize* — a
+    /// modal over a terminal someone is typing into is the wrong-window click arriving through
+    /// a supported API.
+    ///
+    /// `attention` rather than `accent`, so it does not read as a second isolation badge —
+    /// that one is the loudest thing here on purpose, and this must not compete with it.
+    ///
+    /// Absent entirely when there is nothing waiting, which is almost always.
+    @ViewBuilder
+    private var buildBadge: some View {
+        if let stamp = builds.update.waiting {
+            Button {
+                builds.relaunch()
+            } label: {
+                Text("new build")
+                    .foregroundStyle(Color.surface)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.attention, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            // Says what it will cost before it costs it: this quits helm, and every pane goes
+            // with it. The sha is what tells the operator which build they are being offered.
+            .help(
+                "Build \(stamp.sha) is ready — click to quit helm, install it and reopen. "
+                    + "Every terminal and its agent closes.")
         }
     }
 }
