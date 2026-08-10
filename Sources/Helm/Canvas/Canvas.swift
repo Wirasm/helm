@@ -338,10 +338,22 @@ final class CanvasModel: ObservableObject {
     /// Idempotent and cheap to call, which is what lets every exit path call it rather than
     /// deciding for itself whether a save is owed — `read()`, `open(_:)` and `close()` all do.
     ///
-    /// **It refuses while a conflict is up, and that is the whole of "helm does not clobber".**
+    /// **It refuses while a conflict is up, and that is half of "helm does not clobber".**
     /// Somebody else wrote this file since helm last saw it, so writing now would replace bytes
     /// the operator has not been shown. `keepMine()` is the one route through, and it is a button
     /// he presses.
+    ///
+    /// **The other half is the read directly below it, and without it the guarantee is only
+    /// probable.** `reconcile` learns about a second writer through `FileWatcher`, which debounces
+    /// 120ms — so a write landing inside the 120ms before an autosave fires would reach the model
+    /// *after* helm had already overwritten it, and the reconcile that followed would compare the
+    /// file against helm's own bytes and find them equal. Silent, and exactly the failure this
+    /// whole design is arranged around. Reading immediately before writing closes it: what helm
+    /// compares is what is on disk *now*, so the watcher's lag stops mattering. It costs one read
+    /// per save, which is once per typing pause on a file small enough to render as a document.
+    ///
+    /// What remains is the microseconds between that read and the write, which needs file locking
+    /// rather than a check — recorded rather than claimed away.
     ///
     /// **A failure keeps the text and says so.** `saved` is not advanced, so `isDirty` stays true,
     /// the next keystroke schedules another attempt, and the editor still holds every character.
@@ -352,6 +364,16 @@ final class CanvasModel: ObservableObject {
         saveTask?.cancel()
         saveTask = nil
         guard let editable, var draft, draft.isDirty, draft.conflict == nil else { return }
+        // nil is a file that is absent or unreadable, and neither is bytes to protect: an absent
+        // one is what a note deleted under the operator looks like and the write below recreates
+        // it, and an unreadable one could not have been opened for writing in the first place
+        // (`write()` refuses) so it became unreadable after the fact — where the write itself
+        // fails and is reported, rather than being silently allowed through here.
+        if let disk = try? String(contentsOf: editable.url, encoding: .utf8), disk != draft.saved {
+            draft.conflict = CanvasConflict(theirs: disk)
+            self.draft = draft
+            return
+        }
         do {
             try draft.text.write(to: editable.url, atomically: true, encoding: .utf8)
             draft.saved = draft.text
@@ -418,12 +440,19 @@ final class CanvasModel: ObservableObject {
 
     /// **Keep mine.** Write what is in the editor over what is on disk.
     ///
-    /// The operator has been told the file changed and is choosing to replace it. helm does not
-    /// re-check first: re-checking would either refuse the button he just pressed or hide a third
-    /// version behind it.
+    /// **It adopts their bytes as helm's belief about the file, and then saves normally** — which
+    /// is what lets the ordinary path run rather than needing a flag to bypass its own guard.
+    /// `saved` becoming `theirs` is not a fiction: disk really does hold `theirs`, so `saveDraft`
+    /// re-reads, finds exactly what it now expects, and writes.
+    ///
+    /// **And a third write landing between the strip and the click is caught by that same read**,
+    /// which is the behaviour worth having: he is told again, about the newer bytes, instead of
+    /// silently replacing something he was never shown.
     func keepMine() {
-        guard draft?.conflict != nil else { return }
-        draft?.conflict = nil
+        guard var draft, let conflict = draft.conflict else { return }
+        draft.saved = conflict.theirs
+        draft.conflict = nil
+        self.draft = draft
         saveDraft()
     }
 

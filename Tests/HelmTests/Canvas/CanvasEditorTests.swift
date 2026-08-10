@@ -351,6 +351,27 @@ final class CanvasEditorTests: XCTestCase {
         XCTAssertNotNil(model.draft?.conflict)
     }
 
+    /// **The watcher's lag, which is where the guarantee would otherwise only be probable.**
+    ///
+    /// `FileWatcher` debounces 120ms, so a write landing inside the 120ms before an autosave fires
+    /// reaches the model *after* helm has already saved — and the reconcile that follows compares
+    /// the file against helm's own bytes and finds them equal. Silent, and the exact failure this
+    /// design exists to prevent. Driven here by writing the file and saving with **no `refresh()`
+    /// in between**, which is that ordering exactly: the save has to read for itself.
+    func testASaveThatBeatsTheWatcherStillDoesNotClobber() throws {
+        let file = try plan(contents: "# Plan\n")
+        let model = canvas(on: file, debounce: .seconds(30))
+        model.write()
+        model.edit("mine")
+
+        try write("theirs, and the watcher has not fired yet", to: file)
+        model.saveDraft()
+
+        XCTAssertEqual(try contents(of: file), "theirs, and the watcher has not fired yet")
+        XCTAssertNotNil(model.draft?.conflict, "and he is told, rather than it merely not saving")
+        XCTAssertEqual(model.draft?.text, "mine")
+    }
+
     /// A refusal nobody can see is the silence this repository has paid for repeatedly. The strip
     /// names the file and says what helm has stopped doing.
     func testTheOperatorIsToldRatherThanTheSaveJustNotHappening() throws {
@@ -382,6 +403,27 @@ final class CanvasEditorTests: XCTestCase {
         XCTAssertEqual(try contents(of: file), "mine")
         XCTAssertNil(model.draft?.conflict, "resolved, so autosave is running again")
         XCTAssertEqual(model.draft?.isDirty, false)
+    }
+
+    /// **Keep mine is about the version he was shown, so a newer one stops it too.** He pressed a
+    /// button meaning "replace what you told me about"; replacing something else instead is the
+    /// same silent overwrite one turn later.
+    func testKeepMineIsRefusedAgainWhenAThirdVersionArrivedFirst() throws {
+        let file = try plan(contents: "# Plan\n")
+        let model = canvas(on: file, debounce: .seconds(30))
+        model.write()
+        model.edit("mine")
+        try write("the version he was shown", to: file)
+        model.refresh()
+
+        try write("a third version nobody has seen", to: file)
+        model.keepMine()
+
+        XCTAssertEqual(try contents(of: file), "a third version nobody has seen")
+        XCTAssertEqual(
+            model.draft?.conflict, CanvasConflict(theirs: "a third version nobody has seen"),
+            "told again, about the newer bytes")
+        XCTAssertEqual(model.draft?.text, "mine")
     }
 
     /// **Take theirs adopts the version the operator was SHOWN, not whatever is on disk when he
