@@ -218,6 +218,14 @@ enum CanvasHTML {
     /// the scheme and host have to match the document's before anything is touched. Two things
     /// are deliberately **out of scope** and would want their own measurement first: `srcset`,
     /// which `marked` never emits, and CSS `background-image`, which is not an element at all.
+    ///
+    /// **An empty `src` is skipped, and it has to be checked on the *attribute*.** `img[src]`
+    /// matches `<img src="">`, and reading `image.src` back gives **the document's own URL** —
+    /// resolved, not empty — which passes the scheme and host test and would have the page fetch
+    /// its own HTML as a picture on every refresh, forever, for an image that was already broken.
+    /// Measured (`testTheRestampScriptStampsASiblingAndLeavesADataURIAlone`), because the
+    /// plausible reading is that `new URL("")` throws and catches it, and that is not what
+    /// happens — nothing empty ever reaches `new URL`.
     static func restampImagesScript(generation: Int) -> String {
         """
         (function () {
@@ -225,6 +233,8 @@ enum CanvasHTML {
           var images = document.querySelectorAll("img[src]");
           for (var i = 0; i < images.length; i++) {
             var image = images[i];
+            var declared = image.getAttribute("src");
+            if (!declared || !declared.trim()) { continue; }
             var url;
             try { url = new URL(image.src); } catch (e) { continue; }
             if (url.protocol !== location.protocol) { continue; }

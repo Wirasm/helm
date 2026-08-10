@@ -253,6 +253,16 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
             inline.contains("helm=7"),
             "appending a query to it would corrupt the bytes it carries")
 
+        let empty = await page.attribute("src", of: "#empty")
+        XCTAssertEqual(
+            empty, "",
+            "`img[src]` matches `src=\"\"` too, and `image.src` resolves an empty attribute to "
+                + "**the document's own URL** — so without the attribute check the page fetches "
+                + "its own HTML as a picture on every refresh, forever, for an image that was "
+                + "already broken. Measured rather than reasoned: the plausible reading is that "
+                + "`new URL('')` throws and catches it, and it is wrong — nothing empty ever "
+                + "reaches `new URL`. Got \(empty)")
+
         await page.runInBridgeWorld(CanvasHTML.restampImagesScript(generation: 7))
         let again = await page.attribute("src", of: "#sibling")
         XCTAssertEqual(
@@ -292,13 +302,14 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
         </script></body></html>
         """
 
-    /// One image served over `helm-canvas://`, one carrying its own bytes. The script has to
-    /// tell them apart by scheme and host alone — it has no idea what either points at.
+    /// One image served over `helm-canvas://`, one carrying its own bytes, and one pointing
+    /// nowhere. The script has to tell them apart with no idea what any of them points at.
     private static let pageWithASiblingAndADataURI = """
         <!doctype html><html><body>
         <img id="sibling" src="./probe.svg">
         <img id="inline" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'\
         %20width='3'%20height='3'%3E%3C/svg%3E">
+        <img id="empty" src="">
         <script>window.webkit.messageHandlers.probe.postMessage('up');</script>
         </body></html>
         """
