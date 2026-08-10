@@ -120,6 +120,37 @@ final class CanvasUpdateTests: XCTestCase {
                 + "behaviour that predates this channel")
     }
 
+    /// **Only a page that took the update has its pictures re-pointed** (#279), and the two
+    /// halves of that are worth naming separately.
+    ///
+    /// `applied` is where a re-stamp is the *only* delivery there is: the page kept its document
+    /// by contract, so nothing will fetch `./diagram.png` again unless helm asks it to.
+    ///
+    /// `declined` and `failed` are helm not getting to change the page at all, and swapping a
+    /// picture under one of them would contradict the strip above it, which is still offering the
+    /// operator a Reload they have not taken. The other two reload, and the fresh document is
+    /// stamped when it finishes loading — so nothing here is a gap.
+    func testOnlyAPageThatTookTheUpdateHasItsPicturesRePointed() {
+        XCTAssertTrue(CanvasUpdateAnswer.applied.restampsImages)
+        XCTAssertFalse(
+            CanvasUpdateAnswer.declined.restampsImages,
+            "a page that said `not now` is not a page to change underneath")
+        XCTAssertFalse(CanvasUpdateAnswer.failed("boom").restampsImages)
+        XCTAssertFalse(
+            CanvasUpdateAnswer.unhandled.restampsImages,
+            "this one reloads, and `CanvasFileCoordinator` stamps the document that arrives — "
+                + "doing it here as well would cost every image a second fetch")
+        XCTAssertFalse(CanvasUpdateAnswer.unreadable("evaluation failed").restampsImages)
+        for answer in [
+            CanvasUpdateAnswer.applied, .declined, .failed("boom"), .unhandled,
+            .unreadable("evaluation failed"),
+        ] {
+            XCTAssertFalse(
+                answer.reloads && answer.restampsImages,
+                "\(answer) both reloads and re-stamps, which is two deliveries for one refresh")
+        }
+    }
+
     /// What the operator is told, and — the half worth pinning — what they are *not*.
     func testTheStripAppearsOnlyWhenThereIsADecisionToMake() {
         XCTAssertNil(CanvasUpdateAnswer.applied.notice, "the page took it; there is nothing to say")

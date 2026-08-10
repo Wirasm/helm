@@ -182,6 +182,61 @@ enum CanvasHTML {
         """
     }
 
+    // MARK: Keeping an image sibling fresh (#279)
+
+    /// The query parameter helm owns on an image's URL.
+    ///
+    /// Its **value means nothing to the handler** — `CanvasSchemeHandler.serve` resolves a
+    /// sibling from `url.path`, which excludes the query, so a stamped request reads exactly the
+    /// same file off disk. The only thing it changes is the URL, and the URL is the key.
+    static let imageStampParameter = "helm"
+
+    /// Point every image on the page at a URL this refresh has not used before.
+    ///
+    /// **Measured before it was written, and the measurement is the whole argument** — it lives
+    /// in `CanvasSiblingFreshnessLiveTests.testAChangedQueryClearsAnImageThatANavigationDoesNot`,
+    /// against a real `WKWebView` on a real `helm-canvas://` origin, with one sibling `.svg`
+    /// edited between two renders:
+    ///
+    /// - The `<img>` keeps the old dimensions across the navigation helm performs, on a document
+    ///   that demonstrably is a new one. WebKit reuses its decoded copy, keyed by URL.
+    /// - Changing the query on `src` clears it, with **no navigation at all**.
+    /// - A `fetch` of the identical URL returns the new bytes, so none of this is the handler's.
+    ///
+    /// The middle one is why this is a script rather than a rebuilt webview: a page defining
+    /// `window.helmCanvasUpdate` is never navigated (`CanvasUpdate`'s contract, in one
+    /// sentence), so a fix that needs a navigation could never reach the pages that need it most.
+    ///
+    /// **Every image on the page is re-stamped, not only the one that changed**, so a render
+    /// costs one extra read of a local file per image. The precise version is a per-file mtime
+    /// map, which needs a `stat` per sibling and only pays for itself on a page carrying many
+    /// images; **reach for it when the difference is visible, not before**. The generation is
+    /// what `CanvasUpdate` already carries, which is why it is what the stamp spends.
+    ///
+    /// **Same-origin only.** A `data:` URI has this document's bytes in it and a `blob:` one is
+    /// the page's own object — appending a query to either would break the image outright, so
+    /// the scheme and host have to match the document's before anything is touched. Two things
+    /// are deliberately **out of scope** and would want their own measurement first: `srcset`,
+    /// which `marked` never emits, and CSS `background-image`, which is not an element at all.
+    static func restampImagesScript(generation: Int) -> String {
+        """
+        (function () {
+          var stamp = \(jsString(String(generation)));
+          var images = document.querySelectorAll("img[src]");
+          for (var i = 0; i < images.length; i++) {
+            var image = images[i];
+            var url;
+            try { url = new URL(image.src); } catch (e) { continue; }
+            if (url.protocol !== location.protocol) { continue; }
+            if (url.host !== location.host) { continue; }
+            if (url.searchParams.get(\(jsString(imageStampParameter))) === stamp) { continue; }
+            url.searchParams.set(\(jsString(imageStampParameter)), stamp);
+            image.src = url.href;
+          }
+        })();
+        """
+    }
+
     // MARK: The annotation bridge
 
     /// The name the page reads to know which tool the operator is holding. Set from Swift

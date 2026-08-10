@@ -256,8 +256,8 @@ for one the boundary refuses — so `res.ok` and `res.status` mean what they mea
 
 **Pushing the same path again is what refreshes it** (helm #261). The pane re-renders where it
 already is — no tab switch, no focus move, nothing pulled forward — and the reload refetches every
-sibling with it. Rewriting the artifact works too and always did, but you no longer have to touch a
-file you did not change.
+sibling with it, pictures included. Rewriting the artifact works too and always did, but you no
+longer have to touch a file you did not change.
 
 It costs the page's **scroll position**, so push again when something changed rather than on a
 timer.
@@ -268,6 +268,15 @@ on those two paths is served stale: measured six ways, including a plain `fetch`
 quit-and-relaunch of the real app (helm #228). `./app.js?v=2` appears in older canvases and was
 never busting a cache — it worked because editing the import URL edits the **artifact**, which was
 the only file helm watched. Pushing again is the supported way, and it needs no edit at all.
+
+**That holds for a picture too, and it takes helm one extra step to make it hold** (helm #279).
+An `<img>` is the one sibling a reload does not refresh: WebKit answers a repeated image URL with
+the copy it already decoded, so a regenerated `./diagram.png` used to come back looking exactly as
+it did before. helm now re-points every `img[src]` on the page at a `helm=` query of its own on
+each refresh — on a reloaded page and on one that took `window.helmCanvasUpdate` and was therefore
+never reloaded. **So the rule above is unchanged: you never write a cache-buster.** A `?helm=…` you
+see on an image URL is helm's, added at render time; it is not in your artifact and is not yours to
+maintain.
 
 A live page is a different question again — all of this is about what a *reload* fetches, not about
 pushing data into a page that is already open. See **A page that holds state**, above: a page that
