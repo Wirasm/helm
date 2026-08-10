@@ -509,6 +509,42 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   it (`claude -p` skips the dialog but records nothing), so the refusal tells you to run
   `cd <dir> && claude` once by hand.
 - `swift run helm` to iterate, `make app` for the real bundle.
+- **`make release` builds the real bundle and tells a running helm about it; `make install` is
+  that plus the copy.** The split exists because `install` refuses against a live bundle —
+  replacing one leaves the running process on its old code, and the swap is invisible until
+  something behaves oddly an hour later — so an agent that only had `install` could never tell
+  a working operator that a newer build was ready. **The obvious alternative, watching
+  `/Applications/Helm.app`, is circular**: that path only changes *after* the quit the badge
+  exists to ask for. So the **build** leaves the note — `~/.helm/build/latest.json`,
+  `HELM_BUILD_DIR` to redirect it — and a running helm polls it and offers the swap on a
+  capsule in the status bar's right-hand group. Clicking quits helm, installs and reopens;
+  **every pane and its agent goes with it**, which the tooltip says before you press it. It is
+  a badge rather than a dialog because #125's *appear, don't seize* applies to helm's own
+  surfaces too.
+  - **Identity is baked, not derived.** `scripts/stamp-build.sh` writes the commit into the
+    built Info.plist as `HelmBuildSHA`, from a build phase that runs **before** Xcode's
+    implicit codesign — `make release` runs `codesign --verify` afterwards rather than trusting
+    that ordering holds. An installed helm has no checkout to ask, and the tempting proxy —
+    bundle mtime against the stamp's `builtAt` — measures when it was **copied**, because
+    `cp -R` does not preserve mtimes.
+  - **The comparison is "different", never "newer".** helm cannot order two shas without the
+    checkout, and different is also the useful question: an agent building an older branch to
+    test something has produced a build worth offering.
+  - **An unstamped helm never badges** — the SPM path, and every bundle built before this
+    existed. A badge that cannot clear is worse than no badge, and it is the one rule in
+    `BuildUpdate.decide` whose absence a test names (`testUnstampedBuildNeverBadges`).
+  - **An isolated instance never polls at all** (`HELM_DEFAULTS_SUITE`): a worktree build under
+    test does not get to offer to replace the operator's application. The stamp directory is
+    deliberately *not* split per suite — a build is not per-instance — so that policy lives in
+    `BuildUpdateModel` rather than being hidden in a path.
+  - **Two dirty builds of one commit share `<sha>-dirty` and so do not badge each other.** The
+    honest limit, and it lands on the iteration path where `swift run helm` is what anyone is
+    actually using.
+  - The format is written by shell and read by Swift, so it is a duplicate across a runtime
+    boundary — the same carve-out as the spool scripts and the mailbox, and the same
+    obligation. `BuildStampScriptTests` runs both scripts as real subprocesses and decodes what
+    they write with the real types, so a renamed key or field fails a test instead of shipping
+    a helm that can never see an update.
 - **helm persists to one domain, `com.wirasm.helm`, from both launch paths** — so "did it
   persist?" is `defaults read com.wirasm.helm` whichever way it was started, unless
   `HELM_DEFAULTS_SUITE` overrides it (next bullet). `swift run helm`
