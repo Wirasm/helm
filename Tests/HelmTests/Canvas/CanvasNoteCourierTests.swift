@@ -15,10 +15,19 @@ final class CanvasNoteCourierTests: XCTestCase {
     private let handle = Handle(validating: "sild-611a")!
     private let canvas = URL(fileURLWithPath: "/work/artifacts/plan.md")
 
-    private var annotation: CanvasAnnotation {
-        CanvasAnnotation(
-            anchor: .element(id: "bridge", text: "The bridge payload"),
-            comment: "this shouldn't talk to that")
+    /// **Decoded through `CanvasAnnotation.decode`, not assembled beside it** (#326) — see
+    /// `CanvasAnnotationFixture`.
+    ///
+    /// A throwing method rather than the computed property it was, because the gate can refuse and
+    /// a property has nowhere to report that. Not a stored property filled in `setUpWithError`
+    /// either: that override is nonisolated on a `@MainActor` class, so assigning to one there
+    /// warns — which is what the four existing `root` warnings in this file are.
+    private func annotation(
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws -> CanvasAnnotation {
+        try annotation(
+            selecting: "The bridge payload", id: "bridge",
+            comment: "this shouldn't talk to that", file: file, line: line)
     }
 
     override func setUpWithError() throws {
@@ -44,7 +53,7 @@ final class CanvasNoteCourierTests: XCTestCase {
     func testASentNoteLandsAsOneMessageNamedByItsOwnID() throws {
         let courier = CanvasNoteCourier(mailboxRoot: root, now: { Date(timeIntervalSince1970: 42) })
 
-        let delivery = courier.send(annotation, on: canvas, along: .mailbox(handle))
+        let delivery = try courier.send(annotation(), on: canvas, along: .mailbox(handle))
 
         XCTAssertEqual(delivery, .sent(handle))
         let written = try names()
@@ -83,7 +92,8 @@ final class CanvasNoteCourierTests: XCTestCase {
     /// with no `#bridge` cannot act on it. It is `CanvasNotes.clipboardEntry` verbatim so the
     /// paste and the mail cannot drift into two formats, plus one line saying there is nowhere
     /// to reply.
-    func testTheBodyIsTheClipboardEntryPlusWhereToAnswer() {
+    func testTheBodyIsTheClipboardEntryPlusWhereToAnswer() throws {
+        let annotation = try annotation()
         let body = CanvasNoteCourier.body(annotation, on: canvas)
 
         XCTAssertTrue(body.hasPrefix(CanvasNotes.clipboardEntry(annotation, for: canvas)))
@@ -111,6 +121,7 @@ final class CanvasNoteCourierTests: XCTestCase {
 
     func testAnUnroutedNoteWritesNothingAtAll() throws {
         let courier = CanvasNoteCourier(mailboxRoot: root)
+        let annotation = try annotation()
 
         for fallback in [CanvasNoteRoute.Fallback.noOrigin, .originGone] {
             XCTAssertEqual(
@@ -128,7 +139,7 @@ final class CanvasNoteCourierTests: XCTestCase {
         let courier = CanvasNoteCourier(mailboxRoot: root)
         let gone = Handle(validating: "reaped-0000")!
 
-        let delivery = courier.send(annotation, on: canvas, along: .mailbox(gone))
+        let delivery = try courier.send(annotation(), on: canvas, along: .mailbox(gone))
 
         guard case let .failed(named, why) = delivery else {
             return XCTFail("expected a failure, got \(delivery)")
@@ -151,8 +162,8 @@ final class CanvasNoteCourierTests: XCTestCase {
     /// process umask — so this has to be asked for, which is why it is asserted rather than
     /// assumed.
     func testAMessageIsWrittenPrivateLikeEveryOtherWritersIs() throws {
-        _ = CanvasNoteCourier(mailboxRoot: root).send(
-            annotation, on: canvas, along: .mailbox(handle))
+        _ = try CanvasNoteCourier(mailboxRoot: root).send(
+            annotation(), on: canvas, along: .mailbox(handle))
 
         let name = try XCTUnwrap(try names().first { $0.hasSuffix(".json") })
         let attributes = try FileManager.default.attributesOfItem(
@@ -182,8 +193,8 @@ final class CanvasNoteCourierTests: XCTestCase {
         """
         .write(to: box.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
 
-        let delivery = CanvasNoteCourier(mailboxRoot: root)
-            .send(annotation, on: canvas, along: .mailbox(handle))
+        let delivery = try CanvasNoteCourier(mailboxRoot: root)
+            .send(annotation(), on: canvas, along: .mailbox(handle))
 
         guard case let .failed(named, why) = delivery else {
             return XCTFail("a retired mailbox must refuse, got \(delivery)")
@@ -208,8 +219,8 @@ final class CanvasNoteCourierTests: XCTestCase {
         .write(to: box.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
 
         XCTAssertEqual(
-            CanvasNoteCourier(mailboxRoot: root)
-                .send(annotation, on: canvas, along: .mailbox(handle)),
+            try CanvasNoteCourier(mailboxRoot: root)
+                .send(annotation(), on: canvas, along: .mailbox(handle)),
             .sent(handle))
         XCTAssertEqual(try names().filter { $0 != "owner.json" }.count, 1)
     }
@@ -220,15 +231,15 @@ final class CanvasNoteCourierTests: XCTestCase {
     /// — one rule with two spellings, which is the defect being avoided rather than a safer one.
     func testAMailboxWithNoOwnerRecordIsNotTreatedAsRetired() throws {
         XCTAssertEqual(
-            CanvasNoteCourier(mailboxRoot: root)
-                .send(annotation, on: canvas, along: .mailbox(handle)),
+            try CanvasNoteCourier(mailboxRoot: root)
+                .send(annotation(), on: canvas, along: .mailbox(handle)),
             .sent(handle))
     }
 
     /// The staged name is invisible to a reader by both of its rules, and nothing is left behind.
     func testNothingIsLeftStagedAfterADelivery() throws {
-        _ = CanvasNoteCourier(mailboxRoot: root).send(
-            annotation, on: canvas, along: .mailbox(handle))
+        _ = try CanvasNoteCourier(mailboxRoot: root).send(
+            annotation(), on: canvas, along: .mailbox(handle))
 
         XCTAssertEqual(
             try names().filter { $0.hasPrefix(".tmp-") }, [],
