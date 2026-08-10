@@ -63,8 +63,71 @@ final class AgentRegistryTests: XCTestCase {
             [
                 AgentSession(
                     pid: 9139, cwd: "/Users/x/ws", status: .busy,
-                    sessionId: "7b3277cb-4fcb-4df0-a452-d30059772818")
+                    sessionId: "7b3277cb-4fcb-4df0-a452-d30059772818",
+                    // Same expression the decoder evaluates, so this is an equality rather
+                    // than a float comparison dressed up as one.
+                    statusUpdatedAt: Date(timeIntervalSince1970: 1_785_596_922_634.0 / 1000))
             ])
+    }
+
+    // MARK: - What the agent says it is waiting for (#283)
+
+    /// **The stall #283 is about, as the registry records it.** A spool-spawned `claude` under
+    /// `--dangerously-skip-permissions` still stops at Claude Code's bypass-immune guardrails,
+    /// and when it does it writes exactly this row. helm modelled `waiting` in `AgentStatus` from
+    /// the start and read the file every two seconds; what it never did was decode the two fields
+    /// that turn *"it is your turn"* into *"nobody is coming, and it has been this way since T"*.
+    ///
+    /// The literals are from a real stall reproduced 2026-08-10, not invented.
+    func testWaitingForAndStatusUpdatedAtAreDecoded() throws {
+        try write(
+            """
+            {"pid":41436,"sessionId":"2e758d00-b3a9-4cac-b00d-16c130315b78","cwd":"/tmp/ws",\
+            "status":"waiting","updatedAt":1786362950614,"statusUpdatedAt":1786362950614,\
+            "waitingFor":"permission prompt"}
+            """, as: "41436.json")
+
+        let session = try XCTUnwrap(AgentRegistry.sessions(in: root).first)
+
+        XCTAssertEqual(session.status, .waiting)
+        XCTAssertEqual(session.waitingFor, "permission prompt")
+        XCTAssertEqual(
+            try XCTUnwrap(session.statusUpdatedAt).timeIntervalSince1970, 1_786_362_950.614,
+            accuracy: 0.001, "milliseconds on the wire, seconds in a Date")
+    }
+
+    /// A busy agent names nothing, and that must not be read as a stall with an empty reason.
+    ///
+    /// **Two rows in one directory, because one row proves less than it looks like it does.** A
+    /// busy row alone decodes to `waitingFor == nil` by construction of `decodeIfPresent`,
+    /// whatever the surrounding logic — the assertion cannot fail on a plausible regression. What
+    /// can fail, and is what this pins, is a decoder that carries a field from one file into the
+    /// next: two panes side by side, one working and one blocked on a prompt, is the normal state
+    /// of this machine and the case a coordinator acts on.
+    func testAWaitingRowsReasonIsNotCarriedOntoAWorkingOne() throws {
+        try write(row(pid: 9139, status: "busy"), as: "9139.json")
+        try write(
+            #"{"pid":41436,"cwd":"/tmp/ws","status":"waiting","waitingFor":"permission prompt"}"#,
+            as: "41436.json")
+
+        let byPid = AgentRegistry.rows(in: root)
+
+        XCTAssertNil(byPid[9139]?.waitingFor, "the working pane is not blocked on anything")
+        XCTAssertEqual(byPid[41436]?.waitingFor, "permission prompt")
+    }
+
+    /// A row mid-write, or one from a Claude Code that stops stamping the field, must decode to
+    /// absence rather than to an instant no arithmetic can survive.
+    func testARowWithNoOrUnusableStatusTimeDecodesToNoTime() throws {
+        try write(#"{"pid":1,"cwd":"/tmp/ws","status":"waiting"}"#, as: "1.json")
+        try write(
+            #"{"pid":2,"cwd":"/tmp/ws","status":"waiting","statusUpdatedAt":null}"#, as: "2.json")
+
+        let byPid = AgentRegistry.rows(in: root)
+
+        XCTAssertEqual(byPid.count, 2, "the rows still decode — only their timing is absent")
+        XCTAssertNil(byPid[1]?.statusUpdatedAt)
+        XCTAssertNil(byPid[2]?.statusUpdatedAt)
     }
 
     func testRowWithoutStatusDecodesToNoStatus() throws {
@@ -145,8 +208,12 @@ final class AgentRegistryTests: XCTestCase {
         let answers: [String: String?] = [
             // The bench's watch (#63) and `AgentObserver`.
             "rows": AgentRegistry.rows(in: root)[4242]?.sessionId,
-            // The snapshot's join and the spool's poll.
+            // The spool's poll.
             "sessionLookup": AgentRegistry.sessionLookup(in: root)(4242),
+            // The snapshot's join, which since #283 spends one read of the registry on both
+            // this question and the pane's `agent` record — so it must not be a third answer.
+            "sessionLookup(over:)": AgentRegistry.sessionLookup(
+                over: AgentRegistry.rows(in: root))(4242),
             // The chat face's direct match.
             "AgentLocator": AgentLocator.session(in: rows, forPid: 4242, ancestors: [])?
                 .sessionId,

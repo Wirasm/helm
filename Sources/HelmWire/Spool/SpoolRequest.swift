@@ -1577,6 +1577,29 @@ package enum SpoolNamePolicy {
 /// skip past: `cls` is a shell script on `PATH` that this repo does not define, cannot test and
 /// cannot pin, so allowing it would turn a list of programs helm starts into a list of names
 /// something else gets to define — and it buys nothing that naming the flag does not.
+///
+/// # The ceiling, measured: a posture cannot remove every prompt (#283)
+///
+/// **This table is complete and it is still not sufficient, and that is a fact about the agents
+/// rather than a gap here.** A spool-spawned `claude` carrying `--dangerously-skip-permissions` —
+/// this policy's own answer, applied correctly — stopped at a permission prompt and stayed there
+/// for **six and a half hours**. Claude Code marks a subset of its own guardrails **bypass-immune**
+/// (`CIRCUIT_BREAKER_TRAITS.dangerousRemoval = { bypassImmune: true }`, shipped 2.1.226), and the
+/// refusal says as much in its own words: *"This requires explicit approval and cannot be
+/// auto-allowed by permission rules."* Reproduced 2026-08-10, posture verbatim: `rm "$d"/*.json`
+/// raised *"Dangerous rm operation on possibly-empty variable path"* and waited for a keystroke at
+/// a pane with nobody at it.
+///
+/// **So do not widen a flag here in answer to a stalled agent.** There is no flag: the whole point
+/// of a bypass-immune breaker is that no permission input removes it, which is the same shape as
+/// the corollary above — real enforcement refuses without asking. Suppressing it is not this
+/// type's business either; #283 is explicit that it is *"about detection, not permission"*.
+///
+/// **What was built instead is a way to see it.** A blocked Claude session writes
+/// `status: "waiting"` with `waitingFor: "permission prompt"` into its own registry row, and helm
+/// now publishes that per pane in `snapshot.json` as `terminal.agent` — see `BenchSnapshot
+/// .AgentRecord`, which carries the reproduction and the limits. This policy still does everything
+/// it can do; the failure it cannot reach is now one a coordinator can find.
 package enum SpoolUnattendedPolicy {
     /// One agent's answer to "what happens when there is no human at the pane".
     package struct Posture: Equatable {

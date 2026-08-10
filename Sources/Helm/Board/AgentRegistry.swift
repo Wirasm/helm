@@ -40,16 +40,63 @@ struct AgentSession: Equatable {
     /// default so the memberwise initializer stays source-compatible for callers
     /// that only care about the board's three fields.
     var sessionId: String? = nil
+    /// What the agent says it is waiting **for**, in Claude Code's own words — `"permission
+    /// prompt"`, `"input needed"`, `"dialog open"`, `"sandbox request"`, … Absent unless
+    /// `status` is `waiting`.
+    ///
+    /// **This is the field #283 turns on, and it is why `status` alone was not enough.** The
+    /// board collapses `waiting` and `idle` into one answer on purpose — see `AgentStatus` —
+    /// because both mean *it is your turn*. For a coordinator reading `snapshot.json` they are
+    /// opposites: `idle` is an agent that finished, `waiting` on a **permission prompt** is an
+    /// agent that cannot finish and that nobody is going to answer, because the spool's whole
+    /// premise is that nobody is at the pane.
+    ///
+    /// A bare `String` rather than an enum, for `BenchSnapshot.ResumableRecord.blockedReason`'s
+    /// reason: this is a free-form label Claude Code composes, and a reason this build has never
+    /// heard of is something a reader can still print.
+    var waitingFor: String? = nil
+    /// When `status` **or `waitingFor`** last changed — a transition time, not a heartbeat.
+    ///
+    /// **Both halves of that sentence are load-bearing, and the second one is easy to get wrong.**
+    /// The writer stamps this whenever the payload carries a `status` at all —
+    /// `{...e, updatedAt: r, ...e.status !== undefined && { statusUpdatedAt: r }}` — and the
+    /// interactive caller's effect fires on `[status, waitingFor]`, so a change to *what* it is
+    /// blocked on moves this even when it stays `waiting`. That is **better** for the use here
+    /// rather than a caveat: #283 asks *waiting for **this** since T*, so a prompt replaced by a
+    /// different prompt should restart the age, and it does.
+    ///
+    /// **Not a heartbeat, measured rather than assumed.** The discriminating case is a forced
+    /// **non-status** write: a `/rename` moved `updatedAt` by 9 ms and left this field alone.
+    /// Corroborated three more ways — twelve minutes of a continuously working session produced
+    /// zero writes to it, a captured `idle → busy → idle` moved it exactly at each transition, and
+    /// all eight call sites in the shipped 2.1.226 source were enumerated with none of them
+    /// periodic. So `now - statusUpdatedAt` really is an age, which is what
+    /// `BenchSnapshot.AgentRecord.statusUpdatedAt` spends.
+    ///
+    /// **The one theoretical way it resets without the agent moving**, recorded because it belongs
+    /// beside the claim rather than being discovered later: a REPL remount would re-run that
+    /// effect and rewrite an unchanged status. Not observed, and nothing remounts periodically.
+    ///
+    /// Claude Code writes epoch **milliseconds**; this is the `Date` they name.
+    var statusUpdatedAt: Date? = nil
 }
 
 extension AgentSession: Decodable {
-    private enum CodingKeys: String, CodingKey { case pid, cwd, status, sessionId }
+    private enum CodingKeys: String, CodingKey {
+        case pid, cwd, status, sessionId, waitingFor, statusUpdatedAt
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         pid = try container.decode(pid_t.self, forKey: .pid)
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        waitingFor = try container.decodeIfPresent(String.self, forKey: .waitingFor)
+        // Milliseconds, and a non-finite one is dropped rather than turned into a `Date` no
+        // arithmetic can survive — Claude Code's own reader range-checks this field too.
+        statusUpdatedAt =
+            try container.decodeIfPresent(Double.self, forKey: .statusUpdatedAt)
+            .flatMap { $0.isFinite ? Date(timeIntervalSince1970: $0 / 1000) : nil }
         // Unknown and absent collapse to the same nil. Synthesised `Decodable`
         // would instead throw on an unknown value and drop the whole row — the
         // same outcome by accident rather than by rule, and it would take a
@@ -123,8 +170,20 @@ enum AgentRegistry {
     /// is not new exposure: the pre-#247 join reached the very same wrong mailbox by the very
     /// same pid, with no registry involved at all.
     static func sessionLookup(in root: URL = defaultRoot) -> (pid_t) -> String? {
-        let rows = rows(in: root)
-        return { pid in rows[pid]?.sessionId }
+        sessionLookup(over: rows(in: root))
+    }
+
+    /// The same closure over rows a caller already read.
+    ///
+    /// **It exists so that reading the registry once and reading it twice cannot disagree
+    /// (#283).** `BenchSnapshotModel` needs the whole row per pane now — the agent's own
+    /// `status`/`waitingFor` go into `snapshot.json` — as well as this pid→session lookup, and
+    /// calling `sessionLookup(in:)` beside `rows(in:)` would list the same directory twice per
+    /// publish and let one publish's `owner` join disagree with the same publish's `agent`
+    /// record. That is `row(in:)`'s defect exactly, one level up, and this is `row(in:)`'s answer
+    /// to it: the rule is a function over rows the caller holds.
+    static func sessionLookup(over rows: [pid_t: AgentSession]) -> (pid_t) -> String? {
+        { pid in rows[pid]?.sessionId }
     }
 
     /// The same read, keyed by pid, for the caller that needs the whole row rather than the

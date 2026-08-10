@@ -289,6 +289,136 @@ final class BenchSnapshotTests: XCTestCase {
         XCTAssertEqual(handle as? String, "owner-1234")
     }
 
+    // MARK: - What the agent in the pane says it is doing (#283)
+
+    /// **The whole of #283, as a projection rule.** A spool-spawned `claude` stalled six and a
+    /// half hours on a permission prompt its unattended posture could not remove — Claude Code
+    /// marks that guardrail bypass-immune — and nothing outside the process could see it, because
+    /// helm read the registry every publish and kept only `sessionId` out of it.
+    ///
+    /// `waitingFor` is the field that makes it actionable: `waiting` alone is also what a healthy
+    /// agent looks like when it has finished its turn.
+    func testAnAgentBlockedOnAPromptIsReportedWithWhatItIsWaitingForAndSinceWhen() throws {
+        let workspace = Workspace(path: "/tmp/bench-snapshot-waiting")
+        let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
+        let since = Date(timeIntervalSince1970: 1_786_362_950.614)
+
+        let value = BenchSnapshot.project(
+            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil }),
+            foregroundPid: { _ in 4242 },
+            agents: [
+                4242: AgentSession(
+                    pid: 4242, cwd: workspace.path.value, status: .waiting,
+                    sessionId: "2e758d00", waitingFor: "permission prompt",
+                    statusUpdatedAt: since)
+            ])
+        let terminal = try XCTUnwrap(value.workspaces[0].columns[0].slots[0].panes[0].terminal)
+
+        XCTAssertEqual(terminal.agent?.status, "waiting")
+        XCTAssertEqual(terminal.agent?.waitingFor, "permission prompt")
+        XCTAssertEqual(
+            terminal.agent?.statusUpdatedAt, since,
+            "an absolute instant, so `now - statusUpdatedAt` is still right in a snapshot "
+                + "nobody rewrote — which is the whole reason a coordinator need not poll "
+                + "`writtenAt`")
+    }
+
+    /// **The control, and it must pass on both sides of #283.** A rule that only reported
+    /// `waiting` would be satisfied by reporting almost nothing, and would make a working agent
+    /// and a pane with no agent at all indistinguishable — which is the reading error the ticket
+    /// is about, pointing the other way.
+    func testAWorkingAgentIsReportedTooAndNamesNothingItIsWaitingFor() throws {
+        let workspace = Workspace(path: "/tmp/bench-snapshot-busy")
+        let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
+
+        let value = BenchSnapshot.project(
+            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil }),
+            foregroundPid: { _ in 4242 },
+            agents: [4242: AgentSession(pid: 4242, cwd: workspace.path.value, status: .busy)])
+        let terminal = try XCTUnwrap(value.workspaces[0].columns[0].slots[0].panes[0].terminal)
+
+        XCTAssertEqual(terminal.agent?.status, "busy")
+        XCTAssertNil(terminal.agent?.waitingFor)
+    }
+
+    /// pi and codex publish no registry at all, and a pane can be a bare login shell. Absence,
+    /// never an invented `idle` — `AgentRegistry`'s standing rule, kept at this seam too.
+    func testAPaneWhoseProcessTheRegistryDoesNotKnowReportsNoAgent() throws {
+        let workspace = Workspace(path: "/tmp/bench-snapshot-no-agent")
+        let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
+
+        let value = BenchSnapshot.project(
+            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil }),
+            foregroundPid: { _ in 4242 },
+            agents: [999: AgentSession(pid: 999, cwd: "/elsewhere", status: .busy)])
+        let terminal = try XCTUnwrap(value.workspaces[0].columns[0].slots[0].panes[0].terminal)
+
+        XCTAssertNil(
+            terminal.agent, "another pid's row says nothing about this pane")
+    }
+
+    /// A row this build cannot read the status of still carries the two fields that name a
+    /// stall, rather than costing the pane its whole record.
+    func testARowWithNothingToSayProducesNoRecordAndOneWithOnlyAReasonStillDoes() throws {
+        XCTAssertNil(
+            BenchSnapshot.AgentRecord(AgentSession(pid: 1, cwd: nil, status: nil)),
+            "an empty record is worse than no record — it reads as an answer")
+
+        let unknown = BenchSnapshot.AgentRecord(
+            AgentSession(
+                pid: 1, cwd: nil, status: nil, waitingFor: "permission prompt",
+                statusUpdatedAt: Date(timeIntervalSince1970: 10)))
+
+        XCTAssertNil(unknown?.status, "helm does not model it, so helm does not name it")
+        XCTAssertEqual(
+            unknown?.waitingFor, "permission prompt",
+            "the field that names the stall is Claude Code's own words, so it survives a status "
+                + "this build has never heard of")
+    }
+
+    /// The wire obligation `testWorkspaceRecordPathEncodesAsABareStringUnchangedByWorkspacePath`
+    /// and `testOwnerRecordHandleEncodesAsABareStringUnchangedByHandle` carry for their fields,
+    /// for the one #283 adds. `statusUpdatedAt` is the field a reader does arithmetic on, so its
+    /// shape is the contract: an ISO-8601 string, exactly as `writtenAt` already is, and read off
+    /// `JSONSerialization` rather than by a Swift round trip, which would pass either way.
+    func testAgentRecordEncodesItsStatusTimeAsAnIso8601StringLikeWrittenAt() throws {
+        let workspace = Workspace(path: "/tmp/bench-snapshot-json-agent")
+        let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
+
+        let snapshot = BenchSnapshot.project(
+            writtenAt: Date(timeIntervalSince1970: 1_700_000_000),
+            workspaces: workspaces, workbench: workbench, terminals: terminals,
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil }),
+            foregroundPid: { _ in 4242 },
+            agents: [
+                4242: AgentSession(
+                    pid: 4242, cwd: workspace.path.value, status: .waiting,
+                    waitingFor: "permission prompt",
+                    statusUpdatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+            ])
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(snapshot)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let records = try XCTUnwrap(json["workspaces"] as? [[String: Any]])
+        let columns = try XCTUnwrap(records.first?["columns"] as? [[String: Any]])
+        let slots = try XCTUnwrap(columns.first?["slots"] as? [[String: Any]])
+        let panes = try XCTUnwrap(slots.first?["panes"] as? [[String: Any]])
+        let terminal = try XCTUnwrap(panes.first?["terminal"] as? [String: Any])
+        let agent = try XCTUnwrap(terminal["agent"] as? [String: Any])
+
+        XCTAssertEqual(agent["status"] as? String, "waiting")
+        XCTAssertEqual(agent["waitingFor"] as? String, "permission prompt")
+        XCTAssertEqual(
+            agent["statusUpdatedAt"] as? String, json["writtenAt"] as? String,
+            "the same instant must print the same way as `writtenAt`, or a reader has to learn "
+                + "a second date format to do the one subtraction this field exists for")
+    }
+
     func testSchemaAndIsoDateRoundTrip() throws {
         let original = BenchSnapshot(
             writtenAt: Date(timeIntervalSince1970: 1_700_000_000), workspaces: [])
