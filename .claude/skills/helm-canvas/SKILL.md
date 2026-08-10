@@ -34,19 +34,33 @@ taking it away* below.
 - Artifacts go in this project's `~/.prp/<key>/` store, **never in the repo**.
 - **Read the exit code.** Every refusal has its own — `2` wrong number of arguments, `3` not
   absolute, `4` no such file, `5` an extension helm has no renderer for, `6` no terminal it could
-  reach *or the write to it failed*, `7` the path contains control characters. Each says on stderr
-  what to do about it. **Zero means the bytes reached a terminal**, not merely that the script ran.
+  reach at all *or the write to it failed*, `7` the path contains control characters, `8` a terminal
+  is reachable but helm does not own it. Each says on stderr what to do about it. **Zero means the
+  bytes reached the pty helm is parsing**, not merely that the script ran.
+
+**`8` is the one to expect if you are not in a helm pane, and it is not a failure to work
+around.** The push is an escape sequence, so it only means anything to the terminal helm reads;
+a Ghostty, Terminal, tmux or ssh shell swallows it and shows the operator nothing on the bench.
+`push.sh` used to write it anyway and exit `0` (helm #282) — it now refuses, names the terminal it
+found, and emits no bytes at all. **There is no paneless route to the canvas today**: the spool
+(`helm-spool`, `helm-close`, `helm-capture`, `helm-command`) has no `canvas` kind. So when you get
+`8`, hand the operator the absolute path and say what it is; they open it with ⌘O.
+
+`$HELM_PANE` is *not* the check, and do not use it as one yourself: it is inherited by everything a
+pane's agent spawns, so inside a nested pty it still names the pane while the bytes go somewhere
+helm cannot see.
 
 **Do not hand-roll the `printf` yourself.** The push is an escape sequence, and an escape sequence
 only does anything if it reaches the terminal helm is parsing — which your tool call's stdout is
 not. Your harness captures it, and you have no controlling terminal at all: measured from a Claude
 Code tool call, `tty` is `??`, the session is `0`, and `/dev/tty` will not open. A bare `printf`
 comes back to you as text, the operator sees nothing, and nothing anywhere reports an error
-(helm #184). `push.sh` exists to find a pty you can actually write to, and to refuse out loud when
+(helm #184). `push.sh` exists to find a pty helm is actually parsing, and to refuse out loud when
 there is none.
 
-It works the same from a shell the operator typed into, from a `Makefile`, or from a script — that
-path was never broken, and the script does not change it.
+It works the same from a shell the operator typed into inside a pane, from a `Makefile`, or from a
+script. It works from a nested pty too — a `script(1)` or a subshell inside a pane — because the
+walk goes *past* a terminal helm does not own to the pane's own.
 
 **An OSC 8 hyperlink is not a second way in, and inside Claude Code there is no hyperlink at
 all.** Measured on a live agent (helm #124): a `printf` emitting a real OSC 8 sequence reaches the

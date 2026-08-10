@@ -217,6 +217,40 @@ the TUI eats before helm sees it (#124), then a bare `printf` whose stdout the h
 (#184). Its gate needs bash and `ps`, which is why it is not in the Swift gate. **What no gate can
 prove is that a pane appeared — run it against a live helm before believing it.**
 
+**The third one shipped broken in the same shape, and #282 is the fix: writable is not the same
+question as helm's.** Outside a pane the walk found a real tty, wrote a real OSC into it, and exited
+`0` — every layer succeeded and nothing reached the bench, with an escape sequence left in a
+terminal that never asked for one. So the check is now about the **pty** rather than the process
+asking: libghostty opens one pty per pane and holds the master, so walking up from the tty until it
+*changes* lands on whoever opened it, and only `helm` is accepted. `$HELM_PANE` is deliberately not
+the check — it is inherited by everything a pane's agent spawns, so inside a nested pty it still
+names the pane while the bytes go where helm cannot see (measured). A foreign terminal is walked
+*past*, not refused at, so a nested pty inside a pane still delivers to the pane's own. **Exit `8`
+is new and means a terminal is reachable that helm does not own** — distinct from `6`, no terminal
+at all, because the operator's next move differs. **A paneless agent has no canvas route at all
+today**: the spool has no `canvas` kind, so `8` means hand over the path.
+
+**And its gate must never deliver, which it did for as long as it existed.** Six of `test.sh`'s
+cases ran the real `push.sh` from the gate's own process tree, so every run by an agent inside a
+pane pushed six artifacts onto the **operator's** bench, each a tab onto a `mktemp` directory the
+gate then deleted — he watched the dead tabs pile up. That is #282 from the other side and the
+better argument for the guard, because it happened rather than being hypothetical. **push.sh is now
+invoked from exactly one line of that file** — one runner everything goes through, detached — and a
+check fails the run if that stops being true. Staging each case individually was the first attempt
+and it removed the instances rather than the bug: `run_code` still called push.sh raw and was merely
+never handed a renderable path, which the next case added beside the extension list would be.
+- **The double fork does not remove the terminal, it removes the ancestry.** A controlling tty is
+  inherited across fork and reparenting does not clear it, so the run still *reports* a tty; what it
+  cannot do is prove that tty is helm's, because `pty_owner` needs the chain and ppid is 1. So the
+  refusal is `6` headless and `8` from a shell that has a terminal — assert the set, not the number,
+  or the gate fails for whoever runs it by hand.
+- **And the reparent races the runner's own startup.** `( ( cmd & ) & )` reparents only once the
+  intermediate shell exits, which can be after the grandchild is running — and a run that proceeds
+  attached is exactly the one that reaches the bench. The runner waits for ppid 1 and refuses rather
+  than proceeding without it.
+- Check it the way it was checked: diff the canvas panes in `~/.helm/bench/snapshot.json` around a
+  run, and expect zero new ones even while a *broken* `push.sh` is the thing under test.
+
 `hooks/` is the **Claude Code** half of the mailbox — `claude-session-start` claims a mailbox so
 a session can be addressed, `claude-user-prompt-submit` delivers waiting mail by writing the notice
 to **stdout**, which Claude Code feeds to the model as context for the turn about to run. Delivery
