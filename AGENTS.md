@@ -137,17 +137,29 @@ control run, or both.
 command a fresh worktree runs, and every dependency added to it is a dependency every
 contributor now needs.
 
-**CI runs a narrower gate than you do, and the difference is exactly the two suites above.**
-`.github/workflows/gate.yml` runs `INJECTION_NOGENERICS=1 swift test --skip TerminalKeyboardTests
---skip WorkbenchFocusRoutingTests`, because a runner has no active display and those two need a
-real ghostty surface (#253) — excluded rather than tolerated, since a gate whose red is sometimes
-meaningless is a gate nobody reads. Two consequences worth stating rather than leaving in that
-file's comments. **A green CI is not a green local gate**: a regression in either suite passes CI
-and you are the only thing that catches it, so run the full command before the PR. And **a green
-local gate is not a green CI either**, for a different reason — CI runs the gate against the
-**merge commit** rather than your branch tip, which is the whole reason it exists: two PRs merged
-56 seconds apart on 2026-08-06, both green on their own branches, both reviewed, and
-`development` did not compile.
+**CI is not this gate, in both directions, and neither difference is stated anywhere but in
+`.github/workflows/gate.yml`'s own comments.** It runs **three** jobs — `build · test · format`,
+`mailbox hooks · conformance`, and `skill gates` — kept apart because the last two need node and
+the Swift gate must not.
+
+- **Narrower on the Swift job**, by exactly the two suites this section spends forty lines
+  teaching you to diagnose: `INJECTION_NOGENERICS=1 swift test --skip TerminalKeyboardTests
+  --skip WorkbenchFocusRoutingTests`. A runner has no active display and those two need a real
+  ghostty surface (#253) — excluded rather than tolerated, since a gate whose red is sometimes
+  meaningless is a gate nobody reads. So **a green CI is not a green local gate**: a regression in
+  either suite passes CI, and running the full command before the PR is the only thing that
+  catches it.
+- **Broader on everything else**, and this is the half that surprises people: CI runs
+  `hooks/test.sh`, `helm-mail-cc/test.sh`, `helm-canvas/test.sh` and `helm-board/test.sh`
+  **unconditionally, on every PR**, where the rules above ask you to run each only when you
+  touched what it covers. *"A gate that exists, is documented in `AGENTS.md`, and runs only when
+  somebody remembers is the drift this workflow exists to stop."* The `pi-extensions` gate is the
+  one with no CI job — it needs an `npm install` in `pi/` — so that one really is only run by
+  whoever remembers.
+- **And a green local gate is not a green CI either**, for a third reason: CI runs against the
+  **merge commit** rather than your branch tip. That is why it exists — two PRs merged 56 seconds
+  apart on 2026-08-06, both green on their own branches, both reviewed, touching different files,
+  and `development` did not compile.
 
 **If you touched `pi/`, run its gate too — it is separate on purpose:**
 

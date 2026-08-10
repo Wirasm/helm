@@ -82,7 +82,14 @@ jobs:
 
   # Separate job because it needs node and the Swift gate must not: a Swift contributor
   # should never need a JS toolchain to go green, which is why AGENTS.md keeps these apart.
-  # Only runs when the files it covers actually change.
+  #
+  # It runs on EVERY pull request, not only when `hooks/` changes — this comment claimed the
+  # opposite for as long as it existed, and there has never been a `paths:` filter or an `if:`
+  # anywhere in this file to make it true. Leave it that way: the mailbox is written twice
+  # across a runtime boundary on purpose (`AGENTS.md`), so the thing that breaks it is a change
+  # to the Swift it is a copy OF — `mailbox-conformance.mjs` extracts `MailboxDirectory.resolve`
+  # and `DefaultsSuite.override` from `Sources/` and runs all three copies against one fixture
+  # set. A `paths: hooks/**` filter would skip exactly the PR that breaks it.
   hooks:
     name: mailbox hooks · conformance
     runs-on: macos-26
