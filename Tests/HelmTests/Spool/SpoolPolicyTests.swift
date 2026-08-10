@@ -443,6 +443,52 @@ final class SpoolPolicyTests: XCTestCase {
         XCTAssertEqual(accepted.terminal.uuidString, "1E5B7B1C-0000-4000-8000-00000000ABCD")
     }
 
+    // MARK: - Select (#284)
+
+    func testASelectNamesAPaneAndCarriesNothingElse() throws {
+        // The whole request, and the reason it is a kind rather than a command: it carries an
+        // address, which is the one thing `CommandRequest` cannot.
+        let request = try JSONDecoder().decode(
+            SpoolRequest.self,
+            from: Data(
+                #"{"id":"x","kind":"select","pane":"1E5B7B1C-0000-4000-8000-00000000ABCD"}"#.utf8))
+        XCTAssertEqual(
+            request,
+            .select(SelectRequest(id: "x", pane: "1E5B7B1C-0000-4000-8000-00000000ABCD")))
+        guard case .select(let accepted) = try work(request) else {
+            return XCTFail("expected a select")
+        }
+        XCTAssertEqual(accepted.pane.uuidString, "1E5B7B1C-0000-4000-8000-00000000ABCD")
+    }
+
+    func testAPaneThatIsNotAUuidIsRefusedRatherThanMatchingNothing() {
+        // The same argument `testATerminalThatIsNotAUuidIsRefusedRatherThanMatchingNothing`
+        // makes for a close: "helm showed nothing" and "that is a typo" are indistinguishable to
+        // a caller, and exactly one of them is fixable.
+        for pane in ["", "not-a-uuid", "1E5B7B1C-0000-4000-8000", "  "] {
+            XCTAssertNotNil(
+                refusal(.select(SelectRequest(id: "x", pane: pane))),
+                "\(pane) must be refused as a pane id")
+        }
+    }
+
+    func testASelectIsRoutedByItsKindAndCarriesNoCommandOfItsOwn() throws {
+        // The pinning every kind gets, and for the same reason: a `select` that could take the
+        // spawn arm on the strength of a stray `command` would be a file that starts `sh` and
+        // never met `allowedCommands`.
+        let smuggled = try JSONDecoder().decode(
+            SpoolRequest.self,
+            from: Data(
+                #"{"id":"x","kind":"select","pane":"1E5B7B1C-0000-4000-8000-00000000ABCD","command":"sh","cwd":"/tmp","force":true}"#
+                    .utf8))
+        guard case .select(let accepted) = try work(smuggled) else {
+            return XCTFail("a select must stay a select whatever else the file carries")
+        }
+        // And there is nowhere for a command — or a `force` — to survive to: `AcceptedSelect
+        // Request` has neither field, which the compiler enforces rather than this assertion.
+        XCTAssertEqual(accepted.pane.uuidString, "1E5B7B1C-0000-4000-8000-00000000ABCD")
+    }
+
     func testEveryKindHelmKnowsIsNamedInTheRefusalForTheOnesItDoesNot() throws {
         // A third kind arriving with a refusal message that still says there are two is the
         // drift this list exists to stop.

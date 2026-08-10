@@ -21,11 +21,11 @@ import Foundation
 ///
 /// **Lives in `HelmWire` (#221), not in `Helm`.** `Helm` and `HelmTests` compile against this
 /// for one definition instead of restating it. `tools/helm-spool.swift`, `helm-close.swift`,
-/// `helm-capture.swift` and `helm-command.swift` cannot join them — a single-file
-/// `swift tools/…swift` script resolves no `Package.swift`
+/// `helm-capture.swift`, `helm-command.swift` and `helm-select.swift` cannot join them — a
+/// single-file `swift tools/…swift` script resolves no `Package.swift`
 /// and runs from any cwd, which is the whole reason the spool is a script rather
 /// than an SPM target (`AGENTS.md`'s "Why the spool is a script, and must stay one" has the
-/// measurements from the attempt that broke both). So those four still hand-roll the JSON by
+/// measurements from the attempt that broke both). So those five still hand-roll the JSON by
 /// hand, on purpose — the runtime boundary `AGENTS.md`'s own rule carves out — and
 /// `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) is what keeps that duplicate honest: it
 /// runs each script as a real subprocess and decodes what it wrote with these same types.
@@ -38,6 +38,7 @@ package enum SpoolRequest: Equatable {
     case capture(CaptureRequest)
     case close(CloseRequest)
     case command(CommandRequest)
+    case select(SelectRequest)
     /// A `kind` helm does not know. **Kept rather than thrown away**: a decoder that threw here
     /// would make "helm is older than this request" indistinguishable from "this file is not
     /// JSON", and the caller would be told the wrong thing about what to fix.
@@ -52,6 +53,7 @@ package enum SpoolRequest: Equatable {
         case .capture(let request): request.id
         case .close(let request): request.id
         case .command(let request): request.id
+        case .select(let request): request.id
         case .unrecognised(let id, _): id
         }
     }
@@ -61,6 +63,7 @@ package enum SpoolRequest: Equatable {
     /// would otherwise arrive with a refusal message that still says there are two.
     package static let kinds = [
         SpawnRequest.kind, CaptureRequest.kind, CloseRequest.kind, CommandRequest.kind,
+        SelectRequest.kind,
     ]
 }
 
@@ -78,6 +81,7 @@ extension SpoolRequest: Decodable {
         case CaptureRequest.kind: self = .capture(try CaptureRequest(from: decoder))
         case CloseRequest.kind: self = .close(try CloseRequest(from: decoder))
         case CommandRequest.kind: self = .command(try CommandRequest(from: decoder))
+        case SelectRequest.kind: self = .select(try SelectRequest(from: decoder))
         default:
             self = .unrecognised(id: try container.decode(String.self, forKey: .id), kind: kind)
         }
@@ -315,6 +319,72 @@ package struct CommandRequest: Codable, Equatable {
     }
 }
 
+/// Bring a pane forward: make it the one its slot is showing (#284).
+///
+/// **The other half of #284, and the half that needed a ruling.** Closing a canvas needed none —
+/// `SpoolPaneState.holdsTerminal` argues why: the artifact is a file on disk and the operator's
+/// annotations are a sidecar beside it, so there was no loss to weigh. Showing one is a *focus*
+/// question, and the operator's answer is that an agent may make **a pane of its own** current and
+/// may never take the keyboard doing it.
+///
+/// **Why this exists at all.** `push.sh` offers rather than inserts (#125), so on a busy bench a
+/// pushed artifact arrives as a background tab — measured on the operator's own eight-tab strip,
+/// `isSelected: false`, `isVisible: false`. Nothing an agent could send would show it, so #272's
+/// re-push refresh was **real and unobservable to the agent that triggered it**: it could only be
+/// verified in an isolated instance where the canvas happened to get a column of its own.
+///
+/// **A fifth kind rather than a fifth allowed command, and the deciding question is the
+/// address.** `SpoolCommandPolicy` refuses `selectTerminal` in as many words — *"it does so in
+/// whichever slot they are working in, **because the command carries no pane**"* — and that
+/// refusal names its own fix: the problem is the missing address, not the act. A `CommandRequest`
+/// cannot carry one; its header records the absence of a payload field as a measurement rather
+/// than an omission, and `HelmCommand.selectTerminal(index:)` is ⌘1–⌘9, a *position in the focused
+/// slot*, which is not "this pane" and cannot be made into it. So this takes `CloseRequest`'s
+/// shape, which is the shape `SpoolCommandPolicy` already predicted an addressed command would
+/// have to take.
+///
+/// **`Workbench.select(offering:)` is what it routes to, not `select(_:)`** — the non-seizing twin
+/// helm has drawn since #125, differing in the one line that assigns `focusedSlot`. The pane
+/// becomes its slot's **selection**, which in the mounted workspace is what *visible* means
+/// (`CONTEXT.md`); **focused** does not move, and `SelectReport` reports both readings so the
+/// caller checks that rather than trusting this paragraph.
+///
+/// **No `force`, and the absence is the rule rather than an oversight.** `CloseRequest.force` says
+/// *"I know something is running in there"* — a caller asserting about work it owns. Where the
+/// operator's keyboard is was never something a caller could assert about: `helm-close`'s focus
+/// refusal survives `force` already, and a select whose whole failure mode *is* the keyboard has
+/// nothing left for one to mean.
+package struct SelectRequest: Codable, Equatable {
+    package static let kind = "select"
+
+    package let id: String
+    /// The pane to show: `Pane.id`, exactly as `CloseRequest.terminal` is.
+    /// `CloseRequest.waysToKnowAPane` is where a caller gets one, and stays the only place that
+    /// list is written — a pane uuid is a pane uuid whichever request carries it, and a second
+    /// enumeration of the routes is the drift #284 already had to remove once.
+    ///
+    /// **Spelled `pane`, where a close spells the same value `terminal`.** That is not an
+    /// inconsistency to tidy: `terminal` is what every helm built since #176 decodes and what
+    /// every existing caller writes, so renaming it would break both directions across a version
+    /// boundary for one word (`CloseRequest.terminal` argues it in full). This field has no wire
+    /// history to keep faith with, so it gets the name the value has actually had since a pane
+    /// could hold a canvas.
+    package let pane: String
+
+    private enum CodingKeys: String, CodingKey { case id, pane }
+
+    package init(id: String, pane: String) {
+        self.id = id
+        self.pane = pane
+    }
+
+    package init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        pane = try container.decode(String.self, forKey: .pane)
+    }
+}
+
 /// Why helm will not do what a request asked.
 ///
 /// A named type rather than a bare `String` because `Result`'s failure has to be an `Error` —
@@ -334,6 +404,7 @@ package enum SpoolWork: Equatable {
     case capture(AcceptedCaptureRequest)
     case close(AcceptedCloseRequest)
     case command(AcceptedCommandRequest)
+    case select(AcceptedSelectRequest)
 }
 
 package struct AcceptedSpawnRequest: Equatable {
@@ -414,6 +485,20 @@ package struct AcceptedCommandRequest: Equatable {
     }
 }
 
+package struct AcceptedSelectRequest: Equatable {
+    package let id: String
+    /// **A real `TerminalID`, not the string that was in the file** — the same argument
+    /// `AcceptedCloseRequest.terminal` makes, and deliberately the same *type*: the wire has one
+    /// pane-id newtype over one `Pane.id` namespace, and a second one would be a distinction with
+    /// no difference behind it.
+    package let pane: TerminalID
+
+    package init(id: String, pane: TerminalID) {
+        self.id = id
+        self.pane = pane
+    }
+}
+
 /// Which requests helm will act on.
 ///
 /// **Deliberately a strict allowlist, exactly like `TerminalURLPolicy`** — and for a stronger
@@ -476,6 +561,8 @@ package enum SpoolPolicy {
             return accept(close).map(SpoolWork.close)
         case .command(let command):
             return accept(command).map(SpoolWork.command)
+        case .select(let select):
+            return accept(select).map(SpoolWork.select)
         case .unrecognised(_, let kind):
             return .failure(
                 SpoolRefusal(
@@ -598,6 +685,22 @@ package enum SpoolPolicy {
             AcceptedCloseRequest(id: request.id, terminal: terminal, force: request.force))
     }
 
+    /// **A select carries one uuid and nothing else, so this layer has exactly one thing to
+    /// say about it** — the same split as a close, for the same reason. Whether the pane may
+    /// actually be shown needs the live bench and is `SpoolSelectPolicy`'s, so a refusal about a
+    /// pane is never mistaken for a refusal about a file.
+    private static func accept(
+        _ request: SelectRequest
+    ) -> Result<AcceptedSelectRequest, SpoolRefusal> {
+        guard let pane = TerminalID(validating: request.pane) else {
+            return .failure(
+                SpoolRefusal(
+                    "pane \"\(request.pane)\" is not a pane id. It is "
+                        + CloseRequest.waysToKnowAPane + " — a uuid whichever route you took"))
+        }
+        return .success(AcceptedSelectRequest(id: request.id, pane: pane))
+    }
+
     /// **Two questions, two refusals, and telling them apart is the point.** *"That is not a
     /// command helm has"* is a typo the caller can fix; *"that is a command helm will not take
     /// from an agent"* is a standing decision it cannot. Collapsing them into one message would
@@ -709,13 +812,20 @@ package enum SpoolCommandPolicy {
                 "moveFocus is the focus rule itself: it does nothing but move the operator's "
                     + "keyboard to another slot. There is no version of this an agent may send")
 
+        /// **Still refused, and #284 is what makes the refusal complete rather than a dead end.**
+        /// The reason was always the missing address, and there is now an addressed request that
+        /// supplies it: `SelectRequest` names a pane and `SpoolSelectPolicy` refuses the
+        /// operator's slot. This name still carries only an index into whichever slot they are
+        /// in, so it stays where it is.
         case .selectTerminal:
             return .refused(
-                "selectTerminal picks a tab in the focused slot, and Workbench.select focuses "
-                    + "the slot holding it — so it moves the operator's keyboard, and it does "
-                    + "so in whichever slot they are working in, because the command carries no "
-                    + "pane. To make a pane of your own current, there is nothing yet; to close "
-                    + "one, helm-close names a pane and refuses the operator's")
+                "selectTerminal picks a tab in the focused slot by INDEX, and Workbench.select "
+                    + "focuses the slot holding it — so it moves the operator's keyboard, and it "
+                    + "does so in whichever slot they are working in, because the command carries "
+                    + "no pane. helm-select is the addressed version and the one to use: it names "
+                    + "a pane, shows it without taking the keyboard, and refuses one in the "
+                    + "operator's own slot (#284). helm-close is the same shape for the other "
+                    + "direction")
 
         case .selectWorkspace, .cycleWorkspace:
             return .refused(
@@ -827,12 +937,17 @@ package enum SpoolCommandPolicy {
     }
 }
 
-/// What helm can see about one pane at the moment a close is decided.
+/// What helm can see about one pane at the moment a request that names it is decided.
 ///
 /// A value rather than the pane itself, for `AGENTS.md`'s reason — *prefer values over live
-/// objects at a seam*. Every rule in `SpoolClosePolicy` is then a test that needs no bench, no
-/// ghostty surface and no pty, which is the same trade `SpoolSpawning` makes and the reason
-/// #54 asked for the seam in the first place.
+/// objects at a seam*. Every rule in `SpoolClosePolicy` and `SpoolSelectPolicy` is then a test
+/// that needs no bench, no ghostty surface and no pty, which is the same trade `SpoolSpawning`
+/// makes and the reason #54 asked for the seam in the first place.
+///
+/// **One value for one pane, read once, whichever addressed request asked** (#284). A second
+/// struct describing the same pane for the select path would be the seam defect `AGENTS.md`
+/// names — *a type on one side and a comment on the other* — and would make "where is the
+/// operator" answerable two ways.
 package struct SpoolPaneState: Equatable {
     /// False when the uuid names a canvas pane.
     ///
@@ -855,8 +970,40 @@ package struct SpoolPaneState: Equatable {
     /// What it still decides is whether the live-process rule has anything to test. See
     /// `isBusy`.
     package let holdsTerminal: Bool
-    /// The pane the operator's keyboard is in: the focused slot's selected pane.
-    package let holdsKeyboard: Bool
+    /// Where the operator's keyboard is, **relative to this pane**.
+    ///
+    /// **Three-valued, and #284 is what needed the third value.** A close only ever had to ask
+    /// *is this the operator's pane* — removing a pane they are not in cannot move their keyboard,
+    /// so `holdsKeyboard` was the whole of the focus rule and a `Bool` said it. Showing a pane is
+    /// a **displacement**: `Workbench.focusedPane` is the focused slot's *selected* pane, so
+    /// selecting a background tab **of that slot** hands the keyboard to a pane that never held
+    /// it. `holdsKeyboard` is false for that pane the whole time, which is exactly the case a
+    /// second `Bool` would have been added to cover.
+    ///
+    /// **It is one field rather than two because the two would not be independent.**
+    /// `holdsKeyboard == true` implies "in the keyboard's slot", so a pair of booleans makes
+    /// `(holds: true, inSlot: false)` constructable — a state no bench can produce and under which
+    /// `SpoolSelectPolicy` would hand an agent the operator's own pane. `AGENTS.md`: *an invariant
+    /// with a comment explaining it wants a type carrying it.* This is that type, and the nonsense
+    /// is unconstructable rather than merely undocumented.
+    package let keyboard: Keyboard
+
+    /// Where the keyboard is, from this pane's point of view.
+    package enum Keyboard: Equatable, Sendable {
+        /// In another slot entirely. Nothing done to this pane moves it.
+        case elsewhere
+        /// In this pane's slot, but on a different tab — this pane is hidden behind the one the
+        /// operator is typing in. **Showing this pane would take the keyboard**, which is the
+        /// whole reason this case exists.
+        case inItsSlot
+        /// This pane holds it: the focused slot's selected pane, and the one the operator is
+        /// working in.
+        case here
+    }
+
+    /// The pane the operator's keyboard is in — the predicate `SpoolClosePolicy` has refused
+    /// since #176, unchanged in meaning and now derived rather than stored (#284).
+    package var holdsKeyboard: Bool { keyboard == .here }
     /// The pty's foreground process group leader (`tcgetpgrp`), or nil when the surface has
     /// no process at all. The login shell at an idle prompt; the running program otherwise.
     package let foreground: pid_t?
@@ -866,11 +1013,11 @@ package struct SpoolPaneState: Equatable {
     package let sessionLeader: pid_t?
 
     package init(
-        holdsTerminal: Bool, holdsKeyboard: Bool, foreground: pid_t?, foregroundParent: pid_t?,
+        holdsTerminal: Bool, keyboard: Keyboard, foreground: pid_t?, foregroundParent: pid_t?,
         sessionLeader: pid_t?
     ) {
         self.holdsTerminal = holdsTerminal
-        self.holdsKeyboard = holdsKeyboard
+        self.keyboard = keyboard
         self.foreground = foreground
         self.foregroundParent = foregroundParent
         self.sessionLeader = sessionLeader
@@ -903,7 +1050,7 @@ package struct SpoolPaneState: Equatable {
     /// say `force`.
     ///
     /// **A canvas is never busy, and that is stated here rather than left to fall out of the
-    /// adapter (#284).** `WorkbenchSpoolCloser` reads `foreground` out of the live terminal
+    /// adapter (#284).** `WorkbenchSpoolPanes` reads `foreground` out of the live terminal
     /// sessions, so a canvas pane already arrives with `foreground == nil` and the guard below
     /// would answer `false` anyway — but that is an accident of where a lookup happens, in
     /// another module, and a rule `SpoolClosePolicy` leans on should be legible in the type that
@@ -953,8 +1100,9 @@ package struct SpoolPaneState: Equatable {
 /// **What is gone is the refusal that used to come before both of them** — *"holds a canvas, not
 /// a terminal"* — which is why `push.sh` was add-only. `SpoolPaneState.holdsTerminal` carries
 /// the argument for removing it, including the checked claim that closing a canvas destroys
-/// nothing on disk. Note what did **not** change with it: bringing a canvas *forward* is a focus
-/// question, it is the other half of #284, and nothing here answers it.
+/// nothing on disk. Bringing a canvas *forward* is the other half of #284, and it is answered
+/// next door rather than here: `SpoolSelectPolicy`, on the same address and the same value, with
+/// a focus rule that is this one's generalisation rather than its copy.
 ///
 /// **What is deliberately not here: the worktree and the branch.** #176 asks whether teardown
 /// reaches them, and the answer is that it stops at the pane. #141 already shipped that rail,
@@ -996,6 +1144,63 @@ package enum SpoolClosePolicy {
                     + "request again with \"force\": true if you mean it")
         }
         return nil
+    }
+}
+
+/// Whether a pane may be brought forward — the focus half of #284.
+///
+/// **`SpoolClosePolicy`'s rule generalised, not copied, and the generalisation is the whole
+/// content of this type.** #176 refuses `holdsKeyboard` and that is complete *for a close*:
+/// removing a pane the operator is not in cannot move their keyboard. A select is a
+/// **displacement** — `Workbench.focusedPane` is the focused slot's *selected* pane — so showing a
+/// background tab **of that slot** moves the keyboard onto a pane for which `holdsKeyboard` was
+/// false the entire time. A policy that only asked `holdsKeyboard` would allow exactly the
+/// wrong-terminal click `AGENTS.md` bans hard-coded coordinates over, arriving through a
+/// supported API. That is why `SpoolPaneState.keyboard` is three-valued and why this switch is
+/// exhaustive over it: a fourth answer to "where is the operator" cannot be added without a
+/// verdict here.
+///
+/// **The rule, in one sentence: an agent may show a pane in a slot the operator is not in.**
+/// Everything else follows. Nothing is destroyed either way, so there is no `force` to weigh and
+/// none exists — `CloseRequest.force` argues why a caller gets no say in where the operator's
+/// eyes are, and this request has nothing else force could have meant.
+///
+/// **A pane in another slot is shown even when it is already showing, and that is deliberate.**
+/// The common case is an agent re-pushing an artifact it has just rewritten (#272) and wanting to
+/// know the operator can see the new bytes; an idempotent request whose result says
+/// `isVisible: true` answers that without the caller having to ask what state it was in first.
+package enum SpoolSelectPolicy {
+    /// nil when the pane may be shown; the reason when it may not.
+    package static func refusal(
+        for request: AcceptedSelectRequest, pane: SpoolPaneState?
+    ) -> SpoolRefusal? {
+        guard let pane else {
+            return SpoolRefusal(
+                "helm has no pane \(request.pane.uuidString). It may have been closed already, "
+                    + "or it belongs to a different helm — an instance under HELM_DEFAULTS_SUITE "
+                    + "watches its own spool and holds its own panes. A parked workspace's panes "
+                    + "are not on the bench either: only the mounted one has slots to show "
+                    + "anything in")
+        }
+        switch pane.keyboard {
+        case .elsewhere:
+            return nil
+        case .here:
+            return SpoolRefusal(
+                "the operator is working in pane \(request.pane.uuidString) — it is the focused "
+                    + "slot's selected pane, so it is already the one they are looking at and "
+                    + "there is nothing to bring forward. helm does not act on the pane holding "
+                    + "the keyboard")
+        case .inItsSlot:
+            return SpoolRefusal(
+                "pane \(request.pane.uuidString) is a tab in the slot the operator is working "
+                    + "in, so showing it would take their keyboard — the focused slot's "
+                    + "selection IS the focused pane. Nothing overrides this: where their eyes "
+                    + "are is not something a file on disk gets a say in. It is already a tab "
+                    + "they can reach, which is what #125's *appear, don't seize* buys; wait "
+                    + "until they are somewhere else, or push the artifact where it gets a slot "
+                    + "of its own")
+        }
     }
 }
 

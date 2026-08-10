@@ -23,6 +23,7 @@ final class SpoolModelTests: XCTestCase {
     private var capturer: FakeCapturer!
     private var closer: FakeCloser!
     private var commander: FakeCommander!
+    private var selector: FakeSelector!
 
     override func setUp() async throws {
         let base = FileManager.default.temporaryDirectory
@@ -38,6 +39,7 @@ final class SpoolModelTests: XCTestCase {
         capturer = FakeCapturer()
         closer = FakeCloser()
         commander = FakeCommander()
+        selector = FakeSelector()
     }
 
     override func tearDown() async throws {
@@ -49,6 +51,7 @@ final class SpoolModelTests: XCTestCase {
         capturer = nil
         closer = nil
         commander = nil
+        selector = nil
     }
 
     // MARK: - Fixtures
@@ -63,6 +66,7 @@ final class SpoolModelTests: XCTestCase {
         model.attach(capturer: capturer)
         model.attach(closer: closer)
         model.attach(commander: commander)
+        model.attach(selector: selector)
         return model
     }
 
@@ -89,6 +93,10 @@ final class SpoolModelTests: XCTestCase {
 
     private func command(id: String = "go", name: String = "splitRight") -> String {
         #"{"id":"\#(id)","kind":"command","command":"\#(name)"}"#
+    }
+
+    private func select(id: String = "show") -> String {
+        #"{"id":"\#(id)","kind":"select","pane":"\#(selector.pane.uuidString)"}"#
     }
 
     private func mailbox(_ handle: String, pid: pid_t, sessionId: String) throws {
@@ -447,7 +455,7 @@ final class SpoolModelTests: XCTestCase {
         // honest answer to "what did I just destroy" — the artifact file and its `.notes.md`
         // sidecar are exactly where they were.
         closer.state = SpoolPaneState(
-            holdsTerminal: false, holdsKeyboard: false, foreground: nil,
+            holdsTerminal: false, keyboard: .elsewhere, foreground: nil,
             foregroundParent: nil, sessionLeader: nil)
         let model = self.model()
         try submit(close(), named: "bye.json")
@@ -463,7 +471,7 @@ final class SpoolModelTests: XCTestCase {
         // The control for the change above: #284 removed one refusal, not the policy. A canvas
         // the operator is looking at is still theirs, and `force` still does not reach it.
         closer.state = SpoolPaneState(
-            holdsTerminal: false, holdsKeyboard: true, foreground: nil,
+            holdsTerminal: false, keyboard: .here, foreground: nil,
             foregroundParent: nil, sessionLeader: nil)
         let model = self.model()
         try submit(close(force: true), named: "bye.json")
@@ -479,7 +487,7 @@ final class SpoolModelTests: XCTestCase {
         // never closed out from under them*. And it is a REFUSAL, with a reason — a teardown
         // that silently did nothing is indistinguishable from helm not running.
         closer.state = SpoolPaneState(
-            holdsTerminal: true, holdsKeyboard: true, foreground: FakeCloser.shellPid,
+            holdsTerminal: true, keyboard: .here, foreground: FakeCloser.shellPid,
             foregroundParent: FakeCloser.loginPid, sessionLeader: FakeCloser.loginPid)
         let model = self.model()
         try submit(close(force: true), named: "bye.json")
@@ -492,7 +500,7 @@ final class SpoolModelTests: XCTestCase {
 
     func testALivePaneIsRefusedUntilTheRequestSaysForce() async throws {
         closer.state = SpoolPaneState(
-            holdsTerminal: true, holdsKeyboard: false, foreground: FakeCloser.agentPid,
+            holdsTerminal: true, keyboard: .elsewhere, foreground: FakeCloser.agentPid,
             foregroundParent: FakeCloser.shellPid, sessionLeader: FakeCloser.loginPid)
         let model = self.model()
         try submit(close(), named: "bye.json")
@@ -564,6 +572,112 @@ final class SpoolModelTests: XCTestCase {
 
         _ = await awaitResult(id: "bye", is: .closed)
         XCTAssertEqual(closer.closed.count + second.closed.count, 1)
+    }
+
+    // MARK: - Select (#284)
+
+    func testWithTheWatcherOffASelectTouchesNothing() async throws {
+        // The negative control, per kind: it is what gives every other claim in this section
+        // its meaning.
+        let model = self.model(isOff: true)
+        try submit(select(), named: "show.json")
+        model.start()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(selector.shown, [], "no pane may be brought forward")
+        XCTAssertNil(directory.result(id: "show"), "no result may be written")
+        XCTAssertEqual(directory.pending().count, 1, "and the request is still sitting there")
+    }
+
+    func testAPaneInAnotherSlotIsShownAndTheResultProvesTheKeyboardStayedPut() async throws {
+        // The whole of #284's focus half, end to end: an agent pushed something, it landed as a
+        // background tab, and this is how it learns the operator can now see it — without
+        // re-reading snapshot.json and racing it.
+        let model = self.model()
+        try submit(select(), named: "show.json")
+        model.start()
+
+        let result = await awaitResult(id: "show", is: .selected)
+        XCTAssertEqual(selector.shown, [selector.pane], "the select reached the bench")
+        XCTAssertEqual(result?.terminalId?.uuidString, selector.pane.uuidString)
+        XCTAssertEqual(result?.select?.pane.uuidString, selector.pane.uuidString)
+        XCTAssertEqual(result?.select?.isVisible, true, "and it says the pane is actually visible")
+        XCTAssertEqual(
+            result?.select?.focusedPaneBefore, result?.select?.focusedPaneAfter,
+            "the focus rule, reported as two readings rather than asserted in a header")
+        XCTAssertEqual(spawner.opened, [], "a select starts nothing")
+        XCTAssertEqual(closer.closed, [], "…and closes nothing")
+    }
+
+    func testAPaneInTheOperatorsOwnSlotIsRefusedAndStaysWhereItIs() async throws {
+        // The case `holdsKeyboard` cannot see: a background tab of the focused slot. Showing it
+        // would make it the focused pane, so it is refused — and it is a REFUSAL with a reason,
+        // because a select that silently did nothing is indistinguishable from helm not running.
+        selector.state = SpoolPaneState(
+            holdsTerminal: false, keyboard: .inItsSlot, foreground: nil, foregroundParent: nil,
+            sessionLeader: nil)
+        let model = self.model()
+        try submit(select(), named: "show.json")
+        model.start()
+
+        let result = await awaitResult(id: "show", is: .refused)
+        XCTAssertEqual(result?.reason?.contains("keyboard") == true, true)
+        XCTAssertEqual(selector.shown, [], "nothing reached the bench")
+    }
+
+    func testAPaneHelmDoesNotHaveIsRefusedRatherThanIgnoredOnASelect() async throws {
+        selector.state = nil
+        let model = self.model()
+        try submit(select(), named: "show.json")
+        model.start()
+
+        let result = await awaitResult(id: "show", is: .refused)
+        XCTAssertEqual(result?.reason?.contains(selector.pane.uuidString) == true, true)
+        XCTAssertEqual(selector.shown, [])
+    }
+
+    func testABenchThatDidNotShowThePaneIsReportedRatherThanCalledASelect() async throws {
+        // `WorkbenchModel.offerSelect` answers whether the pane is *visible* afterwards, not
+        // whether it was asked for. Answering `selected` about a pane still hidden behind
+        // another would be the exact lie #284 is about.
+        selector.staysHidden = true
+        let model = self.model()
+        try submit(select(), named: "show.json")
+        model.start()
+
+        let result = await awaitResult(id: "show", is: .refused)
+        XCTAssertEqual(result?.reason?.contains("still not visible") == true, true)
+    }
+
+    func testASelectWithNoSelectorAttachedIsAHelmDefectAndSaysSo() async throws {
+        // `failed`, not `refused` — the same distinction the close and command paths draw.
+        let model = SpoolModel(
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
+            shellDeadline: .seconds(5), claimDeadline: .seconds(3))
+        try submit(select(), named: "show.json")
+        model.start()
+
+        let result = await awaitResult(id: "show", is: .failed)
+        XCTAssertEqual(result?.reason?.contains("helm defect") == true, true)
+    }
+
+    func testASelectIsActedOnAtMostOnce() async throws {
+        // Two windows draining one spool must not both mutate the bench.
+        let second = FakeSelector()
+        second.pane = selector.pane
+        let other = SpoolModel(
+            directory: directory, mailRoot: mailRoot, registryRoot: registryRoot, isOff: false,
+            shellDeadline: .seconds(5), claimDeadline: .seconds(3))
+        other.attach(selector: second)
+
+        let model = self.model()
+        try submit(select(), named: "show.json")
+        model.start()
+        other.start()
+        model.drain()
+        other.drain()
+
+        _ = await awaitResult(id: "show", is: .selected)
+        XCTAssertEqual(selector.shown.count + second.shown.count, 1)
     }
 
     // MARK: - Command (#269)
@@ -731,7 +845,7 @@ private final class FakeCloser: SpoolClosing {
     var terminal = UUID()
     /// An idle terminal nobody is looking at, unless a test says otherwise.
     var state: SpoolPaneState? = SpoolPaneState(
-        holdsTerminal: true, holdsKeyboard: false, foreground: shellPid,
+        holdsTerminal: true, keyboard: .elsewhere, foreground: shellPid,
         foregroundParent: loginPid, sessionLeader: loginPid)
     /// The bench refusing to let go — `Workbench.canClose` and its last pane.
     var refuses = false
@@ -743,6 +857,41 @@ private final class FakeCloser: SpoolClosing {
         guard id == terminal, !refuses else { return false }
         closed.append(id)
         return true
+    }
+}
+
+/// A bench that is not there, from the bring-forward side (#284). It reports whatever state the
+/// test wants one pane to be in, and remembers what it was asked to show.
+///
+/// Deliberately a **separate** fake from `FakeCloser` even though one real object implements both
+/// seams (`WorkbenchSpoolPanes`): a test that shares one fake between two request kinds cannot
+/// say which kind touched the bench, and "a select closes nothing" is an assertion this suite
+/// actually makes.
+@MainActor
+private final class FakeSelector: SpoolSelecting {
+    var pane = UUID()
+    /// A canvas in a slot the operator is not in, unless a test says otherwise — the pushed
+    /// artifact #284 is about.
+    var state: SpoolPaneState? = SpoolPaneState(
+        holdsTerminal: false, keyboard: .elsewhere, foreground: nil, foregroundParent: nil,
+        sessionLeader: nil)
+    /// The bench being asked and the pane still not being the one its slot shows. Nothing known
+    /// makes this reachable in the real adapter, which is exactly why the branch needs a fake to
+    /// reach it.
+    var staysHidden = false
+    /// Where the keyboard is, and stays. One value on both sides of the report is the fake's way
+    /// of modelling the promise; the real one measures it.
+    let focused = UUID()
+    var shown: [UUID] = []
+
+    func pane(_ id: UUID) -> SpoolPaneState? { id == pane ? state : nil }
+
+    func select(_ id: UUID) -> Result<SelectReport, SpoolRefusal> {
+        shown.append(id)
+        return .success(
+            SelectReport(
+                pane: TerminalID(id), isVisible: !staysHidden,
+                focusedPaneBefore: TerminalID(focused), focusedPaneAfter: TerminalID(focused)))
     }
 }
 

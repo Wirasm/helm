@@ -53,6 +53,24 @@ protocol SpoolClosing: AnyObject {
     func close(_ id: UUID) -> Bool
 }
 
+/// Bringing a pane forward, as a seam — `SpoolClosing`'s twin, and the same trade (#284).
+///
+/// **It repeats `pane(_:)` rather than inheriting it, and one adapter satisfies both.**
+/// `WorkbenchSpoolPanes` is the only implementation of either, so a shared base protocol would
+/// buy a third name for a lookup that has exactly one caller per request kind — and the fake in
+/// `SpoolModelTests` would still have to implement it. What matters is that a select is judged
+/// against **the same value** a close is: `SpoolPaneState` is read once per request and
+/// `SpoolSelectPolicy` decides on this side of the protocol, with no bench, no surface and no pty.
+@MainActor
+protocol SpoolSelecting: AnyObject {
+    /// What helm can see about one pane right now, or nil when no pane has that id.
+    func pane(_ id: UUID) -> SpoolPaneState?
+    /// Make it the pane its slot is showing, **without moving the keyboard**, and report what the
+    /// bench then looked like. The failure is helm having no bench to show anything on; every
+    /// question about whether it *may* be shown was already answered by `SpoolSelectPolicy`.
+    func select(_ id: UUID) -> Result<SelectReport, SpoolRefusal>
+}
+
 /// Driving the bench, as a seam — the same trade `SpoolSpawning`, `SpoolCapturing` and
 /// `SpoolClosing` all make (#269).
 ///
@@ -123,6 +141,10 @@ final class SpoolModel: ObservableObject {
     /// reference would be gone before the first request and every command would answer "helm
     /// has no bench".
     private var commander: (any SpoolCommanding)?
+    /// Held strongly for the same reason as the four above, and it is the same failure if it is
+    /// not: an adapter `RootView` builds inline is retained by nothing else, so a weak reference
+    /// would be gone before the first request and every select would answer "helm has no bench".
+    private var selector: (any SpoolSelecting)?
     private var watcher: SpoolWatcher?
 
     /// Requests acted on in this process, by result id — so a second window's `drain` and this
@@ -160,6 +182,10 @@ final class SpoolModel: ObservableObject {
 
     func attach(commander: any SpoolCommanding) {
         self.commander = commander
+    }
+
+    func attach(selector: any SpoolSelecting) {
+        self.selector = selector
     }
 
     /// Begin watching. Idempotent, and a no-op under `HELM_SPOOL_OFF`.
@@ -234,7 +260,8 @@ final class SpoolModel: ObservableObject {
                         + "{\"id\",\"cwd\",\"command\",\"args\",\"prompt\"}, a capture is "
                         + "{\"id\",\"kind\":\"capture\",\"path\",\"window\"}, a close is "
                         + "{\"id\",\"kind\":\"close\",\"terminal\",\"force\"}, a command is "
-                        + "{\"id\",\"kind\":\"command\",\"command\"}")
+                        + "{\"id\",\"kind\":\"command\",\"command\"}, a select is "
+                        + "{\"id\",\"kind\":\"select\",\"pane\"}")
                 continue
             }
             guard !handled.contains(request.id) else { continue }
@@ -251,6 +278,8 @@ final class SpoolModel: ObservableObject {
             case .success(.close(let accepted)):
                 act(on: accepted)
             case .success(.command(let accepted)):
+                act(on: accepted)
+            case .success(.select(let accepted)):
                 act(on: accepted)
             }
         }
@@ -319,7 +348,7 @@ final class SpoolModel: ObservableObject {
             return
         }
         // `SpoolClosing` is the app-side seam (`SpoolSpawning`'s twin) and stays `UUID`-typed —
-        // `TerminalID` is the wire's currency, not the live bench's, and `WorkbenchSpoolCloser`
+        // `TerminalID` is the wire's currency, not the live bench's, and `WorkbenchSpoolPanes`
         // is out of scope for this change. `.uuid` is the one place that boundary is crossed.
         let pane = closer.pane(request.terminal.uuid)
         if let refusal = SpoolClosePolicy.refusal(for: request, pane: pane) {
@@ -336,6 +365,52 @@ final class SpoolModel: ObservableObject {
         }
         answer(
             request.id, .closed, terminalId: request.terminal, pid: pane?.foreground)
+    }
+
+    /// Bring a pane forward, or say why not (#284).
+    ///
+    /// **Synchronous, and one write** — a select is applied to the bench value and there is no
+    /// second party to wait for, exactly as a close and a capture are.
+    ///
+    /// **The refusals are `refused` rather than `failed`, and the split is `act(on:
+    /// AcceptedCloseRequest)`'s.** A pane in the operator's own slot and a uuid helm holds no
+    /// pane for are decisions the caller can read and do something about; helm having no bench at
+    /// all is helm's own state, which is `failed`.
+    private func act(on request: AcceptedSelectRequest) {
+        guard let selector else {
+            answer(
+                request.id, .failed,
+                reason: "helm has no bench to show a pane on. It is running, and it answered "
+                    + "this request — so the selector was never attached, which is a helm defect "
+                    + "rather than anything the caller can fix.")
+            return
+        }
+        // `SpoolSelecting` is the app-side seam and stays `UUID`-typed, exactly as `SpoolClosing`
+        // does: `TerminalID` is the wire's currency, not the live bench's. `.uuid` is the one
+        // place that boundary is crossed.
+        let pane = selector.pane(request.pane.uuid)
+        if let refusal = SpoolSelectPolicy.refusal(for: request, pane: pane) {
+            refuse(id: request.id, reason: refusal.reason)
+            return
+        }
+        switch selector.select(request.pane.uuid) {
+        case .success(let report):
+            guard report.isVisible else {
+                // The bench was asked and the pane is still not the one its slot shows. Nothing
+                // known makes this reachable — which is why it is reported rather than assumed
+                // away: a `selected` result about a pane nobody can see is the lie #284 is about.
+                refuse(
+                    id: request.id,
+                    reason: "helm's bench did not make pane \(request.pane.uuidString) its "
+                        + "slot's selection, so it is still not visible. Nothing was moved and "
+                        + "nothing was lost; read ~/.helm/bench/snapshot.json to see where the "
+                        + "pane actually is")
+                return
+            }
+            answer(request.id, .selected, terminalId: request.pane, select: report)
+        case .failure(let refusal):
+            answer(request.id, .failed, reason: refusal.reason)
+        }
     }
 
     /// Drive the bench with one of helm's own commands, and say what it did (#269).
@@ -463,19 +538,20 @@ final class SpoolModel: ObservableObject {
         _ id: String, _ status: SpoolResult.Status, terminalId: TerminalID? = nil,
         pid: pid_t? = nil, sessionId: String? = nil, handle: Handle? = nil,
         runtime: String? = nil, reason: String? = nil, capture: CaptureReport? = nil,
-        command: CommandReport? = nil
+        command: CommandReport? = nil, select: SelectReport? = nil
     ) {
         directory.write(
             SpoolResult(
                 id: id, status: status, terminalId: terminalId, pid: pid,
                 sessionId: sessionId, handle: handle, runtime: runtime, reason: reason,
-                capture: capture, command: command))
+                capture: capture, command: command, select: select))
         NSLog(
-            "helm: spool request %@ is %@%@%@%@", id, status.rawValue,
+            "helm: spool request %@ is %@%@%@%@%@", id, status.rawValue,
             handle.map { " — reachable at \($0.value)" } ?? "",
             capture.map { " — \($0.path), terminal content \($0.terminalContent.rawValue)" } ?? "",
             command.map { " — \($0.command.rawValue), \($0.panes) panes in \($0.columns) columns" }
-                ?? "")
+                ?? "",
+            select.map { " — pane \($0.pane.uuidString), visible \($0.isVisible)" } ?? "")
     }
 
     /// Re-ask `probe` until it answers or the deadline passes.
