@@ -4,16 +4,18 @@
 #
 #   bash .claude/skills/helm-canvas/test.sh
 #
-# What it CANNOT prove: that the escape sequence reached helm and a pane appeared. That
-# needs a running helm and an agent to run it from, and it is the check that matters most
-# (#184 exists because the instruction was verified by reading rather than by using). So
-# the last case here emits for real and asserts only that delivery was attempted and
-# reported success — the operator confirms the pane.
+# What it CANNOT prove: that the escape sequence reached a real helm and a pane appeared.
+# That needs a running helm, and #184 exists because the instruction was verified by reading
+# rather than by using — so run push.sh against a live helm before believing it.
 #
-# What it CAN prove, since #282, is which pty gets written to, and that is the part that
-# used to be untested. The three staged cases at the bottom give push.sh a pty helm owns, a
-# pty it does not, and no pty at all, and pin one exit code to each. They are staged rather
-# than observed so the gate answers the same from a helm pane and from CI.
+# What it CAN prove, since #282, is which pty gets written to, and that is the part that used
+# to be untested. Three staged cases pin one exit code each — a pty helm owns (0), a pty it
+# does not (8), and no pty at all (6) — by handing push.sh the pty rather than observing
+# whatever the gate happens to be run under, so the answers agree from a helm pane, from a
+# Ghostty window and from CI.
+#
+# And it no longer DELIVERS while proving that. See the staging block below: this gate used
+# to push six real artifacts onto the operator's own bench every run.
 
 set -uo pipefail
 
