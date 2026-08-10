@@ -8,16 +8,24 @@ import SwiftUI
 /// reloads a file on external change (plans get rewritten by agents while you
 /// read them).
 ///
-/// Read-only on the **content of an agent's artifact**: helm never edits one, because an agent
-/// owns it and rewrites it whole. Commenting is the exception #33 argued for and #39 shipped, and
-/// it keeps that rule — a note goes to a sidecar *beside* the canvas (`CanvasNotes`), never into
-/// it, precisely so the next rewrite cannot clobber it.
+/// **Read by default, and writable when the operator asks** (#289). Every markdown canvas can be
+/// put into a writing face — an agent's plan as much as a note helm started — and `EditableFile`
+/// is that line. Nothing enters it by itself: `draft` is nil until the header's Write button is
+/// pressed, so reading a canvas is exactly what reading a canvas has always been.
 ///
-/// **The operator's own note is the second exception, and it is a different one** (#289). A file
-/// in a project store's `notes/` directory is one helm started for him and nothing else writes, so
-/// there is no rewrite to clobber and no conflict to answer. `OperatorNote` is that line, carried
-/// as a type rather than as a rule somebody has to remember: `note` is nil for every artifact an
-/// agent pushed, and the writing face below is unreachable without one.
+/// **Annotations are still a sidecar, and that has not moved.** A comment goes *beside* the canvas
+/// (`CanvasNotes`) rather than into it, precisely so the next rewrite cannot clobber it — the
+/// exception #33 argued for and #39 shipped. Editing is a different act with a different answer,
+/// which is the next paragraph.
+///
+/// **What happens when an agent rewrites the file under an open draft, which is the question #307
+/// deferred.** helm cannot stop the write — an agent writes the file directly, and nothing here is
+/// in that path — so what helm guarantees is the other direction: *it never writes over bytes it
+/// has not shown the operator, and it never discards his buffer*. `reconcile` compares what is on
+/// disk against `draft.saved` — helm's own belief about the file — and when they differ under a
+/// dirty draft it raises a `CanvasConflict`, stops saving, and puts the two ways out on a strip.
+/// Both are the operator's: `keepMine()` writes his text over theirs, `takeTheirs()` adopts
+/// exactly the version he was shown.
 @MainActor
 final class CanvasModel: ObservableObject {
     /// What the pane shows for the open file: a markdown document (rendered as
@@ -209,28 +217,26 @@ final class CanvasModel: ObservableObject {
     /// were told they could not write.
     @Published private(set) var notesFailure: String?
 
-    // MARK: - Writing a note (#289)
+    // MARK: - Writing in a canvas (#289)
 
-    /// The note this canvas is showing, when it is showing one at all.
+    /// The file this canvas would let the operator write into, when it is showing one at all.
     ///
-    /// **nil is the read-only canvas helm has always had**, and it is nil for everything except a
-    /// markdown file in a project store's `notes/` directory: an agent's plan, an `.html`
-    /// artifact, a file chosen through Browse… from the desktop, a URL. `OperatorNote`'s header
-    /// argues why that line is where it is; what matters here is that the writing face is
-    /// unreachable without one, so *"only files the operator created are editable"* is a fact
-    /// about this expression rather than a promise in a comment.
+    /// **nil is the read-only canvas**, and it is nil for an `.html` artifact, for anything helm
+    /// renders as plain text, for a `.notes.md` sidecar, and for a URL canvas. `EditableFile`'s
+    /// header argues each of those; what matters here is that the writing face is unreachable
+    /// without one.
     ///
     /// Computed rather than stored, for `notes`' reason one screen up: a stored copy is a second
     /// thing to keep in step with `showing`, and the canvas can be pointed somewhere else at any
     /// moment.
-    var note: OperatorNote? { fileURL.flatMap { OperatorNote($0, under: artifactRoot) } }
+    var editable: EditableFile? { fileURL.flatMap(EditableFile.init) }
 
     /// What the operator is typing, and what helm believes is on disk. **nil means reading** —
-    /// the rendered page — which is every canvas that is not a note and every note the operator
-    /// has switched back to reading.
-    @Published private(set) var draft: NoteDraft?
+    /// the rendered page — which is every canvas nobody has pressed Write on, and every one they
+    /// have switched back.
+    @Published private(set) var draft: CanvasDraft?
 
-    /// Why the note could not be read or written, in the operator's terms.
+    /// Why the file could not be read or written, in the operator's terms.
     ///
     /// **Deliberately not `notesFailure`.** That one is the annotation sidecar's, and the two are
     /// different files with different owners — folding them together would give the operator one
@@ -242,15 +248,7 @@ final class CanvasModel: ObservableObject {
     /// other side of the same file.
     private var saveTask: Task<Void, Never>?
 
-    /// Where the project stores are — `~/.prp` in production, a temporary directory in a test.
-    ///
-    /// **Held rather than reached for, and the same value `WorkbenchModel` starts a note with.**
-    /// `newNote` decides where a note is *written* and `note` above decides whether a file *is*
-    /// one; two roots that disagreed would produce a note the canvas then refused to open for
-    /// writing, with nothing anywhere saying why.
-    private let artifactRoot: URL
-
-    /// How long the note must be quiet before helm writes it.
+    /// How long the file must be quiet before helm writes it.
     ///
     /// **Debounced autosave, and the other two candidates lose work in ways this does not.** An
     /// explicit ⌘S is a thing to remember, and the note it loses is the one taken in a hurry —
@@ -259,16 +257,18 @@ final class CanvasModel: ObservableObject {
     /// for twenty minutes.
     ///
     /// **What it costs, said plainly, and it is worse than "one interval" — that reading was
-    /// wrong and a reviewer caught it.** `edit` cancels and reschedules on every keystroke, so a
-    /// note typed in one continuous burst with no gap this long in it has never been written
-    /// **once**: what an unhandled exit loses there is the whole note, not a bounded tail. That
+    /// wrong and a reviewer caught it.** `edit` cancels and reschedules on every keystroke, so
+    /// text typed in one continuous burst with no gap this long in it has never been written
+    /// **once**: what an unhandled exit loses there is the whole of it, not a bounded tail. That
     /// makes the flush points the load-bearing part rather than the number.
     ///
-    /// Every exit helm can see calls `saveNote()`: switching to Read, closing the pane, pointing
+    /// Every exit helm can see calls `saveDraft()`: switching to Read, closing the pane, pointing
     /// the canvas at another file, closing the last workspace (`WorkbenchModel.deactivate`), and
     /// **quitting** — `WorkbenchModel` subscribes to `NSApplication.willTerminateNotification`
     /// for exactly this reason, because ⌘Q is the ordinary way to leave and reached none of the
-    /// others. What remains is `kill -9`, which nothing can cover.
+    /// others. What remains is `kill -9`, which nothing can cover — **and an unresolved conflict,
+    /// where calling `saveDraft()` is no longer the same thing as saving.** That is argued at the
+    /// guard itself; it is named here because this list is the sentence a reader trusts.
     ///
     /// Long enough that a run of typing is one write rather than one per character, short enough
     /// that a pause between sentences has already saved. Injectable for `FileWatcher`'s reason
@@ -277,33 +277,31 @@ final class CanvasModel: ObservableObject {
 
     /// Start writing. The header's Write button, and what a freshly created note opens into.
     ///
-    /// **The draft is seeded from disk exactly once, here.** Nothing re-seeds it — not the file
-    /// watcher, not a re-render, not helm's own save firing that watcher a moment later — because
-    /// re-seeding is the one move that could take away a sentence the operator was half way
-    /// through typing.
+    /// **The draft is seeded from disk exactly once, here.** Nothing else seeds it — not the file
+    /// watcher, not a re-render, not helm's own save firing that watcher a moment later. The one
+    /// exception is `reconcile` adopting a change under a draft with nothing typed into it, which
+    /// is the case where there is provably nothing to take away.
     ///
-    /// **A note helm cannot read is not opened for writing**, which is the guard that keeps this
+    /// **A file helm cannot read is not opened for writing**, which is the guard that keeps this
     /// from being destructive: seeding an empty draft over an unreadable file and then autosaving
     /// it would replace that file with nothing.
     func write() {
-        guard let note, draft == nil else { return }
-        let existing = try? String(contentsOf: note.url, encoding: .utf8)
-        guard let text = existing ?? emptyIfAbsent(note) else {
+        guard let editable, draft == nil else { return }
+        let text: String
+        // The same three-way question `saveDraft` asks, asked with the same type. It was a
+        // hand-rolled `emptyIfAbsent` here and a bare `try?` there, and that is exactly how the
+        // two sites came to disagree about what an unreadable file means.
+        switch editable.diskContents() {
+        case let .bytes(existing): text = existing
+        case .absent: text = ""
+        case .unreadable:
             writeFailure =
-                "Could not read \(note.url.lastPathComponent) — helm will not write over a note "
-                + "it cannot read."
+                "Could not read \(editable.url.lastPathComponent) — helm will not write over a "
+                + "file it cannot read."
             return
         }
         writeFailure = nil
-        draft = NoteDraft(text: text, saved: text)
-    }
-
-    /// "" for a note whose file is not there, nil for one that is there and would not read.
-    ///
-    /// The distinction is the whole of the guard above: a missing file is a note helm is about to
-    /// create by saving, and an unreadable one is somebody else's bytes.
-    private func emptyIfAbsent(_ note: OperatorNote) -> String? {
-        FileManager.default.fileExists(atPath: note.url.path) ? nil : ""
+        draft = CanvasDraft(text: text, saved: text)
     }
 
     /// Stop writing and go back to the rendered page.
@@ -311,10 +309,19 @@ final class CanvasModel: ObservableObject {
     /// **It refuses while there is text helm could not write**, and that refusal is the point: the
     /// draft is the only copy of those keystrokes, so dropping it to satisfy a button would be the
     /// data loss this whole design is arranged around. The failure strip is already on screen
-    /// saying why, and the operator's route out is to fix the file or copy the text.
+    /// saying why, and the operator's route out is to fix the file, resolve the conflict, or copy
+    /// the text.
+    ///
+    /// **An unresolved conflict holds it too, and `isUnresolved` rather than `isDirty` is what
+    /// says so.** The tempting version of this line reasons that `saveDraft` refuses while a
+    /// conflict is up, so the draft must still be dirty — which is true when the conflict is
+    /// raised and stops being true the moment he undoes his edit back to what helm last wrote.
+    /// `text == saved` then, the strip is still on screen, and a guard spelled `isDirty` would
+    /// drop the draft and take the strip with it: helm deciding the conflict itself, silently,
+    /// through a third way out that pressed neither button.
     func read() {
-        saveNote()
-        guard draft?.isDirty != true else { return }
+        saveDraft()
+        guard draft?.isUnresolved != true else { return }
         draft = nil
     }
 
@@ -326,7 +333,7 @@ final class CanvasModel: ObservableObject {
         saveTask = Task { [weak self, saveDebounce] in
             try? await Task.sleep(for: saveDebounce)
             guard !Task.isCancelled else { return }
-            self?.saveNote()
+            self?.saveDraft()
         }
     }
 
@@ -335,24 +342,162 @@ final class CanvasModel: ObservableObject {
     /// Idempotent and cheap to call, which is what lets every exit path call it rather than
     /// deciding for itself whether a save is owed — `read()`, `open(_:)` and `close()` all do.
     ///
+    /// **It refuses while a conflict is up, and that is half of "helm does not clobber".**
+    /// Somebody else wrote this file since helm last saw it, so writing now would replace bytes
+    /// the operator has not been shown. `keepMine()` is the one route through, and it is a button
+    /// he presses.
+    ///
+    /// **What that costs at ⌘Q, weighed rather than discovered.** Quitting flushes every open
+    /// draft through here, so a conflict nobody resolved means the buffer goes with the process.
+    /// The alternative — treating quit as an implicit *keep mine* — is not the safer default it
+    /// first looks like: the operator's own description of this feature is *"a sentence or two"*
+    /// on top of what the file already said, while an agent's rewrite is a whole document. Writing
+    /// his buffer over it would destroy more than it saved, at the one moment nobody can be asked
+    /// which. So helm keeps the copy that another process can reproduce and loses the one it
+    /// cannot — deliberately, with the strip having said *"helm has stopped saving"* since the
+    /// moment it happened, and pinned by `WorkbenchNoteTests`
+    /// `.testQuittingWithAnUnresolvedConflictKeepsTheFileAndLosesTheBuffer` so it stays a decision
+    /// rather than becoming an accident. `close()` takes the same position for the same reason,
+    /// and a confirmation is what neither path has: `helm-close` reaches one of them with nobody
+    /// at the pane, and the build-update badge quits helm on the other.
+    ///
+    /// **The other half is the read directly below it, and without it the guarantee is only
+    /// probable.** `reconcile` learns about a second writer through `FileWatcher`, which debounces
+    /// 120ms — so a write landing inside the 120ms before an autosave fires would reach the model
+    /// *after* helm had already overwritten it, and the reconcile that followed would compare the
+    /// file against helm's own bytes and find them equal. Silent, and exactly the failure this
+    /// whole design is arranged around. Reading immediately before writing closes it: what helm
+    /// compares is what is on disk *now*, so the watcher's lag stops mattering. It costs one read
+    /// per save, which is once per typing pause on a file small enough to render as a document.
+    ///
+    /// **That read has three outcomes and all three are answered, which the first version of it
+    /// did not do.** It was `if let disk = try? …, disk != draft.saved`, and a failed read fell
+    /// through to the write — helm replacing bytes it never managed to look at. `EditableFile
+    /// .DiskContents` is the type that stopped the two cases sharing a branch; its header has the
+    /// measurement and the two reachable ways in.
+    ///
+    /// What remains is the microseconds between that read and the write, which needs file locking
+    /// rather than a check — recorded rather than claimed away.
+    ///
     /// **A failure keeps the text and says so.** `saved` is not advanced, so `isDirty` stays true,
     /// the next keystroke schedules another attempt, and the editor still holds every character.
     /// A canvas opened through Browse… can live somewhere read-only and `CanvasNotes.append`
-    /// already had to say the same thing one method over; this is that rule for the note itself.
-    func saveNote() {
+    /// already had to say the same thing one method over; this is that rule for the artifact
+    /// itself.
+    func saveDraft() {
         saveTask?.cancel()
         saveTask = nil
-        guard let note, var draft, draft.isDirty else { return }
+        guard let editable, var draft, draft.isDirty, draft.conflict == nil else { return }
+        switch editable.diskContents() {
+        case let .bytes(disk) where disk != draft.saved:
+            draft.conflict = CanvasConflict(theirs: disk)
+            self.draft = draft
+            return
+        case .unreadable:
+            // **Not knowing is not permission.** There is something there and helm could not read
+            // it, so it cannot say whether writing would replace the operator's own last save or
+            // an agent's document mid-stream. It is not a `CanvasConflict` either — that offers
+            // *"take theirs"*, and there is no decodable `theirs` to offer. The draft stays dirty,
+            // so the next keystroke and every later flush try again, which is what makes the
+            // ordinary case of this — a read that landed inside a streaming write — heal itself.
+            writeFailure =
+                "Could not save \(editable.url.lastPathComponent) — helm could not read what is "
+                + "there now, and will not write over bytes it has not seen."
+            return
+        case .bytes, .absent:
+            break
+        }
         do {
-            try draft.text.write(to: note.url, atomically: true, encoding: .utf8)
+            try draft.text.write(to: editable.url, atomically: true, encoding: .utf8)
             draft.saved = draft.text
             draft.savedAt = Date()
             self.draft = draft
             writeFailure = nil
         } catch {
             writeFailure =
-                "Could not save \(note.url.lastPathComponent): \(error.localizedDescription)"
+                "Could not save \(editable.url.lastPathComponent): \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - When somebody else wrote it too (#289)
+
+    /// The file on disk no longer matches what helm believes it wrote. Decide what that means for
+    /// an open draft.
+    ///
+    /// **`draft.saved` is the whole mechanism**, and it needed no second one: it is *what helm
+    /// believes is on disk*, so bytes that differ from it are bytes helm did not put there. Three
+    /// outcomes, and the operator loses nothing in any of them:
+    ///
+    /// - **The same.** helm's own save, firing its own watcher. Nothing happens — which is what
+    ///   makes autosave and a live watcher able to share one file at all.
+    /// - **Different, and the operator has typed nothing since the last write.** There is provably
+    ///   nothing of his to lose, so the change is adopted and he sees the new text. This is the
+    ///   ordinary case of reading an agent's plan with the editor open.
+    /// - **Different, and he has unsaved text.** A conflict: helm holds their bytes, stops saving,
+    ///   and puts both ways out on a strip. Neither direction is decided by helm.
+    ///
+    /// **Only `.markdown` participates, and the rest is deliberate rather than unhandled.** A file
+    /// that has been deleted or has become unreadable loads as `.notice`, and a deletion is not
+    /// content to preserve — the draft stays exactly where it is and the next save recreates the
+    /// file, which is the same answer `write()` gives for a file that was already absent.
+    private func reconcile(_ content: Content) {
+        guard case let .markdown(disk) = content, var draft else { return }
+        // Three branches in the order the doc comment lists them, rather than a chain of guards
+        // whose else-arms carry the work — and one write-back at the end instead of three.
+        if disk == draft.saved {
+            // helm and the file agree again. A conflict somebody resolved on disk — by putting
+            // back what helm last wrote — has nothing left to refuse, so it is not left up.
+            guard draft.conflict != nil else { return }
+            draft.conflict = nil
+        } else if !draft.isDirty {
+            draft.text = disk
+            draft.saved = disk
+            draft.conflict = nil
+        } else {
+            // A second write while a conflict is already up replaces it, so the strip is always
+            // about the newest bytes helm has seen — and so is what `takeTheirs` adopts.
+            draft.conflict = CanvasConflict(theirs: disk)
+        }
+        self.draft = draft
+    }
+
+    /// What the conflict strip says. A property rather than a string built in the view, so the
+    /// sentence is reachable from `swift test` and there is one place it is written.
+    var conflictNotice: String? {
+        guard draft?.conflict != nil, let editable else { return nil }
+        return "\(editable.url.lastPathComponent) was rewritten while you were editing — "
+            + "helm has stopped saving."
+    }
+
+    /// **Keep mine.** Write what is in the editor over what is on disk.
+    ///
+    /// **It adopts their bytes as helm's belief about the file, and then saves normally** — which
+    /// is what lets the ordinary path run rather than needing a flag to bypass its own guard.
+    /// `saved` becoming `theirs` is not a fiction: disk really does hold `theirs`, so `saveDraft`
+    /// re-reads, finds exactly what it now expects, and writes.
+    ///
+    /// **And a third write landing between the strip and the click is caught by that same read**,
+    /// which is the behaviour worth having: he is told again, about the newer bytes, instead of
+    /// silently replacing something he was never shown.
+    func keepMine() {
+        guard var draft, let conflict = draft.conflict else { return }
+        draft.saved = conflict.theirs
+        draft.conflict = nil
+        self.draft = draft
+        saveDraft()
+    }
+
+    /// **Take theirs.** Adopt the version the strip is about, and lose what was typed.
+    ///
+    /// It adopts the bytes helm *reported*, not the bytes on disk right now — see `CanvasConflict`.
+    /// The rendered page is already showing them, because `refresh` re-rendered on the way in.
+    func takeTheirs() {
+        guard var draft, let conflict = draft.conflict else { return }
+        draft.text = conflict.theirs
+        draft.saved = conflict.theirs
+        draft.conflict = nil
+        self.draft = draft
+        writeFailure = nil
     }
 
     // MARK: - An update the page kept (#109)
@@ -491,16 +636,15 @@ final class CanvasModel: ObservableObject {
     /// view would be gone in exactly that state. It moved up one level, to
     /// `WorkbenchModel`, which outlives every canvas pane and is also the thing that now
     /// decides *where* an opened source goes.
-    /// - Parameters:
-    ///   - artifactRoot: where the project stores live, which is what decides whether the open
-    ///     file is a note the operator may write in (#289).
-    ///   - saveDebounce: how long a note must be quiet before helm writes it.
+    ///
+    /// **It no longer takes an artifact root**, which is the seam #289's widening removed rather
+    /// than moved: editability used to be a question about where the project stores are, and is
+    /// now a question about the file in front of the canvas (`EditableFile`).
+    /// - Parameter saveDebounce: how long an edited file must be quiet before helm writes it.
     init(
         source: CanvasSource? = nil,
-        artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot,
         saveDebounce: Duration = .milliseconds(600)
     ) {
-        self.artifactRoot = artifactRoot
         self.saveDebounce = saveDebounce
         if let source { show(source) }
     }
@@ -540,10 +684,10 @@ final class CanvasModel: ObservableObject {
         // **Before anything else.** The canvas is being pointed at another file, and the draft
         // belongs to the one it is leaving — a save owed at this moment has nowhere to go once
         // `showing` has moved.
-        saveNote()
+        saveDraft()
         showing = .file(Document(url: url, content: Self.load(url)))
         // The draft is about the file that was here. Carried onto another one it would be the
-        // wrong text over the right path, which is the one way a note editor can destroy work.
+        // wrong text over the right path, which is the one way an editor destroys work.
         draft = nil
         writeFailure = nil
         selection = nil
@@ -582,8 +726,14 @@ final class CanvasModel: ObservableObject {
     func close() {
         // The pane is going away and the draft with it, so this is the last moment a save can
         // happen at all. `WorkbenchModel.close` and `closeWorkspace` both reach here, which is
-        // every way a note pane disappears short of the process dying.
-        saveNote()
+        // every way an editing pane disappears short of the process dying.
+        //
+        // **Two states leave with it, and helm has no dialog on this path to ask about either**:
+        // an unresolved conflict (`saveDraft` refuses, by design) and a write the volume rejected
+        // (`writeFailure` is up). Both have had a strip on screen since the moment they happened,
+        // which is the whole of the warning the operator gets. Making the close ask would put a
+        // modal on a path `helm-close` also reaches, where there is nobody at the pane to answer.
+        saveDraft()
         watcher = nil
         showing = nil
     }
@@ -775,12 +925,21 @@ final class CanvasModel: ObservableObject {
     ///
     /// A `.url` canvas is deliberately not reachable here: it has no file to re-read, and
     /// `reloadPage()` is the address bar's equivalent.
+    ///
+    /// **It is also the one place a second writer can be noticed at all** (#289), which is why
+    /// `reconcile` hangs here rather than on the watcher: both callers above mean *the bytes may
+    /// have changed*, an open draft has to be told either way, and a rule on one of the two
+    /// call sites would be absent from the other. The file is read once and the string is handed
+    /// to both halves — the render and the reconcile — so they cannot disagree about what is on
+    /// disk.
     func refresh() {
         guard case let .file(previous) = showing else { return }
+        let content = Self.load(previous.url)
+        reconcile(content)
         showing = .file(
             Document(
                 url: previous.url,
-                content: Self.load(previous.url),
+                content: content,
                 generation: previous.generation + 1
             ))
     }
@@ -999,7 +1158,14 @@ struct CanvasView: View {
                 if let update = model.updateNotice {
                     updateStrip(update)
                 }
-                // Its own `if`, for the reason given directly above: a note that would not save
+                // Its own `if`, for the reason given directly above. This one asks rather than
+                // reports, so it is the second strip carrying buttons — and it is above the write
+                // failure deliberately: a conflict is *why* nothing is being written, so a
+                // failure under it would be the symptom above the cause.
+                if let conflict = model.conflictNotice {
+                    conflictStrip(conflict)
+                }
+                // Its own `if`, for the reason given directly above: an edit that would not save
                 // and a comment that would not write are facts about two different files, and
                 // hiding either behind the other is helm choosing which of the operator's
                 // problems they are allowed to see.
@@ -1082,6 +1248,37 @@ struct CanvasView: View {
         }
     }
 
+    /// The second strip that carries actions, and the only one that carries two (#289).
+    ///
+    /// **Both buttons cost the operator something, so both are his to press and neither is
+    /// default-styled into looking safe.** helm has already refused to write; what is left is a
+    /// choice it has no standing to make — whether an agent's rewrite or his own half-sentence is
+    /// the one that survives. The tooltips say which is which in full, because "Keep mine" and
+    /// "Take theirs" are only unambiguous when read together.
+    private func conflictStrip(_ message: String) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                Text(message).lineLimit(2)
+                Spacer()
+                Button("Keep mine") { model.keepMine() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accent)
+                    .help("Write what you have typed over the version on disk")
+                Button("Take theirs") { model.takeTheirs() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accent)
+                    .help("Load the version on disk and lose what you have typed")
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(Color.textMuted)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.surfaceRaised)
+            Divider()
+        }
+    }
+
     private func noticeStrip(_ message: String, symbol: String) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
@@ -1098,7 +1295,11 @@ struct CanvasView: View {
         }
     }
 
-    /// Write ⇄ Read, on a note only.
+    /// Write ⇄ Read, on a markdown canvas.
+    ///
+    /// **Read is the state it starts in, and Write is a press.** That is the operator's own line
+    /// — *"there should be a read mode and editor mode, default is read"* — and it is why an
+    /// editable canvas is indistinguishable from a read-only one until he asks.
     ///
     /// Accent while writing, the same way a held tool and an open drawer already say which way
     /// they are pointing — one treatment for "this control is on", spent at a third site rather
@@ -1113,7 +1314,7 @@ struct CanvasView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(model.draft == nil ? Color.textMuted : Color.accent)
-        .help(model.draft == nil ? "Write in this note" : "Render this note")
+        .help(model.draft == nil ? "Edit this file" : "Render this file")
     }
 
     /// The tools, as chrome on the canvas rather than a mode you have to know about.
@@ -1175,16 +1376,16 @@ struct CanvasView: View {
         }
     }
 
-    /// The writing face, when there is a note and the operator is in it.
+    /// The writing face, when there is an editable file and the operator is in it.
     ///
     /// **Ahead of `document.content` rather than a case inside it**, because a draft is about the
-    /// file and not about what helm made of its bytes: a note the operator has emptied loads as
-    /// `.markdown("")` and one whose file has just been deleted under them loads as `.notice`, and
+    /// file and not about what helm made of its bytes: a file the operator has emptied loads as
+    /// `.markdown("")` and one that has just been deleted under them loads as `.notice`, and
     /// switching them out of the editor on either would drop what they were typing.
     @ViewBuilder
     private func fileContent(for document: CanvasModel.Document) -> some View {
-        if let note = model.note, let draft = model.draft {
-            NoteEditorView(model: model, note: note, draft: draft)
+        if let editable = model.editable, let draft = model.draft {
+            CanvasEditorView(model: model, file: editable, draft: draft)
         } else {
             renderedContent(for: document)
         }
@@ -1245,11 +1446,10 @@ struct CanvasView: View {
                     .truncationMode(.middle)
             }
             Spacer()
-            // **Only on a note, which is the visible half of the scope line.** An agent's
-            // artifact has no Write button at all, so there is nothing to click and nothing to
-            // explain — the conflict question #289 leaves open is one the operator cannot walk
-            // into by accident.
-            if model.note != nil {
+            // **Only on a markdown file, which is the visible half of the scope line.** An
+            // `.html` artifact, a plain-text file and a sidecar have no Write button at all —
+            // there is nothing to click and nothing to explain.
+            if model.editable != nil {
                 writeToggle
             }
             // Nothing to mark while writing: the page is not on screen, and a picker over a text
