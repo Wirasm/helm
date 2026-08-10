@@ -90,14 +90,14 @@ no agent, a quiet dot where every agent is working, an attention dot where one h
 helm holds **no state of its own** here — the registry file's lifecycle is the mark's lifecycle,
 so nothing acknowledges, decays or expires, and there is nothing to clear. It never hides,
 including on the workspace being looked at.
-_Avoid_: **drawing board** (a different thing — see below), status bar, badge, notification centre,
-calling the attention dot an "unread"
+_Avoid_: **drawable board** (a different thing — see below), status bar, badge, notification
+centre, calling the attention dot an "unread"
 
-**drawing board**:
+**drawable board**:
 A **canvas** an agent authors as labelled shapes and the operator draws on by hand, their marks
 coming back as named records. It is a kind of canvas and nothing structural: helm has no board
-pane, and nothing in the **board** above knows it exists. Owned by the `helm-board` skill, not by
-Swift.
+pane, and nothing in the **board** above knows it exists. Owned by the `helm-board` skill, which is
+where the colliding word comes from — no Swift in `Sources/Helm/Board/` is about this at all.
 _Avoid_: board unqualified (that word is the workspace marks), whiteboard, sketch pane, diagram
 
 **rail**:

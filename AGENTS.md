@@ -185,7 +185,8 @@ bash .claude/skills/helm-canvas/test.sh
 bash .claude/skills/helm-board/test.sh
 ```
 
-That skill is the drawable canvas (#111): `@quickdrawjs/core` 0.2.0 vendored, copied *beside*
+That skill is the drawable board (#111) — the word `CONTEXT.md` now defines against
+`Sources/Helm/Board/`, which is a different thing: `@quickdrawjs/core` 0.2.0 vendored, copied *beside*
 an artifact rather than injected, so it is a skill asset and not a bundle resource. Its gate
 **executes** `board-core.js` in node — the ownership diff, the overlap resolution and the state
 report all live there rather than in the DOM glue, precisely so a browser is not needed to test
