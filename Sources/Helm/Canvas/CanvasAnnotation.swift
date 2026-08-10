@@ -44,8 +44,15 @@ struct CanvasAnnotation: Equatable {
         case point(Anchor)
     }
 
-    var mark: Mark
-    var comment: String
+    /// **`let`, because a gate on construction alone is half a gate.** Both fields were `var` at
+    /// the type's internal default, so a caller could take a value the decoder really did produce
+    /// and assign it into exactly the shape `decode` refuses — `.relation(from: nil, to: nil)`,
+    /// *"the one shape that means nothing"* above, or a comment trimmed to empty — with no
+    /// compiler diagnostic anywhere. That is the same door as the initializer, one step later.
+    /// `CanvasSelection` stores its validated fields `let` for this reason; nothing in either
+    /// target writes to these outside the initializer below, so this costs no call site.
+    let mark: Mark
+    let comment: String
 
     /// **`private` is the gate's exclusivity, said by the compiler instead of by a comment**
     /// (#326). `decode` below promises *"every field is type-checked and bounded… never a crash,
