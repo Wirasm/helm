@@ -67,7 +67,9 @@ _Avoid_: active, current, selected, first responder (that word is AppKit's, one 
 
 **canvas**:
 The pane type that renders content — a markdown file, an HTML file, or a URL — and accepts
-annotation on it. Modular by source; extendable to further formats.
+annotation on it. Modular by source; extendable to further formats. A **markdown** canvas also
+has a writing face the operator enters deliberately; **read is the default**, and helm stops
+saving rather than overwrite a file somebody else wrote since it last looked.
 _Avoid_: artifact pane, webview, browser, draw-on pane
 
 ### What helm looks like
@@ -185,10 +187,12 @@ _Avoid_: callback, event, message (nothing is delivered — the agent reads a fi
 
 **request**:
 One file in the spool, of one **kind**: a `spawn` (`{id, cwd, command, args, prompt}`), a
-`capture` (`{id, kind, path, window}`) or a `close` (`{id, kind, terminal, force}`). Acted on
+`capture` (`{id, kind, path, window}`), a `close` (`{id, kind, terminal, force}`), a `command`
+(`{id, kind, command}`) or a `select` (`{id, kind, pane}`). Acted on
 **at most once** — claimed by rename into `claimed/`, which is a graveyard and never re-read,
 so a restart mid-spawn cannot double-open. Only the agents in `SpoolPolicy.allowedCommands` may
-be named, and only by a spawn.
+be named, and only by a spawn. `SpoolRequest.kinds` is the list, and the refusal for a kind helm
+does not know is written from it.
 _Avoid_: job, task, command (the `command` is a field of it)
 
 **teardown**:

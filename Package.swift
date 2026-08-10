@@ -42,8 +42,8 @@ let package = Package(
         // What crosses the spool's process boundary (#221) — request and result types, and the
         // directory-resolution rules a caller must not guess at. No AppKit, no `@MainActor`,
         // nothing app-shaped. Only `Helm` depends on it — `tools/helm-spool.swift`,
-        // `helm-close.swift`, `helm-capture.swift` and `helm-command.swift` do NOT, and that is
-        // not the oversight
+        // `helm-close.swift`, `helm-capture.swift`, `helm-command.swift` and
+        // `helm-select.swift` do NOT, and that is not the oversight
         // #221 first took it for. An `import HelmWire` needs a resolved package: `swift run`
         // demands the gitignored, unpatched `vendor/libghostty-spm` even though HelmSpool's own
         // dependency graph never touches it, and it needs the caller's cwd to *be* this package,

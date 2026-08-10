@@ -69,7 +69,8 @@ A sender cannot guess a handle, which is correct: you list who is alive and addr
 a person would. `owner.json` carries the cwd, so *"the one in the auth worktree"* is a lookup.
 
 ```
-~/.helm/mail/                        ($HELM_MAIL_DIR overrides the root)
+~/.helm/mail/                        ($HELM_MAIL_DIR overrides the root; a helm running under
+                                      $HELM_DEFAULTS_SUITE moves it to ~/.helm/mail-<suite>)
   helm-a3f9/
     owner.json                       {handle, runtime, pid, sessionId, cwd, claimedAt}
                                      plus retiredAt once its owner is gone
@@ -197,6 +198,15 @@ pi --no-extensions -e "$(git rev-parse --show-toplevel)/pi/extensions/helm-mail/
 
 `HELM_MAIL_DIR=/tmp/somewhere` points the whole convention elsewhere, which is what makes the
 test suite hermetic — no run touches the real mailbox.
+
+**And `HELM_DEFAULTS_SUITE` moves it without being asked** — [#285](https://github.com/Wirasm/helm/issues/285).
+An isolated helm hands every pane the suite it runs under (`PaneEnvironment`), so a session inside
+one claims in `~/.helm/mail-<suite>` and the operator's `~/.helm/mail` is left alone: three rules,
+`HELM_MAIL_DIR` first, then the suite, then the shared root, and they are `SpoolDirectory.resolve`'s
+one directory over. The same rule is written three times — here, in `hooks/helm-mail.mjs` and in
+`Sources/HelmWire/Spool/MailboxDirectory.swift` — because helm cannot reach into either writer;
+`hooks/mailbox-conformance.mjs` runs all three against one fixture set so a divergence is red rather
+than a helm that cannot see the agents it is hosting.
 
 ## Test it
 

@@ -581,6 +581,51 @@ run "$root" claude-user-prompt-submit '{"session_id":"aaaa-bbbb-cccc-1234","cwd"
 	ok "a prompt with no mail adds nothing to the turn, on either channel" ||
 	bad "injected into an empty-mailbox turn: out=[$OUT] err=[$ERR]"
 
+# ── an isolated instance claims where the operator never looks (#285) ────────────────────
+#
+# THE ONE SECTION THAT CANNOT USE `HELM_MAIL_DIR`, because the whole question is what happens
+# when nobody sets it. `HELM_DEFAULTS_SUITE` is what a throwaway helm hands its panes, and
+# before #285 an agent under one claimed in the operator's own `~/.helm/mail` — measured, beside
+# his live agents. So `HOME` is redirected instead and `mailRoot()` runs its real default branch
+# against a directory this script owns. The operator's `~/.helm/mail` is unreachable from here by
+# construction rather than by care, which is the same rule `scratch` follows in the conformance
+# harness.
+home=$(fresh)
+# `-u HELM_DEFAULTS_SUITE` FIRST and then the assignment, because this gate is very often run by
+# an agent hosted in an isolated helm — which exports exactly this variable. Measured: `env -u X
+# X=v` applies the unset, then the assignment, so the empty first argument really does mean "no
+# suite" rather than "whatever the shell that ran the gate is in". Without it the control below
+# claims in the developer's own suite and reports the default branch as gone.
+isolated_claim() {
+	local suite=$1 session=$2
+	printf '{"session_id":"%s","cwd":"/tmp/isolated-instance"}' "$session" |
+		env -u HELM_MAIL_DIR -u HELM_DEFAULTS_SUITE HOME="$home" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" \
+			${suite:+HELM_DEFAULTS_SUITE="$suite"} \
+			"$HOOKS/claude-session-start" >/dev/null 2>&1
+}
+
+isolated_claim "drivetest" "019fc78b-f108-7c69-b602-1d44f7639531"
+suite_handle=$(ls "$home/.helm/mail-drivetest" 2>/dev/null | head -1)
+[ -n "$suite_handle" ] && [ -f "$home/.helm/mail-drivetest/$suite_handle/owner.json" ] &&
+	ok "an agent under HELM_DEFAULTS_SUITE claims in ~/.helm/mail-<suite> (#285)" ||
+	bad "claim: nothing under $home/.helm/mail-drivetest — the suite did not move the mailroom"
+# THE NEGATIVE CONTROL, and it is the ticket's acceptance line: the shared root must not merely
+# hold a different mailbox, it must not have been touched at all.
+[ ! -e "$home/.helm/mail" ] &&
+	ok "and the shared ~/.helm/mail was never created, let alone claimed in" ||
+	bad "claim: an isolated instance still reached the shared root: $(ls "$home/.helm/mail" | tr '\n' ' ')"
+
+# The other side of the same control. A `mailRoot` that always suffixed something would satisfy
+# every line above; this is what fails if the suite branch fires when there is no suite.
+isolated_claim "" "019fc78c-ec03-76f3-8e87-f0fc911898cf"
+shared_handle=$(ls "$home/.helm/mail" 2>/dev/null | head -1)
+[ -n "$shared_handle" ] && [ -f "$home/.helm/mail/$shared_handle/owner.json" ] &&
+	ok "and with no suite set the same hook claims in ~/.helm/mail, as it always did" ||
+	bad "claim: no suite set and nothing under $home/.helm/mail — the default branch is gone"
+[ "$(ls "$home/.helm/mail-drivetest" | wc -l | tr -d ' ')" = 1 ] &&
+	ok "the two instances' mailrooms hold one mailbox each — neither can see the other" ||
+	bad "claim: the isolated mailroom gained a mailbox from the un-isolated run"
+
 # ── conformance across the runtime boundary ──────────────────────────────────────────────
 #
 # Everything above tests THIS runtime's half. `mailbox-conformance.mjs` tests that the other

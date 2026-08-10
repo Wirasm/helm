@@ -130,10 +130,12 @@ final class WorkbenchModel: ObservableObject {
 
     /// Where the project stores are — `~/.prp` in production (#289).
     ///
-    /// **One value, handed to both halves of the note seam.** `newNote` decides where a note is
-    /// written; `CanvasModel.note` decides whether an open file *is* one. Two roots that
-    /// disagreed would create a note the pane then refused to open for writing, with nothing
-    /// anywhere saying why — so the model that makes the one hands the same value to the other.
+    /// **One reader now, and that is the widening.** It used to be handed to `CanvasModel` too,
+    /// because editability was a question about where the stores were and a pane that disagreed
+    /// with `newNote` would create a note it then refused to open. `EditableFile` judges the file
+    /// in front of the canvas instead, so the only thing that still needs this is deciding where
+    /// a *new* note lands — and there is no second answer left to disagree with.
+    ///
     /// Injected for `notes`' and `agents`' reason exactly: every rule below is then reachable
     /// from `swift test` against a temporary directory, with nothing written near the operator's
     /// own `~/.prp`.
@@ -343,9 +345,17 @@ final class WorkbenchModel: ObservableObject {
         resumeOffers = [:]
         // **Flushed before they are dropped** (#289). Unlike `closeWorkspace`, this does not call
         // `close()` on each model — that is deliberate and predates notes — so nothing else here
-        // would give a note being typed in its last chance to be written. A pending save holds
-        // its model weakly, so dropping the cache mid-debounce is the one path that could lose
-        // the keystrokes since the last write.
+        // would give a draft being typed in its last chance to be written. A pending save holds
+        // its model weakly, so dropping the cache mid-debounce would lose the keystrokes since
+        // the last write.
+        //
+        // **The flush is not the same as a save, and this is the second thing that can be lost
+        // here.** `saveDraft` refuses while a `CanvasConflict` is up — somebody else wrote the
+        // file and helm will not overwrite bytes the operator has not been shown — so switching
+        // workspace with the strip on screen drops that buffer. Deliberate, argued at
+        // `CanvasModel.saveDraft`, and the same position `close()` and ⌘Q take; pinned per exit by
+        // `CanvasEditorTests` and `WorkbenchNoteTests` rather than asserted in three comments and
+        // checked in one, which is how it stood when the guard was added.
         flushNotes()
         canvases.removeAll()
         // Keyed by canvas pane id, so it goes exactly when the cache does — a leftover entry
@@ -501,10 +511,7 @@ final class WorkbenchModel: ObservableObject {
         let model = CanvasModel(
             source: {
                 if case let .canvas(source) = pane.content { source } else { nil }
-            }(),
-            // The same root `newNote` writes into, so "is this a note?" has one answer per model
-            // rather than one per call site.
-            artifactRoot: artifactRoot)
+            }())
         // The other direction, and the half that was missing: a canvas that goes somewhere
         // has to take its pane with it, or the bench persists where the pane *started*
         // (#89). Wired here because this is the only place a `CanvasModel` is made — and
@@ -769,6 +776,21 @@ final class WorkbenchModel: ObservableObject {
         commit(bench)
     }
 
+    /// A tab click asked for **from outside** — the spool's `select` kind (#284), which is to
+    /// `select(_:)` what `offerSplitRight()` is to `splitRight()`: the same selection with focus
+    /// left where the operator put it (`Workbench.select(offering:)`).
+    ///
+    /// Reports whether the pane is **visible** afterwards rather than whether it was asked for,
+    /// for `WorkbenchSpoolPanes.close`'s reason: the spool's result must say what the bench did,
+    /// and "I asked" is not that.
+    @discardableResult
+    func offerSelect(_ pane: Pane.ID) -> Bool {
+        guard var bench, bench.pane(pane) != nil else { return false }
+        bench.select(offering: pane)
+        commit(bench)
+        return self.bench?.visiblePaneIDs.contains(pane) ?? false
+    }
+
     /// ⌘1–⌘9 — select by position **within the focused slot**. It was by position within
     /// the workspace; a bench has no single row for that to mean.
     func selectTab(_ index: Int) {
@@ -901,13 +923,13 @@ final class WorkbenchModel: ObservableObject {
         return reading.count == 1 ? reading[0].id : nil
     }
 
-    /// Write every open note now (#289).
+    /// Write every open draft now (#289).
     ///
     /// **Named rather than written twice, because the two callers are unrelated**: a workspace
     /// teardown that is about to drop these models, and the app being quit. Both are moments
     /// after which a debounced save can no longer happen, and neither knows about the other.
     func flushNotes() {
-        for cached in canvases.values { cached.model.saveNote() }
+        for cached in canvases.values { cached.model.saveDraft() }
     }
 
     func closeFocusedPane() {
