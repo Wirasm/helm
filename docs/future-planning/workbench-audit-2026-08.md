@@ -559,7 +559,7 @@ hostile-output handling becomes a renderer decision made once, the better place 
 
 ### How to build it — DECIDED: strangler, in this repo
 
-**The actionable milestone sequence lives in `docs/bench-roadmap.md`, written for a
+**The actionable milestone sequence lives in `docs/future-planning/bench-roadmap.md`, written for a
 session with no prior context — start there when building.**
 
 One git project, so agents work across the whole stack in one checkout — and because the

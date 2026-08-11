@@ -2,7 +2,7 @@
 
 **Read this cold.** This document assumes no prior context. The full argument — audit,
 landscape research, architecture, decisions and their rationale — is
-`docs/workbench-audit-2026-08.md` (same directory); read it before starting any
+`docs/future-planning/workbench-audit-2026-08.md` (same directory); read it before starting any
 milestone. This file is the actionable sequence: what to build, in what order, what
 proves each step, and what gets unwired when.
 
