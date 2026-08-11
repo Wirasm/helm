@@ -9,6 +9,8 @@ terminal it owns and renders what it writes. It never builds or hosts an agent o
 
 Direction: `docs/direction.md` (an entry point, not a spec).
 
+`docs/future-planning/` is a **proposal, not the tree** — an audit of helm plus a milestone plan for a headless-daemon successor. Its roadmap is written in the imperative and reads as a work order; it is not one. **Work there starts when the operator names a milestone, and only then.** Its audit's Part I is a real measurement of this tree and is safe to read for that; the rest describes something that does not exist. The directory's own `README.md` says the same thing to whoever opens it first.
+
 ## Working here
 
 Gate, all green before a PR to `development`:
