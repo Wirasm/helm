@@ -136,8 +136,11 @@ shipped helm's model** — human and agents as co-tenants of one visible bench.
    - AGENTS.md's premise that an idle Claude Code session cannot be woken from outside
      ("the notice instead tells the agent to arm its own watch; being notified is the
      wake") is outdated as of Claude Code v2.1.224: cross-session messaging delivers into
-     an idle session as a new user turn. The whole Arm dance in `helm-mail-cc` is now the
-     long way around for CC→CC mail.
+     an idle session as a new user turn. The Arm dance in `helm-mail-cc` becomes the long
+     way around for CC→CC mail — but only once the receiving agent is spawned with
+     `crossSessionInbound: "accept"`; under yolo postures the default silently holds the
+     message instead (see Part II item 2), so the Arm watch stays the reliable path until
+     that setting ships with every spawn.
 
 ---
 
@@ -166,10 +169,24 @@ shipped helm's model** — human and agents as co-tenants of one visible bench.
    longer true, and the operator already exploits this (the `peer-sessions` skill,
    github.com/ray-amjad/peer-sessions, is a worked example: name→socket resolution,
    reply-address-in-the-brief because the peer cannot discover the sender, spawn/teardown
-   scripts — placed, as it happens, via cmux). Agent view: `claude --bg`, auto-worktrees
-   under `.claude/worktrees/`,
-   autonomous draft PRs. The Agent SDK exposes the whole loop programmatically with
-   resume/fork and permission callbacks.
+   scripts — placed, as it happens, via cmux). **Two hard-won qualifications on that
+   wake** (verified against the docs, 2026-08-11): the inbound default is derived from
+   permission modes, and a receiving session in bypass-permissions mode **silently holds**
+   any message whose sender doesn't identify as also bypassing — held mail is dropped
+   after the dialog expiry (default 5 min) in unattended contexts. A daemon poking the
+   socket is not a session, and the only unverified-sender exception is for the session's
+   own *children* — a supervisor is the parent, so it never qualifies. The wake therefore
+   works for yolo agents **only when they are spawned with `crossSessionInbound:
+   "accept"` in their settings** — a named precondition of the design, not a footnote.
+   **Claude Code also ships an actual daemon now**: background sessions (`claude --bg`)
+   are hosted by a per-user supervisor process that survives the spawning terminal and
+   even its own binary-update restarts, keeps a pre-warmed worker so dispatch skips cold
+   launch, and `claude attach <id>` adopts a session into any terminal — though sessions
+   do **not** survive machine reboot, so a resume store still earns its place. The
+   operator's own measurement of dispatch cost: an in-process subagent pays ~47k tokens
+   of context to stand up; a `--bg` peer paid ~1k. Agent view: auto-worktrees under
+   `.claude/worktrees/`, autonomous draft PRs. The Agent SDK exposes the whole loop
+   programmatically with resume/fork and permission callbacks.
 3. **libghostty was extracted.** Ghostty 1.3.0 (March 2026): libghostty is now a
    standalone full-featured Zig module with its own release cycle — but no tagged release
    yet and the C API is still WIP. **libghostty-vt** (the zero-dependency VT parser/state
@@ -231,6 +248,13 @@ Consequences bought outright: the app restarting costs nothing (reattach); the m
 rebooting costs a `--resume` per agent, driven by the daemon from stored session ids
 (cmux's hook trick, helm's `resumable` field, done automatically); ssh and a future phone
 client are the same attach path; a spawn needs no display *actually*, not aspirationally.
+And the sharpest consequence, easy to undersell as a coordination detail: **owning the
+pty is what makes the whole heterogeneous fleet addressable.** The guarded
+paste-at-idle-prompt wake works for *any* CLI precisely because the daemon holds the
+pty and knows the pane is idle — it is what makes codex reachable at all, and what
+makes "woken mail delivery on every runtime" a property of the bench rather than a
+per-runtime negotiation. Restart survival is the argument that sells the daemon;
+universal addressability is the one the design stands on.
 
 Language: the daemon in **Rust or Zig** (single static binary, no toolchain state — the
 same property helm's spool scripts fight for; Zig gets libghostty-vt natively, Rust has
@@ -569,6 +593,35 @@ first step is *additive*, so the new stack is proven before anything old is touc
 Apply the repo's own discipline to each unwiring: watch the old path fail after removal,
 name which tests proved parity, and revert with `git checkout <base> -- <files>` when a
 step lies. helm strangles itself along its own seams and ends the migration as the face.
+
+### Addendum 2026-08-11 — the repo moved under this audit
+
+A wave of PRs landed on `development` the day after the audit's base commit; the branch
+is rebased onto them, and the following claims above are superseded:
+
+- **Four of the five standing-debt items are fixed**: the spool request id is a newtype
+  (#260 — so `bench-wire` *ports* helm's `RequestID` rather than introducing one), the
+  mailbox is suite-isolated (#285), `push.sh` refuses from outside a helm pane (#282),
+  and OSC 52 respects a clipboard-destination rule (#297 — the painter inherits a solved
+  problem, not an open one). #136 (pre-turn delivery leaves no transcript trace) remains
+  open, and mostly evaporates at M2 since socket-delivered messages arrive as real user
+  turns.
+- **The AGENTS.md drift this audit reported is fixed** (#327, PRs #328/#329), including
+  the wake-cap claim — which now documents *why* a hook-side cap cannot work rather than
+  merely lacking one.
+- **The spool grew two more addressed verbs, exactly in this design's grammar**:
+  `helm-select` (#284 — bring-forward answered as an offer: shows a pane in a slot the
+  operator is not in, three-valued keyboard state, deliberately no `--force`) and
+  `helm-name` (#313 — panes named by agents). Six scripts now hand-spell the wire
+  format, all conformance-pinned. The audit's "16 refused for lacking an address" is
+  thus already down to 14 — helm is converging on the addressed-verb thesis by itself,
+  which is the strongest evidence yet that it is the right one.
+- **Attention groundwork exists today**: the bench snapshot publishes what an agent says
+  it is waiting for (#283 → `waitingFor`, with `statusUpdatedAt` moving on it). M1's
+  taps have a helm-side input to read, not just hooks.
+- The "finish before M0" triage in the conversation record is largely done by these
+  PRs; what usefully remains of it is canvas-seam hygiene (#210 tail) and the proving
+  artifacts, both on their own timelines.
 
 ### And if not greenfield
 

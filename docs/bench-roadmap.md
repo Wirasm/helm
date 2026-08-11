@@ -16,11 +16,12 @@ agents get their own always-on box; the Mac attaches. Migration is strangler-sty
 inside this repo: one vertical at a time, old code unwired only when the new is proven.
 
 **Everything is built and proven on one machine — the operator's Mac — first.** The
-second machine is not added until M0–M5 are done and living well in daily use; do not
+second machine is not added until M0–M6 are done and living well in daily use; do not
 stand up a forge, a VM, or a remote peer "to test peering" before then. The design is
-machine-count invariant on purpose (topology is config), so nothing in M0–M5 needs a
-second machine to be built correctly — and `BENCH_SUITE` gives every isolation the
-early milestones need without one.
+machine-count invariant on purpose (topology is config), so nothing in M0–M6 needs a
+second machine to be built correctly — M6 (Reach) is the operator's devices attaching
+to the one machine over the tailnet, not a second machine — and `BENCH_SUITE` gives
+every isolation the early milestones need without one.
 
 ## Invariants — violating any of these is wrong even if it works
 
@@ -32,8 +33,10 @@ Each is argued in the audit doc; this is the checklist form.
 2. **No orchestrator concept in the app — ever.** No role, rank, team, or supervisor
    field in benchd, the wire contracts, the CLI, or the face. Hierarchy is prompts and
    skills, run *on* the bench. Attention items may be *addressed* to any tenant's queue;
-   the daemon stores no notion of who routes to whom. (Audit doc: "Orchestration … NOT
-   part of the app".)
+   the daemon stores no notion of who routes to whom. Corollary: **an agent's role
+   arrives in its spawn brief** — there is no relation in the daemon to look it up from,
+   so a brief that assumes the recipient knows its place in a hierarchy is a bug in the
+   brief. (Audit doc: "Orchestration … NOT part of the app".)
 3. **Every agent is a full interactive TUI in a benchd pty.** Never `claude -p`, never
    `codex exec`. Attach from anywhere must be indistinguishable from sitting at the box.
    Resume after reboot is interactive `--resume` typed into a fresh pty.
@@ -56,9 +59,14 @@ Each is argued in the audit doc; this is the checklist form.
    conformance-pinned duplicate under the repo's honest-duplicate rule (AGENTS.md).
 10. **Keep helm's ported rules verbatim** where they survive: mailbox rules (notice
     carries path never body; `operator` reserved; retire never delete), spool semantics
-    (claim-by-rename, two-phase results, status-plus-reason), close refusals
-    (`holdsKeyboard` never overridable; busy = `getppid(fg) == getsid(fg)`), unattended
-    postures, prompt-out-of-argv, paste-then-submit launch lines.
+    (claim-by-rename, two-phase results, status-plus-reason, the request-id newtype —
+    landed in helm as #260, port it, don't reinvent it), close refusals
+    (`holdsKeyboard` never overridable; busy = `getppid(fg) == getsid(fg)`), the select
+    rule (#284: show a pane in a slot the operator is not in; three-valued keyboard
+    state; no force override), pane naming (#313), the `AddressBook` owner-join rule
+    (#247: session match first, pid only as fallback), the clipboard-destination rule
+    (#297) in the painter, unattended postures, prompt-out-of-argv, paste-then-submit
+    launch lines.
 
 ## Working discipline, every milestone
 
@@ -181,7 +189,17 @@ collapses into taps.
   turn); pi — in-process wake via the extension; any TUI at an idle prompt — benchd
   pastes the notice into the composer and submits (guarded by the tap's idle check;
   paste, then Return separately). Deliver-before-turn remains the no-transport
-  fallback.
+  fallback. Note M2 is *small*: the socket post is the entire CC delivery mechanism —
+  the file record stays canonical and survives any socket incident untouched.
+- **Named precondition (verified 2026-08-11, not a footnote): every spawned Claude Code
+  agent must carry `crossSessionInbound: "accept"` in its settings.** The inbound
+  default derives from permission modes, and a bypass-permissions (yolo) session
+  **silently holds** any message whose sender doesn't identify as also bypassing — held
+  mail is dropped after the dialog expiry (default 5 min) in unattended contexts. benchd
+  never qualifies for the unverified-sender exception because that exception is for the
+  session's own *children* and benchd is the parent. Without this setting, every wake in
+  this design silently fails; the M2 prove-matrix must include a yolo→yolo wake through
+  benchd.
 - `bench mail send|list|read` verbs; hooks and pi extension thin to sensors +
   claim-reporting; benchd optionally registers bench tenants on the CC discovery path
   so `ListAgents` sees them.
@@ -197,8 +215,17 @@ halves stay); the Arm-a-watch instructions in the mail skills.
 
 **Goal:** `bench` CLI is the one agent-facing surface; the four spool scripts retire.
 
-- `bench spawn|close|capture|cmd` implemented over the socket, with benchd *forwarding*
-  to helm's existing spool during transition (helm unchanged).
+- `bench spawn|close|select|name|capture|cmd` implemented over the socket, with benchd
+  *forwarding* to helm's existing spool during transition (helm unchanged; the spool now
+  has six kinds — `select` #284 and `name` #313 joined after the audit).
+- **Build/buy evaluation for the Claude spawn backend**: Claude Code ships a per-user
+  supervisor daemon (`claude --bg`) with a pre-warmed worker and `claude attach <id>`
+  adopting a session into any terminal. A benchd pane running the attach client keeps
+  the full-TUI invariant while the session survives face/daemon restarts inside CC's own
+  supervisor — and the operator measured dispatch at ~1k tokens for a `--bg` peer vs
+  ~47k to stand up an in-process subagent. Caveat: `--bg` sessions do **not** survive
+  machine reboot, so benchd's resume store stays regardless. Evaluate at this milestone
+  by measurement; pi and codex remain benchd-pty either way.
 - File drop-box under `~/.bench/` for socketless callers — claim-by-rename, same
   semantics, lower priority than the socket.
 - Ship the `bench` SKILL.md (gated on a bench-set env var, herdr-style); retarget
@@ -259,11 +286,32 @@ the restore-offer machinery (`awaitingRestore`/`resumable` — mostly dissolved)
 every display-bound workaround (OSC push path in `CanvasPush` → replaced by
 `bench open`).
 
-## M6 — The forge
+## M6 — Reach (still one machine)
+
+**Goal:** "I'm anywhere, the machine's at home, I open the bench and work." This is the
+posture the whole design serves, it needs no forge and no second dev machine — only a
+daemon that isn't in the app — and it deliberately gets its own milestone rather than
+hiding inside the forge's peering.
+
+- Expose the daemon's socket on the tailnet (tsnet listener or Tailscale serve); device
+  identity is the entire auth story (invariant 6).
+- `bench attach` and the queue/mail/attn verbs from the laptop and phone (ssh TUI; push
+  via ntfy on the tailnet); artifacts render remotely via daemon-served canvas bytes
+  (M4).
+- **Partial reach can land much earlier and should**: from M1 the attention queue and
+  mail are socket verbs, so exposing them costs one tailnet listener — read the queue
+  and answer a decision item from the phone before terminals are even daemon-held. Full
+  terminal reach needs M5's attach protocol.
+
+**Prove:** from off-LAN — read the queue, answer a decision item, attach to a live
+session, push an artifact and see it rendered.
+**Unwire:** nothing.
+
+## M7 — The forge
 
 **Goal:** the agents' own machine; the Mac becomes an attach point.
 
-**Entry condition: M0–M5 complete and proven in daily use on the Mac.** This milestone
+**Entry condition: M0–M6 complete and proven in daily use on the Mac.** This milestone
 starts when the second machine is actually purchased and wanted — not before, and never
 as a way to test earlier milestones.
 
