@@ -346,5 +346,6 @@ forge reaches the phone.
 
 ## Naming note
 
-"bench"/`benchd` are working names from the design conversation — rename freely before
-M0 lands if the operator prefers; nothing here depends on the word.
+`bench`/`benchd` — blessed by the operator 2026-08-11. The name is settled and M0 bakes
+it into crate names, the socket path, `BENCH_SUITE`, `~/.bench/` and the CLI; do not
+reopen it.
