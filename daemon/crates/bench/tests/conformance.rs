@@ -1119,3 +1119,65 @@ fn a_claimed_handle_refuses_a_second_claim_and_a_path_is_not_a_handle() {
     );
     assert_eq!(c.code, 3, "stderr: {}", c.stderr);
 }
+
+#[test]
+fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
+    // The house rule: a documented snippet is executed, never restated — a test that
+    // retypes it is a second copy that drifts (helm's mail-skill gate, ported). Every
+    // ```bash fence in SKILL.md runs in order, as operator, against a throwaway root.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.claude/skills/bench-mail/SKILL.md"),
+    )
+    .expect("bench-mail SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        snippets.len() >= 3,
+        "the skill's send/list/read snippets exist"
+    );
+
+    let home = TestHome::claim("skill");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let root = home.dir.join(".bench");
+    for (i, snippet) in snippets.iter().enumerate() {
+        let out = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", snippet])
+            .env_remove("BENCH_SUITE")
+            .env_remove("BENCH_HANDLE")
+            .env("HOME", &home.dir)
+            .env("BENCH_DIR", &root)
+            .env("BENCH", bench_bin())
+            .output()
+            .expect("run snippet");
+        assert!(
+            out.status.success(),
+            "SKILL.md snippet {} failed (exit {:?}):\n{}\n--- stderr:\n{}",
+            i + 1,
+            out.status.code(),
+            snippet,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // The sequence is the story the skill tells: a send exists, the listing shows it
+    // or its retirement, and the read snippet retired it.
+    let listing = bench(&home.dir, &["mail", "list", "--handle", "operator"]);
+    assert!(
+        listing.stdout.contains("\"unread\": false"),
+        "the read snippet retired the sent message: {}",
+        listing.stdout
+    );
+}
