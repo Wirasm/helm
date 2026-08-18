@@ -1,13 +1,12 @@
-# The daemon gate as its own CI job, per the pi/-and-hooks/ pattern: triggered only by
-# daemon/** changes, needs only the Rust toolchain, and the Swift jobs never learn
-# about it (bench-roadmap invariant 9).
+# The daemon gate as its own CI job, per the pi/-and-hooks/ pattern. It runs on EVERY
+# pull request and exits early when daemon/ is untouched — deliberately, because this
+# check is a required status: a job that only triggers on daemon/** paths never reports
+# on a Swift-only PR, and a required check that never reports blocks the merge forever.
+# Always report, spend nothing when there is nothing to gate.
 name: daemon
 
 on:
   pull_request:
-    paths:
-      - "daemon/**"
-      - ".github/workflows/daemon.yml"
 
 jobs:
   gate:
@@ -15,7 +14,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+        with:
+          fetch-depth: 0
+      - name: did daemon/ change?
+        id: changed
+        run: |
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+              | grep -qE '^(daemon/|\.github/workflows/daemon\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "daemon/ untouched — gate satisfied by construction"
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: bash daemon/test.sh
+      - if: steps.changed.outputs.run == 'true'
+        run: bash daemon/test.sh

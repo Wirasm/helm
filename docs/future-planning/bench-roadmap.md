@@ -157,7 +157,8 @@ against the real CLI.
 > The tap dependency that originally ordered them is softened by measurement — the
 > spike verdicts in `daemon/spikes/` proved the pty-paste wake on all three runtimes
 > with a plain pty-quiet idle gate, so mail's wake path does not wait for taps.
-> Milestone numbers below are left as written; start with M2, then return here.
+> Milestone numbers below are left as written; the running order is **M5a (split out
+> below) → M2 (mail) → M1 (attention)**.
 
 ## M1 — Taps and the attention queue (purely additive)
 
@@ -271,6 +272,21 @@ restore) driven entirely through the socket; canvas renders an artifact it never
 from local disk.
 **Unwire:** `WorkspacePersistence`'s workbench half, `BenchSnapshotModel` (the snapshot
 becomes a benchd projection of the event stream, same file shape for readers).
+
+> **Split, operator-ruled 2026-08-18: M5a is pulled forward to land before mail; M5b
+> stays here.** The pty spike proved daemon-owned ptys hosting full TUIs, which makes
+> the cheap half cheap and the wake story clean:
+>
+> - **M5a — the daemon-session core, before mail.** benchd owns ptys for **new spawns
+>   only**: `spawn`/`attach`/`close`/minimal `resume` verbs, a dtach-grade raw byte
+>   relay for attach (ring-buffer replay, resize; no VT grid, no painter), viewed by
+>   running `bench attach` inside an ordinary helm pane. Mail's wake then pastes into
+>   a pty benchd owns — uniform across claude, codex and pi, no per-runtime transports.
+>   Accepted interim costs, chosen knowingly: attach-hosted agents lose helm's pane
+>   `agent` records and mark-routing identity until M4/M5b; canvas-push passthrough
+>   through the relay is assumed and must be spiked before relying on it.
+> - **M5b — everything below this note as written**: the painter, VT-grid state,
+>   migrating existing libghostty panes, and the unwiring list. Unchanged.
 
 ## M5 — Ptys move, per-pane
 
