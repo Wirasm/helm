@@ -12,7 +12,8 @@
 //! knows them, and a code that changes meaning across tools is worse than no code.
 
 use bench_wire::{
-    EXIT_NO_DAEMON, Request, RequestId, Response, SuiteName, resolve_root, socket_path,
+    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Request, RequestId, Response, Status,
+    SuiteName, resolve_root, socket_path,
 };
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -100,6 +101,11 @@ fn run() -> i32 {
             return EXIT_NO_DAEMON;
         }
     };
+    // Bounded on both directions (R2): a caller that hangs produces no exit code,
+    // which is the one failure an unattended agent cannot act on. A timeout is exit 2
+    // — from the caller's seat, a daemon that never answers IS no daemon.
+    let _ = stream.set_write_timeout(Some(DAEMON_IO_TIMEOUT));
+    let _ = stream.set_read_timeout(Some(CLIENT_READ_TIMEOUT));
 
     let mut line = match serde_json::to_string(&request) {
         Ok(l) => l,
@@ -113,7 +119,11 @@ fn run() -> i32 {
 
     let mut reply = String::new();
     if BufReader::new(&stream).read_line(&mut reply).is_err() || reply.is_empty() {
-        eprintln!("bench: no answer from {}", sock.display());
+        eprintln!(
+            "bench: no answer from {} within {}s",
+            sock.display(),
+            CLIENT_READ_TIMEOUT.as_secs()
+        );
         return EXIT_NO_DAEMON;
     }
 
@@ -134,14 +144,15 @@ fn run() -> i32 {
     response.status.exit_code()
 }
 
+// Pre-socket exits derive from the same enum as socket-answered ones (R3).
 fn refuse(why: &str) -> i32 {
     eprintln!("bench: {why}");
-    3
+    Status::Refused.exit_code()
 }
 
 fn fail(why: &str) -> i32 {
     eprintln!("bench: {why}");
-    4
+    Status::Error.exit_code()
 }
 
 /// A fresh id per invocation, inside `RequestId`'s own pattern — validated, not assumed,

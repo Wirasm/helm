@@ -115,6 +115,49 @@ impl RequestId {
 }
 
 // ---------------------------------------------------------------------------
+// Verbs
+// ---------------------------------------------------------------------------
+
+/// Every verb this daemon answers, spelled once (PR #340 review, R5). The refusal
+/// string derives from this list, the dispatcher matches on the parsed enum so the
+/// compiler forces a verdict when a verb is added, and the justfile's probe list is
+/// pinned to it by a conformance test that reads the justfile's own source.
+pub const KNOWN_VERBS: &[&str] = &["status", "events", "stop"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verb {
+    Status,
+    Events,
+    Stop,
+}
+
+impl Verb {
+    /// `None` is an unknown verb — the caller owes a refusal naming `KNOWN_VERBS`.
+    pub fn parse(raw: &str) -> Option<Verb> {
+        match raw {
+            "status" => Some(Verb::Status),
+            "events" => Some(Verb::Events),
+            "stop" => Some(Verb::Stop),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// I/O bounds
+// ---------------------------------------------------------------------------
+
+/// One connection may hold the daemon's serial loop for at most this long (R2): a
+/// client that connects and never finishes its line gets a refusal, not the daemon.
+pub const DAEMON_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A caller waits at most this long for an answer — strictly longer than the daemon's
+/// own bound, so a daemon-side refusal always outruns the client giving up. A timeout
+/// maps to `EXIT_NO_DAEMON`: no exit code at all is the one failure an unattended
+/// agent cannot act on.
+pub const CLIENT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+// ---------------------------------------------------------------------------
 // The envelope
 // ---------------------------------------------------------------------------
 
@@ -172,6 +215,13 @@ pub const EXIT_NO_DAEMON: i32 = 2;
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
+
+/// The first event of every fresh log declares the file's format (R4): the record is
+/// read outside the process, and a reader that predates a change must fail loudly on
+/// the marker instead of misreading history — `BenchSnapshot.format`'s rule, applied to
+/// the file that matters most.
+pub const EVENTS_LOG_FORMAT: &str = "bench.events-log";
+pub const EVENTS_LOG_VERSION: u64 = 0;
 
 /// One line of the append-only record. **Bench-visible means logged**: anything a
 /// projection, a snapshot, or a later reader is allowed to know happened must be
@@ -304,6 +354,19 @@ mod tests {
             resolve_root(None, None, home),
             PathBuf::from("/home/op/.bench")
         );
+    }
+
+    #[test]
+    fn every_known_verb_parses_and_nothing_else_does() {
+        for v in KNOWN_VERBS {
+            assert!(Verb::parse(v).is_some(), "{v} is listed but does not parse");
+        }
+        assert_eq!(
+            KNOWN_VERBS.len(),
+            3,
+            "a new verb joins KNOWN_VERBS and this count together"
+        );
+        assert!(Verb::parse("frobnicate").is_none());
     }
 
     #[test]

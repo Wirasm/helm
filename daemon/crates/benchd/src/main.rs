@@ -20,7 +20,8 @@
 //! beats a concurrency story nothing needs yet.
 
 use bench_wire::{
-    Event, MAX_REQUEST_BYTES, Request, Response, Status, SuiteName, check_socket_path, events_path,
+    DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
+    MAX_REQUEST_BYTES, Request, Response, Status, SuiteName, Verb, check_socket_path, events_path,
     resolve_root, socket_path,
 };
 use serde_json::{Value, json};
@@ -87,19 +88,94 @@ fn run() -> i32 {
     }
 }
 
+// Pre-socket exits derive from the same enum as socket-answered ones (R3): one
+// spelling of the contract, no hand-typed twin to drift.
 fn refuse_start(why: &str) -> i32 {
     eprintln!("benchd: refusing to start: {why}");
-    3
+    Status::Refused.exit_code()
 }
 
 fn fail_start(why: &str) -> i32 {
     eprintln!("benchd: {why}");
-    4
+    Status::Error.exit_code()
 }
 
 enum StartError {
     Refused(String),
     Failed(String),
+}
+
+struct RepairNote {
+    quarantine: PathBuf,
+    dropped_bytes: usize,
+}
+
+/// Read the log with byte offsets. A clean log returns the next seq. An unreadable
+/// line refuses — unless it is the LAST non-empty line, which is an interrupted append:
+/// quarantine the tail to a named sibling, truncate the log back to its last good byte,
+/// and report the repair so the caller can log it (R1).
+fn scan_log(events: &PathBuf) -> Result<(u64, Option<RepairNote>), StartError> {
+    let bytes = match fs::read(events) {
+        Ok(b) => b,
+        Err(_) => return Ok((0, None)),
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let mut seq = 0u64;
+    let mut offset = 0usize;
+    let chunks: Vec<&str> = text.split_inclusive('\n').collect();
+    for (i, chunk) in chunks.iter().enumerate() {
+        let line = chunk.trim_end_matches('\n');
+        if line.trim().is_empty() {
+            offset += chunk.len();
+            continue;
+        }
+        match serde_json::from_str::<Event>(line) {
+            Ok(ev) => {
+                seq = ev.seq + 1;
+                offset += chunk.len();
+            }
+            Err(e) => {
+                let rest_is_empty = chunks[i + 1..].iter().all(|c| c.trim().is_empty());
+                if !rest_is_empty {
+                    return Err(StartError::Refused(format!(
+                        "event log {} line {} is not a readable event ({e}) — refusing to append after history this daemon cannot read",
+                        events.display(),
+                        i + 1
+                    )));
+                }
+                // Torn tail: quarantine, truncate, and say so loudly.
+                let epoch = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let quarantine = events.with_file_name(format!("events.jsonl.torn-{epoch}"));
+                let dropped = &bytes[offset..];
+                fs::write(&quarantine, dropped).map_err(|err| {
+                    StartError::Failed(format!("cannot quarantine torn tail: {err}"))
+                })?;
+                let file = OpenOptions::new().write(true).open(events).map_err(|err| {
+                    StartError::Failed(format!("cannot open log for repair: {err}"))
+                })?;
+                file.set_len(offset as u64).map_err(|err| {
+                    StartError::Failed(format!("cannot truncate torn tail: {err}"))
+                })?;
+                eprintln!(
+                    "benchd: event log {} ended in a torn line ({e}); {} byte(s) quarantined to {} and the log truncated to its last whole event",
+                    events.display(),
+                    dropped.len(),
+                    quarantine.display()
+                );
+                return Ok((
+                    seq,
+                    Some(RepairNote {
+                        quarantine,
+                        dropped_bytes: dropped.len(),
+                    }),
+                ));
+            }
+        }
+    }
+    Ok((seq, None))
 }
 
 struct Daemon {
@@ -146,32 +222,14 @@ impl Daemon {
         }
 
         // Boot-time integrity scan. The log is the record; a daemon that appends after
-        // a line it cannot read would be writing history it does not understand. Refuse
-        // with the line number rather than guessing (direction.md: refuse loudly).
+        // history it cannot read would be writing history it does not understand. One
+        // exception, from PR #340's review (R1): a torn LAST line is an interrupted
+        // append — the daemon's own crash mid-write, or ENOSPC part-way through a line
+        // — and refusing it forever bricks the root with no route out. The tail is
+        // quarantined beside the log and the repair is itself logged. A bad line in
+        // the MIDDLE stays a refusal naming the line: that one is unexplained.
         let events = events_path(&root);
-        let next_seq = match File::open(&events) {
-            Ok(f) => {
-                let mut seq = 0u64;
-                for (i, line) in BufReader::new(f).lines().enumerate() {
-                    let line = line.map_err(|e| {
-                        StartError::Failed(format!("cannot read {}: {e}", events.display()))
-                    })?;
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    let ev: Event = serde_json::from_str(&line).map_err(|e| {
-                        StartError::Refused(format!(
-                            "event log {} line {} is not a readable event ({e}) — refusing to append after history this daemon cannot read",
-                            events.display(),
-                            i + 1
-                        ))
-                    })?;
-                    seq = ev.seq + 1;
-                }
-                seq
-            }
-            Err(_) => 0,
-        };
+        let (next_seq, repair) = scan_log(&events)?;
 
         let log = OpenOptions::new()
             .create(true)
@@ -194,6 +252,28 @@ impl Daemon {
             started_at: now_rfc3339(),
             booted: Instant::now(),
         };
+        // A fresh log opens with its format marker (R4): the file is read outside the
+        // process, and a reader that predates a change must fail on the marker rather
+        // than misread history.
+        if daemon.next_seq == 0 {
+            daemon
+                .append(
+                    "log/format",
+                    json!({ "format": EVENTS_LOG_FORMAT, "version": EVENTS_LOG_VERSION }),
+                )
+                .map_err(StartError::Failed)?;
+        }
+        if let Some(note) = repair {
+            daemon
+                .append(
+                    "log/repaired",
+                    json!({
+                        "quarantine": note.quarantine.display().to_string(),
+                        "dropped_bytes": note.dropped_bytes,
+                    }),
+                )
+                .map_err(StartError::Failed)?;
+        }
         daemon
             .append(
                 "daemon/started",
@@ -234,6 +314,11 @@ impl Daemon {
     }
 
     fn handle(&mut self, stream: UnixStream) -> Handled {
+        // Bounded in TIME as well as bytes (R2): this is the daemon's only loop, and a
+        // client that connects and never finishes its line must get the refusal, not
+        // the daemon. Timeouts are set before the reader clone so both share them.
+        let _ = stream.set_read_timeout(Some(DAEMON_IO_TIMEOUT));
+        let _ = stream.set_write_timeout(Some(DAEMON_IO_TIMEOUT));
         let mut reader = BufReader::new(match stream.try_clone() {
             Ok(s) => s,
             Err(_) => return Handled::Continue,
@@ -242,6 +327,18 @@ impl Daemon {
         // Bounded read: a line that never ends must not become memory nobody asked for.
         let mut limited = (&mut reader).take(MAX_REQUEST_BYTES as u64 + 1);
         if limited.read_line(&mut line).is_err() {
+            respond(
+                &stream,
+                &Response {
+                    id: "timed-out".into(),
+                    status: Status::Refused,
+                    reason: Some(format!(
+                        "request not completed within {}s — one line, newline-terminated",
+                        DAEMON_IO_TIMEOUT.as_secs()
+                    )),
+                    data: None,
+                },
+            );
             return Handled::Continue;
         }
         if line.len() > MAX_REQUEST_BYTES {
@@ -281,16 +378,19 @@ impl Daemon {
     }
 
     fn dispatch(&mut self, req: &Request) -> (Response, Handled) {
-        match req.verb.as_str() {
-            "status" => (self.ok(req, self.status_data()), Handled::Continue),
-            "events" => {
+        // The verb is parsed, not string-matched (R5): the enum makes a new verb a
+        // compile-forced decision here, and the refusal derives its list from the same
+        // spelling the parser uses.
+        match Verb::parse(&req.verb) {
+            Some(Verb::Status) => (self.ok(req, self.status_data()), Handled::Continue),
+            Some(Verb::Events) => {
                 let since = req.args.get("since").and_then(Value::as_u64).unwrap_or(0);
                 match self.read_events(since) {
                     Ok(data) => (self.ok(req, data), Handled::Continue),
                     Err(why) => (self.error(req, why), Handled::Continue),
                 }
             }
-            "stop" => {
+            Some(Verb::Stop) => {
                 // Logged before answered: the record must already say "stopped" when the
                 // caller is told it worked (bench-visible means logged).
                 match self.append("daemon/stopped", json!({ "pid": process::id() })) {
@@ -298,12 +398,14 @@ impl Daemon {
                     Err(why) => (self.error(req, why), Handled::Continue),
                 }
             }
-            other => (
+            None => (
                 Response {
                     id: req.id.clone(),
                     status: Status::Refused,
                     reason: Some(format!(
-                        "unknown verb {other:?} — this daemon answers: status, events, stop"
+                        "unknown verb {:?} — this daemon answers: {}",
+                        req.verb,
+                        KNOWN_VERBS.join(", ")
                     )),
                     data: None,
                 },
@@ -372,6 +474,9 @@ impl Daemon {
             .write_all(line.as_bytes())
             .and_then(|()| self.log.flush())
             .map_err(|e| format!("cannot append to event log: {e}"))?;
+        // Best-effort durability: the record is the point of this process. A failed
+        // sync is not a failed append — the bytes are handed off either way.
+        let _ = self.log.sync_data();
         self.next_seq += 1;
         Ok(())
     }

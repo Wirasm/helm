@@ -96,6 +96,8 @@ Each is argued in the audit doc; this is the checklist form.
 
 ## M0 — Skeleton and isolation
 
+**Landed 2026-08-18, PR #340** — with the spike verdicts in `daemon/spikes/`.
+
 **Goal:** `daemon/` exists, runs, and is safe to develop against on the machine that
 hosts the developers.
 
