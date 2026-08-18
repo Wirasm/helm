@@ -111,3 +111,40 @@ spec:
         fi
     done
     cargo run -q -p bench -- stop >/dev/null 2>&1 || true
+
+# The live proof, repeatable: spawn a real claude through the daemon, attach over the
+# socket, demand arithmetic back through the relay. Costs one small claude turn — not
+# for CI, for whoever asks "did we actually run this?".
+live-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SMOKE=$(mktemp -d "${TMPDIR:-/tmp}/blive.XXXX")
+    export BENCH_DIR="$SMOKE/r"
+    cargo build -q --workspace
+    (timeout 180 ./target/debug/benchd &)
+    sleep 1
+    printf 'Reply with exactly BENCHD-<x>-OK where <x> is 6*7. Use no tools, output nothing else.' > "$SMOKE/p.txt"
+    ./target/debug/bench spawn --agent claude --cwd "$PWD" --prompt-file "$SMOKE/p.txt" >/dev/null
+    python3 - "$BENCH_DIR/benchd.sock" <<'PY'
+    import socket, sys, re, time, json
+    s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
+    s.sendall(b'{"id":"live-1","verb":"attach","args":{"session":"s1"}}\n')
+    line = b""
+    while not line.endswith(b"\n"): line += s.recv(1)
+    assert json.loads(line)["status"] == "ok", line
+    s.settimeout(0.5); buf = b""; deadline = time.time() + 60
+    while time.time() < deadline:
+        try:
+            c = s.recv(8192)
+            if not c: break
+            buf += c
+        except socket.timeout: pass
+        t = re.sub(rb'\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[a-zA-Z]', b'', buf)
+        if b'BENCHD-42-OK' in re.sub(rb'\s', b'', t):
+            print("live-smoke: BENCHD-42-OK through the relay —", len(buf), "bytes"); sys.exit(0)
+    sys.exit("live-smoke: computed reply never arrived")
+    PY
+    ./target/debug/bench close s1 >/dev/null
+    ./target/debug/bench stop >/dev/null
+    rm -rf "$SMOKE"
+    echo "live-smoke: clean"
