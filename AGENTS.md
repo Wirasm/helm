@@ -169,6 +169,19 @@ the Swift gate must not.
 bash .claude/skills/pi-extensions/scripts/test.sh
 ```
 
+**If you touched `daemon/`, run its gate:**
+
+```
+bash daemon/test.sh
+```
+
+`daemon/` is the bench daemon (`benchd`) — a self-contained Rust cargo workspace, the
+same carve-out as `pi/` and `hooks/`: its gate needs only the Rust toolchain, its CI job
+triggers only on `daemon/**`, and the Swift gate never learns about it. Read
+`daemon/direction.md` before working there; the milestone sequence is
+`docs/future-planning/bench-roadmap.md`, and M0 (skeleton and suite isolation) is the
+part that exists.
+
 **If you touched `hooks/`, run its gate:**
 
 ```

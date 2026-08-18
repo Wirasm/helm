@@ -1,0 +1,21 @@
+# The daemon gate as its own CI job, per the pi/-and-hooks/ pattern: triggered only by
+# daemon/** changes, needs only the Rust toolchain, and the Swift jobs never learn
+# about it (bench-roadmap invariant 9).
+name: daemon
+
+on:
+  pull_request:
+    paths:
+      - "daemon/**"
+      - ".github/workflows/daemon.yml"
+
+jobs:
+  gate:
+    name: fmt · clippy · build · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: bash daemon/test.sh
