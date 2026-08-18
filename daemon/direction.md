@@ -69,6 +69,22 @@ benchd serves one operator whose gate is the pull request; composability-as-prod
 complexity bill dsh's own five-day-old ecosystem is already paying. Capabilities land as
 code in this workspace, reviewed, behind the one door.
 
+## Posture: the agents are smart
+
+Adopted 2026-08-18, the operator's words made a rule. **We expose capabilities; we do
+not parse prose.** Nothing in the bench regexes, keyword-matches, or otherwise
+reconstructs meaning from human- or agent-written text — a reply is read by an agent,
+not by a parser. Interpretation belongs to the model; determinism belongs at the tool
+boundary (validated verbs, newtypes, exit codes), which is where `SuiteName` and
+`RequestId` already sit. Concretely: the daemon never parses a mail body; notices point
+rather than quote; status comes from taps — the runtimes' own typed hook and event
+channels — and a capability that seems to need output-scraping is a missing tap or a
+missing verb, not a regex waiting to be written. The one deliberate exception the
+roadmap names: a last-resort output-classification fallback for a runtime with no tap
+at all (M1, codex) — status inference only, never intent, retired the day the tap
+exists. The spike harnesses' READY/NOOP markers were test instrumentation, not a
+pattern to copy into the product.
+
 ## Rules that bind every milestone
 
 The checklist form is bench-roadmap.md's invariants; the ones already load-bearing in
