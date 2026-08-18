@@ -24,8 +24,8 @@
 use bench_session::{AgentKind, Notice, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id};
 use bench_wire::{
     DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
-    MAX_REQUEST_BYTES, Request, Response, Status, SuiteName, Verb, check_socket_path, events_path,
-    resolve_root, socket_path,
+    MAX_REQUEST_BYTES, READY_WAIT, Request, Response, SessionArgs, SpawnArgs, Status, SuiteName,
+    Verb, check_socket_path, events_path, resolve_root, socket_path,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -529,15 +529,19 @@ fn dispatch(
         }
 
         Some(Verb::Spawn) => {
-            // Judged strictly after a permissive decode (the standing carve-out): every
-            // refusal names its rule.
+            // Typed decode first (R3: one spelling, both sides), judged strictly after
+            // — a missing required key refuses naming the FIELD, never a rule that did
+            // not actually fire.
+            let parsed: SpawnArgs = match serde_json::from_value(req.args.clone()) {
+                Ok(a) => a,
+                Err(e) => return (refused(format!("spawn args: {e}")), AfterResponse::Done),
+            };
             let test_ok = std::env::var(TEST_AGENT_ENV).is_ok_and(|v| v == "1");
-            let agent_raw = req.args.get("agent").and_then(Value::as_str).unwrap_or("");
-            let agent = match AgentKind::parse(agent_raw, test_ok) {
+            let agent = match AgentKind::parse(&parsed.agent, test_ok) {
                 Ok(a) => a,
                 Err(why) => return (refused(why), AfterResponse::Done),
             };
-            let cwd = req.args.get("cwd").and_then(Value::as_str).unwrap_or("");
+            let cwd = parsed.cwd.as_str();
             if !cwd.starts_with('/') || !PathBuf::from(cwd).is_dir() {
                 return (
                     refused(format!(
@@ -546,7 +550,7 @@ fn dispatch(
                     AfterResponse::Done,
                 );
             }
-            let prompt = match req.args.get("prompt_file").and_then(Value::as_str) {
+            let prompt = match parsed.prompt_file.as_deref() {
                 None => None,
                 Some(p) => match fs::read_to_string(p) {
                     // The file must outlive the spawn (helm #93) — read it now, refuse
@@ -560,21 +564,13 @@ fn dispatch(
                     }
                 },
             };
-            let rows = req.args.get("rows").and_then(Value::as_u64).unwrap_or(40) as u16;
-            let cols = req.args.get("cols").and_then(Value::as_u64).unwrap_or(140) as u16;
+            let rows = parsed.rows.unwrap_or(40);
+            let cols = parsed.cols.unwrap_or(140);
             let spec = SpawnSpec {
                 agent,
-                cwd: cwd.to_string(),
-                model: req
-                    .args
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .map(String::from),
-                effort: req
-                    .args
-                    .get("effort")
-                    .and_then(Value::as_str)
-                    .map(String::from),
+                cwd: parsed.cwd.clone(),
+                model: parsed.model.clone(),
+                effort: parsed.effort.clone(),
                 runtime_session: agent.mints_session_id().then(mint_session_id),
                 resume: false,
             };
@@ -610,7 +606,7 @@ fn dispatch(
             let mut ready = true;
             let mut prompt_delivered = false;
             if let Some(text) = prompt {
-                ready = session.wait_ready(Duration::from_secs(30));
+                ready = session.wait_ready(READY_WAIT);
                 if ready {
                     let one_line = text.replace('\n', " ");
                     prompt_delivered = session.deliver_line(one_line.trim()).is_ok();
@@ -654,13 +650,13 @@ fn dispatch(
         }
 
         Some(Verb::Attach) => {
-            let sid = req
-                .args
-                .get("session")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let rows = req.args.get("rows").and_then(Value::as_u64).unwrap_or(0) as u16;
-            let cols = req.args.get("cols").and_then(Value::as_u64).unwrap_or(0) as u16;
+            let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
+                Ok(a) => a,
+                Err(e) => return (refused(format!("attach args: {e}")), AfterResponse::Done),
+            };
+            let sid = parsed.session.as_str();
+            let rows = parsed.rows.unwrap_or(0);
+            let cols = parsed.cols.unwrap_or(0);
             let session = {
                 let c = core.lock().unwrap();
                 c.sessions.get(sid).cloned()
@@ -707,11 +703,11 @@ fn dispatch(
         }
 
         Some(Verb::Close) => {
-            let sid = req
-                .args
-                .get("session")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
+                Ok(a) => a,
+                Err(e) => return (refused(format!("close args: {e}")), AfterResponse::Done),
+            };
+            let sid = parsed.session.as_str();
             let session = {
                 let mut c = core.lock().unwrap();
                 c.sessions.remove(sid)
@@ -736,11 +732,11 @@ fn dispatch(
         }
 
         Some(Verb::Resume) => {
-            let sid = req
-                .args
-                .get("session")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
+                Ok(a) => a,
+                Err(e) => return (refused(format!("resume args: {e}")), AfterResponse::Done),
+            };
+            let sid = parsed.session.as_str();
             let old = {
                 let c = core.lock().unwrap();
                 c.sessions.get(sid).cloned()
@@ -784,7 +780,7 @@ fn dispatch(
                     return (errored(why), AfterResponse::Done);
                 }
             }
-            let ready = session.wait_ready(Duration::from_secs(30));
+            let ready = session.wait_ready(READY_WAIT);
             (
                 ok(json!({
                     "session": session.id,

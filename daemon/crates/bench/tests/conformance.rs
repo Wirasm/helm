@@ -763,6 +763,26 @@ fn an_exited_session_refuses_attach_and_the_exit_is_logged() {
         std::thread::sleep(Duration::from_millis(100));
     }
 
+    // R2: the exit must also REAP — a `<defunct>` child is a lifetime the daemon owns
+    // and dropped. `ps -o stat=` on a zombie prints a state containing 'Z'; a reaped
+    // pid prints nothing.
+    let reap_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let out = Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !stat.contains('Z') {
+            break;
+        }
+        assert!(
+            Instant::now() < reap_deadline,
+            "the exited child stayed a zombie (stat {stat:?}) — the drain thread must reap"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
     let attach = bench(&home.dir, &["attach", &sid]);
     assert_eq!(
         attach.code, 3,

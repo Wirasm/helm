@@ -163,11 +163,53 @@ impl Verb {
 /// client that connects and never finishes its line gets a refusal, not the daemon.
 pub const DAEMON_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// A caller waits at most this long for an answer — strictly longer than the daemon's
-/// own bound, so a daemon-side refusal always outruns the client giving up. A timeout
-/// maps to `EXIT_NO_DAEMON`: no exit code at all is the one failure an unattended
-/// agent cannot act on.
-pub const CLIENT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long the daemon waits for a spawned TUI to look ready before giving up on
+/// prompt delivery. Lives HERE, not in the daemon, because the client's patience is
+/// derived from it below — PR #341's R1 was these two numbers spelled apart (30 vs 15),
+/// so a slow spawn exited 2 "no daemon" while the daemon was mid-success.
+pub const READY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A caller waits at most this long for an answer — strictly longer than every
+/// daemon-side wait, **true by construction**: the sum of the waits plus slack, so the
+/// two sides cannot drift apart again. A timeout maps to `EXIT_NO_DAEMON`: no exit
+/// code at all is the one failure an unattended agent cannot act on.
+pub const CLIENT_READ_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(READY_WAIT.as_secs() + DAEMON_IO_TIMEOUT.as_secs() + 5);
+
+// ---------------------------------------------------------------------------
+// Session verb payloads
+// ---------------------------------------------------------------------------
+
+/// `spawn`'s payload, typed once (PR #341 review, R3): both binaries serialize and
+/// decode this struct, so a one-sided rename is a compile error or a refusal naming
+/// the missing field — never a silently-defaulted option or an allowlist refusal that
+/// misdescribes a missing key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnArgs {
+    pub agent: String,
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cols: Option<u16>,
+}
+
+/// The payload shared by `attach`, `close` and `resume`: a session id, plus the
+/// viewer's size where the verb has a viewer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionArgs {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cols: Option<u16>,
+}
 
 // ---------------------------------------------------------------------------
 // The envelope
@@ -379,6 +421,25 @@ mod tests {
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
+    }
+
+    #[test]
+    fn the_clients_patience_outlasts_every_daemon_wait_by_construction() {
+        assert!(
+            CLIENT_READ_TIMEOUT > READY_WAIT + DAEMON_IO_TIMEOUT,
+            "R1's invariant: a daemon-side outcome always outruns the client giving up"
+        );
+    }
+
+    #[test]
+    fn spawn_args_refuse_a_missing_required_key_naming_the_field() {
+        let err = serde_json::from_value::<SpawnArgs>(serde_json::json!({"cwd": "/tmp"}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("agent"), "the refusal names the field: {err}");
+        let ok: SpawnArgs =
+            serde_json::from_value(serde_json::json!({"agent": "claude", "cwd": "/tmp"})).unwrap();
+        assert!(ok.model.is_none() && ok.rows.is_none());
     }
 
     #[test]

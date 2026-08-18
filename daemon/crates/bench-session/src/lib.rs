@@ -247,7 +247,7 @@ pub struct Session {
     pub spawned_at: Instant,
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
-    child: Mutex<Box<dyn Child + Send + Sync>>,
+    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     ring: Arc<Mutex<Ring>>,
     /// dtach-grade: at most one attached client. A new attach REPLACES the old one —
     /// reconnect-after-drop is the common case, and "already attached" refusals would
@@ -311,7 +311,7 @@ impl Session {
             spawned_at: Instant::now(),
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
-            child: Mutex::new(child),
+            child: Arc::new(Mutex::new(child)),
             ring: Arc::new(Mutex::new(Ring {
                 bytes: VecDeque::with_capacity(8192),
                 total: 0,
@@ -329,6 +329,7 @@ impl Session {
             let ring = Arc::clone(&session.ring);
             let attached = Arc::clone(&session.attached);
             let exited = Arc::clone(&session.exited);
+            let child = Arc::clone(&session.child);
             std::thread::spawn(move || {
                 let mut chunk = [0u8; 8192];
                 loop {
@@ -349,6 +350,12 @@ impl Session {
                         }
                     }
                 }
+                // Reap at the moment of exit (PR #341 review, R2): EOF on the master
+                // means the child is gone or going; wait() here ends its lifetime with
+                // its bytes, so no session leaves a zombie for `close` to find — and
+                // `resume`'s removal of the old session needs no second job. close()'s
+                // own wait after this is an ignored ECHILD, never a hang.
+                let _ = child.lock().unwrap().wait();
                 exited.store(true, Ordering::SeqCst);
                 let _ = notices.send(Notice::Exited {
                     session: id.clone(),
