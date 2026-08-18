@@ -19,8 +19,10 @@ knows nor needs the Rust toolchain, in either direction.
 
 - `crates/bench-wire` — every wire type and shared resolution rule, spelled once. If
   `benchd` and `bench` could disagree about a value, its rule belongs here.
-- `crates/benchd` — the daemon. Foreground, one unix socket, serial request handling.
-- `crates/bench` — the CLI, the one agent-facing surface (and the future skill surface).
+- `crates/bench-session` — the pty core: agent allowlist, postures/model/effort/resume
+  argv (one spelling, unit-tested), the ring, the attach relay, drain-then-die close.
+- `crates/benchd` — the daemon. Foreground, one unix socket, a thread per connection.
+- `crates/bench` — the CLI, the one agent-facing surface, and the attach client.
 - There is deliberately **no root `Cargo.toml`** in the repo: `cargo` at the repo root
   fails loudly instead of half-working.
 

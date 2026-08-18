@@ -122,13 +122,20 @@ impl RequestId {
 /// string derives from this list, the dispatcher matches on the parsed enum so the
 /// compiler forces a verdict when a verb is added, and the justfile's probe list is
 /// pinned to it by a conformance test that reads the justfile's own source.
-pub const KNOWN_VERBS: &[&str] = &["status", "events", "stop"];
+pub const KNOWN_VERBS: &[&str] = &[
+    "status", "events", "stop", "spawn", "sessions", "attach", "close", "resume",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verb {
     Status,
     Events,
     Stop,
+    Spawn,
+    Sessions,
+    Attach,
+    Close,
+    Resume,
 }
 
 impl Verb {
@@ -138,6 +145,11 @@ impl Verb {
             "status" => Some(Verb::Status),
             "events" => Some(Verb::Events),
             "stop" => Some(Verb::Stop),
+            "spawn" => Some(Verb::Spawn),
+            "sessions" => Some(Verb::Sessions),
+            "attach" => Some(Verb::Attach),
+            "close" => Some(Verb::Close),
+            "resume" => Some(Verb::Resume),
             _ => None,
         }
     }
@@ -363,7 +375,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            3,
+            8,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
