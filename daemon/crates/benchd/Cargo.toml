@@ -1,0 +1,10 @@
+[package]
+name = "benchd"
+version.workspace = true
+edition.workspace = true
+description = "The bench daemon: owns the record, answers on the socket."
+
+[dependencies]
+bench-wire = { path = "../bench-wire" }
+serde_json.workspace = true
+time.workspace = true
