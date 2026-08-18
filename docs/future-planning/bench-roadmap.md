@@ -150,6 +150,13 @@ against the real CLI.
 **Prove:** two instances (live + suite) run side by side with zero shared state.
 **Unwire:** nothing.
 
+> **Reordering, operator-ruled 2026-08-18: mail lands before the attention queue.**
+> *"Attention can go later because we don't know where we want attention right now."*
+> The tap dependency that originally ordered them is softened by measurement — the
+> spike verdicts in `daemon/spikes/` proved the pty-paste wake on all three runtimes
+> with a plain pty-quiet idle gate, so mail's wake path does not wait for taps.
+> Milestone numbers below are left as written; start with M2, then return here.
+
 ## M1 — Taps and the attention queue (purely additive)
 
 **Goal:** the first new capability helm never had, proving daemon + socket + CLI + taps
