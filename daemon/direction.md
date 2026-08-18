@@ -14,10 +14,15 @@ operator and the agents are equal owners; every verb exists in an addressed, non
 form; both parties go through the same socket. Migration is strangler-style inside this
 repo: one vertical at a time, old code unwired only when the new is proven.
 
-**Where it stands: M0.** A suite-aware record root, an append-only event log, one unix
-socket, three verbs (`status`, `events`, `stop`), a CLI speaking helm's exit-code
-discipline, and a conformance gate that runs the real binaries. Nothing helm does today
-is owned here yet — M1 (attention queue and taps) is the first capability helm never had.
+**Where it stands: M0 + M5a.** A suite-aware record root, an append-only event log, one
+unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance
+gate that runs the real binaries. M5a is the pty core: `spawn` puts a real interactive
+agent (claude, codex, pi — the allowlist) into a daemon-owned pty with posture, model
+and effort flags spelled once in `bench-session`, prompt by file, runtime session id
+minted at spawn; `attach` is a dtach-grade raw relay with ring replay and Ctrl-\ detach;
+`close` is drain-then-die; `resume` re-enters an exited session where the runtime mints
+its id (claude, pi — codex refuses with the reason). Nothing helm does today is owned
+here yet; mail is next, waking agents by pasting into ptys this daemon now owns.
 
 ## The spine
 

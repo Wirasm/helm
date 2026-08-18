@@ -2,7 +2,7 @@
 # `cargo` at the repo root should fail loudly, not half-work (bench-roadmap.md, M0).
 [workspace]
 resolver = "2"
-members = ["crates/bench-wire", "crates/benchd", "crates/bench"]
+members = ["crates/bench-wire", "crates/bench-session", "crates/benchd", "crates/bench"]
 
 [workspace.package]
 version = "0.0.1"

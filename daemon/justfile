@@ -66,17 +66,25 @@ mail-send to subject body-file:
 mail-list:
     {{BENCH}} mail/list
 
-# M3 — spawn an interactive agent into a bench pty. Prompt by FILE, never argv (#93).
-spawn agent="claude" cwd="." prompt-file="":
-    {{BENCH}} spawn --agent {{agent}} --cwd {{cwd}} --prompt-file {{prompt-file}}
+# M5a — spawn an interactive agent into a bench pty. Prompt by FILE, never argv (#93).
+spawn agent="claude" cwd=justfile_directory() prompt-file="":
+    {{BENCH}} spawn --agent {{agent}} --cwd {{cwd}} {{ if prompt-file != "" { "--prompt-file " + prompt-file } else { "" } }}
 
-# M3 — close a pane; the busy refusal and no-force-over-keyboard rules ride along.
-close pane:
-    {{BENCH}} close --pane {{pane}}
+# M5a — list bench sessions.
+sessions:
+    {{BENCH}} sessions
 
-# M5 — attach this terminal to a bench pty.
-attach pane:
-    {{BENCH}} attach --pane {{pane}}
+# M5a — attach this terminal to a session's pty (Ctrl-\ detaches).
+attach session:
+    {{BENCH}} attach {{session}}
+
+# M5a — drain-then-die a session.
+close session:
+    {{BENCH}} close {{session}}
+
+# M5a — re-enter an exited session's runtime state (claude and pi).
+resume session:
+    {{BENCH}} resume {{session}}
 
 # ---- the scoreboard ---------------------------------------------------------
 
@@ -88,8 +96,9 @@ spec:
     (timeout 60 cargo run -q -p benchd &)
     sleep 1
     echo "bench surface, $(date -u +%Y-%m-%dT%H:%MZ):"
-    for verb in status events stop:probe spawn close select name capture cmd \
-                attn/post attn/list attn/ack watch mail/send mail/list mail/read attach; do
+    for verb in status events stop:probe spawn sessions attach close resume \
+                select name capture cmd \
+                attn/post attn/list attn/ack watch mail/send mail/list mail/read; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then
             # probed last for real; listed here so the row exists
@@ -102,3 +111,40 @@ spec:
         fi
     done
     cargo run -q -p bench -- stop >/dev/null 2>&1 || true
+
+# The live proof, repeatable: spawn a real claude through the daemon, attach over the
+# socket, demand arithmetic back through the relay. Costs one small claude turn — not
+# for CI, for whoever asks "did we actually run this?".
+live-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SMOKE=$(mktemp -d "${TMPDIR:-/tmp}/blive.XXXX")
+    export BENCH_DIR="$SMOKE/r"
+    cargo build -q --workspace
+    (timeout 180 ./target/debug/benchd &)
+    sleep 1
+    printf 'Reply with exactly BENCHD-<x>-OK where <x> is 6*7. Use no tools, output nothing else.' > "$SMOKE/p.txt"
+    ./target/debug/bench spawn --agent claude --cwd "$PWD" --prompt-file "$SMOKE/p.txt" >/dev/null
+    python3 - "$BENCH_DIR/benchd.sock" <<'PY'
+    import socket, sys, re, time, json
+    s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
+    s.sendall(b'{"id":"live-1","verb":"attach","args":{"session":"s1"}}\n')
+    line = b""
+    while not line.endswith(b"\n"): line += s.recv(1)
+    assert json.loads(line)["status"] == "ok", line
+    s.settimeout(0.5); buf = b""; deadline = time.time() + 60
+    while time.time() < deadline:
+        try:
+            c = s.recv(8192)
+            if not c: break
+            buf += c
+        except socket.timeout: pass
+        t = re.sub(rb'\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[a-zA-Z]', b'', buf)
+        if b'BENCHD-42-OK' in re.sub(rb'\s', b'', t):
+            print("live-smoke: BENCHD-42-OK through the relay —", len(buf), "bytes"); sys.exit(0)
+    sys.exit("live-smoke: computed reply never arrived")
+    PY
+    ./target/debug/bench close s1 >/dev/null
+    ./target/debug/bench stop >/dev/null
+    rm -rf "$SMOKE"
+    echo "live-smoke: clean"

@@ -1,0 +1,8 @@
+[package]
+name = "bench-session"
+version.workspace = true
+edition.workspace = true
+description = "The pty core: daemon-owned sessions hosting full interactive agent TUIs."
+
+[dependencies]
+portable-pty = "0.9"

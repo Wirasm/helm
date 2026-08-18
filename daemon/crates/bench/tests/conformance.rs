@@ -13,7 +13,7 @@
 //!   binary is located beside our own CARGO_BIN_EXE path.
 
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -72,6 +72,7 @@ impl DaemonGuard {
         let mut cmd = Command::new(benchd_bin());
         cmd.env_remove("BENCH_DIR")
             .env_remove("BENCH_SUITE")
+            .env("BENCH_SESSION_TEST_AGENT", "1")
             .env("HOME", home)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -563,4 +564,279 @@ fn a_second_daemon_on_a_claimed_root_is_refused_loudly() {
         stderr.contains("already answers"),
         "the refusal says who holds the root: {stderr}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// M5a: the pty core — sessions, the relay, and the OSC passthrough proof
+// ---------------------------------------------------------------------------
+
+/// Send one request on a raw socket and return (response_line, open_stream).
+fn raw_request(
+    socket: &Path,
+    verb: &str,
+    args: serde_json::Value,
+) -> (serde_json::Value, UnixStream) {
+    let stream = UnixStream::connect(socket).expect("connect");
+    let req = format!(
+        "{{\"id\":\"t-{}\",\"verb\":\"{verb}\",\"args\":{args}}}\n",
+        std::process::id()
+    );
+    (&stream).write_all(req.as_bytes()).unwrap();
+    let mut line = Vec::new();
+    let mut b = [0u8; 1];
+    loop {
+        match (&stream).read(&mut b) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                if b[0] == b'\n' {
+                    break;
+                }
+                line.push(b[0]);
+            }
+        }
+    }
+    (
+        serde_json::from_slice(&line).expect("response json"),
+        stream,
+    )
+}
+
+#[test]
+fn spawn_refuses_an_agent_off_the_allowlist() {
+    let home = TestHome::claim("allow");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let run = bench(&home.dir, &["spawn", "--agent", "sh", "--cwd", "/tmp"]);
+    assert_eq!(run.code, 3, "stderr: {}", run.stderr);
+    assert!(
+        run.stderr.contains("allowlist"),
+        "the refusal names the rule: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn spawn_refuses_a_cwd_that_is_not_an_absolute_directory() {
+    let home = TestHome::claim("cwd");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let run = bench(
+        &home.dir,
+        &["spawn", "--agent", "test-echo", "--cwd", "relative/x"],
+    );
+    assert_eq!(run.code, 3, "stderr: {}", run.stderr);
+}
+
+#[test]
+fn a_session_relays_bytes_faithfully_including_an_osc_sequence() {
+    // THE canvas-passthrough proof (M5a's named assumption): an OSC 777 written by the
+    // agent must cross the relay byte-for-byte, because whatever terminal hosts
+    // `bench attach` is what parses it — helm included.
+    let home = TestHome::claim("relay");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let run = bench(
+        &home.dir,
+        &["spawn", "--agent", "test-echo", "--cwd", "/tmp"],
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let spawned: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let sid = spawned["session"].as_str().unwrap().to_string();
+
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(resp["status"], "ok", "{resp}");
+
+    // cat echoes what the pty carries; the OSC must come back intact.
+    let osc = "\u{1b}]777;notify;helm.canvas;/tmp/proof.html\u{7}";
+    let payload = format!("before {osc} after\n");
+    (&stream).write_all(payload.as_bytes()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut seen = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    while Instant::now() < deadline {
+        match (&stream).read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => seen.extend_from_slice(&chunk[..n]),
+            Err(_) => {}
+        }
+        if seen.windows(osc.len()).any(|w| w == osc.as_bytes()) {
+            break;
+        }
+    }
+    assert!(
+        seen.windows(osc.len()).any(|w| w == osc.as_bytes()),
+        "the OSC must survive the relay byte-for-byte; got {} bytes: {:?}",
+        seen.len(),
+        String::from_utf8_lossy(&seen)
+    );
+
+    let close = bench(&home.dir, &["close", &sid]);
+    assert_eq!(close.code, 0, "stderr: {}", close.stderr);
+
+    // Bench-visible means logged: the session's whole life is in the record.
+    let log = fs::read_to_string(home.dir.join(".bench/events.jsonl")).unwrap();
+    for kind in ["session/spawned", "session/attached", "session/closed"] {
+        assert!(log.contains(kind), "{kind} missing from the log");
+    }
+}
+
+#[test]
+fn a_second_attach_takes_over_and_the_first_sees_eof() {
+    let home = TestHome::claim("takeover");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let run = bench(
+        &home.dir,
+        &["spawn", "--agent", "test-echo", "--cwd", "/tmp"],
+    );
+    let sid = serde_json::from_str::<serde_json::Value>(&run.stdout).unwrap()["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (r1, s1) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(r1["status"], "ok");
+    let (r2, _s2) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(r2["status"], "ok");
+
+    // The first stream is shut down by the takeover — its next read is EOF, not a hang.
+    let _ = s1.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut chunk = [0u8; 64];
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut eof = false;
+    while Instant::now() < deadline {
+        match (&s1).read(&mut chunk) {
+            Ok(0) => {
+                eof = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => {
+                eof = true;
+                break;
+            }
+        }
+    }
+    assert!(eof, "the replaced attach must be closed, not left dangling");
+
+    let sessions = bench(&home.dir, &["sessions"]);
+    let data: serde_json::Value = serde_json::from_str(&sessions.stdout).unwrap();
+    assert_eq!(
+        data["sessions"][0]["live"], true,
+        "takeover must not kill the session"
+    );
+}
+
+#[test]
+fn an_exited_session_refuses_attach_and_the_exit_is_logged() {
+    let home = TestHome::claim("exited");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let run = bench(
+        &home.dir,
+        &["spawn", "--agent", "test-echo", "--cwd", "/tmp"],
+    );
+    let spawned: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let sid = spawned["session"].as_str().unwrap().to_string();
+    let pid = spawned["pid"].as_u64().unwrap();
+
+    // Kill the agent out from under the daemon — the reader thread must notice and log.
+    libc_kill(pid as i32);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let log = fs::read_to_string(home.dir.join(".bench/events.jsonl")).unwrap_or_default();
+        if log.contains("session/exited") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "session/exited never reached the log"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // R2: the exit must also REAP — a `<defunct>` child is a lifetime the daemon owns
+    // and dropped. `ps -o stat=` on a zombie prints a state containing 'Z'; a reaped
+    // pid prints nothing.
+    let reap_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let out = Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !stat.contains('Z') {
+            break;
+        }
+        assert!(
+            Instant::now() < reap_deadline,
+            "the exited child stayed a zombie (stat {stat:?}) — the drain thread must reap"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let attach = bench(&home.dir, &["attach", &sid]);
+    assert_eq!(
+        attach.code, 3,
+        "attach to an exited session is a refusal: {}",
+        attach.stderr
+    );
+    assert!(
+        attach.stderr.contains("resume"),
+        "the refusal names the route: {}",
+        attach.stderr
+    );
+
+    // The test agent has nothing to resume — the refusal says why.
+    let resume = bench(&home.dir, &["resume", &sid]);
+    assert_eq!(resume.code, 3, "stderr: {}", resume.stderr);
+}
+
+#[test]
+fn stop_takes_the_sessions_with_it() {
+    let home = TestHome::claim("stopall");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let run = bench(
+        &home.dir,
+        &["spawn", "--agent", "test-echo", "--cwd", "/tmp"],
+    );
+    let pid = serde_json::from_str::<serde_json::Value>(&run.stdout).unwrap()["pid"]
+        .as_u64()
+        .unwrap();
+    let stop = bench(&home.dir, &["stop"]);
+    assert_eq!(stop.code, 0);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let alive = libc_alive(pid as i32);
+        if !alive {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the spawned agent outlived the daemon's stop"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+// Minimal libc shims — kill(2) with SIGKILL / signal 0 liveness — to avoid a dependency
+// for two calls.
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+fn libc_kill(pid: i32) {
+    unsafe {
+        kill(pid, 9);
+    }
+}
+fn libc_alive(pid: i32) -> bool {
+    unsafe { kill(pid, 0) == 0 }
 }
