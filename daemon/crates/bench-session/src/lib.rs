@@ -239,6 +239,10 @@ impl Ring {
 
 pub struct Session {
     pub id: String,
+    /// The mailbox address and human name for this session — `--name` at spawn, else
+    /// the session id. Uniqueness and the `operator` reservation are the daemon's to
+    /// enforce; this crate just carries the decided value.
+    pub handle: String,
     pub spec: SpawnSpec,
     pub agent: AgentKind,
     pub cwd: String,
@@ -265,9 +269,11 @@ impl Session {
     /// exits and forced detaches reach the daemon's log.
     pub fn spawn(
         id: String,
+        handle: String,
         spec: &SpawnSpec,
         rows: u16,
         cols: u16,
+        extra_env: &[(String, String)],
         notices: Sender<Notice>,
     ) -> Result<Arc<Session>, String> {
         let (program, args) = argv(spec)?;
@@ -286,6 +292,12 @@ impl Session {
         }
         cmd.cwd(&spec.cwd);
         cmd.env("TERM", "xterm-256color");
+        // The session learns its own address and root — what lets an agent inside run
+        // `bench mail send` with no flags and land in the right mailroom (the same
+        // declare-don't-derive rule as helm's PaneEnvironment).
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
         let child = pair
             .slave
             .spawn_command(cmd)
@@ -303,6 +315,7 @@ impl Session {
 
         let session = Arc::new(Session {
             pid: child.process_id(),
+            handle,
             spec: spec.clone(),
             id: id.clone(),
             agent: spec.agent,
@@ -375,6 +388,13 @@ impl Session {
 
     pub fn output_bytes(&self) -> u64 {
         self.ring.lock().unwrap().total
+    }
+
+    /// How long the pty has been quiet — the crude idle gate the mail spike proved
+    /// sufficient for wake delivery. The taps milestone replaces judgement, not
+    /// plumbing.
+    pub fn idle_for(&self) -> Duration {
+        self.ring.lock().unwrap().last_change.elapsed()
     }
 
     /// Paste, then submit separately — the launch-line rule, spelled once.

@@ -123,7 +123,17 @@ impl RequestId {
 /// compiler forces a verdict when a verb is added, and the justfile's probe list is
 /// pinned to it by a conformance test that reads the justfile's own source.
 pub const KNOWN_VERBS: &[&str] = &[
-    "status", "events", "stop", "spawn", "sessions", "attach", "close", "resume",
+    "status",
+    "events",
+    "stop",
+    "spawn",
+    "sessions",
+    "attach",
+    "close",
+    "resume",
+    "mail/send",
+    "mail/list",
+    "mail/read",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +146,9 @@ pub enum Verb {
     Attach,
     Close,
     Resume,
+    MailSend,
+    MailList,
+    MailRead,
 }
 
 impl Verb {
@@ -150,6 +163,9 @@ impl Verb {
             "attach" => Some(Verb::Attach),
             "close" => Some(Verb::Close),
             "resume" => Some(Verb::Resume),
+            "mail/send" => Some(Verb::MailSend),
+            "mail/list" => Some(Verb::MailList),
+            "mail/read" => Some(Verb::MailRead),
             _ => None,
         }
     }
@@ -177,6 +193,64 @@ pub const CLIENT_READ_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(READY_WAIT.as_secs() + DAEMON_IO_TIMEOUT.as_secs() + 5);
 
 // ---------------------------------------------------------------------------
+// Handles and mail payloads
+// ---------------------------------------------------------------------------
+
+/// A mailbox handle. Same shape rule as suites — it decides a directory, so a path can
+/// never be one — plus one reservation ported from helm's mailbox verbatim:
+/// **`operator` is the operator's**, addressable by anyone, claimable by no session.
+pub const OPERATOR_HANDLE: &str = "operator";
+
+pub fn validate_handle(raw: &str) -> Result<(), String> {
+    if raw.is_empty() {
+        return Err("a handle cannot be empty".into());
+    }
+    if raw.contains('/') || raw.contains('\\') || raw.contains("..") {
+        return Err(format!("a path is not a handle: {raw:?}"));
+    }
+    if raw.len() > 32
+        || !raw
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        || !raw
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(format!(
+            "a handle is lowercase ASCII letters, digits and '-', starting alphanumeric, max 32: {raw:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// `mail/send`'s payload. The body travels IN the request; the notice a recipient gets
+/// carries only the path (helm's rule: notice carries path, never body).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailSendArgs {
+    pub to: String,
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    pub body: String,
+}
+
+/// `mail/list`'s payload: whose mailbox. Metadata only comes back — sender, subject,
+/// time, read-state — bodies never; pull is on demand, push is minimal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailListArgs {
+    pub handle: String,
+}
+
+/// `mail/read`'s payload: retire-never-delete — reading moves inbox → read, and the
+/// response names the new path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailReadArgs {
+    pub handle: String,
+    pub id: String,
+}
+
+// ---------------------------------------------------------------------------
 // Session verb payloads
 // ---------------------------------------------------------------------------
 
@@ -188,6 +262,10 @@ pub const CLIENT_READ_TIMEOUT: std::time::Duration =
 pub struct SpawnArgs {
     pub agent: String,
     pub cwd: String,
+    /// The mailbox address and tab name — defaults to the session id. `operator` is
+    /// refused: that handle is the operator's, addressable, never claimable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -417,7 +495,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            8,
+            11,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
