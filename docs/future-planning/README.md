@@ -1,6 +1,7 @@
 # future-planning
 
-**Nothing in this directory is built, and nothing in it authorises building.**
+**M0 — the daemon skeleton at `daemon/` — is built (PR #340); everything else in this
+directory remains unbuilt, and nothing in it authorises building.**
 
 These documents describe a proposed successor to helm — a headless daemon owning ptys and
 state, with the app as a thin face. They are here so the reasoning survives and can be argued

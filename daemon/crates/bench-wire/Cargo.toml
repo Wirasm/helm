@@ -1,0 +1,9 @@
+[package]
+name = "bench-wire"
+version.workspace = true
+edition.workspace = true
+description = "Every bench wire type and shared resolution rule, spelled once."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

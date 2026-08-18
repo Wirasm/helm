@@ -1,0 +1,9 @@
+[package]
+name = "bench"
+version.workspace = true
+edition.workspace = true
+description = "The bench CLI: the one agent-facing surface over the benchd socket."
+
+[dependencies]
+bench-wire = { path = "../bench-wire" }
+serde_json.workspace = true
