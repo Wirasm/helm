@@ -1,0 +1,104 @@
+# The bench surface as executable spec.
+#
+# Recipes here are the operations the bench is FOR, written down before they exist.
+# A recipe whose verb the daemon does not answer yet fails with the daemon's own
+# refusal naming what it does answer — so `just spec` is a live scoreboard of the
+# surface, and a milestone landing flips rows without this file changing shape.
+# (The idea is stolen from disler's fixing-smartass-opus-5 justfile, which drives
+# herdr's CLI the same way; this file graduates into the bench skill at M3.)
+#
+# Wire verbs are namespaced like event kinds: `attn/post`, `mail/send` — one
+# vocabulary for what happened and what is asked.
+
+BENCH := "cargo run -q -p bench --"
+
+default:
+    @just --list
+
+# ---- today (M0) -------------------------------------------------------------
+
+# Run the live daemon in the foreground.
+daemon:
+    cargo run -q -p benchd
+
+# Daemon identity, root, uptime, event count.
+status:
+    {{BENCH}} status
+
+# Read the record back.
+events:
+    {{BENCH}} events
+
+# Log the stop, then exit.
+stop:
+    {{BENCH}} stop
+
+# The full M0 loop against a throwaway root — green today, stays green.
+smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export BENCH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/bsmk.XXXX")/r
+    (timeout 60 cargo run -q -p benchd &)
+    sleep 1
+    cargo run -q -p bench -- status
+    cargo run -q -p bench -- stop
+    echo "smoke: ok (root $BENCH_DIR)"
+
+# ---- wanted (failing on purpose until their milestone lands) ----------------
+
+# M1 — post an attention item.
+attn-post kind="blocked" detail="":
+    {{BENCH}} attn/post --kind {{kind}} --detail "{{detail}}"
+
+# M1 — the queue, oldest blocked first.
+attn-list:
+    {{BENCH}} attn/list
+
+# M1 — block until a tenant is genuinely blocked or done. Zero-token supervision.
+watch handle:
+    {{BENCH}} watch --handle {{handle}}
+
+# M2 — mail through benchd's authority.
+mail-send to subject body-file:
+    {{BENCH}} mail/send --to {{to}} --subject "{{subject}}" --body-file {{body-file}}
+
+# M2 — the mailbox listing.
+mail-list:
+    {{BENCH}} mail/list
+
+# M3 — spawn an interactive agent into a bench pty. Prompt by FILE, never argv (#93).
+spawn agent="claude" cwd="." prompt-file="":
+    {{BENCH}} spawn --agent {{agent}} --cwd {{cwd}} --prompt-file {{prompt-file}}
+
+# M3 — close a pane; the busy refusal and no-force-over-keyboard rules ride along.
+close pane:
+    {{BENCH}} close --pane {{pane}}
+
+# M5 — attach this terminal to a bench pty.
+attach pane:
+    {{BENCH}} attach --pane {{pane}}
+
+# ---- the scoreboard ---------------------------------------------------------
+
+# Probe every wanted verb against a throwaway daemon: ✓ answered / ✗ not yet.
+spec:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    export BENCH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/bspc.XXXX")/r
+    (timeout 60 cargo run -q -p benchd &)
+    sleep 1
+    echo "bench surface, $(date -u +%Y-%m-%dT%H:%MZ):"
+    for verb in status events stop:probe spawn close select name capture cmd \
+                attn/post attn/list attn/ack watch mail/send mail/list mail/read attach; do
+        v=${verb%:probe}
+        if [ "$verb" = "stop:probe" ]; then
+            # probed last for real; listed here so the row exists
+            printf '  ✓ %-12s (M0)\n' "stop"; continue
+        fi
+        if cargo run -q -p bench -- "$v" >/dev/null 2>&1; then
+            printf '  ✓ %-12s\n' "$v"
+        else
+            printf '  ✗ %-12s not yet\n' "$v"
+        fi
+    done
+    cargo run -q -p bench -- stop >/dev/null 2>&1 || true
