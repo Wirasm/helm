@@ -19,6 +19,8 @@ knows nor needs the Rust toolchain, in either direction.
 
 - `crates/bench-wire` — every wire type and shared resolution rule, spelled once. If
   `benchd` and `bench` could disagree about a value, its rule belongs here.
+- `crates/bench-mail` — the mailroom: delivery, retirement, listings; no sessions, no
+  sockets, no wakes — the reactor in `benchd` owns those.
 - `crates/bench-session` — the pty core: agent allowlist, postures/model/effort/resume
   argv (one spelling, unit-tested), the ring, the attach relay, drain-then-die close.
 - `crates/benchd` — the daemon. Foreground, one unix socket, a thread per connection.

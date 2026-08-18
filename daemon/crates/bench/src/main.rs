@@ -13,7 +13,8 @@
 //! These are helm's spool codes, kept on purpose.
 
 use bench_wire::{
-    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Request, RequestId, Response, Status,
+    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, MailListArgs, MailReadArgs,
+    MailSendArgs, OPERATOR_HANDLE, Request, RequestId, Response, SessionArgs, SpawnArgs, Status,
     SuiteName, resolve_root, socket_path,
 };
 use serde_json::{Value, json};
@@ -33,11 +34,15 @@ fn usage() -> &'static str {
      \x20     events [--since N]                  read the record back from seq N\n\
      \x20     stop                                log the stop, kill sessions, exit\n\
      \x20     spawn --agent <a> --cwd <dir>       spawn an agent into a bench pty\n\
-     \x20           [--prompt-file <p>] [--model <m>] [--effort <e>]\n\
+     \x20           [--name <handle>] [--prompt-file <p>] [--model <m>] [--effort <e>]\n\
      \x20     sessions                            list bench sessions\n\
      \x20     attach <session>                    raw relay to a session's pty (Ctrl-\\ detaches)\n\
      \x20     close <session>                     drain-then-die the session\n\
      \x20     resume <session>                    re-enter an exited session's runtime state\n\
+     \x20     mail send --to <h> --body <text>    deliver mail; a live recipient is woken\n\
+     \x20               [--body-file <p>] [--subject <s>] [--from <h>]\n\
+     \x20     mail list [--handle <h>]            metadata only, unread first\n\
+     \x20     mail read <id> [--handle <h>]       body + retirement (inbox -> read)\n\
      env:   BENCH_SUITE (flag wins) · BENCH_DIR (root override, wins over suite)\n\
      exit:  0 ok · 2 no daemon · 3 refused · 4 daemon failed"
 }
@@ -67,7 +72,8 @@ fn run() -> i32 {
                 None => return refuse("--since needs a sequence number"),
             },
             "--agent" | "--cwd" | "--prompt-file" | "--model" | "--effort" | "--rows"
-            | "--cols" => {
+            | "--cols" | "--name" | "--to" | "--from" | "--subject" | "--body" | "--body-file"
+            | "--handle" => {
                 let key = arg.trim_start_matches("--").replace('-', "_");
                 match argv.next() {
                     Some(v) => flags.push((key, v)),
@@ -86,9 +92,15 @@ fn run() -> i32 {
         }
     }
 
-    let Some(verb) = verb else {
+    let Some(mut verb) = verb else {
         return refuse(usage());
     };
+    if verb == "mail" {
+        if positional.is_empty() {
+            return refuse("mail needs a subcommand: send, list, read");
+        }
+        verb = format!("mail/{}", positional.remove(0));
+    }
 
     // Suite validated before any socket is touched — a name that cannot isolate must
     // never resolve to the shared root by accident (#86). One spelling, two edges.
@@ -107,46 +119,120 @@ fn run() -> i32 {
     let bench_dir = std::env::var("BENCH_DIR").ok();
     let root = resolve_root(bench_dir.as_deref(), suite.as_ref(), &home);
 
-    let mut args = serde_json::Map::new();
-    match verb.as_str() {
-        "events" if since > 0 => {
-            args.insert("since".into(), json!(since));
-        }
+    let flag = |name: &str| -> Option<String> {
+        flags
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+    };
+    // The default identity: the session's own declared handle, else the operator — the
+    // same declare-don't-derive rule as the daemon setting BENCH_HANDLE at spawn.
+    let own_handle =
+        || std::env::var("BENCH_HANDLE").unwrap_or_else(|_| OPERATOR_HANDLE.to_string());
+
+    // Payloads are the wire crate's own types (#341 R3, completed here — the daemon was
+    // typed in that PR, the CLI half was not): the CLI cannot spell a key the daemon
+    // does not read.
+    let args: Value = match verb.as_str() {
+        "events" if since > 0 => json!({ "since": since }),
         "spawn" => {
-            for (k, v) in &flags {
-                let value: Value = match k.as_str() {
-                    "rows" | "cols" => match v.parse::<u64>() {
-                        Ok(n) => json!(n),
+            let mut spawn = SpawnArgs {
+                agent: String::new(),
+                cwd: String::new(),
+                name: flag("name"),
+                prompt_file: flag("prompt_file"),
+                model: flag("model"),
+                effort: flag("effort"),
+                rows: None,
+                cols: None,
+            };
+            if let Some(a) = flag("agent") {
+                spawn.agent = a;
+            } else {
+                return refuse("spawn needs --agent <claude|codex|pi>");
+            }
+            if let Some(c) = flag("cwd") {
+                spawn.cwd = c;
+            } else {
+                return refuse("spawn needs --cwd <absolute dir>");
+            }
+            for k in ["rows", "cols"] {
+                if let Some(v) = flag(k) {
+                    match v.parse::<u16>() {
+                        Ok(n) => {
+                            if k == "rows" {
+                                spawn.rows = Some(n)
+                            } else {
+                                spawn.cols = Some(n)
+                            }
+                        }
                         Err(_) => return refuse(&format!("--{k} needs a number")),
-                    },
-                    _ => json!(v),
-                };
-                args.insert(k.clone(), value);
+                    }
+                }
             }
+            json!(spawn)
         }
-        "attach" | "close" | "resume" => match positional.first() {
-            Some(s) => {
-                args.insert("session".into(), json!(s));
-            }
-            None => {
+        "attach" | "close" | "resume" => {
+            let Some(sid) = positional.first() else {
                 return refuse(&format!(
                     "{verb} needs a session id — `bench sessions` lists them"
                 ));
-            }
-        },
-        _ => {}
-    }
-    if verb == "attach" {
-        // Tell the daemon the viewer's size so the pty matches before replay.
-        if let Some((rows, cols)) = terminal_size() {
-            args.insert("rows".into(), json!(rows));
-            args.insert("cols".into(), json!(cols));
+            };
+            let (rows, cols) = if verb == "attach" {
+                // Tell the daemon the viewer's size so the pty matches before replay.
+                match terminal_size() {
+                    Some((r, c)) => (Some(r), Some(c)),
+                    None => (None, None),
+                }
+            } else {
+                (None, None)
+            };
+            json!(SessionArgs {
+                session: sid.clone(),
+                rows,
+                cols,
+            })
         }
-    }
+        "mail/send" => {
+            let Some(to) = flag("to") else {
+                return refuse("mail send needs --to <handle>");
+            };
+            let body = match (flag("body"), flag("body_file")) {
+                (Some(b), None) => b,
+                (None, Some(p)) => match std::fs::read_to_string(&p) {
+                    Ok(b) => b,
+                    Err(e) => return refuse(&format!("cannot read --body-file {p:?}: {e}")),
+                },
+                (Some(_), Some(_)) => {
+                    return refuse("--body and --body-file are one or the other");
+                }
+                (None, None) => return refuse("mail send needs --body <text> or --body-file <p>"),
+            };
+            json!(MailSendArgs {
+                to,
+                from: flag("from").unwrap_or_else(own_handle),
+                subject: flag("subject"),
+                body,
+            })
+        }
+        "mail/list" => json!(MailListArgs {
+            handle: flag("handle").unwrap_or_else(own_handle),
+        }),
+        "mail/read" => {
+            let Some(id) = positional.first() else {
+                return refuse("mail read needs a message id — `bench mail list` shows them");
+            };
+            json!(MailReadArgs {
+                handle: flag("handle").unwrap_or_else(own_handle),
+                id: id.clone(),
+            })
+        }
+        _ => Value::Null,
+    };
 
     let cli = Cli {
         verb: verb.clone(),
-        args: Value::Object(args),
+        args,
         root,
     };
     if verb == "attach" {

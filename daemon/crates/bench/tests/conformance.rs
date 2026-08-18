@@ -456,12 +456,20 @@ fn the_justfile_probes_every_known_verb() {
     // read the literal out of the source and compare (R5).
     let justfile = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../justfile"))
         .expect("daemon/justfile readable from the bench crate");
-    let probe_line: String = justfile
-        .lines()
-        .skip_while(|l| !l.contains("for verb in"))
-        .take_while(|l| !l.contains("; do"))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let mut probe_lines: Vec<&str> = Vec::new();
+    let mut in_probe = false;
+    for line in justfile.lines() {
+        if line.contains("for verb in") {
+            in_probe = true;
+        }
+        if in_probe {
+            probe_lines.push(line);
+            if line.contains("; do") {
+                break;
+            }
+        }
+    }
+    let probe_line = probe_lines.join(" ");
     for verb in bench_wire::KNOWN_VERBS {
         assert!(
             probe_line.contains(verb),
@@ -839,4 +847,275 @@ fn libc_kill(pid: i32) {
 }
 fn libc_alive(pid: i32) -> bool {
     unsafe { kill(pid, 0) == 0 }
+}
+
+// ---------------------------------------------------------------------------
+// Mail: the mailroom, the notice discipline, the wake reactor, the cap
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mail_to_a_handle_nobody_hosts_waits_in_the_record() {
+    let home = TestHome::claim("ghostmail");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let send = bench(
+        &home.dir,
+        &[
+            "mail",
+            "send",
+            "--to",
+            "ghost",
+            "--body",
+            "hello there",
+            "--subject",
+            "hi",
+        ],
+    );
+    assert_eq!(send.code, 0, "stderr: {}", send.stderr);
+    let sent: serde_json::Value = serde_json::from_str(&send.stdout).unwrap();
+    assert_eq!(
+        sent["wake"], "no-live-session",
+        "honest: nothing will wake a ghost"
+    );
+    let id = sent["id"].as_str().unwrap().to_string();
+
+    // Pull is metadata-only: the listing must never carry the body.
+    let list = bench(&home.dir, &["mail", "list", "--handle", "ghost"]);
+    assert_eq!(list.code, 0);
+    assert!(list.stdout.contains("\"unread\": true"));
+    assert!(
+        !list.stdout.contains("hello there"),
+        "bodies never ride a listing"
+    );
+
+    // Read = body + retirement; retire-never-delete.
+    let read = bench(&home.dir, &["mail", "read", &id, "--handle", "ghost"]);
+    assert_eq!(read.code, 0, "stderr: {}", read.stderr);
+    assert!(read.stdout.contains("hello there"));
+    assert!(
+        read.stdout.contains("/read/"),
+        "the response names where it lives now"
+    );
+    let mailbox = home.dir.join(".bench/mail/ghost");
+    assert!(mailbox.join("read").join(format!("{id}.md")).exists());
+    assert_eq!(
+        fs::read_dir(mailbox.join("inbox")).unwrap().count(),
+        0,
+        "moved, not copied — and never deleted"
+    );
+
+    let relist = bench(&home.dir, &["mail", "list", "--handle", "ghost"]);
+    assert!(relist.stdout.contains("\"unread\": false"));
+}
+
+#[test]
+fn a_send_to_a_live_session_wakes_it_with_a_path_never_the_body() {
+    let home = TestHome::claim("wake");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let spawn = bench(
+        &home.dir,
+        &[
+            "spawn",
+            "--agent",
+            "test-echo",
+            "--cwd",
+            "/tmp",
+            "--name",
+            "echo1",
+        ],
+    );
+    assert_eq!(spawn.code, 0, "stderr: {}", spawn.stderr);
+
+    let send = bench(
+        &home.dir,
+        &[
+            "mail",
+            "send",
+            "--to",
+            "echo1",
+            "--body",
+            "SECRET-BODY-99",
+            "--subject",
+            "ping",
+        ],
+    );
+    assert_eq!(send.code, 0, "stderr: {}", send.stderr);
+    let sent: serde_json::Value = serde_json::from_str(&send.stdout).unwrap();
+    assert_eq!(sent["wake"], "queued");
+    let id = sent["id"].as_str().unwrap().to_string();
+
+    // The reactor pastes the notice into the pty; cat echoes it into the ring, which an
+    // attach replays — the production wake path observed end to end.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let log = fs::read_to_string(home.dir.join(".bench/events.jsonl")).unwrap_or_default();
+        if log.contains("agent/woken") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the wake never happened: {log}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": "s1"}),
+    );
+    assert_eq!(resp["status"], "ok");
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    let mut seen = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match (&stream).read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => seen.extend_from_slice(&chunk[..n]),
+            Err(_) => {}
+        }
+        if String::from_utf8_lossy(&seen).contains("You have mail") {
+            break;
+        }
+    }
+    let text = String::from_utf8_lossy(&seen);
+    assert!(
+        text.contains("You have mail from operator"),
+        "the notice names the sender: {text}"
+    );
+    assert!(
+        text.contains("/read/"),
+        "the notice carries the retired path: {text}"
+    );
+    assert!(
+        !text.contains("SECRET-BODY-99"),
+        "the notice must NEVER carry the body: {text}"
+    );
+
+    // Retired at delivery: the notice's path is where the file already lives.
+    let mailbox = home.dir.join(".bench/mail/echo1");
+    assert!(mailbox.join("read").join(format!("{id}.md")).exists());
+}
+
+#[test]
+fn the_wake_cap_starves_wakes_never_mail() {
+    let home = TestHome::claim("cap");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let spawn = bench(
+        &home.dir,
+        &[
+            "spawn",
+            "--agent",
+            "test-echo",
+            "--cwd",
+            "/tmp",
+            "--name",
+            "echo2",
+        ],
+    );
+    assert_eq!(spawn.code, 0, "stderr: {}", spawn.stderr);
+    for i in 0..9 {
+        let send = bench(
+            &home.dir,
+            &[
+                "mail",
+                "send",
+                "--to",
+                "echo2",
+                "--body",
+                &format!("msg {i}"),
+            ],
+        );
+        assert_eq!(send.code, 0, "send {i} failed: {}", send.stderr);
+    }
+    // Six tokens of burst; the seventh-plus wake must be capped and say so.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let (mut woken, mut capped);
+    loop {
+        let log = fs::read_to_string(home.dir.join(".bench/events.jsonl")).unwrap_or_default();
+        woken = log.matches("agent/woken").count();
+        capped = log.matches("wake/capped").count();
+        if capped >= 1 && woken >= 6 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "cap never engaged: woken={woken} capped={capped}"
+        );
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    assert!(
+        woken <= 6,
+        "the burst budget is six; {woken} wakes happened"
+    );
+    // The starved mail is safe in the inbox, unread — the cap brakes wakes, never mail.
+    let listing = bench(&home.dir, &["mail", "list", "--handle", "echo2"]);
+    assert!(
+        listing.stdout.contains("\"unread\": true"),
+        "capped mail waits unread: {}",
+        listing.stdout
+    );
+}
+
+#[test]
+fn the_operator_handle_is_addressable_but_never_claimable() {
+    let home = TestHome::claim("oper");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let claim = bench(
+        &home.dir,
+        &[
+            "spawn",
+            "--agent",
+            "test-echo",
+            "--cwd",
+            "/tmp",
+            "--name",
+            "operator",
+        ],
+    );
+    assert_eq!(claim.code, 3, "stderr: {}", claim.stderr);
+    assert!(
+        claim.stderr.contains("operator"),
+        "the refusal names the reservation: {}",
+        claim.stderr
+    );
+    let send = bench(
+        &home.dir,
+        &["mail", "send", "--to", "operator", "--body", "for you"],
+    );
+    assert_eq!(send.code, 0, "addressable: {}", send.stderr);
+}
+
+#[test]
+fn a_claimed_handle_refuses_a_second_claim_and_a_path_is_not_a_handle() {
+    let home = TestHome::claim("dupes");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let a = bench(
+        &home.dir,
+        &[
+            "spawn",
+            "--agent",
+            "test-echo",
+            "--cwd",
+            "/tmp",
+            "--name",
+            "worker",
+        ],
+    );
+    assert_eq!(a.code, 0);
+    let b = bench(
+        &home.dir,
+        &[
+            "spawn",
+            "--agent",
+            "test-echo",
+            "--cwd",
+            "/tmp",
+            "--name",
+            "worker",
+        ],
+    );
+    assert_eq!(b.code, 3, "stderr: {}", b.stderr);
+    assert!(b.stderr.contains("already claimed"));
+    let c = bench(
+        &home.dir,
+        &["mail", "send", "--to", "../escape", "--body", "x"],
+    );
+    assert_eq!(c.code, 3, "stderr: {}", c.stderr);
 }
