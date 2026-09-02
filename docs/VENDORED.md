@@ -134,10 +134,23 @@ clones and patches it.
   revision `b0930320739324886590e865d571eb5dd7073912` — the same exact pin
   docs/SPIKE.md records. The patch does not touch the binary target, so the
   `GhosttyKit.xcframework.zip` URL and checksum are upstream's, unchanged.
+
+  **The script fetches that SHA explicitly, and has to.** A clone carries only what
+  its branches reach, and upstream has since moved past the branch that held
+  `b093032` — so a fresh clone does not contain the pinned commit at all. The
+  checkout after it died with `fatal: unable to read tree (b093032…)` on every new
+  worktree while an older `vendor/`, cloned before the prune, kept verifying fine.
+  The object is still served, it is just no longer advertised by any ref, so
+  `git fetch origin <sha>` is what keeps a pin-by-SHA actually reachable. Found by
+  running the script in a fresh worktree, where it had been failing silently: the
+  invocation was piped into `tail`, and a pipeline reports the *last* command's
+  status, so `set -e` inside the script could not surface it. AGENTS.md documents
+  that shape for `log show`; it bites here identically.
 - **Patches**, applied in this order by `scripts/patch-libghostty.sh` (both are `git
   format-patch` output; applied with `git am`):
   1. `Patches/libghostty-spm-multi-surface-wakeup.patch` — the multi-surface wakeup fix.
   2. `Patches/libghostty-spm-clipboard-destination.patch` — the clipboard-destination fix (#297).
+  3. `Patches/libghostty-spm-open-url-handled.patch` — report a handled `open_url` as handled.
 
   **Their diffstats are deliberately not restated here.** `git format-patch` already writes one
   into each patch file, so a copy in this document is a second spelling of a number nothing
@@ -237,6 +250,59 @@ owns — and are tracked separately.
 this decision from helm's own gate — a marker grep proves a patch was applied and says
 nothing about what it decides.
 
+## Patch 3 — report a handled `open_url` as handled
+
+**What it fixes.** `TerminalCallbacks.action` returned `false` for every action, and ghostty
+reads `false` as *the apprt did not handle this*. For `open_url` its default is
+`internal_os.open` (`Surface.zig:4415`, the only call site), so a ⌘-click on a link in a pane
+opened twice: once through helm's delegate, and once through a `/usr/bin/open` ghostty spawned
+itself.
+
+**The second open never stopped running.** Ghostty reads that child's stderr on a detached
+thread whose loop breaks only on `EndOfStream`; after `/usr/bin/open` exits the reader returns
+zero-length slices instead, so the thread never leaves the loop, never reaches `exe.wait()`,
+and logs `open stderr=` at roughly 9k lines a second forever. Upstream ghostty knows
+(ghostty-org/ghostty#13480) and the fix there is closed unmerged, so this is not something a
+newer XCFramework fixes.
+
+Measured on the operator's helm, up nine days, 2026-09-02:
+
+```
+7 spinning threads, ~57% of a core each        398% process CPU
+7 unreaped `/usr/bin/open` children            586 CPU-hours burnt
+93% of each thread's samples in os_log         logd 43%, analyticsd 49%
+```
+
+`sample` put every one of those threads in `zig_os_log_with_type` with **zero** I/O syscalls,
+hitting `__FIREHOSE_CLIENT_THROTTLED_DUE_TO_HEAVY_LOGGING__`. Their seven TIDs matched the
+seven zombies one-for-one, and the four oldest zombies matched the four threads with the
+largest accumulated CPU. It never recovers: only a restart clears it, and each ⌘-click adds
+another.
+
+**It also made `TerminalURLPolicy` advisory.** helm drops any scheme outside its allowlist,
+and `TerminalSession` calls that allowlist "the whole security story" — but dropping it
+returned `false` like everything else, so ghostty opened the dropped URL anyway.
+
+The patch claims ownership for `open_url`, and only when a delegate actually took it. The
+answer is needed synchronously, so the main-thread case is split out; both `open_url` emitters
+run on the main thread, and an action arriving off it keeps the old async dispatch and the old
+`false`. No other action's return value changes — no other fallback was measured, and claiming
+one would suppress it blind.
+
+**Why helm needs it.** helm hosts long-lived agents in its panes and cannot restart to shed a
+leak without killing them.
+
+**This one is a backport, which is why it is written to disappear.** Upstream fixed it
+identically in 1.5.2; the code here is byte-identical to upstream's, so a repin to ≥1.5.2
+retires this patch on its own rather than needing a rebase.
+**What is not proved by any gate**: that a ⌘-click no longer leaks. That needs a display and
+an Accessibility grant, so it is the operator's check — ⌘-click a link, then look for a new
+~57% thread in `ps -M -p <pid>` and a new zombie child. Neither should appear.
+`Tests/HelmTests/Terminals/TerminalOpenURLOwnershipTests.swift` pins the conformance the
+condition depends on — drop `TerminalSurfaceOpenURLDelegate` from `TerminalSession` and
+nothing fails to compile, the callback just reports `false` again and the leak returns with no
+diagnostic anywhere.
+
 ## Where the pin lives, and how it retires
 
 **Where the pin lives now.** A local path dependency is not recorded in
@@ -256,6 +322,12 @@ local pin puts it back into `Package.resolved` where the rest of the deps are.
 
 They retire independently: upstream taking one and not the other leaves `Patches/` holding
 whichever is left, and the script's array is already per-patch.
+
+**Patch 3 is already retired upstream, and that is an argument for repinning rather than a
+reason to do it today.** libghostty-spm 1.5.2 carries the same fix, so a repin drops that
+patch outright. It also moves the ghostty XCFramework several versions, which is a change with
+its own blast radius and its own gate run — worth doing deliberately, not as a side effect of
+a leak fix.
 
 Until one of those happens the branch does not build from a clean clone without
 running `scripts/patch-libghostty.sh` first. Verify the patches with:
