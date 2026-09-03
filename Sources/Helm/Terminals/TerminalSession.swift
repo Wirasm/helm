@@ -623,6 +623,14 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// the whole security story: terminal content is untrusted, so anything
     /// but http/https/file/mailto is dropped silently.
     ///
+    /// **That sentence is only true because the action callback reports this action as
+    /// handled**, which it did not until `Patches/libghostty-spm-open-url-handled.patch`.
+    /// ghostty reads an unhandled `open_url` as its own to perform and falls back to
+    /// `internal_os.open` (`Surface.zig:4415`), so every URL dropped below was opened by
+    /// ghostty anyway — the allowlist decided nothing, and the fallback also leaked a
+    /// spinning thread and an unreaped child per click. `docs/VENDORED.md` has the
+    /// measurement; `TerminalOpenURLOwnershipTests` pins the conformance it turns on.
+    ///
     /// It used to point out of the app: every link went to `NSWorkspace`, so a rendered
     /// report tabbed you into a browser — the trip helm exists to absorb. A link to
     /// something the canvas renders now opens **in helm** instead.
