@@ -261,8 +261,9 @@ struct Workbench: Codable, Equatable {
     /// canvas arriving beside a lone terminal — the dock, at 50/50 — and progressively wrong
     /// after it: the third pane offered into a column takes half of the column and squeezes
     /// the operator's two into a quarter each, the fourth leaves the oldest at an eighth.
-    /// A spool spawn is a row (#177), so that is now something that happens repeatedly and
-    /// unbidden, and shrinking the pane somebody is working in is its own kind of seizing.
+    /// A spool spawn is a column (#238), so a bench that grows one every time an agent
+    /// starts does this repeatedly and unbidden, and shrinking the pane somebody is working
+    /// in is its own kind of seizing.
     ///
     /// `insert` keeps the old sizing deliberately: it is the operator's own gesture, and a
     /// canvas they ⌘-clicked open landing at half the bench is what #125 measured and shipped.
