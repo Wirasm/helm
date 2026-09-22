@@ -67,11 +67,20 @@ nodes:
     bash: test $delivery.output.ready = true
     depends_on: [delivery]
 
+  - id: publication-target
+    script: ci
+    runtime: bun
+    depends_on: [accepted]
+    with:
+      action: prepare
+      pr_url: ''
+      head: '$delivery.output.head'
+
   - id: pr
     include: archon-pr
     with:
       draft: 'true'
-    depends_on: [accepted]
+    depends_on: [publication-target]
 
   - id: checks
     depends_on: [pr]

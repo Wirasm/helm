@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { probe, ready } from './ci.ts';
+import { prepare, probe, ready } from './ci.ts';
 
 const head = 'a'.repeat(40);
 const url = 'https://github.com/example/repo/pull/1';
@@ -44,7 +44,7 @@ describe('quick delivery only promotes the reviewed revision with observed green
   for (const buckets of [['pending'], ['fail'], ['cancel'], ['unknown'], []]) {
     test(`does not promote checks ${JSON.stringify(buckets)}`, () => {
       const api = fake({ buckets });
-      expect(() => ready(api.run, url, head)).toThrow('PR remains draft');
+      expect(() => ready(api.run, url, head)).toThrow('PR readiness refused');
       expect(api.promoted()).toBe(false);
     });
   }
@@ -66,5 +66,45 @@ describe('quick delivery only promotes the reviewed revision with observed green
     expect(() => probe(args => (args[2] === 'checks' ? '{}' : api.run(args)), url, head)).toThrow(
       'check states'
     );
+  });
+});
+
+describe('publication target is checked before the PR component can push', () => {
+  function publication(existing: unknown) {
+    const calls: string[][] = [];
+    const run = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'git')
+        return args[1] === 'branch' ? 'fix/example' : 'git@github.com:owner/fork.git';
+      return JSON.stringify(existing);
+    };
+    return { run, calls };
+  }
+  for (const existing of [[], [{ url, isDraft: true }]]) {
+    test(`allows a new or draft PR: ${JSON.stringify(existing)}`, () => {
+      const api = publication(existing);
+      expect(prepare(api.run)).toEqual({ repository: 'owner/fork', branch: 'fix/example' });
+      expect(api.calls.at(-1)).toEqual([
+        'gh',
+        'pr',
+        'list',
+        '--repo',
+        'owner/fork',
+        '--head',
+        'fix/example',
+        '--state',
+        'open',
+        '--json',
+        'url,isDraft',
+      ]);
+    });
+  }
+  test('refuses an existing ready PR instead of implicitly changing its state', () => {
+    const api = publication([{ url, isDraft: false }]);
+    expect(() => prepare(api.run)).toThrow('will not push into an existing ready PR');
+    expect(api.calls.some(args => args.includes('push') || args.includes('ready'))).toBe(false);
+  });
+  test('missing draft-state evidence refuses publication', () => {
+    expect(() => prepare(publication([{ url }]).run)).toThrow('draft state');
   });
 });

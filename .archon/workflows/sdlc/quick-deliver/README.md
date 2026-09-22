@@ -35,7 +35,8 @@ credentials or replace their default Archon configuration.
    check to resolve a doubt, but does not repeat the full gate by default.
 3. Correct and re-review when needed, with at most three total attempts. Source
    changes invalidate affected validation; unchanged valid evidence can be reused.
-4. Open a draft PR using the pack's PR component. Probe GitHub CI every 30 seconds,
+4. Refuse an existing ready PR before pushing; allow a new PR or an existing draft.
+   Open a draft PR using the pack's PR component. Probe GitHub CI every 30 seconds,
    bounded to 21 probes. Re-read checks and the reviewed revision before making
    the PR ready; read the draft state back after the mutation. Never merge.
 
@@ -52,6 +53,8 @@ PR-body resynchronization, or unconditional final local validation.
   failed/cancelled checks, or a changed PR revision cannot become a success.
   Repositories without CI need another workflow until a deliberate no-CI contract
   is added.
+- Existing ready PRs require a new branch or an explicit operator transition to draft.
+  The workflow does not undo readiness implicitly.
 - Review corrections are automated; CI failures leave a draft PR and fail with
   evidence for operator-directed correction. No hidden repair run starts.
 - A pre-PR failure leaves the local branch and run artifacts, not a public PR.
