@@ -2,7 +2,7 @@
 
 An SDLC-pack workflow being tested in Helm before promotion to Archon. It contains
 no Helm paths, toolchain commands, provider choices or model IDs. It uses current
-Archon workflow primitives and the bundled `archon-pr` component; tested against
+Archon workflow primitives; tested against
 Archon source revision `adbe23426`.
 
 Quick means fewer steps. The implementer uses `large` and the reviewer uses
@@ -36,7 +36,7 @@ credentials or replace their default Archon configuration.
 3. Correct and re-review when needed, with at most three total attempts. Source
    changes invalidate affected validation; unchanged valid evidence can be reused.
 4. Refuse an existing ready PR before pushing; allow a new PR or an existing draft.
-   Open a draft PR using the pack's PR component. Probe GitHub CI every 30 seconds,
+   Publish only to that checked origin repository and current branch. Open a draft PR. Probe GitHub CI every 30 seconds,
    bounded to 21 probes. Re-read checks and the reviewed revision before making
    the PR ready; read the draft state back after the mutation. Never merge.
 
@@ -54,7 +54,9 @@ PR-body resynchronization, or unconditional final local validation.
   Repositories without CI need another workflow until a deliberate no-CI contract
   is added.
 - Existing ready PRs require a new branch or an explicit operator transition to draft.
-  The workflow does not undo readiness implicitly.
+  The workflow does not undo readiness implicitly. Repairing or adopting a PR from
+  another branch or fork is outside this workflow; issue/PR references in the brief
+  are context, never an alternate publication target.
 - Review corrections are automated; CI failures leave a draft PR and fail with
   evidence for operator-directed correction. No hidden repair run starts.
 - A pre-PR failure leaves the local branch and run artifacts, not a public PR.

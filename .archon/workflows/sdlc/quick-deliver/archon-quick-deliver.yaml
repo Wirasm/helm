@@ -75,12 +75,39 @@ nodes:
       action: prepare
       pr_url: ''
       head: '$delivery.output.head'
+    output_format:
+      type: object
+      properties:
+        repository: { type: string }
+        branch: { type: string }
+      required: [repository, branch]
 
   - id: pr
-    include: archon-pr
-    with:
-      draft: 'true'
+    command: publish
+    model: medium
+    context: fresh
+    mutates_checkout: false
     depends_on: [publication-target]
+    with:
+      repository: '$publication-target.output.repository'
+      branch: '$publication-target.output.branch'
+      head: '$delivery.output.head'
+    output_type: pull-request
+    output_format:
+      type: object
+      properties:
+        repo:
+          type: object
+          properties:
+            host: { type: string }
+            path: { type: string }
+          required: [host, path]
+        number: { type: integer }
+        url: { type: string }
+        head: { type: string }
+        base: { type: string }
+        is_draft: { type: boolean }
+      required: [repo, number, url, head, base, is_draft]
 
   - id: checks
     depends_on: [pr]

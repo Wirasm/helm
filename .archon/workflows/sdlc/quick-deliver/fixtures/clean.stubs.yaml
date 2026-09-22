@@ -7,8 +7,8 @@ review:
     summary: 'Independent review accepted.',
     head: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   }
-publication-target: '{"repository":"example/repo","branch":"feature"}'
-pr__pr:
+publication-target: { repository: example/repo, branch: feature }
+pr:
   repo: { host: github, path: example/repo }
   number: 1
   url: https://github.com/example/repo/pull/1
@@ -26,4 +26,6 @@ ready:
 exec-code: true
 fixture:
   expect: completed
-  reached: [implement, implementation-gate, review, accepted, pr__pr, probe, ready]
+  resolved-text-contains:
+    pr: 'Repository: example/repo'
+  reached: [implement, implementation-gate, review, accepted, pr, probe, ready]
