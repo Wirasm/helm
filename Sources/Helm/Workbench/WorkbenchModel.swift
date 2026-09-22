@@ -611,12 +611,12 @@ final class WorkbenchModel: ObservableObject {
     /// A terminal helm was asked to open **from outside** — the spool's spawn (#54), which is
     /// the same tenant `newTerminal` makes and two different decisions about it.
     ///
-    /// Where it lands is `Workbench.placementForSpawnedTerminal()`'s — a pane of its own,
-    /// decided by the bench rather than by whatever the operator last clicked. That it
-    /// *appears* rather than seizing is `Workbench.offer(_:at:)`'s (#125): `selected` and
-    /// `focusedSlot` are both left exactly as they were, so the keyboard stays in the pane
-    /// the operator is typing in. A spawn nobody asked for that takes the keyboard is worse
-    /// than one in an odd slot.
+    /// Where it lands is `Workbench.placementForSpawnedTerminal()`'s — a new column of its
+    /// own at the right end, decided by the bench rather than by whatever the operator last
+    /// clicked. That it *appears* rather than seizing is `Workbench.offer(_:at:)`'s (#125):
+    /// `selected` and `focusedSlot` are both left exactly as they were, so the keyboard stays
+    /// in the pane the operator is typing in. A spawn nobody asked for that takes the
+    /// keyboard is worse than one in an odd slot.
     ///
     /// Returns the session for the same reason `newTerminal` does: the spool has to write
     /// its id into `results/<id>.json` and then send the launch line to that exact pane.

@@ -50,17 +50,14 @@ extension Workbench {
     }
 
     /// Where a **spawned** terminal goes — an agent helm was asked to start from outside the
-    /// app (#177, the spool of #54), as against ⌘N above:
-    /// 1. a new row under the first column that already holds a terminal — agents go where
-    ///    agents already are, the mirror of `holdsCanvas` one level up;
-    /// 2. otherwise a new column at the right end, for a bench that is all canvas and has no
-    ///    column of agents to join.
+    /// app (#177, the spool of #54), as against ⌘N above: **a new column at the right end,
+    /// always.**
     ///
     /// **A pane of its own, never a tab.** A tab is hidden behind whatever its slot is
     /// showing, so stacking a spawn as one means the spawn produces no visible change unless
     /// the operator goes looking — and for a capability whose whole premise is that *nobody
-    /// is watching*, an invisible spawn is backwards. A row is the smallest thing that makes
-    /// "an agent now exists" observable.
+    /// is watching*, an invisible spawn is backwards. A column of its own is the clearest
+    /// thing that makes "an agent now exists" observable.
     ///
     /// **Focus is not consulted, and that is the fix.** `placementForNewTerminal` reads
     /// `focusedSlot` because an operator pressing ⌘N means *here*. A spool request means
@@ -69,17 +66,19 @@ extension Workbench {
     /// spawned agent came to stack onto the canvas somebody was reading. The bench decides
     /// this, not whatever was last clicked.
     ///
-    /// **A row rather than a new column**, which was the other candidate: a terminal loses
-    /// more to width than to height — 80 columns is a floor below which lines wrap, where 20
-    /// rows is merely cramped — and the benches the operator actually keeps are two and three
-    /// columns wide by choice. A column per spawn spends the scarcer axis.
+    /// **A new column on the right, reversed from a row in the first terminal column.** #177
+    /// justified the row on the argument that a terminal loses more to width than to height,
+    /// and the operator running the benches this exists for overruled it. A spawn often
+    /// arrives while they are working, and growing a row reflows the height of the column
+    /// they are in — the vertical space they were using — where a column on the right is
+    /// added beside their work without squeezing it. The two rules above are the ones that
+    /// survive the reversal; the only thing that changed is which edge a spawn grows from.
     ///
     /// Placing is only half of it: the pane must also *not* take the keyboard, which is
     /// `Workbench.offer(_:at:)`'s half (#125). `WorkbenchModel.spawnTerminal` is where the
     /// two meet.
     func placementForSpawnedTerminal() -> Placement {
-        if let column = columns.first(where: \.holdsTerminal) { return .row(in: column.id) }
-        return .column
+        .column
     }
 }
 
@@ -88,18 +87,5 @@ extension Slot {
     /// and a canvas counts: the operator put a canvas there, so that is where canvases go.
     fileprivate var holdsCanvas: Bool {
         panes.contains { if case .canvas = $0.content { true } else { false } }
-    }
-
-    fileprivate var holdsTerminal: Bool {
-        panes.contains { if case .terminal = $0.content { true } else { false } }
-    }
-}
-
-extension Column {
-    /// Whether this column is somewhere a terminal already lives. A column, not a slot,
-    /// because a spawned terminal joins a column as a row of its own — the slot it would
-    /// otherwise join is the tab this rule exists to refuse.
-    fileprivate var holdsTerminal: Bool {
-        slots.contains(where: \.holdsTerminal)
     }
 }

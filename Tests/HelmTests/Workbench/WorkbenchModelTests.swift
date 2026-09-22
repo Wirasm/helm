@@ -331,6 +331,36 @@ final class WorkbenchModelTests: XCTestCase {
             "and the pane they were typing in is still the one on screen")
     }
 
+    /// Repeated spawns append a column on the right rather than stacking rows into the first
+    /// terminal column, so the vertical space the operator is working in is never reflowed.
+    /// The columns land on equal widths, because `Workbench.offer` gives each newcomer an
+    /// equal share that `normalize()` preserves.
+    func testRepeatedSpawnsAppendColumnsOnTheRightAndShareWidthEqually() throws {
+        let (model, _) = mounted()
+        let firstPane = try XCTUnwrap(model.bench?.panes.first?.id)
+        let focused = try XCTUnwrap(model.bench?.focusedSlot)
+
+        let first = try XCTUnwrap(model.spawnTerminal())
+        XCTAssertEqual(model.bench?.columns.count, 2, "one spawn, one new column")
+        XCTAssertEqual(
+            model.bench?.columns.map { $0.slots.flatMap(\.panes).count }, [1, 1],
+            "a column of its own, not a second row under the first column")
+
+        let second = try XCTUnwrap(model.spawnTerminal())
+        let bench = try XCTUnwrap(model.bench)
+        XCTAssertEqual(bench.columns.count, 3, "a second spawn appends a second column")
+        XCTAssertEqual(
+            bench.columns.map { $0.slots.flatMap(\.panes).map(\.id) },
+            [[firstPane], [first.id], [second.id]],
+            "every existing pane survives in place; the newcomers are to the right")
+        for width in bench.columns.map(\.width) {
+            XCTAssertEqual(width, 1.0 / 3, accuracy: 1e-9, "columns share width equally")
+        }
+        XCTAssertEqual(
+            model.bench?.focusedSlot, focused,
+            "and the keyboard never follows any of them")
+    }
+
     // MARK: - A split from outside (#269)
 
     /// The model-level twin of `WorkbenchTests`' value-level assertion, and it is not the same
