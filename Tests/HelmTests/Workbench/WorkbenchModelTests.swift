@@ -331,6 +331,47 @@ final class WorkbenchModelTests: XCTestCase {
             "and the pane they were typing in is still the one on screen")
     }
 
+    /// The operator's ruling on the shape: a spool spawn is a new column on the right, and
+    /// only its own. Repeated before/after counts are the whole point — the first version of
+    /// this rule appended a *row* under the first column holding a terminal, so a second spawn
+    /// made no new column at all and squeezed the shell above it.
+    func testEachSpawnAddsAColumnAndLeavesEveryExistingPaneAndTheFocusAlone() throws {
+        let (model, _) = mounted()
+        model.newTerminal()  // the operator's second tab, so a spawn has a selection to disturb
+        let before = try XCTUnwrap(model.bench)
+        let existingPanes = Set(before.panes.map(\.id))
+        let focused = before.focusedSlot
+        let reading = try XCTUnwrap(before.focusedPane?.id)
+
+        var spawned: [TerminalSession] = []
+        for _ in 0..<3 { spawned.append(try XCTUnwrap(model.spawnTerminal())) }
+
+        let after = try XCTUnwrap(model.bench)
+        XCTAssertEqual(
+            after.columns.count, before.columns.count + spawned.count,
+            "one new column per spawn — \(before.columns.count) before, \(after.columns.count) after"
+        )
+        for session in spawned {
+            let column = try XCTUnwrap(
+                after.columns.first {
+                    $0.slots.contains { $0.panes.contains { $0.id == session.id } }
+                })
+            XCTAssertEqual(column.slots.count, 1, "the spawn is a column of its own, not a row")
+            XCTAssertEqual(column.slots[0].panes.map(\.id), [session.id], "and the only pane in it")
+        }
+        XCTAssertTrue(
+            existingPanes.isSubset(of: Set(after.panes.map(\.id))),
+            "no pane that was already on the bench was lost")
+        XCTAssertEqual(after.focusedSlot, focused, "focus stays where the operator put it")
+        XCTAssertEqual(after.focusedPane?.id, reading, "…and they still see their own pane")
+        let widths = after.columns.map(\.width)
+        for width in widths {
+            XCTAssertEqual(
+                width, 1 / Double(widths.count), accuracy: 1e-9,
+                "columns share the width equally after the spawns")
+        }
+    }
+
     // MARK: - A split from outside (#269)
 
     /// The model-level twin of `WorkbenchTests`' value-level assertion, and it is not the same
