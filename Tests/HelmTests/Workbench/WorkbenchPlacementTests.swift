@@ -68,7 +68,7 @@ final class WorkbenchPlacementTests: XCTestCase {
             "⌘N appends to the slot you are in — what TerminalManager.newTerminal did")
     }
 
-    // MARK: - A spawn (#177)
+    // MARK: - A spawn (#177, direction reversed by #238)
 
     func testASpawnWhileACanvasHasFocusIsNotATabOnTheCanvas() {
         var bench = Workbench(terminal: UUID())
@@ -81,8 +81,8 @@ final class WorkbenchPlacementTests: XCTestCase {
             placement, .tab(in: canvasSlot),
             "the operator was reading a canvas; an agent from outside stacked onto it (#177)")
         XCTAssertEqual(
-            placement, .row(in: bench.columns[0].id),
-            "it joins the column that already holds terminals, as a pane of its own")
+            placement, .column,
+            "it opens a column of its own at the right end (#238)")
     }
 
     func testASpawnIgnoresFocusEvenWhenFocusIsOnATerminal() {
@@ -92,20 +92,20 @@ final class WorkbenchPlacementTests: XCTestCase {
             bench.placementForNewTerminal(), .tab(in: bench.focusedSlot),
             "⌘N is unchanged: the operator asking for a terminal gets it where they are")
         XCTAssertEqual(
-            bench.placementForSpawnedTerminal(), .row(in: bench.columns[0].id),
+            bench.placementForSpawnedTerminal(), .column,
             "a spawn is decided by the bench, not by whatever was last clicked — a tab is "
                 + "hidden, and a spawn nobody is watching must be visible")
     }
 
-    func testASpawnJoinsTheFirstColumnHoldingATerminal() {
+    func testASpawnOpensANewColumnEvenWhenATerminalColumnExists() {
         var bench = Workbench(panes: [Pane(content: .canvas(plan))])
         bench.insert(terminal(), at: .column)
         bench.insert(terminal(), at: .column)
 
         XCTAssertEqual(
-            bench.placementForSpawnedTerminal(), .row(in: bench.columns[1].id),
-            "the first column in bench order that holds a terminal takes it — the mirror of "
-                + "the canvas rule, one level up")
+            bench.placementForSpawnedTerminal(), .column,
+            "the operator's bench is columns wide by choice; a spawn grows it rightward "
+                + "rather than stacking a row under the first column (#238)")
     }
 
     func testASpawnOntoAnAllCanvasBenchGetsAColumnOfItsOwn() {
@@ -116,6 +116,24 @@ final class WorkbenchPlacementTests: XCTestCase {
             bench.placementForSpawnedTerminal(), .column,
             "there is no column of agents to join, and a canvas slot is the one place a "
                 + "spawn must not land")
+    }
+
+    func testRepeatedSpawnsDivideTheWidthEvenlyRatherThanHalvingTheNewest() {
+        var bench = Workbench(terminal: UUID())
+
+        bench.offer(
+            Pane(content: .terminal(face: .terminal)), at: bench.placementForSpawnedTerminal())
+        bench.offer(
+            Pane(content: .terminal(face: .terminal)), at: bench.placementForSpawnedTerminal())
+
+        let widths = bench.columns.map(\.width)
+        XCTAssertEqual(widths.count, 3)
+        for width in widths {
+            XCTAssertEqual(
+                width, 1 / 3.0, accuracy: 1e-9,
+                "each of the three columns takes a third — the 1/n property #177 established, "
+                    + "now on the column axis (#238)")
+        }
     }
 
     func testPathsAreStandardisedSoTheSameFileIsOneCanvas() {

@@ -309,6 +309,9 @@ final class WorkbenchModelTests: XCTestCase {
         XCTAssertNotEqual(
             slot.id, canvasSlot, "the agent stacked onto the canvas being read (#177)")
         XCTAssertEqual(slot.panes.map(\.id), [spawned.id], "a pane of its own, not a tab")
+        XCTAssertEqual(
+            bench.columns.last?.slots.contains { $0.id == slot.id }, true,
+            "and it lands in a column at the right end rather than stacking underneath (#238)")
         XCTAssertTrue(
             spawned.isVisible,
             "a spawn nobody is watching has to be the thing that is visible")
