@@ -1,0 +1,28 @@
+start: ''
+implement: { ready: true, summary: 'Implemented and full local gate passed.' }
+revision: { head: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
+review:
+  {
+    ready: true,
+    summary: 'Independent review accepted.',
+    head: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  }
+pr__pr:
+  repo: { host: github, path: example/repo }
+  number: 1
+  url: https://github.com/example/repo/pull/1
+  head: feature
+  base: main
+  is_draft: true
+probe: { state: green, detail: 'CI passed.' }
+ready:
+  {
+    delivered: true,
+    pr_url: 'https://github.com/example/repo/pull/1',
+    head: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    summary: 'Ready; not merged.',
+  }
+exec-code: true
+fixture:
+  expect: completed
+  reached: [implement, implementation-gate, review, accepted, pr__pr, probe, ready]

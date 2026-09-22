@@ -12,6 +12,10 @@ DerivedData/
 
 .worktrees/
 
-# Archon keeps per-repo run state here. Local, never this repo's to carry — one
-# `git add -A` swept a 696-line workflow file into an unrelated fix (#263).
-.archon/
+# Keep Archon state/config local; only the explicit SDLC prototype is shared.
+.archon/*
+!.archon/workflows/
+.archon/workflows/*
+!.archon/workflows/sdlc/
+.archon/workflows/sdlc/*
+!.archon/workflows/sdlc/quick-deliver/
