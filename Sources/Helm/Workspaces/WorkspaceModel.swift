@@ -183,24 +183,19 @@ final class WorkspaceModel: ObservableObject, ParkedBenches {
 }
 
 extension WorkspaceModel {
-    /// `git branch --show-current`, off the main actor. Nil when git fails or prints nothing:
-    /// not a repository, or a detached HEAD.
+    /// `git branch --show-current`, through `Subprocess`, so the wait holds no thread. Nil when
+    /// git fails, times out or prints nothing: not a repository, or a detached HEAD. A cancelled
+    /// ask is nil too, and `refreshBranch` drops it.
     nonisolated static func currentBranch(in path: WorkspacePath) async -> String? {
-        await Task.detached { () -> String? in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["git", "-C", path.value, "branch", "--show-current"]
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-            process.standardInput = FileHandle.nullDevice
-            guard (try? process.run()) != nil else { return nil }
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let value = String(decoding: data, as: UTF8.self).trimmingCharacters(
-                in: .whitespacesAndNewlines)
-            return value.isEmpty ? nil : value
-        }.value
+        guard
+            let result = try? await Subprocess.run(
+                ["git", "-C", path.value, "branch", "--show-current"],
+                environment: ProcessInfo.processInfo.environment,
+                timeout: .seconds(10)),
+            result.status == 0
+        else { return nil }
+        let value = String(decoding: result.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }

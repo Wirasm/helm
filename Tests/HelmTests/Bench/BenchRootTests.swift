@@ -41,12 +41,13 @@ final class BenchRootTests: XCTestCase {
             XCTAssertEqual(error.variable, "HELM_DEFAULTS_SUITE")
             XCTAssertEqual(error.value, name)
         }
-        guard case .failure(let error) = root(["HELM_DEFAULTS_SUITE": "helm"]) else {
+        let environment = ["HELM_DEFAULTS_SUITE": "helm"]
+        guard case .failure(let error) = root(environment),
+            case .refused(let why) = DefaultsSuite.override(in: environment)
+        else {
             return XCTFail("a suite helm itself refuses never falls back to ~/.bench either")
         }
-        XCTAssertTrue(
-            error.sentence.contains("legacy migration"),
-            "and the pane says helm's own reason, not a character rule: \(error.sentence)")
+        XCTAssertEqual(error.sentence, why, "the pane says helm's own reason, not a character rule")
     }
 
     func testTheBenchVariablesOutrankTheHelmSuite() {
