@@ -165,7 +165,8 @@ against the real CLI.
 
 > **Running order, operator-ruled 2026-09-25.** Milestone numbers below are kept as
 > written; they no longer say what comes next. **Landed:** M0 (#340), M5a (#341),
-> mail in benchd (#342, the core of M2), and the shared browser (#350: #352, #363).
+> mail in benchd (#342, the core of M2), the shared browser (#350: #352, #363), and M4's
+> daemon half — the bench document, its verbs and `events --follow` (#367, #373).
 > **Next, in this order:**
 >
 > Tracking issue: **#362**; each step below has its own.
