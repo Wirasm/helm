@@ -193,7 +193,8 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         } catch let failure as Subprocess.Failure {
             let reason: WorktreeCLIError.Reason =
                 switch failure {
-                case let .captureUnavailable(why): .launchFailed(why)
+                case let .captureUnavailable(why):
+                    .launchFailed(why ?? "could not create temporary command capture")
                 case let .launchFailed(why): .launchFailed(why)
                 case .timedOut: .timedOut(after: timeout)
                 case let .unreadableOutput(why): .unreadableOutput(why)

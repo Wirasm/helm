@@ -235,7 +235,8 @@ struct ArchonCLI: ArchonClient, Sendable {
         } catch let failure as Subprocess.Failure {
             let reason: ArchonCLIError.Reason =
                 switch failure {
-                case let .captureUnavailable(why): .unreadableOutput(why)
+                case let .captureUnavailable(why):
+                    .unreadableOutput(why ?? "could not create temporary capture")
                 case let .launchFailed(why): .launchFailed(why)
                 case .timedOut: .timedOut(after: timeout)
                 case let .unreadableOutput(why): .unreadableOutput(why)

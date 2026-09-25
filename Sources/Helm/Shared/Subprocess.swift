@@ -36,8 +36,9 @@ enum Subprocess {
     /// status is a failure (`git merge-base --is-ancestor` answers with one). Cancellation throws
     /// `CancellationError`.
     enum Failure: Error, Equatable {
-        /// The capture files could not be created in `scratch`.
-        case captureUnavailable(String)
+        /// The capture files could not be created in `scratch` (nil), or not opened (why).
+        /// Nil lets each caller keep its own sentence for the first case.
+        case captureUnavailable(String?)
         /// `Process.run()` refused: no `/usr/bin/env`, an unreadable working directory.
         case launchFailed(String)
         /// The deadline passed and the child was sent SIGTERM.
@@ -69,7 +70,7 @@ enum Subprocess {
         }
         guard FileManager.default.createFile(atPath: outputURL.path, contents: nil),
             FileManager.default.createFile(atPath: errorURL.path, contents: nil)
-        else { throw Failure.captureUnavailable("could not create temporary capture") }
+        else { throw Failure.captureUnavailable(nil) }
 
         let output: FileHandle
         let errors: FileHandle

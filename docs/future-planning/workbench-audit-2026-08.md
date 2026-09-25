@@ -62,7 +62,7 @@ Headless — the real surface:
 | Hear from the operator | canvas marks routed as mail to the pushing agent | wakes an idle agent — human intent carries |
 
 Display-bound (the ceiling the spool exists to escape): `push.sh` (needs a writable pty in
-the ancestry), `helm-spawn` (unlocked screen + Accessibility), `winshot` (Screen Recording
+the ancestry), `helm-spawn` (unlocked screen + Accessibility; deleted in #377), `winshot` (Screen Recording
 grant). Each refuses loudly rather than typing into nothing — every one exists because a
 previous version reported success silently.
 
