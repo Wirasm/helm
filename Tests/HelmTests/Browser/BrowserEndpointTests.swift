@@ -17,7 +17,6 @@ final class BrowserEndpointTests: XCTestCase {
         guard case let .found(endpoint) = BrowserEndpoint.read(at: fixture) else {
             return XCTFail("the fixture benchd's writer is pinned to did not decode")
         }
-        XCTAssertEqual(endpoint.mode, .headless)
         XCTAssertEqual(endpoint.webSocketURL?.scheme, "ws")
         XCTAssertEqual(endpoint.startedAt, "2026-09-25T12:00:00Z")
     }
@@ -25,15 +24,15 @@ final class BrowserEndpointTests: XCTestCase {
     func testAnEndpointFromAFormatThisBuildDoesNotKnowIsReportedNotMisread() throws {
         var json =
             try JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as! [String: Any]
-        json["version"] = 1
+        json["version"] = BrowserEndpoint.supportedVersion + 1
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("endpoint-\(UUID().uuidString).json")
         try JSONSerialization.data(withJSONObject: json).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
         guard case let .unreadable(why) = BrowserEndpoint.read(at: url) else {
-            return XCTFail("a v1 endpoint was accepted by a v0 reader")
+            return XCTFail("an endpoint from a newer format was accepted")
         }
-        XCTAssertTrue(why.contains("v1"), why)
+        XCTAssertTrue(why.contains("v\(BrowserEndpoint.supportedVersion + 1)"), why)
         XCTAssertEqual(
             BrowserEndpoint.read(at: url.appendingPathExtension("missing")), .absent,
             "no file is the ordinary state: no browser running")

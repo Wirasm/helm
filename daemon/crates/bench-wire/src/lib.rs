@@ -357,10 +357,11 @@ pub struct SessionArgs {
 ///   where it is installed (the operator's ruling on #350 — real Chrome runs the Claude
 ///   in Chrome and Codex extensions), else the newest Playwright Chrome for Testing.
 /// - `mock_keychain`: see the field.
-/// - `args`: REPLACES the default set (`--headless=new`, a normal Chrome user agent,
-///   `--remote-allow-origins`, a window size). The flags the daemon owns — profile dir,
-///   debugging port, first-run suppression — are always added and cannot be configured
-///   away.
+/// - `args`: REPLACES the headless browser's default set (`--headless=new`, a normal
+///   Chrome user agent, `--remote-allow-origins`, a window size). The flags the daemon
+///   owns — profile dir, debugging port, first-run suppression — are always added and
+///   cannot be configured away. The setup browser takes none of these: it runs plain
+///   (`bench_browser::setup_args`), because Google refuses sign-in to anything else.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserConfig {
@@ -381,9 +382,10 @@ pub struct BrowserConfig {
 }
 
 /// How the browser is running. `headless` is the normal state, seen only through helm's
-/// pane. `setup` is the same profile in a real window, started by `browser/setup` so the
-/// operator can install extensions and sign in to them — things with browser UI the pane
-/// cannot show. Quitting the setup window returns the browser to `headless`.
+/// pane. `setup` is the same profile in a plain Chrome window, started by `browser/setup`
+/// so the operator can sign in and install extensions — things with browser UI the pane
+/// cannot show. It has no debugging port, so nothing can connect to it and it publishes
+/// no endpoint. Quitting the setup window returns the browser to `headless`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BrowserMode {
@@ -392,7 +394,8 @@ pub enum BrowserMode {
 }
 
 pub const BROWSER_ENDPOINT_FORMAT: &str = "bench.browser-endpoint";
-pub const BROWSER_ENDPOINT_VERSION: u64 = 0;
+/// 1 since #374: `mode` is gone, because only a headless browser has an endpoint.
+pub const BROWSER_ENDPOINT_VERSION: u64 = 1;
 
 /// Where the running browser is — the one shape written to `<root>/browser/endpoint.json`
 /// and returned by `browser/start` and `browser/status`. It is read OUTSIDE this
@@ -400,15 +403,9 @@ pub const BROWSER_ENDPOINT_VERSION: u64 = 0;
 /// reader checks them before trusting the rest (`BenchSnapshot`'s rule).
 ///
 /// `cdp` is what `playwright-cli attach --cdp=` takes; `ws` is the browser-level
-/// websocket a CDP client opens directly. The file exists exactly while a browser the
-/// daemon started is running: written after it answers, removed when it stops or exits.
-///
-/// **A reader that means to drive the browser refuses `mode: setup`.** That is the
-/// operator's own window, and the file and the `browser/started` event still carry its
-/// address because they are the record of what is running ("files are the record",
-/// direction.md) — withholding it would make the record lie. The routes built to hand an
-/// address out enforce it: `browser/start` refuses during setup and `browser/status`
-/// omits `cdp`/`ws`; helm's pane reads the mode and does not connect.
+/// websocket a CDP client opens directly. The file exists exactly while the headless
+/// browser is running: written after it answers, removed when it stops or exits. A setup
+/// browser has no debugging port and so no endpoint — while it runs there is no file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrowserEndpoint {
     pub format: String,
@@ -417,7 +414,6 @@ pub struct BrowserEndpoint {
     pub ws: String,
     pub port: u16,
     pub pid: u32,
-    pub mode: BrowserMode,
     pub binary: String,
     pub profile: String,
     pub started_at: String,

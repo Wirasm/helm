@@ -27,8 +27,9 @@ Claude in Chrome and Codex extensions), else Playwright's Chrome for Testing;
 `browser/config.json` swaps binary or flags — headless, persistent profile under
 `<root>/browser/profile`, debugging port chosen by Chrome and read back from
 `DevToolsActivePort`, endpoint published in `<root>/browser/endpoint.json`. `setup` opens
-the same profile in a real window for installing extensions and signing in; quitting it
-returns to headless. The daemon never automates the browser: agents attach with
+the same profile in a plain Chrome window for installing extensions and signing in: no
+user-agent override, no debugging port, because Google refuses sign-in to a browser that
+has them (#374). Quitting it returns to headless. The daemon never automates the browser: agents attach with
 `playwright-cli attach --cdp=<cdp>`, helm renders it over its own CDP socket. A crash is
 restarted (at most 3 in 60s, then `browser/gave-up`), and the browser runs on a pipe
 leash so it dies with the daemon even under SIGKILL. `just browser-proof` is the live check.

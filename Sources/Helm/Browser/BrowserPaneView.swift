@@ -113,9 +113,6 @@ struct BrowserPaneView: View {
     private var message: String {
         switch model.status {
         case let .waiting(why): why
-        case .setup:
-            "The shared browser is open in its own window for setup. Quit that window (⌘Q) "
-                + "when you are done, and it comes back here."
         case .connecting: "Connecting to the shared browser…"
         case .connected: ""
         }

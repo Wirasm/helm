@@ -21,12 +21,14 @@ echo "$CDP"
 
 `browser start` starts the browser, or finds it running, and prints its endpoint. `cdp` is what
 Playwright takes. The `|| exit` keeps bench's exit code and its reason (on stderr), rather than
-handing Playwright an empty endpoint. Always go through `browser start`. Don't read
-`browser/endpoint.json` yourself, because only `start` refuses the operator's setup window. Exit codes: `0` ok · `2` no daemon · `3` refused (the reason names the fix) · `4`
+handing Playwright an empty endpoint. Always go through `browser start` rather than reading
+`browser/endpoint.json` yourself: the file is simply missing when the browser is down or open
+for setup, and only `start` starts it or tells you why it can't. Exit codes: `0` ok · `2` no daemon · `3` refused (the reason names the fix) · `4`
 the browser did not come up.
 
 It refuses while the operator has the browser open in a window for setup (installing
-extensions, signing in). Leave it alone. It comes back by itself when he quits that window, and
+extensions, signing in). That window is a plain Chrome with no debugging port, so there is
+nothing to attach to. Leave it alone. It comes back by itself when he quits that window, and
 `"$BENCH" browser status` shows `"mode": "headless"` again.
 
 ## Drive it with Playwright

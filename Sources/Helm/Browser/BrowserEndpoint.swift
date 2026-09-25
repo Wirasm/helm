@@ -3,7 +3,8 @@ import Foundation
 /// Where the shared browser is, as benchd publishes it (#350).
 ///
 /// benchd starts one Chrome per bench root and writes this to `<root>/browser/endpoint.json`
-/// while that browser runs; the file is gone when it stops. helm reads it and opens the
+/// while that browser runs headless; the file is gone when it stops, and absent while the
+/// profile is open in a plain window for `bench browser setup`, which has no address. helm reads it and opens the
 /// browser-level CDP websocket (`ws`) itself — benchd is never in the frame path.
 ///
 /// **A duplicate across a runtime boundary, pinned rather than trusted.** The type is
@@ -14,7 +15,7 @@ import Foundation
 /// is a red gate, not a pane that silently never connects.
 struct BrowserEndpoint: Codable, Equatable {
     static let expectedFormat = "bench.browser-endpoint"
-    static let supportedVersion = 0
+    static let supportedVersion = 1
 
     let format: String
     let version: Int
@@ -24,22 +25,13 @@ struct BrowserEndpoint: Codable, Equatable {
     let ws: String
     let port: Int
     let pid: Int32
-    let mode: Mode
     let binary: String
     let profile: String
     let startedAt: String
 
     private enum CodingKeys: String, CodingKey {
-        case format, version, cdp, ws, port, pid, mode, binary, profile
+        case format, version, cdp, ws, port, pid, binary, profile
         case startedAt = "started_at"
-    }
-
-    enum Mode: String, Codable, Equatable {
-        /// The normal state: headless, seen through this pane.
-        case headless
-        /// The same profile in a real Chrome window, for installing extensions. The pane
-        /// says so and does not connect: the window is where the operator is working.
-        case setup
     }
 
     /// What reading the file found. Absence is ordinary — no browser is running — and is
