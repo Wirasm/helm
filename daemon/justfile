@@ -102,7 +102,8 @@ spec:
     echo "bench surface, $(date -u +%Y-%m-%dT%H:%MZ):"
     for verb in status events stop:probe spawn sessions attach close resume \
                 select name capture cmd \
-                attn/post attn/list attn/ack watch mail/send mail/list mail/read; do
+                attn/post attn/list attn/ack watch mail/send mail/list mail/read \
+                browser/start browser/status browser/stop browser/setup; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then
             # probed last for real; listed here so the row exists
@@ -205,3 +206,37 @@ mail-proof:
     "$BENCH" stop >/dev/null
     rm -rf "$SMOKE"
     echo "mail-proof: clean"
+
+# The shared-browser proof, real browser end to end (#350): the daemon starts Chrome for
+# Testing, an agent's own tool attaches over CDP and acts, and the browser carries a
+# normal user agent. Needs Playwright's Chromium and playwright-cli; spends no tokens.
+browser-proof:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DIR="{{justfile_directory()}}"
+    SMOKE=$(mktemp -d "${TMPDIR:-/tmp}/bbp.XXXX")
+    export BENCH_DIR="$SMOKE/r"
+    cargo build -q --workspace
+    BENCH="$DIR/target/debug/bench"
+    (timeout 120 "$DIR/target/debug/benchd" &)
+    sleep 1
+    START=$("$BENCH" browser start)
+    CDP=$(printf '%s' "$START" | python3 -c 'import json,sys; print(json.load(sys.stdin)["cdp"])')
+    BIN=$(printf '%s' "$START" | python3 -c 'import json,sys; print(json.load(sys.stdin)["binary"])')
+    echo "browser-proof: daemon browser at $CDP ($BIN)"
+    cd "$SMOKE"
+    S="bproof-$$"
+    timeout 60 playwright-cli -s="$S" attach --cdp="$CDP" >/dev/null
+    timeout 60 playwright-cli -s="$S" goto "data:text/html,<title>bench-browser-ok</title>" >/dev/null
+    title=$(timeout 30 playwright-cli -s="$S" eval "document.title")
+    ua=$(timeout 30 playwright-cli -s="$S" eval "navigator.userAgent")
+    timeout 30 playwright-cli -s="$S" detach >/dev/null || true
+    echo "$title" | grep -q "bench-browser-ok" || { echo "browser-proof: FAILED — title: $title"; exit 1; }
+    if ! echo "$ua" | grep -q "Chrome/" || echo "$ua" | grep -q "HeadlessChrome"; then
+        echo "browser-proof: FAILED — UA: $ua"; exit 1
+    fi
+    echo "browser-proof: playwright-cli attached, navigated and read the title; UA is not HeadlessChrome"
+    "$BENCH" browser stop >/dev/null
+    "$BENCH" stop >/dev/null
+    rm -rf "$SMOKE"
+    echo "browser-proof: clean"
