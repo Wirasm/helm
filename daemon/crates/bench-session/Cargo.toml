@@ -5,4 +5,5 @@ edition.workspace = true
 description = "The pty core: daemon-owned sessions hosting full interactive agent TUIs."
 
 [dependencies]
-portable-pty = "0.9"
+libc = "0.2"
+rustix = { version = "1.1.5", features = ["fs", "process", "pty", "termios"] }
