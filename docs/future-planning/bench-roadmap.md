@@ -166,7 +166,7 @@ against the real CLI.
 > **Running order, operator-ruled 2026-09-25.** Milestone numbers below are kept as
 > written; they no longer say what comes next. **Landed:** M0 (#340), M5a (#341),
 > mail in benchd (#342, the core of M2), the shared browser (#350: #352, #363), and M4's
-> daemon half — the bench document, its verbs and `events --follow` (#367, #373).
+> daemon half — the bench document, its verbs and `events --follow` (#367, #373), and the session index, `bench sessions --all` (#392).
 > **Next, in this order:**
 >
 > Tracking issue: **#362**; each step below has its own.
@@ -174,16 +174,19 @@ against the real CLI.
 > 1. **M4** (#354) — the bench document, the verb seam and the surface model move to benchd.
 >    The foundation: helm becomes a client of one document, and every later verb is
 >    "mutate the document".
-> 2. **M3** (#355) — `bench` is the whole agent surface: layout verbs with `--asked`, the see
+> 2. **M2 finish** (#358) — one mailroom: unwire helm's mail hooks and the pi watcher down to
+>    sensors, so `bench mail` reaches every agent, the ones in helm panes included. Moved
+>    ahead of M3 on 2026-09-25: benchd's mail reached only the sessions it spawned, so the
+>    "who can I mail" directory (#396) listed most live agents without an address.
+> 3. **M3** (#355) — `bench` is the whole agent surface: layout verbs with `--asked`, the see
 >    verbs (`bench get state|pane|canvas|page|screenshot`, hidden panes included),
 >    sharing (operator → agent: a page, a selection, a canvas or a screenshot, sent as
 >    mail with a path), and one `move` verb behind key, drag and agent. The spool
 >    scripts retire.
-> 3. **Drawers, the keymap, the rules files and the `just` layer** (#356) — the Hyprland feel
+> 4. **Drawers, the keymap, the rules files and the `just` layer** (#356) — the Hyprland feel
 >    (`bench-architecture.md`). The browser moves into a drawer.
-> 4. **M1** (#357) — attention: taps, a queue drawer and a status-bar count. Mostly
+> 5. **M1** (#357) — attention: taps, a queue drawer and a status-bar count. Mostly
 >    projections of the event log by now.
-> 5. **M2 finish** (#358) — unwire helm's mail hooks and the pi watcher down to sensors.
 > 6. **M5b** (#359) — every pane is a benchd session, shown through the attach relay in a
 >    Ghostty surface; a VT engine in benchd (`libghostty-vt`, settled by spike 2026-09-25,
 >    prebuilt and pinned to helm's Ghostty) gives `get screen` / `send` / `watch`. No custom
