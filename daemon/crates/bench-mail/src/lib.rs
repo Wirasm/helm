@@ -98,6 +98,14 @@ pub fn deliver(
 /// Retire a message: inbox → read, never delete. Returns the retired path. Retiring an
 /// already-retired message is fine and answers with where it lives.
 pub fn retire(root: &Path, handle: &str, id: &str) -> Result<PathBuf, String> {
+    // The one place an id becomes a path, so the one place it is checked (#402): `Path::join`
+    // does not collapse `..`, and `read/../../<other>/inbox/m1` read another mailbox. Any
+    // single file name is an id — hand-written ones like `note` included.
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
+        return Err(format!(
+            "{id:?} is not a message id — an id is one file name, as `bench mail list` shows it"
+        ));
+    }
     let name = format!("{id}.md");
     let from_path = inbox(root, handle).join(&name);
     let to_dir = read_dir_of(root, handle);
@@ -305,6 +313,24 @@ mod tests {
         fs::write(hand.join("note.md"), "hand-written").unwrap();
         fs::write(hand.join("m99.txt"), "not a message").unwrap();
         assert_eq!(next_seq(&r), 8, "retired mail counts; other names do not");
+        let _ = fs::remove_dir_all(r);
+    }
+
+    #[test]
+    fn an_id_that_is_a_path_is_refused_before_anything_moves() {
+        let r = root();
+        let (id, path) = deliver(&r, 1, "a", "other", None, "t", "not yours").unwrap();
+        fs::create_dir_all(mail_root(&r).join("me").join("read")).unwrap();
+        for bad in [
+            format!("../../other/inbox/{id}"),
+            "a/b".into(),
+            "..".into(),
+            "".into(),
+        ] {
+            let err = retire(&r, "me", &bad).unwrap_err();
+            assert!(err.contains("not a message id"), "{bad:?}: {err}");
+        }
+        assert!(path.exists(), "nothing moved");
         let _ = fs::remove_dir_all(r);
     }
 

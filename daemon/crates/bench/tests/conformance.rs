@@ -1108,6 +1108,62 @@ fn mail_sent_before_a_restart_survives_mail_sent_after_it() {
 }
 
 #[test]
+fn mail_read_refuses_an_id_that_is_a_path_and_reads_nothing() {
+    // #402: the id was joined onto the mailbox path unchecked, so `..` read another
+    // mailbox's message.
+    let home = TestHome::claim("readpath");
+    let h = &home.dir;
+    let _daemon = DaemonGuard::start(h, None);
+    let sent = bench(h, &["mail", "send", "--to", "other", "--body", "not yours"]);
+    assert_eq!(sent.code, 0, "stderr: {}", sent.stderr);
+    let id = json_of(&sent)["id"].as_str().unwrap().to_string();
+    let other = h.join(".bench/mail/other/inbox").join(format!("{id}.md"));
+    // `me` has read mail before, so its `read/` exists and `read/../../other/…` resolves.
+    let own = bench(h, &["mail", "send", "--to", "me", "--body", "mine"]);
+    let own_id = json_of(&own)["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        bench(h, &["mail", "read", &own_id, "--handle", "me"]).code,
+        0
+    );
+
+    for bad in [
+        format!("../../other/inbox/{id}"),
+        format!("x/{id}"),
+        "..".into(),
+        "".into(),
+    ] {
+        let run = bench(h, &["mail", "read", &bad, "--handle", "me"]);
+        assert_eq!(
+            run.code, 3,
+            "{bad:?}: stdout {} stderr {}",
+            run.stdout, run.stderr
+        );
+        assert!(
+            run.stdout.trim().is_empty(),
+            "{bad:?} read something: {}",
+            run.stdout
+        );
+        assert!(
+            run.stderr.contains("not a message id"),
+            "{bad:?}: {}",
+            run.stderr
+        );
+    }
+    assert!(
+        other.exists(),
+        "the other mailbox's message is still unread where it was"
+    );
+
+    // A hand-written name is still a message id.
+    let inbox = h.join(".bench/mail/me/inbox");
+    fs::create_dir_all(&inbox).unwrap();
+    fs::write(inbox.join("note.md"), "by hand").unwrap();
+    let run = bench(h, &["mail", "read", "note", "--handle", "me"]);
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    assert!(run.stdout.contains("by hand"));
+}
+
+#[test]
 fn a_send_to_a_live_session_wakes_it_with_a_path_never_the_body() {
     let home = TestHome::claim("wake");
     let daemon = DaemonGuard::start(&home.dir, None);
