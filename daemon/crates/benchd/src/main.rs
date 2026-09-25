@@ -24,8 +24,9 @@
 use bench_session::{AgentKind, Notice, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id};
 use bench_wire::{
     DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
-    MAX_REQUEST_BYTES, READY_WAIT, Request, Response, SessionArgs, SpawnArgs, Status, SuiteName,
-    Verb, check_socket_path, events_path, resolve_root, socket_path,
+    MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, READY_WAIT,
+    Request, Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb, check_socket_path,
+    events_path, resolve_root, socket_path, validate_handle,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -113,6 +114,29 @@ struct RepairNote {
     dropped_bytes: usize,
 }
 
+/// Mail waiting to wake its recipient. The reactor drains this — mail/sent events in,
+/// pastes out — and the loop cap lives HERE, in the courier, because only the thing
+/// that causes a wake can count wakes (helm #320's measurement: a hook cannot).
+struct PendingWake {
+    handle: String,
+    mail_id: String,
+    from: String,
+    capped_logged: bool,
+}
+
+/// A token bucket per recipient: burst of WAKE_BURST, refilling one per minute. A
+/// two-agent ping-pong self-throttles instead of burning until the money runs out.
+struct WakeBucket {
+    tokens: f64,
+    last: Instant,
+}
+
+const WAKE_BURST: f64 = 6.0;
+const WAKE_REFILL_PER_SEC: f64 = 1.0 / 60.0;
+/// The idle gate: the pty must have been quiet this long before a paste. The crude
+/// form the mail spike proved; taps refine the judgement later, not the plumbing.
+const WAKE_IDLE_GATE: Duration = Duration::from_secs(2);
+
 /// Read the log with byte offsets. A clean log returns the next seq. An unreadable
 /// line refuses — unless it is the LAST non-empty line, which is an interrupted append:
 /// quarantine the tail, truncate back to the last good byte, and report the repair (R1).
@@ -190,6 +214,9 @@ struct Core {
     booted: Instant,
     sessions: HashMap<String, Arc<Session>>,
     next_session: u64,
+    next_mail: u64,
+    pending_wakes: Vec<PendingWake>,
+    wake_tokens: HashMap<String, WakeBucket>,
     notices: mpsc::Sender<Notice>,
 }
 
@@ -268,6 +295,9 @@ fn boot(root: PathBuf, suite: Option<SuiteName>) -> Result<i32, StartError> {
         booted: Instant::now(),
         sessions: HashMap::new(),
         next_session: 1,
+        next_mail: 1,
+        pending_wakes: Vec::new(),
+        wake_tokens: HashMap::new(),
         notices: notice_tx,
     }));
 
@@ -328,12 +358,132 @@ fn boot(root: PathBuf, suite: Option<SuiteName>) -> Result<i32, StartError> {
         });
     }
 
+    // The wake reactor: mail/sent facts become pastes into idle recipient ptys.
+    {
+        let core = Arc::clone(&core);
+        std::thread::spawn(move || wake_reactor(core));
+    }
+
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let core = Arc::clone(&core);
         std::thread::spawn(move || handle(core, stream));
     }
     Ok(0)
+}
+
+/// Answer `mail/sent` with `agent/woken` — the composition the mail spike proved, as a
+/// reactor over daemon state. Per pending wake: recipient must be a live session, its
+/// pty quiet past the idle gate, and its token bucket willing; then the message is
+/// retired (the notice carries the path it will KEEP), the notice is pasted and
+/// submitted, and the wake is logged. A capped wake logs once and waits for refill —
+/// the mail itself sits safely in the mailbox either way.
+fn wake_reactor(core: Arc<Mutex<Core>>) {
+    loop {
+        std::thread::sleep(Duration::from_millis(400));
+        // Snapshot under the lock; judge and paste outside it.
+        let candidates: Vec<(String, String, String, Arc<Session>)> = {
+            let c = core.lock().unwrap();
+            c.pending_wakes
+                .iter()
+                .filter_map(|p| {
+                    c.sessions
+                        .values()
+                        .find(|s| s.handle == p.handle && s.is_live())
+                        .map(|s| {
+                            (
+                                p.handle.clone(),
+                                p.mail_id.clone(),
+                                p.from.clone(),
+                                Arc::clone(s),
+                            )
+                        })
+                })
+                .collect()
+        };
+        // Drop pendings whose recipient session is gone for good.
+        {
+            let mut c = core.lock().unwrap();
+            let known: std::collections::HashSet<String> =
+                c.sessions.values().map(|s| s.handle.clone()).collect();
+            let mut dropped: Vec<(String, String)> = Vec::new();
+            c.pending_wakes.retain(|p| {
+                let has_session = known.contains(&p.handle);
+                if !has_session {
+                    dropped.push((p.handle.clone(), p.mail_id.clone()));
+                }
+                has_session
+            });
+            for (handle, mail_id) in dropped {
+                let _ = c.append(
+                    "wake/dropped",
+                    json!({ "handle": handle, "mail": mail_id, "why": "recipient session gone; mail stays in the mailbox" }),
+                );
+            }
+        }
+        for (handle, mail_id, from, session) in candidates {
+            if session.idle_for() < WAKE_IDLE_GATE {
+                continue;
+            }
+            // Token, event, and pending-list mutation under the lock; the paste outside.
+            let (go, root) = {
+                let mut c = core.lock().unwrap();
+                let now = Instant::now();
+                let bucket = c.wake_tokens.entry(handle.clone()).or_insert(WakeBucket {
+                    tokens: WAKE_BURST,
+                    last: now,
+                });
+                let refill = now.duration_since(bucket.last).as_secs_f64() * WAKE_REFILL_PER_SEC;
+                bucket.tokens = (bucket.tokens + refill).min(WAKE_BURST);
+                bucket.last = now;
+                if bucket.tokens < 1.0 {
+                    if let Some(p) = c
+                        .pending_wakes
+                        .iter_mut()
+                        .find(|p| p.mail_id == mail_id && !p.capped_logged)
+                    {
+                        p.capped_logged = true;
+                        let _ =
+                            c.append("wake/capped", json!({ "handle": handle, "mail": mail_id }));
+                    }
+                    (false, c.root.clone())
+                } else {
+                    bucket.tokens -= 1.0;
+                    (true, c.root.clone())
+                }
+            };
+            if !go {
+                continue;
+            }
+            let retired = match bench_mail::retire(&root, &handle, &mail_id) {
+                Ok(p) => p,
+                Err(why) => {
+                    let mut c = core.lock().unwrap();
+                    c.pending_wakes.retain(|p| p.mail_id != mail_id);
+                    let _ = c.append(
+                        "wake/dropped",
+                        json!({ "handle": handle, "mail": mail_id, "why": why }),
+                    );
+                    continue;
+                }
+            };
+            let notice = format!("You have mail from {from}: {}", retired.display());
+            let delivered = session.deliver_line(&notice).is_ok();
+            let mut c = core.lock().unwrap();
+            c.pending_wakes.retain(|p| p.mail_id != mail_id);
+            if delivered {
+                let _ = c.append(
+                    "agent/woken",
+                    json!({ "session": session.id, "handle": handle, "mail": mail_id }),
+                );
+            } else {
+                let _ = c.append(
+                    "wake/dropped",
+                    json!({ "handle": handle, "mail": mail_id, "why": "paste failed" }),
+                );
+            }
+        }
+    }
 }
 
 enum AfterResponse {
@@ -574,13 +724,48 @@ fn dispatch(
                 runtime_session: agent.mints_session_id().then(mint_session_id),
                 resume: false,
             };
-            let (id, notices) = {
+            let (id, handle, root, notices) = {
                 let mut c = core.lock().unwrap();
                 let id = format!("s{}", c.next_session);
+                let handle = parsed.name.clone().unwrap_or_else(|| id.clone());
+                if let Err(why) = validate_handle(&handle) {
+                    return (refused(why), AfterResponse::Done);
+                }
+                if handle == OPERATOR_HANDLE {
+                    return (
+                        refused(format!(
+                            "{OPERATOR_HANDLE:?} is the operator's handle — addressable by anyone, claimable by no session"
+                        )),
+                        AfterResponse::Done,
+                    );
+                }
+                if c.sessions.values().any(|s| s.handle == handle) {
+                    return (
+                        refused(format!(
+                            "handle {handle:?} is already claimed — `bench sessions` lists them"
+                        )),
+                        AfterResponse::Done,
+                    );
+                }
                 c.next_session += 1;
-                (id, c.notices.clone())
+                (id, handle, c.root.clone(), c.notices.clone())
             };
-            let session = match Session::spawn(id.clone(), &spec, rows, cols, notices) {
+            // The session learns its address and root, so `bench mail send` inside it
+            // needs no flags and lands in the right mailroom.
+            let extra_env = [
+                ("BENCH_SESSION".to_string(), id.clone()),
+                ("BENCH_HANDLE".to_string(), handle.clone()),
+                ("BENCH_DIR".to_string(), root.display().to_string()),
+            ];
+            let session = match Session::spawn(
+                id.clone(),
+                handle.clone(),
+                &spec,
+                rows,
+                cols,
+                &extra_env,
+                notices,
+            ) {
                 Ok(s) => s,
                 Err(why) => return (errored(why), AfterResponse::Done),
             };
@@ -591,6 +776,7 @@ fn dispatch(
                     "session/spawned",
                     json!({
                         "session": id,
+                        "handle": session.handle,
                         "agent": agent.name(),
                         "cwd": spec.cwd,
                         "pid": session.pid,
@@ -617,6 +803,7 @@ fn dispatch(
             (
                 ok(json!({
                     "session": session.id,
+                    "handle": session.handle,
                     "pid": session.pid,
                     "agent": agent.name(),
                     "runtime_session": session.runtime_session,
@@ -635,6 +822,7 @@ fn dispatch(
                 .map(|s| {
                     json!({
                         "session": s.id,
+                        "handle": s.handle,
                         "agent": s.agent.name(),
                         "cwd": s.cwd,
                         "pid": s.pid,
@@ -759,13 +947,26 @@ fn dispatch(
             }
             let mut spec = old.spec.clone();
             spec.resume = true;
-            let (id, notices) = {
+            let (id, root, notices) = {
                 let mut c = core.lock().unwrap();
                 let id = format!("s{}", c.next_session);
                 c.next_session += 1;
-                (id, c.notices.clone())
+                (id, c.root.clone(), c.notices.clone())
             };
-            let session = match Session::spawn(id.clone(), &spec, 40, 140, notices) {
+            let extra_env = [
+                ("BENCH_SESSION".to_string(), id.clone()),
+                ("BENCH_HANDLE".to_string(), old.handle.clone()),
+                ("BENCH_DIR".to_string(), root.display().to_string()),
+            ];
+            let session = match Session::spawn(
+                id.clone(),
+                old.handle.clone(),
+                &spec,
+                40,
+                140,
+                &extra_env,
+                notices,
+            ) {
                 Ok(s) => s,
                 Err(why) => return (refused(why), AfterResponse::Done),
             };
@@ -787,6 +988,153 @@ fn dispatch(
                     "from": sid,
                     "pid": session.pid,
                     "ready": ready,
+                })),
+                AfterResponse::Done,
+            )
+        }
+
+        Some(Verb::MailSend) => {
+            let parsed: MailSendArgs = match serde_json::from_value(req.args.clone()) {
+                Ok(a) => a,
+                Err(e) => return (refused(format!("mail/send args: {e}")), AfterResponse::Done),
+            };
+            for (role, h) in [("to", &parsed.to), ("from", &parsed.from)] {
+                if let Err(why) = validate_handle(h) {
+                    return (refused(format!("{role}: {why}")), AfterResponse::Done);
+                }
+            }
+            let (seq, root) = {
+                let mut c = core.lock().unwrap();
+                let seq = c.next_mail;
+                c.next_mail += 1;
+                (seq, c.root.clone())
+            };
+            let (id, path) = match bench_mail::deliver(
+                &root,
+                seq,
+                &parsed.from,
+                &parsed.to,
+                parsed.subject.as_deref(),
+                &now_rfc3339(),
+                &parsed.body,
+            ) {
+                Ok(pair) => pair,
+                Err(why) => return (errored(why), AfterResponse::Done),
+            };
+            let wake = {
+                let mut c = core.lock().unwrap();
+                if let Err(why) = c.append(
+                    "mail/sent",
+                    json!({
+                        "id": id,
+                        "from": parsed.from,
+                        "to": parsed.to,
+                        "subject": parsed.subject,
+                        "path": path.display().to_string(),
+                    }),
+                ) {
+                    return (errored(why), AfterResponse::Done);
+                }
+                let live = c
+                    .sessions
+                    .values()
+                    .any(|s| s.handle == parsed.to && s.is_live());
+                if live {
+                    c.pending_wakes.push(PendingWake {
+                        handle: parsed.to.clone(),
+                        mail_id: id.clone(),
+                        from: parsed.from.clone(),
+                        capped_logged: false,
+                    });
+                    "queued"
+                } else {
+                    // Honest: the mail is delivered and waits; nothing will wake a
+                    // recipient this daemon does not host.
+                    "no-live-session"
+                }
+            };
+            (
+                ok(json!({
+                    "id": id,
+                    "to": parsed.to,
+                    "path": path.display().to_string(),
+                    "wake": wake,
+                })),
+                AfterResponse::Done,
+            )
+        }
+
+        Some(Verb::MailList) => {
+            let parsed: MailListArgs = match serde_json::from_value(req.args.clone()) {
+                Ok(a) => a,
+                Err(e) => return (refused(format!("mail/list args: {e}")), AfterResponse::Done),
+            };
+            if let Err(why) = validate_handle(&parsed.handle) {
+                return (refused(why), AfterResponse::Done);
+            }
+            const MAX_RETURNED: usize = 200;
+            let root = core.lock().unwrap().root.clone();
+            let all = bench_mail::list(&root, &parsed.handle);
+            let total = all.len();
+            let mail: Vec<Value> = all
+                .iter()
+                .take(MAX_RETURNED)
+                .map(|m| {
+                    json!({
+                        "id": m.id,
+                        "from": m.from,
+                        "subject": m.subject,
+                        "at": m.at,
+                        "unread": m.unread,
+                    })
+                })
+                .collect();
+            let returned = mail.len();
+            (
+                ok(json!({
+                    "handle": parsed.handle,
+                    "mail": mail,
+                    "total": total,
+                    "returned": returned,
+                    "truncated": returned < total,
+                })),
+                AfterResponse::Done,
+            )
+        }
+
+        Some(Verb::MailRead) => {
+            let parsed: MailReadArgs = match serde_json::from_value(req.args.clone()) {
+                Ok(a) => a,
+                Err(e) => return (refused(format!("mail/read args: {e}")), AfterResponse::Done),
+            };
+            if let Err(why) = validate_handle(&parsed.handle) {
+                return (refused(why), AfterResponse::Done);
+            }
+            let root = core.lock().unwrap().root.clone();
+            // Retire-never-delete: reading moves inbox -> read; reading again answers
+            // from where it lives.
+            let path = match bench_mail::retire(&root, &parsed.handle, &parsed.id) {
+                Ok(p) => p,
+                Err(why) => return (refused(why), AfterResponse::Done),
+            };
+            let body = match bench_mail::read_body(&path) {
+                Ok(b) => b,
+                Err(why) => return (errored(why), AfterResponse::Done),
+            };
+            {
+                let mut c = core.lock().unwrap();
+                // Reading is a mutation here (the retirement), so it is logged.
+                let _ = c.append(
+                    "mail/read",
+                    json!({ "handle": parsed.handle, "id": parsed.id }),
+                );
+                c.pending_wakes.retain(|p| p.mail_id != parsed.id);
+            }
+            (
+                ok(json!({
+                    "id": parsed.id,
+                    "path": path.display().to_string(),
+                    "body": body,
                 })),
                 AfterResponse::Done,
             )

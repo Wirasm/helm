@@ -14,7 +14,14 @@ operator and the agents are equal owners; every verb exists in an addressed, non
 form; both parties go through the same socket. Migration is strangler-style inside this
 repo: one vertical at a time, old code unwired only when the new is proven.
 
-**Where it stands: M0 + M5a.** A suite-aware record root, an append-only event log, one
+**Where it stands: M0 + M5a + mail.** The daemon owns the mailroom (`bench-mail`:
+files are the record, notices carry the path never the body, retire-never-delete,
+metadata-only listings) and the wake reactor (`mail/sent ⇒ agent/woken` by pasting into
+an idle pty the daemon owns, with the loop cap as a per-recipient token bucket in the
+courier — where helm #320 proved it must live). Proven end to end by `just mail-proof`:
+a number passed as mail around a real claude→codex→pi ring, +1 per hop.
+
+**Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance
 gate that runs the real binaries. M5a is the pty core: `spawn` puts a real interactive
 agent (claude, codex, pi — the allowlist) into a daemon-owned pty with posture, model

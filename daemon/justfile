@@ -58,13 +58,17 @@ attn-list:
 watch handle:
     {{BENCH}} watch --handle {{handle}}
 
-# M2 — mail through benchd's authority.
-mail-send to subject body-file:
-    {{BENCH}} mail/send --to {{to}} --subject "{{subject}}" --body-file {{body-file}}
+# Mail — deliver; a live recipient is woken by the reactor.
+mail-send to body subject="":
+    {{BENCH}} mail send --to {{to}} --body "{{body}}" {{ if subject != "" { "--subject " + subject } else { "" } }}
 
-# M2 — the mailbox listing.
-mail-list:
-    {{BENCH}} mail/list
+# Mail — metadata only, unread first.
+mail-list handle="operator":
+    {{BENCH}} mail list --handle {{handle}}
+
+# Mail — body plus retirement (inbox -> read).
+mail-read id handle="operator":
+    {{BENCH}} mail read {{id}} --handle {{handle}}
 
 # M5a — spawn an interactive agent into a bench pty. Prompt by FILE, never argv (#93).
 spawn agent="claude" cwd=justfile_directory() prompt-file="":
@@ -104,8 +108,11 @@ spec:
             # probed last for real; listed here so the row exists
             printf '  ✓ %-12s (M0)\n' "stop"; continue
         fi
-        if cargo run -q -p bench -- "$v" >/dev/null 2>&1; then
+        err=$(cargo run -q -p bench -- "$v" 2>&1 >/dev/null); code=$?
+        if [ $code -eq 0 ]; then
             printf '  ✓ %-12s\n' "$v"
+        elif [ $code -eq 3 ] && ! printf '%s' "$err" | grep -q "unknown verb"; then
+            printf '  ✓ %-12s (answers; needs args)\n' "$v"
         else
             printf '  ✗ %-12s not yet\n' "$v"
         fi
@@ -148,3 +155,53 @@ live-smoke:
     ./target/debug/bench stop >/dev/null
     rm -rf "$SMOKE"
     echo "live-smoke: clean"
+
+# The mail proof, real agents end to end: claude, codex and pi in daemon ptys, a number
+# passed as MAIL around the ring through the production mailroom and wake reactor —
+# each hop +1, so echoes cannot fake it. Costs three small agent turns.
+mail-proof:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DIR="{{justfile_directory()}}"
+    SMOKE=$(mktemp -d "${TMPDIR:-/tmp}/bmp.XXXX")
+    export BENCH_DIR="$SMOKE/r"
+    cargo build -q --workspace
+    BENCH="$DIR/target/debug/bench"
+    (timeout 600 "$DIR/target/debug/benchd" &)
+    sleep 1
+    ring=(post-claude post-codex post-pi)
+    agents=(claude codex pi)
+    for i in 0 1 2; do
+        next=${ring[$(( (i + 1) % 3 ))]}
+        cat > "$SMOKE/brief-$i.txt" <<BRIEF
+    You are ${ring[$i]}, a mailbox participant. Protocol, follow exactly: when a message 'You have mail from X: <path>' arrives, run: cat <path>. The last line is an integer N. Compute N+1. Then run: $BENCH mail send --to $next --body "<N+1>" (with the actual number). Then wait silently for more mail. Never send otherwise. Say READY now and wait.
+    BRIEF
+        tr '\n' ' ' < "$SMOKE/brief-$i.txt" > "$SMOKE/brief-$i.line"
+        "$BENCH" spawn --agent "${agents[$i]}" --cwd "$DIR" --name "${ring[$i]}" --prompt-file "$SMOKE/brief-$i.line" >/dev/null
+    done
+    sleep 5
+    "$BENCH" mail send --to post-claude --from operator --subject ring --body "100" >/dev/null
+    echo "mail-proof: seeded 100 -> post-claude; waiting for 103 to come back around..."
+    deadline=$(( $(date +%s) + 300 ))
+    while true; do
+        if [ "$(date +%s)" -gt "$deadline" ]; then
+            echo "mail-proof: TIMEOUT — events tail:"; "$BENCH" events | tail -c 2000; exit 1
+        fi
+        listing=$("$BENCH" mail list --handle post-claude 2>/dev/null || true)
+        id=$(printf '%s' "$listing" | python3 -c "import json,sys; d=json.load(sys.stdin); m=[x for x in d['mail'] if x['from']=='post-pi']; print(m[0]['id'] if m else '')" 2>/dev/null || true)
+        if [ -n "$id" ]; then
+            body=$("$BENCH" mail read "$id" --handle post-claude | python3 -c "import json,sys; print(json.load(sys.stdin)['body'].strip().splitlines()[-1])")
+            if [ "$body" = "103" ]; then
+                echo "mail-proof: 103 arrived from post-pi — full ring through the real mailroom"
+                break
+            else
+                echo "mail-proof: FAILED — final body was $body, expected 103"; exit 1
+            fi
+        fi
+        sleep 2
+    done
+    "$BENCH" events | python3 -c "import json,sys; d=json.load(sys.stdin); ks=[e['kind'] for e in d['events']]; print('mail-proof events:', ' '.join(k for k in ks if k.startswith(('mail/','agent/woken','wake/'))))"
+    for h in post-claude post-codex post-pi; do :; done
+    "$BENCH" stop >/dev/null
+    rm -rf "$SMOKE"
+    echo "mail-proof: clean"

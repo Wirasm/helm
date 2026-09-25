@@ -17,6 +17,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bench-mail"
+version = "0.0.1"
+
+[[package]]
 name = "bench-session"
 version = "0.0.1"
 dependencies = [
@@ -35,6 +39,7 @@ dependencies = [
 name = "benchd"
 version = "0.0.1"
 dependencies = [
+ "bench-mail",
  "bench-session",
  "bench-wire",
  "serde_json",

@@ -1,0 +1,5 @@
+[package]
+name = "bench-mail"
+version.workspace = true
+edition.workspace = true
+description = "The mailroom: files are the record, notices point, retirement never deletes."
