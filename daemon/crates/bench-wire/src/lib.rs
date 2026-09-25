@@ -372,6 +372,13 @@ pub const BROWSER_ENDPOINT_VERSION: u64 = 0;
 /// `cdp` is what `playwright-cli attach --cdp=` takes; `ws` is the browser-level
 /// websocket a CDP client opens directly. The file exists exactly while a browser the
 /// daemon started is running: written after it answers, removed when it stops or exits.
+///
+/// **A reader that means to drive the browser refuses `mode: setup`.** That is the
+/// operator's own window, and the file and the `browser/started` event still carry its
+/// address because they are the record of what is running ("files are the record",
+/// direction.md) — withholding it would make the record lie. The routes built to hand an
+/// address out enforce it: `browser/start` refuses during setup and `browser/status`
+/// omits `cdp`/`ws`; helm's pane reads the mode and does not connect.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrowserEndpoint {
     pub format: String,
