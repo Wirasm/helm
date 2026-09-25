@@ -10,6 +10,11 @@ surface below, names what each one proves, and puts the **switch-over line after
 — restoring workspaces and terminals across a restart, which is the only thing keeping helm
 from being the daily driver. Read it before planning any surface here.
 
+**Where helm is heading** is the bench: a daemon (`benchd`) that owns sessions, the
+layout and the record, with helm as the window. The approved shape is
+`docs/future-planning/bench-architecture.md` and the sequence is `bench-roadmap.md` beside it.
+Both are plans, not the tree.
+
 helm is the surface you work in, full screen, all day. Native macOS. It hosts terminals,
 renders what agents produce, and gives quick access to the actions you run often. The
 intelligence lives in agent skills and Archon workflows
