@@ -86,10 +86,10 @@ final class WorkbenchNoteTests: XCTestCase {
                 .count, 2)
     }
 
-    /// **`deactivate` drops the canvas cache without closing what is in it**, which predates notes
-    /// and is right for a webview. It is the one teardown that would otherwise take a note being
-    /// typed with it: a pending save holds its model weakly, so the model deallocs and the
-    /// keystrokes since the last write are gone.
+    /// **`deactivate` lets the canvases go**, through the canvas kind's `close()` since PR 3a of
+    /// #354 (it used to drop them unclosed after a separate flush). Either way it is a teardown
+    /// that would take a note being typed with it if nothing saved first: a pending save holds its
+    /// model weakly, so the model deallocs and the keystrokes since the last write are gone.
     func testClosingTheLastWorkspaceSavesANoteBeingTyped() throws {
         let model = mounted()
         let id = try XCTUnwrap(model.newNote(on: day("2026-08-07")))
@@ -133,8 +133,8 @@ final class WorkbenchNoteTests: XCTestCase {
     }
 
     /// **The third exit that takes the same position, and the one whose own comment used to say
-    /// the debounce race was the only thing it could lose.** `deactivate` flushes through
-    /// `saveDraft`, which refuses while a conflict is up, so switching workspace with the strip on
+    /// the debounce race was the only thing it could lose.** `deactivate` saves through
+    /// `saveDraft` (the canvas kind's `close`), which refuses while a conflict is up, so switching workspace with the strip on
     /// screen drops that buffer exactly as closing the pane and quitting do.
     ///
     /// One test per exit: it was claimed in three comments and checked in one.

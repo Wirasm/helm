@@ -76,45 +76,24 @@ final class WorkbenchModel: ObservableObject {
 
     private let terminals: TerminalManager
 
-    /// One `CanvasModel` per canvas pane, keyed by pane id — the "N instances" #23 named.
-    /// Dropped when its pane closes, which drops its `FileWatcher` and that watcher's open
-    /// file descriptor with it.
-    ///
-    /// **Stamped with the workspace that opened it**, for the same reason `TerminalSession`
-    /// carries `workspacePath`: `closeWorkspace` has to drop what a workspace owned, and by
-    /// the time it runs that workspace's bench is no longer the live one to ask. Without
-    /// the stamp the cache had no way to answer "whose is this?" and the entries simply
-    /// stayed — a `FileWatcher` and its open descriptor per canvas, for the life of the
-    /// process.
-    private var canvases: [Pane.ID: CachedCanvas] = [:]
-
-    private struct CachedCanvas {
-        let workspacePath: WorkspacePath?
-        let model: CanvasModel
-    }
-
-    /// Live browser panes (#350), by pane id, for `canvases`' reason: a tab switch keeps the
-    /// connection instead of reconnecting. Dropped with the canvases when the workspace parks —
-    /// a parked pane is not on screen, and its model reconnects when it is again.
-    private var browsers: [Pane.ID: BrowserPaneModel] = [:]
-    /// How a browser pane's model is made. A test passes one pointed at a scratch bench root,
-    /// because the default finds the operator's live `~/.bench` browser, and a test that opens
-    /// a link must not open it there.
-    private let makeBrowser: @MainActor () -> BrowserPaneModel
+    /// Every live pane object — sessions, canvases, browser views — keyed by pane id, one
+    /// registry for every kind (`SurfaceKind`, PR 3a of #354). It is the terminal manager's, so
+    /// the bench and the manager can never disagree about what is alive.
+    private var surfaces: SurfaceRegistry { terminals.surfaces }
 
     /// Which terminal put each canvas pane on the bench (#205) — the key is the **canvas** pane,
     /// the value names the **terminal** pane, which is what `CanvasOrigin` exists to keep straight.
     ///
-    /// Kept beside `canvases` rather than on `Pane.Content.canvas`, and that is load-bearing:
+    /// Kept beside the canvas's model rather than on `Pane.Content.canvas`, and that is load-bearing:
     /// `CanvasSource` is compared by value to answer "is this file already open?"
     /// (`Workbench.pane(showing:)`), so an origin inside it would make the same artifact pushed by
     /// two agents two different sources — a second pane for a file already on screen, which is the
     /// interruption `offer` exists to avoid. It also must not persist; `CanvasOrigin`'s header has
     /// the reason.
     ///
-    /// **Stamped with the workspace whose bench holds the pane**, for `canvases`' reason: a push
-    /// can land on a parked bench (#349) and never be resolved into a canvas, so the canvas cache
-    /// cannot tell `closeWorkspace` it is there.
+    /// **Stamped with the workspace whose bench holds the pane**: a push can land on a parked
+    /// bench (#349) and never be resolved into a canvas, so the registry cannot tell
+    /// `closeWorkspace` it is there.
     private var origins: [Pane.ID: PushedBy] = [:]
 
     private struct PushedBy {
@@ -182,12 +161,17 @@ final class WorkbenchModel: ObservableObject {
         artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot,
         makeBrowser: @escaping @MainActor () -> BrowserPaneModel = { BrowserPaneModel() }
     ) {
-        self.makeBrowser = makeBrowser
         self.terminals = terminals
         self.notes = notes
         self.agents = agents
         self.launcher = launcher ?? TerminalLineLauncher(terminals: terminals)
         self.artifactRoot = artifactRoot
+        // Registered here rather than by the manager because both need the bench: the canvas
+        // kind the mark route, the browser kind a factory the caller chose. Re-registering
+        // replaces, so a second model on one manager rewires them to itself.
+        terminals.surfaces.register(
+            CanvasPaneKind { [weak self] model, pane in self?.wireMarks(model, in: pane) })
+        terminals.surfaces.register(BrowserPaneKind(make: makeBrowser))
         subscribe()
     }
 
@@ -365,43 +349,35 @@ final class WorkbenchModel: ObservableObject {
         mount = .empty
         shelvedBench = nil
         resumeOffers = [:]
-        // **Flushed before they are dropped** (#289). Unlike `closeWorkspace`, this does not call
-        // `close()` on each model — that is deliberate and predates notes — so nothing else here
-        // would give a draft being typed in its last chance to be written. A pending save holds
-        // its model weakly, so dropping the cache mid-debounce would lose the keystrokes since
-        // the last write.
+        // What does not outlive an unmount — canvases and browser views — is let go through
+        // its kind, and a canvas's `close()` saves a draft being typed (#289): the last moment a
+        // save can happen. **A save is not guaranteed here**: `saveDraft` refuses while a `CanvasConflict` is up — somebody else wrote the
+        // file and helm will not overwrite bytes the operator has not been shown. Deliberate,
+        // argued at `CanvasModel.saveDraft`, the same position `close()` and ⌘Q take, and pinned
+        // per exit by `CanvasEditorTests` and `WorkbenchNoteTests`.
         //
-        // **The flush is not the same as a save, and this is the second thing that can be lost
-        // here.** `saveDraft` refuses while a `CanvasConflict` is up — somebody else wrote the
-        // file and helm will not overwrite bytes the operator has not been shown — so switching
-        // workspace with the strip on screen drops that buffer. Deliberate, argued at
-        // `CanvasModel.saveDraft`, and the same position `close()` and ⌘Q take; pinned per exit by
-        // `CanvasEditorTests` and `WorkbenchNoteTests` rather than asserted in three comments and
-        // checked in one, which is how it stood when the guard was added.
-        flushNotes()
-        canvases.removeAll()
-        for browser in browsers.values { browser.close() }
-        browsers.removeAll()
-        // Keyed by canvas pane id, so it goes exactly when the cache does — a leftover entry
+        // This used to drop the canvas models **without** closing them, after a separate flush,
+        // which left each one's `FileWatcher` open with nothing showing it. Closing is now one
+        // path for every kind (`SurfaceRegistry.unmount`).
+        surfaces.unmount()
+        // Keyed by canvas pane id, so it goes exactly when the canvases do — a leftover entry
         // would name a pane nothing resolves any more.
         origins.removeAll()
         reconcileSessions()
     }
 
-    /// Closing a workspace is an explicit teardown, unlike switching: drop every canvas it
-    /// owned so each `FileWatcher` — and that watcher's open file descriptor — goes with
-    /// it. The bench's twin of `TerminalManager.closeWorkspace`, and called the same way:
-    /// unconditionally, naming the workspace, whether or not it is the active one.
+    /// Closing a workspace is an explicit teardown, unlike switching: every pane object it
+    /// owned goes through its kind — a canvas's `FileWatcher` and its descriptor, a browser
+    /// view's connection, a session's pty. Called the same way as
+    /// `TerminalManager.closeWorkspace`, which reaches the same registry: unconditionally,
+    /// naming the workspace, whether or not it is the active one.
     ///
     /// **Deliberately not done on a workspace SWITCH.** The cache surviving a switch is
     /// what gets the same webview back instead of a reload, and pane ids are persisted, so
     /// switching back finds its canvases still there. `activate` is right to leave it
     /// alone; only closing is a teardown.
     func closeWorkspace(_ path: WorkspacePath) {
-        for (id, cached) in canvases where cached.workspacePath == path {
-            cached.model.close()
-            canvases[id] = nil
-        }
+        surfaces.closeWorkspace(path)
         origins = origins.filter { $0.value.workspacePath != path }
     }
 
@@ -523,36 +499,53 @@ final class WorkbenchModel: ObservableObject {
 
     // MARK: - Resolving panes to the objects they name
 
-    func session(for pane: Pane) -> TerminalSession? {
-        guard case .terminal = pane.content else { return nil }
-        return terminals.sessions.first { $0.id == pane.id }
+    /// A pane's body and its tab, from its kind — the one route every kind is drawn by, so
+    /// nothing in the bench's views asks what kind a pane is.
+    func surfaceView(of pane: Pane, in slot: SurfaceSlot) -> AnyView? {
+        surfaces.view(of: pane, in: slot, workspace: workspacePath)
     }
 
-    /// Resolve-or-create, at the edge. The model is cached by pane id so a tab switch or a
+    func surfaceTab(of pane: Pane, in slot: SurfaceSlot) -> AnyView? {
+        surfaces.tab(of: pane, in: slot, workspace: workspacePath)
+    }
+
+    /// What a surface needs to know about where it is drawn, answered by the bench.
+    func surfaceSlot(for pane: Pane, in slot: Slot) -> SurfaceSlot {
+        SurfaceSlot(
+            pane: pane,
+            holdsKeyboard: bench?.focusedPane?.id == pane.id,
+            isSelected: pane.id == slot.selected,
+            canClose: bench?.canClose(pane.id) ?? false,
+            select: { [weak self] in self?.select(pane.id) },
+            close: { [weak self] in self?.close(pane.id) })
+    }
+
+    func session(for pane: Pane) -> TerminalSession? {
+        surfaces.existing(pane.id, as: TerminalSession.self)
+    }
+
+    /// Resolve-or-create, at the edge. The model is kept by pane id so a tab switch or a
     /// re-render gets the same webview back rather than reloading the page.
     func canvas(for pane: Pane) -> CanvasModel {
-        if let existing = canvases[pane.id] { return existing.model }
-        let model = CanvasModel(
-            source: {
-                if case let .canvas(source) = pane.content { source } else { nil }
-            }())
-        // The return path (#205). Wired here because this is the only place a `CanvasModel` is
-        // made — and AFTER construction, so resolving a restored pane into its own canvas is
-        // not mistaken for a mark. The identity check keeps an ORPHAN quiet: `deactivate` drops
-        // the cache without closing what is in it, so a model whose pane was re-resolved
-        // afterwards is still alive and still holding this closure, and it has no origin to
-        // route to any more. `model` is captured weakly because the closure is stored on it.
+        guard let model = surfaces.resolve(pane, in: workspacePath) as? CanvasModel else {
+            preconditionFailure("canvas(for:) asked about a pane that is not a canvas: \(pane)")
+        }
+        return model
+    }
+
+    /// The return path (#205), wired onto every canvas model the canvas kind makes. AFTER
+    /// construction, so resolving a restored pane into its own canvas is not mistaken for a
+    /// mark. The identity check keeps an ORPHAN quiet: a model that is no longer the registry's
+    /// for its pane has no origin to route to any more. `model` is captured weakly because the
+    /// closure is stored on it.
+    private func wireMarks(_ model: CanvasModel, in pane: Pane.ID) {
         model.onAnnotation = { [weak self, weak model] annotation, canvas in
-            guard let self, let model, canvases[pane.id]?.model === model else {
+            guard let self, let model, surfaces.existing(pane, as: CanvasModel.self) === model
+            else {
                 return .notSent(.noOrigin)
             }
-            return deliver(annotation, on: canvas, markedIn: pane.id)
+            return deliver(annotation, on: canvas, markedIn: pane)
         }
-        // A canvas pane only renders while its workspace is the active one, so this is
-        // that workspace — the same association `TerminalManager` gets for free by
-        // storing `workspacePath` on the session itself.
-        canvases[pane.id] = CachedCanvas(workspacePath: workspacePath, model: model)
-        return model
     }
 
     /// An operator's mark on a canvas pane, on its way to the agent that pushed that canvas
@@ -575,9 +568,9 @@ final class WorkbenchModel: ObservableObject {
     }
 
     func browser(for pane: Pane) -> BrowserPaneModel {
-        if let existing = browsers[pane.id] { return existing }
-        let model = makeBrowser()
-        browsers[pane.id] = model
+        guard let model = surfaces.resolve(pane, in: workspacePath) as? BrowserPaneModel else {
+            preconditionFailure("browser(for:) asked about a pane that is not a browser: \(pane)")
+        }
         return model
     }
 
@@ -772,7 +765,7 @@ final class WorkbenchModel: ObservableObject {
             // `canvas(for:)` first builds its model, so resolving one here would buy nothing
             // and would open a `FileWatcher`, and its file descriptor, for a pane that is not
             // on screen.
-            canvases[pane]?.model.refresh()
+            surfaces.existing(pane, as: CanvasModel.self)?.refresh()
         }
         return pane
     }
@@ -790,31 +783,19 @@ final class WorkbenchModel: ObservableObject {
     private func offer(_ source: CanvasSource, onBenchOf path: WorkspacePath) -> Pane.ID? {
         if path == workspacePath { return offer(source) }
         guard let pane = parked?.offer(source, toBenchOf: path) else { return nil }
-        canvases[pane]?.model.refresh()
+        surfaces.existing(pane, as: CanvasModel.self)?.refresh()
         return pane
     }
 
     func close(_ pane: Pane.ID) {
-        guard var bench, let closing = bench.pane(pane), bench.close(pane) else { return }
+        guard var bench, bench.close(pane) else { return }
         // The offer goes with the pane it was about. Nothing else would drop it — an offer is
         // keyed by pane id, and a closed pane's id is one nothing resolves any more.
         resumeOffers[pane] = nil
         commit(bench)
-        switch closing.content {
-        case .terminal:
-            // Dropping the manager's last strong reference is what actually kills the pty.
-            if let session = terminals.sessions.first(where: { $0.id == pane }) {
-                terminals.close(session)
-            }
-        case .canvas:
-            canvases[pane]?.model.close()
-            canvases[pane] = nil
-            origins[pane] = nil
-        case .browser:
-            // Closes the view onto the browser, not the browser: agents may be using it.
-            browsers[pane]?.close()
-            browsers[pane] = nil
-        }
+        origins[pane] = nil
+        // One teardown for every kind: the kind knows what letting its model go means.
+        surfaces.close(pane)
     }
 
     func select(_ pane: Pane.ID) {
@@ -964,7 +945,7 @@ final class WorkbenchModel: ObservableObject {
     /// teardown that is about to drop these models, and the app being quit. Both are moments
     /// after which a debounced save can no longer happen, and neither knows about the other.
     func flushNotes() {
-        for cached in canvases.values { cached.model.saveDraft() }
+        for canvas in surfaces.models(CanvasModel.self) { canvas.saveDraft() }
     }
 
     func closeFocusedPane() {

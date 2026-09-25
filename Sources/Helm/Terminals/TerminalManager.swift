@@ -1,11 +1,20 @@
 import AppKit
+import Combine
 import GhosttyTerminal
 import SwiftUI
 
 // MARK: - TerminalManager
 
-/// App-level owner of the ordered terminal sessions. **Ownership only** — selection
-/// belongs to the slot that shows a session, under a bench.
+/// App-level owner of the terminal sessions' **lifecycle** — which workspace's shells exist,
+/// restoring them, making new ones — and of the app's one `SurfaceRegistry`, which is where the
+/// sessions themselves are kept, beside every other kind of pane's live object (PR 3a of #354).
+/// Selection belongs to the slot that shows a session, under a bench.
+///
+/// **Why the registry hangs off this type.** Every caller that needs a terminal already holds a
+/// `TerminalManager` (`.shared` in the app, an isolated one in each test), so the registry comes
+/// with it and nothing's construction changed. It is the terminal *kind* that lives here
+/// (`TerminalPaneKind`); canvases and browsers register theirs from `WorkbenchModel`. M5b moves
+/// ptys to benchd and is where this type shrinks to what is left.
 ///
 /// It used to own both. `selectedID` was one id per workspace, which worked while helm
 /// mounted exactly one terminal; under a bench N slots each have their own selected pane
@@ -28,10 +37,17 @@ import SwiftUI
 final class TerminalManager: ObservableObject {
     static let shared = TerminalManager()
 
-    /// Flat app-level ownership of every workspace's sessions. Switching a
-    /// workspace only changes which subset is mounted; it never releases one.
-    @Published private(set) var sessions: [TerminalSession] = []
+    /// Every live pane object of every kind. Sessions are the terminal entries in it.
+    let surfaces: SurfaceRegistry
+
+    /// Every workspace's sessions, in creation order. Switching a workspace only changes which
+    /// subset is mounted; it never releases one.
+    var sessions: [TerminalSession] { surfaces.models(TerminalSession.self) }
     @Published private(set) var activeWorkspacePath: WorkspacePath?
+
+    /// Re-publishes the registry's changes as this manager's, so everything that observed
+    /// `sessions` changing (the snapshot, workspace persistence) still sees them.
+    private var forwarding: AnyCancellable?
 
     /// The single ghostty runtime every session's surface is created on.
     let controller: TerminalController
@@ -44,15 +60,23 @@ final class TerminalManager: ObservableObject {
 
     /// Internal (not private) so tests can build isolated managers; the app
     /// itself only ever uses `.shared`, which is `.exec` — a real login shell.
-    init(backend: @escaping @MainActor () -> TerminalSessionBackend = { .exec }) {
+    init(
+        backend: @escaping @MainActor () -> TerminalSessionBackend = { .exec },
+        surfaces: SurfaceRegistry = SurfaceRegistry()
+    ) {
         self.backend = backend
+        self.surfaces = surfaces
         controller = TerminalSession.makeController()
+        surfaces.register(TerminalPaneKind(manager: self))
+        forwarding = surfaces.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         // No pty is created until a workspace is first visited. This bounds
         // startup cost to the active context rather than all remembered folders.
     }
 
     func sessions(for workspacePath: WorkspacePath) -> [TerminalSession] {
-        sessions.filter { $0.workspacePath == workspacePath }
+        surfaces.models(TerminalSession.self, in: workspacePath)
     }
 
     /// Makes a workspace active, lazily rebuilding its tab row on first visit.
@@ -93,7 +117,7 @@ final class TerminalManager: ObservableObject {
                 controller: controller, backend: backend())
             nextOrdinal += 1
             session.manager = self
-            sessions.append(session)
+            surfaces.adopt(session, as: id, kind: .terminal, in: workspacePath)
         }
     }
 
@@ -101,10 +125,11 @@ final class TerminalManager: ObservableObject {
         activeWorkspacePath = nil
     }
 
-    /// Closing a workspace is an explicit tab teardown, unlike switching: drop
-    /// every session it owns so their retained NSViews release their ptys.
+    /// Closing a workspace is an explicit teardown, unlike switching: every pane object it
+    /// owned goes — its sessions, so their retained NSViews release their ptys, and its
+    /// canvases and browser views, each through its own kind's `close`.
     func closeWorkspace(_ workspacePath: WorkspacePath) {
-        sessions.removeAll { $0.workspacePath == workspacePath }
+        surfaces.closeWorkspace(workspacePath)
         if activeWorkspacePath == workspacePath { deactivate() }
     }
 
@@ -135,7 +160,7 @@ final class TerminalManager: ObservableObject {
             backend: backend())
         nextOrdinal += 1
         session.manager = self
-        sessions.append(session)
+        surfaces.adopt(session, as: session.id, kind: .terminal, in: workspacePath)
         activeWorkspacePath = workspacePath
         return session
     }
@@ -148,6 +173,6 @@ final class TerminalManager: ObservableObject {
     /// it generalised, to `Workbench.canClose`, which refuses the bench's last *pane*. A
     /// workspace showing one terminal and one canvas may legitimately close the terminal.
     func close(_ session: TerminalSession) {
-        sessions.removeAll { $0.id == session.id }
+        surfaces.close(session.id)
     }
 }

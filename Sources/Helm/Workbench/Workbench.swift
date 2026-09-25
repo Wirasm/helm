@@ -949,9 +949,23 @@ extension Pane {
 /// Hand-written with a string discriminator, for the reason `CanvasSource`'s encoder
 /// gives: the synthesized shape uses positional `_0` keys, which break on any reordering
 /// of the cases and are unreadable in the stored blob.
+extension Pane.Content {
+    /// The discriminator: which kind of pane this is, without its payload. It is the stored
+    /// `kind` string, and it is what `SurfaceRegistry` looks a kind up by — the one switch over
+    /// pane kinds that the rest of the app is spared.
+    enum Kind: String, Codable, Hashable { case terminal, canvas, browser }
+
+    var kind: Kind {
+        switch self {
+        case .terminal: .terminal
+        case .canvas: .canvas
+        case .browser: .browser
+        }
+    }
+}
+
 extension Pane.Content: Codable {
     private enum CodingKeys: String, CodingKey { case kind, source, agent }
-    private enum Kind: String, Codable { case terminal, canvas, browser }
 
     /// **A `kind` this build does not know throws, and `Slot` skips the pane.** The build
     /// before this one had a third pane type and wrote `{"kind":"archonRun"}` into benches

@@ -708,8 +708,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   `TextEditor` over the markdown **source** (not the rendered page — that would be an
   HTML→markdown round trip over a document nobody asked helm to reformat), autosaves 600ms after
   typing stops, and flushes on Read, on close, on the canvas being pointed elsewhere, on the last
-  workspace closing (`WorkbenchModel.deactivate`, which drops the canvas cache without closing
-  what is in it) and on ⌘Q. The path is on the editor's footer as a `CopyableLabel`; **it is not
+  workspace closing (`WorkbenchModel.deactivate`, which closes each canvas through its kind) and
+  on ⌘Q. The path is on the editor's footer as a `CopyableLabel`; **it is not
   put on the clipboard** — a clipboard that changes under an act nobody asked for destroys
   whatever was in it.
   - **`EditableFile` is the scope line, carried as a type**, and it asks about the file rather
@@ -919,6 +919,7 @@ test is simple: two people building two features should not have to edit the sam
 
 **The slices, largest first, so a stranger knows where to look**: `Canvas/` (6.1k lines) is the
 document surface; `Workbench/` (3.8k) is columns, slots, panes and the offer/insert distinction;
+`Surfaces/` is `SurfaceKind` and the one registry every pane kind's live object is kept in;
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
 libghostty seam — sessions, the host view, the pane environment, and `push.sh`'s landing site;
 then `Spool/`, `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,

@@ -40,8 +40,15 @@ the app — several slots are visible at once, each with its own selected pane.
 _Avoid_: cell, tab group, split
 
 **pane**:
-A workbench tenant. Two types: **terminal** and **canvas**.
+A workbench tenant. Three kinds: **terminal**, **canvas** and **browser pane**.
 _Avoid_: view, widget, dock
+
+**surface kind**:
+What one kind of pane is, in one place (`SurfaceKind`): how its live object is made, drawn, shown
+on a tab and let go. Every live pane object of every kind is kept in one **surface registry**, keyed
+by pane id. A new kind of pane is a new conformance and one registration; nothing in the bench asks
+what kind a pane is.
+_Avoid_: pane type (in code), plugin, renderer
 
 **name**:
 What a pane is called on its slot's tab strip, and **who called it that**. helm *derives* one

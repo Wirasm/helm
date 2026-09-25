@@ -455,43 +455,17 @@ enum BrowserGeometry {
 /// agent has got to without selecting the pane.
 struct BrowserTabLabel: View {
     @ObservedObject var model: BrowserPaneModel
-    let name: String?
-    let isSelected: Bool
-    let canClose: Bool
-    let onSelect: () -> Void
-    let onClose: () -> Void
+    let slot: SurfaceSlot
 
     var body: some View {
-        HStack(spacing: 5) {
+        PaneTab(
+            title: slot.pane.name.text ?? label, truncation: .middle,
+            closeHelp: "Close the pane (the browser keeps running)", slot: slot
+        ) {
             Image(systemName: "globe")
                 .font(.system(size: 9))
                 .foregroundStyle(model.status == .connected ? Color.accent : Color.textMuted)
-            Text(name ?? label)
-                .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 180)
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.textMuted)
-            .disabled(!canClose)
-            .opacity(canClose ? 1 : 0.3)
-            .help(
-                canClose
-                    ? "Close the pane (the browser keeps running)"
-                    : "The last pane cannot be closed")
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color.selection : .clear)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 5))
-        .onTapGesture(perform: onSelect)
     }
 
     private var label: String {

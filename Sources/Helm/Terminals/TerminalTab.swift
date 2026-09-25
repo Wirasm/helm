@@ -4,58 +4,17 @@ import SwiftUI
 /// status change re-renders that tab alone rather than the whole strip.
 struct TerminalTab: View {
     @ObservedObject var session: TerminalSession
-    let isSelected: Bool
-    let canClose: Bool
-    let onSelect: () -> Void
-    let onClose: () -> Void
+    let slot: SurfaceSlot
+
+    private var isSelected: Bool { slot.isSelected }
 
     var body: some View {
-        HStack(spacing: 5) {
-            indicator
-            Text(session.displayTitle)
-                .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 180)
-
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.textMuted)
-            .disabled(!canClose)
-            .opacity(canClose ? 1 : 0.3)
-            .help(
-                canClose
-                    ? "Close terminal (kills this shell)" : "The last pane cannot be closed")
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color.selection : .clear)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 5))
-        .onTapGesture(perform: onSelect)
+        PaneTab(
+            title: session.displayTitle, truncation: .tail,
+            closeHelp: "Close terminal (kills this shell)", slot: slot
+        ) { indicator }
     }
 
-    /// The tab's one indicator slot, by precedence: dead shell > bell (`attention`
-    /// keeps priority) > finished-command tick/mark (panes you cannot see, cleared
-    /// when one comes on screen) > live progress hint. All state, no popups — the
-    /// quiet rules live in `TerminalActivity`.
-    ///
-    /// Every mark here is a palette token: `attention` for a bell — the same colour the
-    /// workspace bar's agent dot spends, because it is the same claim one altitude up —
-    /// `accent` for a command that finished cleanly, `danger` for one that did not. They
-    /// were SwiftUI's `.orange`, `.green` and `.red` until #149.
-    ///
-    /// **Do not copy the `!isSelected` gating into an agent-status indicator.**
-    /// Hiding a mark on the tab you are looking at is right for a shell-command
-    /// outcome — you watched it happen, so selecting the tab acknowledges it. It is
-    /// wrong for a per-workspace agent rollup, where selecting a workspace shows you
-    /// one of its N terminals and says nothing about the others; that indicator must
-    /// follow one rule everywhere, including where you already are.
     @ViewBuilder
     private var indicator: some View {
         if session.status == .exited {
@@ -124,72 +83,6 @@ struct TerminalTab: View {
                 .frame(width: 10, height: 10)
                 .help("Command running")
                 .accessibilityLabel("Command running")
-        }
-    }
-}
-
-// MARK: - CanvasTab
-
-/// A canvas's tab: what it is showing, and no indicator. A canvas has no shell to
-/// report a bell, an exit code or a progress sequence.
-struct CanvasTab: View {
-    let source: CanvasSource
-    /// What the pane is called (#313), or nil when nothing has named it.
-    ///
-    /// **Handed in, where a terminal's name is pushed onto its session** — and the asymmetry is
-    /// the pane types', not this file's. A terminal has an `ObservableObject` that three readers
-    /// already spend for its label, so a name that lived anywhere else would give
-    /// `snapshot.json` a different answer from the tab beside it. A canvas has no such object at
-    /// all: `label` below is recomputed from `CanvasSource` every render and stored nowhere, and
-    /// there is nothing in the snapshot to disagree with — `BenchSnapshot.CanvasRecord` carries
-    /// the source and has never carried a title.
-    ///
-    /// **The cost of that, stated rather than left to be discovered**: a named canvas is named on
-    /// its tab and **absent from `snapshot.json`**, so an agent that named one reads the name back
-    /// out of its own `helm-name` result rather than off the bench. Giving `CanvasRecord` a name
-    /// is that type's change to make, not this one's.
-    let name: String?
-    let isSelected: Bool
-    let canClose: Bool
-    let onSelect: () -> Void
-    let onClose: () -> Void
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "doc.text")
-                .font(.system(size: 9))
-                .foregroundStyle(Color.textMuted)
-            Text(name ?? label)
-                .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 180)
-
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.textMuted)
-            .disabled(!canClose)
-            .opacity(canClose ? 1 : 0.3)
-            .help(canClose ? "Close canvas" : "The last pane cannot be closed")
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color.selection : .clear)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 5))
-        .onTapGesture(perform: onSelect)
-    }
-
-    /// The filename — the shortest thing that still tells two open canvases apart, and what
-    /// the tab shows when nothing has named the pane.
-    private var label: String {
-        switch source {
-        case let .file(path): (path.value as NSString).lastPathComponent
         }
     }
 }

@@ -268,33 +268,21 @@ private struct SlotView: View {
 
     @ViewBuilder
     private func paneContent(_ pane: Pane) -> some View {
-        switch pane.content {
-        case .terminal:
-            if let session = model.session(for: pane) {
-                VStack(spacing: 0) {
-                    // Above the terminal rather than over it (#63): the shell underneath is
-                    // live and usable, and an overlay on a pane the operator may simply want
-                    // to type in is the seizing the offer exists to avoid. It is absent when
-                    // there is nothing to ask, which is every pane on a normal launch.
-                    if let offer = model.resumeOffers[pane.id] {
-                        AgentResumeBar(
-                            offer: offer,
-                            resume: { model.resume(pane.id) },
-                            dismiss: { model.dismissResume(pane.id) })
-                    }
-                    // `focusedPane` is the bench's own reader — the focused slot's selected
-                    // pane — so which terminal owns the keyboard is one question with one
-                    // answer, asked where the answer lives rather than re-derived per slot.
-                    TerminalPaneView(
-                        session: session,
-                        holdsKeyboard: bench.focusedPane?.id == pane.id)
-                }
+        VStack(spacing: 0) {
+            // Above the pane rather than over it (#63): the shell underneath is live and usable,
+            // and an overlay on a pane the operator may simply want to type in is the seizing
+            // the offer exists to avoid. It is absent when there is nothing to ask, which is
+            // every pane on a normal launch — and only a terminal pane ever has one.
+            if let offer = model.resumeOffers[pane.id] {
+                AgentResumeBar(
+                    offer: offer,
+                    resume: { model.resume(pane.id) },
+                    dismiss: { model.dismissResume(pane.id) })
             }
-        case .canvas:
-            CanvasView(model: model.canvas(for: pane))
-        case .browser:
-            BrowserPaneView(
-                model: model.browser(for: pane), holdsKeyboard: bench.focusedPane?.id == pane.id)
+            // The kind draws it (`SurfaceKind`). `holdsKeyboard` is the bench's own reader —
+            // the focused slot's selected pane — so which pane owns the keyboard is one question
+            // with one answer, asked where the answer lives.
+            model.surfaceView(of: pane, in: model.surfaceSlot(for: pane, in: slot))
         }
     }
 }
