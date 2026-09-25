@@ -1,3 +1,4 @@
+import HelmWire
 import Inject
 import SwiftUI
 
@@ -72,7 +73,11 @@ struct WorkbenchView: View {
                     SplitStack(
                         axis: .horizontal, extent: geo.size.width, members: bench.columns,
                         fraction: { $0.width }, minimumExtent: Self.minimumColumnWidth,
-                        resize: { model.resizeColumn($0, to: $1, against: $2) }
+                        resize: {
+                            model.send(
+                                .layoutResize(.columns(member: $0, against: $2), fraction: $1),
+                                by: .operatorGesture)
+                        }
                     ) { column in
                         ColumnView(
                             model: model, bench: bench, column: column, height: geo.size.height,
@@ -107,13 +112,12 @@ struct WorkbenchView: View {
 /// **It offers the action rather than naming a keystroke.** The old copy said "choose a
 /// folder with ⌘⇧O" — a thing to remember, and written backwards besides (macOS prints
 /// modifiers ⌃⌥⇧⌘, so it is ⇧⌘O, which is what the status bar already said). The button is
-/// one click; the key is still shown beside it, rendered from `Shortcut.all` through
+/// one click; the key is still shown beside it, rendered from `KeyBindings.all` through
 /// `KeyGlyph.binding` so the two can no longer disagree.
 ///
-/// **It posts rather than opening the panel itself.** `WorkspaceBar` owns the `NSOpenPanel`
-/// and already listens for `.openWorkspace`, so the button, the bar's `+` and ⇧⌘O are
-/// one path with one behaviour. A second panel here would be a second answer to "what does
-/// opening a workspace do".
+/// **It asks for the table's own action rather than opening a panel itself**, so the button,
+/// the bar's `+` and ⇧⌘O are one path with one behaviour (`WorkspacePanel`). A second panel
+/// here would be a second answer to "what does opening a workspace do".
 ///
 /// **`ViewThatFits` because the bench is not always a pane.** With the rail open and a short
 /// window this space is a band, and a column laid out for a full pane renders into a strip
@@ -122,7 +126,7 @@ struct WorkbenchView: View {
 private struct EmptyBench: View {
     /// nil only if the row is ever removed from the map, in which case the button stands
     /// alone rather than claiming a key that does not fire.
-    private let keys = KeyGlyph.binding(for: .openWorkspace)
+    private let keys = KeyGlyph.binding(for: .local(.openWorkspacePanel))
 
     var body: some View {
         ViewThatFits(in: .vertical) {
@@ -169,7 +173,7 @@ private struct EmptyBench: View {
 
     private var openButton: some View {
         Button {
-            HelmCommand.openWorkspace.post()
+            Actions.perform(.local(.openWorkspacePanel))
         } label: {
             HStack(spacing: 8) {
                 Text("Choose Folder…")
@@ -211,7 +215,11 @@ private struct ColumnView: View {
         SplitStack(
             axis: .vertical, extent: height, members: column.slots,
             fraction: { $0.height }, minimumExtent: WorkbenchView.minimumSlotHeight,
-            resize: { model.resizeSlot($0, to: $1, against: $2) }
+            resize: {
+                model.send(
+                    .layoutResize(.slots(member: $0, against: $2), fraction: $1),
+                    by: .operatorGesture)
+            }
         ) { slot in
             SlotView(
                 model: model, bench: bench, slot: slot, workspaceRoot: workspaceRoot)
@@ -247,7 +255,8 @@ private struct SlotView: View {
                 // Behind the content rather than over it. The reporter takes no part in hit
                 // testing at all — it reads a local event monitor — so nothing it covers stops
                 // working, and putting it in front would only risk that.
-                .background(PaneClickReporter { model.focus(slot.id) })
+                .background(
+                    PaneClickReporter { model.send(.focusSlot(slot.id), by: .operatorGesture) })
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .enableInjection()

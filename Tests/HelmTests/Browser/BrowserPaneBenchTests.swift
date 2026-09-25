@@ -64,13 +64,14 @@ final class BrowserPaneBenchTests: XCTestCase {
     /// A ⌘-clicked http link (#376): the browser pane is offered, the keyboard stays in the
     /// terminal that was clicked, and the address reaches that pane's browser to open as a tab.
     /// No browser runs under this bench root, so it waits there until one does.
-    func testAClickedLinkOffersTheBrowserAndHandsItTheAddress() async throws {
+    func testAClickedLinkOffersTheBrowserAndHandsItTheAddress() throws {
         let model = mounted()
         let typing = try XCTUnwrap(model.bench?.focusedPane?.id)
         let link = try XCTUnwrap(URL(string: "http://localhost:3000"))
 
-        HelmCommand.openBrowser(link).post()
-        try await Task.sleep(for: .milliseconds(100))
+        // From the clicked terminal's own callback, which is where the click arrives.
+        try XCTUnwrap(model.focusedTerminal)
+            .terminalDidRequestOpenURL(link.absoluteString, kind: .unknown)
 
         let pane = try XCTUnwrap(model.bench?.panes.first { $0.content == .browser })
         XCTAssertEqual(model.bench?.focusedPane?.id, typing, "a link click must not seize")
@@ -84,10 +85,10 @@ final class BrowserPaneBenchTests: XCTestCase {
         let first = try XCTUnwrap(URL(string: "http://localhost:3000"))
         let second = try XCTUnwrap(URL(string: "https://example.com/docs"))
 
-        let pane = try XCTUnwrap(model.offerBrowser(opening: first))
-        XCTAssertEqual(model.offerBrowser(opening: second), pane)
+        model.openLink(first)
+        model.openLink(second)
 
-        let browser = try XCTUnwrap(model.bench?.pane(pane))
+        let browser = try XCTUnwrap(model.bench?.panes.first { $0.content == .browser })
         XCTAssertEqual(model.browser(for: browser).pendingLinks, [first, second])
         XCTAssertEqual(model.bench?.panes.filter { $0.content == .browser }.count, 1)
     }

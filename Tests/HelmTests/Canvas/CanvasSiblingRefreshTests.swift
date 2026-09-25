@@ -22,8 +22,8 @@ import XCTest
 /// spans the whole distance: **a push in at one end, and what the page ends up with read off the
 /// other**.
 ///
-/// It drives the app's own objects the whole way. `HelmCommand.pushCanvasFile` is the command a
-/// terminal's OSC 777 posts; `HTMLCanvasPage` is the very configuration and reload rule
+/// It drives the app's own objects the whole way. The push is `push.sh`'s OSC 777 arriving at a
+/// real session; `HTMLCanvasPage` is the very configuration and reload rule
 /// `HTMLCanvasWebView` gives SwiftUI. The one thing standing in for the app is SwiftUI itself —
 /// `render(_:)` below is what `updateNSView` does when the model publishes, and nothing more.
 ///
@@ -67,7 +67,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
 
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        try await push(artifact, from: terminal.id)
+        try await push(artifact, from: terminal)
 
         let canvas = try openCanvas(in: model)
         let page = LivePane(artifact: artifact)
@@ -80,7 +80,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         // ONLY the sibling. `page.html` keeps its mtime and its bytes.
         try #"{"version":"v2"}"#.write(to: sibling, atomically: true, encoding: .utf8)
 
-        try await push(artifact, from: terminal.id)
+        try await push(artifact, from: terminal)
         page.render(try document(of: canvas))
 
         let second = await page.nextReport()
@@ -105,7 +105,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
 
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        try await push(artifact, from: terminal.id)
+        try await push(artifact, from: terminal)
 
         let canvas = try openCanvas(in: model)
         let page = LivePane(artifact: artifact)
@@ -162,7 +162,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
 
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        try await push(markdownArtifact, from: terminal.id)
+        try await push(markdownArtifact, from: terminal)
 
         let canvas = try self.canvas(showing: markdownArtifact, in: model)
         let page = LiveMarkdownPane(artifact: markdownArtifact)
@@ -178,7 +178,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         // reload keys and the `FileWatcher` on it fires nothing at all.
         try Self.svg(width: 22).write(to: sibling, atomically: true, encoding: .utf8)
 
-        try await push(markdownArtifact, from: terminal.id)
+        try await push(markdownArtifact, from: terminal)
         page.render(try document(of: canvas), markdown: source)
 
         let navigated = await page.didNavigateAwayFromTheMarkedDocument()
@@ -219,7 +219,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
 
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        try await push(markdownArtifact, from: terminal.id)
+        try await push(markdownArtifact, from: terminal)
 
         let canvas = try self.canvas(showing: markdownArtifact, in: model)
         let page = LiveMarkdownPane(artifact: markdownArtifact)
@@ -235,7 +235,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         // re-push is the only signal helm gets.
         try Self.svg(width: 22).write(to: sibling, atomically: true, encoding: .utf8)
 
-        try await push(markdownArtifact, from: terminal.id)
+        try await push(markdownArtifact, from: terminal)
         page.render(try document(of: canvas), markdown: source)
 
         let second = await page.imageWidth(settlingOn: "22")
@@ -253,12 +253,12 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     func testARePushOfAnOpenCanvasBumpsItsDocumentGeneration() async throws {
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        try await push(artifact, from: terminal.id)
+        try await push(artifact, from: terminal)
 
         let canvas = try openCanvas(in: model)
         let before = try document(of: canvas).generation
 
-        try await push(artifact, from: terminal.id)
+        try await push(artifact, from: terminal)
 
         XCTAssertGreaterThan(
             try document(of: canvas).generation, before,
@@ -276,7 +276,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     func testARePushStillDoesNotChangeWhatTheSlotShowsOrWhereFocusIs() async throws {
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        try await push(artifact, from: terminal.id)
+        try await push(artifact, from: terminal)
         // Resolved, so the re-push below really does refresh something — an unresolved pane
         // has no render to disturb and would satisfy this for the wrong reason.
         _ = try openCanvas(in: model)
@@ -287,7 +287,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         let showing = try XCTUnwrap(model.bench?.focusedPane?.id)
         let focused = try XCTUnwrap(model.bench?.focusedSlot)
 
-        try await push(artifact, from: terminal.id)
+        try await push(artifact, from: terminal)
 
         XCTAssertEqual(
             model.bench?.focusedPane?.id, showing,
@@ -302,8 +302,8 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     func testPushingOneArtifactDoesNotRefreshAnother() async throws {
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        try await push(artifact, from: terminal.id)
-        try await push(other, from: terminal.id)
+        try await push(artifact, from: terminal)
+        try await push(other, from: terminal)
 
         // Both resolved: a refresh only reaches a pane that has a `CanvasModel`, so leaving the
         // pushed one unresolved would make this pass without the fix ever running.
@@ -311,7 +311,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         let bystander = try canvas(showing: other, in: model)
         let before = try document(of: bystander).generation
 
-        try await push(artifact, from: terminal.id)
+        try await push(artifact, from: terminal)
 
         XCTAssertEqual(
             try document(of: bystander).generation, before,
@@ -328,14 +328,11 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         return (model, manager)
     }
 
-    /// The command a terminal's OSC 777 posts, and the hop onto the bench it travels over —
-    /// `HelmCommand.publisher` delivers on the main queue, so the sleep is what lets it land.
-    private func push(_ file: URL, from terminal: UUID) async throws {
-        HelmCommand.pushCanvasFile(
-            CanvasPushRequest(
-                artifact: file, workspacePath: workspace,
-                origin: CanvasOrigin(terminal: terminal))
-        ).post()
+    /// `push.sh`'s OSC 777, arriving at the terminal that printed it. The sleep is kept from when
+    /// the hop was a main-queue notification: the route is synchronous now, and a later
+    /// assertion that waits on a render is only made more certain by it.
+    private func push(_ file: URL, from terminal: TerminalSession) async throws {
+        terminal.terminalDidRequestDesktopNotification(title: CanvasPush.marker, body: file.path)
         try await Task.sleep(for: .milliseconds(100))
     }
 

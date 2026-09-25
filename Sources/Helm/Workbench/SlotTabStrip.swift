@@ -1,3 +1,4 @@
+import HelmWire
 import Inject
 import SwiftUI
 
@@ -34,8 +35,8 @@ struct SlotTabStrip: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
-                model.focus(slot.id)
-                model.newTerminal()
+                model.send(.focusSlot(slot.id), by: .operatorGesture)
+                model.send(.paneOpen(surface: .terminal(agent: nil)), by: .operatorGesture)
             } label: {
                 Image(systemName: "plus")
             }
@@ -57,7 +58,8 @@ struct SlotTabStrip: View {
                 .help("Open artifact (⌘O)")
                 .popover(isPresented: $model.isBrowserOpen, arrowEdge: .bottom) {
                     ArtifactBrowser(workspaceRoot: workspaceRoot) { url in
-                        model.open(.file(url))
+                        model.send(
+                            .paneOpen(surface: .canvas(path: url.path)), by: .operatorGesture)
                     } onDismiss: {
                         model.isBrowserOpen = false
                     }
@@ -72,7 +74,7 @@ struct SlotTabStrip: View {
         .foregroundStyle(Color.textPrimary)
         .background(ChromeBackground())
         .contentShape(Rectangle())
-        .onTapGesture { model.focus(slot.id) }
+        .onTapGesture { model.send(.focusSlot(slot.id), by: .operatorGesture) }
         .enableInjection()
     }
 

@@ -1,4 +1,5 @@
 import Combine
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -426,65 +427,61 @@ final class WorkbenchMoveTests: XCTestCase {
 final class MovePaneKeystrokeTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/helm-move-pane")
 
-    /// The map's half. ⌘⌥arrow is focus, ⌘⌥⇧arrow is the pane — one keystroke apart, which is
-    /// the gesture's whole claim to being learnable.
+    /// The table's half. ⌘⌥arrow is focus, ⌘⌥⇧arrow is the pane — one keystroke apart, which
+    /// is the gesture's whole claim to being learnable.
     func testShiftTurnsTheFocusBindingIntoAPaneMove() {
         for (keyCode, direction) in [
-            (UInt16(123), Workbench.Direction.left), (124, .right), (126, .up), (125, .down),
+            (UInt16(123), BenchDirection.left), (124, .right), (126, .up), (125, .down),
         ] {
             XCTAssertEqual(
-                Shortcut.match(
+                KeyBindings.match(
                     characters: nil, keyCode: keyCode, modifiers: [.command, .option, .shift],
-                    terminalFocused: true)?.command,
-                .movePane(direction),
+                    terminalFocused: true)?.action,
+                .verb(.moveFocused(direction)),
                 "⇧⌥⌘ keyCode \(keyCode)")
             XCTAssertEqual(
-                Shortcut.match(
+                KeyBindings.match(
                     characters: nil, keyCode: keyCode, modifiers: [.command, .option],
-                    terminalFocused: true)?.command,
-                .moveFocus(direction),
+                    terminalFocused: true)?.action,
+                .verb(.stepFocus(direction)),
                 "…and without shift it is still focus movement, keyCode \(keyCode)")
         }
     }
 
-    /// Every move row is in the menu and posts what its title says. #152 is the reason this is
-    /// asserted rather than assumed: four View ▸ Focus rows were silent no-ops for as long as
+    /// Every move row is in the menu and names the direction it moves. #152 is the reason this
+    /// is asserted rather than assumed: four View ▸ Focus rows were silent no-ops for as long as
     /// the payload rode in an untyped `Notification.object`.
-    func testEveryMoveRowIsClickableAndPostsItsOwnDirection() throws {
-        let rows = Shortcut.all.filter { if case .movePane = $0.command { true } else { false } }
+    func testEveryMoveRowIsClickableAndNamesItsOwnDirection() throws {
+        let rows = KeyBindings.all.compactMap { row -> (KeyBinding, BenchDirection)? in
+            guard case let .verb(.moveFocused(direction)) = row.action else { return nil }
+            return (row, direction)
+        }
         XCTAssertEqual(rows.count, 4, "one row per arrow")
 
-        for row in rows {
+        for (row, direction) in rows {
             let menu = try XCTUnwrap(row.menu, "a move row not in the menu cannot be clicked")
-            XCTAssertTrue(menu.title.hasPrefix("Move Pane "), menu.title)
-
-            var delivered: [HelmCommand] = []
-            let token = HelmCommand.publisher.sink { delivered.append($0) }
-            defer { token.cancel() }
-
-            row.post()
-
-            XCTAssertEqual(
-                delivered, [row.command],
-                "\(menu.title) posted \(delivered) — the row and the channel disagree")
+            XCTAssertEqual(menu.title, "Move Pane \(direction.rawValue.capitalized)")
         }
     }
 
-    /// The end of it: the posted command reaches a live bench and moves a pane. A command the
-    /// subscriber drops looks exactly like a command nothing binds, which is what #152 was.
-    func testThePostedCommandMovesAPaneOnALiveBench() {
+    /// The end of it: the gesture, resolved against a live bench and sent as the operator,
+    /// moves the focused pane — and the keyboard comes with it, because the operator moved it.
+    func testTheGestureMovesTheFocusedPaneOnALiveBench() throws {
         let model = WorkbenchModel(terminals: TerminalManager())
         model.activate(workspacePath: workspace)
         model.splitRight()
         let moved = model.bench?.focusedPane?.id
         XCTAssertEqual(model.bench?.columns.count, 2, "two columns to move between")
 
-        HelmCommand.movePane(.left).post()
-        Eventually.holds { model.bench?.columns.count == 1 }
+        let verb = try XCTUnwrap(
+            VerbTemplate.moveFocused(.left).resolve(
+                bench: model.bench, workspaces: [], active: nil))
+        XCTAssertEqual(verb, .paneMove(try XCTUnwrap(moved), .left))
+        model.send(verb, by: .operatorGesture)
 
         XCTAssertEqual(
             model.bench?.columns.count, 1,
-            "⇧⌥⌘← did nothing — WorkbenchModel is dropping a command the map posts")
+            "⇧⌥⌘← did nothing — the sink dropped the verb the table resolved")
         XCTAssertEqual(
             model.bench?.focusedPane?.id, moved,
             "and the operator's keyboard came with it")

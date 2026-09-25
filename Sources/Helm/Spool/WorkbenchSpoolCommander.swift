@@ -10,21 +10,13 @@ import HelmWire
 /// every command an agent may not send, and this type is only reached with one it may. What is
 /// genuinely here is *how*: which of helm's two shapes an allowed command routes to.
 ///
-/// **Four of the five route to a non-seizing twin, and the fifth needs none.** helm has drawn
-/// that distinction since #125 and named both halves — `Workbench.insert` is the operator
-/// asking, `Workbench.offer` is an agent offering, and they differ in the line that assigns
-/// `focusedSlot`. So:
+/// **Four of the five are bench verbs, sent as an agent**, so the sink leaves the keyboard where
+/// the operator put it — the same rule every agent's verb gets (`LocalSink`, and benchd's
+/// `Focus`). `newTerminal` is `pane/open` of a terminal, the splits are `pane/split`, and
+/// `openBrowser` is `pane/open` of the browser (#350).
 ///
-/// - `newTerminal` → `WorkbenchModel.spawnTerminal()`, which is `newTerminal()`'s offering twin
-///   and predates this ticket entirely — it is what the spool's own `spawn` kind already uses.
-/// - `splitRight`/`splitDown` → `offerSplitRight()`/`offerSplitDown()`, the twins added for
-///   #269 on top of `Workbench.splitRight(offering:)`.
-/// - `openBrowser` → `WorkbenchModel.offerBrowser()`, which offers the browser pane (#350).
-/// - `toggleRail` → posted as the real `HelmCommand`, because there is no seizing to avoid: it
-///   shows or hides chrome beside the bench and touches no pane. Posting rather than calling
-///   `ArchonRailModel.toggleVisibility()` directly would be a second route to the same state
-///   with the model's own subscription sitting unused, so the model is held and called — see
-///   `rail` below.
+/// `toggleRail` is the fifth and touches no pane: it shows or hides chrome beside the bench, so
+/// there is no verb for it and no seizing to avoid. The rail's model is held and called.
 ///
 /// **`focusedPaneBefore`/`After` are read here, either side of the mutation**, and that is the
 /// point of measuring them at this layer: this is the only place that can see the live bench,
@@ -32,11 +24,9 @@ import HelmWire
 @MainActor
 final class WorkbenchSpoolCommander: SpoolCommanding {
     private let workbench: WorkbenchModel
-    /// Held rather than reached for through a notification, so `toggleRail` has the same
-    /// synchronous "it happened" guarantee as the other three. `HelmCommand.publisher` hops to
-    /// the main queue before `ArchonRailModel` sees it (`ArchonRailModel.init`), so a posted
-    /// command would still be in flight when the result was written — and a result that says
-    /// `ran` about something that has not run yet is the silence this ladder exists to remove.
+    /// Called directly, so `toggleRail` has happened by the time the result is written — a
+    /// result that says `ran` about something that has not run yet is the silence this ladder
+    /// exists to remove.
     private let rail: ArchonRailModel
 
     init(workbench: WorkbenchModel, rail: ArchonRailModel) {
@@ -46,24 +36,16 @@ final class WorkbenchSpoolCommander: SpoolCommanding {
 
     func run(_ command: HelmCommandName) -> Result<CommandReport, SpoolRefusal> {
         let before = workbench.bench?.focusedPane?.id
-        let created: UUID?
 
+        let verb: BenchVerb
         switch command {
-        case .newTerminal:
-            guard let session = workbench.spawnTerminal() else { return .failure(noBench) }
-            created = session.id
-        case .splitRight:
-            guard let session = workbench.offerSplitRight() else { return .failure(noBench) }
-            created = session.id
-        case .splitDown:
-            guard let session = workbench.offerSplitDown() else { return .failure(noBench) }
-            created = session.id
+        case .newTerminal: verb = .paneOpen(surface: .terminal(agent: nil))
+        case .splitRight: verb = .paneSplit(direction: .right)
+        case .splitDown: verb = .paneSplit(direction: .down)
+        case .openBrowser: verb = .paneOpen(surface: .browser)
         case .toggleRail:
             rail.toggleVisibility()
-            created = nil
-        case .openBrowser:
-            guard let pane = workbench.offerBrowser() else { return .failure(noBench) }
-            created = pane
+            return .success(report(command, before: before, created: nil))
 
         // **Named rather than defaulted, and unreachable rather than merely unhandled.**
         // `SpoolPolicy.accept` runs `SpoolCommandPolicy.verdict` before an
@@ -81,18 +63,23 @@ final class WorkbenchSpoolCommander: SpoolCommanding {
                         + "WorkbenchSpoolCommander disagree about what may be sent."))
         }
 
+        guard let created = workbench.send(verb, by: .agent()) else { return .failure(noBench) }
+        return .success(report(command, before: before, created: created))
+    }
+
+    private func report(_ command: HelmCommandName, before: UUID?, created: UUID?) -> CommandReport
+    {
         let after = workbench.bench
         // Bound rather than written inline: `after?.focusedPane?.id.map(…)` keeps the optional
         // chain going and calls `map` on the `UUID` itself, which does not compile.
         let focusedAfter = after?.focusedPane?.id
-        return .success(
-            CommandReport(
-                command: command,
-                paneCreated: created.map(TerminalID.init),
-                focusedPaneBefore: before.map(TerminalID.init),
-                focusedPaneAfter: focusedAfter.map(TerminalID.init),
-                columns: after?.columns.count ?? 0,
-                panes: after?.panes.count ?? 0))
+        return CommandReport(
+            command: command,
+            paneCreated: created.map(TerminalID.init),
+            focusedPaneBefore: before.map(TerminalID.init),
+            focusedPaneAfter: focusedAfter.map(TerminalID.init),
+            columns: after?.columns.count ?? 0,
+            panes: after?.panes.count ?? 0)
     }
 
     /// Why there was no bench to act on — and there are now **two** answers, which is why this

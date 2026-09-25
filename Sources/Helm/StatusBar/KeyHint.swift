@@ -2,61 +2,25 @@ import AppKit
 
 /// One thing the status bar says you can press.
 ///
-/// `keys` is **rendered from `Shortcut.all`**, never typed. That is the whole design
-/// constraint of this file: helm binds a few dozen keys and nothing in the window mentioned
-/// any of them, so the operator could not open a second pane without reading source — but a
-/// hand-written list of glyphs would be a second copy of the keymap, and the second copy is
-/// always the one that goes stale. Only the *word* for a command is written here, and a
-/// word cannot be wrong about which key fires.
+/// Both halves come from the key table (`KeyBindings.all`): `keys` is **rendered** from the rows,
+/// never typed, and `label` is the row's own `hint`. helm binds a few dozen keys and nothing in
+/// the window mentioned any of them, so the operator could not open a second pane without
+/// reading source — but a hand-written list of glyphs would be a second copy of the keymap, and
+/// the second copy is always the one that goes stale. That is why the word lives on the row:
+/// the table used to be answered by a separate catalogue of labels, and a test had to keep the
+/// two in step.
+///
+/// Rows without a `hint` stay off the bar on purpose. Font size is bound five ways — ⌘=, ⌘+,
+/// ⌘⇧+, ⌘-, ⌘0 — because of how shift reaches `charactersIgnoringModifiers`, and rendering
+/// that honestly would spend a tenth of the bar on the one command every macOS app binds
+/// identically. It keeps its menu items, which is where a universal shortcut belongs.
 struct KeyHint: Equatable, Identifiable {
-    /// "⌘⌥1–9", "⌘↑↓", "⌘N" — glyphs, from the map.
+    /// "⌘⌥1–9", "⌘↑↓", "⌘N" — glyphs, from the table.
     let keys: String
     /// The word the operator would use, lowercase because chrome recedes.
     let label: String
 
     var id: String { label }
-}
-
-/// The commands the bar names, in reading order.
-///
-/// **Curation, and nothing else.** Which commands are worth a hint is a design judgement
-/// and it is made here, in the open; what each one is BOUND to is not decided here at all.
-/// `KeyHintCatalogTests` requires that `named` and `omitted` together account for every
-/// notification in `Shortcut.all`, so a new shortcut cannot slip in unadvertised and an
-/// advertised one cannot outlive its binding — the compiler will not catch either, and the
-/// test does.
-enum KeyHintCatalog {
-    /// Ordered: the pane commands first, because they are the ones an operator needs on day
-    /// one and the ones nothing else in the window hints at.
-    static let named: [(command: HelmCommand.Name, label: String)] = [
-        (.newTerminal, "new"),
-        // Next to `new` for the reason `move` sits next to `focus`: the two are one modifier
-        // apart (⌘N and ⇧⌘N), and reading them side by side is what teaches the second one.
-        (.newNote, "note"),
-        (.splitRight, "split"),
-        (.splitDown, "split down"),
-        (.closePane, "close"),
-        (.selectTerminal, "pane"),
-        (.moveFocus, "focus"),
-        // Next to `focus` on purpose: the two are one keystroke apart (⌥⌘arrows and
-        // ⇧⌥⌘arrows), and reading them side by side is what teaches the second one.
-        (.movePane, "move"),
-        (.openArtifact, "artifact"),
-        (.jumpToPrompt, "turn"),
-        (.selectWorkspace, "workspace"),
-        (.cycleWorkspace, "cycle"),
-        (.openWorkspace, "folder"),
-        (.toggleRail, "archon"),
-        (.openBrowser, "browser"),
-    ]
-
-    /// Left off the bar on purpose.
-    ///
-    /// Font size is bound five ways — ⌘=, ⌘+, ⌘⇧+, ⌘-, ⌘0 — because of how the shift key
-    /// reaches `charactersIgnoringModifiers`, and rendering that honestly would spend a
-    /// tenth of the bar on the one command every macOS app binds identically. It keeps its
-    /// menu items, which is where a universal shortcut belongs.
-    static let omitted: Set<HelmCommand.Name> = [.adjustFontSize]
 }
 
 /// The hints to show, given where focus is.
@@ -68,17 +32,23 @@ enum KeyHints {
     /// can fire and shows the first binding that can. The same rule silently drops ⌘↑↓,
     /// which only exists inside a terminal, and ⌃←→, which only exists outside one.
     ///
-    /// `shortcuts` is a parameter rather than a read of `Shortcut.all` so the rules are
-    /// exercisable against a two-row map instead of the real one.
+    /// In the order each label first appears in the table.
+    ///
+    /// `rows` is a parameter rather than a read of `KeyBindings.all` so the rules are exercisable
+    /// against a two-row table instead of the real one.
     static func visible(
-        terminalFocused: Bool, in shortcuts: [Shortcut] = Shortcut.all
+        terminalFocused: Bool, in rows: [KeyBinding] = KeyBindings.all
     ) -> [KeyHint] {
-        KeyHintCatalog.named.compactMap { command, label in
-            let live = shortcuts.filter {
-                $0.command.name == command && $0.canFire(terminalFocused: terminalFocused)
+        var labels: [String] = []
+        for label in rows.compactMap(\.hint) where !labels.contains(label) {
+            labels.append(label)
+        }
+        return labels.compactMap { label in
+            let live = rows.filter {
+                $0.hint == label && $0.canFire(terminalFocused: terminalFocused)
             }
-            // The FIRST binding that can fire, not all of them. `Shortcut.all` is in match
-            // order, so the first is the one the operator's keystroke would actually hit.
+            // The FIRST row that can fire, and the rows sharing its modifiers — the binding the
+            // operator's keystroke would actually hit, not every way to reach the same word.
             guard let first = live.first,
                 let keys = render(live.filter { $0.modifiers == first.modifiers })
             else { return nil }
@@ -86,12 +56,12 @@ enum KeyHints {
         }
     }
 
-    /// One binding's rows — same command, same modifiers — as a single string.
+    /// One hint's rows — same label, same modifiers — as a single string.
     ///
     /// Collapsing is not decoration: nine rows for ⌘1…⌘9 rendered one by one would be the
     /// whole bar, and the two runs helm binds (digits, arrows) are exactly the two a human
     /// reads as one thing anyway.
-    private static func render(_ rows: [Shortcut]) -> String? {
+    private static func render(_ rows: [KeyBinding]) -> String? {
         guard let modifiers = rows.first?.modifiers else { return nil }
         let glyphs = rows.compactMap { KeyGlyph.trigger($0.trigger) }
         guard !glyphs.isEmpty else { return nil }
@@ -130,12 +100,12 @@ enum KeyGlyph {
     /// name a key asks here instead, on `KeyHint`'s own reasoning: a hand-written glyph is a
     /// second copy of the keymap, and the second copy is the one that goes stale.
     ///
-    /// The first row that binds the command, which for a command bound once is the only one.
+    /// The first row that binds the action, which for an action bound once is the only one.
     /// nil when nothing binds it or its trigger has no glyph.
     static func binding(
-        for command: HelmCommand.Name, in shortcuts: [Shortcut] = Shortcut.all
+        for action: KeyBinding.Action, in rows: [KeyBinding] = KeyBindings.all
     ) -> String? {
-        guard let row = shortcuts.first(where: { $0.command.name == command }),
+        guard let row = rows.first(where: { $0.action == action }),
             let key = trigger(row.trigger)
         else { return nil }
         return modifiers(row.modifiers) + key
@@ -153,7 +123,7 @@ enum KeyGlyph {
     /// The key itself, or nil for a keyCode helm does not draw. Arrow keys are matched on
     /// their code rather than a character (they carry function-key code points, not typable
     /// ones), so they are the only codes that need naming here.
-    static func trigger(_ trigger: Shortcut.Trigger) -> String? {
+    static func trigger(_ trigger: KeyBinding.Trigger) -> String? {
         switch trigger {
         case let .character(character): character.uppercased()
         case let .keyCode(code):

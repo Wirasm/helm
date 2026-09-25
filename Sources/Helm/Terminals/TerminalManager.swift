@@ -49,6 +49,10 @@ final class TerminalManager: ObservableObject {
     /// `sessions` changing (the snapshot, workspace persistence) still sees them.
     private var forwarding: AnyCancellable?
 
+    /// The bench a session's ⌘-clicked link and `push.sh` go to, as verbs. Set by the
+    /// `WorkbenchModel` built on this manager; weak because that model holds this manager.
+    weak var bench: WorkbenchModel?
+
     /// The single ghostty runtime every session's surface is created on.
     let controller: TerminalController
 

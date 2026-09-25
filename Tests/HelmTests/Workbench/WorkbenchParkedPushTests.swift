@@ -50,12 +50,13 @@ final class WorkbenchParkedPushTests: XCTestCase {
             workspacePath: path, restoring: rig.workspaces.contexts[path.value]?.workbench)
     }
 
-    private func push(for path: WorkspacePath) async throws {
-        HelmCommand.pushCanvasFile(
-            CanvasPushRequest(
-                artifact: artifact, workspacePath: path, origin: CanvasOrigin(terminal: UUID()))
-        ).post()
-        try await Task.sleep(for: .milliseconds(100))
+    /// `push.sh`'s sequence, printed by a terminal of the workspace `path` names — which is how a
+    /// push comes to name a parked workspace at all.
+    private func push(for path: WorkspacePath, in rig: Rig) throws {
+        let terminal = try XCTUnwrap(
+            rig.manager.sessions(for: path).first, "no terminal in \(path.value) to push from")
+        terminal.terminalDidRequestDesktopNotification(
+            title: CanvasPush.marker, body: artifact.path)
     }
 
     private func stored(_ path: WorkspacePath, in rig: Rig) throws -> Workbench {
@@ -68,7 +69,7 @@ final class WorkbenchParkedPushTests: XCTestCase {
     func testAPushFromAParkedWorkspaceIsOnItsBenchWhenTheOperatorSwitchesIn() async throws {
         let rig = try parkedRig()
 
-        try await push(for: parkedPath)
+        try push(for: parkedPath, in: rig)
 
         XCTAssertEqual(
             try stored(parkedPath, in: rig).canvasPanes.map(\.content),
@@ -87,7 +88,7 @@ final class WorkbenchParkedPushTests: XCTestCase {
         let rig = try parkedRig()
         let before = try stored(parkedPath, in: rig)
 
-        try await push(for: parkedPath)
+        try push(for: parkedPath, in: rig)
 
         let after = try stored(parkedPath, in: rig)
         XCTAssertEqual(after.focusedSlot, before.focusedSlot)
@@ -104,7 +105,7 @@ final class WorkbenchParkedPushTests: XCTestCase {
         let rig = try parkedRig()
         let mountedBefore = rig.workbench.bench
 
-        try await push(for: parkedPath)
+        try push(for: parkedPath, in: rig)
 
         XCTAssertEqual(rig.workbench.bench, mountedBefore)
         XCTAssertEqual(rig.workbench.bench?.canvasPanes.count, 0)
@@ -115,8 +116,8 @@ final class WorkbenchParkedPushTests: XCTestCase {
     func testARePushFromAParkedWorkspaceKeepsOnePane() async throws {
         let rig = try parkedRig()
 
-        try await push(for: parkedPath)
-        try await push(for: parkedPath)
+        try push(for: parkedPath, in: rig)
+        try push(for: parkedPath, in: rig)
 
         XCTAssertEqual(try stored(parkedPath, in: rig).canvasPanes.count, 1)
     }
@@ -126,7 +127,7 @@ final class WorkbenchParkedPushTests: XCTestCase {
     func testAParkedPushIsPersisted() async throws {
         let rig = try parkedRig()
 
-        try await push(for: parkedPath)
+        try push(for: parkedPath, in: rig)
 
         let reloaded = WorkspaceModel(defaults: rig.defaults)
         XCTAssertEqual(

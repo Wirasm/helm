@@ -168,8 +168,9 @@ anything SwiftUI can reach. Two weights of one material, never two materials.
 _Avoid_: blur, vibrancy, frosted (as a noun), calling the chrome's weight "the" glass
 
 **hint**:
-One line the status bar draws saying a key and what it does. Rendered from `Shortcut.all`,
-never written down twice; which commands get one is a choice, what they are bound to is not.
+One line the status bar draws saying a key and what it does. Rendered from the key table
+(`KeyBindings.all`), whose rows carry the word as well as the key, so neither is written down
+twice; which rows get one is a choice, what they are bound to is not.
 _Avoid_: tooltip, help, cheatsheet
 
 ### What agents produce
