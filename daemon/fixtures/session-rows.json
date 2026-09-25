@@ -1,0 +1,264 @@
+{
+  "dismissed": {
+    "dismissed": [
+      {
+        "at_ms": 1789995000000,
+        "harness": "claude",
+        "id": "472ef957-cf30-43c9-bed6-1c2890bd71f4"
+      }
+    ],
+    "format": "bench.dismissed-sessions",
+    "version": 0
+  },
+  "hosted": {
+    "format": "bench.hosted-sessions",
+    "sessions": [
+      {
+        "cwd": "/Users/op/Projects/helm",
+        "harness": "claude",
+        "id": "7901aef9-3f1a-4691-9cac-1017daa3e0bd",
+        "recorded_at": "2026-09-25T11:56:36Z",
+        "via": {
+          "kind": "pane",
+          "pane": "0e8e8cc6-159b-45d8-bc02-485120975998"
+        }
+      },
+      {
+        "cwd": "/Users/op/Projects/helm/.worktrees/drawer",
+        "harness": "pi",
+        "id": "e2b51ed4-8559-4515-8ca0-484c2d386904",
+        "recorded_at": "2026-09-25T12:00:00Z",
+        "via": {
+          "kind": "bench",
+          "session": "s2"
+        }
+      }
+    ],
+    "version": 0
+  },
+  "list": {
+    "returned": 9,
+    "roots": [
+      "/Users/op/Projects/helm",
+      "/Users/op/Projects/helm/.worktrees/drawer"
+    ],
+    "rows": [
+      {
+        "cwd": "/Users/op/Projects/helm",
+        "harness": "claude",
+        "host": {
+          "kind": "pane",
+          "pane": "0e8e8cc6-159b-45d8-bc02-485120975998"
+        },
+        "id": "19281c67-097c-4aec-ae6d-8eab6a7b7915",
+        "name": "helm-f0",
+        "open": {
+          "kind": "focus_pane",
+          "pane": "0e8e8cc6-159b-45d8-bc02-485120975998"
+        },
+        "root": "/Users/op/Projects/helm",
+        "state": {
+          "activity": {
+            "kind": "shell"
+          },
+          "kind": "running"
+        },
+        "updated_at_ms": 1790000009000
+      },
+      {
+        "cwd": "/Users/op/Projects/helm/.worktrees/drawer",
+        "harness": "claude",
+        "host": {
+          "kind": "pane",
+          "pane": "f53c8a20-0b7e-4c1a-9d3f-5a6b7c8d9e0f"
+        },
+        "id": "2d40680c-8c1e-4a57-9d0e-3a4c1b2d9e10",
+        "open": {
+          "kind": "focus_pane",
+          "pane": "f53c8a20-0b7e-4c1a-9d3f-5a6b7c8d9e0f"
+        },
+        "root": "/Users/op/Projects/helm/.worktrees/drawer",
+        "state": {
+          "activity": {
+            "kind": "waiting",
+            "waiting_for": "permission prompt"
+          },
+          "kind": "running"
+        },
+        "updated_at_ms": 1790000008000
+      },
+      {
+        "cwd": "/Users/op/Projects/helm",
+        "harness": "claude",
+        "host": {
+          "kind": "bench",
+          "session": "s3"
+        },
+        "id": "5f1e2d3c-4b5a-4c6d-8e7f-9a0b1c2d3e4f",
+        "open": {
+          "kind": "bench_attach",
+          "session": "s3"
+        },
+        "root": "/Users/op/Projects/helm",
+        "state": {
+          "activity": {
+            "kind": "idle"
+          },
+          "kind": "running"
+        },
+        "updated_at_ms": 1790000007000
+      },
+      {
+        "cwd": "/Users/op/Projects/helm",
+        "harness": "codex",
+        "host": {
+          "kind": "bench",
+          "session": "s4"
+        },
+        "id": "s4",
+        "open": {
+          "kind": "bench_attach",
+          "session": "s4"
+        },
+        "root": "/Users/op/Projects/helm",
+        "state": {
+          "activity": {
+            "kind": "unknown"
+          },
+          "kind": "running"
+        },
+        "updated_at_ms": 1790000006500
+      },
+      {
+        "cwd": "/Users/op/Projects/helm",
+        "harness": "claude",
+        "host": {
+          "job": "cdde87a0",
+          "kind": "background"
+        },
+        "id": "cdde87a0-563a-4310-ad59-a100eb8c07be",
+        "name": "Review Helm UI concept designs",
+        "open": {
+          "job": "cdde87a0",
+          "kind": "claude_attach"
+        },
+        "root": "/Users/op/Projects/helm",
+        "state": {
+          "activity": {
+            "detail": "which branch?",
+            "kind": "blocked",
+            "state": "needs_reply"
+          },
+          "kind": "running"
+        },
+        "updated_at_ms": 1790000006000
+      },
+      {
+        "cwd": "/Users/op/Projects/helm",
+        "harness": "claude",
+        "host": {
+          "job": "a1b2c3d4",
+          "kind": "background"
+        },
+        "id": "0b9f7c1e-2d3a-4e5f-8a9b-c0d1e2f3a4b5",
+        "name": "Nightly dependency audit",
+        "open": {
+          "job": "a1b2c3d4",
+          "kind": "claude_attach"
+        },
+        "root": "/Users/op/Projects/helm",
+        "state": {
+          "activity": {
+            "kind": "busy"
+          },
+          "kind": "running"
+        },
+        "updated_at_ms": 1790000005500
+      },
+      {
+        "cwd": "/Users/op/Projects/helm",
+        "harness": "claude",
+        "host": {
+          "kind": "in_session",
+          "parent": "19281c67-097c-4aec-ae6d-8eab6a7b7915",
+          "transcript": "/Users/op/.claude/projects/-Users-op-Projects-helm/19281c67-097c-4aec-ae6d-8eab6a7b7915/subagents/agent-ad6c56fd668049ebd.jsonl"
+        },
+        "id": "ad6c56fd668049ebd",
+        "name": "general-purpose · ws14: sessions list spike",
+        "open": {
+          "kind": "transcript",
+          "parent": "19281c67-097c-4aec-ae6d-8eab6a7b7915",
+          "path": "/Users/op/.claude/projects/-Users-op-Projects-helm/19281c67-097c-4aec-ae6d-8eab6a7b7915/subagents/agent-ad6c56fd668049ebd.jsonl"
+        },
+        "parent": "19281c67-097c-4aec-ae6d-8eab6a7b7915",
+        "root": "/Users/op/Projects/helm",
+        "state": {
+          "activity": {
+            "count": 3,
+            "kind": "waiting_on_tasks"
+          },
+          "kind": "running"
+        },
+        "updated_at_ms": 1790000005000
+      },
+      {
+        "cwd": "/Users/op/Projects/helm",
+        "harness": "claude",
+        "host": {
+          "kind": "none"
+        },
+        "id": "7901aef9-3f1a-4691-9cac-1017daa3e0bd",
+        "open": {
+          "argv": [
+            "claude",
+            "--dangerously-skip-permissions",
+            "--resume",
+            "7901aef9-3f1a-4691-9cac-1017daa3e0bd"
+          ],
+          "cwd": "/Users/op/Projects/helm",
+          "kind": "resume"
+        },
+        "root": "/Users/op/Projects/helm",
+        "state": {
+          "at_ms": 1789990000000,
+          "kind": "finished"
+        },
+        "updated_at_ms": 1789990000000
+      },
+      {
+        "cwd": "/Users/op/Projects/helm/.worktrees/drawer",
+        "harness": "pi",
+        "host": {
+          "kind": "none"
+        },
+        "id": "e2b51ed4-8559-4515-8ca0-484c2d386904",
+        "open": {
+          "argv": [
+            "pi",
+            "--approve",
+            "--session-id",
+            "e2b51ed4-8559-4515-8ca0-484c2d386904"
+          ],
+          "cwd": "/Users/op/Projects/helm/.worktrees/drawer",
+          "kind": "resume"
+        },
+        "root": "/Users/op/Projects/helm/.worktrees/drawer",
+        "state": {
+          "at_ms": 1789980000000,
+          "kind": "finished"
+        },
+        "updated_at_ms": 1789980000000
+      }
+    ],
+    "total": 9,
+    "truncated": false,
+    "unreadable": [
+      {
+        "path": "/Users/op/.claude/sessions/28495.json",
+        "source": "claude-registry",
+        "why": "unknown status \"pondering\""
+      }
+    ],
+    "workspace": "/Users/op/Projects/helm"
+  }
+}

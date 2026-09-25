@@ -24,6 +24,14 @@ pub use layout::{
     document_path,
 };
 
+mod sessions;
+pub use sessions::{
+    Activity, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
+    HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host, HostedRecord, HostedSession,
+    HostedVia, OpenAction, SessionKey, SessionList, SessionRow, SessionState, SessionsArgs,
+    Unreadable, dismissed_path, hosted_path, sessions_dir,
+};
+
 /// A request line larger than this is refused, not read. The cap is about the reader:
 /// every accepted byte can end up in an event log an agent later pulls into context.
 /// Same argument as helm's 64 KB canvas-state cap.
@@ -135,6 +143,8 @@ pub const KNOWN_VERBS: &[&str] = &[
     "stop",
     "spawn",
     "sessions",
+    "sessions/all",
+    "sessions/dismiss",
     "attach",
     "close",
     "resume",
@@ -174,6 +184,10 @@ pub enum Verb {
     Stop,
     Spawn,
     Sessions,
+    /// Every agent session in a workspace (#384).
+    SessionsAll,
+    /// Hide a finished session from `sessions/all`.
+    SessionsDismiss,
     Attach,
     Close,
     Resume,
@@ -197,6 +211,8 @@ impl Verb {
             "stop" => Some(Verb::Stop),
             "spawn" => Some(Verb::Spawn),
             "sessions" => Some(Verb::Sessions),
+            "sessions/all" => Some(Verb::SessionsAll),
+            "sessions/dismiss" => Some(Verb::SessionsDismiss),
             "attach" => Some(Verb::Attach),
             "close" => Some(Verb::Close),
             "resume" => Some(Verb::Resume),
@@ -650,7 +666,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            33,
+            35,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

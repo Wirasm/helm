@@ -1,16 +1,14 @@
 [package]
-name = "benchd"
+name = "bench-sessions"
 version.workspace = true
 edition.workspace = true
-description = "The bench daemon: owns the record, answers on the socket."
+description = "Every agent session in a workspace, read from the harnesses' own files."
 
 [dependencies]
 bench-wire = { path = "../bench-wire" }
 bench-doc = { path = "../bench-doc" }
 bench-session = { path = "../bench-session" }
-bench-mail = { path = "../bench-mail" }
-bench-browser = { path = "../bench-browser" }
-bench-sessions = { path = "../bench-sessions" }
 serde.workspace = true
 serde_json.workspace = true
-time.workspace = true
+libc = "0.2"
+memchr = "2"
