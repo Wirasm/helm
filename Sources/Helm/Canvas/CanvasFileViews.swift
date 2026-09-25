@@ -228,7 +228,7 @@ struct HTMLCanvasView: View {
     let onSelection: (CanvasPageSelection) -> Void
     /// The operator pressing Reload on the notice — a counter, not a flag, so pressing it twice
     /// reloads twice and a demand can never be missed by arriving in the same render as the
-    /// answer that raised it. The same shape as `CanvasModel.addressFocus` and `generation`.
+    /// answer that raised it. The same shape as `generation`.
     let reloadDemand: Int
     /// What the page said about an offered update, on its way to the notice strip.
     let onUpdate: (CanvasUpdateAnswer) -> Void
