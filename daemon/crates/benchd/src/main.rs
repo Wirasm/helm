@@ -1187,24 +1187,7 @@ fn dispatch(
         }
 
         Some(Verb::BrowserStart) => {
-            {
-                let mut c = core.lock().unwrap();
-                // A setup window is the operator's, mid-install or mid-sign-in: an agent that
-                // was handed it as "the shared browser" would drive the window he is typing
-                // in. Refuse with the route; quitting it brings the headless browser back.
-                if c.browser
-                    .as_ref()
-                    .is_some_and(|b| b.is_running() && b.endpoint.mode == BrowserMode::Setup)
-                {
-                    return (
-                        refused(
-                            "the shared browser is open in a window for setup — the operator is using it. When he quits it (Cmd-Q) it comes back headless by itself; `bench browser status` says when".into(),
-                        ),
-                        AfterResponse::Done,
-                    );
-                }
-                c.browser_restarts.clear();
-            }
+            core.lock().unwrap().browser_restarts.clear();
             match start_browser(core, 0, BrowserMode::Headless) {
                 Ok((browser, already)) => {
                     let mut data = json!(browser.endpoint);
@@ -1247,6 +1230,10 @@ fn dispatch(
             let c = core.lock().unwrap();
             let running = c.browser.as_ref().filter(|b| b.is_running());
             let mut data = match running {
+                // Setup is the operator's window: say so, and hand out no address to drive it.
+                Some(b) if b.endpoint.mode == BrowserMode::Setup => {
+                    json!({ "mode": b.endpoint.mode, "pid": b.endpoint.pid })
+                }
                 Some(b) => json!(b.endpoint),
                 None => json!({}),
             };
@@ -1284,7 +1271,19 @@ fn start_browser(
     let (root, home) = {
         let mut c = core.lock().unwrap();
         if let Some(b) = c.browser.as_ref().filter(|b| b.is_running()) {
-            return Ok((Arc::clone(b), true));
+            // Decided here, under the lifecycle lock that serializes every start, so no
+            // caller can slip between a check and the hand-back. A setup window is the
+            // operator's, mid-install or mid-sign-in: an agent handed it as "the shared
+            // browser" would drive the window he is typing in.
+            return match (b.endpoint.mode, mode) {
+                (running, asked) if running == asked => Ok((Arc::clone(b), true)),
+                (BrowserMode::Setup, _) => Err(LaunchError::Refused(
+                    "the shared browser is open in a window for setup — the operator is using it. When he quits it (Cmd-Q) it comes back headless by itself; `bench browser status` says when".into(),
+                )),
+                (BrowserMode::Headless, _) => Err(LaunchError::Refused(
+                    "the headless browser came back while setup was starting — run `bench browser setup` again".into(),
+                )),
+            };
         }
         if restart > 0 && !c.browser_wanted {
             return Err(LaunchError::Refused(

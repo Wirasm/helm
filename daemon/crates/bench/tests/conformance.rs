@@ -1301,6 +1301,9 @@ fn browser_start_publishes_the_endpoint_it_logged_and_a_second_start_finds_it() 
     );
     serde_json::from_value::<bench_wire::BrowserEndpoint>(fixture)
         .expect("the fixture is a real endpoint");
+    let typed: bench_wire::BrowserEndpoint =
+        serde_json::from_value(written).expect("what the daemon writes decodes as the type");
+    assert_eq!(typed.mode, bench_wire::BrowserMode::Headless);
 
     // Logged before it was answered.
     let started: Vec<_> = event_kinds(&home.dir)
@@ -1594,6 +1597,12 @@ fn setup_opens_the_same_profile_headed_and_quitting_it_returns_to_headless() {
     let meanwhile = bench(&home.dir, &["browser", "start"]);
     assert_eq!(meanwhile.code, 3, "stderr: {}", meanwhile.stderr);
     assert!(meanwhile.stderr.contains("setup"), "{}", meanwhile.stderr);
+    let during = json_of(&bench(&home.dir, &["browser", "status"]));
+    assert_eq!(during["mode"], "setup");
+    assert!(
+        during.get("cdp").is_none() && during.get("ws").is_none(),
+        "status hands out no address to the operator's window: {during}"
+    );
 
     // The operator quits the window (Cmd-Q is a clean exit; TERM is how the fake gets one).
     let setup_pid = setup["pid"].as_u64().unwrap() as i32;
