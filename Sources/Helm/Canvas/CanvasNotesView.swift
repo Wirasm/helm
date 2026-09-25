@@ -19,7 +19,7 @@ struct CanvasCommentField: View {
                 Image(systemName: "quote.opening")
                     .font(.system(size: 9))
                     .foregroundStyle(Color.textMuted)
-                Text(quoted)
+                Text(Self.quote(for: selection))
                     .font(.system(size: 11))
                     .foregroundStyle(Color.textMuted)
                     .lineLimit(2)
@@ -69,7 +69,7 @@ struct CanvasCommentField: View {
         .onExitCommand { model.dismissSelection() }
     }
 
-    private var quoted: String {
+    static func quote(for selection: CanvasSelection) -> String {
         (selection.body["text"] as? String) ?? ""
     }
 
