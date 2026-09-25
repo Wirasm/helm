@@ -14,7 +14,7 @@ final class WorkbenchMoveTests: XCTestCase {
     // MARK: - Helpers
 
     private func terminal(_ id: UUID = UUID()) -> Pane {
-        Pane(id: id, content: .terminal(face: .terminal))
+        Pane(id: id, content: .terminal())
     }
 
     /// Where a pane sits, as the pair a reader of `snapshot.json` would see. The assertions

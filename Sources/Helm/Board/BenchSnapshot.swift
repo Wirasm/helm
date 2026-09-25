@@ -254,7 +254,7 @@ struct BenchSnapshot: Codable, Equatable {
             isVisible = visible
             isFocused = focused
             switch pane.content {
-            case let .terminal(_, resumable):
+            case let .terminal(resumable):
                 kind = .terminal
                 terminal = TerminalRecord(
                     id: pane.id,

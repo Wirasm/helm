@@ -73,7 +73,7 @@ struct Palette: Equatable, Sendable {
         case dark
     }
 
-    /// The reading plane: the terminal grid, the chat face's paper, a canvas. Everything
+    /// The reading plane: the terminal grid, a canvas. Everything
     /// helm shows content on is this one colour, which is the whole point of having it.
     let surface: Token
     /// Chrome sitting above the plane — the workspace bar, a slot's tab strip, the status

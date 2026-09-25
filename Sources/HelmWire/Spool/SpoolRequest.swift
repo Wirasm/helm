@@ -315,8 +315,8 @@ package struct CloseRequest: Codable, Equatable {
 
 /// Drive the bench: one of the commands helm can already carry out (#269).
 ///
-/// **Not a new capability — a route to one that exists.** `HelmCommand` has twenty typed cases
-/// that the keymap and the menu have been able to fire since #219. Nothing outside the process
+/// **Not a new capability — a route to one that exists.** `HelmCommand`'s typed cases are what
+/// the keymap and the menu have been able to fire since #219. Nothing outside the process
 /// could fire any of them: the spool knew `spawn`, `capture` and `close`, so an agent could
 /// create a pane and destroy one and photograph the window, and could do nothing to the bench in
 /// between. This is the fourth kind, and it costs one `case` on the envelope that was built to
@@ -1124,7 +1124,7 @@ package enum SpoolCommandPolicy {
                     + "the addressed version and the one to use: it names a pane, refuses the "
                     + "one holding the keyboard, and --force does not override that (#176)")
 
-        case .adjustFontSize, .jumpToPrompt, .toggleChat:
+        case .adjustFontSize, .jumpToPrompt:
             return .refused(
                 "\(command.rawValue) acts on the focused pane, so from a request file it acts "
                     + "on whichever pane the operator is in — the command carries no address "
@@ -1175,12 +1175,6 @@ package enum SpoolCommandPolicy {
                 "pushCanvasFile carries a CanvasPushRequest — the workspace it belongs to and "
                     + "the terminal that emitted it — which helm assembles from a pane's own "
                     + "output. push.sh is the route, and it is already the non-seizing one")
-
-        case .composeText:
-            return .refused(
-                "composeText prefills one pane's composer, and the pane it means is chosen by "
-                    + "WorkbenchModel.composeTarget — the focused pane. Prefilling would also "
-                    + "overwrite whatever the operator had typed there and not yet sent")
         }
     }
 }

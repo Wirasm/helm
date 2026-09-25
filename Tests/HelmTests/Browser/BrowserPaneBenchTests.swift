@@ -55,7 +55,7 @@ final class BrowserPaneBenchTests: XCTestCase {
 
     func testABrowserPaneSurvivesARestart() throws {
         let bench = Workbench(panes: [
-            Pane(content: .terminal(face: .terminal)), Pane(content: .browser),
+            Pane(content: .terminal()), Pane(content: .browser),
         ])
         let decoded = try JSONDecoder().decode(
             Workbench.self, from: JSONEncoder().encode(bench))

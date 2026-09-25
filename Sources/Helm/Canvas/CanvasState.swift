@@ -112,8 +112,8 @@ struct CanvasStateBody: Equatable {
 ///
 /// **It is not a way into a live prompt, and cannot become one.** Nothing here wakes a session,
 /// starts a turn, or spends a credit — the sink is a file, and the agent reads it when it next
-/// runs. Saying anything to an agent *now* is still `ChatModel.canSend`'s `status == .idle` plus
-/// the operator pressing Post, and this channel touches neither.
+/// runs. Saying anything to an agent *now* is the operator typing into its pane, or mail, and
+/// this channel is neither.
 struct CanvasPageState: Equatable {
     /// The handler an `.html` artifact posts to:
     /// `window.webkit.messageHandlers.helmCanvasState.postMessage(…)`.

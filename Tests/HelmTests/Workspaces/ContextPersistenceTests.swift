@@ -71,7 +71,7 @@ final class ContextPersistenceTests: XCTestCase {
         let ids = [UUID(), UUID()]
         let saved = WorkspaceContext(
             workbench: Workbench(
-                panes: ids.map { Pane(id: $0, content: .terminal(face: .terminal)) }))
+                panes: ids.map { Pane(id: $0, content: .terminal()) }))
         WorkspaceContextStore.save([workspacePath.value: saved], to: defaults)
 
         let model = WorkspaceModel(defaults: defaults)

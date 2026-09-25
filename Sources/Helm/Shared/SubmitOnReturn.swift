@@ -15,9 +15,9 @@ extension View {
     /// **It takes `submit` rather than leaving `.onSubmit` at the call site, and that is the
     /// point of the modifier.** The defect has been found three times here and it was the same
     /// shape every time — a vertical `TextField` carrying `.onSubmit` and nothing beside it:
-    /// the chat composer (#119), the Archon rail and the canvas comment field (#278). Supplying
-    /// only the missing half would leave the *forgetting* exactly where it was; a caller that
-    /// reaches for this cannot take the submit without the newline.
+    /// the chat composer (#119, since removed), the Archon rail and the canvas comment field
+    /// (#278). Supplying only the missing half would leave the *forgetting* exactly where it
+    /// was; a caller that reaches for this cannot take the submit without the newline.
     ///
     /// **`.repeat` is in the phase set, and leaving it out is the same bug again for anyone who
     /// *holds* the chord.** macOS auto-repeats a held key past the repeat delay and SwiftUI
@@ -26,8 +26,7 @@ extension View {
     /// reach `insertNewline:`, and submit. So the tap is fixed and the hold is not, which is the
     /// worse half: a two-key chord is held more readily than a single key is. A reviewer caught
     /// it on #275 and it was reproduced before it was believed, so every caller's suite has a
-    /// held case — `ChatComposerReturnTests`, `ArchonRailReturnTests`,
-    /// `CanvasCommentFieldReturnTests`.
+    /// held case — `ArchonRailReturnTests` and `CanvasCommentFieldReturnTests`.
     ///
     /// **`insertNewline` is a closure and not the `Binding<String>` this first took, and the
     /// difference is measured rather than stylistic.** A `Binding` handed in here is captured by
@@ -46,16 +45,6 @@ extension View {
     /// exposes no selection to insert into. It is visible the moment it happens rather than
     /// silent, and ⌥Return is the exact key for the mid-sentence case.
     ///
-    /// **`ChatComposer` still spells all of this out inline and should call this instead — #292.**
-    /// It is the same five lines and one mechanical edit; it is not made here only because
-    /// `Sources/Helm/Chat/` is another slice's file and in flight. Until #292 lands there are two
-    /// spellings of one rule, which is the thing this file exists to stop, and **it does not earn
-    /// the carve-out** `AGENTS.md` gives `hooks/`/`pi/` and the spool scripts: those are separate
-    /// runtimes, and `Chat/` and `Shared/` are the same target under the same `swift build`. So it
-    /// carries the obligation every honest duplicate here carries anyway — being **detectable**.
-    /// `SubmitOnReturnParityTests` reads both files and fails when the phase set or the shift
-    /// guard stops matching, because no behavioural suite can see the *modifier* gaining something
-    /// the inline copy never hears about.
     func submitOnReturnInsertNewlineOnShift(
         submit: @escaping () -> Void, insertNewline: @escaping () -> Void
     ) -> some View {

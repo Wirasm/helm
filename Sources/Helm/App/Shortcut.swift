@@ -87,11 +87,8 @@ extension Shortcut {
     /// as the always-available fallback for operators who have not released Mission
     /// Control's ⌃1–⌃9 in System Settings.
     ///
-    /// **⌘T is the two faces of the terminal pane, back where the muscle memory
-    /// already is.** It was freed when the one-surface re-layout killed the old
-    /// two-faces model, and reserved rather than reused; the chat face claims it
-    /// deliberately, being the same shape of command. **⌘J is still unbound** —
-    /// reserved for terminal maximize. Muscle memory lives here.
+    /// **⌘T and ⌘J are unbound.** ⌘T left with the chat face (#375); ⌘J is reserved for
+    /// terminal maximize. Muscle memory lives here.
     static let all: [Shortcut] = terminalScoped + workspaceScoped + global
 
     /// Rows that a focused terminal wins or loses outright.
@@ -169,13 +166,6 @@ extension Shortcut {
             Shortcut(
                 .character("n"), [.command, .shift], does: .newNote,
                 menu: .init(title: "New Note", key: "n", modifiers: [.command, .shift])),
-            // ⌘T — swap the pane between the terminal and the agent's writing.
-            // `.anywhere` because the terminal grid holds focus almost all the
-            // time and this has to work from there; the local monitor consumes
-            // it, so ghostty's own ⌘T (new tab) never sees it.
-            Shortcut(
-                .character("t"), .command, does: .toggleChat,
-                menu: .init(title: "Toggle Chat View", key: "t", modifiers: .command)),
             Shortcut(
                 .character("o"), .command, does: .openArtifact,
                 menu: .init(title: "Open Artifact…", key: "o", modifiers: .command)),

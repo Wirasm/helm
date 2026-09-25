@@ -16,7 +16,7 @@ final class BenchMountTests: XCTestCase {
     private func bench(terminals: Int, canvases: Int = 0) -> Workbench {
         var bench = Workbench(terminal: UUID())
         for _ in 1..<max(terminals, 1) {
-            bench.insert(Pane(content: .terminal(face: .terminal)), at: .column)
+            bench.insert(Pane(content: .terminal()), at: .column)
         }
         for index in 0..<canvases {
             bench.insert(Pane(content: .canvas(.file("/tmp/a\(index).md"))), at: .column)
@@ -64,7 +64,6 @@ final class BenchMountTests: XCTestCase {
                 Pane(
                     id: pane,
                     content: .terminal(
-                        face: .terminal,
                         agent: ResumableAgent(command: "claude", session: "abc", cwd: "/tmp")))
             ])
 

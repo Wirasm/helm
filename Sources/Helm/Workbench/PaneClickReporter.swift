@@ -7,7 +7,7 @@ import SwiftUI
 ///
 /// **helm has two ideas of focus and only one of them used to move.** There is the first
 /// responder — which surface has the keyboard, owned by AppKit and ghostty — and there is
-/// `Workbench.focusedSlot`, which is what ⌘⇧D, ⌘T, ⌘N, ⌘⌥W, ⌘O and ⌘L act on. Clicking a *tab*
+/// `Workbench.focusedSlot`, which is what ⌘⇧D, ⌘N, ⌘⌥W, ⌘O and ⌘L act on. Clicking a *tab*
 /// moved both, because `SlotTabStrip` calls `model.focus`. Clicking a pane's *body* moved only
 /// the first responder, so the operator typed into one pane while every command landed in
 /// another, with no error and nothing on screen to say why (#152). ⌘⇧D was the worst of them:

@@ -55,7 +55,6 @@ Sources/Helm/
 ├── Workspaces/   the folders helm has open, and their persisted per-workspace state
 ├── Workbench/    the pane arrangement: columns, slots, tab strips, placement
 ├── Terminals/    sessions, the shared ghostty runtime, a terminal's tab and pane
-├── Chat/         the agent's writing, read from the transcript — the terminal pane's other face
 ├── Canvas/       rendering a markdown/HTML file or a URL — the pane and its webviews
 ├── Artifacts/    finding artifacts: store discovery, the ⌘O browser, store resolution
 ├── Board/        which workspace has an agent that wants you, without opening it

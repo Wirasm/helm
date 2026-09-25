@@ -912,10 +912,6 @@ final class CanvasModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([sidecar])
     }
 
-    /// The accumulated markdown, for `Post`. nil when there is nothing to hand over — which
-    /// is also exactly when the drawer has nothing to render, because it is the same string.
-    var notesMarkdown: String? { notesText }
-
     func revealInFinder() {
         guard let url = fileURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -1199,9 +1195,6 @@ struct CanvasView: View {
     /// Both are no-ops in release (docs/VENDORED.md).
     @ObserveInjection private var inject
     @ObservedObject var model: CanvasModel
-    /// Hands the accumulated notes to a composer. The bench decides which one — there may
-    /// be several chat faces open, and an unaddressed notification would prefill them all.
-    var post: ((String) -> Void)?
 
     var body: some View {
         if let showing = model.showing {
@@ -1264,7 +1257,7 @@ struct CanvasView: View {
     private var notesDrawer: some View {
         if model.showsNotes, model.sidecarURL != nil {
             GeometryReader { proxy in
-                CanvasNotesDrawer(model: model, post: post)
+                CanvasNotesDrawer(model: model)
                     .frame(
                         width: CanvasNotesDrawerMetrics.width(inPaneOf: proxy.size.width),
                         height: proxy.size.height

@@ -11,8 +11,8 @@ final class WorkbenchTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func terminal(_ id: UUID = UUID(), face: TerminalFace = .terminal) -> Pane {
-        Pane(id: id, content: .terminal(face: face))
+    private func terminal(_ id: UUID = UUID()) -> Pane {
+        Pane(id: id, content: .terminal())
     }
 
     private func canvas(_ path: String) -> Pane {
@@ -428,52 +428,6 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertEqual(bench.columns[0].slots.map(\.height), heights, "nothing moved")
     }
 
-    // MARK: - The face (#37)
-
-    func testTogglingTheFaceAffectsOnlyTheFocusedPane() {
-        var bench = Workbench(terminal: UUID())
-        let other = terminal()
-        bench.splitRight(with: other)  // focus follows the new pane
-
-        bench.toggleFace()
-
-        XCTAssertEqual(
-            bench.face(ofSelectedPaneIn: bench.focusedSlot), .chat, "the focused pane swapped")
-        XCTAssertEqual(
-            bench.face(ofSelectedPaneIn: bench.columns[0].slots[0].id), .terminal,
-            "read one agent's prose while watching another's shell — the whole reason the face "
-                + "left TerminalWorkspace's single @State")
-    }
-
-    func testTogglingTheFaceOnACanvasPaneDoesNothing() {
-        var bench = Workbench(terminal: UUID())
-        let page = canvas("/tmp/plan.md")
-        bench.splitRight(with: page)
-        let before = bench
-
-        bench.toggleFace()
-
-        XCTAssertEqual(bench, before, "⌘T with a canvas focused changes nothing at all")
-        XCTAssertNil(
-            bench.face(ofSelectedPaneIn: bench.focusedSlot),
-            "a canvas has no face, which is how the slot strip renders no toggle")
-    }
-
-    func testTheFaceToggleReadsTheSlotsSelectedPaneOnly() {
-        let shell = terminal()
-        let page = canvas("/tmp/plan.md")
-        var bench = Workbench(panes: [shell, page], selecting: page.id)
-
-        XCTAssertNil(
-            bench.face(ofSelectedPaneIn: bench.focusedSlot),
-            "a slot showing its canvas tab offers no face")
-
-        bench.select(shell.id)
-        XCTAssertEqual(
-            bench.face(ofSelectedPaneIn: bench.focusedSlot), .terminal,
-            "switching back to the terminal tab offers it again")
-    }
-
     // MARK: - Repointing a canvas (#89)
 
     func testRepointingACanvasRecordsWhereItWent() {
@@ -566,7 +520,6 @@ final class WorkbenchTests: XCTestCase {
             ("insert column", { $0.insert(self.terminal(), at: .column) }),
             ("moveFocus up", { $0.moveFocus(.up) }),
             ("moveFocus left", { $0.moveFocus(.left) }),
-            ("toggleFace", { $0.toggleFace() }),
             ("select", { $0.select(page.id) }),
             (
                 "resizeColumn",
@@ -629,18 +582,13 @@ final class WorkbenchTests: XCTestCase {
                 + "cases and are unreadable in the stored blob")
     }
 
-    func testAChatFaceDoesNotSurviveEncoding() throws {
-        var bench = Workbench(terminal: UUID())
-        bench.toggleFace()
-        XCTAssertEqual(bench.face(ofSelectedPaneIn: bench.focusedSlot), .chat)
-
-        let data = try JSONEncoder().encode(bench)
-        let restored = try JSONDecoder().decode(Workbench.self, from: data)
+    /// The chat face left in #375. No build ever persisted a face, but a stored pane that
+    /// carries one must still load as the terminal it is rather than be skipped.
+    func testAStoredChatFaceLoadsAsATerminal() throws {
+        let blob = #"{"kind":"terminal","face":"chat"}"#
 
         XCTAssertEqual(
-            restored.face(ofSelectedPaneIn: restored.focusedSlot), .terminal,
-            "the shell it named respawns empty, so restoring into the chat face would show "
-                + "'no session is running' where a shell should be")
+            try JSONDecoder().decode(Pane.Content.self, from: Data(blob.utf8)), .terminal())
     }
 
     func testABenchWithNoPanesDoesNotDecode() {

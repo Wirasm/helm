@@ -114,7 +114,7 @@ enum CanvasNotesDrawerMetrics {
     static let minimum: CGFloat = 280
 
     /// **Never wider than the pane.** A drawer hanging off the edge of a narrow column
-    /// would put Post and Reveal — the only route to either now — outside the window.
+    /// would put Reveal — the only route to it now — outside the window.
     static func width(inPaneOf paneWidth: CGFloat) -> CGFloat {
         guard paneWidth > 0 else { return minimum }
         return min(paneWidth, max(minimum, paneWidth * fraction))
@@ -139,24 +139,20 @@ enum CanvasNotesDrawerMetrics {
     }
 }
 
-/// The sidecar, over the trailing half of the canvas — **rendered**, not listed (#198).
+/// The sidecar, over the trailing half of the canvas — **shown in full**, not listed (#198).
 ///
 /// **This replaces the popover, and that is the whole feature.** What was here listed
 /// headings at `lineLimit(2)` and never showed a single word of what the operator had
 /// written; the only way to read a note was Reveal in Finder, which leaves helm. So the
-/// drawer renders the file — it is a `.md`, and `MarkdownText` already draws one at a
-/// chosen type scale.
+/// drawer shows the file, as the plain text it is.
 ///
-/// **It renders a file; it never interprets one.** `CanvasNotes.readable` takes the `<sub>`
+/// **It shows a file; it never interprets one.** `CanvasNotes.readable` takes the `<sub>`
 /// wrapper off the timestamp and nothing else touches the text. Turning a heading back into
 /// a `Mark` — which is what hover-highlighting needs — is #199's, and it has to stay #199's:
-/// the moment this file parses a heading, the sidecar's headings stop being a rendering and
+/// the moment this file parses a heading, the sidecar's headings stop being text on screen and
 /// become a format with a round trip to keep honest.
 struct CanvasNotesDrawer: View {
     @ObservedObject var model: CanvasModel
-    /// Hand the accumulation to the focused pane's composer. Nil when this canvas is not
-    /// mounted in a bench, which is only ever a preview.
-    let post: ((String) -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -215,7 +211,11 @@ struct CanvasNotesDrawer: View {
         if let text = model.notesText {
             GeometryReader { proxy in
                 ScrollView {
-                    MarkdownText(text: CanvasNotes.readable(text))
+                    Text(CanvasNotes.readable(text))
+                        .font(.system(size: 13))
+                        .lineSpacing(3)
+                        .foregroundStyle(Color.textPrimary)
+                        .textSelection(.enabled)
                         .frame(
                             width: CanvasNotesDrawerMetrics.textWidth(inDrawerOf: proxy.size.width),
                             alignment: .leading
@@ -253,13 +253,6 @@ struct CanvasNotesDrawer: View {
                 .foregroundStyle(Color.textMuted)
                 .disabled(!model.hasNotes)
             Spacer()
-            Button("Post") { model.notesMarkdown.map { post?($0) } }
-                .font(.system(size: 11))
-                .disabled(post == nil || !model.hasNotes)
-                .help(
-                    post == nil
-                        ? "Open a terminal's reading face (⌘T) to post these"
-                        : "Hand these notes to the agent's composer")
         }
         .padding(10)
         .background(Color.surfaceRaised)

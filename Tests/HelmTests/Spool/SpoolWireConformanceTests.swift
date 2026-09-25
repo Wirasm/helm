@@ -629,7 +629,7 @@ final class SpoolWireConformanceTests: XCTestCase {
     // MARK: - 2c. helm-command's own restated allowlist (#269)
 
     /// **The one thing `helm-command.swift` restates beyond the JSON shape, watched the same
-    /// way everything else across this boundary is.** The script carries the four allowed names
+    /// way everything else across this boundary is.** The script carries the allowed names
     /// so that `--list` can answer with no helm running — which is exactly when an agent wants
     /// to ask — and a single-file script cannot `import HelmWire` to get them. So this runs the
     /// real script and compares its real output against the real `SpoolCommandPolicy`.

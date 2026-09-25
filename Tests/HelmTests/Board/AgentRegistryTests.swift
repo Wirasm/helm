@@ -51,8 +51,8 @@ final class AgentRegistryTests: XCTestCase {
     // MARK: - Decode
 
     /// `sessionId` is decoded alongside the board's own three fields. The board
-    /// does not read it — the chat face does, because `sessionId` + `cwd` are
-    /// what locate the transcript on disk. One registry row type, per #28.
+    /// does not read it — the resume record (#63) does, because `sessionId` + `cwd`
+    /// are what locate the transcript on disk. One registry row type, per #28.
     func testDecodesTheFieldsTheBoardReads() throws {
         try write(row(pid: 9139, status: "busy", cwd: "/Users/x/ws"), as: "9139.json")
 
@@ -204,7 +204,6 @@ final class AgentRegistryTests: XCTestCase {
         try write(rowNamed(pid: 4242, session: "aaaa-1111"), as: "4242.json")
         try write(rowNamed(pid: 4242, session: "bbbb-2222"), as: "4242-stale.json")
 
-        let rows = AgentRegistry.sessions(in: root)
         let answers: [String: String?] = [
             // The bench's watch (#63) and `AgentObserver`.
             "rows": AgentRegistry.rows(in: root)[4242]?.sessionId,
@@ -214,20 +213,14 @@ final class AgentRegistryTests: XCTestCase {
             // this question and the pane's `agent` record — so it must not be a third answer.
             "sessionLookup(over:)": AgentRegistry.sessionLookup(
                 over: AgentRegistry.rows(in: root))(4242),
-            // The chat face's direct match.
-            "AgentLocator": AgentLocator.session(in: rows, forPid: 4242, ancestors: [])?
-                .sessionId,
-            // `ChatModel`'s half-second refresh.
-            "ChatModel refresh": AgentRegistry.row(for: 4242, in: rows)?.sessionId,
         ]
 
         XCTAssertNotNil(
             answers["rows"] ?? nil, "one of them wins — the degenerate case is not absence")
         XCTAssertEqual(
             Set(answers.values.map { $0 ?? "<none>" }).count, 1,
-            "one rule, one answer, across every reader — a pane's chat face, its persisted "
-                + "resume record and its snapshot owner must not name three different "
-                + "sessions: \(answers)")
+            "one rule, one answer, across every reader — a pane's persisted resume record "
+                + "and its snapshot owner must not name two different sessions: \(answers)")
     }
 
     private func rowNamed(pid: Int, session: String) -> String {

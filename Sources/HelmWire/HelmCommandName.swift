@@ -14,7 +14,7 @@ import Foundation
 /// **What did not move is `HelmCommand` itself, and that is the seam decision #269 asks for.**
 /// `HelmCommand`'s payloads are `Workbench.Direction`, `CanvasPushRequest`, `Pane.ID`,
 /// `FontSizeStep` and `URL` — the live app's vocabulary. Dragging them into `HelmWire` to
-/// expose four commands would invert the dependency this target exists to keep one-way. So the
+/// expose a handful of commands would invert the dependency this target exists to keep one-way. So the
 /// *identity* is shared and the *payloads* stay where they are, and `Helm` keeps
 /// `HelmCommand.Name` as a typealias onto this type so no call site there had to change.
 ///
@@ -34,6 +34,6 @@ import Foundation
 package enum HelmCommandName: String, CaseIterable, Codable, Sendable {
     case newTerminal, selectTerminal, openArtifact, openCanvasFile, pushCanvasFile
     case openCanvasURL, openWorkspace, adjustFontSize, jumpToPrompt, selectWorkspace
-    case cycleWorkspace, toggleChat, splitRight, splitDown, closePane, moveFocus
-    case composeText, toggleRail, movePane, newNote, openBrowser
+    case cycleWorkspace, splitRight, splitDown, closePane, moveFocus
+    case toggleRail, movePane, newNote, openBrowser
 }

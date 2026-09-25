@@ -253,9 +253,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     ///
     ///   **The reason the smaller number is safe is that scrollback is not the
     ///   archive.** The transcript on disk is
-    ///   (`~/.claude/projects/<slug>/<sessionId>.jsonl`) and the chat face already
-    ///   reads it, so history that scrolls off a pane is lost from the *pane*, not
-    ///   from helm. Scrollback only has to cover "scroll up and see what just
+    ///   (`~/.claude/projects/<slug>/<sessionId>.jsonl`), so history that scrolls
+    ///   off a pane is lost from the *pane*, not from the agent. Scrollback only has to cover "scroll up and see what just
     ///   happened".
     ///
     ///   Note the direction: at 16 MiB helm is holding a pane **below** ghostty's

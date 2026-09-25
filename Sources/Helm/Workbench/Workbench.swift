@@ -45,7 +45,7 @@ struct Workbench: Codable, Equatable {
     /// The bench helm has always rendered: one column, one slot, one terminal. This is
     /// what a first-run workspace gets, and what `RootView` drew before there was a bench.
     init(terminal id: Pane.ID) {
-        self.init(panes: [Pane(id: id, content: .terminal(face: .terminal))])
+        self.init(panes: [Pane(id: id, content: .terminal())])
     }
 
     /// One column, one slot, these panes as tabs — today's frame with N terminals in it.
@@ -68,11 +68,8 @@ struct Workbench: Codable, Equatable {
     /// default 1×1 bench, and a first-run workspace behaves exactly as it always has.
     static func migrating(from context: WorkspaceContext) -> Workbench? {
         guard !context.terminalSessionIDs.isEmpty else { return nil }
-        // Every migrated terminal pane is `.terminal(face: .terminal)`. Nothing ever wrote
-        // a face, and a restored shell comes back empty anyway.
-        let terminals = context.terminalSessionIDs.map {
-            Pane(id: $0, content: .terminal(face: .terminal))
-        }
+        // A restored shell comes back empty, so a migrated pane has no agent to record.
+        let terminals = context.terminalSessionIDs.map { Pane(id: $0, content: .terminal()) }
         var bench = Workbench(panes: terminals, selecting: context.selectedTerminalID)
         // `openArtifactPath` is a FILE path only — that is the whole point of the field,
         // and the reason #38 persisted nothing for a URL canvas. There is no URL to
@@ -115,7 +112,7 @@ struct Workbench: Codable, Equatable {
     /// costs, and `WorkbenchModel` turns each entry into one pane's resume offer.
     var resumableAgents: [(pane: Pane.ID, agent: ResumableAgent)] {
         panes.compactMap { pane in
-            guard case let .terminal(_, agent) = pane.content, let agent else { return nil }
+            guard case let .terminal(agent) = pane.content, let agent else { return nil }
             return (pane.id, agent)
         }
     }
@@ -128,7 +125,7 @@ struct Workbench: Codable, Equatable {
     /// alone, and that is the case it exists to catch: a single pane whose whole value is the
     /// conversation it held.
     var isOneEmptyShell: Bool {
-        guard panes.count == 1, case let .terminal(_, agent) = panes[0].content else {
+        guard panes.count == 1, case let .terminal(agent) = panes[0].content else {
             return false
         }
         return agent == nil
@@ -153,18 +150,6 @@ struct Workbench: Codable, Equatable {
     /// opening a second copy of it.
     func pane(showing source: CanvasSource) -> Pane.ID? {
         panes.first { $0.content == .canvas(source) }?.id
-    }
-
-    /// Which face a slot's strip should offer, or nil when that slot's selected pane is a
-    /// non-terminal and there is no face to offer. The strip renders `if let` on this rather
-    /// than asking what kind of pane it is — that question is a decision, and decisions
-    /// live here.
-    func face(ofSelectedPaneIn slot: Slot.ID) -> TerminalFace? {
-        guard let slot = self.slot(slot),
-            let pane = slot.panes.first(where: { $0.id == slot.selected }),
-            case let .terminal(face, _) = pane.content
-        else { return nil }
-        return face
     }
 
     /// The last pane of the bench cannot close — the generalisation of
@@ -713,26 +698,6 @@ struct Workbench: Codable, Equatable {
         normalize()
     }
 
-    /// ⌘T — swap the **focused pane's** two faces.
-    ///
-    /// **A no-op when the focused pane is a canvas**, which is ⌘T's whole rule and is a
-    /// line of `Workbench` rather than a line of a view. It was `Bool.toggle()` inside
-    /// `TerminalWorkspace`: one flag for the whole vertical, carried along when the
-    /// operator switched tabs, and unreachable from `swift test`.
-    mutating func toggleFace() {
-        guard let address = address(ofSlot: focusedSlot) else { return }
-        let slot = columns[address.column].slots[address.slot]
-        guard let index = slot.panes.firstIndex(where: { $0.id == slot.selected }),
-            case let .terminal(face, agent) = slot.panes[index].content
-        else { return }
-        // The agent is carried across, not dropped: which face is drawn says nothing about
-        // who is in the pane, and rebuilding `.terminal` without it would silently discard a
-        // resume offer every time the operator pressed ⌘T.
-        columns[address.column].slots[address.slot].panes[index].content =
-            .terminal(face: face == .terminal ? .chat : .terminal, agent: agent)
-        normalize()
-    }
-
     /// A canvas went somewhere: the address on a ⌘L pane was committed, or a page followed a
     /// link. The pane is what carries the source, so this is what the bench persists.
     ///
@@ -757,18 +722,16 @@ struct Workbench: Codable, Equatable {
     /// An agent started, stopped being offered, or was declined in a terminal pane (#63).
     ///
     /// **A terminal pane only**, for `repoint`'s reason one case over: nothing else can hold
-    /// an agent, and a canvas quietly growing one would be a value nothing can act on. The
-    /// face is left exactly as it was — recording who is in a pane is not a statement about
-    /// which of its two presentations is drawn.
+    /// an agent, and a canvas quietly growing one would be a value nothing can act on.
     ///
     /// nil clears the record, which is what answering an offer does: a declined agent that
     /// stayed on the pane would be re-offered on the next launch forever.
     mutating func record(_ agent: ResumableAgent?, in pane: Pane.ID) {
         guard let address = address(of: pane),
-            case let .terminal(face, _) = self.pane(pane)?.content
+            case .terminal = self.pane(pane)?.content
         else { return }
         columns[address.column].slots[address.slot].panes[address.pane].content =
-            .terminal(face: face, agent: agent)
+            .terminal(agent: agent)
         normalize()
     }
 
@@ -949,11 +912,10 @@ struct Pane: Codable, Equatable, Identifiable {
     var content: Content
     /// What this pane is called, and who called it that (#313).
     ///
-    /// **Beside `content` rather than inside it**, unlike `face` and `agent`: a name means the
-    /// same thing for a terminal and for a canvas, and `Pane.id` is already one namespace across
-    /// both (#284). `TerminalFace`'s header argues the opposite way for its own field, and the
-    /// distinction is exactly the one it draws — a canvas *has no face*, so asking it for one must
-    /// not compile, where a canvas plainly can be called something.
+    /// **Beside `content` rather than inside it**, unlike `agent`: a name means the same thing
+    /// for a terminal and for a canvas, and `Pane.id` is already one namespace across both
+    /// (#284). A canvas has no agent, so asking one for its agent must not compile, where a
+    /// canvas plainly can be called something.
     var name: PaneName = .unnamed
 
     init(id: UUID = UUID(), content: Content, name: PaneName = .unnamed) {
@@ -966,29 +928,13 @@ struct Pane: Codable, Equatable, Identifiable {
         /// `agent` is what was running in this terminal when helm last looked, and the whole
         /// of what #63 adds to a persisted bench — see `ResumableAgent`, which argues why it
         /// lives on `.terminal` rather than beside `Pane`. Defaulted, so every construction
-        /// site that has nothing to say about an agent still reads `.terminal(face: .terminal)`
-        /// and says nothing.
-        case terminal(face: TerminalFace, agent: ResumableAgent? = nil)
+        /// site that has nothing to say about an agent reads `.terminal()` and says nothing.
+        case terminal(agent: ResumableAgent? = nil)
         case canvas(CanvasSource)
         /// A view onto the shared browser benchd runs (#350). No payload: there is one
         /// browser per bench root, and which tab it shows is live state, not arrangement.
         case browser
     }
-}
-
-// MARK: - TerminalFace
-
-/// Which face a terminal pane is showing: the terminal, or the agent's writing drawn
-/// over it (#37). An associated value on `.terminal` rather than a field on `Pane`,
-/// because a canvas has no face and the type should say so — asking one for its face
-/// must not compile.
-///
-/// It was `@State private var chat` on `TerminalWorkspace`: ONE flag for the whole
-/// vertical, carried along when the operator switched tabs. Per pane is both the truthful
-/// shape under a bench — two terminals side by side, one being read and one being watched
-/// — and the only one that survives `TerminalWorkspace` being deleted.
-enum TerminalFace: String, Codable, Equatable {
-    case terminal, chat
 }
 
 // MARK: - Codable
@@ -1046,16 +992,17 @@ extension Pane.Content: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
-        // The face is deliberately not read, because it is deliberately not written.
+        // **A `face` key is ignored.** No build ever wrote one (the chat face was never
+        // persisted), and the key decoder skips keys it is not asked for, so a hand-edited
+        // `{"kind":"terminal","face":"chat"}` loads as the terminal it always was.
         //
-        // **The agent is, and it degrades to absence rather than throwing.** A malformed
+        // **The agent degrades to absence rather than throwing.** A malformed
         // `agent` costs this pane its resume offer; throwing would cost the pane, and
         // `Slot.init(from:)` skips a pane it cannot read. Losing a terminal because helm
         // could not read a hint about it is the wrong trade in a file this decoder exists
         // to be tolerant of.
         case .terminal:
             self = .terminal(
-                face: .terminal,
                 agent: (try? container.decodeIfPresent(ResumableAgent.self, forKey: .agent))
                     ?? nil)
         case .canvas: self = .canvas(try container.decode(CanvasSource.self, forKey: .source))
@@ -1063,22 +1010,17 @@ extension Pane.Content: Codable {
         }
     }
 
-    /// **The face is deliberately NOT persisted.** A restored session is a fresh empty
-    /// shell — position 1's ruling, *attach never own* (#27) — so the agent whose prose
-    /// made the chat face worth reading is gone. Restoring into it would greet the
-    /// operator with *"No Claude Code session is running in this terminal"* where a shell
-    /// should be, and cost a keystroke to leave. ⌘T is one keystroke to get back **in**.
-    ///
-    /// **The agent IS persisted, and it is not the same claim.** A face is a presentation of
-    /// something that is gone; `agent` is the id of a conversation that is not — the pty died
-    /// with helm's process and the transcript did not (#63 proved that by hand: `claude
-    /// --resume` on a session whose process had been killed picked up 208 records). What comes
+    /// **The agent is persisted.** A restored session is a fresh empty shell — position 1's
+    /// ruling, *attach never own* (#27) — but `agent` is the id of a conversation that
+    /// survives it: the pty died with helm's process and the transcript did not (#63 proved
+    /// that by hand: `claude --resume` on a session whose process had been killed picked up
+    /// 208 records). What comes
     /// back is still a plain empty shell; what is added is an *offer*, which the operator may
     /// decline, and which is the only form of resurrection that can be wrong safely.
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .terminal(_, agent):
+        case let .terminal(agent):
             try container.encode(Kind.terminal, forKey: .kind)
             try container.encodeIfPresent(agent, forKey: .agent)
         case let .canvas(source):

@@ -57,9 +57,6 @@ enum HelmCommand: Equatable {
     case selectWorkspace(index: Int)
     /// ⌃←/⌃→ — -1 or +1.
     case cycleWorkspace(delta: Int)
-    /// ⌘T — swap the **focused pane's** two faces: the terminal, and the agent's writing drawn
-    /// over it.
-    case toggleChat
     /// ⌘D — a new column right of the focused one, holding a fresh terminal.
     case splitRight
     /// ⌘⇧D — a new row under the focused slot, holding a fresh terminal.
@@ -76,8 +73,6 @@ enum HelmCommand: Equatable {
     /// and that is the seam #287's agent half needs. See `SpoolCommandPolicy.verdict(for:)` for
     /// why sending *this* name across the spool is refused while the operation is not.
     case movePane(Workbench.Direction)
-    /// A canvas's `Post`: prefill one pane's composer with text.
-    case composeText(ComposeRequest)
     /// ⌘⇧N — start a markdown note in the open workspace's `~/.prp` store and open it for
     /// writing (#289).
     ///
@@ -91,18 +86,6 @@ enum HelmCommand: Equatable {
     /// ⌘⇧B — show the shared browser benchd runs (#350), in a pane of its own. Offered, not
     /// seized: the pane appears and the keyboard stays put (`WorkbenchModel.offerBrowser`).
     case openBrowser
-}
-
-// MARK: - Payloads with no other home
-
-/// Text offered to one pane's composer.
-///
-/// **Addressed, and that is the point.** The composer lives inside `ChatOverlay`, so under a
-/// bench an unaddressed command would prefill every open chat face at once. Which pane is the
-/// bench's decision (`WorkbenchModel.composeTarget`); this only carries it.
-struct ComposeRequest: Equatable {
-    let pane: Pane.ID
-    let text: String
 }
 
 // MARK: - Name
@@ -141,13 +124,11 @@ extension HelmCommand {
         case .jumpToPrompt: .jumpToPrompt
         case .selectWorkspace: .selectWorkspace
         case .cycleWorkspace: .cycleWorkspace
-        case .toggleChat: .toggleChat
         case .splitRight: .splitRight
         case .splitDown: .splitDown
         case .closePane: .closePane
         case .moveFocus: .moveFocus
         case .movePane: .movePane
-        case .composeText: .composeText
         case .toggleRail: .toggleRail
         case .newNote: .newNote
         case .openBrowser: .openBrowser

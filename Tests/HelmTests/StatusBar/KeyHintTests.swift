@@ -99,7 +99,7 @@ final class KeyHintTests: XCTestCase {
     /// A command nothing binds gets nil rather than a plausible-looking string, so a caller
     /// can decline to advertise a key instead of naming one that does not fire.
     func testAnUnboundCommandHasNoGlyphs() {
-        XCTAssertNil(KeyGlyph.binding(for: .composeText))
+        XCTAssertNil(KeyGlyph.binding(for: .pushCanvasFile))
     }
 
     // MARK: - Drift
@@ -131,9 +131,9 @@ final class KeyHintTests: XCTestCase {
     /// that nothing performs is the exact defect `AGENTS.md:354` names — found by review, not
     /// by the compiler, because nothing in the toolchain would say a word.
     func testEveryCommandIsAccountedForOnTheBarOrDeliberatelyIsNot() {
-        // Not keystrokes: an OSC 8 ⌘-click, terminal OUTPUT, and a canvas `Post` respectively.
-        // A bar hint for one of these would advertise a key that does not exist.
-        let neverBound: Set<HelmCommand.Name> = [.openCanvasFile, .pushCanvasFile, .composeText]
+        // Not keystrokes: an OSC 8 ⌘-click and terminal OUTPUT respectively. A bar hint for
+        // one of these would advertise a key that does not exist.
+        let neverBound: Set<HelmCommand.Name> = [.openCanvasFile, .pushCanvasFile]
 
         // The exemption list is itself a hand-maintained set, so it is held to the map rather
         // than trusted: binding one of these to a key must fail here instead of silently

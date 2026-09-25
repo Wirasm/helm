@@ -1,10 +1,9 @@
 import Foundation
 
-/// From a registry row to the transcript file it is writing.
+/// From a Claude Code session to the transcript file it is writing.
 ///
-/// The registry row is the whole input — `sessionId` names the file and `cwd`
-/// names the directory. helm reads `AgentRegistry`'s rows and nothing else;
-/// there is no second registry reader here by #28's ruling.
+/// `sessionId` names the file and `cwd` names the directory. `AgentObserver` asks it
+/// whether a pane's agent has written anything worth offering to resume.
 ///
 /// `root` is injected so the whole resolver is exercisable against a fixture
 /// directory, on a machine that has never run Claude Code.
@@ -24,28 +23,14 @@ enum TranscriptLocator {
         String(cwd.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
     }
 
-    /// The transcript for `session`, or nil when it has not written one yet.
+    /// The transcript for a session, or nil when it has not written one yet.
     ///
-    /// The slug is a guess — a lossy transform of a path helm did not choose — so
-    /// a miss falls back to scanning the project directories for the file named
-    /// after this session. Guessing the slug wrong and "the agent has written
-    /// nothing yet" look identical from the outside, and only one of them is
-    /// worth telling the operator about.
-    static func transcript(
-        for session: AgentSession, root: URL = defaultRoot
-    ) -> URL? {
-        guard let sessionId = session.sessionId, !sessionId.isEmpty else { return nil }
-        return transcript(forSession: sessionId, cwd: session.cwd, root: root)
-    }
-
-    /// The same question asked without a registry row in hand (#63).
+    /// Asked with the two fields the answer depends on rather than a registry row: a restore
+    /// offer (#63) knows a session id and a `cwd` read off the pane's persisted
+    /// `ResumableAgent`, from a process that no longer exists, and has no row to describe.
     ///
-    /// A restore offer knows a session id and a `cwd` — read off the pane's persisted
-    /// `ResumableAgent`, from a process that no longer exists — and has no row to describe.
-    /// Synthesising an `AgentSession` with a made-up pid to ask this would be a value pretending
-    /// to be something it is not, which is the shape `AGENTS.md` names as a seam. So the two
-    /// fields the answer actually depends on are the parameters, and the row-shaped caller
-    /// above unpacks itself.
+    /// The slug is a guess — a lossy transform of a path helm did not choose — so a miss
+    /// falls back to scanning the project directories for the file named after this session.
     static func transcript(
         forSession sessionId: String, cwd: String?, root: URL = defaultRoot
     ) -> URL? {

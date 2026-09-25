@@ -22,7 +22,7 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
         pushing canvas: Pane, at placement: (Workbench) -> Placement
     ) -> (WorkbenchSpoolPanes, WorkbenchModel, UUID) {
         let terminal = UUID()
-        var bench = Workbench(panes: [Pane(id: terminal, content: .terminal(face: .terminal))])
+        var bench = Workbench(panes: [Pane(id: terminal, content: .terminal())])
         bench.offer(canvas, at: placement(bench))
         let terminals = TerminalManager()
         let model = WorkbenchModel(terminals: terminals)
@@ -78,7 +78,7 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
         let pushed = Pane(content: .canvas(plan))
         let sibling = Pane(content: .canvas(.file("/tmp/helm-spool-panes-other.md")))
         var arrangement = Workbench(
-            panes: [Pane(id: UUID(), content: .terminal(face: .terminal))])
+            panes: [Pane(id: UUID(), content: .terminal())])
         arrangement.offer(sibling, at: .column)
         // Behind `sibling`, in a slot the operator is not in — exactly where a re-push lands on
         // a busy bench, and the reason #272's refresh was unobservable.
@@ -188,7 +188,7 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
         let pushed = Pane(content: .canvas(plan))
         let terminal = UUID()
         var arrangement = Workbench(
-            panes: [Pane(id: terminal, content: .terminal(face: .terminal))])
+            panes: [Pane(id: terminal, content: .terminal())])
         arrangement.offer(pushed, at: .column)
         let terminals = TerminalManager()
         let model = WorkbenchModel(terminals: terminals)

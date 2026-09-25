@@ -18,14 +18,6 @@ import SwiftUI
 /// subscriptions did not stop being right — they moved up a level, because all of them are
 /// *"act on the focused pane"* and focus is the bench's now. `AGENTS.md`'s rule is exact: a
 /// subscription that has to work while its view is closed belongs on the model.
-/// `TerminalWorkspace` got away with `@State` for the face because it was the one
-/// always-present view; nothing under a bench is.
-///
-/// What is deliberately NOT here: a `ChatModel`. `ChatOverlay` owns its own as a
-/// `@StateObject` driven from `.task`, so SwiftUI starts the 250 ms poll when the face
-/// appears and cancels it when the face is swapped away. Caching one here the way canvases
-/// are cached would turn a poller that runs only while someone is reading into one per
-/// terminal pane, forever. The bench's only job is to say *which panes show the chat face*.
 @MainActor
 final class WorkbenchModel: ObservableObject {
     /// Nothing open, a question waiting on the operator, or a bench — as one value, so no
@@ -352,7 +344,7 @@ final class WorkbenchModel: ObservableObject {
             // in its own words: *"unreachable through any mutation — but a decoded bench is not
             // built by a mutation, so this is not an assertion."* `uniqueKeysWithValues:` traps
             // on a duplicate, which here is a crash **at mount**, on every relaunch, that the
-            // operator can only escape by hand-editing defaults. `AgentRegistry.row(in:)` makes
+            // operator can only escape by hand-editing defaults. `AgentRegistry.rows(in:)` makes
             // exactly this argument on this same branch and is the reason to make it here too.
             //
             // First rather than last, because `Workbench.address(of:)` is a `firstIndex(where:)`
@@ -412,7 +404,7 @@ final class WorkbenchModel: ObservableObject {
     /// `TerminalManager.activate` does not leave behind.
     private static func defaultBench(for sessions: [Pane.ID]) -> Workbench? {
         guard !sessions.isEmpty else { return nil }
-        return Workbench(panes: sessions.map { Pane(id: $0, content: .terminal(face: .terminal)) })
+        return Workbench(panes: sessions.map { Pane(id: $0, content: .terminal()) })
     }
 
     // MARK: - Which agent is in which pane (#63)
@@ -457,7 +449,7 @@ final class WorkbenchModel: ObservableObject {
         var updated = bench
         var changed = false
         for (pane, agent) in live {
-            guard case let .terminal(_, recorded) = bench.pane(pane)?.content,
+            guard case let .terminal(recorded) = bench.pane(pane)?.content,
                 recorded != agent
             else { continue }
             updated.record(agent, in: pane)
@@ -661,7 +653,7 @@ final class WorkbenchModel: ObservableObject {
         guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
         bench.insert(
-            Pane(id: session.id, content: .terminal(face: .terminal)),
+            Pane(id: session.id, content: .terminal()),
             at: bench.placementForNewTerminal())
         commit(bench)
         return session
@@ -684,7 +676,7 @@ final class WorkbenchModel: ObservableObject {
         guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
         bench.offer(
-            Pane(id: session.id, content: .terminal(face: .terminal)),
+            Pane(id: session.id, content: .terminal()),
             at: bench.placementForSpawnedTerminal())
         commit(bench)
         return session
@@ -918,14 +910,14 @@ final class WorkbenchModel: ObservableObject {
     func splitRight() {
         guard let path = workspacePath, var bench else { return }
         bench.splitRight(
-            with: Pane(id: terminals.newTerminal(in: path).id, content: .terminal(face: .terminal)))
+            with: Pane(id: terminals.newTerminal(in: path).id, content: .terminal()))
         commit(bench)
     }
 
     func splitDown() {
         guard let path = workspacePath, var bench else { return }
         bench.splitDown(
-            with: Pane(id: terminals.newTerminal(in: path).id, content: .terminal(face: .terminal)))
+            with: Pane(id: terminals.newTerminal(in: path).id, content: .terminal()))
         commit(bench)
     }
 
@@ -940,7 +932,7 @@ final class WorkbenchModel: ObservableObject {
     func offerSplitRight() -> TerminalSession? {
         guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
-        bench.splitRight(offering: Pane(id: session.id, content: .terminal(face: .terminal)))
+        bench.splitRight(offering: Pane(id: session.id, content: .terminal()))
         commit(bench)
         return session
     }
@@ -950,7 +942,7 @@ final class WorkbenchModel: ObservableObject {
     func offerSplitDown() -> TerminalSession? {
         guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
-        bench.splitDown(offering: Pane(id: session.id, content: .terminal(face: .terminal)))
+        bench.splitDown(offering: Pane(id: session.id, content: .terminal()))
         commit(bench)
         return session
     }
@@ -988,39 +980,6 @@ final class WorkbenchModel: ObservableObject {
         guard var bench, let pane = bench.focusedPane?.id else { return }
         bench.move(pane, direction)
         commit(bench)
-    }
-
-    /// ⌘T. The rule — including that it does nothing at all on a canvas — is
-    /// `Workbench.toggleFace()`'s, so this is a delegation and not a decision.
-    func toggleFace() {
-        guard var bench else { return }
-        bench.toggleFace()
-        commit(bench)
-    }
-
-    /// Hand a canvas's accumulated notes to a composer, if there is one to hand them to.
-    ///
-    /// **Post inherits the composer's gate rather than adding one of its own.** Prefilling
-    /// only fills the field — `ChatModel.canSend` (`status == .idle`, nothing looser) is
-    /// what decides whether it can be sent, and #29 measured why that must not be relaxed.
-    func post(_ text: String) {
-        guard let pane = composeTarget else { return }
-        HelmCommand.composeText(ComposeRequest(pane: pane, text: text)).post()
-    }
-
-    /// The pane whose composer a `Post` reaches: the focused pane if it is a terminal on
-    /// the chat face, else the only chat face open. nil when there is no unambiguous
-    /// target — and then the button is disabled rather than posting into nothing, because
-    /// a control that silently does nothing is worse than one that says it cannot.
-    var composeTarget: Pane.ID? {
-        guard let bench else { return nil }
-        if let focused = bench.focusedPane, case .terminal(.chat, _) = focused.content {
-            return focused.id
-        }
-        let reading = bench.panes.filter {
-            if case .terminal(.chat, _) = $0.content { true } else { false }
-        }
-        return reading.count == 1 ? reading[0].id : nil
     }
 
     /// Write every open draft now (#289).
@@ -1132,7 +1091,6 @@ final class WorkbenchModel: ObservableObject {
         case let .jumpToPrompt(offset):
             guard terminals.anyTerminalHasFocus else { return }
             focusedTerminal?.jumpToPrompt(by: offset)
-        case .toggleChat: toggleFace()
         case .splitRight: splitRight()
         case .splitDown: splitDown()
         case .closePane: closeFocusedPane()
@@ -1163,10 +1121,10 @@ final class WorkbenchModel: ObservableObject {
         case let .openCanvasURL(url):
             if let url { open(.url(url)) } else { openAddressField() }
 
-        // Belongs to other verticals: the workspace bar, the Archon rail, `RootView`, and
-        // the chat overlay of one addressed pane. Listed rather than defaulted silently, so
-        // adding a command forces a decision here instead of producing a no-op.
-        case .openWorkspace, .toggleRail, .selectWorkspace, .cycleWorkspace, .composeText:
+        // Belongs to other verticals: the workspace bar, the Archon rail and `RootView`.
+        // Listed rather than defaulted silently, so adding a command forces a decision here
+        // instead of producing a no-op.
+        case .openWorkspace, .toggleRail, .selectWorkspace, .cycleWorkspace:
             break
         }
     }

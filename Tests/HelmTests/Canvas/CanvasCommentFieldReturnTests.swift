@@ -6,17 +6,16 @@ import XCTest
 
 /// **What a Return in the canvas comment field does — asked of a real key event.**
 ///
-/// The third instance of the shape #275 fixed in the chat composer: a
+/// The third instance of the shape #275 fixed in the chat composer (since removed): a
 /// `TextField(axis: .vertical)` with `.onSubmit` and nothing beside it. AppKit's
 /// `StandardKeyBinding.dict` maps `\r` to `insertNewline:` and `~\r` to
 /// `insertNewlineIgnoringFieldEditor:` and **has no entry for Shift-Return at all**, so a
 /// shifted Return is an ordinary one and the note was written half-finished. A note is prose
 /// about a passage, which is exactly the kind of writing that runs past one line (#278).
 ///
-/// The harness is `ChatComposerReturnTests`', on purpose — a real `NSWindow` around the real
-/// `CanvasCommentField`, real `NSEvent`s through `NSWindow.sendEvent`. **No WebKit and no
-/// ghostty surface**: the field is a field, and what it is drawn over does not decide what a
-/// Return means.
+/// The harness is a real `NSWindow` around the real `CanvasCommentField`, with real `NSEvent`s
+/// through `NSWindow.sendEvent`. **No WebKit and no ghostty surface**: the field is a field,
+/// and what it is drawn over does not decide what a Return means.
 @MainActor
 final class CanvasCommentFieldReturnTests: XCTestCase {
     /// A canvas to write notes beside, and its sidecar swept afterwards. A per-test helper rather

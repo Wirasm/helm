@@ -45,7 +45,7 @@ final class SpoolCommandPolicyTests: XCTestCase {
     /// operator is in, so there is nothing for a policy to check.
     func testEveryUnaddressedCommandThatActsOnTheFocusedPaneIsRefused() {
         for command in [
-            HelmCommandName.closePane, .adjustFontSize, .jumpToPrompt, .toggleChat, .composeText,
+            HelmCommandName.closePane, .adjustFontSize, .jumpToPrompt,
             // #287's half of it, and the one worth reading twice: `Workbench.move` *is*
             // addressed — it names the pane it moves — but `HelmCommand.movePane` carries only a
             // direction and applies it to the focused pane. The operation is allowable and the
@@ -236,9 +236,10 @@ final class SpoolCommandPolicyTests: XCTestCase {
             "the refusal for an unknown kind lists these, so an older helm's answer and a newer "
                 + "one's have to differ in exactly this line")
         XCTAssertEqual(
-            HelmCommandName.allCases.count, 21,
-            "helm has twenty-one commands — eighteen from #219, plus movePane (#287), newNote "
-                + "(#289) and openBrowser (#350). If that number changed, SpoolCommandPolicy's "
+            HelmCommandName.allCases.count, 19,
+            "helm has nineteen commands — eighteen from #219, plus movePane (#287), newNote "
+                + "(#289) and openBrowser (#350), less toggleChat and composeText, which left "
+                + "with the chat face (#375). If that number changed, SpoolCommandPolicy's "
                 + "switch already forced a verdict for the new one — this only records that it "
                 + "was a deliberate change rather than a merge artefact")
     }

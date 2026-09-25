@@ -197,7 +197,6 @@ final class CanvasNotesDrawerTests: XCTestCase {
         XCTAssertTrue(
             rendered.contains("ship the migration first"),
             "the comment is the thing the popover never showed — it is the whole issue")
-        XCTAssertEqual(model.notesMarkdown, rendered, "Post hands over exactly what is drawn")
     }
 
     func testASidecarWithNoHeadingsIsStillOfferedAndStillReadable() throws {
@@ -213,13 +212,12 @@ final class CanvasNotesDrawerTests: XCTestCase {
         XCTAssertEqual(model.notesText, "the plan reads well, but the ordering is off.\n")
     }
 
-    func testAnEmptySidecarHasNothingToRenderAndNothingToPost() throws {
+    func testAnEmptySidecarHasNothingToRender() throws {
         try writeSidecar("   \n\n")
         let model = CanvasModel()
         model.open(file)
 
         XCTAssertNil(model.notesText, "the drawer reads as empty rather than as broken")
-        XCTAssertNil(model.notesMarkdown, "and there is nothing to hand to a composer")
         XCTAssertFalse(model.hasNotes)
     }
 
@@ -256,7 +254,7 @@ final class CanvasNotesDrawerTests: XCTestCase {
     func testTheDrawerIsNeverWiderThanThePaneItIsOver() {
         XCTAssertEqual(
             CanvasNotesDrawerMetrics.width(inPaneOf: 220), 220,
-            "hanging off the edge would put Post and Reveal — the only route to either — "
+            "hanging off the edge would put Reveal — the only route to it — "
                 + "outside the window")
         XCTAssertEqual(
             CanvasNotesDrawerMetrics.width(inPaneOf: 0), CanvasNotesDrawerMetrics.minimum,
