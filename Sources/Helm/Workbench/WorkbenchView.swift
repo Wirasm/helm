@@ -292,6 +292,9 @@ private struct SlotView: View {
             }
         case .canvas:
             CanvasView(model: model.canvas(for: pane), post: postHandler)
+        case .browser:
+            BrowserPaneView(
+                model: model.browser(for: pane), holdsKeyboard: bench.focusedPane?.id == pane.id)
         }
     }
 

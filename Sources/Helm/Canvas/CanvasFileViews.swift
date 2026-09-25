@@ -816,22 +816,30 @@ final class CanvasStateChannel: NSObject, WKScriptMessageHandler {
 
 // MARK: - What the page reported
 
-/// A live selection on the canvas: the payload the comment field needs, before there is a
-/// comment to make an annotation out of.
+/// A live selection on the canvas: what the operator marked, before there is a comment to make
+/// an annotation out of.
 ///
-/// `body` stays raw so `CanvasAnnotation.decode` — the pure, tested validation — is the
-/// one thing that ever interprets it. This carries only what the UI needs to place itself.
+/// **It carries the decoded mark, not the page's raw body** (#210). This used to hold `body`
+/// raw so that `CanvasAnnotation.decode` would be the one thing that interpreted it. That left
+/// the gate validating `kind` and dropping it one line later: `CanvasAnnotation.decode` re-read
+/// the same string, and the comment field, with no kind to switch on, guessed at a top-level
+/// `text` that only a selection and a tap carry. Every arrow and circle opened the field with a
+/// blank quote. The mark is now decoded once, by `CanvasAnnotation.Mark.decode(_:as:)`, from the
+/// kind the gate already validated. The field quotes it and the note is written from it.
 struct CanvasSelection {
-    /// The untrusted body, handed to `CanvasAnnotation.decode` once there is a comment.
-    let body: [String: Any]
+    /// What the mark names, or `nil` when the gesture was real but named nothing helm can anchor
+    /// to (a circle round blank space). The field still opens and says so, rather than the ink
+    /// staying on the page with no response, and `CanvasAnnotation.decode` refuses the note.
+    let mark: CanvasAnnotation.Mark?
     /// Where the selection is in the viewport, so the field can be anchored near it.
     /// Presentation only; never persisted, and never part of an anchor.
     let rect: CGRect
 
     /// **`fileprivate` is the gate's exclusivity, said by the compiler instead of by a comment**
-    /// (#298). This checks one thing — that the body is a dictionary — and every check that
-    /// matters lives in `CanvasPageSelection.decode` below: a declared `kind`, a known one, and a
-    /// `selection` that carries text. While this was `internal`, "decode is the only maker" was
+    /// (#298). This decodes the mark from a `kind` it trusts the caller to have validated, and
+    /// every check that decides whether there is a selection at all lives in
+    /// `CanvasPageSelection.decode` below: a declared `kind`, a known one, and a `selection` that
+    /// carries text. While this was `internal`, "decode is the only maker" was
     /// prose, and anything in the module could hand it a raw dictionary and hold a selection the
     /// gate would have refused.
     ///
@@ -851,9 +859,8 @@ struct CanvasSelection {
     /// `fileprivate` rather than `private`: `private` on a member is scoped to the enclosing
     /// declaration and its same-file extensions, which would shut `decode` out too. The gate and
     /// this initializer share a file precisely so the only maker is a compile-time fact.
-    fileprivate init?(_ body: Any) {
-        guard let payload = body as? [String: Any] else { return nil }
-        self.body = payload
+    fileprivate init(_ payload: [String: Any], kind: CanvasPageSelection.Kind) {
+        mark = CanvasAnnotation.Mark.decode(payload, as: kind)
         let raw = payload["rect"] as? [String: Any] ?? [:]
         func number(_ key: String) -> CGFloat {
             CGFloat((raw[key] as? NSNumber)?.doubleValue ?? 0)
@@ -940,16 +947,15 @@ enum CanvasPageSelection {
         // The one shape check that survives the move to a declared kind, and it is about the
         // FIELD rather than the anchor: a `selection` with no text would put an empty comment
         // box over the page. Whether any of these resolves to an anchor is
-        // `CanvasAnnotation.decode`'s call at comment time — the same as it already was for a
-        // plain selection with no id — so nothing else is inspected here.
+        // `CanvasAnnotation.Mark.decode`'s call, made once in `CanvasSelection.init`; a mark
+        // that resolves to nothing still opens the field, which says so.
         if kind == .selection {
             let text = (payload["text"] as? String) ?? ""
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return .failure(.malformed(kind))
             }
         }
-        guard let selection = CanvasSelection(payload) else { return .failure(.malformed(kind)) }
-        return .success(.selected(selection))
+        return .success(.selected(CanvasSelection(payload, kind: kind)))
     }
 }
 

@@ -106,6 +106,15 @@ struct SlotTabStrip: View {
                 onSelect: { model.select(pane.id) },
                 onClose: { model.close(pane.id) }
             )
+        case .browser:
+            BrowserTabLabel(
+                model: model.browser(for: pane),
+                name: pane.name.text,
+                isSelected: isSelected,
+                canClose: canClose,
+                onSelect: { model.select(pane.id) },
+                onClose: { model.close(pane.id) }
+            )
         }
     }
 

@@ -59,9 +59,13 @@ Metadata only — id, sender, subject, time, read-state — bodies never, caps r
 
 ```bash
 BENCH="${BENCH:-bench}"
-ID=$($BENCH mail list --handle operator | python3 -c "import json,sys; m=json.load(sys.stdin)['mail']; print(m[0]['id'] if m else '')")
-[ -n "$ID" ] && $BENCH mail read "$ID" --handle operator
+OUT=$($BENCH mail list --handle operator) || exit
+ID=$(printf '%s' "$OUT" | python3 -c "import json,sys; m=json.load(sys.stdin)['mail']; print(m[0]['id'] if m else '')")
+[ -z "$ID" ] || $BENCH mail read "$ID" --handle operator
 ```
+
+The `|| exit` keeps bench's exit code (2 no daemon, 3 refused). Without it, a listing that
+failed would look like an empty inbox.
 
 `read` returns the body and retires the message (inbox → `read/`). Nothing in the
 mailroom ever deletes; the files under `$BENCH_DIR/mail/<handle>/` are the record and

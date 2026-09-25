@@ -9,7 +9,7 @@ final class CanvasMarkTests: XCTestCase {
     private func decode(
         _ body: [String: Any], comment: String = "this is wrong"
     ) -> CanvasAnnotation? {
-        CanvasAnnotation.decode(body, comment: comment)
+        CanvasAnnotation.decode(posted: body, comment: comment)
     }
 
     private func target(_ id: String?, _ text: String) -> [String: Any] {

@@ -18,10 +18,11 @@ final class SpoolCommandPolicyTests: XCTestCase {
 
     /// **The allowlist itself, written out.** A change to it has to change this line, which is
     /// the point: an allowlist that can widen without a diff anyone reads is not a decision.
-    func testTheAllowlistIsExactlyTheFourCommandsThatDoNotTakeTheKeyboard() {
+    func testTheAllowlistIsExactlyTheFiveCommandsThatDoNotTakeTheKeyboard() {
         XCTAssertEqual(
-            SpoolCommandPolicy.allowed, [.newTerminal, .splitRight, .splitDown, .toggleRail],
-            "these four grow the bench and leave the operator's keyboard where it is. Widening "
+            SpoolCommandPolicy.allowed,
+            [.newTerminal, .splitRight, .splitDown, .toggleRail, .openBrowser],
+            "these five grow the bench and leave the operator's keyboard where it is. Widening "
                 + "this set is a decision about the operator's focus — read "
                 + "SpoolCommandPolicy's header before changing it")
     }
@@ -235,9 +236,9 @@ final class SpoolCommandPolicyTests: XCTestCase {
             "the refusal for an unknown kind lists these, so an older helm's answer and a newer "
                 + "one's have to differ in exactly this line")
         XCTAssertEqual(
-            HelmCommandName.allCases.count, 20,
-            "helm has twenty commands — eighteen from #219, plus movePane (#287) and newNote "
-                + "(#289). If that number changed, SpoolCommandPolicy's "
+            HelmCommandName.allCases.count, 21,
+            "helm has twenty-one commands — eighteen from #219, plus movePane (#287), newNote "
+                + "(#289) and openBrowser (#350). If that number changed, SpoolCommandPolicy's "
                 + "switch already forced a verdict for the new one — this only records that it "
                 + "was a deliberate change rather than a merge artefact")
     }

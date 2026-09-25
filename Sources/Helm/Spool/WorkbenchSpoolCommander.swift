@@ -60,6 +60,9 @@ final class WorkbenchSpoolCommander: SpoolCommanding {
         case .toggleRail:
             rail.toggleVisibility()
             created = nil
+        case .openBrowser:
+            guard let pane = workbench.offerBrowser() else { return .failure(noBench) }
+            created = pane
 
         // **Named rather than defaulted, and unreachable rather than merely unhandled.**
         // `SpoolPolicy.accept` runs `SpoolCommandPolicy.verdict` before an

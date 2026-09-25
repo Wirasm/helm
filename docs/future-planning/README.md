@@ -1,8 +1,9 @@
 # future-planning
 
-**Three pieces of `daemon/` are built — M0, the skeleton (PR #340); M5a, daemon-owned ptys
-(PR #341); and mail in benchd (PR #342). Everything else in this directory remains unbuilt,
-and nothing in it authorises building.**
+**Four pieces of `daemon/` are built — M0, the skeleton (PR #340); M5a, daemon-owned ptys
+(PR #341); mail in benchd (PR #342); and the shared browser, with helm's browser pane
+(PR #352, #363). Everything else in this directory remains unbuilt, and nothing in it
+authorises building.**
 
 These documents describe a proposed successor to helm — a headless daemon owning ptys and
 state, with the app as a thin face. They are here so the reasoning survives and can be argued

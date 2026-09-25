@@ -49,6 +49,7 @@ enum KeyHintCatalog {
         (.cycleWorkspace, "cycle"),
         (.openWorkspace, "folder"),
         (.toggleRail, "archon"),
+        (.openBrowser, "browser"),
     ]
 
     /// Left off the bar on purpose.

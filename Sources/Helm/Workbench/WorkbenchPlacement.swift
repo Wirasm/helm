@@ -80,6 +80,15 @@ extension Workbench {
     func placementForSpawnedTerminal() -> Placement {
         .column
     }
+
+    /// Where a browser pane goes: **the one already open, if there is one** — there is one
+    /// shared browser, so a second pane onto it would be a second copy of the same tab — else
+    /// a new column at the right end, for `placementForSpawnedTerminal`'s reason: it arrives
+    /// beside the operator's work without squeezing the slot they are in.
+    func placementForBrowser() -> Placement {
+        if let open = panes.first(where: { $0.content == .browser }) { return .existing(open.id) }
+        return .column
+    }
 }
 
 extension Slot {

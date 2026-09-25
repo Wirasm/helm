@@ -449,7 +449,7 @@ final class CanvasModelTests: XCTestCase {
         else {
             return XCTFail("a body with a selection in it is one")
         }
-        XCTAssertEqual(selection.body["id"] as? String, "phase-2")
+        XCTAssertEqual(selection.mark, .selection(.element(id: "phase-2", text: "Phase 2")))
     }
 
     /// **The discriminator, at the gate** (#109). Every message the page posts says what it is,
