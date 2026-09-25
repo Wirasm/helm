@@ -22,6 +22,10 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
 
     @Published private(set) var status: Status = .connecting
     @Published private(set) var tabs = BrowserTabs()
+    /// Links the operator ⌘-clicked before the browser was reachable, oldest first. Each
+    /// opens as a tab once the pane connects, so a click made while benchd's browser is
+    /// still starting is not lost.
+    private(set) var pendingLinks: [URL] = []
 
     /// Frames go straight to the view, not through `@Published`: at up to 60 a second,
     /// a SwiftUI re-render per frame would cost more than the frame.
@@ -123,6 +127,7 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
                 try await connection.call("Target.setDiscoverTargets", Discover(discover: true))
                 apply(tabs.replaceAll(with: listed.targetInfos))
                 status = .connected
+                openPendingLinks()
             } catch {
                 connection.close("could not read the browser's tabs: \(error)")
             }
@@ -298,6 +303,22 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
 
     func newTab() {
         connection?.send("Target.createTarget", CreateTarget(url: "about:blank"))
+    }
+
+    /// Open `url` as a new tab of the shared browser — a ⌘-clicked link (#376). A new tab
+    /// rather than the one on screen, so a page an agent is working in is not navigated away
+    /// under it; `BrowserTabs` follows the new tab, so the pane shows it.
+    func open(_ url: URL) {
+        pendingLinks.append(url)
+        if status == .connected { openPendingLinks() }
+    }
+
+    private func openPendingLinks() {
+        guard let connection else { return }
+        for url in pendingLinks {
+            connection.send("Target.createTarget", CreateTarget(url: url.absoluteString))
+        }
+        pendingLinks.removeAll()
     }
 
     private func evaluate(_ expression: String) {

@@ -6,7 +6,8 @@
   // case it replaces was called `select` and did two jobs: reading the page, and treating what
   // you highlighted as the subject of a comment. So a canvas was never inert — every click was
   // a candidate mark — and `CanvasMarkTool`'s header has the argument. `text` is the second
-  // job, picked up like the three drawing tools.
+  // job, and the operator picks it up. (Freehand, arrow and point tools stood beside it until
+  // #385 removed them; the board is where the operator draws.)
   if (!window.__helmMarkTool) { window.__helmMarkTool = "read"; }
   function tool() { return window.__helmMarkTool || "read"; }
 
@@ -30,9 +31,8 @@
   // message is (#109/#210). There were three shapes here and no declared kind: a selection was
   // "has a non-empty top-level text", a dismissal was `{cleared:true}`, and a geometry mark was
   // `{mark:"…"}` — so the Swift gate had to infer the shape, inferred it wrongly, and dropped
-  // every enclosure and relation for months (#216). A second discriminator would be the same
-  // defect twice, so `mark` is gone rather than kept beside this: the values it carried —
-  // `point`, `relation`, `enclosure` — are kinds now.
+  // every geometry mark for months (#216). The page posts two kinds now: `selection` and
+  // `cleared`.
   //
   // The far side is `CanvasPageSelection.Kind` in `CanvasFileViews.swift`, which is exhaustive
   // and REFUSES a kind it does not know rather than guessing at the shape. So a kind added here
@@ -40,8 +40,7 @@
   // `CanvasAnnotationScriptTests.testTheScriptAndSwiftStillAgreeOnEveryMessageKind` fails: a
   // JavaScript file cannot compile against a Swift enum, so that test is the gate.
 
-  // helm's own document wrapper — helm's chrome, marked as such by the Swift that writes it,
-  // exactly as the ink layer is.
+  // helm's own document wrapper — helm's chrome, marked as such by the Swift that writes it.
   //
   // `CanvasHTML.documentPage` puts every rendered markdown artifact inside
   // `<article id="content" data-helm-frame>`, so `#content` is an id helm wrote and no
@@ -88,44 +87,28 @@
   }
 
   // A region the PAGE owns the pointer in — `data-helm-surface`, declared by the artifact
-  // (#111). Inside one, helm does nothing at all: no `preventDefault`, no stroke, no `cleared`,
-  // and no anchor resolved out of it.
+  // (#111). Inside one, helm does nothing at all: no mark, no `cleared`, and no anchor resolved
+  // out of it.
   //
   // Spelled out here rather than interpolated, exactly like the handler name, the tool global
   // and `data-helm-frame` above. `CanvasSurface` in Swift is where the argument lives — why the
-  // page rather than helm writes this one, and why helm's ink is strictly worse on a board than
-  // the board's own — and `CanvasSurfaceTests` is the gate over all three copies of the string,
+  // page rather than helm writes this one, and why helm's marks are strictly worse on a board
+  // than the board's own — and `CanvasSurfaceTests` is the gate over all three copies of the string,
   // this one included, because a JavaScript file cannot compile against a Swift constant.
   //
-  // `closest`, not a hand-rolled walk: `targetsInside` already asks the same kind of question
-  // the same way, and a second spelling of "walk up looking for an attribute" is a second thing
-  // to get wrong. Null-tolerant because `e.target` is null for a gesture over nothing at all,
-  // which is a real mark ("add a node here") and must not throw.
+  // `closest`, not a hand-rolled walk. Null-tolerant because `e.target` is null for a
+  // gesture over nothing at all, and that must not throw.
   function inPageSurface(node) {
     return !!(node && node.closest && node.closest("[data-helm-surface]"));
   }
 
-  // What the operator marked, and what it can be NAMED by — two questions, and #215 was
-  // conflating them into one field. `text` is the marked element's own; `id` may come from
-  // an ancestor, because a name can belong to a container and still name what is inside it.
+  // What a mark can be NAMED by: the nearest id on the marked element or an ancestor, because
+  // a name can belong to a container and still name what is inside it (#215).
   //
-  // The old code reassigned `node` while walking and then read the text off whatever the
-  // walk stopped on, so `text` was always the ANCESTOR's: `node || labelled` could not fall
-  // back, since after the walk `node` is either the id-bearing ancestor or `document.body`
-  // and both are truthy. Every markdown block came back as the whole document under
-  // `#content`, and every id-less sibling produced the identical `(id, text)` pair — which
-  // is why circling three paragraphs yielded one target. Per-element text separates them
-  // with no change to the dedupe key.
-  //
-  // **The walk stays.** It is what lets a marked word inside `<h2 id="phase-2">` anchor to
-  // the heading, and it is the whole of #113: a hit on a mermaid node lands on the `<text>`
-  // or `<p>` inside the `<g>` that carries the id, so a resolver that read only the marked
-  // element's own id would anchor no diagram at all.
-  //
-  // ONE name for one element, and now genuinely one: the text-selection branch below used to
-  // carry a second copy of this walk, so "every tool resolves the same way" was true of three
-  // tools out of four and a selection on a markdown canvas anchored to `#content` through a
-  // code path `resolve` never touched.
+  // **The walk is what lets a marked word inside `<h2 id="phase-2">` anchor to the heading**,
+  // and it is the whole of #113: a mark on a mermaid node lands on the `<text>` or `<p>` inside
+  // the `<g>` that carries the id, so reading only the marked element's own id would anchor no
+  // diagram at all.
   function nameFor(node) {
     for (var up = node; up && up !== document.body; up = up.parentNode) {
       if (up.id && !helmFrame(up)) { return up.id; }
@@ -136,234 +119,26 @@
   // The element a gesture is really about. A Range's `commonAncestorContainer` is very often
   // a TEXT node — it is whatever the highlight happens to sit inside — and a text node carries
   // no id and is not what a mark names, so step up to the element holding it. Null for a node
-  // detached from the document, which is why both callers check before dereferencing; reading
-  // `.textContent` off that null used to throw.
+  // detached from the document, which is why the caller checks before naming it.
   function elementFor(node) {
     return node && node.nodeType === 3 ? node.parentNode : node;
   }
 
-  // ONE resolver, used by every tool — #112 asks for the draw-time hit test and any later
-  // re-resolution to share a code path, because inconsistent resolution between capture and
-  // action is its own bug class. So this changes what all four marks report, not one.
-  function resolve(node) {
-    node = elementFor(node);
-    if (!node) { return null; }
-    // **The second half of #111's rule, and the half with no visible symptom.** A page that
-    // owns the pointer here owns what is addressable here too: a mounted board is ONE
-    // `<canvas>` with no per-shape DOM nodes, so anything resolved out of it names the
-    // container and quotes its toolbar. The board's own records carry the ids an agent can
-    // find again, and they reach the agent through the state latch rather than through an
-    // anchor. ONE resolver, so every tool yields the same way — a guard added at `targetAt`
-    // alone would leave `targetsInside` reporting the board.
-    if (inPageSurface(node)) { return null; }
-    var text = (node.textContent || "").trim().slice(0, 400);
-    if (!text) { return null; }
-    return { id: nameFor(node), text: text };
-  }
-
-  function targetAt(x, y) {
-    if (paper) { paper.style.display = "none"; }
-    var hit = document.elementFromPoint(x, y);
-    if (paper) { paper.style.display = ""; }
-    return resolve(hit);
-  }
-
-  // Ray casting. A freehand loop is treated as closed, because a person circling
-  // something does not carefully meet the ends and helm should not make them.
-  function inside(poly, x, y) {
-    var yes = false;
-    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      var xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
-      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
-        yes = !yes;
-      }
-    }
-    return yes;
-  }
-
-  // Everything the loop encircles — an element is a target when the loop covers most of IT.
+  // The text mark, painted (#308).
   //
-  // Not "the loop contains its centre", which is the rule this replaces and the defect in
-  // #208. Centre-testing is a good defence against a SIBLING the stroke grazed, and no defence
-  // at all against an ANCESTOR: <article id="content"> wraps the whole page, so its centre IS
-  // the page's centre, and every loop drawn near the middle of a document also returned the
-  // entire document — listed first, in document order, with a 400-character quote of mermaid's
-  // injected CSS behind it.
+  // A text mark was once the browser's own selection, which greys the instant the comment
+  // field takes the keyboard, so the operator was asked to comment on a passage that no longer
+  // looked marked.
   //
-  // Coverage is asymmetric, and that asymmetry is the whole fix: an element larger than the
-  // loop cannot have most of itself inside the loop, wherever its centre falls. A container the
-  // operator really did circle still qualifies, because then the loop is around it. Measured on
-  // the page #208 was found on, for a loop around one node: that node covers 1.00, the <svg>
-  // around it 0.08, the <article> around that 0.02.
-  //
-  // **That guarantee does not depend on the stroke's shape**, which is what makes it a fix
-  // rather than a heuristic. An element's coverage is bounded above by the loop's own interior
-  // area divided by the element's, so an element far larger than the loop cannot qualify
-  // however the loop is drawn — on the page above that ceiling was 1.4%.
-  //
-  // **What dropping the centre test gave up, stated exactly.** For a CONVEX stroke, covering
-  // more than half of a rectangle implies containing its centre: a half-plane holding more than
-  // half of a rectangle holds its centre, and a stroke excluding the centre could be separated
-  // from it by one. There the centre test was implied and dropping it changes nothing. But a
-  // freehand stroke is NOT guaranteed convex — a hand dipping around an indent draws a concave
-  // one, and `inside` accepts any path at all. Measured: a horseshoe notched across the mid-row
-  // of a 100x100 box covers 0.918 of it while its centre falls in the notch. So for a concave
-  // stroke this WIDENS what a loop selects, taking something the centre test would have
-  // rejected. That is what the rule says on its face — the loop does cover most of it — and it
-  // cannot let an ancestor back in, because the bound above holds whatever the shape.
-  //
-  // A grazed neighbour is rejected harder than before either way, by covering almost none of
-  // itself rather than by where its centre happened to be.
-  //
-  // The grid is sample DENSITY and carries no invariant: "more than half" is counted in
-  // integers below, so the comparison is exact at any density and a tie — exactly half —
-  // is rejected. Nothing here has to be kept odd, or kept anything.
-  var grid = 7;
-
-  // How many of `box`'s sample points the loop contains, on a grid of cell centres. Sampled
-  // rather than clipped: the stroke is a path of any shape, and exact polygon clipping is a
-  // great deal of code to move a decision whose two sides measure an order of magnitude apart.
-  function covered(poly, box) {
-    var hits = 0;
-    for (var i = 0; i < grid; i++) {
-      for (var j = 0; j < grid; j++) {
-        var x = box.x + (box.width * (i + 0.5)) / grid;
-        var y = box.y + (box.height * (j + 0.5)) / grid;
-        if (inside(poly, x, y)) { hits++; }
-      }
-    }
-    return hits;
-  }
-
-  function targetsInside(poly) {
-    var seen = {}, found = [];
-    var nodes = document.querySelectorAll("[id], p, li, td, th, h1, h2, h3");
-    for (var i = 0; i < nodes.length; i++) {
-      if (nodes[i].closest("[data-helm-mark]")) { continue; }
-      var r = nodes[i].getBoundingClientRect();
-      if (!r.width && !r.height) { continue; }
-      // getBoundingClientRect is viewport-relative; the stroke is page-relative.
-      var box = {
-        x: r.left + window.scrollX, y: r.top + window.scrollY,
-        width: r.width, height: r.height
-      };
-      // More than half, in integers: one half is not a tuning parameter, it is the number the
-      // convex argument above needs, so it is spelled as a comparison rather than a constant.
-      if (2 * covered(poly, box) <= grid * grid) { continue; }
-      var t = resolve(nodes[i]);
-      if (!t) { continue; }
-      var key = (t.id || "") + "\u0000" + t.text;
-      if (seen[key]) { continue; }
-      seen[key] = true;
-      found.push(t);
-    }
-    return found;
-  }
-
-  // The ink. helm's own chrome, marked as such so an agent reading the DOM can tell
-  // it from what it authored, and inert so the page can never come to need it.
-  var paper = null, ink = null, stroke = [], from = null;
-  // Has this mark been POSTED? Until it has, the mark is an in-flight gesture and
-  // anything that interrupts may throw it away. Once posted it is the comment
-  // field's subject, and only Swift — closing that field — may take it down.
-  // All four marks, not just the drawn three: a text highlight is committed at its
-  // own `return` below and answers to this flag identically.
-  var committed = false;
-
-  function sheet() {
-    if (paper) { return paper; }
-    paper = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    paper.setAttribute("data-helm-mark", "");
-    // Sized once, from the document as it is now. A late-loading image or a window
-    // resize can therefore leave the ink adrift from what it circled — accepted,
-    // because the ANCHOR is an id or a quote and never these pixels. The ink is a
-    // reminder of what you marked, not the record of it.
-    //
-    // ABSOLUTE over the whole document, not fixed over the viewport. A mark is
-    // glued to what it was drawn around: scroll away and it travels off screen with
-    // its subject, scroll back and it is still there. Fixed positioning would leave
-    // it hanging over whatever scrolled underneath, which is a mark that lies.
-    paper.style.cssText =
-      "position:absolute;left:0;top:0;" +
-      "width:" + document.documentElement.scrollWidth + "px;" +
-      "height:" + document.documentElement.scrollHeight + "px;" +
-      "pointer-events:none;z-index:2147483647;overflow:visible";
-    // The arrowhead `marker-end` points at. An unresolvable url() is IGNORED rather
-    // than erroring, so without this the arrow tool silently drew a bare line — the
-    // one cue that tells it apart from freehand while you are drawing.
-    //
-    // Built with DOM calls rather than a markup string: this script reads and
-    // reports and never writes markup, which is an invariant with a test on it, and
-    // a markup string here is the shape that quietly becomes an injection vector.
-    var svgNS = "http://www.w3.org/2000/svg";
-    var defs = document.createElementNS(svgNS, "defs");
-    var marker = document.createElementNS(svgNS, "marker");
-    marker.setAttribute("id", "helm-mark-head");
-    marker.setAttribute("markerWidth", "8");
-    marker.setAttribute("markerHeight", "8");
-    marker.setAttribute("refX", "6");
-    marker.setAttribute("refY", "3");
-    marker.setAttribute("orient", "auto");
-    var barb = document.createElementNS(svgNS, "path");
-    barb.setAttribute("d", "M0,0 L6,3 L0,6 Z");
-    barb.setAttribute("fill", "currentColor");
-    marker.appendChild(barb);
-    defs.appendChild(marker);
-    paper.appendChild(defs);
-    document.body.appendChild(paper);
-    return paper;
-  }
-
-  function draw(d, head) {
-    var svg = sheet();
-    if (!ink) {
-      ink = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      ink.setAttribute("fill", "none");
-      ink.setAttribute("stroke", "currentColor");
-      ink.setAttribute("stroke-width", "2.5");
-      ink.setAttribute("stroke-linecap", "round");
-      ink.setAttribute("stroke-linejoin", "round");
-      ink.setAttribute("opacity", "0.85");
-      if (head) { ink.setAttribute("marker-end", "url(#helm-mark-head)"); }
-      svg.appendChild(ink);
-    }
-    ink.setAttribute("d", d);
-  }
-
-  function ring(x, y) {
-    var svg = sheet();
-    var dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", "13");
-    dot.setAttribute("fill", "none");
-    dot.setAttribute("stroke", "currentColor");
-    dot.setAttribute("stroke-width", "2.5");
-    dot.setAttribute("opacity", "0.85");
-    svg.appendChild(dot);
-  }
-
-  // The text mark — the fourth thing that marks, and the one thing on this page that is not
-  // DRAWN (#308).
-  //
-  // **Three tools kept their mark and one did not.** freehand and arrow leave ink, point draws
-  // a ring precisely because a tap has no travel, and a text mark was the browser's own
-  // selection — which greys the instant the comment field takes the keyboard, so the operator
-  // was asked to comment on a passage that no longer looked marked. The three were built
-  // together for #112; text selection predates them and was never brought along.
-  //
-  // **A CSS Custom Highlight, not a rectangle on the ink layer**, and the reason is anchoring.
+  // **A CSS Custom Highlight, not a rectangle over the page**, and the reason is anchoring.
   // An anchor is resolved out of the DOM — `nameFor` walks ancestors for an id, and a range's
   // `commonAncestorContainer` decides which element it is about — so a highlight that wrapped
   // the range in elements of its own, or split its text nodes, would change the thing the mark
   // is named by while claiming to change nothing. `CSS.highlights` mutates **no DOM at all**:
-  // no wrapper, no split, no attribute, not one node added to the artifact's tree. Rects on the
-  // ink layer would also have avoided that, and would have had to be translucent and sit over
+  // no wrapper, no split, no attribute, not one node added to the artifact's tree. Rects over
+  // the page would also have avoided that, and would have had to be translucent and sit over
   // the glyphs at max z-index, frozen at the geometry the range had when it was marked. This
   // paints behind the text the way the browser's own selection does, and reflows with it.
-  //
-  // It is also why this needs no `data-helm-mark`. The ink layer carries that attribute so
-  // `resolve` and `targetsInside` can skip helm's own chrome; a highlight has no element to
-  // skip, so "the mark cannot become its own anchor target" is structural here rather than
-  // remembered.
   //
   // **Measured in a real WKWebView from the bridge world before any of this was written**,
   // because none of it survives being assumed across a content-world boundary: `CSS.highlights`
@@ -382,8 +157,7 @@
   // The `::highlight()` rule the registry has nothing to paint with until it exists.
   //
   // **Adopted, not appended.** `document.adoptedStyleSheets` adds no node to the tree, so an
-  // agent reading the artifact's DOM back sees exactly what it wrote — the same promise the ink
-  // keeps by marking itself, kept here by there being nothing to mark. A `<style>` in `<head>`
+  // agent reading the artifact's DOM back sees exactly what it wrote. A `<style>` in `<head>`
   // would render identically and would be an element helm put into someone else's document.
   //
   // Re-checked and re-written on every paint rather than built once: `adoptedStyleSheets` is
@@ -426,104 +200,16 @@
     }
   }
 
-  function wipe() {
-    if (paper && paper.parentNode) { paper.parentNode.removeChild(paper); }
-    // Every mark this page can make comes down here, which is what lets a text mark share the
-    // ink's lifecycle instead of growing one of its own: Swift already calls this when the
-    // comment field closes — posted, dismissed by the ✕, or by Escape — and `abandon` already
-    // knows not to.
-    unpaintTextMark();
-    paper = null; ink = null; stroke = []; from = null; committed = false;
-  }
-
-  // Throw away an in-flight gesture, and ONLY an in-flight one.
-  //
-  // A drag released outside the document — over helm's own header, another pane —
-  // never fires mouseup here, and the ink would sit at max z-index until the next
-  // stroke. But `blur` also fires when the comment field takes the keyboard, which
-  // it does the instant it appears: an unconditional wipe there erases the mark
-  // before the operator has looked at it, which is the whole feature.
-  function abandon() { if (!committed) { wipe(); } }
-
-  window.addEventListener("blur", abandon);
-  document.addEventListener("mouseleave", abandon);
-  // Swift closing the comment field — the only thing allowed to remove a posted mark.
-  window.__helmWipeMark = wipe;
-  // A tool change, which must not disturb a mark already awaiting its comment.
-  window.__helmAbandonMark = abandon;
-
-  function pathFrom(points) {
-    var d = "M" + points[0].x + " " + points[0].y;
-    for (var i = 1; i < points.length; i++) {
-      d += " L" + points[i].x + " " + points[i].y;
-    }
-    return d;
-  }
-
-  // The stroke is in PAGE coordinates so it scrolls with its subject. The rect that
-  // travels to Swift is not: it places the comment field on screen, so it has to be
-  // viewport-relative or the field lands off screen the moment the page is scrolled.
-  function viewportRect(box) {
-    return {
-      x: box.x - window.scrollX, y: box.y - window.scrollY,
-      width: box.width, height: box.height
-    };
-  }
-
-  function bounds(points) {
-    var l = Infinity, r = -Infinity, t = Infinity, b = -Infinity;
-    for (var i = 0; i < points.length; i++) {
-      l = Math.min(l, points[i].x); r = Math.max(r, points[i].x);
-      t = Math.min(t, points[i].y); b = Math.max(b, points[i].y);
-    }
-    return { x: l, y: t, width: r - l, height: b - t };
-  }
-
-  document.addEventListener("mousedown", function (e) {
-    var t = tool();
-    // The two tools the BROWSER's pointer stays with. `read` for the obvious reason, and
-    // `text` because a text mark *is* the browser's own selection — cancelling `mousedown`
-    // here is exactly what would stop the operator making one. The far side is
-    // `CanvasMarkTool.draws`, which is exhaustive so a sixth tool has to state its verdict,
-    // and `CanvasMarkToolTests.testThePageTakesThePointerForExactlyTheToolsThatDraw` drives
-    // every case through this line to hold the two lists together.
-    if (t === "read" || t === "text") { return; }
-    // The page's pointer, not helm's (#111). BEFORE `preventDefault` and before a stroke
-    // starts, which is the whole of it: a mark tool held over a drawable board used to lay
-    // helm's ink over the board's own — quickdraw never cancels `pointerdown`, so cancelling
-    // the compatibility `mousedown` never stopped it drawing — and helm's copy could name
-    // nothing. Returning here means one gesture makes one mark, the board's.
-    if (inPageSurface(e.target)) { return; }
-    // Primary button only. A tool is a STICKY selection, unlike the modifier it
-    // replaced — so a right-click for the page's own context menu would otherwise
-    // start a stroke, and the menu's tracking loop eats the matching mouseup.
-    if (e.button !== 0) { return; }
-    e.preventDefault();
-    wipe();
-    // Page coordinates, so the stroke means the same thing after a scroll.
-    stroke = [{ x: e.pageX, y: e.pageY }];
-    from = targetAt(e.clientX, e.clientY);
-  }, true);
-
-  document.addEventListener("mousemove", function (e) {
-    if (!stroke.length) { return; }
-    var t = tool();
-    if (t === "point") { return; }
-    stroke.push({ x: e.pageX, y: e.pageY });
-    if (t === "arrow") {
-      draw(pathFrom([stroke[0], stroke[stroke.length - 1]]), true);
-    } else {
-      draw(pathFrom(stroke), false);
-    }
-  }, true);
+  // Swift closing the comment field — posted, dismissed by the ✕, or by Escape — is the only
+  // thing that takes a posted mark down.
+  window.__helmWipeMark = unpaintTextMark;
 
   document.addEventListener("mouseup", function (e) {
     var t = tool();
 
     // **Reading, and helm says nothing whatsoever** (#302). Not a quieter mark — no
-    // `selection`, no `cleared`, no comment field, no message of any kind. This is the whole
-    // behaviour change: text still highlights, because the browser does that and helm never
-    // took the pointer at `mousedown` above, and helm simply does not read the result.
+    // `selection`, no `cleared`, no comment field, no message of any kind. Text still
+    // highlights, because the browser does that, and helm simply does not read the result.
     //
     // **`cleared` is deliberately not sent here, and that is a decision rather than a
     // consequence.** It is the canvas's click-elsewhere-to-dismiss (#165), and under `read`
@@ -533,116 +219,41 @@
     // marking on still closing the operator's drawer every time they clicked the page —
     // which is the same complaint as the popup, one surface over. The drawer keeps its own
     // exits: its button, and Escape.
-    if (t === "read") { return; }
+    if (t !== "text") { return; }
 
-    if (t === "text") {
-      // **The page's pointer, so helm has nothing to say about this click** (#111). Without
-      // this, a drag on a drawable board with this tool held selects no text, so the branch
-      // below posts `cleared` — and helm answers a dismissal by taking the operator's selection
-      // down and closing the notes drawer. Every stroke closed their notes. Silence is the
-      // correct message here: nothing helm can name was marked, and `cleared` does not mean
-      // "nothing happened", it means "the operator clicked away from a selection".
-      //
-      // **Still needed, and #302 did not subsume it.** That change moved this branch off the
-      // default, so the board collision is no longer met by an operator who chose nothing —
-      // but the two are different mechanisms and neither implies the other: `read` is a GLOBAL
-      // mode the operator holds, `data-helm-surface` is a PER-ARTIFACT declaration that binds
-      // whatever they are holding. Delete this and a board is broken again the moment anyone
-      // picks up the text tool, which is precisely when they are most likely to.
-      if (inPageSurface(e.target)) { return; }
-      // The text is the operator's own highlight rather than an element's contents, which is
-      // why this branch cannot simply call `resolve` — but the NAME is the same question the
-      // other three tools ask, so it goes through the same `nameFor` (#215).
-      var selection = document.getSelection();
-      var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
-      var text = empty ? "" : String(selection).trim();
-      // Take the mark down here rather than waiting to be told, exactly as `point` does when it
-      // resolves nothing. Swift answers a `cleared` by closing the field, which comes back as a
-      // wipe — but a render later, and in between the operator would be looking at a highlight
-      // over the passage they just clicked away from.
-      if (!text) { wipe(); bridge.postMessage({ kind: "cleared" }); return; }
-      var range = selection.getRangeAt(0);
-      var node = elementFor(range.commonAncestorContainer);
-      var id = node ? nameFor(node) : null;
-      var r = range.getBoundingClientRect();
-      // **One mark on screen, and this is the call that keeps it to one.** Every drawing gesture
-      // starts with a `wipe()` at `mousedown`; `text` is exempted from that on purpose — the
-      // `preventDefault` there is what would stop the operator selecting at all — so the whole
-      // burden of taking down whatever was already marked lands here, on the one branch that
-      // establishes a new mark. Without it: commit an arrow, pick up `text` (which does *not*
-      // wipe, because a tool change must not drop a mark awaiting its comment), select a
-      // passage, and the stale arrow is still painted beside the new highlight with only one of
-      // them being what the comment field is about.
-      //
-      // The `!text` branch above already makes exactly this call, and so does `point` when it
-      // resolves nothing. This is the third spelling of the same rule and the one that was
-      // missing.
-      //
-      // **Latent before this slice, real after it**: `text` painted nothing of its own, so the
-      // orphaned ink was the *only* thing on screen rather than one of two contradictory marks.
-      // Making a text mark visible is what turned it into a defect.
-      //
-      // Safe here: `wipe()` touches the ink layer and the highlight registry and never
-      // `document.getSelection()`, and everything read off the range is already read above.
-      wipe();
-      // The mark STAYS, and `committed` is what says so — the same two lines the three drawing
-      // tools end on, for the same reason: from here the mark is the comment field's subject,
-      // and only Swift closing that field may take it down. Without the flag, `abandon` on the
-      // `blur` the field itself causes would erase it before the operator had looked at it.
-      paintTextMark(range);
-      committed = true;
-      bridge.postMessage({
-        kind: "selection", id: id, text: text,
-        rect: { x: r.left, y: r.top, width: r.width, height: r.height }
-      });
-      return;
-    }
-
-    if (!stroke.length) { return; }
-    var startTarget = from;
-    var box = bounds(stroke.concat([{ x: e.pageX, y: e.pageY }]));
-    var drawn = stroke.slice();
-    // The ink STAYS. It is the comment field's subject, and a field floating with
-    // nothing on screen saying what it is about is the gap this closes. Swift takes
-    // it down when the field closes; a new stroke replaces it.
-    stroke = []; from = null;
-
-    if (t === "point") {
-      var at = targetAt(e.clientX, e.clientY);
-      if (!at) { wipe(); bridge.postMessage({ kind: "cleared" }); return; }
-      // A tap draws nothing on its way, so it needs a mark of its own — otherwise
-      // the one gesture with no travel is also the one with no visible subject.
-      ring(e.pageX, e.pageY);
-      committed = true;
-      bridge.postMessage({
-        kind: "point", id: at.id, text: at.text, rect: viewportRect(box)
-      });
-      return;
-    }
-
-    if (t === "arrow") {
-      draw(pathFrom([drawn[0], { x: e.pageX, y: e.pageY }]), true);
-      var end = targetAt(e.clientX, e.clientY);
-      // Either end may be empty — an arrow into blank space is "add a node here".
-      committed = true;
-      bridge.postMessage({
-        kind: "relation", from: startTarget, to: end, rect: viewportRect(box)
-      });
-      return;
-    }
-
-    if (t === "freehand") {
-      draw(pathFrom(drawn), false);
-      // What the loop encircles. Posted even when empty, so decode refuses it
-      // visibly — silence is indistinguishable from the stroke never registering.
-      committed = true;
-      bridge.postMessage({
-        kind: "enclosure", targets: targetsInside(drawn), rect: viewportRect(box)
-      });
-      return;
-    }
-
-    // A tool helm does not know. Do nothing rather than guess — freehand used to be
-    // the fall-through here, so a garbage token silently drew a circle.
+    // **The page's pointer, so helm has nothing to say about this click** (#111). Without
+    // this, a drag on a drawable board with this tool held selects no text, so the branch
+    // below posts `cleared` — and helm answers a dismissal by taking the operator's selection
+    // down and closing the notes drawer. Every stroke closed their notes. Silence is the
+    // correct message here: nothing helm can name was marked, and `cleared` does not mean
+    // "nothing happened", it means "the operator clicked away from a selection".
+    //
+    // **Still needed, and #302 did not subsume it.** `read` is a GLOBAL mode the operator
+    // holds; `data-helm-surface` is a PER-ARTIFACT declaration that binds whatever they are
+    // holding. Delete this and a board is broken again the moment anyone picks up the text
+    // tool.
+    if (inPageSurface(e.target)) { return; }
+    // The text is the operator's own highlight rather than an element's contents; the NAME
+    // comes from `nameFor` (#215).
+    var selection = document.getSelection();
+    var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
+    var text = empty ? "" : String(selection).trim();
+    // Take the mark down here rather than waiting to be told. Swift answers a `cleared` by
+    // closing the field, which comes back as a wipe — but a render later, and in between the
+    // operator would be looking at a highlight over the passage they just clicked away from.
+    if (!text) { unpaintTextMark(); bridge.postMessage({ kind: "cleared" }); return; }
+    var range = selection.getRangeAt(0);
+    var node = elementFor(range.commonAncestorContainer);
+    var id = node ? nameFor(node) : null;
+    var r = range.getBoundingClientRect();
+    // One mark on screen: whatever was up before comes down first, even when this one cannot
+    // be painted. The new mark then STAYS — from here it is the comment field's subject, and
+    // only Swift closing that field may take it down.
+    unpaintTextMark();
+    paintTextMark(range);
+    bridge.postMessage({
+      kind: "selection", id: id, text: text,
+      rect: { x: r.left, y: r.top, width: r.width, height: r.height }
+    });
   }, true);
 })();

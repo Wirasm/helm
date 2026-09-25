@@ -221,13 +221,6 @@ final class CanvasNotesDrawerTests: XCTestCase {
         XCTAssertFalse(model.hasNotes)
     }
 
-    func testAURLCanvasHasNoSidecarToOpen() {
-        let model = CanvasModel()
-        model.openURL(URL(string: "https://example.com/dashboard")!)
-
-        XCTAssertNil(model.sidecarURL, "which is what keeps a drawer off a web page")
-    }
-
     // MARK: - How wide
 
     func testTheDrawerTakesHalfOfAnOrdinaryPane() {

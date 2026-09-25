@@ -983,7 +983,7 @@ package enum SpoolPolicy {
 /// which is to say on whatever pane the operator happens to be in. There is nothing for a
 /// policy to check, because the request never said which pane it meant. So a refusal names the
 /// route to use instead **where one exists** — `helm-close` for `closePane` and `selectTerminal`,
-/// `push.sh` for `openCanvasFile`/`openCanvasURL`/`openArtifact`/`pushCanvasFile`, `helm-spool`
+/// `push.sh` for `openCanvasFile`/`openArtifact`/`pushCanvasFile`, `helm-spool`
 /// for `openWorkspace` — and where one does not, it says what an addressed version would have to
 /// carry, which is exactly `CloseRequest`'s shape: a pane, refused when
 /// `SpoolPaneState.holdsKeyboard`.
@@ -1081,7 +1081,7 @@ package enum SpoolCommandPolicy {
                     + "workspace. It is the largest seizure helm can perform, and nothing an "
                     + "agent asks for is worth it")
 
-        case .openCanvasFile, .openCanvasURL:
+        case .openCanvasFile:
             return .refused(
                 "\(command.rawValue) selects the new pane and focuses its slot "
                     + "(Workbench.insert). An agent putting an artifact on the bench uses "

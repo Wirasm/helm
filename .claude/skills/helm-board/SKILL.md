@@ -161,17 +161,17 @@ interrupts — the file is simply current when you next look.
 ## What helm's own marking does on a board — nothing, deliberately
 
 The container carries `data-helm-surface`, and inside a declared surface helm's annotation layer
-does nothing at all: no stroke, no ink, no anchor.
+does nothing at all: no mark, no dismissal, no anchor.
 
-That is a decision rather than a limitation. helm's mark layer resolves what it circled against
-**DOM elements**, and a mounted board is one `<canvas>` with no per-shape nodes — so a helm mark
-over a board could only ever name the board. The board's own ink becomes a record with an id,
-resolves by overlap to a shape you named, and reaches you through the latch. It is the same
-gesture with a better answer, so the two do not share the surface.
+That is a decision rather than a limitation. helm's text mark resolves against **DOM elements**, and
+a mounted board is one `<canvas>` with no per-shape nodes — so a helm mark over a board could only
+ever name the board. The board's own ink becomes a record with an id, resolves by overlap to a
+shape you named, and reaches you through the latch.
 
-Practically: **the operator draws with the board's tools, not helm's.** helm's mark tools still
-work everywhere else on the page — a heading, a caption, prose above the board — so put anything
-you want them to be able to highlight *outside* the board element.
+Practically: **the operator draws with the board's tools.** helm has no drawing tools of its own on a
+document (#385 removed them); its text mark still works everywhere else on the page — a heading, a
+caption, prose above the board — so put anything you want them to be able to highlight *outside*
+the board element.
 
 ## What this does not do
 

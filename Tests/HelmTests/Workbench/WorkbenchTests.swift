@@ -428,44 +428,6 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertEqual(bench.columns[0].slots.map(\.height), heights, "nothing moved")
     }
 
-    // MARK: - Repointing a canvas (#89)
-
-    func testRepointingACanvasRecordsWhereItWent() {
-        var bench = Workbench(terminal: UUID())
-        let page = Pane(content: .canvas(.empty))
-        bench.splitRight(with: page)
-
-        bench.repoint(page.id, to: .url(URL(string: "https://example.com")!))
-
-        XCTAssertEqual(
-            bench.pane(page.id)?.content, .canvas(.url(URL(string: "https://example.com")!)),
-            "⌘L opens `.empty` because there is no address yet — the one that follows is "
-                + "what a relaunch has to give back")
-        assertInvariants(bench, "repoint")
-    }
-
-    func testRepointingATerminalPaneIsRefused() {
-        let shell = terminal()
-        var bench = Workbench(panes: [shell])
-        let before = bench
-
-        bench.repoint(shell.id, to: .url(URL(string: "https://example.com")!))
-
-        XCTAssertEqual(
-            bench, before,
-            "a terminal that quietly became a canvas is not a repair — it is a pane whose "
-                + "pty has nowhere to render")
-    }
-
-    func testRepointingAPaneTheBenchDoesNotHoldIsANoOp() {
-        var bench = Workbench(terminal: UUID())
-        let before = bench
-
-        bench.repoint(UUID(), to: .url(URL(string: "https://example.com")!))
-
-        XCTAssertEqual(bench, before, "a canvas may outlive its pane by a moment")
-    }
-
     // MARK: - Selecting
 
     func testSelectingAPaneTheBenchDoesNotHoldIsANoOp() {
@@ -554,10 +516,7 @@ final class WorkbenchTests: XCTestCase {
     func testCodableRoundTripsEveryPaneKind() throws {
         var bench = Workbench(terminal: UUID())
         bench.insert(canvas("/tmp/plan.md"), at: .column)
-        bench.insert(
-            Pane(content: .canvas(.url(URL(string: "http://localhost:3000")!))),
-            at: .tab(in: bench.focusedSlot))
-        bench.insert(Pane(content: .canvas(.empty)), at: .row(in: bench.columns[0].id))
+        bench.insert(Pane(content: .browser), at: .row(in: bench.columns[0].id))
         bench.resizeColumn(bench.columns[0].id, to: 0.7, against: bench.columns[1].id)
 
         let data = try JSONEncoder().encode(bench)

@@ -39,32 +39,23 @@ struct StandardizedPath: Equatable, Hashable, Codable {
 
 // MARK: - CanvasSource
 
-/// What a canvas pane is showing, as a value the workbench can persist. CONTEXT.md:
-/// the canvas is *modular by source* — a file an agent or the operator opened, or a
-/// URL.
+/// What a canvas pane is showing, as a value the workbench can persist: a file an agent or
+/// the operator opened.
 ///
-/// A sum rather than two optionals, because a canvas showing both a file and a URL is
-/// not a state that exists — and because the difference has to survive the persistence
-/// seam. `WorkspaceContext.openArtifactPath` was a **file** path, so #38 deliberately
-/// persisted nothing for a URL canvas rather than write `url.path` (empty, or a stray
-/// `/segment`) into a field read back through `URL(fileURLWithPath:)`. This type is what
-/// retires that field: a bench pane carries its own source, so a URL canvas comes back.
+/// **One case, and still an enum with a `kind` on the wire.** It had three — a file, a URL
+/// and an empty ⌘L canvas — until #376 removed the URL canvas; web pages are the shared
+/// browser's now. A payload that can grow a second kind keeps its discriminator (AGENTS.md),
+/// and it is also what makes a stored `url` or `empty` source fail to decode, so `Slot` drops
+/// that pane rather than guessing at it.
 ///
-/// **An address, not a document.** It used to carry `CanvasModel.Document` /
-/// `CanvasModel.Page` — the rendered content, the file watcher's generation counter, the
-/// last load failure — which is live state that cannot be `Codable` and should not be. The
-/// model keeps all of that as `CanvasModel.Showing`; what a pane persists is only enough to
-/// re-open the same thing.
+/// **An address, not a document.** The rendered content and the file watcher's generation
+/// counter are live state that cannot be `Codable` and should not be. The model keeps those as
+/// `CanvasModel.Document`; what a pane persists is only enough to re-open the same thing.
 enum CanvasSource: Equatable {
     /// A file on disk. The payload type carries the guarantee: a `StandardizedPath` cannot
     /// be built unstandardized, so `Workbench.pane(showing:)`'s by-value compare cannot
     /// silently stop matching and ⌘-clicking the same link twice stays one canvas.
     case file(path: StandardizedPath)
-    /// A page the canvas navigated to.
-    case url(URL)
-    /// A canvas with nothing in it yet — what ⌘L opens before an address is committed.
-    /// Persisted as itself so the empty pane comes back rather than vanishing.
-    case empty
 
     static func file(_ url: URL) -> CanvasSource {
         .file(path: StandardizedPath(url))
@@ -75,21 +66,21 @@ enum CanvasSource: Equatable {
     }
 
     /// The file this source names, for the model that has to load it.
-    var fileURL: URL? {
-        if case let .file(path) = self { URL(fileURLWithPath: path.value) } else { nil }
+    var fileURL: URL {
+        switch self {
+        case let .file(path): URL(fileURLWithPath: path.value)
+        }
     }
 }
 
 // MARK: - Codable
 
 /// Hand-written with a string discriminator. The synthesized shape is
-/// `{"file":{"path":"…"}}` for a payload-labelled case and `{"url":{"_0":"…"}}` for an
-/// unlabelled one — positional `_0` keys that break on any reordering and are unreadable
-/// in the stored blob. A pane's source is something an operator may well have to look at
+/// `{"file":{"path":"…"}}` — no `kind`, and unreadable in the stored blob. A pane's source is something an operator may well have to look at
 /// in `defaults read`, so it is spelled out.
 extension CanvasSource: Codable {
-    private enum CodingKeys: String, CodingKey { case kind, path, address }
-    private enum Kind: String, Codable { case file, url, empty }
+    private enum CodingKeys: String, CodingKey { case kind, path }
+    private enum Kind: String, Codable { case file }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -98,10 +89,6 @@ extension CanvasSource: Codable {
             // StandardizedPath standardizes on decode, so a hand-edited defaults blob
             // carrying `/a/./b.md` comes back as the same source as `/a/b.md`.
             self = .file(path: try container.decode(StandardizedPath.self, forKey: .path))
-        case .url:
-            self = .url(try container.decode(URL.self, forKey: .address))
-        case .empty:
-            self = .empty
         }
     }
 
@@ -111,11 +98,6 @@ extension CanvasSource: Codable {
         case let .file(path):
             try container.encode(Kind.file, forKey: .kind)
             try container.encode(path, forKey: .path)
-        case let .url(url):
-            try container.encode(Kind.url, forKey: .kind)
-            try container.encode(url, forKey: .address)
-        case .empty:
-            try container.encode(Kind.empty, forKey: .kind)
         }
     }
 }

@@ -3,8 +3,12 @@ import Foundation
 /// **A region of a page where the pointer is the page's, not helm's** (#111).
 ///
 /// An artifact declares one by putting `data-helm-surface` on an element; helm's annotation
-/// script then does nothing at all inside it — no `preventDefault`, no stroke, no `cleared`
-/// message, and no anchor resolved out of it.
+/// script then does nothing at all inside it — no mark, no `cleared` message, and no anchor
+/// resolved out of it.
+///
+/// **Since #385 only the text tool can meet a surface.** The freehand, arrow and point tools the
+/// section below measures were removed; the section stays because the text-tool half of the
+/// collision is still live, and it is the half that closed the operator's notes.
 ///
 /// ## The collision this settles, measured rather than assumed
 ///
@@ -61,9 +65,10 @@ import Foundation
 ///
 /// ## Why an attribute, and why the *page* writes this one
 ///
-/// `data-helm-frame` and `data-helm-mark` are helm marking helm's own chrome so the script can
-/// skip it. This is the same shape pointed the other way: the page marking the page's own
-/// surface so the script can skip that too. The argument for a marker over anything the script
+/// `data-helm-frame` is helm marking helm's own chrome so the script can skip it (and
+/// `data-helm-mark` did the same for the ink layer, until #385 removed it). This is the same
+/// shape pointed the other way: the page marking the page's own surface so the script can skip
+/// that too. The argument for a marker over anything the script
 /// could infer is `helmFrame`'s and is unchanged — *"an attribute helm itself writes cannot be
 /// wrong in either direction"*, and here an attribute the **author** writes cannot be wrong
 /// either, because declaring it is the author saying what they mean. The inference this

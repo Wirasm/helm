@@ -169,17 +169,10 @@ extension Shortcut {
             Shortcut(
                 .character("o"), .command, does: .openArtifact,
                 menu: .init(title: "Open Artifact…", key: "o", modifiers: .command)),
-            // ⌘L — the address bar, wherever the idiom comes from. The `nil` URL IS the
-            // command: the canvas focuses its field and the operator types. It used to be
-            // the *absence* of a notification object, which is the one shape an untyped
-            // channel cannot tell from a mistake.
-            Shortcut(
-                .character("l"), .command, does: .openCanvasURL(nil),
-                menu: .init(title: "Open URL…", key: "l", modifiers: .command)),
             // ⌘⇧B — the shared browser (#350). Offered like everything that arrives on the
             // bench: the pane appears and the keyboard stays where it was.
             Shortcut(
-                .character("b"), [.command, .shift], does: .openBrowser,
+                .character("b"), [.command, .shift], does: .openBrowser(nil),
                 menu: .init(title: "Shared Browser", key: "b", modifiers: [.command, .shift])),
             Shortcut(
                 .character("r"), [.command, .shift], does: .toggleRail,

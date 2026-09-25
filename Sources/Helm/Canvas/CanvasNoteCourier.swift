@@ -122,9 +122,8 @@ struct CanvasNoteCourier {
     /// That entry is already the sidecar's own heading plus the canvas path, which is what carries
     /// the **anchor**: `` `#bridge` — "this shouldn't talk to that" `` rather than the prose
     /// alone. #205's acceptance is explicit that an agent receiving the sentence with no anchor
-    /// cannot act on it, and inventing a leaner shape here would drop exactly that — the mark type
-    /// (an arrow would read as one anchor) and the covered text (which is how the agent verifies
-    /// it resolved to the right thing). A second format would also be a second thing to keep in
+    /// cannot act on it, and inventing a leaner shape here would drop exactly that — and the
+    /// covered text, which is how the agent verifies it resolved to the right thing. A second format would also be a second thing to keep in
     /// step with `CanvasNotes.describe`.
     ///
     /// The trailer is the one addition, and it is about the channel rather than the note: mail

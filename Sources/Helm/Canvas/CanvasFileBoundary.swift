@@ -6,7 +6,7 @@ import Foundation
 /// helm serves artifacts itself. A page's relative references (`./diagram.css`,
 /// `img/x.png`) must resolve to siblings; nothing may resolve outside.
 ///
-/// **Pure on purpose**, in the style of `CanvasURLPolicy` and `CanvasAddress`: the decision
+/// **Pure on purpose**, in the style of `TerminalURLPolicy` and `CanvasAddress`: the decision
 /// lives where `swift test` reaches it, rather than inside a `WKURLSchemeHandler` where
 /// exercising it would need a live `WKURLSchemeTask`. That is not a tidiness preference —
 /// the first version of this check was a private method on the handler, and the symlink
