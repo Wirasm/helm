@@ -181,7 +181,8 @@ runs only when `daemon/**` or a `.claude/skills/bench-*` skill changed (the gate
 skills' snippets), and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
 `docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
-M0 (skeleton), M5a (daemon-owned ptys) and mail are the parts that exist.
+M0 (skeleton), M5a (daemon-owned ptys), mail and the shared browser (#350) are the parts
+that exist.
 
 **If you touched `hooks/`, run its gate:**
 
