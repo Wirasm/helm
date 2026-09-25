@@ -6,6 +6,7 @@ version = 4
 name = "bench"
 version = "0.0.1"
 dependencies = [
+ "bench-sessions",
  "bench-wire",
  "serde_json",
 ]
@@ -41,6 +42,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bench-sessions"
+version = "0.0.1"
+dependencies = [
+ "bench-doc",
+ "bench-session",
+ "bench-wire",
+ "libc",
+ "memchr",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bench-wire"
 version = "0.0.1"
 dependencies = [
@@ -57,7 +71,9 @@ dependencies = [
  "bench-doc",
  "bench-mail",
  "bench-session",
+ "bench-sessions",
  "bench-wire",
+ "serde",
  "serde_json",
  "time",
 ]

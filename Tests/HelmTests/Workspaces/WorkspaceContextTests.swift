@@ -15,7 +15,7 @@ final class WorkspaceContextTests: XCTestCase {
         // equality now: the fixture carries one rather than the assertion being loosened.
         let context = WorkspaceContext(
             terminalSessionIDs: [id], selectedTerminalID: id, openArtifactPath: "/tmp/a.md",
-            branch: "main", branchResolved: true, workbench: Workbench(terminal: id))
+            workbench: Workbench(terminal: id))
         WorkspaceContextStore.save(["/workspace": context], to: defaults)
 
         let restored = WorkspaceContextStore.load(from: defaults)["/workspace"]
@@ -32,7 +32,7 @@ final class WorkspaceContextTests: XCTestCase {
         let id = UUID()
         let blob = """
             {"/workspace":{"terminalSessionIDs":["\(id.uuidString)"],
-                           "branchResolved":"yes please","branch":17,
+                           "selectedTerminalID":17,
                            "openArtifactPath":"/tmp/a.md"}}
             """
         defaults.set(blob, forKey: WorkspaceContextStore.key)
@@ -41,8 +41,7 @@ final class WorkspaceContextTests: XCTestCase {
 
         XCTAssertEqual(restored?.terminalSessionIDs, [id], "the good fields still decode")
         XCTAssertEqual(restored?.openArtifactPath, "/tmp/a.md")
-        XCTAssertFalse(restored?.branchResolved ?? true, "a bad bool falls back to its default")
-        XCTAssertNil(restored?.branch, "a bad optional falls back to nil")
+        XCTAssertNil(restored?.selectedTerminalID, "a bad optional falls back to nil")
     }
 
     func testAMissingKeyIsNotAnError() {

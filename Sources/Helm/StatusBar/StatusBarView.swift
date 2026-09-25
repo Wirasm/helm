@@ -67,7 +67,7 @@ struct StatusBarView: View {
     private var stats: some View {
         let summary = StatusSummary.of(
             workspace: model.selectedWorkspace,
-            contexts: model.contexts,
+            branches: model.branches,
             presence: board.presence
         )
         HStack(spacing: 6) {
