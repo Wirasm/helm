@@ -106,7 +106,7 @@ pub fn default_candidates(home: &Path, playwright_browsers_path: Option<&str>) -
             Some((rev, entry.path()))
         })
         .collect();
-    revisions.sort_by(|a, b| b.0.cmp(&a.0));
+    revisions.sort_by_key(|r| std::cmp::Reverse(r.0));
     const LAYOUTS: &[&str] = &[
         "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
         "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
