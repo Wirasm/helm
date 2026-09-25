@@ -20,7 +20,7 @@
 
 use crate::bench::{Bench, Pane};
 use crate::document::Document;
-use crate::ids::PaneId;
+use crate::ids::{PaneId, StandardPath};
 use crate::surface::{PaneName, Surface};
 use serde_json::Value;
 
@@ -70,21 +70,27 @@ impl Bench {
 
 impl Document {
     /// Read a stored document. A workspace whose bench cannot be recovered keeps its place
-    /// with today's one-terminal frame; its shelf, if unreadable, is dropped. What still
-    /// refuses is a document no operation could have produced — a path open twice, a pane id
-    /// in two places — because there is no telling which half to keep.
+    /// with today's one-terminal frame; its shelf, if unreadable, is dropped. A workspace with
+    /// no readable path is dropped — the path is its identity, and there is nothing to show
+    /// without one — and an `active` naming nothing that survived falls back to the first
+    /// workspace. What still refuses is a document no operation could have produced — a path
+    /// open twice, a pane id in two places — because there is no telling which half to keep.
     pub fn read_tolerant(mut value: Value) -> Result<Recovered<Document>, String> {
         let mut notes = Vec::new();
+        let mut kept: Vec<String> = Vec::new();
         if let Some(workspaces) = value.get_mut("workspaces").and_then(Value::as_array_mut) {
+            workspaces.retain(|workspace| match readable_path(workspace) {
+                Ok(_) => true,
+                Err(why) => {
+                    notes.push(format!("a workspace was dropped: {why}"));
+                    false
+                }
+            });
             for workspace in workspaces {
-                let path = workspace
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .unwrap_or("<no path>")
-                    .to_string();
-                let Some(fields) = workspace.as_object_mut() else {
-                    continue;
-                };
+                let path = readable_path(workspace).expect("unreadable paths were dropped above");
+                kept.push(path.clone());
+                let fields = workspace.as_object_mut().expect("checked by readable_path");
+                fields.insert("path".into(), Value::String(path.clone()));
                 let bench = fields.remove("bench").unwrap_or(Value::Null);
                 let recovered = match Bench::read_tolerant(bench) {
                     Ok(r) => r,
@@ -121,12 +127,54 @@ impl Document {
                 }
             }
         }
+        repair_active(&mut value, &kept, &mut notes);
         let document = serde_json::from_value(value).map_err(|e| e.to_string())?;
         Ok(Recovered {
             value: document,
             notes,
         })
     }
+}
+
+/// A workspace entry's path in its one spelling, or why it has none.
+fn readable_path(workspace: &Value) -> Result<String, String> {
+    let fields = workspace
+        .as_object()
+        .ok_or_else(|| format!("an entry that is not a workspace ({workspace})"))?;
+    let raw = fields
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("an entry with no path")?;
+    StandardPath::new(raw).map(|p| p.as_str().to_string())
+}
+
+/// `active` must name a workspace that survived; otherwise the first one is shown, as helm
+/// shows the first when the one it remembered is gone (`WorkspacePersistence.loadSelection`).
+fn repair_active(value: &mut Value, kept: &[String], notes: &mut Vec<String>) {
+    let Some(fields) = value.as_object_mut() else {
+        return;
+    };
+    let stored = fields.get("active").cloned().unwrap_or(Value::Null);
+    let resolved = stored
+        .as_str()
+        .and_then(|raw| StandardPath::new(raw).ok())
+        .map(|p| p.as_str().to_string())
+        .filter(|p| kept.contains(p));
+    let active = match (&stored, resolved) {
+        // Nothing was active, which a document can say (a workspace opened in the background
+        // while nothing was on screen); that is not a loss.
+        (Value::Null, _) => Value::Null,
+        (_, Some(path)) => Value::String(path),
+        _ => {
+            let fallback = kept.first().cloned();
+            notes.push(format!(
+                "the active workspace {stored} is not one that could be read — {} is shown instead",
+                fallback.as_deref().unwrap_or("nothing")
+            ));
+            fallback.map(Value::String).unwrap_or(Value::Null)
+        }
+    };
+    fields.insert("active".into(), active);
 }
 
 fn to_value(bench: &Bench) -> Value {

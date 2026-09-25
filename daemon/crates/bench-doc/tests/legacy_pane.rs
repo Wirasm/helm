@@ -184,3 +184,81 @@ fn a_field_a_newer_build_added_is_ignored_not_fatal() {
         "nothing was lost, so nothing is reported"
     );
 }
+
+#[test]
+fn a_workspace_with_no_readable_path_is_dropped_and_its_siblings_survive() {
+    let healthy = |path: &str| json!({"path": path, "bench": bench(vec![terminal_pane_fresh()])});
+    for bad in [
+        json!({"bench": bench(vec![archon_pane()])}),
+        json!({"path": "relative/dir", "bench": bench(vec![archon_pane()])}),
+        json!("not a workspace"),
+    ] {
+        let stored = json!({
+            "workspaces": [healthy("/work/a"), bad.clone(), healthy("/work/b")],
+            "active": "/work/b"
+        });
+
+        let read = Document::read_tolerant(stored).unwrap();
+
+        let paths: Vec<_> = read
+            .value
+            .workspaces()
+            .iter()
+            .map(|w| w.path.to_string())
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["/work/a", "/work/b"],
+            "{bad}: the siblings survive"
+        );
+        assert_eq!(
+            read.value.active().map(|p| p.to_string()).as_deref(),
+            Some("/work/b")
+        );
+        assert_eq!(
+            read.notes.len(),
+            1,
+            "{bad}: and the drop is reported: {:?}",
+            read.notes
+        );
+    }
+}
+
+#[test]
+fn an_active_workspace_that_did_not_survive_falls_back_to_the_first() {
+    for active in [json!("/work/gone"), json!("relative"), json!(42)] {
+        let stored = json!({
+            "workspaces": [
+                {"path": "/work/a", "bench": bench(vec![terminal_pane_fresh()])},
+                {"path": "/work/b", "bench": bench(vec![terminal_pane_fresh()])}
+            ],
+            "active": active.clone()
+        });
+
+        let read = Document::read_tolerant(stored).unwrap();
+
+        assert_eq!(
+            read.value.active().map(|p| p.to_string()).as_deref(),
+            Some("/work/a"),
+            "{active}: helm shows the first when the remembered one is gone"
+        );
+        assert_eq!(read.notes.len(), 1, "{active}: {:?}", read.notes);
+    }
+
+    let nothing_active = json!({
+        "workspaces": [{"path": "/work/a", "bench": bench(vec![terminal_pane_fresh()])}],
+        "active": null
+    });
+    let read = Document::read_tolerant(nothing_active).unwrap();
+    assert_eq!(
+        read.value.active(),
+        None,
+        "nothing active is a state, not a loss"
+    );
+    assert!(read.notes.is_empty());
+}
+
+/// A terminal pane with its own id, for tests that hold several benches in one document.
+fn terminal_pane_fresh() -> Value {
+    terminal_pane(&PaneId::mint().to_string())
+}
