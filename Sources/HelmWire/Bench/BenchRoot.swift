@@ -49,11 +49,12 @@ package enum BenchRoot {
                 return .failure(BenchRootError(variable: DefaultsSuite.suiteVariable, value: name))
             }
             return .success(root(suite: name, home: home))
-        case .refused:
+        case .refused(let why):
             // A running helm never gets here, because `DefaultsDomain.resolve` stops the launch
             // first. If something does, the shared root is the one answer that is never right.
             let raw = environment[DefaultsSuite.suiteVariable] ?? ""
-            return .failure(BenchRootError(variable: DefaultsSuite.suiteVariable, value: raw))
+            return .failure(
+                BenchRootError(variable: DefaultsSuite.suiteVariable, value: raw, sentence: why))
         }
     }
 
@@ -73,9 +74,17 @@ package struct BenchRootError: Error, Equatable {
     /// The variable that named the suite: `BENCH_SUITE` or `HELM_DEFAULTS_SUITE`.
     package let variable: String
     package let value: String
+    /// Why, for the pane to show.
+    package let sentence: String
 
-    package var sentence: String {
-        "\(variable)=\(value) is not a bench suite name (lowercase letters, digits and '-', at "
-            + "most 32), so helm will not guess which bench you meant"
+    /// A name `SuiteName` would refuse. The other refusal, a helm suite `DefaultsSuite` itself
+    /// refuses, passes its own reason.
+    init(variable: String, value: String, sentence: String? = nil) {
+        self.variable = variable
+        self.value = value
+        self.sentence =
+            sentence
+            ?? "\(variable)=\(value) is not a bench suite name (lowercase letters, digits and "
+            + "'-', at most 32), so helm will not guess which bench you meant"
     }
 }

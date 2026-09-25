@@ -171,8 +171,13 @@ final class WorkspaceModel: ObservableObject, ParkedBenches {
     /// `branchResolved` flag that stopped every later ask, so a tab showed the branch its folder
     /// had the first time it was opened, across relaunches, forever. A nil answer clears the label,
     /// because a folder that stopped being a repository, or a detached HEAD, has no branch to show.
+    ///
+    /// The answer is dropped when it arrives too late to be true: the tab's task was cancelled
+    /// because the selection moved on and a newer ask is running, or the workspace was closed
+    /// while git was running and would otherwise get a label back.
     func refreshBranch(for workspace: Workspace) async {
         let branch = await readBranch(workspace.path)
+        guard !Task.isCancelled, workspaces.contains(workspace) else { return }
         branches[workspace.path] = branch
     }
 }

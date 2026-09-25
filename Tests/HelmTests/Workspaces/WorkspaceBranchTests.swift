@@ -37,6 +37,46 @@ final class WorkspaceBranchTests: XCTestCase {
             "no branch now (detached, or no longer a repository) clears the old label")
     }
 
+    /// A workspace closed while git was still answering does not get its label back.
+    func testAnAnswerForAClosedWorkspaceIsDropped() async throws {
+        let git = SlowGit()
+        let model = WorkspaceModel(
+            defaults: try isolatedDefaults("branch-closed"), readBranch: { _ in await git.ask() })
+        model.open(workspace)
+
+        let refresh = Task { await model.refreshBranch(for: workspace) }
+        await git.untilAsked()
+        model.close(workspace)
+        await git.answer("main")
+        await refresh.value
+
+        XCTAssertNil(model.branches[workspace.path])
+    }
+
+    /// Holds git's answer until the test releases it.
+    private actor SlowGit {
+        private var pending: CheckedContinuation<String?, Never>?
+        private var asked: CheckedContinuation<Void, Never>?
+
+        func ask() async -> String? {
+            await withCheckedContinuation { continuation in
+                pending = continuation
+                asked?.resume()
+                asked = nil
+            }
+        }
+
+        func untilAsked() async {
+            guard pending == nil else { return }
+            await withCheckedContinuation { asked = $0 }
+        }
+
+        func answer(_ branch: String?) {
+            pending?.resume(returning: branch)
+            pending = nil
+        }
+    }
+
     /// A relaunch starts with no label and asks, even over a blob an older build wrote with
     /// `branchResolved: true`, the flag that used to stop every later ask.
     func testARelaunchRemembersNoBranch() async throws {
