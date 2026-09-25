@@ -14,7 +14,7 @@ operator and the agents are equal owners; every verb exists in an addressed, non
 form; both parties go through the same socket. Migration is strangler-style inside this
 repo: one vertical at a time, old code unwired only when the new is proven.
 
-**Where it stands: M0 + M5a + mail.** The daemon owns the mailroom (`bench-mail`:
+**Where it stands: M0 + M5a + mail + the shared browser.** The daemon owns the mailroom (`bench-mail`:
 files are the record, notices carry the path never the body, retire-never-delete,
 metadata-only listings) and the wake reactor (`mail/sent ⇒ agent/woken` by pasting into
 an idle pty the daemon owns, with the loop cap as a per-recipient token bucket in the
@@ -132,7 +132,7 @@ this workspace:
 
 ## How it grows
 
-Landed: M0 skeleton, M5a daemon ptys, mail. Next, in order (tracking issue #362): M4 the
+Landed: M0 skeleton, M5a daemon ptys, mail, the shared browser (#350). Next, in order (tracking issue #362): M4 the
 bench document → M3 `bench` as the whole agent surface → drawers, keymap and rules → M1
 attention → M2 finish (helm's mail hooks become sensors) → M5b every pane a benchd session
 → M6 sync the record over Tailscale → M7 the agents' own machine. Each milestone: new event
