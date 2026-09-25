@@ -230,6 +230,7 @@ const CLAUDE_READY_MARKER: &str = "bypass permissions";
 /// ever writing it contiguously.
 fn shows_marker(bytes: &[u8], marker: &str) -> bool {
     let drawn: Vec<u8> = drawn(bytes)
+        .0
         .into_iter()
         .filter(|b| !b.is_ascii_whitespace())
         .collect();
@@ -242,8 +243,9 @@ fn shows_marker(bytes: &[u8], marker: &str) -> bool {
 
 /// The bytes of raw pty output that are drawn: everything except escape sequences. A
 /// cursor move, a mode switch or an OSC's payload (a window title, a hyperlink target)
-/// puts nothing on screen.
-fn drawn(bytes: &[u8]) -> Vec<u8> {
+/// puts nothing on screen. Also returns where an escape that `bytes` ends inside begins
+/// (`bytes.len()` when none does), so a caller reading chunk by chunk can carry it over.
+fn drawn(bytes: &[u8]) -> (Vec<u8>, usize) {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
@@ -252,31 +254,46 @@ fn drawn(bytes: &[u8]) -> Vec<u8> {
             i += 1;
             continue;
         }
+        let start = i;
         i += 1;
-        match bytes.get(i) {
+        let finished = match bytes.get(i) {
+            None => false,
             // CSI: parameters, then one final byte in @..~.
             Some(b'[') => {
                 i += 1;
                 while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
                     i += 1;
                 }
+                i < bytes.len()
             }
             // OSC: up to BEL or ST (ESC \).
-            Some(b']') => {
-                while i < bytes.len() && bytes[i] != 0x07 {
-                    if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
+            Some(b']') => loop {
+                i += 1;
+                match bytes.get(i) {
+                    None => break false,
+                    Some(0x07) => break true,
+                    Some(0x1b) if bytes.get(i + 1) == Some(&b'\\') => {
                         i += 1;
-                        break;
+                        break true;
                     }
+                    Some(_) => {}
+                }
+            },
+            // Anything else: intermediates in 0x20..=0x2f, then one final byte
+            // (`ESC ( B` selects a charset).
+            Some(_) => {
+                while i < bytes.len() && (0x20..=0x2f).contains(&bytes[i]) {
                     i += 1;
                 }
+                i < bytes.len()
             }
-            // Any other escape is ESC plus one byte.
-            _ => {}
+        };
+        if !finished {
+            return (out, start);
         }
         i += 1;
     }
-    out
+    (out, bytes.len())
 }
 
 // ---------------------------------------------------------------------------
@@ -295,15 +312,36 @@ struct Ring {
     bytes: VecDeque<u8>,
     total: u64,
     last_change: Instant,
+    /// An escape the last read ended inside, so the next read can finish it.
+    unfinished: Vec<u8>,
 }
 
+/// An unterminated escape longer than this is not held for the next read. A `cat` of
+/// binary output can open an OSC that never closes.
+const UNFINISHED_ESCAPE_CAP: usize = 4096;
+
 impl Ring {
+    fn new(last_change: Instant) -> Ring {
+        Ring {
+            bytes: VecDeque::with_capacity(8192),
+            total: 0,
+            last_change,
+            unfinished: Vec::new(),
+        }
+    }
+
     fn push(&mut self, chunk: &[u8]) {
         self.total += chunk.len() as u64;
         // Quiet means nothing new drawn. A TUI that re-parks its cursor on a timer is
         // still idle (pi does, every ~2s).
-        if !drawn(chunk).is_empty() {
+        let mut scan = std::mem::take(&mut self.unfinished);
+        scan.extend_from_slice(chunk);
+        let (drawn, unfinished) = drawn(&scan);
+        if !drawn.is_empty() {
             self.last_change = Instant::now();
+        }
+        if scan.len() - unfinished <= UNFINISHED_ESCAPE_CAP {
+            self.unfinished = scan.split_off(unfinished);
         }
         for &b in chunk {
             if self.bytes.len() == RING_CAPACITY {
@@ -374,11 +412,7 @@ impl Session {
             spawned_at: Instant::now(),
             master: Mutex::new(master),
             child: Arc::new(Mutex::new(child)),
-            ring: Arc::new(Mutex::new(Ring {
-                bytes: VecDeque::with_capacity(8192),
-                total: 0,
-                last_change: Instant::now(),
-            })),
+            ring: Arc::new(Mutex::new(Ring::new(Instant::now()))),
             attached: Arc::new(Mutex::new(None)),
             attach_gen: AtomicU64::new(0),
             exited: Arc::new(AtomicBool::new(false)),
@@ -716,6 +750,10 @@ mod tests {
             b"bypass mode, no permissions",
             CLAUDE_READY_MARKER
         ));
+        assert!(shows_marker(
+            b"bypass\x1b(B permissions",
+            CLAUDE_READY_MARKER
+        ));
     }
 
     #[test]
@@ -724,28 +762,31 @@ mod tests {
         // idle. Counted as a change, it held every non-claude agent short of the 2s
         // quiet that wait_ready and the wake gate both need.
         let quiet_since = Instant::now() - Duration::from_secs(5);
-        let mut ring = Ring {
-            bytes: VecDeque::new(),
-            total: 0,
-            last_change: quiet_since,
-        };
+        let mut ring = Ring::new(quiet_since);
         ring.push(b"\x1b[1G\x1b[?25l");
         assert_eq!(
             ring.last_change, quiet_since,
             "a cursor move is not a change"
         );
         assert_eq!(ring.total, 10, "every byte still counts toward the total");
+        // A charset switch has an intermediate byte before its final one.
+        ring.push(b"\x1b(B");
+        // One pty read can end inside a sequence. Its tail arrives in the next read.
+        ring.push(b"\x1b[1G\x1b");
+        ring.push(b"[?2");
+        ring.push(b"5l\x1b]0;title");
+        ring.push(b"\x07");
+        assert_eq!(
+            ring.last_change, quiet_since,
+            "escapes split across reads, or with intermediates, draw nothing"
+        );
         ring.push(b"\x1b[2Kthinking");
         assert!(ring.last_change > quiet_since, "drawn text is a change");
     }
 
     #[test]
     fn the_ring_caps_and_reports_totals() {
-        let mut ring = Ring {
-            bytes: VecDeque::new(),
-            total: 0,
-            last_change: Instant::now(),
-        };
+        let mut ring = Ring::new(Instant::now());
         ring.push(&vec![b'x'; RING_CAPACITY + 100]);
         assert_eq!(ring.bytes.len(), RING_CAPACITY);
         assert_eq!(ring.total, (RING_CAPACITY + 100) as u64);
