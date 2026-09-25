@@ -126,7 +126,7 @@ final class TerminalManagerTests: XCTestCase {
         XCTAssertEqual(
             manager.sessions(for: firstWorkspace).map(\.displayTitle), ["shell 1", "shell 2"],
             "titles use creation ordinals")
-        manager.close(manager.sessions(for: firstWorkspace)[1])
+        manager.surfaces.close(manager.sessions(for: firstWorkspace)[1].id)
         manager.newTerminal(in: firstWorkspace)
         XCTAssertEqual(
             manager.sessions(for: firstWorkspace).map(\.displayTitle), ["shell 1", "shell 3"],
@@ -223,7 +223,7 @@ final class TerminalManagerTests: XCTestCase {
         manager.newTerminal(in: firstWorkspace)
         let sessions = manager.sessions(for: firstWorkspace)
         let survivors = [sessions[0], sessions[2]]
-        manager.close(sessions[1])
+        manager.surfaces.close(sessions[1].id)
         XCTAssertEqual(
             manager.sessions(for: firstWorkspace).map(\.id), survivors.map(\.id),
             "only requested tab closes")

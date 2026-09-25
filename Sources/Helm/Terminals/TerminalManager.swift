@@ -164,15 +164,4 @@ final class TerminalManager: ObservableObject {
         activeWorkspacePath = workspacePath
         return session
     }
-
-    /// Closes the tab AND its shell: removing the session drops the last strong
-    /// reference (once SwiftUI unmounts the view), deallocating view →
-    /// coordinator → surface → pty.
-    ///
-    /// It no longer refuses the workspace's last terminal. That rule did not disappear —
-    /// it generalised, to `Workbench.canClose`, which refuses the bench's last *pane*. A
-    /// workspace showing one terminal and one canvas may legitimately close the terminal.
-    func close(_ session: TerminalSession) {
-        surfaces.close(session.id)
-    }
 }

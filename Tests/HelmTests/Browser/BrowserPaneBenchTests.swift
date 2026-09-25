@@ -100,4 +100,19 @@ final class BrowserPaneBenchTests: XCTestCase {
             Workbench.self, from: JSONEncoder().encode(bench))
         XCTAssertEqual(decoded.panes.map(\.content).last, .browser)
     }
+
+    /// The real browser kind, not a fake: closing the workspace lets the view onto the browser go
+    /// (PR 3a of #354 — it used to be left open until an unmount), and the next pane onto the
+    /// browser gets a fresh connection.
+    func testClosingTheWorkspaceLetsTheBrowserViewGo() throws {
+        let model = mounted()
+        let id = try XCTUnwrap(model.offerBrowser())
+        let pane = try XCTUnwrap(model.bench?.pane(id))
+        let view = model.browser(for: pane)
+
+        model.closeWorkspace(workspace)
+        model.activate(workspacePath: workspace)
+
+        XCTAssertNotIdentical(model.browser(for: pane), view)
+    }
 }
