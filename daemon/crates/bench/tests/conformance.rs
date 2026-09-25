@@ -1299,6 +1299,7 @@ fn browser_start_publishes_the_endpoint_it_logged_and_a_second_start_finds_it() 
     let mut on_disk: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&endpoint_path).unwrap()).unwrap();
     on_disk["already_running"] = serde_json::json!(false);
+    on_disk["mode"] = serde_json::json!("headless");
     assert_eq!(on_disk, answer);
 
     // helm reads this file from Swift and cannot import the Rust type, so both sides test
@@ -1327,7 +1328,7 @@ fn browser_start_publishes_the_endpoint_it_logged_and_a_second_start_finds_it() 
         .expect("the fixture is a real endpoint");
     let typed: bench_wire::BrowserEndpoint =
         serde_json::from_value(written).expect("what the daemon writes decodes as the type");
-    assert_eq!(typed.mode, bench_wire::BrowserMode::Headless);
+    assert_eq!(typed.version, bench_wire::BROWSER_ENDPOINT_VERSION);
 
     // Logged before it was answered.
     let started: Vec<_> = event_kinds(&home.dir)
@@ -1588,10 +1589,14 @@ fn an_endpoint_left_by_a_dead_daemon_is_cleared_at_boot_and_logged() {
 }
 
 #[test]
-fn setup_opens_the_same_profile_headed_and_quitting_it_returns_to_headless() {
+fn setup_opens_the_profile_in_a_plain_window_and_quitting_it_returns_to_headless() {
     let home = TestHome::claim("brsetup");
     let fake = write_fake_browser(&home.dir);
-    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    // Configured args are headless flags; setup must not take them either.
+    write_browser_config(
+        &home.dir,
+        serde_json::json!({ "binary": fake, "args": ["--headless=new", "--user-agent=spoofed"] }),
+    );
     let _daemon = DaemonGuard::start(&home.dir, None);
     let argv_path = home.dir.join(".bench/browser/profile/argv");
 
@@ -1600,20 +1605,36 @@ fn setup_opens_the_same_profile_headed_and_quitting_it_returns_to_headless() {
     let headless_pid = headless["pid"].as_u64().unwrap() as i32;
 
     // Setup takes the running browser down and brings the profile up in a window.
+    fs::remove_file(&argv_path).unwrap();
     let setup = bench(&home.dir, &["browser", "setup"]);
     assert_eq!(setup.code, 0, "stderr: {}", setup.stderr);
     let setup = json_of(&setup);
     assert_eq!(setup["mode"], "setup");
-    assert_eq!(
-        setup["profile"], headless["profile"],
-        "one profile, two modes"
-    );
     assert!(!libc_alive(headless_pid));
-    let argv = fs::read_to_string(&argv_path).unwrap();
-    assert!(!argv.contains("--headless"), "{argv}");
+    // A plain Chrome on the same profile: Google refuses sign-in to one carrying the
+    // headless browser's user agent, remote-allow-origins or a debugging port (#374).
+    // Setup answers once it has the pid — there is no port to wait for — so the fake may
+    // not have recorded its argv yet (removed above so the headless one cannot be read).
+    let profile = home.dir.join(".bench/browser/profile");
+    let mut argv = String::new();
+    wait_until("the setup browser's argv", Duration::from_secs(5), || {
+        argv = fs::read_to_string(&argv_path).unwrap_or_default();
+        argv.ends_with('\n')
+    });
+    assert_eq!(
+        argv.lines().collect::<Vec<_>>(),
+        [
+            format!("--user-data-dir={}", profile.display()).as_str(),
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--use-mock-keychain",
+            "--password-store=basic",
+        ],
+        "setup runs with the profile flags and nothing else"
+    );
     assert!(
-        argv.contains("--user-agent="),
-        "the rest of the flags are unchanged: {argv}"
+        !home.dir.join(".bench/browser/endpoint.json").exists(),
+        "a setup browser has no address, so no endpoint names it"
     );
 
     // While the operator is in that window, `start` must not hand it to an agent as "the
@@ -1623,9 +1644,10 @@ fn setup_opens_the_same_profile_headed_and_quitting_it_returns_to_headless() {
     assert!(meanwhile.stderr.contains("setup"), "{}", meanwhile.stderr);
     let during = json_of(&bench(&home.dir, &["browser", "status"]));
     assert_eq!(during["mode"], "setup");
+    assert_eq!(during["pid"], setup["pid"]);
     assert!(
         during.get("cdp").is_none() && during.get("ws").is_none(),
-        "status hands out no address to the operator's window: {during}"
+        "{during}"
     );
 
     // The operator quits the window (Cmd-Q is a clean exit; TERM is how the fake gets one).
@@ -1646,8 +1668,9 @@ fn setup_opens_the_same_profile_headed_and_quitting_it_returns_to_headless() {
     assert!(
         fs::read_to_string(&argv_path)
             .unwrap()
-            .contains("--headless=new")
+            .contains("--remote-debugging-port=0")
     );
+    assert!(home.dir.join(".bench/browser/endpoint.json").exists());
     assert!(
         event_kinds(&home.dir)
             .iter()

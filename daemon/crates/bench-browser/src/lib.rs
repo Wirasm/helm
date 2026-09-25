@@ -12,10 +12,11 @@
 //!
 //! Two mechanisms carry the lifecycle rules:
 //!
-//! - **Port 0 + `DevToolsActivePort`.** Chromium picks a free port and writes it, with
-//!   the browser websocket path, into `<profile>/DevToolsActivePort` once its debugging
-//!   server is listening. So two suites never collide on a port, and "ready" is a fact
-//!   the browser reports rather than a sleep.
+//! - **Port 0 + `DevToolsActivePort`.** The headless browser's Chromium picks a free port
+//!   and writes it, with the browser websocket path, into `<profile>/DevToolsActivePort`
+//!   once its debugging server is listening. So two suites never collide on a port, and
+//!   "ready" is a fact the browser reports rather than a sleep. A setup browser has no
+//!   port at all (see `setup_args`), so there is nothing to wait for or publish.
 //! - **A pipe is the leash.** macOS has no parent-death signal, and the repo's rule is
 //!   that anything spawned must die without its spawner (#291: twelve orphaned burners,
 //!   nine hours). Chromium runs under a small `sh` wrapper whose stdin is a pipe the
@@ -189,14 +190,33 @@ pub fn default_args(version_output: &str) -> Result<Vec<String>, String> {
     ])
 }
 
-/// The flags the daemon owns. They go LAST so they win over anything a config's
-/// `args` says about the same switch: the profile must be the bench's, and the port
-/// must be the one the daemon reads back. `mock_keychain` is `BrowserConfig`'s field,
-/// forced on under a HOME that is not the account's own (`is_accounts_own_home`).
+/// The flags the daemon owns on the headless browser. They go LAST so they win over
+/// anything a config's `args` says about the same switch: the profile must be the
+/// bench's, and the port must be the one the daemon reads back. `mock_keychain` is
+/// `BrowserConfig`'s field, forced on under a HOME that is not the account's own
+/// (`is_accounts_own_home`).
 pub fn owned_args(profile: &Path, mock_keychain: bool) -> Vec<String> {
     let mut args = vec![
         format!("--user-data-dir={}", profile.display()),
         "--remote-debugging-port=0".into(),
+    ];
+    // The rest is setup's own set, after its `--user-data-dir`: one spelling of the
+    // profile flags for both modes.
+    args.extend(setup_args(profile, mock_keychain).into_iter().skip(1));
+    args
+}
+
+/// Everything the setup browser gets: the profile and nothing that looks automated.
+///
+/// Setup is where the operator signs in, and Google refuses a sign-in from a Chrome that
+/// carries the headless browser's flags — measured for #374: with the user-agent
+/// override, `--remote-allow-origins` and a debugging port, "This browser or app may not
+/// be secure"; with only these flags, on the same profile, Google and GitHub both signed
+/// in, and the headless browser then carried both logins. Nobody drives a setup browser,
+/// so it needs no port, and a config's `args` (headless flags) never reach it.
+pub fn setup_args(profile: &Path, mock_keychain: bool) -> Vec<String> {
+    let mut args = vec![
+        format!("--user-data-dir={}", profile.display()),
         "--no-first-run".into(),
         "--no-default-browser-check".into(),
     ];
@@ -295,12 +315,29 @@ exit "$s"
 /// One running browser. The daemon holds it in an `Arc`; the thread started by
 /// `launch` owns the wrapper `Child` and is the only thing that waits on it.
 pub struct Browser {
-    pub endpoint: BrowserEndpoint,
+    pub pid: u32,
+    pub launched: Launched,
     wrapper_pid: u32,
     leash: Mutex<Option<ChildStdin>>,
     exit: Mutex<Option<ExitInfo>>,
     exited: Condvar,
     endpoint_path: PathBuf,
+}
+
+/// What kind of browser is running, and so whether it has an address. Only the headless
+/// browser listens for CDP; a setup browser runs with no debugging port.
+pub enum Launched {
+    Headless(BrowserEndpoint),
+    Setup,
+}
+
+impl Browser {
+    pub fn mode(&self) -> BrowserMode {
+        match self.launched {
+            Launched::Headless(_) => BrowserMode::Headless,
+            Launched::Setup => BrowserMode::Setup,
+        }
+    }
 }
 
 /// How a browser ended. `requested` separates a stop the daemon asked for from a
@@ -335,14 +372,6 @@ impl Browser {
     ) -> Result<Arc<Browser>, LaunchError> {
         let config = read_config(root)?;
         let binary = resolve_binary(&config, candidates, root)?;
-        let mut args = match &config.args {
-            Some(a) => a.clone(),
-            None => default_args(&read_version(&binary)?).map_err(LaunchError::Failed)?,
-        };
-        if mode == BrowserMode::Setup {
-            // The same profile and flags, in a real window.
-            args.retain(|a| !a.starts_with("--headless"));
-        }
         let dir = browser_dir(root);
         let profile = browser_profile_dir(root);
         fs::DirBuilder::new()
@@ -353,7 +382,17 @@ impl Browser {
                 LaunchError::Failed(format!("cannot create {}: {e}", profile.display()))
             })?;
         let mock_keychain = config.mock_keychain.unwrap_or(false) || !is_accounts_own_home(home);
-        args.extend(owned_args(&profile, mock_keychain));
+        let args = match mode {
+            BrowserMode::Headless => {
+                let mut args = match &config.args {
+                    Some(a) => a.clone(),
+                    None => default_args(&read_version(&binary)?).map_err(LaunchError::Failed)?,
+                };
+                args.extend(owned_args(&profile, mock_keychain));
+                args
+            }
+            BrowserMode::Setup => setup_args(&profile, mock_keychain),
+        };
         link_native_messaging_hosts(&profile, home);
 
         // A port file from an earlier run would be read as this run's answer.
@@ -408,55 +447,62 @@ impl Browser {
             }
         };
 
-        let deadline = Instant::now() + BROWSER_READY_WAIT;
-        let (port, ws_path) = loop {
-            if let Some(answer) = read_port_file(&port_file) {
-                break answer;
-            }
-            if let Ok(Some(status)) = child.try_wait() {
-                return Err(abandon(
-                    child,
-                    leash,
-                    None,
-                    format!(
-                        "{} exited ({status}) before it was listening",
-                        binary.display()
-                    ),
-                ));
-            }
-            if Instant::now() >= deadline {
-                return Err(abandon(
-                    child,
-                    leash,
-                    Some(pid),
-                    format!(
-                        "{} did not report a debugging port within {}s",
-                        binary.display(),
-                        BROWSER_READY_WAIT.as_secs()
-                    ),
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        };
+        let launched = match mode {
+            // Nothing to wait for: a setup browser reports no port, and nothing connects.
+            BrowserMode::Setup => Launched::Setup,
+            BrowserMode::Headless => {
+                let deadline = Instant::now() + BROWSER_READY_WAIT;
+                let (port, ws_path) = loop {
+                    if let Some(answer) = read_port_file(&port_file) {
+                        break answer;
+                    }
+                    if let Ok(Some(status)) = child.try_wait() {
+                        return Err(abandon(
+                            child,
+                            leash,
+                            None,
+                            format!(
+                                "{} exited ({status}) before it was listening",
+                                binary.display()
+                            ),
+                        ));
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(abandon(
+                            child,
+                            leash,
+                            Some(pid),
+                            format!(
+                                "{} did not report a debugging port within {}s",
+                                binary.display(),
+                                BROWSER_READY_WAIT.as_secs()
+                            ),
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                };
 
-        let endpoint = BrowserEndpoint {
-            format: BROWSER_ENDPOINT_FORMAT.into(),
-            version: BROWSER_ENDPOINT_VERSION,
-            cdp: format!("http://127.0.0.1:{port}"),
-            ws: format!("ws://127.0.0.1:{port}{ws_path}"),
-            port,
-            pid,
-            mode,
-            binary: binary.display().to_string(),
-            profile: profile.display().to_string(),
-            started_at,
+                let endpoint = BrowserEndpoint {
+                    format: BROWSER_ENDPOINT_FORMAT.into(),
+                    version: BROWSER_ENDPOINT_VERSION,
+                    cdp: format!("http://127.0.0.1:{port}"),
+                    ws: format!("ws://127.0.0.1:{port}{ws_path}"),
+                    port,
+                    pid,
+                    binary: binary.display().to_string(),
+                    profile: profile.display().to_string(),
+                    started_at,
+                };
+                if let Err(e) = write_endpoint(&endpoint_path, &endpoint) {
+                    return Err(abandon(child, leash, Some(pid), e));
+                }
+                Launched::Headless(endpoint)
+            }
         };
-        if let Err(e) = write_endpoint(&endpoint_path, &endpoint) {
-            return Err(abandon(child, leash, Some(pid), e));
-        }
 
         let browser = Arc::new(Browser {
-            endpoint,
+            pid,
+            launched,
             wrapper_pid,
             leash: Mutex::new(leash),
             exit: Mutex::new(None),
@@ -470,8 +516,8 @@ impl Browser {
             // here means the daemon asked.
             let requested = supervised.leash.lock().unwrap().is_none();
             let info = ExitInfo {
-                pid: supervised.endpoint.pid,
-                mode: supervised.endpoint.mode,
+                pid: supervised.pid,
+                mode: supervised.mode(),
                 code: status.ok().and_then(|s: ExitStatus| s.code()),
                 requested,
             };
@@ -499,7 +545,7 @@ impl Browser {
             .unwrap();
         if timeout.timed_out() && guard.is_none() {
             drop(guard);
-            signal(self.endpoint.pid, 9);
+            signal(self.pid, 9);
             signal(self.wrapper_pid, 9);
             let guard = self.exit.lock().unwrap();
             let _ = self

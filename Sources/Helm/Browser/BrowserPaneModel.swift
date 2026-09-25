@@ -15,8 +15,6 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
     enum Status: Equatable {
         /// Not connected, and why — shown in the pane.
         case waiting(String)
-        /// The shared browser is running in a window for setup; the pane does not compete.
-        case setup
         case connecting
         case connected
     }
@@ -90,15 +88,12 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         switch BrowserEndpoint.read(at: url) {
         case .absent:
             status = .waiting(
-                "No shared browser is running. `bench browser start` starts one; this pane "
-                    + "connects when it appears.")
+                "No shared browser is running here. `bench browser start` starts one, and "
+                    + "after `bench browser setup` it comes back when that window is quit (⌘Q); "
+                    + "this pane connects when it appears.")
         case let .unreadable(why):
             status = .waiting(why)
         case let .found(endpoint):
-            guard endpoint.mode == .headless else {
-                status = .setup
-                return
-            }
             guard let ws = endpoint.webSocketURL else {
                 status = .waiting("\(url.path) names no websocket")
                 return
