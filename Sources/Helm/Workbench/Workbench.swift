@@ -252,6 +252,20 @@ struct Workbench: Codable, Equatable {
         normalize()
     }
 
+    /// An agent's canvas: placed by `placement(forOpening:)` and offered, never inserted.
+    /// Returns the pane now showing `source` — the one already there, or the one just added.
+    ///
+    /// One rule for every bench, mounted or parked (#349). A push from a workspace the operator
+    /// is not looking at lands on that workspace's stored bench through this same call, so the
+    /// two cannot drift into placing a canvas differently.
+    mutating func offer(canvas source: CanvasSource) -> Pane.ID {
+        let placement = placement(forOpening: source)
+        if case let .existing(open) = placement { return open }
+        let pane = Pane(content: .canvas(source))
+        offer(pane, at: placement)
+        return pane.id
+    }
+
     /// The fraction a newcomer arrives with so that `normalize()` lands an `n`-member stack
     /// on `1/(n+1)` each — every existing member keeping its proportion to the others, and
     /// none of them halved to make room.

@@ -8,7 +8,7 @@ import Foundation
 /// opened, its identity is the normalised path, and everything persisted is a local
 /// preference. There was never a registration, so there is nothing to unregister.
 @MainActor
-final class WorkspaceModel: ObservableObject {
+final class WorkspaceModel: ObservableObject, ParkedBenches {
     @Published private(set) var workspaces: [Workspace]
     @Published private(set) var selectedWorkspace: Workspace?
     /// Keyed by `WorkspacePath.value`, not `WorkspacePath` itself: `Dictionary` only encodes
@@ -136,6 +136,24 @@ final class WorkspaceModel: ObservableObject {
         workbenchChanges = workbench.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { MainActor.assumeIsolated(save) }
+    }
+
+    /// Put a canvas on a parked workspace's stored bench (#349) — what switching back to it will
+    /// mount (`RootView.activateSelectedWorkspace`).
+    ///
+    /// Written and saved only on a real change: a re-push of a canvas already there changes
+    /// nothing here, and every save reaches `UserDefaults`.
+    func offer(_ source: CanvasSource, toBenchOf path: WorkspacePath) -> Pane.ID? {
+        guard var context = contexts[path.value], var bench = context.workbench else {
+            return nil
+        }
+        let pane = bench.offer(canvas: source)
+        if bench != context.workbench {
+            context.workbench = bench
+            contexts[path.value] = context
+            WorkspaceContextStore.save(contexts, to: defaults)
+        }
+        return pane
     }
 
     /// Remember a workspace's git branch for its tab label.

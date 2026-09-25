@@ -112,6 +112,15 @@ final class WorkbenchModel: ObservableObject {
     /// the reason.
     private var origins: [Pane.ID: CanvasOrigin] = [:]
 
+    /// Where a push from a workspace that is not mounted goes (#349). A parked workspace's bench
+    /// is a value in `WorkspaceModel.contexts`, which this model cannot reach, and without this a
+    /// push from one was dropped while `push.sh` reported success.
+    ///
+    /// Weak because `WorkspaceModel.observe` already holds this model strongly; both are the
+    /// root view's `@StateObject`s, so neither outlives the other. nil drops a parked push, which
+    /// is what a test that never wires it gets.
+    weak var parked: ParkedBenches?
+
     /// How a mark leaves helm. Injected for the same reason `BenchSnapshotModel` injects its
     /// mailbox root and its `foregroundPid`: the routing is then reachable from `swift test`
     /// against a mailbox the test owns, with no live agent and nothing written near the
@@ -736,20 +745,35 @@ final class WorkbenchModel: ObservableObject {
     @discardableResult
     func offer(_ source: CanvasSource) -> Pane.ID? {
         guard var bench else { return nil }
-        let placement = bench.placement(forOpening: source)
-        if case let .existing(open) = placement {
+        let pane = bench.offer(canvas: source)
+        if self.bench?.pane(pane) == nil {
+            commit(bench)
+        } else {
             // Only a pane already resolved into a canvas has a render to refresh. One that has
             // not — a restored tab nobody has selected since launch — reads the file when
             // `canvas(for:)` first builds its model, so resolving one here would buy nothing
             // and would open a `FileWatcher`, and its file descriptor, for a pane that is not
             // on screen.
-            canvases[open]?.model.refresh()
-            return open
+            canvases[pane]?.model.refresh()
         }
-        let pane = Pane(content: .canvas(source))
-        bench.offer(pane, at: placement)
-        commit(bench)
-        return pane.id
+        return pane
+    }
+
+    /// `offer`, onto the bench of whichever workspace `path` names (#349).
+    ///
+    /// The mounted one is `offer` itself. A parked one is offered by its owner, `parked`, onto
+    /// the bench stored for it, so the canvas is there when the operator switches in. The
+    /// mounted bench is never touched by a parked workspace's push: that is the reason the
+    /// workspace travels on the request at all (`CanvasPushRequest`).
+    ///
+    /// A re-push of a canvas already on a parked bench refreshes its cached model when there is
+    /// one. The cache survives a switch (`closeWorkspace`'s header), so a pane the operator has
+    /// looked at still has a render, and #261's reason to refresh it holds unchanged.
+    private func offer(_ source: CanvasSource, onBenchOf path: WorkspacePath) -> Pane.ID? {
+        if path == workspacePath { return offer(source) }
+        guard let pane = parked?.offer(source, toBenchOf: path) else { return nil }
+        canvases[pane]?.model.refresh()
+        return pane
     }
 
     func close(_ pane: Pane.ID) {
@@ -1063,13 +1087,19 @@ final class WorkbenchModel: ObservableObject {
 
         // Scoped to the workspace whose terminal asked. A push comes from OUTPUT, so it
         // can arrive from a session the operator parked long ago — and this model is the
-        // active workspace's, whichever that now is.
+        // active workspace's, whichever that now is. A parked workspace's push goes onto its
+        // own stored bench (#349).
         case let .pushCanvasFile(request):
-            guard request.workspacePath == workspacePath else { return }
+            guard
+                let pane = offer(.file(request.artifact), onBenchOf: request.workspacePath)
+            else { return }
             // **Recorded whether the pane is new or already open, and the second case is the
             // common one** — an agent re-offering the file it just rewrote gets `.existing`, and
             // the newest pusher is the one who wants to hear about a mark on it.
-            guard let pane = offer(.file(request.artifact)) else { return }
+            //
+            // **For a parked bench too.** `origins` is keyed by pane id and survives a switch, and
+            // `deliver` resolves the origin against every workspace's sessions, so a mark made
+            // after the operator switches in reaches the agent that pushed.
             origins[pane] = request.origin
 
         // ⌘L is `nil` and means "show me the address field"; a URL means "open this",
