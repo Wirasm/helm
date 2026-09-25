@@ -11,9 +11,9 @@ final class StatusSummaryTests: XCTestCase {
     func testReportsTheSelectedWorkspacesOwnFacts() {
         let summary = StatusSummary.of(
             workspace: workspace,
-            contexts: [
-                workspace.path.value: WorkspaceContext(branch: "feat/design-primitives"),
-                "/tmp/other": WorkspaceContext(branch: "main"),
+            branches: [
+                workspace.path: "feat/design-primitives",
+                WorkspacePath("/tmp/other"): "main",
             ],
             presence: [workspace.path.value: .notWorking, "/tmp/other": .working]
         )
@@ -28,25 +28,19 @@ final class StatusSummaryTests: XCTestCase {
     func testNothingOpenSaysNothing() {
         let summary = StatusSummary.of(
             workspace: nil,
-            contexts: ["/tmp/other": WorkspaceContext(branch: "main")],
+            branches: [WorkspacePath("/tmp/other"): "main"],
             presence: ["/tmp/other": .working]
         )
         XCTAssertEqual(summary, .none)
         XCTAssertNil(summary.agentLabel)
     }
 
-    /// A folder that is not a repository, and a context persisted before that was stored as
-    /// nil. Both have to read as "no branch", not as a gap between two separators.
+    /// A folder that is not a repository has no entry, and reads as "no branch", not as a gap
+    /// between two separators.
     func testAFolderWithNoBranchShowsNoBranch() {
-        for branch in [nil, ""] {
-            let summary = StatusSummary.of(
-                workspace: workspace,
-                contexts: [workspace.path.value: WorkspaceContext(branch: branch)],
-                presence: [:]
-            )
-            XCTAssertEqual(summary.workspace, "helm-status")
-            XCTAssertNil(summary.branch, "branch was \(String(describing: branch))")
-        }
+        let summary = StatusSummary.of(workspace: workspace, branches: [:], presence: [:])
+        XCTAssertEqual(summary.workspace, "helm-status")
+        XCTAssertNil(summary.branch)
     }
 
     /// No agent is a third answer, not a quiet version of "working" — same split `AgentDot`
@@ -55,7 +49,7 @@ final class StatusSummaryTests: XCTestCase {
         func label(_ presence: AgentPresence?) -> String? {
             StatusSummary.of(
                 workspace: workspace,
-                contexts: [:],
+                branches: [:],
                 presence: presence.map { [workspace.path.value: $0] } ?? [:]
             ).agentLabel
         }

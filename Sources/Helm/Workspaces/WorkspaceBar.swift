@@ -61,7 +61,7 @@ struct WorkspaceBar: View {
                 Text("⌃\(index + 1)").foregroundStyle(Color.textMuted)
                 AgentDot(presence: board.presence[workspace.path.value])
                 Text(workspace.name).fontWeight(isSelected ? .semibold : .regular)
-                if let branch = model.contexts[workspace.path.value]?.branch {
+                if let branch = model.branches[workspace.path] {
                     Text(branch).foregroundStyle(Color.textMuted).lineLimit(1)
                 }
             }
@@ -76,7 +76,9 @@ struct WorkspaceBar: View {
             Button("Close Workspace") { close(workspace) }
             Button("Copy Path") { Pasteboard.copy(workspace.path.value) }
         }
-        .task(id: workspace.path) { await resolveBranch(for: workspace) }
+        // Keyed on selection so the branch is asked again when the tab appears and whenever it
+        // is switched to or away from (#379). `ForEach` already keys the tab by workspace.
+        .task(id: isSelected) { await model.refreshBranch(for: workspace) }
     }
 
     private func openWorkspace() {
@@ -88,29 +90,5 @@ struct WorkspaceBar: View {
         panel.message = "Choose a folder to work in"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         open(Workspace(url: url))
-    }
-
-    /// Asked once per workspace and cached, resolved off the render path. `branchResolved`
-    /// is set whether or not a branch came back, so a folder that is not a repository is
-    /// asked once rather than on every appearance.
-    private func resolveBranch(for workspace: Workspace) async {
-        guard model.contexts[workspace.path.value]?.branchResolved != true else { return }
-        let branch = await Task.detached { () -> String? in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["git", "-C", workspace.path.value, "branch", "--show-current"]
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-            process.standardInput = FileHandle.nullDevice
-            guard (try? process.run()) != nil else { return nil }
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let value = String(decoding: data, as: UTF8.self).trimmingCharacters(
-                in: .whitespacesAndNewlines)
-            return value.isEmpty ? nil : value
-        }.value
-        model.cacheBranch(branch, for: workspace)
     }
 }

@@ -21,10 +21,6 @@ struct WorkspaceContext: Codable, Equatable {
     var terminalSessionIDs: [UUID] = []
     var selectedTerminalID: UUID?
     var openArtifactPath: String?
-    /// Resolved off the render path on open/switch. It is harmless to persist:
-    /// git will refresh it when the workspace becomes active again.
-    var branch: String?
-    var branchResolved = false
     /// The pane arrangement, carrying the canvas source with it — which is what finally
     /// lets a **URL** canvas be restored, where `openArtifactPath` could only ever hold a
     /// file path.
@@ -52,14 +48,11 @@ struct WorkspaceContext: Codable, Equatable {
     /// synthesized memberwise one.
     init(
         terminalSessionIDs: [UUID] = [], selectedTerminalID: UUID? = nil,
-        openArtifactPath: String? = nil, branch: String? = nil, branchResolved: Bool = false,
-        workbench: Workbench? = nil, shelvedBench: Workbench? = nil
+        openArtifactPath: String? = nil, workbench: Workbench? = nil, shelvedBench: Workbench? = nil
     ) {
         self.terminalSessionIDs = terminalSessionIDs
         self.selectedTerminalID = selectedTerminalID
         self.openArtifactPath = openArtifactPath
-        self.branch = branch
-        self.branchResolved = branchResolved
         self.workbench = workbench
         self.shelvedBench = shelvedBench
     }
@@ -90,9 +83,6 @@ struct WorkspaceContext: Codable, Equatable {
             (try? container.decodeIfPresent(UUID.self, forKey: .selectedTerminalID)) ?? nil
         openArtifactPath =
             (try? container.decodeIfPresent(String.self, forKey: .openArtifactPath)) ?? nil
-        branch = (try? container.decodeIfPresent(String.self, forKey: .branch)) ?? nil
-        branchResolved =
-            ((try? container.decodeIfPresent(Bool.self, forKey: .branchResolved)) ?? nil) ?? false
         // The bench degrades the same way, but not silently.
         //
         // Dropping it costs the operator their columns, slots, tab order and which canvas
