@@ -24,7 +24,7 @@ to stop at.
 | # | Primitive | What it is | Owner |
 |---|---|---|---|
 | 1 | **Session** | A process in a pty: an agent TUI or a shell. Has a handle. | benchd |
-| 2 | **Surface** | Anything a pane can show, named by a typed source: `term:<session>`, `file:<path>` (markdown, HTML, board), `browser:<tab>`. New kinds plug in at the edge. | benchd provides bytes; helm renders |
+| 2 | **Surface** | Anything a pane can show, named by a typed source: `term:<session>`, `file:<path>` (markdown, HTML, board), `browser`. New kinds plug in at the edge. | benchd provides bytes; helm renders |
 | 3 | **Layout** | Workspaces → columns → slots → panes (today's shape), plus **drawers**. A pane is a view of one surface. | benchd (the bench document) |
 | 4 | **Verb** | Every change goes through one door: `bench <verb>`. helm's own keystrokes are verbs too. Each verb carries who asked. | benchd executes; helm renders the result |
 | 5 | **Event** | An append-only log of what happened. helm follows it to redraw, agents to wait. | benchd (`events.jsonl`) |
@@ -101,7 +101,9 @@ What leaves Swift, and at which milestone:
 - **Placement and mutation logic** in `Workbench` (most of 3.8k): moved to benchd. Swift keeps a
   render-only value (M4).
 - **Persistence** (the UserDefaults half of Workspaces): moved to benchd's record (M4).
-- **Board/presence and `BenchSnapshot`** (1.1k): become projections of the event log (M1/M4).
+- **Board/presence and `BenchSnapshot`** (1.1k): become projections of the event log (M1). The
+  snapshot is fed from the document at M4 and goes at M5b, or at M3 if `bench get` replaces its
+  readers first (ruled 2026-09-25).
 - **Mail** hooks and the pi watcher: reduced to sensors (M2 finish).
 - **Chat** (1.7k, a transcript poller measured 8.8s behind): leaves the core. If wanted again,
   it is a document surface rendered over the transcript logs. Not a priority.

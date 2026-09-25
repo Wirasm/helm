@@ -184,8 +184,8 @@ against the real CLI.
 >    projections of the event log by now.
 > 5. **M2 finish** (#358) — unwire helm's mail hooks and the pi watcher down to sensors.
 > 6. **M5b** (#359) — every pane is a benchd session, shown through the attach relay in a
->    Ghostty surface; a VT engine in benchd (by spike: `libghostty-vt` preferred,
->    `alacritty_terminal` the fallback) gives `get screen` / `send` / `watch`. No custom
+>    Ghostty surface; a VT engine in benchd (`libghostty-vt`, settled by spike 2026-09-25,
+>    prebuilt and pinned to helm's Ghostty) gives `get screen` / `send` / `watch`. No custom
 >    painter.
 > 7. **M6** (#360) — sync: the record root as a synced folder, show-requests as files.
 > 8. **M7** (#361) — the second machine, same entry condition as before.
@@ -478,8 +478,8 @@ Playwright (`playwright-cli attach --cdp=…`); the bench is a supervisor and a 
 **never a browser driver**. The Chrome question is settled: **real Google Chrome** by
 default, so the Claude in Chrome and Codex extensions can run in it, with Chrome for
 Testing as the fallback (`bench browser setup` opens the profile headed to install them).
-The pane becomes the `browser` surface kind with M4 (no tab field, as in #353) and moves into a drawer once
-drawers exist.
+The pane becomes the `browser` surface kind with M4 (no tab field, as in #353) and moves
+into a drawer once drawers exist.
 
 ---
 
