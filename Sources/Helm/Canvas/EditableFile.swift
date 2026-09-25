@@ -39,7 +39,7 @@ struct EditableFile: Equatable {
     /// Recognise one by its path — the only route in.
     ///
     /// nil for an `.html` artifact, for plain text and every other extension the canvas renders
-    /// monospaced, for a sidecar, and for a URL canvas (which has no file to be asked about).
+    /// monospaced, and for a sidecar.
     /// Each of those is read-only, which is what it was before this existed.
     ///
     /// **No artifact root, and that is the widening made visible.** The old rule needed to know

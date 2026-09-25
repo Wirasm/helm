@@ -144,9 +144,8 @@ extension CanvasAnnotation.Mark {
     ///
     /// The page is agent-authored, not helm-authored, so this treats the body as
     /// untrusted: every field is type-checked and bounded, and a malformed body is nil —
-    /// never a crash, never a half-written note. The shape mirrors
-    /// `CanvasURLPolicy.address(_:)`: a hostile value in, a validated one or nothing out,
-    /// because a note that resolves to nothing is better refused than guessed at.
+    /// never a crash, never a half-written note: a hostile value in, a validated one or nothing
+    /// out, because a note that resolves to nothing is better refused than guessed at.
     ///
     /// `WKScriptMessage.body` is `Any` bridged from JS — `NSDictionary`/`NSString`/
     /// `NSNumber`, and a JS number arrives as `NSNumber` rather than `Int`. Type-check,

@@ -405,7 +405,7 @@ enum CanvasHTML {
     /// **What crosses the seam is now a convention, and that is the cost of the move.** While
     /// this was one string there was nothing for the two halves to disagree about; there is
     /// now. **Three** strings are spelled out in the `.js` rather than interpolated —
-    /// `CanvasBridgePolicy.handlerName`, `markToolGlobal`, and the `data-helm-frame` attribute
+    /// `CanvasFileCoordinator.bridgeHandlerName`, `markToolGlobal`, and the `data-helm-frame` attribute
     /// `documentPage` writes above — and the message shape is agreed with
     /// `CanvasAnnotation.decode` by nothing the compiler can see.
     ///

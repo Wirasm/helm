@@ -351,9 +351,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     }
 
     private func document(of canvas: CanvasModel) throws -> CanvasModel.Document {
-        try XCTUnwrap(
-            { if case let .file(document) = canvas.showing { document } else { nil } }(),
-            "the canvas is not showing a file")
+        try XCTUnwrap(canvas.showing, "the canvas is not showing a file")
     }
 
     /// The `FileWatcher` is a `DispatchSource` on the main queue, so its callback lands on a

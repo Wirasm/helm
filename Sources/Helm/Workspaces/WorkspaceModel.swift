@@ -69,10 +69,9 @@ final class WorkspaceModel: ObservableObject, ParkedBenches {
     /// Save the current workspace's UI state before switching away from it.
     ///
     /// One field now carries what three used to: the bench holds the terminal ids, which
-    /// pane each slot has selected, and **which canvas held which file or URL**. The three
-    /// legacy fields are still read on load (they are the migration source) but are no
-    /// longer written — a URL canvas persists properly now, rather than persisting nothing
-    /// because `openArtifactPath` could only hold a file path.
+    /// pane each slot has selected, and **which canvas held which file**. The three legacy
+    /// fields are still read on load (they are the migration source) but are no longer
+    /// written.
     func saveContext(terminalManager: TerminalManager, workbench: WorkbenchModel) {
         guard let workspace = selectedWorkspace else { return }
         // Never record a workspace that is not mounted. Until `TerminalManager.activate`

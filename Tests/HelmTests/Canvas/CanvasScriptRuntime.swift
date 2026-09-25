@@ -23,8 +23,8 @@ final class CanvasScriptRuntime {
     private let context: JSContext
     private var exceptions: [String] = []
 
-    /// - Parameter bridge: `false` drops `window.webkit` entirely, which is a URL canvas or
-    ///   an artifact opened outside helm — the case #33 requires be untouched.
+    /// - Parameter bridge: `false` drops `window.webkit` entirely, which is an artifact opened
+    ///   outside helm — the case #33 requires be untouched.
     init(bridge: Bool = true) throws {
         guard let context = JSContext() else {
             throw Failure.noContext

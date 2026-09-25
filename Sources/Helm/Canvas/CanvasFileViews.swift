@@ -9,13 +9,12 @@ import WebKit
 // plus the inline scripts from CanvasHTML — which include the ANNOTATION
 // BRIDGE, a script message handler the page can post to.
 //
-// The bridge is why `CanvasBridgePolicy` exists and why this file is separate
-// from URLCanvasViews.swift. A handler on a webview that loads arbitrary
-// websites would let any page post into helm, so it is installed here, on local
-// artifacts only, and each webview gets its OWN WKUserContentController — the
-// controller is a property of the configuration, so one shared instance would
-// share every registered script and handler with every webview, which is
-// exactly how the bridge would reach the URL source by accident.
+// A handler on a webview that loads arbitrary websites would let any page post
+// into helm, which is why helm has no such webview: the URL canvas was removed
+// (#376), and a web page is the shared browser's, in its own pane. Each webview
+// here still gets its OWN WKUserContentController — the controller is a property
+// of the configuration, so one shared instance would share every registered
+// script and handler with every webview.
 //
 // "OPENED EXPLICITLY BY THE USER" IS NO LONGER TRUE, and that is deliberate
 // (#125). An agent can push an artifact by printing OSC 777, and if the bench has
@@ -59,10 +58,6 @@ import WebKit
 /// render different text; the artifact's **path** for an `.html` one, because the handler reads
 /// its bytes per request and the path is all the view knows.
 ///
-/// **Deliberately not shared with `URLCanvasCoordinator`.** That one compares a URL and a
-/// generation and has no theme at all — helm does not render a remote page, so there is no third
-/// instance of this rule to unify, and pretending there is would mean a field one side must
-/// always leave empty.
 struct CanvasReloadKey: Equatable {
     let theme: CanvasTheme
     let generation: Int
@@ -233,7 +228,7 @@ struct HTMLCanvasView: View {
     let onSelection: (CanvasPageSelection) -> Void
     /// The operator pressing Reload on the notice — a counter, not a flag, so pressing it twice
     /// reloads twice and a demand can never be missed by arriving in the same render as the
-    /// answer that raised it. The same shape as `CanvasModel.addressFocus` and `generation`.
+    /// answer that raised it. The same shape as `generation`.
     let reloadDemand: Int
     /// What the page said about an offered update, on its way to the notice strip.
     let onUpdate: (CanvasUpdateAnswer) -> Void
@@ -482,14 +477,19 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// `contentWorld:` it, so a page's own JS sees no `helmCanvas` at all.
     static let bridgeWorld = WKContentWorld.world(name: "helm-canvas-bridge")
 
+    /// The bridge's handler name, and therefore `window.webkit.messageHandlers.helmCanvas` —
+    /// defined only inside `bridgeWorld`. `canvas-annotation.js` spells it out rather than
+    /// interpolating it; `CanvasAnnotationScriptTests` holds the two together.
+    nonisolated static let bridgeHandlerName = "helmCanvas"
+
     var loadedKey: CanvasReloadKey?
     /// The last reload the operator asked for, so a rising counter is a new demand and an
     /// unchanged one is ordinary SwiftUI churn. Starts at zero to match `CanvasModel`'s, so a
     /// pane that has never shown the notice never navigates for this reason.
     var reloadDemand = 0
     /// What the page said about an offered update, on its way to the notice strip. **A closure
-    /// rather than a delegate call**, for `CanvasModel.onSourceChange`'s reason one file over:
-    /// this object is SwiftUI's, made in `makeCoordinator`, and the model outlives it.
+    /// rather than a delegate call**: this object is SwiftUI's, made in `makeCoordinator`, and the
+    /// model outlives it.
     var onUpdate: ((CanvasUpdateAnswer) -> Void)?
     /// What the page said about itself, on its way to the latch (#110). Set by the
     /// representable exactly as `onUpdate` is; nil on a coordinator built without one, where a
@@ -647,7 +647,7 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     func installBridge(on controller: WKUserContentController) {
         controller.add(
             proxy, contentWorld: CanvasFileCoordinator.bridgeWorld,
-            name: CanvasBridgePolicy.handlerName)
+            name: CanvasFileCoordinator.bridgeHandlerName)
         addAnnotationScript(to: controller)
     }
 
@@ -669,7 +669,8 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// both needed; neither alone is reliable.
     func removeBridge(from controller: WKUserContentController) {
         controller.removeScriptMessageHandler(
-            forName: CanvasBridgePolicy.handlerName, contentWorld: CanvasFileCoordinator.bridgeWorld
+            forName: CanvasFileCoordinator.bridgeHandlerName,
+            contentWorld: CanvasFileCoordinator.bridgeWorld
         )
     }
 

@@ -44,6 +44,28 @@ final class WorkbenchLegacyPaneTests: XCTestCase {
         """
     }
 
+    /// The URL canvas left in #376, and a stored one goes the way an unknown pane kind does:
+    /// its source no longer decodes, so `Slot` skips the pane and keeps the rest.
+    func testAStoredURLOrEmptyCanvasIsSkippedAndTheRestOfTheSlotSurvives() throws {
+        let terminal = "44444444-4444-4444-4444-444444444444"
+        let file = "55555555-5555-5555-5555-555555555555"
+        let url = """
+            {"id":"66666666-6666-6666-6666-666666666666","content":{"kind":"canvas","source":\
+            {"kind":"url","address":"http://localhost:3000"}}}
+            """
+        let empty = """
+            {"id":"77777777-7777-7777-7777-777777777777","content":{"kind":"canvas","source":\
+            {"kind":"empty"}}}
+            """
+        let stored = bench(panes: [terminalPane(terminal), url, empty, canvasPane(file)])
+
+        let restored = try JSONDecoder().decode(Workbench.self, from: Data(stored.utf8))
+
+        XCTAssertEqual(
+            restored.panes.map { $0.id.uuidString.lowercased() }, [terminal, file],
+            "the URL and empty canvases are dropped and nothing else is")
+    }
+
     /// The pane goes; the terminal and the canvas beside it stay, and so does the slot.
     func testAnUnknownPaneKindIsSkippedAndTheRestOfTheSlotSurvives() throws {
         let terminal = "44444444-4444-4444-4444-444444444444"

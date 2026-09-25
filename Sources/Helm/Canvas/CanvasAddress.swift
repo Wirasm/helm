@@ -16,7 +16,7 @@ import Foundation
 /// host, `isSecureContext` is true), so the origin becomes a genuine key rather than an
 /// empty string.
 ///
-/// Pure on purpose, in the style of `CanvasURLPolicy` and `CanvasBridgePolicy`: a
+/// Pure on purpose, in the style of `CanvasFileBoundary` and `TerminalURLPolicy`: a
 /// `WKSecurityOrigin` cannot be built in a test, so the decision lives here where
 /// `swift test` reaches it and the webview is left with nothing but plumbing.
 enum CanvasAddress {

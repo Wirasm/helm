@@ -558,27 +558,24 @@ enum FontSizeStep: Int {
 enum TerminalLinkRoute: Equatable {
     /// A file helm renders — the canvas opens it.
     case canvasFile
-    /// A web address — the canvas follows it, instead of a browser taking the operator
-    /// out of the app.
-    case canvasURL
+    /// A web address — a new tab of the shared browser, shown in the browser pane (#376),
+    /// instead of the system browser taking the operator out of the app.
+    case browser
     /// Everything else the allowlist admits: `mailto:`, and files helm has no renderer
     /// for. The system still owns the apps that handle those.
     case system
 
     /// **Two policies, two jobs — composed, never merged.** `TerminalURLPolicy` is the
-    /// outer gate on untrusted terminal content and has already run when we get here;
-    /// `CanvasURLPolicy` answers the narrower question of whether the canvas will
-    /// *follow* what the gate let through. `mailto:` passing the gate and being refused
-    /// by the canvas is the wanted outcome, not a gap: helm has no mail client and
-    /// should not pretend to.
-    ///
-    /// Asking `CanvasURLPolicy` rather than re-deriving http/https here is what keeps
-    /// the terminal's idea of what the canvas takes from drifting away from the canvas's.
+    /// outer gate on untrusted terminal content and has already run when we get here; this
+    /// answers the narrower question of where what it let through goes. `mailto:` passing
+    /// the gate and going to the system is the wanted outcome, not a gap: helm has no mail
+    /// client and should not pretend to.
     static func route(_ url: URL) -> TerminalLinkRoute {
         if url.isFileURL {
             return RenderableFile.isRenderable(url) ? .canvasFile : .system
         }
-        return CanvasURLPolicy.allows(url) ? .canvasURL : .system
+        let scheme = url.scheme?.lowercased()
+        return scheme == "http" || scheme == "https" ? .browser : .system
     }
 }
 
@@ -631,8 +628,8 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// measurement; `TerminalOpenURLOwnershipTests` pins the conformance it turns on.
     ///
     /// It used to point out of the app: every link went to `NSWorkspace`, so a rendered
-    /// report tabbed you into a browser — the trip helm exists to absorb. A link to
-    /// something the canvas renders now opens **in helm** instead.
+    /// report tabbed you into a browser — the trip helm exists to absorb. A link helm can
+    /// show now opens **in helm** instead.
     ///
     /// **Offer, not push.** helm opens it only when you ⌘-click. Nothing appears
     /// unbidden — it is not helm's job to rearrange the bench on the operator's behalf.
@@ -656,10 +653,9 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// This method stays exactly as it is — a link printed from a *shell* still works,
     /// which is a path #124 required not to regress.
     ///
-    /// Both things the canvas renders come in this way: a `.md`/`.html` file, and an
-    /// http address — an agent's `http://localhost:3000` opens **in helm** rather than
-    /// tabbing the operator into a browser. A closed canvas opens itself on either,
-    /// because the canvas subscribes on its model rather than on a view.
+    /// Two things open in helm this way: a `.md`/`.html` file, as a canvas, and an http
+    /// address — an agent's `http://localhost:3000` — as a new tab of the shared browser,
+    /// in the browser pane (#376). Neither takes the keyboard from the terminal clicked in.
     ///
     /// Everything else the allowlist admits — a PDF, an image, `mailto:` — keeps its
     /// old route to the system, which still owns the apps that handle them.
@@ -669,8 +665,8 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
         switch TerminalLinkRoute.route(validated) {
         case .canvasFile:
             HelmCommand.openCanvasFile(validated).post()
-        case .canvasURL:
-            HelmCommand.openCanvasURL(validated).post()
+        case .browser:
+            HelmCommand.openBrowser(validated).post()
         case .system:
             NSWorkspace.shared.open(validated)
         }

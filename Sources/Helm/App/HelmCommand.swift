@@ -40,12 +40,6 @@ enum HelmCommand: Equatable {
     /// operator asking: a push **appears** as a tab without selecting it or moving focus, because
     /// the operator did not ask for it and may be mid-thought in another pane (#125).
     case pushCanvasFile(CanvasPushRequest)
-    /// The canvas takes a URL. `nil` is ⌘L — *"show me the address field"*, whether the canvas is
-    /// open or not; a URL is a ⌘-clicked http link.
-    ///
-    /// The optional is the whole distinction and it used to live in the *absence* of a
-    /// notification object, which is the one shape an untyped channel cannot tell from a mistake.
-    case openCanvasURL(URL?)
     /// ⌘⇧O — the sidebar presents the folder picker; the chosen folder becomes an open workspace.
     case openWorkspace
     /// ⌘+/⌘-/⌘0 — applied to the selected terminal.
@@ -85,7 +79,11 @@ enum HelmCommand: Equatable {
     case toggleRail
     /// ⌘⇧B — show the shared browser benchd runs (#350), in a pane of its own. Offered, not
     /// seized: the pane appears and the keyboard stays put (`WorkbenchModel.offerBrowser`).
-    case openBrowser
+    ///
+    /// A URL is a ⌘-clicked http link (#376), opened as a new tab of that browser. ⌘⇧B and the
+    /// spool send nil: the name is one command either way, so the spool's verdict on it and the
+    /// status bar's hint do not split in two.
+    case openBrowser(URL?)
 }
 
 // MARK: - Name
@@ -118,7 +116,6 @@ extension HelmCommand {
         case .openArtifact: .openArtifact
         case .openCanvasFile: .openCanvasFile
         case .pushCanvasFile: .pushCanvasFile
-        case .openCanvasURL: .openCanvasURL
         case .openWorkspace: .openWorkspace
         case .adjustFontSize: .adjustFontSize
         case .jumpToPrompt: .jumpToPrompt
