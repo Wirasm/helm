@@ -861,12 +861,10 @@ fn dispatch(
             let mut c = core.lock().unwrap();
             let (tx, rx) = mpsc::sync_channel(FOLLOWER_QUEUE);
             c.followers.push(tx);
-            let data = json!({
-                "seq": c.bench.seq,
-                "next_seq": c.next_seq,
-                "document": c.bench.document,
-            });
-            (ok(data), AfterResponse::Follow(rx))
+            (
+                ok(json!(layout::document_at(&c))),
+                AfterResponse::Follow(rx),
+            )
         }
         Some(Verb::Layout) => {
             let mut c = core.lock().unwrap();

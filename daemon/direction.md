@@ -142,8 +142,9 @@ this workspace:
 
 ## How it grows
 
-Landed: M0 skeleton, M5a daemon ptys, mail, the shared browser (#350). Next, in order (tracking issue #362): M4 the
-bench document → M3 `bench` as the whole agent surface → drawers, keymap and rules → M1
+Landed: M0 skeleton, M5a daemon ptys, mail, the shared browser (#350), and M4's daemon half
+(the bench document in benchd: #367, #373). Next, in order (tracking issue #362): the rest of
+M4, helm as the document's client → M3 `bench` as the whole agent surface → drawers, keymap and rules → M1
 attention → M2 finish (helm's mail hooks become sensors) → M5b every pane a benchd session
 → M6 sync the record over Tailscale → M7 the agents' own machine. Each milestone: new event
 kinds, new verbs, same spine. The roadmap is the sequence; the operator names the milestone

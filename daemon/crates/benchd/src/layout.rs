@@ -16,8 +16,9 @@
 use crate::Core;
 use bench_doc::{Caller, Document, Focus, Pane, PaneId, Rules, Surface, Target};
 use bench_wire::{
-    Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider,
-    DocumentRecord, LayoutVerb, MoveTo, Request, Response, Status, document_path,
+    Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider, DocumentAt,
+    DocumentChange, DocumentRecord, LayoutReport, LayoutVerb, MoveTo, Request, Response, Status,
+    document_path,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -60,8 +61,7 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
         }
     };
     if verb == LayoutVerb::Get {
-        let data = json!({ "seq": core.bench.seq, "document": core.bench.document });
-        return reply(Status::Ok, None, Some(data));
+        return reply(Status::Ok, None, Some(json!(document_at(core))));
     }
 
     let by = req.by.clone().unwrap_or_else(Actor::agent);
@@ -72,40 +72,38 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
         Ok(o) => o,
         Err(refusal) => return reply(Status::Refused, Some(refusal.to_string()), None),
     };
-    let after = focused_pane(&next);
-    let mut data = json!({
-        "focused_pane_before": before,
-        "focused_pane_after": after,
-    });
-    if let Some(pane) = outcome.created {
-        data["pane_created"] = json!(pane);
-    }
-    if let Some(pane) = outcome.pane {
-        data["pane"] = json!(pane);
-    }
-
-    if next == core.bench.document {
-        data["changed"] = json!(false);
-        data["seq"] = json!(core.bench.seq);
-        return reply(Status::Ok, None, Some(data));
+    let mut report = LayoutReport {
+        seq: core.bench.seq,
+        changed: next != core.bench.document,
+        pane_created: outcome.created,
+        pane: outcome.pane,
+        focused_pane_before: before,
+        focused_pane_after: focused_pane(&next),
+    };
+    if !report.changed {
+        return reply(Status::Ok, None, Some(json!(report)));
     }
 
-    let mut logged = data.clone();
-    logged["verb"] = json!(req.verb);
-    logged["args"] = req.args.clone();
-    logged["by"] = json!(by);
-    logged["asked"] = json!(req.asked);
-    let event = match core.append_event(DOCUMENT_CHANGED, logged, Some(&next)) {
+    // The seq is the event's own, known only once it is written; everything else in the
+    // logged record is the report the caller gets.
+    report.seq = core.next_seq;
+    let change = DocumentChange {
+        verb: req.verb.clone(),
+        args: req.args.clone(),
+        by,
+        asked: req.asked,
+        report: report.clone(),
+    };
+    let event = match core.append_event(DOCUMENT_CHANGED, json!(change), Some(&next)) {
         Ok(e) => e,
         Err(why) => return reply(Status::Error, Some(why), None),
     };
+    debug_assert_eq!(event.seq, report.seq);
     // The change is now a fact: logged, and every follower has it. `bench.json` failing to
     // land is reported, not undone — the log says what happened, and the next change that
     // does land writes the whole document again.
     core.bench.document = next;
     core.bench.seq = event.seq;
-    data["changed"] = json!(true);
-    data["seq"] = json!(event.seq);
     if let Err(why) = save(&core.root, &core.bench) {
         let _ = core.append("bench/unsaved", json!({ "seq": event.seq, "why": why }));
         return reply(
@@ -114,10 +112,18 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
                 "applied and logged as seq {}, but bench.json could not be written: {why}",
                 event.seq
             )),
-            Some(data),
+            Some(json!(report)),
         );
     }
-    reply(Status::Ok, None, Some(data))
+    reply(Status::Ok, None, Some(json!(report)))
+}
+
+/// The document and the seq it reflects — `bench/get`'s answer and a follower's first line.
+pub fn document_at(core: &Core) -> DocumentAt {
+    DocumentAt {
+        seq: core.bench.seq,
+        document: core.bench.document.clone(),
+    }
 }
 
 /// The pane holding the operator's keyboard: the active workspace's focused pane.

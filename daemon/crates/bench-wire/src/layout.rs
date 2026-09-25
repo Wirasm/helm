@@ -186,6 +186,44 @@ pub struct Frame {
     pub document: Option<Document>,
 }
 
+/// What `bench/get` answers, and the first line of `events --follow`: the document and the
+/// seq of the event it reflects.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocumentAt {
+    pub seq: u64,
+    pub document: Document,
+}
+
+/// What every other layout verb answers. The focused pane before and after are two readings
+/// taken either side of the change, so a caller can check the focus promise itself rather
+/// than trust it (helm's `CommandReport`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayoutReport {
+    /// The seq of the event this change was logged as — or, when nothing changed, of the
+    /// event the unchanged document still reflects.
+    pub seq: u64,
+    pub changed: bool,
+    /// A pane that did not exist before the verb.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_created: Option<PaneId>,
+    /// The pane a `pane/open` resolved to: the new one, or the one already showing it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<PaneId>,
+    pub focused_pane_before: Option<PaneId>,
+    pub focused_pane_after: Option<PaneId>,
+}
+
+/// The data of a `bench/changed` event: the report, plus what was asked and by whom.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocumentChange {
+    pub verb: String,
+    pub args: serde_json::Value,
+    pub by: Actor,
+    pub asked: bool,
+    #[serde(flatten)]
+    pub report: LayoutReport,
+}
+
 pub const DOCUMENT_RECORD_FORMAT: &str = "bench.document";
 pub const DOCUMENT_RECORD_VERSION: u64 = 0;
 
@@ -285,11 +323,34 @@ mod tests {
         let frame: Frame = serde_json::from_str(&text).expect("the fixture decodes");
         assert_eq!(frame.event.kind, DOCUMENT_CHANGED);
         assert!(frame.document.is_some());
+        let change: DocumentChange = serde_json::from_value(frame.event.data.clone())
+            .expect("a bench/changed event's data is a DocumentChange");
+        assert_eq!(serde_json::to_value(&change).unwrap(), frame.event.data);
         let written = serde_json::to_string_pretty(&frame).unwrap() + "\n";
         assert_eq!(
             written,
             text,
             "the frame spelling drifted from {}",
+            path.display()
+        );
+    }
+
+    /// `fixtures/bench-report.json` pins the answer to a layout verb and to `bench/get`, the
+    /// two reply shapes helm's client (M4 PR 3) decodes.
+    #[test]
+    fn the_reply_fixture_round_trips() {
+        let (path, text) = fixture("bench-report.json");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let report: LayoutReport = serde_json::from_value(value["report"].clone()).unwrap();
+        let at: DocumentAt = serde_json::from_value(value["get"].clone()).unwrap();
+        assert!(report.pane_created.is_some() && report.focused_pane_before.is_some());
+        assert!(!at.document.workspaces().is_empty());
+        let written =
+            serde_json::to_string_pretty(&json!({ "get": at, "report": report })).unwrap() + "\n";
+        assert_eq!(
+            written,
+            text,
+            "the reply spelling drifted from {}",
             path.display()
         );
     }

@@ -19,8 +19,9 @@ use std::path::{Path, PathBuf};
 
 mod layout;
 pub use layout::{
-    Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider,
-    DocumentRecord, Frame, LAYOUT_VERBS, LayoutVerb, MoveTo, document_path,
+    Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider, DocumentAt,
+    DocumentChange, DocumentRecord, Frame, LAYOUT_VERBS, LayoutReport, LayoutVerb, MoveTo,
+    document_path,
 };
 
 /// A request line larger than this is refused, not read. The cap is about the reader:

@@ -1849,6 +1849,9 @@ fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
         None,
         false,
     ));
+    // What the daemon actually sends decodes as the wire types helm's client will read.
+    serde_json::from_value::<bench_wire::DocumentAt>(before.clone())
+        .expect("bench/get is a DocumentAt");
     drop(daemon);
 
     let daemon = DaemonGuard::start(&home.dir, None);
@@ -1894,6 +1897,14 @@ fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
             .all(|e| e["data"]["by"]["kind"] == "operator"),
         "and each says who asked"
     );
+    for change in &changes {
+        let typed: bench_wire::DocumentChange = serde_json::from_value(change["data"].clone())
+            .expect("a bench/changed event's data is a DocumentChange");
+        assert_eq!(
+            typed.report.seq, change["seq"],
+            "the report names its own event"
+        );
+    }
     assert_eq!(
         record["seq"],
         changes.last().unwrap()["seq"],
@@ -1926,6 +1937,8 @@ fn an_agent_rearranges_the_bench_and_never_moves_the_operators_focus() {
         ("pane/close", serde_json::json!({ "pane": right })),
     ] {
         let data = ok_data(layout(&daemon.socket, verb, args, None, false));
+        serde_json::from_value::<bench_wire::LayoutReport>(data.clone())
+            .unwrap_or_else(|e| panic!("{verb}: the reply is a LayoutReport: {e}"));
         assert_eq!(data["focused_pane_before"], held.as_str(), "{verb}");
         assert_eq!(
             data["focused_pane_after"],
