@@ -23,6 +23,8 @@ knows nor needs the Rust toolchain, in either direction.
   sockets, no wakes — the reactor in `benchd` owns those.
 - `crates/bench-session` — the pty core: agent allowlist, postures/model/effort/resume
   argv (one spelling, unit-tested), the ring, the attach relay, drain-then-die close.
+- `crates/bench-browser` — the shared browser: find, configure and launch one Chromium
+  on a pipe leash. Knows no sockets or events; the daemon supervises it.
 - `crates/benchd` — the daemon. Foreground, one unix socket, a thread per connection.
 - `crates/bench` — the CLI, the one agent-facing surface, and the attach client.
 - There is deliberately **no root `Cargo.toml`** in the repo: `cargo` at the repo root

@@ -43,6 +43,12 @@ fn usage() -> &'static str {
      \x20               [--body-file <p>] [--subject <s>] [--from <h>]\n\
      \x20     mail list [--handle <h>]            metadata only, unread first\n\
      \x20     mail read <id> [--handle <h>]       body + retirement (inbox -> read)\n\
+     \x20     browser start                       start the shared browser, or find it running;\n\
+     \x20                                         `cdp` in its answer is for playwright-cli attach\n\
+     \x20     browser status                      the endpoint, or running: false\n\
+     \x20     browser stop                        stop the shared browser\n\
+     \x20     browser setup                       the same profile in a real window, to install\n\
+     \x20                                         extensions and sign in; quit it to go headless\n\
      env:   BENCH_SUITE (flag wins) · BENCH_DIR (root override, wins over suite)\n\
      exit:  0 ok · 2 no daemon · 3 refused · 4 daemon failed"
 }
@@ -100,6 +106,12 @@ fn run() -> i32 {
             return refuse("mail needs a subcommand: send, list, read");
         }
         verb = format!("mail/{}", positional.remove(0));
+    }
+    if verb == "browser" {
+        if positional.is_empty() {
+            return refuse("browser needs a subcommand: start, status, stop, setup");
+        }
+        verb = format!("browser/{}", positional.remove(0));
     }
 
     // Suite validated before any socket is touched — a name that cannot isolate must

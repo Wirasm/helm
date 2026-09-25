@@ -101,6 +101,11 @@ final class WorkbenchModel: ObservableObject {
         let model: CanvasModel
     }
 
+    /// Live browser panes (#350), by pane id, for `canvases`' reason: a tab switch keeps the
+    /// connection instead of reconnecting. Dropped with the canvases when the workspace parks —
+    /// a parked pane is not on screen, and its model reconnects when it is again.
+    private var browsers: [Pane.ID: BrowserPaneModel] = [:]
+
     /// Which terminal put each canvas pane on the bench (#205) — the key is the **canvas** pane,
     /// the value names the **terminal** pane, which is what `CanvasOrigin` exists to keep straight.
     ///
@@ -377,6 +382,8 @@ final class WorkbenchModel: ObservableObject {
         // checked in one, which is how it stood when the guard was added.
         flushNotes()
         canvases.removeAll()
+        for browser in browsers.values { browser.close() }
+        browsers.removeAll()
         // Keyed by canvas pane id, so it goes exactly when the cache does — a leftover entry
         // would name a pane nothing resolves any more.
         origins.removeAll()
@@ -605,6 +612,40 @@ final class WorkbenchModel: ObservableObject {
         return notes.send(annotation, on: canvas, along: route)
     }
 
+    func browser(for pane: Pane) -> BrowserPaneModel {
+        if let existing = browsers[pane.id] { return existing }
+        let model = BrowserPaneModel()
+        browsers[pane.id] = model
+        return model
+    }
+
+    /// Show the shared browser (#350) — **offered, never seizing**, from the operator's key as
+    /// much as from an agent's command: the pane appears (or, if one is open, its slot shows it)
+    /// and the keyboard stays where it was. The browser is something to glance at while work
+    /// goes on, and an agent opening it must not pull the operator out of the pane he is typing
+    /// in. He clicks it when he wants to use it.
+    ///
+    /// Returns the pane showing the browser.
+    @discardableResult
+    func offerBrowser() -> Pane.ID? {
+        guard var bench else { return nil }
+        let placement = bench.placementForBrowser()
+        if case let .existing(open) = placement {
+            // Bring it forward only in a slot the operator is not in. In his own slot, showing
+            // a background tab *is* moving his keyboard — the focused slot's selection is the
+            // focused pane (`SpoolSelectPolicy`'s rule) — so the pane stays where it is.
+            if bench.slot(for: open)?.id != bench.focusedSlot {
+                bench.select(offering: open)
+                commit(bench)
+            }
+            return open
+        }
+        let pane = Pane(content: .browser)
+        bench.offer(pane, at: placement)
+        commit(bench)
+        return pane.id
+    }
+
     /// What ⌘+/⌘0/⌘↑ act on.
     var focusedTerminal: TerminalSession? {
         bench?.focusedPane.flatMap(session(for:))
@@ -801,6 +842,10 @@ final class WorkbenchModel: ObservableObject {
             canvases[pane]?.model.close()
             canvases[pane] = nil
             origins[pane] = nil
+        case .browser:
+            // Closes the view onto the browser, not the browser: agents may be using it.
+            browsers[pane]?.close()
+            browsers[pane] = nil
         }
     }
 
@@ -1080,6 +1125,7 @@ final class WorkbenchModel: ObservableObject {
         switch command {
         case .newTerminal: newTerminal()
         case .newNote: newNote()
+        case .openBrowser: offerBrowser()
         case let .selectTerminal(index): selectTab(index)
         case .openArtifact: isBrowserOpen.toggle()
         case let .adjustFontSize(step): focusedTerminal?.adjustFontSize(step)

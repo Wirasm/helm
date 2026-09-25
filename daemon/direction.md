@@ -14,12 +14,24 @@ operator and the agents are equal owners; every verb exists in an addressed, non
 form; both parties go through the same socket. Migration is strangler-style inside this
 repo: one vertical at a time, old code unwired only when the new is proven.
 
-**Where it stands: M0 + M5a + mail.** The daemon owns the mailroom (`bench-mail`:
+**Where it stands: M0 + M5a + mail + the shared browser.** The daemon owns the mailroom (`bench-mail`:
 files are the record, notices carry the path never the body, retire-never-delete,
 metadata-only listings) and the wake reactor (`mail/sent ⇒ agent/woken` by pasting into
 an idle pty the daemon owns, with the loop cap as a per-recipient token bucket in the
 courier — where helm #320 proved it must live). Proven end to end by `just mail-proof`:
 a number passed as mail around a real claude→codex→pi ring, +1 per hop.
+
+**Plus the shared browser (#350).** `browser/start|status|stop|setup`: the daemon starts
+one browser per root — Google Chrome where installed (the operator's ruling: it runs the
+Claude in Chrome and Codex extensions), else Playwright's Chrome for Testing;
+`browser/config.json` swaps binary or flags — headless, persistent profile under
+`<root>/browser/profile`, debugging port chosen by Chrome and read back from
+`DevToolsActivePort`, endpoint published in `<root>/browser/endpoint.json`. `setup` opens
+the same profile in a real window for installing extensions and signing in; quitting it
+returns to headless. The daemon never automates the browser: agents attach with
+`playwright-cli attach --cdp=<cdp>`, helm renders it over its own CDP socket. A crash is
+restarted (at most 3 in 60s, then `browser/gave-up`), and the browser runs on a pipe
+leash so it dies with the daemon even under SIGKILL. `just browser-proof` is the live check.
 
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance
@@ -120,7 +132,9 @@ this workspace:
 
 ## How it grows
 
-M1 attention queue + taps (first new capability, purely additive) → M2 mail authority →
-M3 the CLI replaces the spool scripts → M4 the workbench document → M5 ptys → M6 reach
-over the tailnet → M7 the forge. Each milestone: new event kinds, new verbs, same spine.
-The roadmap is the sequence; the operator names the milestone that starts.
+Landed: M0 skeleton, M5a daemon ptys, mail, the shared browser (#350). Next, in order (tracking issue #362): M4 the
+bench document → M3 `bench` as the whole agent surface → drawers, keymap and rules → M1
+attention → M2 finish (helm's mail hooks become sensors) → M5b every pane a benchd session
+→ M6 sync the record over Tailscale → M7 the agents' own machine. Each milestone: new event
+kinds, new verbs, same spine. The roadmap is the sequence; the operator names the milestone
+that starts.

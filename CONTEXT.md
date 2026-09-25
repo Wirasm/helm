@@ -81,6 +81,15 @@ has a writing face the operator enters deliberately; **read is the default**, an
 saving rather than overwrite a file somebody else wrote since it last looked.
 _Avoid_: artifact pane, webview, browser, draw-on pane
 
+**browser pane**:
+The pane type that shows the **shared browser** — the one Chrome benchd runs per bench root
+(`bench browser start`), which agents drive with Playwright and the operator uses by hand. helm
+neither starts nor automates it: the pane reads benchd's `browser/endpoint.json`, draws the tab
+it follows over CDP, and forwards mouse, keys and the clipboard. One per bench; it appears
+without taking the keyboard (⌘⇧B, or an agent's `helm-command openBrowser`). Not a canvas: a
+canvas renders a file or URL in helm's own webview.
+_Avoid_: webview, canvas, embedded browser
+
 ### What helm looks like
 
 **board**:

@@ -72,6 +72,9 @@ impl DaemonGuard {
         let mut cmd = Command::new(benchd_bin());
         cmd.env_remove("BENCH_DIR")
             .env_remove("BENCH_SUITE")
+            // The browser's default binary is looked up in the Playwright cache under
+            // HOME; a runner's own override must not reach past the test home.
+            .env_remove("PLAYWRIGHT_BROWSERS_PATH")
             .env("BENCH_SESSION_TEST_AGENT", "1")
             .env("HOME", home)
             .stdout(Stdio::null())
@@ -1180,4 +1183,532 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
         "the read snippet retired the sent message: {}",
         listing.stdout
     );
+}
+
+// ---------------------------------------------------------------------------
+// The shared browser (#350): a fake Chromium, so the gate needs no browser
+// ---------------------------------------------------------------------------
+
+/// A stand-in for Chromium that keeps the two promises benchd relies on: `--version`
+/// answers with a version line, and once "listening" it writes `DevToolsActivePort`
+/// into its `--user-data-dir`. It records its argv there, dies on TERM, and with
+/// `--die-after=<s>` crashes by itself — a profile that takes Chromium down on launch.
+fn write_fake_browser(home: &Path) -> PathBuf {
+    let path = home.join("fake-chromium");
+    fs::write(
+        &path,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Fake Chromium 142.0.7000.1"; exit 0; fi
+dir=""; die=""
+for a in "$@"; do
+  case "$a" in
+    --user-data-dir=*) dir="${a#--user-data-dir=}" ;;
+    --die-after=*) die="${a#--die-after=}" ;;
+  esac
+done
+printf '%s\n' "$@" > "$dir/argv"
+trap 'exit 0' TERM
+printf '%s\n/devtools/browser/fake-%s\n' "$(( $$ % 40000 + 20000 ))" "$$" > "$dir/port.tmp"
+mv "$dir/port.tmp" "$dir/DevToolsActivePort"
+if [ -n "$die" ]; then sleep "$die"; exit 1; fi
+while :; do sleep 0.1; done
+"#,
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+fn write_browser_config(home: &Path, config: serde_json::Value) {
+    let dir = home.join(".bench/browser");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("config.json"), config.to_string()).unwrap();
+}
+
+fn json_of(run: &CliRun) -> serde_json::Value {
+    serde_json::from_str(&run.stdout)
+        .unwrap_or_else(|e| panic!("not JSON ({e}): {} / {}", run.stdout, run.stderr))
+}
+
+fn event_kinds(home: &Path) -> Vec<(String, serde_json::Value)> {
+    let run = bench(home, &["events"]);
+    json_of(&run)["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["kind"].as_str().unwrap().to_string(), e["data"].clone()))
+        .collect()
+}
+
+fn wait_until(what: &str, deadline: Duration, mut done: impl FnMut() -> bool) {
+    let end = Instant::now() + deadline;
+    while !done() {
+        assert!(Instant::now() < end, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn browser_start_publishes_the_endpoint_it_logged_and_a_second_start_finds_it() {
+    let home = TestHome::claim("brstart");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let _daemon = DaemonGuard::start(&home.dir, None);
+
+    let run = bench(&home.dir, &["browser", "start"]);
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let answer = json_of(&run);
+    assert_eq!(answer["already_running"], false);
+    assert_eq!(answer["format"], "bench.browser-endpoint");
+    let port = answer["port"].as_u64().unwrap();
+    assert_eq!(answer["cdp"], format!("http://127.0.0.1:{port}"));
+    assert!(
+        answer["ws"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("ws://127.0.0.1:{port}/devtools/browser/"))
+    );
+
+    // The file is the same fact the answer reported — helm and agents read it, not us.
+    let endpoint_path = home.dir.join(".bench/browser/endpoint.json");
+    let mut on_disk: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&endpoint_path).unwrap()).unwrap();
+    on_disk["already_running"] = serde_json::json!(false);
+    assert_eq!(on_disk, answer);
+
+    // helm reads this file from Swift and cannot import the Rust type, so both sides test
+    // against one checked-in sample: the keys written here are exactly the fixture's, and
+    // helm's BrowserEndpointTests decodes the same file.
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/browser-endpoint.json"),
+        )
+        .expect("daemon/fixtures/browser-endpoint.json"),
+    )
+    .unwrap();
+    let keys = |v: &serde_json::Value| {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&endpoint_path).unwrap()).unwrap();
+    assert_eq!(
+        keys(&written),
+        keys(&fixture),
+        "endpoint.json drifted from the fixture helm reads"
+    );
+    serde_json::from_value::<bench_wire::BrowserEndpoint>(fixture)
+        .expect("the fixture is a real endpoint");
+    let typed: bench_wire::BrowserEndpoint =
+        serde_json::from_value(written).expect("what the daemon writes decodes as the type");
+    assert_eq!(typed.mode, bench_wire::BrowserMode::Headless);
+
+    // Logged before it was answered.
+    let started: Vec<_> = event_kinds(&home.dir)
+        .into_iter()
+        .filter(|(k, _)| k == "browser/started")
+        .collect();
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].1["pid"], answer["pid"]);
+
+    // Default flags: a normal Chrome UA at the binary's own major, headless; then the
+    // daemon's own flags, last so they win.
+    let profile = home.dir.join(".bench/browser/profile");
+    let argv = fs::read_to_string(profile.join("argv")).unwrap();
+    let argv: Vec<&str> = argv.lines().collect();
+    assert!(argv.contains(&"--headless=new"), "{argv:?}");
+    let ua = argv
+        .iter()
+        .find(|a| a.starts_with("--user-agent="))
+        .unwrap();
+    assert!(
+        ua.contains("Chrome/142.0.0.0") && !ua.contains("Headless"),
+        "{ua}"
+    );
+    assert_eq!(
+        &argv[argv.len() - 6..],
+        &[
+            format!("--user-data-dir={}", profile.display()).as_str(),
+            "--remote-debugging-port=0",
+            "--no-first-run",
+            "--no-default-browser-check",
+            // A test HOME is not the account's own: a Chrome here must never go looking
+            // for a login keychain (the dialog that offers to reset the real ones).
+            "--use-mock-keychain",
+            "--password-store=basic",
+        ]
+    );
+
+    let again = bench(&home.dir, &["browser", "start"]);
+    assert_eq!(again.code, 0, "stderr: {}", again.stderr);
+    let again = json_of(&again);
+    assert_eq!(again["already_running"], true);
+    assert_eq!(again["pid"], answer["pid"], "one browser per root");
+
+    let status = json_of(&bench(&home.dir, &["browser", "status"]));
+    assert_eq!(status["running"], true);
+    assert_eq!(status["pid"], answer["pid"]);
+}
+
+#[test]
+fn configured_args_replace_the_defaults_but_never_the_daemons_own_flags() {
+    let home = TestHome::claim("brargs");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(
+        &home.dir,
+        serde_json::json!({ "binary": fake, "args": ["--remote-debugging-port=9222", "--kiosk"] }),
+    );
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let run = bench(&home.dir, &["browser", "start"]);
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let argv = fs::read_to_string(home.dir.join(".bench/browser/profile/argv")).unwrap();
+    let argv: Vec<&str> = argv.lines().collect();
+    assert_eq!(argv[..2], ["--remote-debugging-port=9222", "--kiosk"]);
+    assert!(
+        !argv.iter().any(|a| a.starts_with("--user-agent")),
+        "{argv:?}"
+    );
+    assert_eq!(argv.last(), Some(&"--password-store=basic"));
+    assert!(
+        argv.contains(&"--remote-debugging-port=0"),
+        "the daemon's port flag comes after and wins"
+    );
+}
+
+#[test]
+fn browser_stop_and_daemon_stop_each_leave_no_browser_and_no_endpoint() {
+    let home = TestHome::claim("brstop");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let endpoint = home.dir.join(".bench/browser/endpoint.json");
+
+    let pid = json_of(&bench(&home.dir, &["browser", "start"]))["pid"]
+        .as_u64()
+        .unwrap() as i32;
+    let stop = bench(&home.dir, &["browser", "stop"]);
+    assert_eq!(stop.code, 0, "stderr: {}", stop.stderr);
+    assert_eq!(json_of(&stop)["was_running"], true);
+    assert!(
+        !libc_alive(pid),
+        "browser/stop answered before the browser was gone"
+    );
+    assert!(
+        !endpoint.exists(),
+        "an endpoint must not name a stopped browser"
+    );
+    assert!(
+        event_kinds(&home.dir)
+            .iter()
+            .any(|(k, d)| k == "browser/stopped" && d["pid"] == pid)
+    );
+    // Nothing restarted it: a stop is not a crash.
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        json_of(&bench(&home.dir, &["browser", "status"]))["running"],
+        false
+    );
+    assert_eq!(
+        json_of(&bench(&home.dir, &["browser", "stop"]))["was_running"],
+        false
+    );
+
+    let pid = json_of(&bench(&home.dir, &["browser", "start"]))["pid"]
+        .as_u64()
+        .unwrap() as i32;
+    assert_eq!(bench(&home.dir, &["stop"]).code, 0);
+    wait_until(
+        "the browser to die with the daemon's stop",
+        Duration::from_secs(8),
+        || !libc_alive(pid),
+    );
+    // The wrapper removes the file after its browser exits, a moment after the pid goes.
+    wait_until("the endpoint to be removed", Duration::from_secs(2), || {
+        !endpoint.exists()
+    });
+}
+
+#[test]
+fn a_killed_daemon_takes_its_browser_with_it() {
+    // The #291 rule made mechanical: no cleanup code runs when a daemon is SIGKILLed,
+    // so only the leash can do this.
+    let home = TestHome::claim("brleash");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+    let pid = json_of(&bench(&home.dir, &["browser", "start"]))["pid"]
+        .as_u64()
+        .unwrap() as i32;
+    assert!(libc_alive(pid));
+
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+    wait_until(
+        "the browser to die with its daemon",
+        Duration::from_secs(5),
+        || !libc_alive(pid),
+    );
+    wait_until("the endpoint to be removed", Duration::from_secs(2), || {
+        !home.dir.join(".bench/browser/endpoint.json").exists()
+    });
+}
+
+#[test]
+fn a_crashed_browser_is_restarted_and_a_crash_loop_gives_up() {
+    let home = TestHome::claim("brcrash");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let first = json_of(&bench(&home.dir, &["browser", "start"]))["pid"]
+        .as_u64()
+        .unwrap();
+    libc_kill(first as i32);
+    let mut second = 0;
+    wait_until("a restarted browser", Duration::from_secs(8), || {
+        let s = json_of(&bench(&home.dir, &["browser", "status"]));
+        second = s["pid"].as_u64().unwrap_or(0);
+        s["running"] == true && second != first
+    });
+    let events = event_kinds(&home.dir);
+    assert!(
+        events
+            .iter()
+            .any(|(k, d)| k == "browser/exited" && d["pid"] == first && d["restarting"] == true),
+        "{events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|(k, d)| k == "browser/started" && d["pid"] == second && d["restart"] == 1),
+        "{events:?}"
+    );
+    let _ = bench(&home.dir, &["browser", "stop"]);
+
+    // A browser that dies on every launch is relaunched three times, then left down.
+    write_browser_config(
+        &home.dir,
+        serde_json::json!({ "binary": fake, "args": ["--die-after=0.3"] }),
+    );
+    assert_eq!(bench(&home.dir, &["browser", "start"]).code, 0);
+    wait_until("the crash loop to give up", Duration::from_secs(15), || {
+        event_kinds(&home.dir)
+            .iter()
+            .any(|(k, _)| k == "browser/gave-up")
+    });
+    let restarts = event_kinds(&home.dir)
+        .iter()
+        .filter(|(k, d)| k == "browser/started" && d["restart"].as_u64().unwrap_or(0) > 0)
+        .count();
+    assert_eq!(
+        restarts,
+        1 + 3,
+        "one restart from the first half, three from the loop"
+    );
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        json_of(&bench(&home.dir, &["browser", "status"]))["running"],
+        false
+    );
+}
+
+#[test]
+fn a_browser_config_or_binary_that_cannot_work_is_refused_naming_the_fix() {
+    let home = TestHome::claim("brrefuse");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+
+    // "No browser anywhere" is a unit test in bench-browser: this machine may well have
+    // Google Chrome installed, and a conformance test must not launch the real thing.
+    write_browser_config(&home.dir, serde_json::json!({ "binnary": "/x" }));
+    let typo = bench(&home.dir, &["browser", "start"]);
+    assert_eq!(typo.code, 3, "stderr: {}", typo.stderr);
+    assert!(typo.stderr.contains("config.json"), "{}", typo.stderr);
+
+    write_browser_config(
+        &home.dir,
+        serde_json::json!({ "binary": "/no/such/chrome" }),
+    );
+    let missing = bench(&home.dir, &["browser", "start"]);
+    assert_eq!(missing.code, 3, "stderr: {}", missing.stderr);
+    assert!(
+        missing.stderr.contains("/no/such/chrome"),
+        "{}",
+        missing.stderr
+    );
+
+    let failed = event_kinds(&home.dir)
+        .iter()
+        .filter(|(k, _)| k == "browser/failed")
+        .count();
+    assert_eq!(failed, 2, "a refused start is still on the record");
+    assert_eq!(
+        json_of(&bench(&home.dir, &["browser", "status"]))["running"],
+        false
+    );
+}
+
+#[test]
+fn an_endpoint_left_by_a_dead_daemon_is_cleared_at_boot_and_logged() {
+    let home = TestHome::claim("brstale");
+    let dir = home.dir.join(".bench/browser");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("endpoint.json"), r#"{"cdp":"http://127.0.0.1:1"}"#).unwrap();
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    assert!(!dir.join("endpoint.json").exists());
+    assert!(
+        event_kinds(&home.dir)
+            .iter()
+            .any(|(k, _)| k == "browser/cleared")
+    );
+}
+
+#[test]
+fn setup_opens_the_same_profile_headed_and_quitting_it_returns_to_headless() {
+    let home = TestHome::claim("brsetup");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let argv_path = home.dir.join(".bench/browser/profile/argv");
+
+    let headless = json_of(&bench(&home.dir, &["browser", "start"]));
+    assert_eq!(headless["mode"], "headless");
+    let headless_pid = headless["pid"].as_u64().unwrap() as i32;
+
+    // Setup takes the running browser down and brings the profile up in a window.
+    let setup = bench(&home.dir, &["browser", "setup"]);
+    assert_eq!(setup.code, 0, "stderr: {}", setup.stderr);
+    let setup = json_of(&setup);
+    assert_eq!(setup["mode"], "setup");
+    assert_eq!(
+        setup["profile"], headless["profile"],
+        "one profile, two modes"
+    );
+    assert!(!libc_alive(headless_pid));
+    let argv = fs::read_to_string(&argv_path).unwrap();
+    assert!(!argv.contains("--headless"), "{argv}");
+    assert!(
+        argv.contains("--user-agent="),
+        "the rest of the flags are unchanged: {argv}"
+    );
+
+    // While the operator is in that window, `start` must not hand it to an agent as "the
+    // shared browser" — it refuses and says what brings the headless browser back.
+    let meanwhile = bench(&home.dir, &["browser", "start"]);
+    assert_eq!(meanwhile.code, 3, "stderr: {}", meanwhile.stderr);
+    assert!(meanwhile.stderr.contains("setup"), "{}", meanwhile.stderr);
+    let during = json_of(&bench(&home.dir, &["browser", "status"]));
+    assert_eq!(during["mode"], "setup");
+    assert!(
+        during.get("cdp").is_none() && during.get("ws").is_none(),
+        "status hands out no address to the operator's window: {during}"
+    );
+
+    // The operator quits the window (Cmd-Q is a clean exit; TERM is how the fake gets one).
+    let setup_pid = setup["pid"].as_u64().unwrap() as i32;
+    unsafe {
+        kill(setup_pid, 15);
+    }
+    let mut back = serde_json::Value::Null;
+    wait_until(
+        "the browser to come back headless",
+        Duration::from_secs(8),
+        || {
+            back = json_of(&bench(&home.dir, &["browser", "status"]));
+            back["running"] == true && back["pid"].as_u64() != Some(setup_pid as u64)
+        },
+    );
+    assert_eq!(back["mode"], "headless");
+    assert!(
+        fs::read_to_string(&argv_path)
+            .unwrap()
+            .contains("--headless=new")
+    );
+    assert!(
+        event_kinds(&home.dir)
+            .iter()
+            .any(|(k, d)| k == "browser/exited" && d["mode"] == "setup" && d["pid"] == setup_pid),
+        "the quit is on the record"
+    );
+}
+
+#[test]
+fn the_bench_browser_skills_snippets_execute_against_a_real_daemon() {
+    // The bench-mail rule: a documented snippet is executed, never restated. Every ```bash
+    // fence in the skill runs against a throwaway daemon whose browser is the fake — the
+    // ```text fences are Playwright's, which the gate does not have.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../.claude/skills/bench-browser/SKILL.md"),
+    )
+    .expect("bench-browser SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        snippets.len(),
+        1,
+        "the skill's one executable snippet: get the endpoint"
+    );
+
+    let home = TestHome::claim("brskill");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let out = Command::new("bash")
+        .args(["-euo", "pipefail", "-c", &snippets[0]])
+        .env_remove("BENCH_SUITE")
+        .env("HOME", &home.dir)
+        .env("BENCH_DIR", home.dir.join(".bench"))
+        .env("BENCH", bench_bin())
+        .output()
+        .expect("run snippet");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "snippet failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let status = json_of(&bench(&home.dir, &["browser", "status"]));
+    assert_eq!(
+        stdout.trim(),
+        status["cdp"].as_str().unwrap(),
+        "the snippet prints the endpoint playwright-cli attach takes"
+    );
+
+    // A refusal must reach the caller as bench's own exit code, not as an empty endpoint
+    // piped onward — an agent that sees exit 0 and "" attaches to nothing.
+    let _ = bench(&home.dir, &["browser", "stop"]);
+    write_browser_config(
+        &home.dir,
+        serde_json::json!({ "binary": "/no/such/chrome" }),
+    );
+    let refused = Command::new("bash")
+        .args(["-c", &snippets[0]])
+        .env_remove("BENCH_SUITE")
+        .env("HOME", &home.dir)
+        .env("BENCH_DIR", home.dir.join(".bench"))
+        .env("BENCH", bench_bin())
+        .output()
+        .expect("run snippet");
+    assert_eq!(
+        refused.status.code(),
+        Some(3),
+        "the refusal's exit code survives the snippet: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(String::from_utf8_lossy(&refused.stdout).trim().is_empty());
 }

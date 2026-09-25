@@ -177,10 +177,12 @@ bash daemon/test.sh
 
 `daemon/` is the bench daemon (`benchd`) — a self-contained Rust cargo workspace, the
 same carve-out as `pi/` and `hooks/`: its gate needs only the Rust toolchain, its CI job
-triggers only on `daemon/**`, and the Swift gate never learns about it. Read
+runs only when `daemon/**` or a `.claude/skills/bench-*` skill changed (the gate executes those
+skills' snippets), and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
-`docs/future-planning/bench-roadmap.md`, and M0 (skeleton and suite isolation) is the
-part that exists.
+`docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
+M0 (skeleton), M5a (daemon-owned ptys), mail and the shared browser (#350) are the parts
+that exist.
 
 **If you touched `hooks/`, run its gate:**
 
@@ -325,16 +327,16 @@ worse than the absence it was added to fix. The distinction does exist, but not 
 reach it: one layer in, in transcript JSONL that Anthropic documents as internal and
 version-dependent, and in the agent's **own context** as prose. Legible is not countable.
 
-**The premise under all of this is no longer settled, and #320 is where it is being settled.**
-This file used to state flatly that nothing outside a Claude Code session can start a turn in it.
-Claude Code 2.1.224+ ships per-session sockets and a message delivered to an idle session's socket
-arrives as a new user turn — measured at **0.12s**, no watch armed. So take the sentence above as
-*"helm does not do this today"* rather than as a fact about the runtime. **The verdict is
-CONDITIONAL and the condition is helm's own posture**: under `--dangerously-skip-permissions`,
-which `SpoolUnattendedPolicy` gives every spawned `claude`, the poke is accepted, returns cleanly,
-and is **held** behind a modal in a pane nobody is watching — #179 arriving through a new door.
-Nothing is built, the arm-a-watch notice is still the working mechanism, and #322 is the same
-shape: also CONDITIONAL, also unbuilt. **Read both before designing against either.**
+**#320 and #322 are closed, and the wake that got built is not the socket.** Claude Code 2.1.224+
+ships per-session sockets, and a message delivered to an idle session's socket arrives as a new user
+turn — measured at **0.12s** — so *"Claude Code has no equivalent helm can call"* above means
+*helm does not do this*, not that the runtime cannot. #320's verdict was CONDITIONAL on helm's own
+posture: under `--dangerously-skip-permissions`, which `SpoolUnattendedPolicy` gives every spawned
+`claude`, the poke is accepted, returns cleanly, and is **held** behind a modal in a pane nobody is
+watching — #179 arriving through a new door. So the build went the other way: **benchd pastes the
+notice into an idle pty it owns**, the same for claude, codex and pi, with the loop cap in its
+courier (#342, `daemon/`). #322's single `bench mail` verb shipped in the same PR. In helm itself
+nothing changed: the arm-a-watch notice is still the working mechanism for a pane helm hosts.
 
 Both hooks are wired by hand into `~/.claude/settings.json` and
 never write themselves there; `hooks/helm-mail.mjs` is the convention, and it is a **deliberate
@@ -673,10 +675,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `name.name`, **read back off the bench** rather than echoed. Exit codes are 2 no answer,
     3 refused, 4 helm could not act, 6 abandoned.
 - **To drive the bench in between, `swift tools/helm-command.swift <command>`** — the fourth
-  spool kind (#269), needing what the other three need: nothing. helm has twenty typed
-  commands (`HelmCommand`, #219, #287 and #289) and **will take four of them from an agent**:
-  `newTerminal`, `splitRight`, `splitDown`, `toggleRail`. `--list` names them without a running
-  helm.
+  spool kind (#269), needing what the other three need: nothing. helm has twenty-one typed
+  commands (`HelmCommand`, #219, #287, #289 and #350) and **will take five of them from an
+  agent**: `newTerminal`, `splitRight`, `splitDown`, `toggleRail`, `openBrowser`. `--list` names
+  them without a running helm.
   - **The rule is one sentence: rearranging the bench is fine, taking focus is not.** It is
     #125's *appear, don't seize* on a channel that can now ask for anything the keymap can — an
     agent selecting your active tab mid-thought is the wrong-terminal click arriving through a
@@ -1133,12 +1135,13 @@ GitHub issues on `Wirasm/helm`, via `gh`. See `docs/agents/issue-tracker.md`.
 Single-context; vocabulary is canonical in `CONTEXT.md`, with `../GLOSSARY.md` for the
 cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
-### The five helm-local skills
+### The helm-local skills
 
-`.claude/skills/` holds twelve; **seven are vendored** from `mattpocock/skills` and pinned in
+`.claude/skills/` holds fourteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
-not a change. The other five are hand-written, helm-local, and are the surface an agent hosted in
-helm actually uses. Four gates cover the five, all listed in *Working here* above — the two mail
+not a change. The other seven are hand-written. The first five below are helm's, the surface an agent
+hosted in helm actually uses. The last two, `bench-mail` and `bench-browser`, are benchd's, and their
+snippets run in the daemon gate's conformance suite. Four gates cover the five, all listed in *Working here* above — the two mail
 skills share one, because the send and the mailbox listing are documented identically in each.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
@@ -1150,6 +1153,9 @@ skills share one, because the send and the mailbox listing are documented identi
   covers both, and it **executes the snippets out of `SKILL.md`** rather than restating them.
 - **`pi-extensions`** — how to build one without taking the pi CLI down, how to read the installed
   pi rather than guess at its API, and how to test one without spending a model call.
+- **`bench-mail`** — sending and reading mail through benchd's mailroom.
+- **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
+  start`, drive it with `playwright-cli attach`, and put it in front of him with `openBrowser`.
 
 ### The two helm-local subagents
 
