@@ -315,8 +315,8 @@ package struct CloseRequest: Codable, Equatable {
 
 /// Drive the bench: one of the commands helm can already carry out (#269).
 ///
-/// **Not a new capability — a route to one that exists.** `HelmCommand` has twenty typed cases
-/// that the keymap and the menu have been able to fire since #219. Nothing outside the process
+/// **Not a new capability — a route to one that exists.** `HelmCommand`'s typed cases are what
+/// the keymap and the menu have been able to fire since #219. Nothing outside the process
 /// could fire any of them: the spool knew `spawn`, `capture` and `close`, so an agent could
 /// create a pane and destroy one and photograph the window, and could do nothing to the bench in
 /// between. This is the fourth kind, and it costs one `case` on the envelope that was built to

@@ -12,7 +12,7 @@
 // no keystrokes — a file appears in the spool, helm acts, helm writes a file back. It works with
 // the screen locked, headless and over ssh.
 //
-// helm has twenty-one commands and will take five of them from an agent. The rule is one sentence:
+// helm will take five of its commands from an agent. The rule is one sentence:
 // REARRANGING THE BENCH IS FINE, TAKING FOCUS IS NOT. An agent selecting the operator's active tab
 // mid-thought is the wrong-terminal click in a supported API — so every command that moves the
 // keyboard, or that acts on "the focused pane" without saying which pane it means, is refused with
@@ -94,7 +94,7 @@ let usage = """
       \(allowed.joined(separator: "  "))
 
     Everything else is refused with a reason — rearranging the bench is fine, taking the
-    operator's keyboard is not. `--list` names the four above without sending anything;
+    operator's keyboard is not. `--list` names the five above without sending anything;
     send any other command to read helm's own refusal, which says why and what to use.
 
     Exits 2 no answer, 3 refused (read `reason`), 4 helm could not act.
