@@ -6,6 +6,7 @@ members = [
     "crates/bench-wire",
     "crates/bench-session",
     "crates/bench-mail",
+    "crates/bench-browser",
     "crates/benchd",
     "crates/bench",
 ]

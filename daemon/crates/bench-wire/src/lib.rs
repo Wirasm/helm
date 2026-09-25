@@ -134,6 +134,10 @@ pub const KNOWN_VERBS: &[&str] = &[
     "mail/send",
     "mail/list",
     "mail/read",
+    "browser/start",
+    "browser/status",
+    "browser/stop",
+    "browser/setup",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +153,10 @@ pub enum Verb {
     MailSend,
     MailList,
     MailRead,
+    BrowserStart,
+    BrowserStatus,
+    BrowserStop,
+    BrowserSetup,
 }
 
 impl Verb {
@@ -166,6 +174,10 @@ impl Verb {
             "mail/send" => Some(Verb::MailSend),
             "mail/list" => Some(Verb::MailList),
             "mail/read" => Some(Verb::MailRead),
+            "browser/start" => Some(Verb::BrowserStart),
+            "browser/status" => Some(Verb::BrowserStatus),
+            "browser/stop" => Some(Verb::BrowserStop),
+            "browser/setup" => Some(Verb::BrowserSetup),
             _ => None,
         }
     }
@@ -185,12 +197,26 @@ pub const DAEMON_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// so a slow spawn exited 2 "no daemon" while the daemon was mid-success.
 pub const READY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// How long `browser/start` waits for Chromium to write `DevToolsActivePort` — the
+/// moment its debugging server is listening. A cold profile on a busy machine takes a
+/// second or two; a browser that has not answered in this long is not going to.
+pub const BROWSER_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+const fn longest_daemon_wait_secs() -> u64 {
+    if READY_WAIT.as_secs() > BROWSER_READY_WAIT.as_secs() {
+        READY_WAIT.as_secs()
+    } else {
+        BROWSER_READY_WAIT.as_secs()
+    }
+}
+
 /// A caller waits at most this long for an answer — strictly longer than every
-/// daemon-side wait, **true by construction**: the sum of the waits plus slack, so the
-/// two sides cannot drift apart again. A timeout maps to `EXIT_NO_DAEMON`: no exit
-/// code at all is the one failure an unattended agent cannot act on.
+/// daemon-side wait, **true by construction**: the longest wait plus the I/O bound plus
+/// slack, so the two sides cannot drift apart again. A timeout maps to
+/// `EXIT_NO_DAEMON`: no exit code at all is the one failure an unattended agent cannot
+/// act on.
 pub const CLIENT_READ_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(READY_WAIT.as_secs() + DAEMON_IO_TIMEOUT.as_secs() + 5);
+    std::time::Duration::from_secs(longest_daemon_wait_secs() + DAEMON_IO_TIMEOUT.as_secs() + 5);
 
 // ---------------------------------------------------------------------------
 // Handles and mail payloads
@@ -287,6 +313,93 @@ pub struct SessionArgs {
     pub rows: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cols: Option<u16>,
+}
+
+// ---------------------------------------------------------------------------
+// The shared browser
+// ---------------------------------------------------------------------------
+
+/// `<root>/browser/config.json` — how the operator swaps the browser without a code
+/// change. Both keys are optional; an unknown key is refused rather than ignored, so a
+/// typo (`"binnary"`) is a named refusal and not a silent fall back to the default.
+///
+/// - `binary`: absolute path to a Chromium-family executable. Default: Google Chrome
+///   where it is installed (the operator's ruling on #350 — real Chrome runs the Claude
+///   in Chrome and Codex extensions), else the newest Playwright Chrome for Testing.
+/// - `mock_keychain`: see the field.
+/// - `args`: REPLACES the default set (`--headless=new`, a normal Chrome user agent,
+///   `--remote-allow-origins`, a window size). The flags the daemon owns — profile dir,
+///   debugging port, first-run suppression — are always added and cannot be configured
+///   away.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// `true` adds `--use-mock-keychain --password-store=basic`: Chrome keeps its
+    /// cookie and password encryption key in the profile instead of the macOS login
+    /// keychain. The trade-off is real — anything that can read the profile directory can
+    /// then read the logged-in sessions in it — so the default is `false`: the shared
+    /// browser runs under the operator's own HOME with his real keychain. The flags are
+    /// added regardless whenever the browser runs under a HOME that is not the account's
+    /// own (a test, a redirected HOME), because there macOS finds no keychain and offers
+    /// to reset the operator's real ones (#350, measured the hard way).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mock_keychain: Option<bool>,
+}
+
+/// How the browser is running. `headless` is the normal state, seen only through helm's
+/// pane. `setup` is the same profile in a real window, started by `browser/setup` so the
+/// operator can install extensions and sign in to them — things with browser UI the pane
+/// cannot show. Quitting the setup window returns the browser to `headless`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BrowserMode {
+    Headless,
+    Setup,
+}
+
+pub const BROWSER_ENDPOINT_FORMAT: &str = "bench.browser-endpoint";
+pub const BROWSER_ENDPOINT_VERSION: u64 = 0;
+
+/// Where the running browser is — the one shape written to `<root>/browser/endpoint.json`
+/// and returned by `browser/start` and `browser/status`. It is read OUTSIDE this
+/// workspace (helm's pane, agents' shells), so it carries `format`/`version` and a
+/// reader checks them before trusting the rest (`BenchSnapshot`'s rule).
+///
+/// `cdp` is what `playwright-cli attach --cdp=` takes; `ws` is the browser-level
+/// websocket a CDP client opens directly. The file exists exactly while a browser the
+/// daemon started is running: written after it answers, removed when it stops or exits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserEndpoint {
+    pub format: String,
+    pub version: u64,
+    pub cdp: String,
+    pub ws: String,
+    pub port: u16,
+    pub pid: u32,
+    pub mode: BrowserMode,
+    pub binary: String,
+    pub profile: String,
+    pub started_at: String,
+}
+
+pub fn browser_dir(root: &Path) -> PathBuf {
+    root.join("browser")
+}
+
+pub fn browser_config_path(root: &Path) -> PathBuf {
+    browser_dir(root).join("config.json")
+}
+
+pub fn browser_endpoint_path(root: &Path) -> PathBuf {
+    browser_dir(root).join("endpoint.json")
+}
+
+pub fn browser_profile_dir(root: &Path) -> PathBuf {
+    browser_dir(root).join("profile")
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +608,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            11,
+            15,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
@@ -506,6 +619,10 @@ mod tests {
         assert!(
             CLIENT_READ_TIMEOUT > READY_WAIT + DAEMON_IO_TIMEOUT,
             "R1's invariant: a daemon-side outcome always outruns the client giving up"
+        );
+        assert!(
+            CLIENT_READ_TIMEOUT > BROWSER_READY_WAIT + DAEMON_IO_TIMEOUT,
+            "the same invariant for a browser start"
         );
     }
 

@@ -21,6 +21,18 @@ an idle pty the daemon owns, with the loop cap as a per-recipient token bucket i
 courier — where helm #320 proved it must live). Proven end to end by `just mail-proof`:
 a number passed as mail around a real claude→codex→pi ring, +1 per hop.
 
+**Plus the shared browser (#350).** `browser/start|status|stop|setup`: the daemon starts
+one browser per root — Google Chrome where installed (the operator's ruling: it runs the
+Claude in Chrome and Codex extensions), else Playwright's Chrome for Testing;
+`browser/config.json` swaps binary or flags — headless, persistent profile under
+`<root>/browser/profile`, debugging port chosen by Chrome and read back from
+`DevToolsActivePort`, endpoint published in `<root>/browser/endpoint.json`. `setup` opens
+the same profile in a real window for installing extensions and signing in; quitting it
+returns to headless. The daemon never automates the browser: agents attach with
+`playwright-cli attach --cdp=<cdp>`, helm renders it over its own CDP socket. A crash is
+restarted (at most 3 in 60s, then `browser/gave-up`), and the browser runs on a pipe
+leash so it dies with the daemon even under SIGKILL. `just browser-proof` is the live check.
+
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance
 gate that runs the real binaries. M5a is the pty core: `spawn` puts a real interactive

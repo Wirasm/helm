@@ -1,0 +1,10 @@
+[package]
+name = "bench-browser"
+version.workspace = true
+edition.workspace = true
+description = "The shared browser: find, configure and launch one Chromium, bounded by its owner's life."
+
+[dependencies]
+bench-wire = { path = "../bench-wire" }
+serde_json.workspace = true
+libc = "0.2"

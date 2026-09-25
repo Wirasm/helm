@@ -17,6 +17,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bench-browser"
+version = "0.0.1"
+dependencies = [
+ "bench-wire",
+ "libc",
+ "serde_json",
+]
+
+[[package]]
 name = "bench-mail"
 version = "0.0.1"
 
@@ -39,6 +48,7 @@ dependencies = [
 name = "benchd"
 version = "0.0.1"
 dependencies = [
+ "bench-browser",
  "bench-mail",
  "bench-session",
  "bench-wire",

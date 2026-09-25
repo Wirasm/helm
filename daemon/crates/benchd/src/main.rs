@@ -1,11 +1,14 @@
-//! benchd — the bench daemon. M0 (skeleton and isolation), M5a (the pty core) and mail.
+//! benchd — the bench daemon. M0 (skeleton and isolation), M5a (the pty core), mail and
+//! the shared browser.
 //!
 //! What exists: a suite-aware record root, an append-only event log that is the single
-//! source of truth, and one unix socket answering eleven verbs — status/events/stop from
+//! source of truth, and one unix socket answering fifteen verbs — status/events/stop from
 //! M0; spawn/sessions/attach/close/resume from M5a: daemon-owned ptys hosting full
-//! interactive agent TUIs, viewed through a dtach-grade raw relay (`bench attach`); and
+//! interactive agent TUIs, viewed through a dtach-grade raw relay (`bench attach`);
 //! mail/send, mail/list and mail/read, with the wake reactor pasting a notice into an
-//! idle recipient's pty (#342).
+//! idle recipient's pty (#342); and browser/start, browser/status, browser/stop and
+//! browser/setup — one supervised Chrome per root whose endpoint agents and helm connect
+//! to directly (#350).
 //! What deliberately does not exist yet: the bench document, attention and taps (see
 //! `docs/future-planning/bench-roadmap.md` and tracking issue #362). Each arrives as new
 //! event kinds plus new verbs over this same spine, never as a second channel beside it.
@@ -23,12 +26,13 @@
 //! sits behind one mutex held only for map and log operations — never across a ready
 //! wait, a prompt delivery, or an attach pump.
 
+use bench_browser::{Browser, ExitInfo, LaunchError, default_candidates};
 use bench_session::{AgentKind, Notice, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id};
 use bench_wire::{
-    DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
+    BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
     MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, READY_WAIT,
-    Request, Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb, check_socket_path,
-    events_path, resolve_root, socket_path, validate_handle,
+    Request, Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb, browser_endpoint_path,
+    check_socket_path, events_path, resolve_root, socket_path, validate_handle,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -88,7 +92,7 @@ fn run() -> i32 {
     let bench_dir = std::env::var("BENCH_DIR").ok();
     let root = resolve_root(bench_dir.as_deref(), suite.as_ref(), &home);
 
-    match boot(root, suite) {
+    match boot(root, suite, home) {
         Ok(code) => code,
         Err(StartError::Refused(why)) => refuse_start(&why),
         Err(StartError::Failed(why)) => fail_start(&why),
@@ -220,7 +224,26 @@ struct Core {
     pending_wakes: Vec<PendingWake>,
     wake_tokens: HashMap<String, WakeBucket>,
     notices: mpsc::Sender<Notice>,
+    /// Whose Playwright cache the default browser comes from.
+    home: PathBuf,
+    browser: Option<Arc<Browser>>,
+    /// True between a `browser/start` and a `browser/stop`: a crash restarts only a
+    /// browser somebody still wants.
+    browser_wanted: bool,
+    /// Restarts inside the current window — the crash-loop cap.
+    browser_restarts: Vec<Instant>,
 }
+
+/// A crashed browser is restarted at most this many times inside this window; the next
+/// crash is logged as `browser/gave-up` and the browser stays down until a
+/// `browser/start`. A profile that crashes Chromium on every launch must not become a
+/// launch loop nobody is watching.
+const BROWSER_RESTART_CAP: usize = 3;
+const BROWSER_RESTART_WINDOW: Duration = Duration::from_secs(60);
+
+/// Held across a whole start or stop — never the core lock, which a ready wait must
+/// not hold — so two starts serialize and the second finds the first's browser.
+static BROWSER_LIFECYCLE: Mutex<()> = Mutex::new(());
 
 impl Core {
     fn append(&mut self, kind: &str, data: Value) -> Result<(), String> {
@@ -244,7 +267,7 @@ impl Core {
     }
 }
 
-fn boot(root: PathBuf, suite: Option<SuiteName>) -> Result<i32, StartError> {
+fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, StartError> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true).mode(0o700);
     builder.create(&root).map_err(|e| {
@@ -284,6 +307,15 @@ fn boot(root: PathBuf, suite: Option<SuiteName>) -> Result<i32, StartError> {
         })?;
     let _ = fs::set_permissions(&events, fs::Permissions::from_mode(0o600));
 
+    // An endpoint file at boot names a browser from a daemon that is gone — and its
+    // leash went with it, so that browser is gone too. Removed before the socket is
+    // bound, so no client of this daemon can find it; logged once the log is open.
+    let stale_endpoint = Some(browser_endpoint_path(&root))
+        .filter(|p| p.exists())
+        .inspect(|p| {
+            let _ = fs::remove_file(p);
+        });
+
     let listener = UnixListener::bind(&sock)
         .map_err(|e| StartError::Failed(format!("cannot bind {}: {e}", sock.display())))?;
 
@@ -301,6 +333,10 @@ fn boot(root: PathBuf, suite: Option<SuiteName>) -> Result<i32, StartError> {
         pending_wakes: Vec::new(),
         wake_tokens: HashMap::new(),
         notices: notice_tx,
+        home,
+        browser: None,
+        browser_wanted: false,
+        browser_restarts: Vec::new(),
     }));
 
     {
@@ -319,6 +355,13 @@ fn boot(root: PathBuf, suite: Option<SuiteName>) -> Result<i32, StartError> {
                     "quarantine": note.quarantine.display().to_string(),
                     "dropped_bytes": note.dropped_bytes,
                 }),
+            )
+            .map_err(StartError::Failed)?;
+        }
+        if let Some(stale) = &stale_endpoint {
+            c.append(
+                "browser/cleared",
+                json!({ "endpoint": stale.display().to_string(), "why": "left by a daemon that is no longer running" }),
             )
             .map_err(StartError::Failed)?;
         }
@@ -570,6 +613,7 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
             for s in sessions {
                 let _ = s.close(Duration::from_secs(1));
             }
+            let _ = stop_browser(&core, Duration::from_secs(2));
             let root = core.lock().unwrap().root.clone();
             let _ = fs::remove_file(socket_path(&root));
             process::exit(0);
@@ -1142,6 +1186,65 @@ fn dispatch(
             )
         }
 
+        Some(Verb::BrowserStart) => {
+            core.lock().unwrap().browser_restarts.clear();
+            match start_browser(core, 0, BrowserMode::Headless) {
+                Ok((browser, already)) => {
+                    let mut data = json!(browser.endpoint);
+                    data["already_running"] = json!(already);
+                    (ok(data), AfterResponse::Done)
+                }
+                Err(LaunchError::Refused(why)) => (refused(why), AfterResponse::Done),
+                Err(LaunchError::Failed(why)) => (errored(why), AfterResponse::Done),
+            }
+        }
+
+        Some(Verb::BrowserSetup) => {
+            // The same profile, headed, for what only a real window can do: installing
+            // extensions and signing in to them. Whatever runs now makes way for it.
+            let running_setup = {
+                let c = core.lock().unwrap();
+                c.browser
+                    .as_ref()
+                    .is_some_and(|b| b.is_running() && b.endpoint.mode == BrowserMode::Setup)
+            };
+            if !running_setup && let Err(why) = stop_browser(core, Duration::from_secs(5)) {
+                return (errored(why), AfterResponse::Done);
+            }
+            core.lock().unwrap().browser_restarts.clear();
+            match start_browser(core, 0, BrowserMode::Setup) {
+                Ok((browser, already)) => {
+                    let mut data = json!(browser.endpoint);
+                    data["already_running"] = json!(already);
+                    data["next"] = json!(
+                        "a Chrome window is open on this profile: install extensions and sign in, then quit it (Cmd-Q) — the browser returns to headless by itself"
+                    );
+                    (ok(data), AfterResponse::Done)
+                }
+                Err(LaunchError::Refused(why)) => (refused(why), AfterResponse::Done),
+                Err(LaunchError::Failed(why)) => (errored(why), AfterResponse::Done),
+            }
+        }
+
+        Some(Verb::BrowserStatus) => {
+            let c = core.lock().unwrap();
+            let running = c.browser.as_ref().filter(|b| b.is_running());
+            let mut data = match running {
+                Some(b) => json!(b.endpoint),
+                None => json!({}),
+            };
+            data["running"] = json!(running.is_some());
+            (ok(data), AfterResponse::Done)
+        }
+
+        Some(Verb::BrowserStop) => match stop_browser(core, Duration::from_secs(5)) {
+            Ok(pid) => (
+                ok(json!({ "was_running": pid.is_some(), "pid": pid })),
+                AfterResponse::Done,
+            ),
+            Err(why) => (errored(why), AfterResponse::Done),
+        },
+
         None => (
             refused(format!(
                 "unknown verb {:?} — this daemon answers: {}",
@@ -1150,6 +1253,156 @@ fn dispatch(
             )),
             AfterResponse::Done,
         ),
+    }
+}
+
+/// Start the browser unless one is running; `(browser, already_running)`. `restart` is
+/// 0 for a caller's start and n for the supervisor's n-th relaunch, and is logged.
+fn start_browser(
+    core: &Arc<Mutex<Core>>,
+    restart: usize,
+    mode: BrowserMode,
+) -> Result<(Arc<Browser>, bool), LaunchError> {
+    let _life = BROWSER_LIFECYCLE.lock().unwrap();
+    let (root, home) = {
+        let mut c = core.lock().unwrap();
+        if let Some(b) = c.browser.as_ref().filter(|b| b.is_running()) {
+            return Ok((Arc::clone(b), true));
+        }
+        if restart > 0 && !c.browser_wanted {
+            return Err(LaunchError::Refused(
+                "stopped while a restart was pending".into(),
+            ));
+        }
+        c.browser_wanted = true;
+        (c.root.clone(), c.home.clone())
+    };
+    let supervisor = Arc::clone(core);
+    let candidates = default_candidates(
+        &home,
+        std::env::var("PLAYWRIGHT_BROWSERS_PATH").ok().as_deref(),
+    );
+    let launched = Browser::launch(
+        &root,
+        &home,
+        &candidates,
+        mode,
+        now_rfc3339(),
+        Box::new(move |info| browser_exited(supervisor, info)),
+    );
+    let mut c = core.lock().unwrap();
+    match launched {
+        Ok(browser) => {
+            c.browser = Some(Arc::clone(&browser));
+            let mut data = json!(browser.endpoint);
+            data["restart"] = json!(restart);
+            if let Err(why) = c.append("browser/started", data) {
+                drop(c);
+                browser.stop(Duration::from_secs(2));
+                return Err(LaunchError::Failed(why));
+            }
+            Ok((browser, false))
+        }
+        Err(e) => {
+            if restart == 0 {
+                c.browser_wanted = false;
+            }
+            let why = match &e {
+                LaunchError::Refused(w) | LaunchError::Failed(w) => w.clone(),
+            };
+            let _ = c.append(
+                "browser/failed",
+                json!({ "why": why, "restart": restart, "mode": mode }),
+            );
+            Err(e)
+        }
+    }
+}
+
+/// Stop the browser if one runs: logged, then the leash is dropped and the exit
+/// awaited. Returns the pid that was stopped.
+fn stop_browser(core: &Arc<Mutex<Core>>, grace: Duration) -> Result<Option<u32>, String> {
+    let _life = BROWSER_LIFECYCLE.lock().unwrap();
+    let browser = {
+        let mut c = core.lock().unwrap();
+        c.browser_wanted = false;
+        match c.browser.take().filter(|b| b.is_running()) {
+            Some(b) => {
+                c.append("browser/stopped", json!({ "pid": b.endpoint.pid }))?;
+                b
+            }
+            None => return Ok(None),
+        }
+    };
+    browser.stop(grace);
+    Ok(Some(browser.endpoint.pid))
+}
+
+/// The supervisor's half: a requested exit was already logged as `browser/stopped`; a
+/// setup window the operator quit goes back to headless; a crash is logged and, inside
+/// the cap and while the browser is still wanted, relaunched.
+fn browser_exited(core: Arc<Mutex<Core>>, info: ExitInfo) {
+    if info.requested {
+        return;
+    }
+    if info.mode == BrowserMode::Setup {
+        let wanted = {
+            let mut c = core.lock().unwrap();
+            if c.browser
+                .as_ref()
+                .is_some_and(|b| b.endpoint.pid == info.pid)
+            {
+                c.browser = None;
+            }
+            let wanted = c.browser_wanted;
+            let _ = c.append(
+                "browser/exited",
+                json!({ "pid": info.pid, "code": info.code, "mode": info.mode, "restarting": wanted }),
+            );
+            wanted
+        };
+        if wanted {
+            let _ = start_browser(&core, 0, BrowserMode::Headless);
+        }
+        return;
+    }
+    let restart = {
+        let mut c = core.lock().unwrap();
+        if c.browser
+            .as_ref()
+            .is_some_and(|b| b.endpoint.pid == info.pid)
+        {
+            c.browser = None;
+        }
+        let now = Instant::now();
+        c.browser_restarts
+            .retain(|t| now.duration_since(*t) < BROWSER_RESTART_WINDOW);
+        let restarting = c.browser_wanted && c.browser_restarts.len() < BROWSER_RESTART_CAP;
+        let _ = c.append(
+            "browser/exited",
+            json!({ "pid": info.pid, "code": info.code, "mode": info.mode, "restarting": restarting }),
+        );
+        if restarting {
+            c.browser_restarts.push(now);
+            Some(c.browser_restarts.len())
+        } else {
+            if c.browser_wanted {
+                c.browser_wanted = false;
+                let _ = c.append(
+                    "browser/gave-up",
+                    json!({
+                        "restarts": BROWSER_RESTART_CAP,
+                        "window_secs": BROWSER_RESTART_WINDOW.as_secs(),
+                        "route": "`bench browser start` tries again; the browser log is <root>/browser/chrome.log",
+                    }),
+                );
+            }
+            None
+        }
+    };
+    if let Some(n) = restart {
+        std::thread::sleep(Duration::from_millis(500));
+        let _ = start_browser(&core, n, BrowserMode::Headless);
     }
 }
 
