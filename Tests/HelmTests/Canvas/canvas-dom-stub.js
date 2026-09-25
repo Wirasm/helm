@@ -300,8 +300,8 @@
     },
   };
 
-  // The negative control: a canvas with no bridge (a URL canvas, or `playwright-cli` opening
-  // the artifact directly) must be left completely alone.
+  // The negative control: a canvas with no bridge (`playwright-cli` opening the artifact
+  // directly) must be left completely alone.
   if (global.__helmNoBridge) {
     delete win.webkit;
   }
