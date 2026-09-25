@@ -207,15 +207,15 @@ check() {
   [ -n "$holders" ] || refuse "no live process holds session $session"
   [ "$inside" -eq 1 ] || refuse "session $session (pid $holders) is not running inside helm pid $pid"
 
-  local tool
-  for tool in timeout claude cargo swift make xcodegen perl; do
-    command -v "$tool" >/dev/null || refuse "$tool is not on PATH"
-  done
-
   if [ -z "$cwd" ]; then
     cwd="$(session_field "$session" cwd)" || refuse "cannot read the cwd of $session; pass it"
   fi
   [ -d "$cwd" ] || refuse "no directory $cwd"
+
+  local tool
+  for tool in timeout claude cargo swift make xcodegen perl; do
+    command -v "$tool" >/dev/null || refuse "$tool is not on PATH"
+  done
 }
 
 detach() {
@@ -329,11 +329,15 @@ detached_run() {
   log "step 4: swapping $bundle for $product"
   timeout 600 /bin/sh -c "$(swap_script)" helm-update "$pid" "$product" "$bundle" 60 "$launcher"
   local swap=$?
-  # 1–4 are BundleSwap's own exits. Anything else (the launcher failing after a good rename,
-  # or this timeout killing a copy midway) leaves the bundle in a state only a listing can tell.
+  # 2–4 are BundleSwap's own failures, each of which restores and relaunches. Exit 1 is its
+  # deadline only while helm is still alive: BundleSwap ends on the launcher, so a relaunch that
+  # fails after a good swap also returns 1. That, and anything else (this timeout killing a copy
+  # midway), leaves the bundle in a state only a listing can tell.
+  if [ "$swap" -eq 1 ] && alive "$pid"; then
+    fail "helm pid $pid did not exit within 60s; nothing was swapped"
+  fi
   case "$swap" in
   0) log "swapped; relaunched through $launcher" ;;
-  1) fail "helm pid $pid did not exit within 60s; nothing was swapped" ;;
   2 | 3 | 4) fail "the swap failed with exit $swap; the previous bundle was restored and relaunched" ;;
   *)
     ls -ld "$bundle" "$bundle.helm-update" "$bundle.helm-previous" 2>&1

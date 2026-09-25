@@ -74,13 +74,13 @@ final class ReleaseResumeScriptTests: XCTestCase {
             ["-c", "source \"$1\"; shift; \(function) \"$@\"", "test", script.path] + arguments)
     }
 
-    /// A bundle whose executable is a copy of `/bin/sleep`, so it can be run and seen by `ps`.
-    private func makeBundle(named name: String) throws -> URL {
+    /// A bundle whose executable is a copy of a system binary, so it can be run and seen by `ps`.
+    private func makeBundle(named name: String, executable: String = "/bin/sleep") throws -> URL {
         let bundle = scratch.appendingPathComponent(name)
         let macOS = bundle.appendingPathComponent("Contents/MacOS")
         try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
         try FileManager.default.copyItem(
-            at: URL(fileURLWithPath: "/bin/sleep"), to: macOS.appendingPathComponent("Helm"))
+            at: URL(fileURLWithPath: executable), to: macOS.appendingPathComponent("Helm"))
         let plist: [String: Any] = ["CFBundleExecutable": "Helm"]
         let data = try PropertyListSerialization.data(
             fromPropertyList: plist, format: .xml, options: 0)
@@ -88,7 +88,23 @@ final class ReleaseResumeScriptTests: XCTestCase {
         return bundle
     }
 
-    /// Runs an executable, bounded by its own argument rather than by this suite remembering.
+    /// A binary that forks one child and both sleep 30s, so a fake helm can have a descendant.
+    /// Compiled rather than copied: macOS kills a copy of `/bin/bash`, `/bin/sh` or
+    /// `/usr/bin/time` on launch (exit 137), while a copy of `/bin/sleep` runs.
+    private func forkingExecutable() throws -> URL {
+        let source = scratch.appendingPathComponent("forker.c")
+        let binary = scratch.appendingPathComponent("forker")
+        try Data(
+            "#include <unistd.h>\nint main(void) { fork(); sleep(30); return 0; }\n".utf8
+        ).write(to: source)
+        let compile = try bash([
+            "-c", "xcrun clang \"$1\" -o \"$2\"", "cc", source.path, binary.path,
+        ])
+        XCTAssertEqual(compile.status, 0, compile.stderr)
+        return binary
+    }
+
+    /// Runs an executable, bounded by its own sleep rather than by this suite remembering.
     private func run(_ executable: URL, _ arguments: [String] = ["30"]) throws -> pid_t {
         let process = Process()
         process.executableURL = executable
@@ -167,20 +183,36 @@ final class ReleaseResumeScriptTests: XCTestCase {
         XCTAssertFalse(result.stdout.contains("detached"), "it detached after refusing")
     }
 
-    /// The control for the refusal above: a real child of the process is found inside it, or
-    /// a guard that refused every session would pass alone.
-    func testASessionInAChildOfTheHelmIsInsideIt() throws {
-        // `; :` keeps bash from exec-ing sleep, so sleep is bash's child rather than bash itself.
-        let parent = try run(URL(fileURLWithPath: "/bin/bash"), ["-c", "/bin/sleep 30; :"])
+    /// The control for the refusal above, through the same `check()`: a session in a child of
+    /// the bundle's process passes the guard and is stopped only by the next check, a missing
+    /// `cwd`. A guard that refused every session, or compared the pids the wrong way round,
+    /// fails here.
+    func testASessionInsideTheHelmPassesTheGuard() throws {
+        let bundle = try makeBundle(named: "Target.app", executable: try forkingExecutable().path)
+        let helm = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"), [])
         var child = ""
         for _ in 0..<50 where child.isEmpty {
-            child = try bash(["-c", "pgrep -P \(parent)"]).stdout
+            child = try bash(["-c", "pgrep -P \(helm)"]).stdout
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if child.isEmpty { Thread.sleep(forTimeInterval: 0.1) }
         }
         XCTAssertFalse(child.isEmpty, "the child never started")
+        let session = "11111111-2222-3333-4444-555555555555"
+        let home = scratch.appendingPathComponent("home")
+        let sessions = home.appendingPathComponent(".claude/sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try Data(#"{"pid":\#(child),"sessionId":"\#(session)"}"#.utf8)
+            .write(to: sessions.appendingPathComponent("\(child).json"))
 
-        XCTAssertEqual(try call("descends_from", child, String(parent)).status, 0)
-        XCTAssertNotEqual(try call("descends_from", String(parent), child).status, 0)
+        let result = try bash(
+            [
+                script.path, session, scratch.appendingPathComponent("absent").path,
+                // The child runs the same executable, so the parent is named.
+                "--bundle", bundle.path, "--pid", String(helm),
+            ],
+            environment: ["HOME": home.path])
+
+        XCTAssertEqual(result.status, 3, result.stderr)
+        XCTAssertTrue(result.stderr.contains("no directory"), result.stderr)
     }
 }
