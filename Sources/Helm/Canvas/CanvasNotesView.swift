@@ -4,8 +4,9 @@ import SwiftUI
 /// header's `Notes (n)`.
 ///
 /// **No decisions here.** Anchoring is `CanvasHTML.annotationScript()`'s, validation is
-/// `CanvasAnnotation.decode`'s, the sidecar's path and shape are `CanvasNotes`'s, and what
-/// to do when either refuses is `CanvasModel.annotate(comment:)`'s. This file draws.
+/// `CanvasPageSelection.decode`'s and `CanvasAnnotation.decode`'s, the sidecar's path and shape
+/// are `CanvasNotes`'s, and what to do when either refuses is `CanvasModel.annotate(comment:)`'s.
+/// This file draws.
 struct CanvasCommentField: View {
     @ObservedObject var model: CanvasModel
     let selection: CanvasSelection
@@ -69,8 +70,23 @@ struct CanvasCommentField: View {
         .onExitCommand { model.dismissSelection() }
     }
 
+    /// What the field quotes while the operator types: the words the mark covers, read off the
+    /// decoded mark, so every kind is quoted and none is guessed at from the page's field names.
+    /// The note's heading (`CanvasNotes.entry`) names the same things with ids and backticks for
+    /// an agent; this is plain text because `Text` draws it verbatim.
     static func quote(for selection: CanvasSelection) -> String {
-        (selection.body["text"] as? String) ?? ""
+        switch selection.mark {
+        case let .selection(anchor), let .point(anchor):
+            return anchor.text
+        case let .enclosure(covering):
+            return covering.map(\.text).joined(separator: ", ")
+        case let .relation(from, to):
+            return "\(from?.text ?? "empty space") → \(to?.text ?? "empty space")"
+        case .none:
+            // A circle round blank space, or an arrow with neither end on anything. The page
+            // posts these on purpose so the refusal is visible; a blank quote would hide it.
+            return "Nothing here helm can anchor a note to."
+        }
     }
 
     /// Shift+Enter's newline. `@State` reads its own storage rather than a captured value, so

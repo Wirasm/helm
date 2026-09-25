@@ -854,7 +854,7 @@ final class CanvasModel: ObservableObject {
     /// What is decided here is only what to do when either refuses.
     func annotate(comment: String) {
         guard let canvas = fileURL, let selection else { return }
-        guard let annotation = CanvasAnnotation.decode(selection.body, comment: comment) else {
+        guard let annotation = CanvasAnnotation.decode(selection, comment: comment) else {
             notesFailure = "That selection could not be anchored — try selecting the text again."
             return
         }

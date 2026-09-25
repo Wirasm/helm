@@ -15,10 +15,10 @@ final class CanvasAnnotationTests: XCTestCase {
         _ body: Any, comment: String = "this ordering is wrong"
     ) -> CanvasAnnotation? {
         guard var payload = body as? [String: Any] else {
-            return CanvasAnnotation.decode(body, comment: comment)
+            return CanvasAnnotation.decode(posted: body, comment: comment)
         }
         payload["kind"] = payload["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
-        return CanvasAnnotation.decode(payload, comment: comment)
+        return CanvasAnnotation.decode(posted: payload, comment: comment)
     }
 
     // MARK: - The anchor

@@ -104,7 +104,40 @@ extension CanvasAnnotation {
     private static let allowedIDCharacters = CharacterSet(
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_:.-")
 
-    /// From the bridge's message body.
+    /// A selection the gate admitted, and the comment the operator wrote about it.
+    ///
+    /// **Nothing is parsed here any more.** The page's body was read once, by
+    /// `CanvasPageSelection.decode`, which validated its `kind` and decoded the mark through
+    /// `Mark.decode(_:as:)` below. This only asks whether that mark resolved to anything and
+    /// whether there is a comment to attach to it. Before #210 this function took the raw body and
+    /// re-read `kind` from it, a second classification of a string the gate had already
+    /// classified, and a `CanvasSelection` carried only that raw body. The comment field had no
+    /// kind to switch on, so it guessed a field name and showed a blank quote for every arrow and
+    /// circle.
+    static func decode(_ selection: CanvasSelection, comment: String) -> CanvasAnnotation? {
+        let comment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !comment.isEmpty, let mark = selection.mark else { return nil }
+        return CanvasAnnotation(mark: mark, comment: comment)
+    }
+}
+
+extension CanvasAnnotation.Anchor {
+    /// The words the anchor covers, with or without an id.
+    var text: String {
+        switch self {
+        case let .element(_, text), let .quote(text): text
+        }
+    }
+}
+
+extension CanvasAnnotation.Mark {
+    /// What the page's body names, given the `kind` the gate has already validated.
+    ///
+    /// Called from exactly one place, `CanvasPageSelection.decode`, which read `kind` from the
+    /// body and passes it here so nothing reads it twice. `nil` means the gesture was real but
+    /// named nothing helm can anchor to (a circle round empty space, an arrow with neither end
+    /// on anything). The comment field still opens for it and says so, and `CanvasAnnotation`
+    /// refuses the note.
     ///
     /// The page is agent-authored, not helm-authored, so this treats the body as
     /// untrusted: every field is type-checked and bounded, and a malformed body is nil —
@@ -115,55 +148,47 @@ extension CanvasAnnotation {
     /// `WKScriptMessage.body` is `Any` bridged from JS — `NSDictionary`/`NSString`/
     /// `NSNumber`, and a JS number arrives as `NSNumber` rather than `Int`. Type-check,
     /// never force-cast.
-    static func decode(_ body: Any, comment: String) -> CanvasAnnotation? {
-        let comment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !comment.isEmpty else { return nil }
-        guard let payload = body as? [String: Any] else { return nil }
-
-        switch CanvasPageSelection.Kind(rawValue: payload["kind"] as? String ?? "") {
+    static func decode(
+        _ payload: [String: Any], as kind: CanvasPageSelection.Kind
+    ) -> CanvasAnnotation.Mark? {
+        typealias Annotation = CanvasAnnotation
+        switch kind {
         case .enclosure:
-            let covered = decodedAnchors(payload["targets"])
+            let covered = Annotation.decodedAnchors(payload["targets"])
             // Refused rather than shipped as a coordinate: a circle around nothing is the
             // operator pointing at empty space, and helm has no honest anchor for that.
-            guard !covered.isEmpty, covered.count <= maximumEnclosureCount else { return nil }
-            return CanvasAnnotation(mark: .enclosure(covering: covered), comment: comment)
+            guard !covered.isEmpty, covered.count <= Annotation.maximumEnclosureCount else {
+                return nil
+            }
+            return .enclosure(covering: covered)
 
         case .relation:
-            let from = decodedAnchor(payload["from"])
-            let to = decodedAnchor(payload["to"])
+            let from = Annotation.decodedAnchor(payload["from"])
+            let to = Annotation.decodedAnchor(payload["to"])
             // One end may be empty — that is "add a node here". Neither end is nothing.
             guard from != nil || to != nil else { return nil }
-            return CanvasAnnotation(mark: .relation(from: from, to: to), comment: comment)
+            return .relation(from: from, to: to)
 
         case .point:
-            guard let at = decodedAnchor(payload) else { return nil }
-            return CanvasAnnotation(mark: .point(at), comment: comment)
+            return Annotation.decodedAnchor(payload).map(Self.point)
 
         case .selection:
-            guard let at = decodedAnchor(payload) else { return nil }
-            return CanvasAnnotation(mark: .selection(at), comment: comment)
+            return Annotation.decodedAnchor(payload).map(Self.selection)
 
-        case .cleared, .none:
-            // **A kind this build does not know is refused, and that reverses what this
-            // `default` used to do** (#109). It used to fall through to a text selection, on
-            // the reasoning that *"the page is agent-authored and a future mark helm has not
-            // learned is not a reason to throw away a comment"* — but the page posting here is
-            // not agent-authored: the bridge lives in a named content world (#164), so the only
-            // thing that can post is `canvas-annotation.js`, which ships in the same binary as
-            // this switch. An unknown kind is therefore not a newer page, it is drift — and
-            // guessing "it was probably a selection" is how a lasso would silently become a
-            // highlight over whatever text happened to be in the payload.
-            //
-            // `.cleared` lands here too, and always did: a dismissal is not a note.
+        case .cleared:
+            // A dismissal is not a mark. The gate answers `.cleared` before it gets here, so
+            // this is the exhaustive switch saying so rather than a reachable path.
             return nil
         }
     }
+}
 
+extension CanvasAnnotation {
     /// One target — an element with an id, or the text it covers.
     ///
     /// **The one place a DOM id becomes an anchor**, so the draw-time hit test and any later
     /// re-resolution cannot disagree about what a mark named (#112's own acceptance).
-    private static func decodedAnchor(_ raw: Any?) -> Anchor? {
+    fileprivate static func decodedAnchor(_ raw: Any?) -> Anchor? {
         guard let payload = raw as? [String: Any] else { return nil }
         guard let text = sanitizedText(payload["text"]) else { return nil }
         guard let id = payload["id"] as? String, let valid = validID(id) else {
@@ -184,7 +209,7 @@ extension CanvasAnnotation {
         return .element(id: valid, text: text)
     }
 
-    private static func decodedAnchors(_ raw: Any?) -> [Anchor] {
+    fileprivate static func decodedAnchors(_ raw: Any?) -> [Anchor] {
         guard let list = raw as? [Any] else { return [] }
         return list.compactMap(decodedAnchor)
     }
