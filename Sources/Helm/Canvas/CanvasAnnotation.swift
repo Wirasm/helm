@@ -22,32 +22,22 @@ struct CanvasAnnotation: Equatable {
         case quote(String)
     }
 
-    /// What the operator drew, and what it names (#112).
+    /// What the operator marked, and what it names.
     ///
-    /// **Classify the gesture; do not digitise it.** No case carries a coordinate. SketchVLM
-    /// ships no shape recogniser and tldraw sends no freehand geometry at all — what travels
-    /// in every system that works is *type plus target*. A mark made of pixels is not
-    /// something the agent can edit, which is the same reason an anchor is an id and not a
-    /// rect.
+    /// **No case carries a coordinate.** A mark made of pixels is not something the agent can
+    /// edit, which is the same reason an anchor is an id and not a rect.
+    ///
+    /// **One case, still an enum**, because the page's `kind` is what picks it and a payload
+    /// that can grow a second kind keeps its discriminator. There were four until #385 removed
+    /// the geometry tools (enclosure, relation, point).
     enum Mark: Equatable {
-        /// Text the operator selected. helm's behaviour before this slice, unchanged.
+        /// Text the operator selected.
         case selection(Anchor)
-        /// A circle or box. **Multiplicity is data, not an error** — circling three nodes
-        /// means all three, and flattening that to "the nearest one" would be helm deciding
-        /// what the operator meant.
-        case enclosure(covering: [Anchor])
-        /// An arrow. Both ends are optional because an arrow into empty space is a real
-        /// thing to draw — "add a node here" — so it is representable rather than refused.
-        /// Both ends nil is the one shape that means nothing.
-        case relation(from: Anchor?, to: Anchor?)
-        /// A tap: the nearest thing under it.
-        case point(Anchor)
     }
 
     /// **`let`, because a gate on construction alone is half a gate.** Both fields were `var` at
     /// the type's internal default, so a caller could take a value the decoder really did produce
-    /// and assign it into exactly the shape `decode` refuses — `.relation(from: nil, to: nil)`,
-    /// *"the one shape that means nothing"* above, or a comment trimmed to empty — with no
+    /// and assign it into exactly the shape `decode` refuses — a comment trimmed to empty — with no
     /// compiler diagnostic anywhere. That is the same door as the initializer, one step later.
     /// `CanvasSelection` stores its validated fields `let` for this reason; nothing in either
     /// target writes to these outside the initializer below, so this costs no call site.
@@ -91,10 +81,6 @@ struct CanvasAnnotation: Equatable {
 }
 
 extension CanvasAnnotation {
-    /// An enclosure may not cover an unbounded number of things — a drag across a whole
-    /// document is not a mark, it is a mistake.
-    static let maximumEnclosureCount = 32
-
     /// An element id is at most this long, and holds only characters that can appear in
     /// one. Anything else is a page trying to write something other than an id.
     static let maximumIDLength = 200
@@ -111,9 +97,7 @@ extension CanvasAnnotation {
     /// `Mark.decode(_:as:)` below. This only asks whether that mark resolved to anything and
     /// whether there is a comment to attach to it. Before #210 this function took the raw body and
     /// re-read `kind` from it, a second classification of a string the gate had already
-    /// classified, and a `CanvasSelection` carried only that raw body. The comment field had no
-    /// kind to switch on, so it guessed a field name and showed a blank quote for every arrow and
-    /// circle.
+    /// classified, and a `CanvasSelection` carried only that raw body.
     static func decode(_ selection: CanvasSelection, comment: String) -> CanvasAnnotation? {
         let comment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !comment.isEmpty, let mark = selection.mark else { return nil }
@@ -137,9 +121,8 @@ extension CanvasAnnotation.Mark {
     /// validated, so nothing reads `kind` twice. It trusts that `kind` rather than re-checking it,
     /// and nothing needs this to have a single caller: a `Mark` can be written as a literal
     /// anyway, so the gate that matters is `CanvasSelection`'s `fileprivate` init, which only
-    /// `CanvasPageSelection.decode` can reach. `nil` means the gesture was real but
-    /// named nothing helm can anchor to (a circle round empty space, an arrow with neither end
-    /// on anything). The comment field still opens for it and says so, and `CanvasAnnotation`
+    /// `CanvasPageSelection.decode` can reach. `nil` means the selection named nothing helm can
+    /// anchor to. The comment field still opens for it and says so, and `CanvasAnnotation`
     /// refuses the note.
     ///
     /// The page is agent-authored, not helm-authored, so this treats the body as
@@ -155,25 +138,6 @@ extension CanvasAnnotation.Mark {
     ) -> CanvasAnnotation.Mark? {
         typealias Annotation = CanvasAnnotation
         switch kind {
-        case .enclosure:
-            let covered = Annotation.decodedAnchors(payload["targets"])
-            // Refused rather than shipped as a coordinate: a circle around nothing is the
-            // operator pointing at empty space, and helm has no honest anchor for that.
-            guard !covered.isEmpty, covered.count <= Annotation.maximumEnclosureCount else {
-                return nil
-            }
-            return .enclosure(covering: covered)
-
-        case .relation:
-            let from = Annotation.decodedAnchor(payload["from"])
-            let to = Annotation.decodedAnchor(payload["to"])
-            // One end may be empty — that is "add a node here". Neither end is nothing.
-            guard from != nil || to != nil else { return nil }
-            return .relation(from: from, to: to)
-
-        case .point:
-            return Annotation.decodedAnchor(payload).map(Self.point)
-
         case .selection:
             return Annotation.decodedAnchor(payload).map(Self.selection)
 
@@ -188,8 +152,7 @@ extension CanvasAnnotation.Mark {
 extension CanvasAnnotation {
     /// One target — an element with an id, or the text it covers.
     ///
-    /// **The one place a DOM id becomes an anchor**, so the draw-time hit test and any later
-    /// re-resolution cannot disagree about what a mark named (#112's own acceptance).
+    /// **The one place a DOM id becomes an anchor.**
     fileprivate static func decodedAnchor(_ raw: Any?) -> Anchor? {
         guard let payload = raw as? [String: Any] else { return nil }
         guard let text = sanitizedText(payload["text"]) else { return nil }
@@ -209,11 +172,6 @@ extension CanvasAnnotation {
         }
         // An id the agent authored. Already the greppable thing.
         return .element(id: valid, text: text)
-    }
-
-    fileprivate static func decodedAnchors(_ raw: Any?) -> [Anchor] {
-        guard let list = raw as? [Any] else { return [] }
-        return list.compactMap(decodedAnchor)
     }
 
     private static func validID(_ id: String) -> String? {

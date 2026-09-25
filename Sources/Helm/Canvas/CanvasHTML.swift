@@ -48,7 +48,7 @@ enum CanvasHTML {
     ///    machinery.
     ///
     /// `data-helm-frame` on the wrapper is load-bearing, not decoration: it is helm marking its
-    /// own chrome, the same job `data-helm-mark` does for the ink, and `canvas-annotation.js`
+    /// own chrome, and `canvas-annotation.js`
     /// reads it to know that `#content` is helm's id rather than the artifact's. **Take it off
     /// and every mark on every markdown canvas anchors to `#content` again**, which is a grep
     /// that finds nothing (#215). The argument for a marker over anything the script could
@@ -316,8 +316,8 @@ enum CanvasHTML {
     /// against a Swift constant, so `CanvasAnnotationScriptTests` is the gate over both copies.
     ///
     /// **`CSS.highlights` is the document's, shared with the page's own scripts**, so this is a
-    /// name in someone else's namespace. `helm-mark` is the prefix helm already marks its chrome
-    /// with (`data-helm-mark`, `helm-mark-head`), which is as much as a shared registry allows.
+    /// name in someone else's namespace. `helm-mark` is a prefix no artifact has a reason to use,
+    /// which is as much as a shared registry allows.
     static let markHighlightName = "helm-mark"
 
     /// The global the page reads the text mark's colour from.
@@ -341,8 +341,7 @@ enum CanvasHTML {
     }
 
     /// Take the mark down. Called when the comment field closes, submitted or dismissed —
-    /// the mark is that field's subject and lives exactly as long as it does. All four marks:
-    /// the page's `wipe` takes its ink and its text highlight down together (#308).
+    /// the mark is that field's subject and lives exactly as long as it does (#308).
     static func clearMarkScript() -> String {
         "if (window.__helmWipeMark) { window.__helmWipeMark(); }"
     }
@@ -358,7 +357,6 @@ enum CanvasHTML {
         """
         window.\(markToolGlobal) = \(jsString(tool.token));
         window.\(markTintGlobal) = \(jsString(markTint(for: theme)));
-        if (window.__helmAbandonMark) { window.__helmAbandonMark(); }
         """
     }
 

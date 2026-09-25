@@ -104,22 +104,16 @@ final class CanvasHTMLTests: XCTestCase {
 
     // MARK: The mark tools (#112)
 
-    // The script's *behaviour* moved to `CanvasAnnotationScriptTests`, which executes the
-    // shipped `canvas-annotation.js` rather than reading it (#197). Nothing was dropped: the
-    // tool driving the mark, the single resolver, the loop's centre test, the inert ink, the
-    // arrowhead, the primary-button guard and the abandon rules are all asserted there against
-    // what a gesture does. What stays here is what generating a string is still responsible
-    // for — `setMarkTool` and `clearMarkScript`, which are Swift and not the resource.
+    // The script's *behaviour* is in `CanvasAnnotationScriptTests`, which executes the shipped
+    // `canvas-annotation.js` rather than reading it (#197). What stays here is what generating a
+    // string is still responsible for — `setMarkTool` and `clearMarkScript`, which are Swift and
+    // not the resource.
 
-    func testSettingTheToolDropsHalfDrawnWorkButNotACommittedMark() {
-        // It used to wipe unconditionally. That was right when ink was transient and wrong
-        // the moment it started outliving the gesture: switching tools with a comment open
-        // erased the mark and left the field anchored to nothing.
-        let set = CanvasHTML.setMarkTool(.read, theme: .light)
-
-        XCTAssertTrue(set.contains("__helmAbandonMark"))
+    func testSettingTheToolDoesNotTakeACommittedMarkDown() {
+        // Switching tools with a comment open used to erase the mark and leave the field
+        // anchored to nothing.
         XCTAssertFalse(
-            set.contains("__helmWipeMark"),
+            CanvasHTML.setMarkTool(.read, theme: .light).contains("__helmWipeMark"),
             "a tool change may not remove a mark that is already awaiting its comment")
     }
 
@@ -222,16 +216,4 @@ final class CanvasHTMLTests: XCTestCase {
             script.contains("altKey"),
             "marking is a tool you pick up, not a modifier you have to know about")
     }
-
-    /// #112's own acceptance: the draw-time hit test and any later re-resolution share ONE
-    /// code path, because inconsistent resolution between capture and action is its own bug
-    /// class. A count of definitions, which is a fact about the text.
-    func testOneResolverServesEveryTool() {
-        let script = CanvasHTML.annotationScript()
-
-        XCTAssertEqual(script.components(separatedBy: "function resolve(").count - 1, 1)
-        XCTAssertTrue(
-            script.contains("function targetAt(") && script.contains("function targetsInside("))
-    }
-
 }

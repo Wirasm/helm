@@ -30,13 +30,10 @@ final class CanvasClipboardTests: XCTestCase {
     }
 
     func testTheAnchorLineIsTheSAMELineTheSidecarWrites() throws {
-        // Not a second format. The heading already carries the gesture and what it covered,
+        // Not a second format. The heading already carries the anchor and what it covered,
         // because that is how an anchor renders — so a paste and the file cannot disagree.
         let marked = try annotation(
-            marking: [
-                "kind": "enclosure",
-                "targets": [["id": "phase-2", "text": "Phase 2: Ship"] as [String: Any]],
-            ],
+            marking: ["kind": "selection", "id": "phase-2", "text": "Phase 2: Ship"],
             comment: "wrong order")
         let entry = CanvasNotes.entry(marked, at: Date(timeIntervalSince1970: 0))
         let heading = entry.split(separator: "\n").first.map { $0.dropFirst(3) } ?? ""
@@ -46,33 +43,17 @@ final class CanvasClipboardTests: XCTestCase {
             "the clipboard should quote the sidecar's own heading verbatim")
     }
 
-    func testAnArrowKeepsBothEnds() throws {
-        // The reason the heading is reused rather than a bare id: an arrow names two things,
-        // and half of it is a different instruction.
-        let text = try copied([
-            "kind": "relation",
-            "from": ["id": "phase-1", "text": "One"] as [String: Any],
-            "to": ["id": "phase-3", "text": "Three"] as [String: Any],
-        ])
-
-        XCTAssertTrue(text.contains("`#phase-1`"))
-        XCTAssertTrue(text.contains("`#phase-3`"))
-        XCTAssertTrue(text.contains("→"))
-    }
-
     func testAQuoteIsVisiblyNotAnID() throws {
         // mindmap, sequence and plain markdown all degrade to a quote. The agent has to be
         // able to tell "grep for this identifier" from "search for this text".
-        let quoted = try copied(["kind": "point", "text": "branchA"])
+        let quoted = try copied(["kind": "selection", "text": "branchA"])
 
         XCTAssertTrue(quoted.contains("\"branchA\""))
         XCTAssertFalse(quoted.contains("`#"), "a quote must not look like an id")
     }
 
     func testItCarriesNoImageAndNoCoordinate() throws {
-        let text = try copied([
-            "kind": "enclosure", "targets": [["id": "a", "text": "A"] as [String: Any]],
-        ])
+        let text = try copied(["kind": "selection", "id": "a", "text": "A"])
 
         for forbidden in ["data:image", "base64", "rect", "px"] {
             XCTAssertFalse(

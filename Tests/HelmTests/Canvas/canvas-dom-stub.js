@@ -9,18 +9,9 @@
 // Two places where a browser and a stub could differ, decided deliberately:
 //
 //   - `getBoundingClientRect` is VIEWPORT-relative and boxes are stored in page coordinates,
-//     exactly as the real thing behaves. That is what puts the script's `window.scrollX`
-//     corrections under test instead of assuming them — #196 lived in that gap.
-//   - The mark layer covers the whole document for hit-testing while it is displayed, because
-//     `position:absolute` at `z-index: 2147483647` over `scrollWidth`×`scrollHeight` does.
-//     That is the hazard `targetAt` hides it for, so the stub reproduces it rather than
-//     letting the hide pass vacuously.
-//   - A mouse event's `target` is the topmost element under the pointer **ignoring the mark
-//     layer**, because the mark layer carries `pointer-events:none` and a browser never
-//     targets it. Modelled rather than assumed, and it is load-bearing for #111: the whole of
-//     `data-helm-surface` is a `closest` walk from `e.target`, and a stub that handed the
-//     script its own ink as the target would answer "not a surface" for every gesture and let
-//     the arbitration pass vacuously.
+//     exactly as the real thing behaves (#196 lived in that gap).
+//   - A mouse event's `target` is the topmost element under the pointer. It is load-bearing
+//     for #111: the whole of `data-helm-surface` is a `closest` walk from `e.target`.
 (function (global) {
   "use strict";
 
@@ -109,8 +100,7 @@
     };
   };
 
-  // One simple selector: `[attribute]` or a tag name. That is the whole vocabulary the
-  // script uses — `"[id], p, li, td, th, h1, h2, h3"` and `"[data-helm-mark]"`.
+  // One simple selector: `[attribute]` or a tag name — enough for `closest` and the fixture.
   function matches(node, selector) {
     var one = selector.trim();
     if (one.charAt(0) === "[") {
@@ -137,15 +127,6 @@
   documentElement.scrollHeight = 2000;
   var body = new Element("body");
   documentElement.appendChild(body);
-
-  function markLayer() {
-    for (var i = 0; i < body.childNodes.length; i++) {
-      if (body.childNodes[i].getAttribute("data-helm-mark") !== null) {
-        return body.childNodes[i];
-      }
-    }
-    return null;
-  }
 
   var emptySelection = {
     isCollapsed: true,
@@ -192,10 +173,6 @@
       });
     },
     elementFromPoint: function (x, y) {
-      var paper = markLayer();
-      if (paper && paper.style.display !== "none") {
-        return paper;
-      }
       var hit = null;
       descendants(documentElement).forEach(function (node) {
         if (!node.box) {
@@ -215,21 +192,9 @@
     },
   };
 
-  // The element a browser would fire a mouse event AT. `elementFromPoint` above reports the
-  // mark layer while it is displayed, because that is what the layer's geometry says — but the
-  // layer is `pointer-events:none`, and a browser skips it when routing a real gesture. Hidden
-  // for the duration, exactly as `targetAt` hides it for its own hit test.
+  // The element a browser would fire a mouse event AT.
   function pointerTarget(clientX, clientY) {
-    var paper = markLayer();
-    var was = paper ? paper.style.display : null;
-    if (paper) {
-      paper.style.display = "none";
-    }
-    var hit = doc.elementFromPoint(clientX, clientY);
-    if (paper) {
-      paper.style.display = was;
-    }
-    return hit;
+    return doc.elementFromPoint(clientX, clientY);
   }
 
   // The CSS Custom Highlight API, to the extent the script touches it — a document-wide
@@ -317,12 +282,10 @@
   }
 
   // The shape `CanvasHTML.documentPage` produces: everything inside `<article id="content">`.
-  // `#content` is deliberately here — it is the ancestor #208 is about — but the fixture puts
-  // the two list items far from its centroid so a loop round one of them is unambiguous, and
-  // no test in this suite pins #208's behaviour either way.
+  // `#content` is deliberately here: it is the helm-written ancestor a mark must not be named
+  // by (#215).
   //
-  // `body` is deliberately NOT laid out, so a point outside `#content` hits nothing at all:
-  // that is "an arrow into blank space", which is a mark helm has to be able to make.
+  // `body` is deliberately NOT laid out, so a point outside `#content` hits nothing at all.
   var content = node("article", "content", "", box(0, 0, 760, 1800));
   // helm's own chrome, marked the way `CanvasHTML.documentPage` marks it. The marker is the
   // ONLY thing that distinguishes this from an agent-authored `<div id="content">` at the top
@@ -413,19 +376,6 @@
     selection = emptySelection;
   }
 
-  // Direct children of the paper only. The arrowhead's barb is a `<path>` too, nested inside
-  // `<defs><marker>`, and counting it as ink made the first version of this harness report the
-  // barb's `d` as the stroke the operator drew.
-  function inMarkLayer(tag) {
-    var paper = markLayer();
-    if (!paper) {
-      return [];
-    }
-    return paper.childNodes.filter(function (el) {
-      return el.tagName === tag;
-    });
-  }
-
   global.window = win;
   global.document = doc;
   global.__helm = {
@@ -438,10 +388,6 @@
       win.__helmMarkTool = tool;
       win.__helmMarkTint = tint;
     },
-    scrollTo: function (x, y) {
-      win.scrollX = x;
-      win.scrollY = y;
-    },
     // Page coordinates in; the stub derives the viewport pair the way a browser does.
     mouse: function (type, pageX, pageY, button) {
       var prevented = false;
@@ -451,8 +397,7 @@
         pageY: pageY,
         clientX: pageX - win.scrollX,
         clientY: pageY - win.scrollY,
-        // The element a browser would report. See the header: the mark layer is
-        // `pointer-events:none`, so it is never a target however high its z-index.
+        // The element a browser would report.
         target: pointerTarget(pageX - win.scrollX, pageY - win.scrollY),
         preventDefault: function () {
           prevented = true;
@@ -466,13 +411,7 @@
     //
     // **Created on demand, never in the default fixture.** Every other test in this suite
     // shares that fixture, and a laid-out element added to it silently changes what their
-    // loops enclose and what their taps hit. This one is opt-in, so #111's tests are the only
-    // ones that meet it.
-    //
-    // The toolbar's text is not decoration either: it is what an enclosure over an
-    // un-yielded board would quote back at the agent, so leaving it out would let the
-    // resolution half of the arbitration pass without the failure it prevents being
-    // constructible.
+    // gestures hit. This one is opt-in, so #111's tests are the only ones that meet it.
     mountBoard: function () {
       var container = node("main", "board", "", box(20, 450, 700, 200));
       container.setAttribute("data-helm-surface", "");
@@ -492,58 +431,6 @@
     listenerCount: function (which, type) {
       var bag = which === "window" ? listeners.window : listeners.document;
       return (bag[type] || []).length;
-    },
-    hasMarkLayer: function () {
-      return markLayer() !== null;
-    },
-    markLayerStyle: function () {
-      var paper = markLayer();
-      return paper ? paper.style.cssText : "";
-    },
-    inkPaths: function () {
-      return inMarkLayer("path").map(function (el) {
-        return { d: el.getAttribute("d"), markerEnd: el.getAttribute("marker-end") };
-      });
-    },
-    ringCount: function () {
-      return inMarkLayer("circle").length;
-    },
-    // `<marker id="helm-mark-head">` — helm's own chrome, and the only element in the mark
-    // layer carrying an id, so the only one `targetsInside`'s query can pick up.
-    markerIDs: function () {
-      var paper = markLayer();
-      if (!paper) {
-        return [];
-      }
-      return descendants(paper)
-        .filter(function (el) {
-          return !!el.id;
-        })
-        .map(function (el) {
-          return el.id;
-        });
-    },
-    // Lay an element out, and give it text, after the fact.
-    //
-    // Both exist to make ONE assertion non-vacuous: that `closest("[data-helm-mark]")` keeps
-    // helm's own chrome out of what a loop reports. Today's chrome — the arrowhead `<marker>`
-    // — is already excluded twice over, once for having no size and once for having no text,
-    // so removing the guard changes nothing and a test written against it as-shipped passes
-    // either way (measured). A test has to construct the state the guard is actually for:
-    // chrome that is laid out and readable, which is what any labelled mark would be.
-    layOut: function (id, x, y, width, height) {
-      var el = find(id);
-      if (el) {
-        el.box = box(x, y, width, height);
-      }
-      return el !== null;
-    },
-    giveText: function (id, text) {
-      var el = find(id);
-      if (el) {
-        el.ownText = text;
-      }
-      return el !== null;
     },
     // The same DOM, minus helm's frame marker — which is exactly what an `.html` ARTIFACT is,
     // since helm reads those from disk and generates nothing in them. The marker is the only

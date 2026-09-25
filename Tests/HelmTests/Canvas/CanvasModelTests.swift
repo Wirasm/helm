@@ -136,65 +136,6 @@ final class CanvasModelTests: XCTestCase {
         XCTAssertEqual(model.notes, [])
     }
 
-    // MARK: - Geometry marks reach the model (#216)
-
-    // `CanvasMarkTests` drives `CanvasAnnotation.decode` directly with hand-built enclosure and
-    // relation dictionaries; the tests above go through the real gate — `CanvasPageSelection
-    // .decode` at `CanvasFileViews.swift` — but only ever as a `selection`, because that is the
-    // kind the helper fills in. Neither pushes a GEOMETRY payload through it. That gate required
-    // a top-level `text`, which an enclosure and a relation never carry, so both were silently
-    // dropped before decode ever saw them. These two go through it exactly as the page posts
-    // them, and would have failed before the fix.
-    //
-    // The helper stopped being a way *around* that gate in #298: `CanvasSelection.init` is
-    // `fileprivate`, so `decode` is the only thing that can make one. What these two still buy
-    // that it cannot is the kinds it does not post.
-
-    /// The page's freehand tool: `bridge.postMessage({ kind: "enclosure", targets, rect })`.
-    func testAnEnclosurePayloadReachesTheNoteThroughTheRealGate() throws {
-        let model = quietCanvas()
-        model.open(file)
-
-        let report = try CanvasPageSelection.decode([
-            "kind": "enclosure",
-            "targets": [["id": "phase-2", "text": "Phase 2: Ship"]],
-            "rect": ["x": 10, "y": 20, "width": 30, "height": 40],
-        ]).get()
-        model.pageDidReport(report)
-        XCTAssertNotNil(model.selection, "an enclosure is a selection, exactly as text is")
-
-        model.annotate(comment: "these two are the same step")
-
-        XCTAssertNil(model.notesFailure)
-        XCTAssertEqual(model.notes, ["circled `#phase-2` — \"Phase 2: Ship\""])
-        addTeardownBlock { [sidecar = model.sidecarURL] in
-            if let sidecar { try? FileManager.default.removeItem(at: sidecar) }
-        }
-    }
-
-    /// The page's arrow tool: `bridge.postMessage({ kind: "relation", from, to, rect })`.
-    func testARelationPayloadReachesTheNoteThroughTheRealGate() throws {
-        let model = quietCanvas()
-        model.open(file)
-
-        let report = try CanvasPageSelection.decode([
-            "kind": "relation",
-            "from": ["id": "phase-1", "text": "One"],
-            "to": ["id": "phase-3", "text": "Three"],
-            "rect": ["x": 0, "y": 0, "width": 0, "height": 0],
-        ]).get()
-        model.pageDidReport(report)
-        XCTAssertNotNil(model.selection, "a relation is a selection, exactly as text is")
-
-        model.annotate(comment: "this should point the other way")
-
-        XCTAssertNil(model.notesFailure)
-        XCTAssertEqual(model.notes, ["arrow `#phase-1` → `#phase-3`"])
-        addTeardownBlock { [sidecar = model.sidecarURL] in
-            if let sidecar { try? FileManager.default.removeItem(at: sidecar) }
-        }
-    }
-
     // MARK: - Dismissing
 
     // #165: the comment field's only exit was `.onExitCommand` in the view, which travels
@@ -328,18 +269,18 @@ final class CanvasModelTests: XCTestCase {
     func testPickingAToolHoldsIt() {
         let model = CanvasModel()
 
-        model.pick(.freehand)
+        model.pick(.text)
 
-        XCTAssertEqual(model.markTool, .freehand)
+        XCTAssertEqual(model.markTool, .text)
     }
 
     @MainActor
     func testPickingTheHeldToolPutsItDown() {
         // Otherwise getting back to reading the page means remembering which icon reads.
         let model = CanvasModel()
-        model.pick(.arrow)
+        model.pick(.text)
 
-        model.pick(.arrow)
+        model.pick(.text)
 
         XCTAssertEqual(
             model.markTool, .read,
@@ -363,21 +304,11 @@ final class CanvasModelTests: XCTestCase {
     @MainActor
     func testPickingReadPutsDownWhateverWasHeld() {
         let model = CanvasModel()
-        model.pick(.freehand)
+        model.pick(.text)
 
         model.pick(.read)
 
         XCTAssertEqual(model.markTool, .read)
-    }
-
-    @MainActor
-    func testPickingAnotherToolSwapsRatherThanClears() {
-        let model = CanvasModel()
-        model.pick(.arrow)
-
-        model.pick(.point)
-
-        XCTAssertEqual(model.markTool, .point)
     }
 
     @MainActor

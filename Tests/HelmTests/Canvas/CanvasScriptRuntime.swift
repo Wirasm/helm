@@ -74,46 +74,11 @@ final class CanvasScriptRuntime {
         call("setTool", tool.token, CanvasHTML.markTint(for: theme))
     }
 
-    func scroll(x: Double, y: Double) { call("scrollTo", x, y) }
-
-    /// Page coordinates, which is what the operator's hand means and what the stroke stores.
-    /// Returns whether the script called `preventDefault()` — the page taking the pointer over
-    /// from the browser, which it may only do for a gesture it is actually going to draw.
+    /// Page coordinates. Returns whether the script called `preventDefault()` — the page taking
+    /// the pointer over from the browser, which no tool does (#385).
     @discardableResult
     func mouse(_ type: String, _ x: Double, _ y: Double, button: Int = 0) -> Bool {
         call("mouse", type, x, y, button)?.toBool() ?? false
-    }
-
-    /// The whole gesture: press, a straight run of moves, release. `point` never moves, which
-    /// is the one gesture with no travel.
-    func drag(from start: (x: Double, y: Double), to end: (x: Double, y: Double), steps: Int = 4) {
-        mouse("mousedown", start.x, start.y)
-        for step in 1...steps {
-            let fraction = Double(step) / Double(steps)
-            mouse(
-                "mousemove", start.x + (end.x - start.x) * fraction,
-                start.y + (end.y - start.y) * fraction)
-        }
-        mouse("mouseup", end.x, end.y)
-    }
-
-    /// A closed-ish loop round a page-coordinate rectangle, released short of where it began —
-    /// a person circling something does not carefully meet the ends.
-    func loop(around rect: (x: Double, y: Double, width: Double, height: Double)) {
-        let corners = [
-            (rect.x, rect.y),
-            (rect.x + rect.width, rect.y),
-            (rect.x + rect.width, rect.y + rect.height),
-            (rect.x, rect.y + rect.height),
-        ]
-        mouse("mousedown", corners[0].0, corners[0].1)
-        for corner in corners.dropFirst() { mouse("mousemove", corner.0, corner.1) }
-        mouse("mouseup", corners[0].0, corners[0].1 + 6)
-    }
-
-    func tap(at point: (x: Double, y: Double)) {
-        mouse("mousedown", point.x, point.y)
-        mouse("mouseup", point.x, point.y)
     }
 
     /// Make the page an `.html` **artifact** rather than the markdown page helm generates: same
@@ -127,7 +92,7 @@ final class CanvasScriptRuntime {
     func mountBoard() { call("mountBoard") }
 
     /// Where `mountBoard` puts the board, in page coordinates. Named once here rather than
-    /// retyped per assertion — a stroke aimed at the wrong band would yield for the wrong
+    /// retyped per assertion — a gesture aimed at the wrong band would yield for the wrong
     /// reason and still pass.
     static let boardBox = (x: 20.0, y: 450.0, width: 700.0, height: 200.0)
 
@@ -190,36 +155,6 @@ final class CanvasScriptRuntime {
     /// The CSS behind the highlight: the `::highlight()` rule and the colour in it.
     var adoptedStyle: String { call("adoptedStyle")?.toString() ?? "" }
     var adoptedSheetCount: Int { Int(call("adoptedSheetCount")?.toInt32() ?? 0) }
-
-    var hasMarkLayer: Bool { call("hasMarkLayer")?.toBool() ?? false }
-    var markLayerStyle: String { call("markLayerStyle")?.toString() ?? "" }
-    var ringCount: Int { Int(call("ringCount")?.toInt32() ?? 0) }
-    var markLayerIDs: [String] { (call("markerIDs")?.toArray() as? [String]) ?? [] }
-
-    struct Ink {
-        var d: String
-        var markerEnd: String?
-    }
-
-    var inkPaths: [Ink] {
-        let raw = call("inkPaths")?.toArray() ?? []
-        return raw.compactMap { entry in
-            guard let entry = entry as? [String: Any], let d = entry["d"] as? String else {
-                return nil
-            }
-            return Ink(d: d, markerEnd: entry["markerEnd"] as? String)
-        }
-    }
-
-    @discardableResult
-    func layOut(id: String, x: Double, y: Double, width: Double, height: Double) -> Bool {
-        call("layOut", id, x, y, width, height)?.toBool() ?? false
-    }
-
-    @discardableResult
-    func giveText(id: String, text: String) -> Bool {
-        call("giveText", id, text)?.toBool() ?? false
-    }
 
     func listenerCount(on target: String, for type: String) -> Int {
         Int(call("listenerCount", target, type)?.toInt32() ?? 0)
