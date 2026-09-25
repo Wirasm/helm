@@ -26,6 +26,8 @@
 //! sits behind one mutex held only for map and log operations — never across a ready
 //! wait, a prompt delivery, or an attach pump.
 
+mod layout;
+
 use bench_browser::{Browser, ExitInfo, LaunchError, default_candidates};
 use bench_session::{AgentKind, Notice, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id};
 use bench_wire::{
@@ -34,6 +36,7 @@ use bench_wire::{
     Request, Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb, browser_endpoint_path,
     check_socket_path, events_path, resolve_root, socket_path, validate_handle,
 };
+use bench_wire::{DOCUMENT_CHANGED, Frame};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -42,6 +45,7 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -146,11 +150,26 @@ const WAKE_IDLE_GATE: Duration = Duration::from_secs(2);
 /// Read the log with byte offsets. A clean log returns the next seq. An unreadable
 /// line refuses — unless it is the LAST non-empty line, which is an interrupted append:
 /// quarantine the tail, truncate back to the last good byte, and report the repair (R1).
-fn scan_log(events: &PathBuf) -> Result<(u64, Option<RepairNote>), StartError> {
+/// The scan also finds the seq of the last `bench/changed`, so boot can tell a `bench.json`
+/// that is behind the log (`layout::load`).
+struct Scanned {
+    next_seq: u64,
+    repair: Option<RepairNote>,
+    last_document_change: Option<u64>,
+}
+
+fn scan_log(events: &PathBuf) -> Result<Scanned, StartError> {
     let bytes = match fs::read(events) {
         Ok(b) => b,
-        Err(_) => return Ok((0, None)),
+        Err(_) => {
+            return Ok(Scanned {
+                next_seq: 0,
+                repair: None,
+                last_document_change: None,
+            });
+        }
     };
+    let mut last_document_change = None;
     let text = String::from_utf8_lossy(&bytes);
     let mut seq = 0u64;
     let mut offset = 0usize;
@@ -165,6 +184,9 @@ fn scan_log(events: &PathBuf) -> Result<(u64, Option<RepairNote>), StartError> {
             Ok(ev) => {
                 seq = ev.seq + 1;
                 offset += chunk.len();
+                if ev.kind == DOCUMENT_CHANGED {
+                    last_document_change = Some(ev.seq);
+                }
             }
             Err(e) => {
                 let rest_is_empty = chunks[i + 1..].iter().all(|c| c.trim().is_empty());
@@ -196,17 +218,22 @@ fn scan_log(events: &PathBuf) -> Result<(u64, Option<RepairNote>), StartError> {
                     dropped.len(),
                     quarantine.display()
                 );
-                return Ok((
-                    seq,
-                    Some(RepairNote {
+                return Ok(Scanned {
+                    next_seq: seq,
+                    repair: Some(RepairNote {
                         quarantine,
                         dropped_bytes: dropped.len(),
                     }),
-                ));
+                    last_document_change,
+                });
             }
         }
     }
-    Ok((seq, None))
+    Ok(Scanned {
+        next_seq: seq,
+        repair: None,
+        last_document_change,
+    })
 }
 
 /// The shared core: the log and the session registry, behind one mutex held only for
@@ -232,7 +259,28 @@ struct Core {
     browser_wanted: bool,
     /// Restarts inside the current window — the crash-loop cap.
     browser_restarts: Vec<Instant>,
+    /// The bench document (M4): what `bench.json` holds, and the seq that produced it.
+    bench: layout::BenchState,
+    /// `events --follow` connections, each with its own bounded queue and writer thread.
+    /// A frame is handed over here and written there, **never under this mutex**: a 16 KB
+    /// frame is larger than a unix socket's send buffer, so one follower that stopped
+    /// reading would otherwise freeze every verb (spike S1). A full queue drops the follower
+    /// — safe, because reconnecting returns the whole document.
+    followers: Vec<mpsc::SyncSender<Arc<str>>>,
+    /// Set by every append; cleared by the flusher, which fsyncs off this mutex (see
+    /// `Flusher`).
+    unflushed: Arc<AtomicBool>,
 }
+
+/// How many frames a follower may fall behind before it is dropped.
+const FOLLOWER_QUEUE: usize = 256;
+
+/// How often the flusher fsyncs the log. Spike S1 measured `F_FULLFSYNC` as the only slow
+/// stage between a keystroke and helm's redraw: 17.1 ms p99 per event inline, 5.4 ms p99
+/// with a 50 ms flush on its own thread. The trade, approved: a power loss or kernel panic
+/// can lose up to this much of the log; a benchd crash loses nothing, because every event is
+/// written and flushed to the kernel before the response that reports it.
+const FLUSH_EVERY: Duration = Duration::from_millis(50);
 
 /// A crashed browser is restarted at most this many times inside this window; the next
 /// crash is logged as `browser/gave-up` and the browser stays down until a
@@ -247,6 +295,33 @@ static BROWSER_LIFECYCLE: Mutex<()> = Mutex::new(());
 
 impl Core {
     fn append(&mut self, kind: &str, data: Value) -> Result<(), String> {
+        self.append_event(kind, data, None).map(|_| ())
+    }
+
+    /// Log one event, then hand it to every follower — with `document` attached when the
+    /// event changed it. Written and flushed to the kernel before this returns (so before
+    /// the response that reports it); fsynced by the flusher within `FLUSH_EVERY`.
+    fn append_event(
+        &mut self,
+        kind: &str,
+        data: Value,
+        document: Option<&bench_doc::Document>,
+    ) -> Result<Event, String> {
+        let event = self.write_event(kind, data)?;
+        let mut dropped = self.fan_out(&event, document);
+        // A dropped follower is itself bench-visible. Its own fan-out can drop more, so this
+        // repeats until a round drops nobody — at most once per follower.
+        while dropped > 0 {
+            let note = self.write_event(
+                "events/follower-dropped",
+                json!({ "count": dropped, "why": format!("fell {FOLLOWER_QUEUE} frames behind; reconnect for the whole document") }),
+            )?;
+            dropped = self.fan_out(&note, None);
+        }
+        Ok(event)
+    }
+
+    fn write_event(&mut self, kind: &str, data: Value) -> Result<Event, String> {
         let event = Event {
             seq: self.next_seq,
             at: now_rfc3339(),
@@ -260,11 +335,54 @@ impl Core {
             .write_all(line.as_bytes())
             .and_then(|()| self.log.flush())
             .map_err(|e| format!("cannot append to event log: {e}"))?;
-        // Best-effort durability: the record is the point of this process.
-        let _ = self.log.sync_data();
+        self.unflushed.store(true, Ordering::Release);
         self.next_seq += 1;
-        Ok(())
+        Ok(event)
     }
+
+    /// Queue a frame for every follower; answer how many were dropped for being full.
+    fn fan_out(&mut self, event: &Event, document: Option<&bench_doc::Document>) -> usize {
+        if self.followers.is_empty() {
+            return 0;
+        }
+        let frame = Frame {
+            event: event.clone(),
+            document: document.cloned(),
+        };
+        let Ok(mut line) = serde_json::to_string(&frame) else {
+            return 0;
+        };
+        line.push('\n');
+        let line: Arc<str> = line.into();
+        let mut dropped = 0;
+        self.followers
+            .retain(|tx| match tx.try_send(Arc::clone(&line)) {
+                Ok(()) => true,
+                Err(mpsc::TrySendError::Full(_)) => {
+                    dropped += 1;
+                    false
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => false,
+            });
+        dropped
+    }
+}
+
+/// fsyncs the log on its own thread, through its own descriptor, so no verb ever waits on
+/// the disk (`FLUSH_EVERY` has the measurement and the trade).
+fn spawn_flusher(log: &File, unflushed: Arc<AtomicBool>) -> Result<(), String> {
+    let own = log
+        .try_clone()
+        .map_err(|e| format!("cannot open the log for the flusher: {e}"))?;
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(FLUSH_EVERY);
+            if unflushed.swap(false, Ordering::AcqRel) {
+                let _ = own.sync_data();
+            }
+        }
+    });
+    Ok(())
 }
 
 fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, StartError> {
@@ -296,7 +414,12 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
     }
 
     let events = events_path(&root);
-    let (next_seq, repair) = scan_log(&events)?;
+    let Scanned {
+        next_seq,
+        repair,
+        last_document_change,
+    } = scan_log(&events)?;
+    let (bench, bench_events) = layout::load(&root, last_document_change);
 
     let log = OpenOptions::new()
         .create(true)
@@ -316,9 +439,6 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
             let _ = fs::remove_file(p);
         });
 
-    let listener = UnixListener::bind(&sock)
-        .map_err(|e| StartError::Failed(format!("cannot bind {}: {e}", sock.display())))?;
-
     let (notice_tx, notice_rx) = mpsc::channel::<Notice>();
     let core = Arc::new(Mutex::new(Core {
         root,
@@ -337,9 +457,12 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         browser: None,
         browser_wanted: false,
         browser_restarts: Vec::new(),
+        bench,
+        followers: Vec::new(),
+        unflushed: Arc::new(AtomicBool::new(false)),
     }));
 
-    {
+    let listener = {
         let mut c = core.lock().unwrap();
         if c.next_seq == 0 {
             c.append(
@@ -365,6 +488,11 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
             )
             .map_err(StartError::Failed)?;
         }
+        for (kind, data) in bench_events {
+            c.append(kind, data).map_err(StartError::Failed)?;
+        }
+        let unflushed = Arc::clone(&c.unflushed);
+        spawn_flusher(&c.log, unflushed).map_err(StartError::Failed)?;
         let suite_name = c.suite.as_ref().map(|s| s.as_str().to_string());
         c.append(
             "daemon/started",
@@ -375,13 +503,18 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
             }),
         )
         .map_err(StartError::Failed)?;
+        // Bound only now, after the boot events: a client that can connect can read them
+        // (the socket used to come first, and a fast reader found an empty log).
+        let listener = UnixListener::bind(&sock)
+            .map_err(|e| StartError::Failed(format!("cannot bind {}: {e}", sock.display())))?;
         eprintln!(
             "benchd {} listening at {} (root {})",
             env!("CARGO_PKG_VERSION"),
             socket_path(&c.root).display(),
             c.root.display()
         );
-    }
+        listener
+    };
 
     // Session notices — exits and forced detaches — become events. The reader threads
     // send; this thread logs. Bench-visible means logged, including facts nobody asked
@@ -543,6 +676,9 @@ enum AfterResponse {
         cols: u16,
     },
     Stop,
+    /// `events --follow`: after the response line, this connection is a stream of frames
+    /// from the follower's own queue, written on this thread and never under the mutex.
+    Follow(mpsc::Receiver<Arc<str>>),
 }
 
 fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
@@ -614,9 +750,23 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
                 let _ = s.close(Duration::from_secs(1));
             }
             let _ = stop_browser(&core, Duration::from_secs(2));
+            // The flusher runs every FLUSH_EVERY; the last events must not wait on it.
+            let _ = core.lock().unwrap().log.sync_data();
             let root = core.lock().unwrap().root.clone();
             let _ = fs::remove_file(socket_path(&root));
             process::exit(0);
+        }
+        AfterResponse::Follow(frames) => {
+            respond_keep_open(&stream, &response);
+            // Writes stay bounded by DAEMON_IO_TIMEOUT: a follower that stops reading errors
+            // out here, while its queue fills and the core drops it.
+            let mut out = &stream;
+            while let Ok(frame) = frames.recv() {
+                if out.write_all(frame.as_bytes()).is_err() {
+                    break;
+                }
+            }
+            let _ = stream.shutdown(std::net::Shutdown::Both);
         }
         AfterResponse::Pump {
             session,
@@ -704,6 +854,23 @@ fn dispatch(
                 })),
                 AfterResponse::Done,
             )
+        }
+        Some(Verb::Events) if req.args.get("follow").and_then(Value::as_bool) == Some(true) => {
+            // Registered and snapshotted under one lock, so no event falls between the
+            // document this answers with and the first frame.
+            let mut c = core.lock().unwrap();
+            let (tx, rx) = mpsc::sync_channel(FOLLOWER_QUEUE);
+            c.followers.push(tx);
+            let data = json!({
+                "seq": c.bench.seq,
+                "next_seq": c.next_seq,
+                "document": c.bench.document,
+            });
+            (ok(data), AfterResponse::Follow(rx))
+        }
+        Some(Verb::Layout) => {
+            let mut c = core.lock().unwrap();
+            (layout::answer(&mut c, req), AfterResponse::Done)
         }
         Some(Verb::Events) => {
             let since = req.args.get("since").and_then(Value::as_u64).unwrap_or(0);

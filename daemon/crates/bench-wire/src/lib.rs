@@ -17,6 +17,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+mod layout;
+pub use layout::{
+    Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider,
+    DocumentRecord, Frame, LAYOUT_VERBS, LayoutVerb, MoveTo, document_path,
+};
+
 /// A request line larger than this is refused, not read. The cap is about the reader:
 /// every accepted byte can end up in an event log an agent later pulls into context.
 /// Same argument as helm's 64 KB canvas-state cap.
@@ -138,6 +144,26 @@ pub const KNOWN_VERBS: &[&str] = &[
     "browser/status",
     "browser/stop",
     "browser/setup",
+    // The layout verbs (M4) — `LAYOUT_VERBS`, spelled again here so this one list stays the
+    // whole surface; `every_layout_verb_is_known_and_routes_to_layout` keeps the two in step.
+    "bench/get",
+    "workspace/open",
+    "workspace/close",
+    "workspace/activate",
+    "workspace/reset",
+    "workspace/unshelve",
+    "workspace/import",
+    "pane/open",
+    "pane/split",
+    "pane/close",
+    "pane/show",
+    "pane/move",
+    "pane/name",
+    "pane/repoint",
+    "pane/record",
+    "focus/slot",
+    "focus/step",
+    "layout/resize",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +183,8 @@ pub enum Verb {
     BrowserStatus,
     BrowserStop,
     BrowserSetup,
+    /// Every verb in `LAYOUT_VERBS`; `LayoutVerb` decodes which one and its arguments.
+    Layout,
 }
 
 impl Verb {
@@ -178,6 +206,7 @@ impl Verb {
             "browser/status" => Some(Verb::BrowserStatus),
             "browser/stop" => Some(Verb::BrowserStop),
             "browser/setup" => Some(Verb::BrowserSetup),
+            layout if LAYOUT_VERBS.contains(&layout) => Some(Verb::Layout),
             _ => None,
         }
     }
@@ -424,6 +453,15 @@ pub struct Request {
     pub verb: String,
     #[serde(default)]
     pub args: Value,
+    /// Who asked. Absent means an agent — the reading that cannot move the operator's
+    /// focus. Only the layout verbs read it today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<Actor>,
+    /// The caller says the operator asked for this, so it may bring something forward or
+    /// move focus. "Only when asked" is a rule in the agent's skill, not a check: the
+    /// daemon cannot know what the operator said (helm #320).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asked: bool,
 }
 
 /// Every response carries a status, and the status is the exit code: a caller never
@@ -483,7 +521,7 @@ pub const EVENTS_LOG_VERSION: u64 = 0;
 /// `kind` is namespaced `domain/what` (`daemon/started`). A reader that meets a kind it
 /// does not know must refuse or skip *visibly*, never misread it — which is why the
 /// envelope stays this small and flat.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub seq: u64,
     /// RFC 3339 UTC. A `cat` of the log is meant to be readable by a human having a bad
@@ -615,7 +653,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            15,
+            33,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

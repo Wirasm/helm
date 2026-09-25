@@ -14,7 +14,7 @@ operator and the agents are equal owners; every verb exists in an addressed, non
 form; both parties go through the same socket. Migration is strangler-style inside this
 repo: one vertical at a time, old code unwired only when the new is proven.
 
-**Where it stands: M0 + M5a + mail + the shared browser.** The daemon owns the mailroom (`bench-mail`:
+**Where it stands: M0 + M5a + mail + the shared browser + the bench document's daemon half.** The daemon owns the mailroom (`bench-mail`:
 files are the record, notices carry the path never the body, retire-never-delete,
 metadata-only listings) and the wake reactor (`mail/sent ⇒ agent/woken` by pasting into
 an idle pty the daemon owns, with the loop cap as a per-recipient token bucket in the
@@ -32,6 +32,16 @@ returns to headless. The daemon never automates the browser: agents attach with
 `playwright-cli attach --cdp=<cdp>`, helm renders it over its own CDP socket. A crash is
 restarted (at most 3 in 60s, then `browser/gave-up`), and the browser runs on a pipe
 leash so it dies with the daemon even under SIGKILL. `just browser-proof` is the live check.
+
+**And the bench document (M4, #354), daemon side.** `bench-doc` is helm's `Workbench` —
+workspaces, columns, slots, panes, typed surfaces, placement as data — and benchd serves it:
+the layout verbs (`workspace/*`, `pane/*`, `focus/*`, `layout/resize`, `bench/get`), each
+logged as one `bench/changed` event that says who asked; `bench.json` as the record it boots
+from; and `events --follow`, one line per event with the whole document attached when it
+changed. The focus rule is the document's own: an agent's verb that would move the operator's
+focus is refused unless it says `asked`. helm does not use any of it yet — its client is the
+next step — and `just bench-proof` drives a whole session through the socket and across a
+restart.
 
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance

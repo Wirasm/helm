@@ -6,6 +6,7 @@ description = "The bench daemon: owns the record, answers on the socket."
 
 [dependencies]
 bench-wire = { path = "../bench-wire" }
+bench-doc = { path = "../bench-doc" }
 bench-session = { path = "../bench-session" }
 bench-mail = { path = "../bench-mail" }
 bench-browser = { path = "../bench-browser" }
