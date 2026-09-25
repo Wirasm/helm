@@ -224,52 +224,59 @@ pub fn mint_session_id() -> String {
 /// accepts a paste.
 const CLAUDE_READY_MARKER: &str = "bypass permissions";
 
-/// Whether `marker` is on screen in raw pty output. Escape sequences and whitespace are
-/// dropped from both sides first: a renderer that places each word with a cursor move
-/// (claude's inline renderer does, measured on 2.1.282) draws the phrase without ever
-/// writing it contiguously. An OSC's payload (a window title, say) is not on screen.
+/// Whether `marker` is on screen in raw pty output. Whitespace is dropped from both
+/// sides as well as escape sequences: a renderer that places each word with a cursor
+/// move (claude's inline renderer does, measured on 2.1.282) draws the phrase without
+/// ever writing it contiguously.
 fn shows_marker(bytes: &[u8], marker: &str) -> bool {
-    let mut drawn = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            0x1b => {
-                i += 1;
-                match bytes.get(i) {
-                    // CSI: parameters, then one final byte in @..~.
-                    Some(b'[') => {
-                        i += 1;
-                        while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
-                            i += 1;
-                        }
-                    }
-                    // OSC: up to BEL or ST (ESC \).
-                    Some(b']') => {
-                        while i < bytes.len() && bytes[i] != 0x07 {
-                            if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
-                                i += 1;
-                                break;
-                            }
-                            i += 1;
-                        }
-                    }
-                    // Any other escape is ESC plus one byte.
-                    _ => {}
-                }
-                i += 1;
-            }
-            b if b.is_ascii_whitespace() => i += 1,
-            b => {
-                drawn.push(b);
-                i += 1;
-            }
-        }
-    }
+    let drawn: Vec<u8> = drawn(bytes)
+        .into_iter()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
     let wanted: Vec<u8> = marker
         .bytes()
         .filter(|b| !b.is_ascii_whitespace())
         .collect();
     drawn.windows(wanted.len()).any(|w| w == wanted.as_slice())
+}
+
+/// The bytes of raw pty output that are drawn: everything except escape sequences. A
+/// cursor move, a mode switch or an OSC's payload (a window title, a hyperlink target)
+/// puts nothing on screen.
+fn drawn(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != 0x1b {
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        match bytes.get(i) {
+            // CSI: parameters, then one final byte in @..~.
+            Some(b'[') => {
+                i += 1;
+                while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
+                    i += 1;
+                }
+            }
+            // OSC: up to BEL or ST (ESC \).
+            Some(b']') => {
+                while i < bytes.len() && bytes[i] != 0x07 {
+                    if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            // Any other escape is ESC plus one byte.
+            _ => {}
+        }
+        i += 1;
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +300,11 @@ struct Ring {
 impl Ring {
     fn push(&mut self, chunk: &[u8]) {
         self.total += chunk.len() as u64;
-        self.last_change = Instant::now();
+        // Quiet means nothing new drawn. A TUI that re-parks its cursor on a timer is
+        // still idle (pi does, every ~2s).
+        if !drawn(chunk).is_empty() {
+            self.last_change = Instant::now();
+        }
         for &b in chunk {
             if self.bytes.len() == RING_CAPACITY {
                 self.bytes.pop_front();
@@ -705,6 +716,27 @@ mod tests {
             b"bypass mode, no permissions",
             CLAUDE_READY_MARKER
         ));
+    }
+
+    #[test]
+    fn output_that_draws_nothing_does_not_end_the_quiet() {
+        // pi, measured: `ESC[1G ESC[?25l` (cursor to column 1, hide it) every ~2s while
+        // idle. Counted as a change, it held every non-claude agent short of the 2s
+        // quiet that wait_ready and the wake gate both need.
+        let quiet_since = Instant::now() - Duration::from_secs(5);
+        let mut ring = Ring {
+            bytes: VecDeque::new(),
+            total: 0,
+            last_change: quiet_since,
+        };
+        ring.push(b"\x1b[1G\x1b[?25l");
+        assert_eq!(
+            ring.last_change, quiet_since,
+            "a cursor move is not a change"
+        );
+        assert_eq!(ring.total, 10, "every byte still counts toward the total");
+        ring.push(b"\x1b[2Kthinking");
+        assert!(ring.last_change > quiet_since, "drawn text is a change");
     }
 
     #[test]
