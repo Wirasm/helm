@@ -1183,6 +1183,27 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
         "the read snippet retired the sent message: {}",
         listing.stdout
     );
+
+    // With no daemon, the read snippet must fail with bench's own code — never exit 0 and
+    // look like an empty inbox, which is what an agent would then report.
+    drop(_daemon);
+    let read = snippets.last().expect("the read snippet");
+    let out = Command::new("bash")
+        .args(["-c", read])
+        .env_remove("BENCH_SUITE")
+        .env_remove("BENCH_HANDLE")
+        .env("HOME", &home.dir)
+        .env("BENCH_DIR", &root)
+        .env("BENCH", bench_bin())
+        .output()
+        .expect("run snippet");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "no daemon reaches the caller as exit 2: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
 }
 
 // ---------------------------------------------------------------------------

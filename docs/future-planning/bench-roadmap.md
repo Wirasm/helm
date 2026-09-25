@@ -165,7 +165,7 @@ against the real CLI.
 
 > **Running order, operator-ruled 2026-09-25.** Milestone numbers below are kept as
 > written; they no longer say what comes next. **Landed:** M0 (#340), M5a (#341), and
-> mail in benchd (#342, the core of M2). **In flight:** the shared browser (#350).
+> mail in benchd (#342, the core of M2), and the shared browser (#350: #352, #363).
 > **Next, in this order:**
 >
 > Tracking issue: **#362**; each step below has its own.
@@ -428,13 +428,16 @@ An artifact shown from the forge lands on the Mac bench once the folder syncs.
 
 ## Alongside the milestones — the shared browser (#350)
 
-In flight, not a numbered milestone. benchd **supervises one Chromium** (a helper, like a
-session: persistent profile under the bench root, a CDP port, its endpoint published for
-agents to read), and helm gets the **first new surface kind**, `browser:<tab>`, so the
-operator and agents share one logged-in browser. Agents drive it with their own
+Landed, not a numbered milestone (#352, #363). benchd **supervises one browser** (a helper,
+like a session: persistent profile under the bench root, a CDP port, its endpoint published
+in `<root>/browser/endpoint.json` for agents to read), and helm has a **browser pane**, so
+the operator and agents share one logged-in browser. Agents drive it with their own
 Playwright (`playwright-cli attach --cdp=…`); the bench is a supervisor and a viewer,
-**never a browser driver**. It moves into a drawer once drawers exist. The spike and the
-open Chrome-for-Testing vs real-Chrome question are in #350.
+**never a browser driver**. The Chrome question is settled: **real Google Chrome** by
+default, so the Claude in Chrome and Codex extensions can run in it, with Chrome for
+Testing as the fallback (`bench browser setup` opens the profile headed to install them).
+The pane becomes the `browser:<tab>` surface kind with M4 and moves into a drawer once
+drawers exist.
 
 ---
 
