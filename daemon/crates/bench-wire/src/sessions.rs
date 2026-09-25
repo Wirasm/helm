@@ -152,7 +152,8 @@ pub enum OpenAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Unreadable {
     /// Which reader: `claude-registry`, `claude-job`, `claude-subagent`, `pi-session`,
-    /// `helm-snapshot`.
+    /// `helm-snapshot` — or `session-list` for a row the list itself had no action for
+    /// (a combination of host and state no reader should produce; `path` is its cwd).
     pub source: String,
     pub path: String,
     pub why: String,

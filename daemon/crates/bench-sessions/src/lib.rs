@@ -35,6 +35,9 @@ use std::path::{Path, PathBuf};
 pub use claude::Cache;
 pub use scope::Workspace;
 
+/// `Unreadable.source` for a row [`open_action`] had no action for.
+pub const SESSION_LIST: &str = "session-list";
+
 /// A reply lists at most this many rows and says how many it left out.
 pub const MAX_ROWS: usize = 200;
 
@@ -151,7 +154,7 @@ impl Rows<'_> {
             Ok(o) => o,
             Err(why) => {
                 self.unreadable.push(Unreadable {
-                    source: "bench".into(),
+                    source: SESSION_LIST.into(),
                     path: d.cwd.clone(),
                     why,
                 });

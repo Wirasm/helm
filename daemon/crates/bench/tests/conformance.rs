@@ -2378,11 +2378,7 @@ fn tree_state(dir: &Path) -> Vec<(PathBuf, u64, std::time::SystemTime)> {
 }
 
 fn mangle(cwd: &Path) -> String {
-    cwd.display()
-        .to_string()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
+    bench_sessions::claude::mangle(&cwd.display().to_string())
 }
 
 #[test]
@@ -2521,6 +2517,21 @@ fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
         refused.stderr.contains("bench sessions --all"),
         "{}",
         refused.stderr
+    );
+    let with_all = bench(
+        h,
+        &[
+            "sessions",
+            "dismiss",
+            "gone",
+            "--harness",
+            "claude",
+            "--all",
+        ],
+    );
+    assert_eq!(
+        with_all.code, 3,
+        "--all never turns a dismiss into a listing"
     );
     let no_harness = bench(h, &["sessions", "dismiss", "gone"]);
     assert_eq!(no_harness.code, 3);

@@ -127,6 +127,11 @@ fn run() -> i32 {
     if all && verb != "sessions" {
         return refuse("--all is for `sessions`");
     }
+    if verb == "sessions" && all && !positional.is_empty() {
+        return refuse(
+            "--all lists sessions; `bench sessions dismiss <id> --harness <h>` takes no --all",
+        );
+    }
     if verb == "sessions" && all {
         verb = "sessions/all".into();
     } else if verb == "sessions" && positional.first().map(String::as_str) == Some("dismiss") {

@@ -1003,6 +1003,8 @@ fn dispatch(
                 ) {
                     return (errored(why), AfterResponse::Done);
                 }
+                // Recorded at spawn only: `resume` re-enters the same runtime session id
+                // (bench_session::argv), which this record already holds.
                 if let Err(why) = sessions::record_spawn(
                     &mut c,
                     bench_wire::Harness::parse(agent.name()),

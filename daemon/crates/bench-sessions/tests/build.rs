@@ -155,11 +155,10 @@ impl Fixture {
         agent: &str,
         records: &[L],
     ) -> PathBuf {
-        let dir = self.home().join(".claude/projects").join(
-            cwd.chars()
-                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-                .collect::<String>(),
-        );
+        let dir = self
+            .home()
+            .join(".claude/projects")
+            .join(bench_sessions::claude::mangle(cwd));
         let dir = dir.join(session).join("subagents");
         write(
             &dir.join(format!("agent-{agent}.meta.json")),
@@ -175,11 +174,7 @@ impl Fixture {
         let path = self
             .home()
             .join(".claude/projects")
-            .join(
-                cwd.chars()
-                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-                    .collect::<String>(),
-            )
+            .join(bench_sessions::claude::mangle(cwd))
             .join(format!("{session}.jsonl"));
         write(
             &path,
