@@ -268,8 +268,7 @@ struct Workbench: Codable, Equatable {
         members > 0 ? 1 / Double(members) : 1
     }
 
-    /// Closes a pane, and reports whether it did. Generalises `TerminalManager.close`
-    /// one level: closing the selected pane selects the neighbour **at the closed
+    /// Closes a pane, and reports whether it did. Closing the selected pane selects the neighbour **at the closed
     /// position**, an emptied slot goes, an emptied column goes, and the bench's last
     /// pane refuses.
     @discardableResult
