@@ -212,8 +212,17 @@ pub struct SessionKey {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HostedVia {
-    Pane { pane: PaneId },
-    Bench { session: String },
+    Pane {
+        pane: PaneId,
+    },
+    Bench {
+        session: String,
+        /// The session's mailbox handle, which outlives the session: its finished row still
+        /// says where its mail waits after `close` or a daemon restart. Absent in entries
+        /// recorded before #396.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handle: Option<String>,
+    },
 }
 
 /// One entry of the hosted-sessions record.

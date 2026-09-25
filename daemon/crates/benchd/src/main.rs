@@ -39,7 +39,7 @@ use bench_wire::{
 };
 use bench_wire::{DOCUMENT_CHANGED, Frame};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -297,6 +297,16 @@ const BROWSER_RESTART_WINDOW: Duration = Duration::from_secs(60);
 static BROWSER_LIFECYCLE: Mutex<()> = Mutex::new(());
 
 impl Core {
+    /// Handles held by a live session: the mail a send to one of these is woken for.
+    /// `mail/send` queues a wake by it, and `sessions/all` reports it as `wakeable`.
+    fn live_handles(&self) -> HashSet<String> {
+        self.sessions
+            .values()
+            .filter(|s| s.is_live())
+            .map(|s| s.handle.clone())
+            .collect()
+    }
+
     fn append(&mut self, kind: &str, data: Value) -> Result<(), String> {
         self.append_event(kind, data, None).map(|_| ())
     }
@@ -1011,6 +1021,7 @@ fn dispatch(
                     spec.runtime_session.as_deref(),
                     &spec.cwd,
                     &id,
+                    &handle,
                 ) {
                     return (errored(why), AfterResponse::Done);
                 }
@@ -1274,10 +1285,7 @@ fn dispatch(
                 ) {
                     return (errored(why), AfterResponse::Done);
                 }
-                let live = c
-                    .sessions
-                    .values()
-                    .any(|s| s.handle == parsed.to && s.is_live());
+                let live = c.live_handles().contains(&parsed.to);
                 if live {
                     c.pending_wakes.push(PendingWake {
                         handle: parsed.to.clone(),

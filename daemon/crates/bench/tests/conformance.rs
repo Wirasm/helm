@@ -912,7 +912,7 @@ fn a_session_row_says_where_to_mail_it_and_whether_a_send_will_wake_it() {
     use bench_wire::{MailAddress, SessionList};
     let home = TestHome::claim("mailrow");
     let h = &home.dir;
-    let _daemon = DaemonGuard::start_with_fake_pi(h);
+    let daemon = DaemonGuard::start_with_fake_pi(h);
     let ws = workspace(h);
     let ws_arg = ws.display().to_string();
     let (pid, runtime) = spawn_pi(h, &ws, "worker");
@@ -996,6 +996,18 @@ fn a_session_row_says_where_to_mail_it_and_whether_a_send_will_wake_it() {
         })
     );
     assert!(inbox("worker") >= 1, "the last send waits unread");
+
+    // The mailbox outlives the session in the daemon's memory: closed, then across a restart,
+    // the finished row still says where its mail waits.
+    let session = json_of(&bench(h, &["sessions"]))["sessions"][0]["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(bench(h, &["close", &session]).code, 0);
+    assert_eq!(list().rows, dead.rows, "closed: the row is unchanged");
+    drop(daemon);
+    let _daemon = DaemonGuard::start_with_fake_pi(h);
+    assert_eq!(list().rows, dead.rows, "restarted: the row is unchanged");
 }
 
 #[test]
@@ -2627,6 +2639,10 @@ fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
     assert_eq!(first.rows[1].host, Host::None);
     assert!(
         matches!(&first.rows[1].open, OpenAction::Resume { argv, .. } if argv.contains(&"gone".to_string()))
+    );
+    assert!(
+        first.rows.iter().all(|r| r.mail.is_none()),
+        "helm-pane agents have no benchd mailbox until #358"
     );
     assert_eq!(first.unreadable.len(), 1, "{:?}", first.unreadable);
     assert_eq!(first.unreadable[0].source, "claude-job");

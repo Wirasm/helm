@@ -52,21 +52,8 @@ pub struct BenchSession {
     pub pid: u32,
     pub live: bool,
     pub spawned_ms: u64,
-    /// Its mailbox handle, and how many messages wait in that inbox.
+    /// Its mailbox handle.
     pub handle: String,
-    pub unread: usize,
-}
-
-impl BenchSession {
-    /// The one place `wakeable` is decided: a live session, which is exactly what `mail/send`
-    /// and the wake reactor check before queueing a wake.
-    fn mail(&self) -> MailAddress {
-        MailAddress {
-            handle: self.handle.clone(),
-            wakeable: self.live,
-            unread: self.unread,
-        }
-    }
 }
 
 /// Everything a build reads besides the harness files.
@@ -79,8 +66,10 @@ pub struct Inputs<'a> {
     pub bench: &'a [BenchSession],
     pub hosted: &'a [HostedSession],
     pub dismissed: &'a [Dismissal],
-    /// Messages waiting in the operator's inbox.
-    pub operator_unread: usize,
+    /// A handle's mail address: its unread count, and whether benchd holds a live session
+    /// with it. benchd answers from its mailroom and the same rule `mail/send` uses to queue a
+    /// wake; this crate only decides which rows have a mailbox.
+    pub mailbox: &'a dyn Fn(&str) -> MailAddress,
     pub now_ms: u64,
     /// Stamped on sessions this build adds to the record.
     pub now: &'a str,
@@ -241,7 +230,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 host: Host::Bench {
                     session: b.session.clone(),
                 },
-                mail: Some(b.mail()),
+                mail: Some((inputs.mailbox)(&b.handle)),
                 updated_at_ms: registered
                     .and_then(|r| r.status_updated_ms)
                     .unwrap_or(b.spawned_ms),
@@ -474,14 +463,16 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 cwd: h.cwd.clone(),
                 state: SessionState::Finished { at_ms },
                 host: Host::None,
-                // The benchd session that ran it, by the runtime id the bench minted. Never
-                // by `HostedVia::Bench`'s session id: those begin again at s1 when the
-                // daemon restarts, and would lend this row a stranger's mailbox.
-                mail: inputs
-                    .bench
-                    .iter()
-                    .find(|b| b.harness == h.harness && b.runtime_session.as_ref() == Some(&h.id))
-                    .map(BenchSession::mail),
+                // The handle recorded at spawn: the mailbox outlives the session, in benchd's
+                // memory and across its restarts. Never looked up by bench session id, which
+                // begins again at s1 when the daemon restarts.
+                mail: match &h.via {
+                    HostedVia::Bench {
+                        handle: Some(handle),
+                        ..
+                    } => Some((inputs.mailbox)(handle)),
+                    _ => None,
+                },
                 updated_at_ms: at_ms,
             },
         );
@@ -505,11 +496,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
         list: SessionList {
             workspace: ws.root.clone(),
             roots: ws.roots.clone(),
-            operator: MailAddress {
-                handle: OPERATOR_HANDLE.into(),
-                wakeable: false,
-                unread: inputs.operator_unread,
-            },
+            operator: (inputs.mailbox)(OPERATOR_HANDLE),
             returned: rows.len(),
             truncated: rows.len() < total,
             total,
