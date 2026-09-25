@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// persists today — and a kind this build does not know is a decode error that names it,
 /// never a silently dropped pane.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Surface {
     /// A terminal. Its pty is helm's until M5b, keyed by the pane's own id. `agent` is what
     /// was running in it when last looked (helm #63): an id of a conversation that outlives
@@ -58,7 +58,7 @@ impl Surface {
 /// that quietly became a canvas is a pane whose pty has nowhere to render (helm's
 /// `Workbench.repoint`), and with this type the wrong call does not compile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CanvasSource {
     File {
         path: StandardPath,
@@ -84,7 +84,6 @@ pub enum SurfaceClass {
 /// The agent a terminal pane held (helm `ResumableAgent`), recorded so a restart can offer
 /// to resume the conversation. The offer itself is helm's; this is only the record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ResumableAgent {
     pub command: String,
     pub session: String,
@@ -119,7 +118,6 @@ impl PaneName {
 /// has no encoded form: `Pane` omits the key entirely, so an un-named pane's JSON is exactly
 /// what it would be if names did not exist.
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct EncodedName {
     source: NameSource,
     text: String,

@@ -22,7 +22,6 @@ use std::collections::HashSet;
 
 /// One open folder and its arrangement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Workspace {
     pub path: StandardPath,
     pub bench: Bench,
@@ -254,7 +253,6 @@ impl Document {
 /// two workspaces with one path, a pane id in two places, an active workspace that is not
 /// open — rather than guessing which half to keep.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct EncodedDocument {
     workspaces: Vec<Workspace>,
     active: Option<StandardPath>,

@@ -67,7 +67,6 @@ pub enum Placement {
 
 /// One tenant of a slot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Pane {
     pub id: PaneId,
     pub surface: Surface,
@@ -97,7 +96,6 @@ impl Pane {
 /// One tabbed cell of a column: the panes it holds, and which of them is on screen.
 /// `selected` is per slot — N slots are visible at once, so no single id could say it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Slot {
     pub id: SlotId,
     pub panes: Vec<Pane>,
@@ -128,7 +126,6 @@ impl Slot {
 
 /// One vertical stack of slots, and the share of the bench's width it gets.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Column {
     pub id: ColumnId,
     pub slots: Vec<Slot>,
@@ -407,9 +404,11 @@ impl Bench {
         if self.pane(pane.id).is_some() {
             return Err(Refusal::DuplicatePane(pane.id));
         }
+        // `normalize()` keeps `focused_slot` live, so this refusal is unreachable today — and a
+        // refusal rather than a panic, because one bad gesture must not take benchd down.
         let a = self
             .address_of_slot(self.focused_slot)
-            .expect("normalize keeps focused_slot live");
+            .ok_or(Refusal::UnknownSlot(self.focused_slot))?;
         let slot_id = match split {
             Split::Right => {
                 let width = self.columns[a.column].width / 2.0;
@@ -440,9 +439,10 @@ impl Bench {
     /// at the same depth, clamped to what it has. Off the edge is a no-op rather than a wrap:
     /// a wrap makes the far edge unreachable by holding the key down.
     pub fn step_focus(&mut self, direction: Direction) {
-        let a = self
-            .address_of_slot(self.focused_slot)
-            .expect("normalize keeps focused_slot live");
+        // Unreachable while `normalize()` keeps `focused_slot` live; a no-op rather than a panic.
+        let Some(a) = self.address_of_slot(self.focused_slot) else {
+            return;
+        };
         match direction {
             Direction::Up | Direction::Down => {
                 let Some(next) = step(a.slot, direction == Direction::Up) else {
@@ -849,7 +849,6 @@ fn trading(fractions: &[f64], index: usize, neighbour: usize, fraction: f64) -> 
 /// for the one state nothing can repair: a bench with no panes has nothing to render and
 /// nothing to invent, so it is refused.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct EncodedBench {
     columns: Vec<Column>,
     focused_slot: SlotId,

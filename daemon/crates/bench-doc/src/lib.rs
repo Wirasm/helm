@@ -16,6 +16,7 @@ mod ids;
 mod placement;
 mod refusal;
 mod surface;
+mod tolerant;
 
 pub use bench::{Bench, Column, Direction, Focus, MINIMUM_FRACTION, Pane, Placement, Slot, Split};
 pub use document::{Document, Target, Workspace};
@@ -23,3 +24,4 @@ pub use ids::{ColumnId, PaneId, SlotId, StandardPath};
 pub use placement::{Caller, Rule, Rules, Strategy};
 pub use refusal::Refusal;
 pub use surface::{CanvasSource, PaneName, ResumableAgent, Surface, SurfaceClass};
+pub use tolerant::Recovered;
