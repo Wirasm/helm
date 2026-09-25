@@ -11,7 +11,8 @@
 //!   where the mail is; the mail itself costs tokens only when the agent chooses to
 //!   read it, once, at the moment it matters.
 //! - **Retire, never delete.** Reading moves inbox → read. Nothing in the mailroom
-//!   ever unlinks a message.
+//!   ever unlinks a message, and delivery never replaces one: ids continue from the
+//!   mailroom across restarts ([`next_seq`]) and a message file is created new.
 //! - **Pull is metadata-only.** A listing returns sender/subject/time/read-state —
 //!   bodies never — and reports its caps.
 //!
@@ -31,6 +32,7 @@
 //! ```
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// One line of a listing: everything a triage needs, nothing a body costs.
@@ -75,13 +77,35 @@ pub fn deliver(
         .map(|s| format!("subject: {s}\n"))
         .unwrap_or_default();
     let content = format!("---\nfrom: {from}\nat: {at_rfc3339}\n{subject_line}---\n{body}\n");
-    fs::write(&path, content).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    // Create-new: a message is never replaced. An id that names a file already there is an
+    // allocation bug, and it fails the send rather than losing the mail it would replace.
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => format!(
+                "message {id} already exists at {} — refusing to overwrite it",
+                path.display()
+            ),
+            _ => format!("cannot write {}: {e}", path.display()),
+        })?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     Ok((id, path))
 }
 
 /// Retire a message: inbox → read, never delete. Returns the retired path. Retiring an
 /// already-retired message is fine and answers with where it lives.
 pub fn retire(root: &Path, handle: &str, id: &str) -> Result<PathBuf, String> {
+    // The one place an id becomes a path, so the one place it is checked (#402): `Path::join`
+    // does not collapse `..`, and `read/../../<other>/inbox/m1` read another mailbox. Any
+    // single file name is an id — hand-written ones like `note` included.
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
+        return Err(format!(
+            "{id:?} is not a message id — an id is one file name, as `bench mail list` shows it"
+        ));
+    }
     let name = format!("{id}.md");
     let from_path = inbox(root, handle).join(&name);
     let to_dir = read_dir_of(root, handle);
@@ -134,6 +158,29 @@ pub fn list(root: &Path, handle: &str) -> Vec<MailMeta> {
         }
     }
     out
+}
+
+/// The first id no message in the mailroom has: one past the highest `m<n>` in any inbox
+/// or read directory. benchd seeds its counter from this at boot, so an id is never handed
+/// out twice across restarts. Files with other names (hand-written ones) are not ids.
+pub fn next_seq(root: &Path) -> u64 {
+    let mailboxes = fs::read_dir(mail_root(root))
+        .into_iter()
+        .flatten()
+        .flatten();
+    mailboxes
+        .flat_map(|mailbox| ["inbox", "read"].map(|dir| mailbox.path().join(dir)))
+        .flat_map(|dir| fs::read_dir(dir).into_iter().flatten().flatten())
+        .filter_map(|e| {
+            let name = e.file_name();
+            name.to_str()?
+                .strip_prefix('m')?
+                .strip_suffix(".md")?
+                .parse::<u64>()
+                .ok()
+        })
+        .max()
+        .map_or(1, |n| n + 1)
 }
 
 /// How many messages wait unread in a handle's inbox — the files `list` reports as unread,
@@ -242,6 +289,48 @@ mod tests {
         assert_eq!(listing.len(), 2);
         assert!(listing[0].unread && listing[0].from == "y");
         assert!(!listing[1].unread && listing[1].subject.as_deref() == Some("one"));
+        let _ = fs::remove_dir_all(r);
+    }
+
+    #[test]
+    fn a_delivery_never_replaces_a_message() {
+        let r = root();
+        let (_, path) = deliver(&r, 1, "a", "b", None, "t", "first").unwrap();
+        let err = deliver(&r, 1, "a", "b", None, "t", "second").unwrap_err();
+        assert!(err.contains("refusing to overwrite"), "{err}");
+        assert!(fs::read_to_string(&path).unwrap().ends_with("first\n"));
+        let _ = fs::remove_dir_all(r);
+    }
+
+    #[test]
+    fn the_next_seq_follows_every_message_in_the_mailroom() {
+        let r = root();
+        assert_eq!(next_seq(&r), 1, "an empty mailroom starts at m1");
+        deliver(&r, 3, "a", "b", None, "t", "x").unwrap();
+        deliver(&r, 7, "a", "c", None, "t", "x").unwrap();
+        retire(&r, "c", "m7").unwrap();
+        let hand = mail_root(&r).join("b").join("inbox");
+        fs::write(hand.join("note.md"), "hand-written").unwrap();
+        fs::write(hand.join("m99.txt"), "not a message").unwrap();
+        assert_eq!(next_seq(&r), 8, "retired mail counts; other names do not");
+        let _ = fs::remove_dir_all(r);
+    }
+
+    #[test]
+    fn an_id_that_is_a_path_is_refused_before_anything_moves() {
+        let r = root();
+        let (id, path) = deliver(&r, 1, "a", "other", None, "t", "not yours").unwrap();
+        fs::create_dir_all(mail_root(&r).join("me").join("read")).unwrap();
+        for bad in [
+            format!("../../other/inbox/{id}"),
+            "a/b".into(),
+            "..".into(),
+            "".into(),
+        ] {
+            let err = retire(&r, "me", &bad).unwrap_err();
+            assert!(err.contains("not a message id"), "{bad:?}: {err}");
+        }
+        assert!(path.exists(), "nothing moved");
         let _ = fs::remove_dir_all(r);
     }
 

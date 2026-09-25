@@ -1065,6 +1065,105 @@ fn mail_to_a_handle_nobody_hosts_waits_in_the_record() {
 }
 
 #[test]
+fn mail_sent_before_a_restart_survives_mail_sent_after_it() {
+    // #399: the id counter began again at m1 on every boot and the write replaced the file,
+    // so the first send after a restart overwrote unread mail from before it.
+    let home = TestHome::claim("restartmail");
+    let h = &home.dir;
+    let send = |body: &str| -> String {
+        let run = bench(h, &["mail", "send", "--to", "ghost", "--body", body]);
+        assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+        json_of(&run)["id"].as_str().unwrap().to_string()
+    };
+    let daemon = DaemonGuard::start(h, None);
+    let first = send("before the restart");
+    drop(daemon);
+    let daemon = DaemonGuard::start(h, None);
+    let second = send("after the restart");
+    assert_ne!(first, second, "an id is never handed out twice");
+    let inbox = h.join(".bench/mail/ghost/inbox");
+    for (id, body) in [
+        (&first, "before the restart"),
+        (&second, "after the restart"),
+    ] {
+        let text = fs::read_to_string(inbox.join(format!("{id}.md")))
+            .unwrap_or_else(|e| panic!("{id} is gone: {e}"));
+        assert!(text.ends_with(&format!("{body}\n")), "{id}: {text}");
+    }
+
+    // A file already at the next id (planted behind the daemon's back) is never replaced:
+    // the send fails loudly, exit 4, and the planted file is untouched.
+    let n: u64 = second.trim_start_matches('m').parse().unwrap();
+    let planted = inbox.join(format!("m{}.md", n + 1));
+    fs::write(&planted, "planted").unwrap();
+    let run = bench(h, &["mail", "send", "--to", "ghost", "--body", "third"]);
+    assert_eq!(run.code, 4, "stdout: {} stderr: {}", run.stdout, run.stderr);
+    assert!(
+        run.stderr.contains("refusing to overwrite"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(fs::read_to_string(&planted).unwrap(), "planted");
+    drop(daemon);
+}
+
+#[test]
+fn mail_read_refuses_an_id_that_is_a_path_and_reads_nothing() {
+    // #402: the id was joined onto the mailbox path unchecked, so `..` read another
+    // mailbox's message.
+    let home = TestHome::claim("readpath");
+    let h = &home.dir;
+    let _daemon = DaemonGuard::start(h, None);
+    let sent = bench(h, &["mail", "send", "--to", "other", "--body", "not yours"]);
+    assert_eq!(sent.code, 0, "stderr: {}", sent.stderr);
+    let id = json_of(&sent)["id"].as_str().unwrap().to_string();
+    let other = h.join(".bench/mail/other/inbox").join(format!("{id}.md"));
+    // `me` has read mail before, so its `read/` exists and `read/../../other/…` resolves.
+    let own = bench(h, &["mail", "send", "--to", "me", "--body", "mine"]);
+    let own_id = json_of(&own)["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        bench(h, &["mail", "read", &own_id, "--handle", "me"]).code,
+        0
+    );
+
+    for bad in [
+        format!("../../other/inbox/{id}"),
+        format!("x/{id}"),
+        "..".into(),
+        "".into(),
+    ] {
+        let run = bench(h, &["mail", "read", &bad, "--handle", "me"]);
+        assert_eq!(
+            run.code, 3,
+            "{bad:?}: stdout {} stderr {}",
+            run.stdout, run.stderr
+        );
+        assert!(
+            run.stdout.trim().is_empty(),
+            "{bad:?} read something: {}",
+            run.stdout
+        );
+        assert!(
+            run.stderr.contains("not a message id"),
+            "{bad:?}: {}",
+            run.stderr
+        );
+    }
+    assert!(
+        other.exists(),
+        "the other mailbox's message is still unread where it was"
+    );
+
+    // A hand-written name is still a message id.
+    let inbox = h.join(".bench/mail/me/inbox");
+    fs::create_dir_all(&inbox).unwrap();
+    fs::write(inbox.join("note.md"), "by hand").unwrap();
+    let run = bench(h, &["mail", "read", "note", "--handle", "me"]);
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    assert!(run.stdout.contains("by hand"));
+}
+
+#[test]
 fn a_send_to_a_live_session_wakes_it_with_a_path_never_the_body() {
     let home = TestHome::claim("wake");
     let daemon = DaemonGuard::start(&home.dir, None);

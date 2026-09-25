@@ -453,6 +453,10 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
             let _ = fs::remove_file(p);
         });
 
+    // From the mailroom, not 1: the files outlive this process, and an id reused after a
+    // restart named a message that was still there (#399).
+    let next_mail = bench_mail::next_seq(&root);
+
     let (notice_tx, notice_rx) = mpsc::channel::<Notice>();
     let core = Arc::new(Mutex::new(Core {
         root,
@@ -463,7 +467,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         booted: Instant::now(),
         sessions: HashMap::new(),
         next_session: 1,
-        next_mail: 1,
+        next_mail,
         pending_wakes: Vec::new(),
         wake_tokens: HashMap::new(),
         notices: notice_tx,
