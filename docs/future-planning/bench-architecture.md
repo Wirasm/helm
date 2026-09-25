@@ -2,8 +2,8 @@
 
 **A plan, not the tree.** The operator approved this shape on 2026-09-25. It describes where
 helm and `benchd` are going, not what exists; `AGENTS.md` describes the tree. The milestone
-sequence that builds it is `bench-roadmap.md`, and work on any of it starts when the operator
-names a milestone.
+sequence that builds it is `bench-roadmap.md` (tracking issue #362), and work on any of it
+starts when the operator names a milestone.
 
 ## What we are building
 
