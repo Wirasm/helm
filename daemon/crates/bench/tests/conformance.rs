@@ -1631,3 +1631,61 @@ fn setup_opens_the_same_profile_headed_and_quitting_it_returns_to_headless() {
         "the quit is on the record"
     );
 }
+
+#[test]
+fn the_bench_browser_skills_snippets_execute_against_a_real_daemon() {
+    // The bench-mail rule: a documented snippet is executed, never restated. Every ```bash
+    // fence in the skill runs against a throwaway daemon whose browser is the fake — the
+    // ```text fences are Playwright's, which the gate does not have.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../.claude/skills/bench-browser/SKILL.md"),
+    )
+    .expect("bench-browser SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        snippets.len(),
+        1,
+        "the skill's one executable snippet: get the endpoint"
+    );
+
+    let home = TestHome::claim("brskill");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let out = Command::new("bash")
+        .args(["-euo", "pipefail", "-c", &snippets[0]])
+        .env_remove("BENCH_SUITE")
+        .env("HOME", &home.dir)
+        .env("BENCH_DIR", home.dir.join(".bench"))
+        .env("BENCH", bench_bin())
+        .output()
+        .expect("run snippet");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "snippet failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let status = json_of(&bench(&home.dir, &["browser", "status"]));
+    assert_eq!(
+        stdout.trim(),
+        status["cdp"].as_str().unwrap(),
+        "the snippet prints the endpoint playwright-cli attach takes"
+    );
+}

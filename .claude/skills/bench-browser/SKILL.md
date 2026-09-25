@@ -1,0 +1,64 @@
+---
+name: bench-browser
+description: Use the operator's shared browser — the one Chrome benchd runs, where he is logged in to his accounts and can watch what you do in a helm pane. Use when a task needs a real browser, a logged-in session, or a web page the operator should see; when the operator says "use the browser", "in my browser", "log in and…", "check the site"; or before reaching for any other browser tool.
+---
+
+# The shared browser
+
+There is **one** browser on the bench: a Chrome that `benchd` starts and keeps running, with the
+operator's logins in its profile. He sees it in a helm pane, and you drive it with Playwright.
+Use it rather than starting a browser of your own. A second browser has none of his sessions,
+and he can't see it.
+
+## Get the endpoint
+
+```bash
+BENCH="${BENCH:-bench}"
+CDP=$("$BENCH" browser start | python3 -c 'import json,sys; print(json.load(sys.stdin)["cdp"])')
+echo "$CDP"
+```
+
+`browser start` starts the browser, or finds it running, and prints its endpoint. `cdp` is what
+Playwright takes. Exit codes: `0` ok · `2` no daemon · `3` refused (the reason names the fix) · `4`
+the browser did not come up.
+
+It refuses while the operator has the browser open in a window for setup (installing
+extensions, signing in). Leave it alone. It comes back by itself when he quits that window, and
+`"$BENCH" browser status` shows `"mode": "headless"` again.
+
+## Drive it with Playwright
+
+```text
+playwright-cli -s=<your-name> attach --cdp="$CDP"
+playwright-cli -s=<your-name> tab-new https://example.com
+playwright-cli -s=<your-name> snapshot
+playwright-cli -s=<your-name> detach
+```
+
+- **Attach, never `open`.** `open` launches a separate browser without his logins.
+- **Work in a tab of your own** (`tab-new`), and do not navigate the tab he is looking at unless
+  he asked you to. The pane follows whichever tab opens or navigates, so he sees your work
+  either way.
+- **`detach` when you are done.** It disconnects you and leaves the browser and its tabs running.
+  Never stop the browser (`bench browser stop`) unless he asked. Other agents may be using it.
+- Playwright MCP works too, with `--cdp-endpoint "$CDP"`.
+
+## Show it to him
+
+If he has no browser pane open, one command puts it on the bench without taking his keyboard:
+
+```text
+swift <helm checkout>/tools/helm-command.swift openBrowser
+```
+
+(⌘⇧B does the same from his side.)
+
+## Facts with edges
+
+- Logins, cookies and extensions live in the profile under the bench root and survive restarts.
+  A crashed browser is restarted automatically, and the endpoint changes when it restarts, so
+  run `browser start` again rather than reusing an old `$CDP`.
+- It is real Google Chrome where installed (else Chrome for Testing), headless, with a normal
+  Chrome user agent, so sites that refuse headless browsers accept it.
+- A login that needs his password or 2FA is his to do. Ask him to sign in through the pane,
+  then continue in the same session.
