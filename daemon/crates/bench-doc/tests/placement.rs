@@ -6,8 +6,8 @@
 mod common;
 
 use bench_doc::{
-    Bench, Caller, CanvasSource, Focus, Pane, PaneId, Placement, Rule, Rules, Split, Strategy,
-    Surface, SurfaceClass,
+    Bench, Caller, Focus, Pane, PaneId, Placement, Rule, Rules, Split, Strategy, Surface,
+    SurfaceClass,
 };
 use common::*;
 
@@ -187,33 +187,6 @@ fn paths_are_standardised_so_the_same_file_is_one_canvas() {
     );
 }
 
-#[test]
-fn a_url_source_is_matched_by_value_too() {
-    let mut bench = Bench::terminal(PaneId::mint());
-    let localhost = Surface::Canvas {
-        source: url("http://localhost:3000"),
-    };
-    let open = Pane::new(localhost.clone());
-    let open_id = open.id;
-    bench.place(open, Placement::Column, Focus::Take).unwrap();
-
-    assert_eq!(
-        place(&bench, &localhost, Caller::Agent),
-        Placement::Existing(open_id)
-    );
-    assert_eq!(
-        place(
-            &bench,
-            &Surface::Canvas {
-                source: url("http://localhost:4000")
-            },
-            Caller::Agent
-        ),
-        Placement::Tab(bench.focused_slot()),
-        "a different address is a different canvas, beside the one already open"
-    );
-}
-
 // MARK: - The browser (#353's `placementForBrowser`)
 
 #[test]
@@ -236,13 +209,7 @@ fn the_browser_goes_to_the_pane_already_showing_it_else_a_new_column() {
         "one shared browser, so a second pane onto it would be a second copy of one tab"
     );
     assert_eq!(
-        place(
-            &bench,
-            &Surface::Canvas {
-                source: CanvasSource::Empty
-            },
-            Caller::Operator
-        ),
+        place(&bench, &file("/tmp/plan.md"), Caller::Operator),
         Placement::Column,
         "and a browser slot is not a canvas slot"
     );

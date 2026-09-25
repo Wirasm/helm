@@ -225,11 +225,6 @@ fn apply(
         LayoutVerb::PaneName { pane, name } => doc
             .edit(Target::Pane(*pane), focus, |b| b.name(*pane, name.clone()))
             .map(|_| Outcome::default()),
-        LayoutVerb::PaneRepoint { pane, source } => doc
-            .edit(Target::Pane(*pane), focus, |b| {
-                b.repoint(*pane, source.clone())
-            })
-            .map(|()| Outcome::default()),
         LayoutVerb::PaneRecord { pane, agent } => doc
             .edit(Target::Pane(*pane), focus, |b| {
                 b.record_agent(*pane, agent.clone())

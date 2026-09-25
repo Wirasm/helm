@@ -53,22 +53,15 @@ impl Surface {
     }
 }
 
-/// Where a canvas points. A separate type rather than three more `Surface` variants,
-/// because "repoint this canvas" must not be able to turn it into a terminal — a terminal
-/// that quietly became a canvas is a pane whose pty has nowhere to render (helm's
-/// `Workbench.repoint`), and with this type the wrong call does not compile.
+/// Where a canvas points. A file, and only a file: helm's URL canvas was removed (#376, the
+/// operator's ruling of 2026-09-25 — a web page is a tab of the shared browser), and with it
+/// the empty `⌘L` canvas and the verb that repointed one. A tagged type with one variant so a
+/// later source kind is an addition, not a migration; a stored `url` or `empty` source is no
+/// longer a kind this build reads, and the tolerant reader skips that pane with a note.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CanvasSource {
-    File {
-        path: StandardPath,
-    },
-    Url {
-        url: String,
-    },
-    /// ⌘L before an address is committed. Persisted as itself so the empty pane comes back
-    /// rather than vanishing.
-    Empty,
+    File { path: StandardPath },
 }
 
 /// The coarse classes placement distinguishes. Every canvas source is one class: helm's
@@ -170,20 +163,6 @@ mod tests {
             (
                 Surface::file("/tmp/plan.md").unwrap(),
                 json!({"kind": "canvas", "source": {"kind": "file", "path": "/tmp/plan.md"}}),
-            ),
-            (
-                Surface::Canvas {
-                    source: CanvasSource::Url {
-                        url: "http://localhost:3000".into(),
-                    },
-                },
-                json!({"kind": "canvas", "source": {"kind": "url", "url": "http://localhost:3000"}}),
-            ),
-            (
-                Surface::Canvas {
-                    source: CanvasSource::Empty,
-                },
-                json!({"kind": "canvas", "source": {"kind": "empty"}}),
             ),
             (Surface::Browser, json!({"kind": "browser"})),
         ] {

@@ -145,6 +145,14 @@ final class WorkbenchModel: ObservableObject {
     /// a decision — `BenchMountPolicy.mount` takes this as `answered`.
     private var answered: Set<WorkspacePath> = []
 
+    /// Where every verb goes (`VerbSink`). The local bench today; benchd's sink in PR 3c, which
+    /// is the one line that changes then.
+    private lazy var sink: any VerbSink = LocalSink(workbench: self)
+
+    /// Opening, closing and switching workspaces, which `RootView` carries out because they span
+    /// the workspace list and the bench together. nil in a test that has no workspace list.
+    var workspaceVerbs: ((WorkspaceVerb) -> Void)?
+
     /// `AnyCancellable`s rather than NotificationCenter tokens: they unsubscribe in their
     /// own deinit, and Swift 6 forbids a nonisolated deinit from touching the non-Sendable
     /// token the observer API hands back.
@@ -172,6 +180,9 @@ final class WorkbenchModel: ObservableObject {
         terminals.surfaces.register(
             CanvasPaneKind { [weak self] model, pane in self?.wireMarks(model, in: pane) })
         terminals.surfaces.register(BrowserPaneKind(make: makeBrowser))
+        // The same rewiring for the manager's sessions: a ⌘-clicked link and a `push.sh` are
+        // verbs, and this is the bench they are sent to.
+        terminals.bench = self
         subscribe()
     }
 
@@ -516,8 +527,8 @@ final class WorkbenchModel: ObservableObject {
             holdsKeyboard: bench?.focusedPane?.id == pane.id,
             isSelected: pane.id == slot.selected,
             canClose: bench?.canClose(pane.id) ?? false,
-            select: { [weak self] in self?.select(pane.id) },
-            close: { [weak self] in self?.close(pane.id) })
+            select: { [weak self] in self?.send(.paneShow(pane.id), by: .operatorGesture) },
+            close: { [weak self] in self?.send(.paneClose(pane.id), by: .operatorGesture) })
     }
 
     func session(for pane: Pane) -> TerminalSession? {
@@ -580,12 +591,9 @@ final class WorkbenchModel: ObservableObject {
     /// goes on, and an agent opening it must not pull the operator out of the pane he is typing
     /// in. He clicks it when he wants to use it.
     ///
-    /// `link` is a ⌘-clicked http address (#376): it opens as a new tab of the shared browser,
-    /// by the same non-seizing route — the operator clicked in a terminal and stays there.
-    ///
     /// Returns the pane showing the browser.
     @discardableResult
-    func offerBrowser(opening link: URL? = nil) -> Pane.ID? {
+    func offerBrowser() -> Pane.ID? {
         guard var bench else { return nil }
         let placement = bench.placementForBrowser()
         let shown: Pane
@@ -603,7 +611,6 @@ final class WorkbenchModel: ObservableObject {
             bench.offer(shown, at: placement)
             commit(bench)
         }
-        if let link { browser(for: shown).open(link) }
         return shown.id
     }
 
@@ -678,7 +685,11 @@ final class WorkbenchModel: ObservableObject {
         do {
             let note = try OperatorNote.create(
                 inWorkspaceAt: path.value, under: artifactRoot, on: date)
-            guard let id = open(.file(note.url)), let pane = bench?.pane(id) else { return nil }
+            guard
+                let id = send(
+                    .paneOpen(surface: .canvas(path: note.url.path)), by: .operatorGesture),
+                let pane = bench?.pane(id)
+            else { return nil }
             noteFailure = nil
             noteFailureTask?.cancel()
             // Straight into the writing face: the operator asked for somewhere to write, and a
@@ -775,12 +786,12 @@ final class WorkbenchModel: ObservableObject {
     /// The mounted one is `offer` itself. A parked one is offered by its owner, `parked`, onto
     /// the bench stored for it, so the canvas is there when the operator switches in. The
     /// mounted bench is never touched by a parked workspace's push: that is the reason the
-    /// workspace travels on the request at all (`CanvasPushRequest`).
+    /// workspace travels on the verb at all.
     ///
     /// A re-push of a canvas already on a parked bench refreshes its cached model when there is
     /// one. The cache survives a switch (`closeWorkspace`'s header), so a pane the operator has
     /// looked at still has a render, and #261's reason to refresh it holds unchanged.
-    private func offer(_ source: CanvasSource, onBenchOf path: WorkspacePath) -> Pane.ID? {
+    func offer(_ source: CanvasSource, onBenchOf path: WorkspacePath) -> Pane.ID? {
         if path == workspacePath { return offer(source) }
         guard let pane = parked?.offer(source, toBenchOf: path) else { return nil }
         surfaces.existing(pane, as: CanvasModel.self)?.refresh()
@@ -840,15 +851,6 @@ final class WorkbenchModel: ObservableObject {
         return previous
     }
 
-    /// ⌘1–⌘9 — select by position **within the focused slot**. It was by position within
-    /// the workspace; a bench has no single row for that to mean.
-    func selectTab(_ index: Int) {
-        guard let bench, let slot = bench.slot(bench.focusedSlot),
-            slot.panes.indices.contains(index)
-        else { return }
-        select(slot.panes[index].id)
-    }
-
     /// Make a slot the one commands target.
     ///
     /// **A slot that is already focused commits nothing**, and that guard is load-bearing now
@@ -864,18 +866,22 @@ final class WorkbenchModel: ObservableObject {
         commit(bench)
     }
 
-    func splitRight() {
-        guard let path = workspacePath, var bench else { return }
-        bench.splitRight(
-            with: Pane(id: terminals.newTerminal(in: path).id, content: .terminal()))
+    @discardableResult
+    func splitRight() -> TerminalSession? {
+        guard let path = workspacePath, var bench else { return nil }
+        let session = terminals.newTerminal(in: path)
+        bench.splitRight(with: Pane(id: session.id, content: .terminal()))
         commit(bench)
+        return session
     }
 
-    func splitDown() {
-        guard let path = workspacePath, var bench else { return }
-        bench.splitDown(
-            with: Pane(id: terminals.newTerminal(in: path).id, content: .terminal()))
+    @discardableResult
+    func splitDown() -> TerminalSession? {
+        guard let path = workspacePath, var bench else { return nil }
+        let session = terminals.newTerminal(in: path)
+        bench.splitDown(with: Pane(id: session.id, content: .terminal()))
         commit(bench)
+        return session
     }
 
     /// ⌘D asked for **from outside** — the spool's `command` kind (#269), which is to
@@ -928,13 +934,13 @@ final class WorkbenchModel: ObservableObject {
         commit(bench)
     }
 
-    /// ⌘⌥⇧+arrow. **The only decision here is which pane the keystroke meant** — the focused one
-    /// — and everything else is `Workbench.move(_:_:)`'s, which is addressed precisely so that a
-    /// second caller can mean a different pane (#287). `commit` rather than a bare assignment
-    /// because a move changes which panes are on screen: a relocated slot can be the only thing
-    /// a column had.
-    func movePane(_ direction: Workbench.Direction) {
-        guard var bench, let pane = bench.focusedPane?.id else { return }
+    /// ⌘⌥⇧+arrow reaches here as `pane/move` on the focused pane (`VerbTemplate.moveFocused`),
+    /// and everything else is `Workbench.move(_:_:)`'s, which is addressed so that a second
+    /// caller can mean a different pane (#287). `commit` rather than a bare assignment because a
+    /// move changes which panes are on screen: a relocated slot can be the only thing a column
+    /// had.
+    func move(_ pane: Pane.ID, _ direction: Workbench.Direction) {
+        guard var bench else { return }
         bench.move(pane, direction)
         commit(bench)
     }
@@ -946,11 +952,6 @@ final class WorkbenchModel: ObservableObject {
     /// after which a debounced save can no longer happen, and neither knows about the other.
     func flushNotes() {
         for canvas in surfaces.models(CanvasModel.self) { canvas.saveDraft() }
-    }
-
-    func closeFocusedPane() {
-        guard let pane = bench?.focusedPane else { return }
-        close(pane.id)
     }
 
     // MARK: - Visibility
@@ -998,23 +999,7 @@ final class WorkbenchModel: ObservableObject {
 
     // MARK: - Subscriptions
 
-    /// **One subscription, and the `switch` is exhaustive.** This was twelve, each unpacking
-    /// `Notification.object` with its own `as?` — seven of them, four re-parsing an enum from a
-    /// raw value the poster had flattened it into. A command this bench does not handle is now
-    /// `default`, named and deliberate, rather than a name nobody happened to subscribe to.
     private func subscribe() {
-        HelmCommand.publisher
-            // Load-bearing, not decoration: `@Published` fires in `willSet`, so a handler
-            // that re-reads state synchronously would see the value from before the change.
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] command in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.handle(command)
-                }
-            }
-            .store(in: &commands)
-
         // **⌘Q is the ordinary way to leave, and it reached no flush point at all** (#289).
         // Every other exit a note has — Read, closing the pane, pointing the canvas elsewhere,
         // closing the last workspace — is one of helm's own code paths. Quitting is not: the
@@ -1023,9 +1008,9 @@ final class WorkbenchModel: ObservableObject {
         // note* rather than a bounded tail. That is not a corner — "jot it down, ⌘Q" is the
         // shape of the feature.
         //
-        // **Synchronous, with no `receive(on:)`**, which is the opposite of the subscription
-        // above and is the point: the run loop is about to stop, so a hop to the main queue is
-        // a save that never runs. AppKit posts this on the main thread already.
+        // **Synchronous, with no `receive(on:)`**, and that is the point: the run loop is about
+        // to stop, so a hop to the main queue is a save that never runs. AppKit posts this on
+        // the main thread already.
         //
         // What it still does not cover is `kill -9`, and nothing can. That is the honest
         // remainder of `CanvasModel.saveDebounce`'s cost.
@@ -1036,47 +1021,47 @@ final class WorkbenchModel: ObservableObject {
             }
             .store(in: &commands)
     }
+}
 
-    private func handle(_ command: HelmCommand) {
-        switch command {
-        case .newTerminal: newTerminal()
-        case .newNote: newNote()
-        case let .openBrowser(link): offerBrowser(opening: link)
-        case let .selectTerminal(index): selectTab(index)
-        case .openArtifact: isBrowserOpen.toggle()
-        case let .adjustFontSize(step): focusedTerminal?.adjustFontSize(step)
-        case let .jumpToPrompt(offset):
-            guard terminals.anyTerminalHasFocus else { return }
-            focusedTerminal?.jumpToPrompt(by: offset)
-        case .splitRight: splitRight()
-        case .splitDown: splitDown()
-        case .closePane: closeFocusedPane()
-        case let .moveFocus(direction): moveFocus(direction)
-        case let .movePane(direction): movePane(direction)
-        case let .openCanvasFile(url): open(.file(url))
+// MARK: - The door
 
-        // Scoped to the workspace whose terminal asked. A push comes from OUTPUT, so it
-        // can arrive from a session the operator parked long ago — and this model is the
-        // active workspace's, whichever that now is. A parked workspace's push goes onto its
-        // own stored bench (#349).
-        case let .pushCanvasFile(request):
-            guard
-                let pane = offer(.file(request.artifact), onBenchOf: request.workspacePath)
-            else { return }
-            // **Recorded whether the pane is new or already open, and the second case is the
-            // common one** — an agent re-offering the file it just rewrote gets `.existing`, and
-            // the newest pusher is the one who wants to hear about a mark on it.
-            //
-            // **For a parked bench too.** `origins` is keyed by pane id and survives a switch, and
-            // `deliver` resolves the origin against every workspace's sessions, so a mark made
-            // after the operator switches in reaches the agent that pushed.
-            origins[pane] = PushedBy(origin: request.origin, workspacePath: request.workspacePath)
+extension WorkbenchModel: VerbSink {
+    /// Every change to this bench, from anyone. See `VerbSink`.
+    @discardableResult
+    func send(_ verb: BenchVerb, by actor: BenchActor, asked: Bool) -> Pane.ID? {
+        sink.send(verb, by: actor, asked: asked)
+    }
 
-        // Belongs to other verticals: the workspace bar, the Archon rail and `RootView`.
-        // Listed rather than defaulted silently, so adding a command forces a decision here
-        // instead of producing a no-op.
-        case .openWorkspace, .toggleRail, .selectWorkspace, .cycleWorkspace:
-            break
-        }
+    /// An agent's `push.sh` (#125): the canvas is offered as a `pane/open` from that agent, and
+    /// the terminal it came from is remembered so a mark the operator later makes on the canvas
+    /// can be mailed back to it (#205).
+    ///
+    /// **Recorded whether the pane is new or already open, and the second case is the common
+    /// one** — an agent re-offering the file it just rewrote gets the pane that was there, and
+    /// the newest pusher is the one who wants to hear about a mark on it. For a parked bench too:
+    /// `origins` is keyed by pane id and survives a switch, and `deliver` resolves the origin
+    /// against every workspace's sessions.
+    ///
+    /// The origin is kept here rather than read back off the verb's actor: benchd records who
+    /// asked and no rule reads it, and which agent a mark goes to is helm's concern.
+    @discardableResult
+    func push(_ artifact: URL, from origin: CanvasOrigin, in workspace: WorkspacePath) -> Pane.ID? {
+        guard
+            let pane = send(
+                .paneOpen(workspace: workspace.value, surface: .canvas(path: artifact.path)),
+                by: .agent(pane: origin.terminal.uuidString))
+        else { return nil }
+        origins[pane] = PushedBy(origin: origin, workspacePath: workspace)
+        return pane
+    }
+
+    /// A ⌘-clicked http address (#376): the browser pane is opened as the operator's `pane/open`,
+    /// and the address becomes a new tab of the shared browser it shows. Neither takes the
+    /// keyboard from the terminal clicked in.
+    func openLink(_ link: URL) {
+        guard let id = send(.paneOpen(surface: .browser), by: .operatorGesture),
+            let pane = bench?.pane(id)
+        else { return }
+        browser(for: pane).open(link)
     }
 }

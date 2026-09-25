@@ -23,7 +23,6 @@ pub enum Refusal {
     /// A resize names two members a divider does not sit between.
     NotADivider,
     NotATerminal(PaneId),
-    NotACanvas(PaneId),
     NothingShelved(StandardPath),
     DocumentNotEmpty {
         workspaces: usize,
@@ -56,7 +55,6 @@ impl fmt::Display for Refusal {
                 "those two are not either side of one divider — a resize trades between adjacent members only"
             ),
             Refusal::NotATerminal(id) => write!(f, "pane {id} is not a terminal"),
-            Refusal::NotACanvas(id) => write!(f, "pane {id} is not a canvas"),
             Refusal::NothingShelved(path) => write!(f, "workspace {path} has no shelved bench"),
             Refusal::DocumentNotEmpty { workspaces } => write!(
                 f,

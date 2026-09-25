@@ -67,12 +67,14 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
                 SpoolRefusal(
                     "helm could not make \(workspace.path.value) the active workspace"))
         }
-        guard let session = workbench.spawnTerminal() else {
+        guard let pane = workbench.send(.paneOpen(surface: .terminal(agent: nil)), by: .agent())
+        else {
             return .failure(
                 SpoolRefusal("helm could not open a terminal in \(workspace.path.value)"))
         }
-        workbench.name(session.id, to: named)
-        return .success(session.id)
+        // helm's own label for what it just started (`PaneName.derived`), so it is helm acting.
+        workbench.send(.paneName(pane, named), by: .helm)
+        return .success(pane)
     }
 
     func foregroundPid(of terminal: UUID) -> pid_t? {

@@ -659,14 +659,16 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     ///
     /// Everything else the allowlist admits — a PDF, an image, `mailto:` — keeps its
     /// old route to the system, which still owns the apps that handle them.
-    /// `TerminalLinkRoute` makes that three-way choice; this method only posts it.
+    /// `TerminalLinkRoute` makes that three-way choice; this method only sends it, as the
+    /// operator's own `pane/open`.
     func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
         guard let validated = TerminalURLPolicy.validated(url) else { return }
         switch TerminalLinkRoute.route(validated) {
         case .canvasFile:
-            HelmCommand.openCanvasFile(validated).post()
+            manager?.bench?.send(
+                .paneOpen(surface: .canvas(path: validated.path)), by: .operatorGesture)
         case .browser:
-            HelmCommand.openBrowser(validated).post()
+            manager?.bench?.openLink(validated)
         case .system:
             NSWorkspace.shared.open(validated)
         }
@@ -701,13 +703,11 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     func terminalDidRequestDesktopNotification(title: String, body: String) {
         switch CanvasPush.classify(title: title, body: body) {
         case let .open(url):
-            HelmCommand.pushCanvasFile(
-                CanvasPushRequest(
-                    artifact: url, workspacePath: workspacePath,
-                    // This session is the agent that asked, and this is the only place that is
-                    // known — see `CanvasPushRequest.origin`.
-                    origin: CanvasOrigin(terminal: id))
-            ).post()
+            // Onto the bench of *this* session's workspace, which may be parked: a push comes
+            // from output, so it can arrive hours after the operator left (#349). And from
+            // *this* terminal, which is the one moment the pushing agent's pane is known —
+            // one hop later there is a canvas and nothing saying where it came from (#205).
+            manager?.bench?.push(url, from: CanvasOrigin(terminal: id), in: workspacePath)
             return
         case let .refused(why):
             // Ungated on purpose. The gate below suppresses *ambient* notifications while

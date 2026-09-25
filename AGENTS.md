@@ -664,8 +664,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `name.name`, **read back off the bench** rather than echoed. Exit codes are 2 no answer,
     3 refused, 4 helm could not act, 6 abandoned.
 - **To drive the bench in between, `swift tools/helm-command.swift <command>`** — the fourth
-  spool kind (#269), needing what the other three need: nothing. helm has eighteen typed
-  commands (`HelmCommand`, #219, #287, #289 and #350) and **will take five of them from an
+  spool kind (#269), needing what the other three need: nothing. `HelmCommandName` names
+  eighteen commands (#219, #287, #289 and #350) and helm **will take five of them from an
   agent**: `newTerminal`, `splitRight`, `splitDown`, `toggleRail`, `openBrowser`. `--list` names
   them without a running helm.
   - **The rule is one sentence: rearranging the bench is fine, taking focus is not.** It is
@@ -685,14 +685,15 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     policy to check. An addressed version would carry a pane and refuse it when
     `SpoolPaneState.holdsKeyboard` — the shape is `CloseRequest`'s, and for `movePane` it is
     still not built.
-  - **An allowed command routes to helm's own non-seizing twin**, which is a distinction helm
-    has drawn since #125 and named both halves of: `Workbench.insert` is the operator asking,
-    `Workbench.offer` is an agent offering. `newTerminal` → `WorkbenchModel.spawnTerminal()`
-    (which predates this and is what a spawn already uses); the splits →
-    `offerSplitRight()`/`offerSplitDown()`. The honest cost, recorded: an agent's split still
-    **halves the column the operator is in**, because a bench command carries no address — a
-    layout change around them, not a focus change to them, exactly as a pushed artifact already
-    rebalances columns.
+  - **An allowed command becomes a bench verb sent as an agent** (`WorkbenchSpoolCommander`):
+    `newTerminal` → `pane/open` of a terminal, the splits → `pane/split`, `openBrowser` →
+    `pane/open` of the browser; `toggleRail` touches no pane and calls the rail. The verb's focus
+    rule is what keeps it from seizing — the keyboard moves only for the operator, or when the
+    caller says he asked — which is the line `Workbench.insert` (the operator asking) and
+    `Workbench.offer` (an agent offering) have differed by since #125. The honest cost,
+    recorded: an agent's split still **halves the column the operator is in**, because a bench
+    command carries no address — a layout change around them, not a focus change to them,
+    exactly as a pushed artifact already rebalances columns.
   - **The result says what happened**, so no caller has to re-read `snapshot.json` and race it:
     `command.paneCreated` (also copied to `terminalId`, so `helm-close <terminalId>` is the next
     move with no lookup), `command.focusedPaneBefore`/`After` — **equal, which is the focus rule
@@ -935,6 +936,7 @@ test is simple: two people building two features should not have to edit the sam
 **The slices, largest first, so a stranger knows where to look**: `Canvas/` (6.1k lines) is the
 document surface; `Workbench/` (3.8k) is columns, slots, panes and the offer/insert distinction;
 `Surfaces/` is `SurfaceKind` and the one registry every pane kind's live object is kept in;
+`Keymap/` is the key table and its readers (below);
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
 libghostty seam — sessions, the host view, the pane environment, and `push.sh`'s landing site;
 then `Spool/`, `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
@@ -960,6 +962,16 @@ above and are the easiest to be surprised by:
   accumulate. The **drawable** board is
   `.claude/skills/helm-board/`, a kind of canvas an agent authors and the operator draws on; no
   Swift in `Board/` knows it exists. `CONTEXT.md` now defines both senses.
+
+**Every change to the bench is a `BenchVerb` sent through one door** (#354).
+`WorkbenchModel.send(_:by:asked:)` is the `VerbSink` every caller uses — a key, a click, a
+drag, a ⌘-clicked link, `push.sh`, the spool — and it says who asked, which is what decides
+focus. Keys are rows of one table, `KeyBindings.all` (`Sources/Helm/Keymap/`), read by the key
+monitor, the menu and the status bar's hints; a row's action is data, a `VerbTemplate` resolved
+against the bench when the key fires or a `LocalAction` that never reaches the document.
+`LocalActions` in `App/` carries both out. There is no NotificationCenter command bus: do not
+add one, and do not call `WorkbenchModel`'s mutation methods from a new caller — send the verb,
+so the sink that replaces the local one (benchd's, #354's PR 3c) sees it too.
 
 **Put a command handler where its lifetime is right, not where it looks tidy.** A subscription
 that has to work while its view is closed belongs on the model, which outlives the

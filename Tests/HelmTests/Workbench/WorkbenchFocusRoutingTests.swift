@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import GhosttyTerminal
+import HelmWire
 import SwiftUI
 import XCTest
 
@@ -58,7 +59,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
 
         try bench.clickPane(inSlot: second)
         Eventually.holds { bench.workbench.bench?.focusedSlot == second }
-        bench.command(.splitDown)
+        bench.command(.split(.down))
 
         Eventually.holds { bench.workbench.bench?.columns.first?.slots.count == 3 }
         let order = try XCTUnwrap(bench.workbench.bench?.columns.first?.slots.map(\.id))
@@ -167,49 +168,46 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     // MARK: - The menu's route
 
     /// View ▸ Focus Left/Right/Up/Down were silent no-ops: the menu posted `payload`, which was
-    /// nil on every row that carried a direction in the separate `direction` field (#152).
-    ///
-    /// **Two of that test's three assertions no longer have anything to assert about.** A row
-    /// cannot carry a payload and a direction that disagree, because there is one field; and a
-    /// direction cannot arrive as something the subscriber drops, because it arrives as a
-    /// `Workbench.Direction` rather than as a `String` the far side re-parses. That is the
-    /// refactor's point, not a gap in coverage — what is left is the part that is still a
-    /// question: does each row carry the direction its menu title claims, and does posting
-    /// deliver exactly that.
-    func testEveryFocusRowPostsItsDirectionThroughTheOneSeam() throws {
-        let rows = Shortcut.all.filter { if case .moveFocus = $0.command { true } else { false } }
+    /// nil on every row that carried a direction in a separate `direction` field (#152). The
+    /// channel that let the menu and the keymap assemble a command differently is gone — both
+    /// hand the row's own action to `Actions` — so what is left to ask is whether each row
+    /// carries the direction its menu title claims.
+    func testEveryFocusRowCarriesTheDirectionItsMenuNames() throws {
+        let rows = KeyBindings.all.compactMap { row -> (KeyBinding, BenchDirection)? in
+            guard case let .verb(.stepFocus(direction)) = row.action else { return nil }
+            return (row, direction)
+        }
         XCTAssertEqual(rows.count, 4, "the four ⌘⌥arrow rows are the ones carrying a direction")
 
-        for row in rows {
-            XCTAssertNotNil(row.menu, "a focus row that is not in the menu cannot be clicked")
-
-            var delivered: [HelmCommand] = []
-            let token = HelmCommand.publisher.sink { delivered.append($0) }
-            defer { token.cancel() }
-
-            row.post()
-
-            XCTAssertEqual(
-                delivered, [row.command],
-                "\(row.menu!.title) posted \(delivered) — the row and the channel disagree")
+        for (row, direction) in rows {
+            let menu = try XCTUnwrap(
+                row.menu, "a focus row that is not in the menu cannot be clicked")
+            XCTAssertEqual(menu.title, "Focus \(direction.rawValue.capitalized)")
         }
     }
 
-    /// The end of it: the menu's route moves focus on a real bench, which is the acceptance
-    /// criterion no unit test on the table alone can reach.
+    /// The end of it: the menu's route — the row's action, handed to the performer `RootView`
+    /// composes — moves focus on a real bench, which no unit test on the table alone can reach.
     func testTheMenusFocusRowMovesFocusOnARealBench() throws {
         let bench = Bench(terminals: 2)
         defer { bench.close() }
+        let defaults = try isolatedDefaults("focus-menu-route")
+        let actions = LocalActions(
+            workbench: bench.workbench, workspaces: WorkspaceModel(defaults: defaults),
+            rail: ArchonRailModel(client: FakeArchonClient(), defaults: defaults),
+            terminals: bench.terminals)
+        Actions.performer = actions
+        defer { Actions.performer = nil }
 
         let before = try XCTUnwrap(bench.workbench.bench?.focusedSlot)
-        let row = try XCTUnwrap(Shortcut.all.first { $0.command == .moveFocus(.down) })
+        let row = try XCTUnwrap(
+            KeyBindings.all.first { $0.action == .verb(.stepFocus(.down)) && $0.menu != nil })
 
-        row.post()
-        Eventually.holds { bench.workbench.bench?.focusedSlot != before }
+        Actions.perform(row.action)
 
         XCTAssertNotEqual(
             bench.workbench.bench?.focusedSlot, before,
-            "View ▸ Focus Down did nothing — the menu is posting something the subscriber drops")
+            "View ▸ Focus Down did nothing — the menu's action never reached the bench")
     }
 }
 
@@ -350,8 +348,11 @@ private final class Bench {
         return code
     }
 
-    func command(_ command: HelmCommand) {
-        command.post()
+    /// A key table gesture, resolved against the bench and sent as the operator, as a key does.
+    func command(_ gesture: VerbTemplate) {
+        if let verb = gesture.resolve(bench: workbench.bench, workspaces: [], active: nil) {
+            workbench.send(verb, by: .operatorGesture)
+        }
         settle()
     }
 
