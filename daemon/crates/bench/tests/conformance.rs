@@ -1688,4 +1688,27 @@ fn the_bench_browser_skills_snippets_execute_against_a_real_daemon() {
         status["cdp"].as_str().unwrap(),
         "the snippet prints the endpoint playwright-cli attach takes"
     );
+
+    // A refusal must reach the caller as bench's own exit code, not as an empty endpoint
+    // piped onward — an agent that sees exit 0 and "" attaches to nothing.
+    let _ = bench(&home.dir, &["browser", "stop"]);
+    write_browser_config(
+        &home.dir,
+        serde_json::json!({ "binary": "/no/such/chrome" }),
+    );
+    let refused = Command::new("bash")
+        .args(["-c", &snippets[0]])
+        .env_remove("BENCH_SUITE")
+        .env("HOME", &home.dir)
+        .env("BENCH_DIR", home.dir.join(".bench"))
+        .env("BENCH", bench_bin())
+        .output()
+        .expect("run snippet");
+    assert_eq!(
+        refused.status.code(),
+        Some(3),
+        "the refusal's exit code survives the snippet: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(String::from_utf8_lossy(&refused.stdout).trim().is_empty());
 }

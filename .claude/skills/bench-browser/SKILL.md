@@ -14,12 +14,15 @@ and he can't see it.
 
 ```bash
 BENCH="${BENCH:-bench}"
-CDP=$("$BENCH" browser start | python3 -c 'import json,sys; print(json.load(sys.stdin)["cdp"])')
+OUT=$("$BENCH" browser start) || exit
+CDP=$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["cdp"])')
 echo "$CDP"
 ```
 
 `browser start` starts the browser, or finds it running, and prints its endpoint. `cdp` is what
-Playwright takes. Exit codes: `0` ok · `2` no daemon · `3` refused (the reason names the fix) · `4`
+Playwright takes. The `|| exit` keeps bench's exit code and its reason (on stderr), rather than
+handing Playwright an empty endpoint. Always go through `browser start`. Don't read
+`browser/endpoint.json` yourself, because only `start` refuses the operator's setup window. Exit codes: `0` ok · `2` no daemon · `3` refused (the reason names the fix) · `4`
 the browser did not come up.
 
 It refuses while the operator has the browser open in a window for setup (installing
@@ -60,5 +63,6 @@ swift <helm checkout>/tools/helm-command.swift openBrowser
   run `browser start` again rather than reusing an old `$CDP`.
 - It is real Google Chrome where installed (else Chrome for Testing), headless, with a normal
   Chrome user agent, so sites that refuse headless browsers accept it.
-- A login that needs his password or 2FA is his to do. Ask him to sign in through the pane,
-  then continue in the same session.
+- A login that needs his password or 2FA is his to do. He signs in through the pane, or through
+  `bench browser setup` when it needs browser UI the pane can't show (an extension, a passkey
+  prompt). Then continue in the same session.

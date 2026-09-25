@@ -1133,12 +1133,13 @@ GitHub issues on `Wirasm/helm`, via `gh`. See `docs/agents/issue-tracker.md`.
 Single-context; vocabulary is canonical in `CONTEXT.md`, with `../GLOSSARY.md` for the
 cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
-### The five helm-local skills
+### The helm-local skills
 
-`.claude/skills/` holds twelve; **seven are vendored** from `mattpocock/skills` and pinned in
+`.claude/skills/` holds fourteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
-not a change. The other five are hand-written, helm-local, and are the surface an agent hosted in
-helm actually uses. Four gates cover the five, all listed in *Working here* above — the two mail
+not a change. The other seven are hand-written: the five below are helm's, and the surface an agent
+hosted in helm actually uses; `bench-mail` and `bench-browser` are benchd's, and their snippets run
+in the daemon gate's conformance suite. Four gates cover the five, all listed in *Working here* above — the two mail
 skills share one, because the send and the mailbox listing are documented identically in each.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
@@ -1150,6 +1151,8 @@ skills share one, because the send and the mailbox listing are documented identi
   covers both, and it **executes the snippets out of `SKILL.md`** rather than restating them.
 - **`pi-extensions`** — how to build one without taking the pi CLI down, how to read the installed
   pi rather than guess at its API, and how to test one without spending a model call.
+- **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
+  start`, drive it with `playwright-cli attach`, and put it in front of him with `openBrowser`.
 
 ### The two helm-local subagents
 
