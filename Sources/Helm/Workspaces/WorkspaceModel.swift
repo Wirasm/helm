@@ -16,17 +16,25 @@ final class WorkspaceModel: ObservableObject, ParkedBenches {
     /// change `helmWorkspaceContexts`'s shape and strand a context saved before this type
     /// existed.
     @Published private(set) var contexts: [String: WorkspaceContext]
+    /// Each workspace's current git branch, for its tab label. Never persisted: see
+    /// `refreshBranch(for:)`.
+    @Published private(set) var branches: [WorkspacePath: String] = [:]
 
     /// The selected workspace's path, for anything that needs a root without needing the
     /// workspace itself.
     var selectedWorkspaceRoot: WorkspacePath? { selectedWorkspace?.path }
 
     private let defaults: UserDefaults
+    private let readBranch: @Sendable (WorkspacePath) async -> String?
     private var terminalChanges: AnyCancellable?
     private var workbenchChanges: AnyCancellable?
 
-    init(defaults: UserDefaults = DefaultsDomain.store) {
+    init(
+        defaults: UserDefaults = DefaultsDomain.store,
+        readBranch: @escaping @Sendable (WorkspacePath) async -> String? = currentBranch(in:)
+    ) {
         self.defaults = defaults
+        self.readBranch = readBranch
         workspaces = WorkspacePersistence.load(from: defaults)
         contexts = WorkspaceContextStore.load(from: defaults)
         selectedWorkspace = WorkspacePersistence.loadSelection(
@@ -49,6 +57,7 @@ final class WorkspaceModel: ObservableObject, ParkedBenches {
         WorkspacePersistence.save(workspaces, to: defaults)
         contexts[workspace.path.value] = nil
         WorkspaceContextStore.save(contexts, to: defaults)
+        branches[workspace.path] = nil
         if selectedWorkspace == workspace { select(nil) }
     }
 
@@ -156,15 +165,37 @@ final class WorkspaceModel: ObservableObject, ParkedBenches {
         return pane
     }
 
-    /// Remember a workspace's git branch for its tab label.
+    /// Ask git which branch a workspace is on now, for its tab label.
     ///
-    /// `branchResolved` is set whether or not a branch was found, so a folder that is not a
-    /// repository is asked once rather than on every render. Absence is a resolved answer.
-    func cacheBranch(_ branch: String?, for workspace: Workspace) {
-        var context = contexts[workspace.path.value] ?? WorkspaceContext()
-        context.branch = branch
-        context.branchResolved = true
-        contexts[workspace.path.value] = context
-        WorkspaceContextStore.save(contexts, to: defaults)
+    /// Asked every time, never remembered: before #379 the answer was persisted with a
+    /// `branchResolved` flag that stopped every later ask, so a tab showed the branch its folder
+    /// had the first time it was opened, across relaunches, forever. A nil answer clears the label,
+    /// because a folder that stopped being a repository, or a detached HEAD, has no branch to show.
+    func refreshBranch(for workspace: Workspace) async {
+        let branch = await readBranch(workspace.path)
+        branches[workspace.path] = branch
+    }
+}
+
+extension WorkspaceModel {
+    /// `git branch --show-current`, off the main actor. Nil when git fails or prints nothing:
+    /// not a repository, or a detached HEAD.
+    nonisolated static func currentBranch(in path: WorkspacePath) async -> String? {
+        await Task.detached { () -> String? in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["git", "-C", path.value, "branch", "--show-current"]
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            process.standardInput = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return nil }
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let value = String(decoding: data, as: UTF8.self).trimmingCharacters(
+                in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }.value
     }
 }
