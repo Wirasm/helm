@@ -21,6 +21,10 @@ knows nor needs the Rust toolchain, in either direction.
   `benchd` and `bench` could disagree about a value, its rule belongs here.
 - `crates/bench-mail` — the mailroom: delivery, retirement, listings; no sessions, no
   sockets, no wakes — the reactor in `benchd` owns those.
+- `crates/bench-doc` — the bench document: workspaces → columns → slots → panes, typed
+  surfaces, placement as data, and the focus rule. Pure — no IO, no sockets. Ported from helm's
+  `Workbench`; its Swift tests are mirrored in `crates/bench-doc/tests/` under their own names,
+  and `fixtures/bench-document.json` is the sample both the Rust and Swift gates read.
 - `crates/bench-session` — the pty core: agent allowlist, postures/model/effort/resume
   argv (one spelling, unit-tested), the ring, the attach relay, drain-then-die close.
 - `crates/bench-browser` — the shared browser: find, configure and launch one Chromium
