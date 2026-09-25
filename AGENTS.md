@@ -177,7 +177,8 @@ bash daemon/test.sh
 
 `daemon/` is the bench daemon (`benchd`) — a self-contained Rust cargo workspace, the
 same carve-out as `pi/` and `hooks/`: its gate needs only the Rust toolchain, its CI job
-triggers only on `daemon/**`, and the Swift gate never learns about it. Read
+runs only when `daemon/**` or a `.claude/skills/bench-*` skill changed (the gate executes those
+skills' snippets), and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
 `docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
 M0 (skeleton), M5a (daemon-owned ptys) and mail are the parts that exist.
@@ -1137,9 +1138,9 @@ cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
 `.claude/skills/` holds fourteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
-not a change. The other seven are hand-written: the five below are helm's, and the surface an agent
-hosted in helm actually uses; `bench-mail` and `bench-browser` are benchd's, and their snippets run
-in the daemon gate's conformance suite. Four gates cover the five, all listed in *Working here* above — the two mail
+not a change. The other seven are hand-written. The first five below are helm's, the surface an agent
+hosted in helm actually uses. The last two, `bench-mail` and `bench-browser`, are benchd's, and their
+snippets run in the daemon gate's conformance suite. Four gates cover the five, all listed in *Working here* above — the two mail
 skills share one, because the send and the mailbox listing are documented identically in each.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
@@ -1151,6 +1152,7 @@ skills share one, because the send and the mailbox listing are documented identi
   covers both, and it **executes the snippets out of `SKILL.md`** rather than restating them.
 - **`pi-extensions`** — how to build one without taking the pi CLI down, how to read the installed
   pi rather than guess at its API, and how to test one without spending a model call.
+- **`bench-mail`** — sending and reading mail through benchd's mailroom.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
   start`, drive it with `playwright-cli attach`, and put it in front of him with `openBrowser`.
 
