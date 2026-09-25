@@ -21,10 +21,13 @@
 //! - **The reader never stops draining the master** — an undrained pty blocks the agent
 //!   on write (pty spike).
 
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+mod pty;
+
 use std::collections::VecDeque;
+use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -309,12 +312,12 @@ pub struct Session {
     pub spec: SpawnSpec,
     pub agent: AgentKind,
     pub cwd: String,
-    pub pid: Option<u32>,
+    pub pid: u32,
     pub runtime_session: Option<String>,
     pub spawned_at: Instant,
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
-    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    /// The pty master: input and resize go through it; the drain thread reads a dup.
+    master: Mutex<File>,
+    child: Arc<Mutex<Child>>,
     ring: Arc<Mutex<Ring>>,
     /// dtach-grade: at most one attached client. A new attach REPLACES the old one —
     /// reconnect-after-drop is the common case, and "already attached" refusals would
@@ -340,44 +343,17 @@ impl Session {
         notices: Sender<Notice>,
     ) -> Result<Arc<Session>, String> {
         let (program, args) = argv(spec)?;
-        let pty = native_pty_system();
-        let pair = pty
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| format!("openpty: {e}"))?;
-        let mut cmd = CommandBuilder::new(&program);
-        for a in &args {
-            cmd.arg(a);
-        }
-        cmd.cwd(&spec.cwd);
-        cmd.env("TERM", "xterm-256color");
-        // The session learns its own address and root — what lets an agent inside run
-        // `bench mail send` with no flags and land in the right mailroom (the same
-        // declare-don't-derive rule as helm's PaneEnvironment).
-        for (k, v) in extra_env {
-            cmd.env(k, v);
-        }
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| format!("spawn {program}: {e}"))?;
-        drop(pair.slave);
-
-        let mut reader = pair
-            .master
-            .try_clone_reader()
+        // `extra_env` is how the session learns its own address and root — what lets an
+        // agent inside run `bench mail send` with no flags and land in the right mailroom
+        // (the same declare-don't-derive rule as helm's PaneEnvironment).
+        let (master, child) = pty::spawn(&program, &args, &spec.cwd, extra_env, rows, cols)
+            .map_err(|e| format!("spawn {program} in {}: {e}", spec.cwd))?;
+        let mut reader = master
+            .try_clone()
             .map_err(|e| format!("clone reader: {e}"))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| format!("take writer: {e}"))?;
 
         let session = Arc::new(Session {
-            pid: child.process_id(),
+            pid: child.id(),
             handle,
             spec: spec.clone(),
             id: id.clone(),
@@ -385,8 +361,7 @@ impl Session {
             cwd: spec.cwd.clone(),
             runtime_session: spec.runtime_session.clone(),
             spawned_at: Instant::now(),
-            master: Mutex::new(pair.master),
-            writer: Mutex::new(writer),
+            master: Mutex::new(master),
             child: Arc::new(Mutex::new(child)),
             ring: Arc::new(Mutex::new(Ring {
                 bytes: VecDeque::with_capacity(8192),
@@ -410,6 +385,7 @@ impl Session {
                 let mut chunk = [0u8; 8192];
                 loop {
                     match reader.read(&mut chunk) {
+                        // EIO once the child's side has closed is the pty's EOF.
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
                             ring.lock().unwrap().push(&chunk[..n]);
@@ -429,8 +405,8 @@ impl Session {
                 // Reap at the moment of exit (PR #341 review, R2): EOF on the master
                 // means the child is gone or going; wait() here ends its lifetime with
                 // its bytes, so no session leaves a zombie for `close` to find — and
-                // `resume`'s removal of the old session needs no second job. close()'s
-                // own wait after this is an ignored ECHILD, never a hang.
+                // `resume`'s removal of the old session needs no second job. close() after
+                // this finds the status already collected and signals nothing.
                 let _ = child.lock().unwrap().wait();
                 exited.store(true, Ordering::SeqCst);
                 let _ = notices.send(Notice::Exited {
@@ -462,20 +438,20 @@ impl Session {
 
     /// Paste, then submit separately — the launch-line rule, spelled once.
     pub fn deliver_line(&self, line: &str) -> Result<(), String> {
-        let mut w = self.writer.lock().unwrap();
+        let mut w = self.master.lock().unwrap();
         w.write_all(line.as_bytes())
             .map_err(|e| format!("paste: {e}"))?;
         w.flush().ok();
         drop(w);
         std::thread::sleep(Duration::from_millis(300));
-        let mut w = self.writer.lock().unwrap();
+        let mut w = self.master.lock().unwrap();
         w.write_all(b"\r").map_err(|e| format!("submit: {e}"))?;
         w.flush().ok();
         Ok(())
     }
 
     pub fn write_input(&self, bytes: &[u8]) -> Result<(), String> {
-        let mut w = self.writer.lock().unwrap();
+        let mut w = self.master.lock().unwrap();
         w.write_all(bytes).map_err(|e| format!("input: {e}"))?;
         w.flush().ok();
         Ok(())
@@ -523,12 +499,7 @@ impl Session {
     pub fn attach(&self, stream: UnixStream, rows: u16, cols: u16) -> Result<u64, String> {
         if rows > 0 && cols > 0 {
             let master = self.master.lock().unwrap();
-            let _ = master.resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
+            let _ = pty::resize(&master, rows, cols);
         }
         let replay: Vec<u8> = {
             let ring = self.ring.lock().unwrap();
@@ -570,7 +541,7 @@ impl Session {
     }
 
     /// Drain-then-die (session-state spike): a grace for the runtime to flush its
-    /// transcript, a term, another grace, then the kill. Returns whether it was still
+    /// transcript, a hangup, another grace, then the kill. Returns whether it was still
     /// live when asked.
     pub fn close(&self, grace: Duration) -> bool {
         let was_live = self.is_live();
@@ -578,9 +549,7 @@ impl Session {
             std::thread::sleep(grace);
         }
         self.detach();
-        let mut child = self.child.lock().unwrap();
-        let _ = child.kill();
-        let _ = child.wait();
+        pty::hang_up_then_kill(&mut self.child.lock().unwrap());
         was_live
     }
 }
