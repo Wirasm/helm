@@ -220,7 +220,8 @@ final class CanvasAnchorTests: XCTestCase {
 
         for page in [tap, arrow, loop, selection] {
             let annotation = try XCTUnwrap(
-                CanvasAnnotation.decode(try XCTUnwrap(page.lastPosted), comment: "a comment"))
+                CanvasAnnotation.decode(
+                    posted: try XCTUnwrap(page.lastPosted), comment: "a comment"))
             let entry = CanvasNotes.entry(annotation, at: Date())
             XCTAssertFalse(
                 entry.contains("`#"), "a block helm cannot name must not be printed as one")
@@ -277,7 +278,7 @@ final class CanvasAnchorTests: XCTestCase {
 
     private func mark(_ page: CanvasScriptRuntime) throws -> CanvasAnnotation.Mark {
         try XCTUnwrap(
-            CanvasAnnotation.decode(try XCTUnwrap(page.lastPosted), comment: "a comment"),
+            CanvasAnnotation.decode(posted: try XCTUnwrap(page.lastPosted), comment: "a comment"),
             "the page posted a payload the real decoder refuses"
         ).mark
     }
