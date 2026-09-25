@@ -125,7 +125,7 @@ Research (2026-09-25, primary sources):
   preview). Embedded libghostty always owns its own pty today. Upstream PR #14277 adds a non-pty
   backend (tmux panes as native surfaces) and was unmerged as of 2026-09-20. **libghostty-vt**
   (Ghostty's VT engine, headless, C API) exists, with community Rust bindings (`libghostty-vt`
-  0.2.1); it is pre-1.0 and its handles are not thread-safe (one per task).
+  0.2.1).
 - **kitty** remote control (`get-text`, `send-text`, `ls`) is snapshot-only, and kitty is not
   embeddable. Streaming a pane to other readers is **zellij's** feature: `zellij action
   subscribe` streams pane content as JSON, and its web client is multiplayer.
@@ -138,18 +138,34 @@ Research (2026-09-25, primary sources):
   visible step down from Ghostty. A custom Metal painter is months of work. Feeding libghostty's
   renderer from outside has no upstream path yet.
 
+**Checked 2026-09-25 (versions and roadmaps; detail in #359):**
+
+- **libghostty-vt is pre-1.0 at both layers**, Ghostty's C API and the Rust bindings. Its
+  `Terminal` is **never `Send`**: upstream closed that as won't-fix because the C API makes
+  no cross-thread guarantee. So each session's VT state lives on one pinned OS thread for its
+  lifetime. Plan for a vendored pin, not tracking crates.io.
+- **`alacritty_terminal`** (0.26.0) stays the fallback. Nearly every minor release breaks
+  something, so each bump is a small migration.
+- **Replace `portable-pty`.** Nothing has been published in 19 months, and its reason to
+  exist, Windows ConPTY, is dead weight here. Use `rustix` `openpty` with our own spawn. This
+  can land before the VT spike.
+- **No upstream Ghostty backend without a pty yet.** Ghostty 1.4 targets scripting and a true
+  tmux control mode; #14277 is tmux-specific. Keep the relay. helm's vendored Ghostty 1.3.1 is
+  still the latest tag.
+
 Decision:
 
-- **benchd holds the truth**: `portable-pty` (already in `bench-session`), the raw byte log it
-  already keeps, and **a VT engine per session** for structured reads: `bench get screen`,
+- **benchd holds the truth**: its own ptys (`rustix` `openpty` plus our own spawn, replacing
+  the `portable-pty` in `bench-session` today), the raw byte log it already keeps, and **a VT
+  engine per session**, each on its own pinned thread, for structured reads: `bench get screen`,
   `bench send`, `bench watch --screen` (a zellij-style subscribe). A short spike under real
   agent output picks the engine. `libghostty-vt` is preferred because it is the same engine as
   helm's renderer, so what an agent reads is what the operator sees; `alacritty_terminal` is the
   fallback if the bindings are too raw.
 - **helm keeps Ghostty's renderer**, fed from benchd by running the attach relay inside a
   Ghostty surface. That already works (M5a, `bench attach`). The operator keeps full Ghostty
-  quality, and one byte stream feeds both parsers. If upstream ships a non-pty backend
-  (#14277's direction), the inner relay pty goes away and nothing else changes.
+  quality, and one byte stream feeds both parsers. If upstream ever ships a non-pty backend
+  (none is on its roadmap as of 1.4), the inner relay pty goes away and nothing else changes.
 - **No custom painter.** M5b becomes: every helm terminal pane is a benchd session shown through
   the relay; restore-on-restart is benchd's; `bench get/send/watch` works on any pane.
 - **Not adopted**: zellij, tmux or WezTerm as the session server. Each would take ownership of

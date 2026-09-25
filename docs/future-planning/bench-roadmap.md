@@ -168,30 +168,34 @@ against the real CLI.
 > mail in benchd (#342, the core of M2). **In flight:** the shared browser (#350).
 > **Next, in this order:**
 >
-> 1. **M4** — the bench document, the verb seam and the surface model move to benchd.
+> Tracking issue: **#362**; each step below has its own.
+>
+> 1. **M4** (#354) — the bench document, the verb seam and the surface model move to benchd.
 >    The foundation: helm becomes a client of one document, and every later verb is
 >    "mutate the document".
-> 2. **M3** — `bench` is the whole agent surface: layout verbs with `--asked`, the see
+> 2. **M3** (#355) — `bench` is the whole agent surface: layout verbs with `--asked`, the see
 >    verbs (`bench get state|pane|canvas|page|screenshot`, hidden panes included),
 >    sharing (operator → agent: a page, a selection, a canvas or a screenshot, sent as
 >    mail with a path), and one `move` verb behind key, drag and agent. The spool
 >    scripts retire.
-> 3. **Drawers, the keymap, the rules files and the `just` layer** — the Hyprland feel
+> 3. **Drawers, the keymap, the rules files and the `just` layer** (#356) — the Hyprland feel
 >    (`bench-architecture.md`). The browser moves into a drawer.
-> 4. **M1** — attention: taps, a queue drawer and a status-bar count. Mostly
+> 4. **M1** (#357) — attention: taps, a queue drawer and a status-bar count. Mostly
 >    projections of the event log by now.
-> 5. **M2 finish** — unwire helm's mail hooks and the pi watcher down to sensors.
-> 6. **M5b** — every pane is a benchd session, shown through the attach relay in a
+> 5. **M2 finish** (#358) — unwire helm's mail hooks and the pi watcher down to sensors.
+> 6. **M5b** (#359) — every pane is a benchd session, shown through the attach relay in a
 >    Ghostty surface; a VT engine in benchd (by spike: `libghostty-vt` preferred,
 >    `alacritty_terminal` the fallback) gives `get screen` / `send` / `watch`. No custom
 >    painter.
-> 7. **M6** — sync: the record root as a synced folder, show-requests as files.
-> 8. **M7** — the second machine, same entry condition as before.
+> 7. **M6** (#360) — sync: the record root as a synced folder, show-requests as files.
+> 8. **M7** (#361) — the second machine, same entry condition as before.
 >
 > The earlier order (2026-08-18: M5a → M2 mail → M1 attention) is done as far as it
 > went; attention moved later again because where it lives is now a drawer.
 
 ## M1 — Taps and the attention queue (purely additive)
+
+Issue: #357.
 
 **Goal:** the first new capability helm never had, proving daemon + socket + CLI + taps
 end to end with zero risk to existing helm.
@@ -219,6 +223,8 @@ a rate-limit message.
 **Unwire:** nothing.
 
 ## M2 — Mail authority moves to benchd
+
+M2 finish: #358.
 
 **Mail landed 2026-09-25, PR #342**: the mailroom (`bench-mail`), `bench mail
 send|list|read`, and the wake reactor — benchd pastes the notice into an idle pty it
@@ -251,6 +257,8 @@ and green against benchd.
 halves stay); the Arm-a-watch instructions in the mail skills.
 
 ## M3 — The wire front moves
+
+Issue: #355.
 
 **Goal:** `bench` CLI is the whole agent-facing surface; the six spool scripts retire.
 Runs after M4, so every verb here mutates the bench document benchd already owns.
@@ -286,6 +294,8 @@ retargeted conformance suite; an agent verb without `--asked` never moves focus.
 dance is deleted, not ported).
 
 ## M4 — The bench document moves
+
+Issue: #354.
 
 **Goal:** benchd owns workbench state; helm becomes a renderer that still hosts ptys.
 First in the running order, because every later verb is "mutate the document".
@@ -332,7 +342,8 @@ becomes a benchd projection of the event stream, same file shape for readers).
 ## M5 — Ptys move, per-pane
 
 **Rewritten 2026-09-25 to the no-painter decision** (argued in `bench-architecture.md`,
-"The terminal stack"). M5a landed; this section is M5b.
+"The terminal stack"). M5a landed; this section is M5b, issue #359, which also holds the
+2026-09-25 version check.
 
 **Goal:** every pane is a benchd session, the operator's own shells included; helm keeps
 Ghostty's renderer; agents can read, write and follow any terminal; sessions survive
@@ -341,13 +352,20 @@ helm restarting.
 - **helm shows benchd sessions through the attach relay inside a Ghostty surface.** That
   already works (M5a's `bench attach`). The operator keeps full Ghostty quality and one
   byte stream feeds both parsers. **No custom painter**: SwiftTerm is a visible step down
-  and a Metal painter is months of work. Upstream Ghostty PR #14277 adds a non-pty
-  backend but was unmerged as of 2026-09-20; if it ships, the inner relay pty goes away
-  and nothing else changes.
+  and a Metal painter is months of work. **Keep the relay**: upstream Ghostty has no
+  backend without a pty (PR #14277 is tmux-specific, and 1.4 targets scripting and tmux
+  control mode). If one ever ships, the inner relay pty goes away and nothing else
+  changes.
+- **Replace `portable-pty`** (nothing published in 19 months; its Windows support is
+  dead weight) with `rustix` `openpty` and our own spawn. Near-term, and it can land
+  before the VT spike.
 - **A VT engine per session in benchd**, chosen by a short spike under real agent output:
   `libghostty-vt` preferred (the same engine as helm's renderer, so what an agent reads
-  is what the operator sees; community Rust bindings, pre-1.0, not thread-safe per
-  handle), `alacritty_terminal` the fallback if the bindings are too raw.
+  is what the operator sees), `alacritty_terminal` the fallback. libghostty-vt is
+  pre-1.0 in both its C API and its Rust bindings, and its `Terminal` is never `Send` by
+  upstream design, so each session's VT state is pinned to one thread for its lifetime;
+  the spike must prove that model under benchd's task layout, and the crate is a vendored
+  pin rather than a tracked dependency.
 - **`bench get screen`, `bench send`, `bench watch --screen`** on any pane. zellij's
   `action subscribe` (pane content streamed as JSON) is the reference design for
   `watch`.
@@ -364,7 +382,7 @@ push path in `CanvasPush` (replaced by `bench open`). libghostty stays as the re
 
 ## M6 — Sync (still one machine)
 
-**Rewritten 2026-09-25**: cross-machine means files (invariants 5 and 6). This replaces
+Issue: #360. **Rewritten 2026-09-25**: cross-machine means files (invariants 5 and 6). This replaces
 the earlier "Reach" plan, which put the daemon socket on the tailnet.
 
 **Goal:** the record root is a folder that syncs over Tailscale, and showing something
@@ -383,6 +401,8 @@ background tab on the Mac without moving focus.
 **Unwire:** nothing.
 
 ## M7 — The forge
+
+Issue: #361.
 
 **Goal:** the agents' own machine, sharing the record with the Mac through M6's synced
 folder.
