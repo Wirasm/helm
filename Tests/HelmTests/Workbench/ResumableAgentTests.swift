@@ -33,7 +33,7 @@ final class ResumableAgentTests: XCTestCase {
         let defaults = try isolatedDefaults("resumable-agent-store")
         let pane = UUID()
         let bench = Workbench(
-            panes: [Pane(id: pane, content: .terminal(face: .terminal, agent: agent()))])
+            panes: [Pane(id: pane, content: .terminal(agent: agent()))])
 
         WorkspaceContextStore.save(
             ["/one": WorkspaceContext(workbench: bench)], to: defaults)
@@ -41,14 +41,14 @@ final class ResumableAgentTests: XCTestCase {
         let restored = try XCTUnwrap(
             WorkspaceContextStore.load(from: defaults)["/one"]?.workbench)
         XCTAssertEqual(
-            restored.pane(pane)?.content, .terminal(face: .terminal, agent: agent()),
+            restored.pane(pane)?.content, .terminal(agent: agent()),
             "the pty died with the process; the id of the conversation it held did not")
     }
 
     /// A pane with nothing recorded encodes as it always did, so a bench written by this build
     /// is still readable by one that predates it — and vice versa.
     func testAPaneWithNoAgentEncodesExactlyAsItDidBefore() throws {
-        let data = try JSONEncoder().encode(Pane.Content.terminal(face: .terminal))
+        let data = try JSONEncoder().encode(Pane.Content.terminal())
 
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -67,7 +67,7 @@ final class ResumableAgentTests: XCTestCase {
 
         let bench = try JSONDecoder().decode(Workbench.self, from: Data(blob.utf8))
 
-        XCTAssertEqual(bench.pane(pane)?.content, .terminal(face: .terminal, agent: nil))
+        XCTAssertEqual(bench.pane(pane)?.content, .terminal(agent: nil))
     }
 
     /// A malformed record costs the pane its offer, never the pane. `Slot.init(from:)` skips a
@@ -89,16 +89,17 @@ final class ResumableAgentTests: XCTestCase {
         XCTAssertTrue(bench.resumableAgents.isEmpty, "and it simply has nothing to offer")
     }
 
-    /// ⌘T rebuilds `.terminal`, and dropping the agent there would silently retire the offer
-    /// every time the operator looked at the chat face.
-    func testTogglingTheFaceKeepsTheAgent() throws {
-        let pane = UUID()
-        var bench = Workbench(
-            panes: [Pane(id: pane, content: .terminal(face: .terminal, agent: agent()))])
+    /// A `face` key left in a stored pane by hand (no build ever wrote one; the chat face left
+    /// in #375) must not cost the pane its resume offer.
+    func testAStoredChatFaceKeepsTheAgent() throws {
+        let stored = try JSONEncoder().encode(Pane.Content.terminal(agent: agent()))
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: stored) as? [String: Any])
+        object["face"] = "chat"
+        let blob = try JSONSerialization.data(withJSONObject: object)
 
-        bench.toggleFace()
-
-        XCTAssertEqual(bench.pane(pane)?.content, .terminal(face: .chat, agent: agent()))
+        XCTAssertEqual(
+            try JSONDecoder().decode(Pane.Content.self, from: blob), .terminal(agent: agent()))
     }
 
     // MARK: - The line helm composes
@@ -258,7 +259,6 @@ final class ResumableAgentTests: XCTestCase {
         XCTAssertEqual(
             observing.bench?.pane(pane)?.content,
             .terminal(
-                face: .terminal,
                 agent: ResumableAgent(command: "claude", session: "abc", cwd: "/tmp/sub")),
             "the registry's own cwd, because an agent started in a subdirectory is not "
                 + "working in the workspace root")
@@ -302,8 +302,8 @@ final class ResumableAgentTests: XCTestCase {
         let other = UUID()
         let bench = Workbench(
             panes: [
-                Pane(id: pane, content: .terminal(face: .terminal, agent: agent())),
-                Pane(id: other, content: .terminal(face: .terminal)),
+                Pane(id: pane, content: .terminal(agent: agent())),
+                Pane(id: other, content: .terminal()),
             ])
         let model = WorkbenchModel(
             terminals: terminals,
@@ -332,7 +332,7 @@ final class ResumableAgentTests: XCTestCase {
         model.activate(
             workspacePath: workspace,
             restoring: Workbench(
-                panes: [Pane(id: pane, content: .terminal(face: .terminal, agent: agent()))]))
+                panes: [Pane(id: pane, content: .terminal(agent: agent()))]))
 
         model.dismissResume(pane)
 
@@ -350,7 +350,7 @@ final class ResumableAgentTests: XCTestCase {
         let terminals = TerminalManager()
         let pane = UUID()
         let bench = Workbench(
-            panes: [Pane(id: pane, content: .terminal(face: .terminal, agent: agent()))])
+            panes: [Pane(id: pane, content: .terminal(agent: agent()))])
         let model = WorkbenchModel(
             terminals: terminals,
             agents: .fixture(foreground: [:], rows: [:]), launcher: RecordingLauncher())
@@ -371,7 +371,7 @@ final class ResumableAgentTests: XCTestCase {
     }
 
     /// **A bench comes off disk, so two panes can carry one id — and building the offers must
-    /// not trap on that.** `AgentRegistry.row(in:)`, added on this same branch, argues the rule
+    /// not trap on that.** `AgentRegistry.rows(in:)`, added on this same branch, argues the rule
     /// in its own header: *"`Dictionary(_:uniquingKeysWith:)` rather than `uniqueKeysWithValues:`,
     /// because the latter traps and a hand-edited registry directory is not worth a crash."*
     /// The offers were built the trapping way, over a value decoded from `UserDefaults` rather
@@ -385,8 +385,8 @@ final class ResumableAgentTests: XCTestCase {
         let pane = UUID()
         let bench = Workbench(
             panes: [
-                Pane(id: pane, content: .terminal(face: .terminal, agent: agent("first"))),
-                Pane(id: pane, content: .terminal(face: .terminal, agent: agent("second"))),
+                Pane(id: pane, content: .terminal(agent: agent("first"))),
+                Pane(id: pane, content: .terminal(agent: agent("second"))),
             ])
         let model = WorkbenchModel(
             terminals: TerminalManager(),
@@ -413,8 +413,8 @@ final class ResumableAgentTests: XCTestCase {
         let snapshot = try project(
             bench: Workbench(
                 panes: [
-                    Pane(id: pane, content: .terminal(face: .terminal, agent: agent())),
-                    Pane(content: .terminal(face: .terminal)),
+                    Pane(id: pane, content: .terminal(agent: agent())),
+                    Pane(content: .terminal()),
                 ]), suite: "resume-snapshot-offered")
 
         let records = try panes(in: snapshot)
@@ -435,7 +435,7 @@ final class ResumableAgentTests: XCTestCase {
         let pane = UUID()
         let snapshot = try project(
             bench: Workbench(
-                panes: [Pane(id: pane, content: .terminal(face: .terminal, agent: agent()))]),
+                panes: [Pane(id: pane, content: .terminal(agent: agent()))]),
             transcripts: [], suite: "resume-snapshot-blocked")
 
         let record = try XCTUnwrap(try panes(in: snapshot)[pane]?.resumable)
@@ -448,7 +448,7 @@ final class ResumableAgentTests: XCTestCase {
     func testAPaneThatNeverHeldAnAgentCarriesNoResumeRecord() throws {
         let pane = UUID()
         let snapshot = try project(
-            bench: Workbench(panes: [Pane(id: pane, content: .terminal(face: .terminal))]),
+            bench: Workbench(panes: [Pane(id: pane, content: .terminal())]),
             suite: "resume-snapshot-control")
 
         XCTAssertNil(try panes(in: snapshot)[pane]?.resumable)
@@ -489,7 +489,7 @@ final class ResumableAgentTests: XCTestCase {
         model.activate(
             workspacePath: parked.path,
             restoring: Workbench(
-                panes: [Pane(id: pane, content: .terminal(face: .terminal, agent: agent()))]))
+                panes: [Pane(id: pane, content: .terminal(agent: agent()))]))
         XCTAssertNotNil(model.resumeOffers[pane], "it is asked about while it is mounted")
         workspaces.saveContext(terminalManager: terminals, workbench: model)
 
@@ -568,7 +568,7 @@ final class ResumableAgentTests: XCTestCase {
         model.activate(
             workspacePath: workspace,
             restoring: Workbench(
-                panes: [Pane(id: pane, content: .terminal(face: .terminal, agent: agent()))]))
+                panes: [Pane(id: pane, content: .terminal(agent: agent()))]))
 
         XCTAssertTrue(
             launcher.sent.isEmpty,

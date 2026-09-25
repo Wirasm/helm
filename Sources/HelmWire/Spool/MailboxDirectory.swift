@@ -132,9 +132,9 @@ package struct MailboxOwner: Decodable, Equatable {
 /// characters. Reading the file is the only correct resolution, so it is the only one here.
 ///
 /// **Lives in `HelmWire` (#221)** — the join used to default `ancestors` to
-/// `AgentLocator.ancestors(of:)`, but `AgentLocator` is `Helm`-only (`Chat/AgentLocator.swift`,
-/// used by `ChatModel` too) and this library depends on nothing in `Helm` — the dependency
-/// graph only runs the other way. So there is no default, and the callers across the module
+/// `AgentLocator.ancestors(of:)`, but `AgentLocator` is `Helm`-only (`Board/AgentLocator.swift`)
+/// and this library depends on nothing in `Helm` — the dependency graph only runs the other
+/// way. So there is no default, and the callers across the module
 /// boundary pass the live lookups in. `AddressBook.sessionFor` arrived by the same rule.
 package enum MailboxDirectory {
     /// Where the mail lives. `HELM_MAIL_DIR` is honoured because both mail implementations

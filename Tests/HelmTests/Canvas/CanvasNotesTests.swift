@@ -136,9 +136,9 @@ final class CanvasNotesTests: XCTestCase {
             CanvasNotes.markdown(in: directory.appendingPathComponent("nothing.notes.md")))
     }
 
-    /// The drawer renders the file natively, so the timestamp's `<sub>` wrapper would show
+    /// The drawer shows the file as plain text, so the timestamp's `<sub>` wrapper would show
     /// up as literal angle brackets in the one surface built to make the sidecar legible.
-    func testTheDrawerReadsTheTimestampAsAFootnoteRatherThanAsTags() throws {
+    func testTheDrawerReadsTheTimestampWithoutItsTags() throws {
         let canvas = directory.appendingPathComponent("plan.md")
         try CanvasNotes.append(
             try annotation(selecting: "a passage", comment: "first"), for: canvas,
@@ -150,9 +150,11 @@ final class CanvasNotesTests: XCTestCase {
         let time = footnote.dropFirst("<sub>".count).dropLast("</sub>".count)
         let readable = CanvasNotes.readable(written)
 
-        XCTAssertFalse(readable.contains("<sub>"), "no tags in a natively rendered document")
+        XCTAssertFalse(readable.contains("<sub>"), "no tags in a plain-text drawer")
         XCTAssertFalse(readable.contains("</sub>"))
-        XCTAssertTrue(readable.contains("_\(time)_"), "the stamp itself survives, emphasised")
+        XCTAssertTrue(
+            readable.split(separator: "\n").contains(Substring(time)),
+            "the stamp itself survives, on its own line")
         XCTAssertTrue(
             readable.contains("## \"a passage\""),
             "and the heading is untouched — turning one back into a mark is #199's, and it "

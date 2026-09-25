@@ -13,10 +13,10 @@ import XCTest
 /// shifted Return is an ordinary one and `.onSubmit` fires. That distinction cannot be made by
 /// any function this suite could call directly — it is AppKit that decides what a Return means
 /// — so these build a real `NSWindow` around the real `ArchonRailView` and push real `NSEvent`s
-/// through `NSWindow.sendEvent`. The harness is `ChatComposerReturnTests`', on purpose.
+/// through `NSWindow.sendEvent`.
 ///
-/// **It matters more here than it did there.** In the composer a stray submit sends a message;
-/// here `submit()` launches an Archon workflow — real work, on a real branch, that somebody has
+/// **It matters more here than it did in the chat composer.** There a stray submit sent a
+/// message; here `submit()` launches an Archon workflow — real work, on a real branch, that somebody has
 /// to notice and unwind (#278). So the assertions are about what reached the Archon client, not
 /// about a flag.
 ///
@@ -162,15 +162,15 @@ private final class RailWindow {
         hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 600)
         window.contentView = hosting
 
-        // **The rail does not focus its own field, unlike the chat composer.** Nothing in
+        // **The rail does not focus its own field.** Nothing in
         // `ArchonRailView` sets `composerFocused`, so in a window nobody has clicked in there is
         // no first responder for a Return to reach. The operator gets there by clicking; a test
         // hands the keyboard over directly instead, and asserts it arrived rather than assuming.
         //
         // That route is not a shortcut around the thing under test, and it was checked rather
-        // than assumed: the same `makeFirstResponder` on the **chat composer** — a field this
-        // repo already knows submits on Return — still submits, so a Return that does nothing
-        // here would be the rail's answer and not the harness's.
+        // than assumed: the same `makeFirstResponder` on the chat composer (removed in #375), a
+        // field known to submit on Return, still submitted, so a Return that does nothing here
+        // is the rail's answer and not the harness's.
         //
         // What ends up first responder is the **field editor** SwiftUI's `AppKitTextField`
         // opens, an `NSTextView` AppKit only builds once the field is being edited — which is

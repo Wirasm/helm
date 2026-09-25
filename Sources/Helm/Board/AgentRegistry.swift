@@ -32,8 +32,8 @@ struct AgentSession: Equatable {
     let cwd: String?
     let status: AgentStatus?
     /// Claude Code's own id for the conversation. The board does not use it; the
-    /// chat face does, because `sessionId` + `cwd` are what locate the transcript
-    /// on disk (`TranscriptLocator`).
+    /// resume record (#63) and the spool's owner join do, and `sessionId` + `cwd` are
+    /// what locate the transcript on disk (`TranscriptLocator`).
     ///
     /// It lives here rather than in a second reader by #28's ruling — one registry
     /// row type, split only if the two consumers genuinely diverge. `var` with a
@@ -180,8 +180,8 @@ enum AgentRegistry {
     /// `status`/`waitingFor` go into `snapshot.json` — as well as this pid→session lookup, and
     /// calling `sessionLookup(in:)` beside `rows(in:)` would list the same directory twice per
     /// publish and let one publish's `owner` join disagree with the same publish's `agent`
-    /// record. That is `row(in:)`'s defect exactly, one level up, and this is `row(in:)`'s answer
-    /// to it: the rule is a function over rows the caller holds.
+    /// record. That is the duplicate-pid defect `rows(in:)` closes, one level up, and the answer is
+    /// the same: the rule is a function over rows the caller holds.
     static func sessionLookup(over rows: [pid_t: AgentSession]) -> (pid_t) -> String? {
         { pid in rows[pid]?.sessionId }
     }
@@ -205,30 +205,6 @@ enum AgentRegistry {
     /// convention. `Dictionary(_:uniquingKeysWith:)` rather than `uniqueKeysWithValues:`,
     /// because the latter traps and a hand-edited registry directory is not worth a crash.
     static func rows(in root: URL = defaultRoot) -> [pid_t: AgentSession] {
-        row(in: sessions(in: root))
-    }
-
-    /// The same keying over rows a caller already has.
-    ///
-    /// **It exists because "every reader" turned out to be narrower than it sounded.** The
-    /// first version of this rule unified two readers and left two more — `AgentLocator
-    /// .session(in:forPid:)` and `ChatModel`'s half-second refresh, both doing their own
-    /// `first(where: { $0.pid == pid })` over the raw array. They are the *chat face's* answer
-    /// to "which session is in this pane", so a divergence there is not academic: the face
-    /// renders one conversation's transcript while `WorkbenchModel` records another as the
-    /// pane's `ResumableAgent` and `snapshot.json` reports a third, each internally consistent
-    /// and none of them erroring.
-    ///
-    /// Pure and array-in, because those two callers hold rows rather than a root — `AgentLocator`
-    /// takes the registry as an argument precisely so its rule is testable without a filesystem,
-    /// and making it read a directory instead would trade one seam for a worse one.
-    static func row(in rows: [AgentSession]) -> [pid_t: AgentSession] {
-        Dictionary(rows.map { ($0.pid, $0) }, uniquingKeysWith: { _, last in last })
-    }
-
-    /// The one row for a pid, out of rows a caller already has. The direct-match step every
-    /// reader shares; see `row(in:)` for why it is a function.
-    static func row(for pid: pid_t, in rows: [AgentSession]) -> AgentSession? {
-        row(in: rows)[pid]
+        Dictionary(sessions(in: root).map { ($0.pid, $0) }, uniquingKeysWith: { _, last in last })
     }
 }

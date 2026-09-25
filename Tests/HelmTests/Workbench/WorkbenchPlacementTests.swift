@@ -8,7 +8,7 @@ final class WorkbenchPlacementTests: XCTestCase {
     private let plan = CanvasSource.file("/tmp/plan.md")
     private let tasks = CanvasSource.file("/tmp/tasks.md")
 
-    private func terminal() -> Pane { Pane(content: .terminal(face: .terminal)) }
+    private func terminal() -> Pane { Pane(content: .terminal()) }
 
     func testAnAlreadyOpenSourceIsSelectedRatherThanOpenedAgain() {
         var bench = Workbench(terminal: UUID())

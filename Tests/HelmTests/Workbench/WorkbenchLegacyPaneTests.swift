@@ -55,7 +55,7 @@ final class WorkbenchLegacyPaneTests: XCTestCase {
         XCTAssertEqual(
             restored.panes.map { $0.id.uuidString.lowercased() }, [terminal, canvas],
             "the archonRun pane is dropped and nothing else is")
-        XCTAssertEqual(restored.panes[0].content, .terminal(face: .terminal))
+        XCTAssertEqual(restored.panes[0].content, .terminal())
         XCTAssertEqual(
             restored.slots.count, 1, "a slot that still holds panes is not itself dropped")
     }
@@ -125,7 +125,7 @@ final class WorkbenchLegacyPaneTests: XCTestCase {
     /// regression rather than tolerance.
     func testOnlyTwoPaneKindsEncodeAndAThirdDoesNotDecode() throws {
         for content in [
-            Pane.Content.terminal(face: .terminal),
+            Pane.Content.terminal(),
             .canvas(.file(URL(fileURLWithPath: "/tmp/a.md"))),
         ] {
             XCTAssertEqual(

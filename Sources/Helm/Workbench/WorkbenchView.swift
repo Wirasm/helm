@@ -241,7 +241,7 @@ private struct SlotView: View {
                 // Clicking a pane's body is the operator saying *this is the pane I mean now*,
                 // exactly as clicking its tab is — and until #152 only the tab said it. One
                 // reporter per slot rather than one per pane type: it sits below whatever the
-                // slot renders, so a terminal grid, a chat face and a canvas all report the
+                // slot renders, so a terminal grid, a browser and a canvas all report the
                 // same way, and focus is measured in slots regardless.
                 //
                 // Behind the content rather than over it. The reporter takes no part in hit
@@ -269,7 +269,7 @@ private struct SlotView: View {
     @ViewBuilder
     private func paneContent(_ pane: Pane) -> some View {
         switch pane.content {
-        case let .terminal(face, _):
+        case .terminal:
             if let session = model.session(for: pane) {
                 VStack(spacing: 0) {
                     // Above the terminal rather than over it (#63): the shell underneath is
@@ -286,22 +286,15 @@ private struct SlotView: View {
                     // pane — so which terminal owns the keyboard is one question with one
                     // answer, asked where the answer lives rather than re-derived per slot.
                     TerminalPaneView(
-                        session: session, face: face,
+                        session: session,
                         holdsKeyboard: bench.focusedPane?.id == pane.id)
                 }
             }
         case .canvas:
-            CanvasView(model: model.canvas(for: pane), post: postHandler)
+            CanvasView(model: model.canvas(for: pane))
         case .browser:
             BrowserPaneView(
                 model: model.browser(for: pane), holdsKeyboard: bench.focusedPane?.id == pane.id)
         }
-    }
-
-    /// nil when there is nowhere unambiguous to send notes, which is what leaves the
-    /// canvas's `Post` disabled with a reason rather than silently doing nothing.
-    private var postHandler: ((String) -> Void)? {
-        guard model.composeTarget != nil else { return nil }
-        return { model.post($0) }
     }
 }

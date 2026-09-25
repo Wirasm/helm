@@ -62,11 +62,11 @@ struct GhosttyHostView: NSViewRepresentable {
 /// window was not there yet" and "the window is never coming" are the same silent return* —
 /// and this is the same failure one slice over.
 ///
-/// **Both entry points are edges, and that is what keeps the composer typable.** The old
+/// **Both entry points are edges, and that is what keeps a text field typable.** The old
 /// claim had to be non-stealing (`firstResponder === window`) because it ran on every
-/// re-render; grabbing focus each tick would have made the chat composer and the workspace
-/// bar untypable. Nothing here runs on a re-render: a window change is a real AppKit event,
-/// and `claimsKeyboard` only acts on `false → true`. Clicking into the composer moves the
+/// re-render; grabbing focus each tick would have made the workspace bar and a canvas's
+/// comment field untypable. Nothing here runs on a re-render: a window change is a real AppKit
+/// event, and `claimsKeyboard` only acts on `false → true`. Clicking into a field moves the
 /// first responder and neither edge fires, so the terminal does not snatch it back.
 final class FocusClaimingTerminalView: TerminalView {
     /// Helm's intent: the bench's focused pane is this one. Pushed by `GhosttyHostView`.

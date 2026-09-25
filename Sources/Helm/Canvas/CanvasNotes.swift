@@ -149,22 +149,20 @@ enum CanvasNotes {
     }
 
     /// The sidecar as the drawer reads it: the file's own text, with the timestamp's `<sub>`
-    /// wrapper turned into markdown emphasis.
+    /// wrapper taken off.
     ///
     /// **The one liberty the drawer takes, and it is presentation.** `entry` writes the
     /// stamp as `<sub>…</sub>` because the sidecar is read by agents and by whatever renders
-    /// markdown-with-HTML — helm's own document canvas does, through marked. The drawer does
-    /// not: it renders blocks natively (`MarkdownText`), so the tags would sit there as
-    /// literal angle brackets in the one surface built to make this file legible. Swapping
-    /// them for `_…_` keeps the footnote reading as a footnote and costs no interpretation
-    /// of the note itself — the heading is left exactly as written, which is the boundary
-    /// #199 needs held.
+    /// markdown-with-HTML — helm's own document canvas does, through marked. The drawer shows
+    /// plain text, so the tags would sit there as literal angle brackets in the one surface
+    /// built to make this file legible. Dropping them costs no interpretation of the note
+    /// itself — the heading is left exactly as written, which is the boundary #199 needs held.
     static func readable(_ text: String) -> String {
-        text.replacingOccurrences(of: "<sub>", with: "_")
-            .replacingOccurrences(of: "</sub>", with: "_")
+        text.replacingOccurrences(of: "<sub>", with: "")
+            .replacingOccurrences(of: "</sub>", with: "")
     }
 
-    /// The whole accumulation, for `Post`.
+    /// The whole accumulation, or nil when the sidecar is missing or blank.
     static func markdown(in sidecar: URL) -> String? {
         guard let text = try? String(contentsOf: sidecar, encoding: .utf8),
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

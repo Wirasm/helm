@@ -52,7 +52,7 @@ final class PaneNameTests: XCTestCase {
 
     func testANameSurvivesTheRestartThatThePaneSurvives() throws {
         // #313 asks for this by name: a name lost on relaunch would be worse than no name.
-        let pane = Pane(id: UUID(), content: .terminal(face: .terminal), name: .chosen("the plan"))
+        let pane = Pane(id: UUID(), content: .terminal(), name: .chosen("the plan"))
         XCTAssertEqual(try roundTrip(pane).name, .chosen("the plan"))
 
         let derived = Pane(
@@ -80,7 +80,7 @@ final class PaneNameTests: XCTestCase {
         // produced — which is what makes two helms of different vintages able to share a machine,
         // the normal state here.
         let encoded = try JSONEncoder().encode(
-            Pane(id: UUID(), content: .terminal(face: .terminal)))
+            Pane(id: UUID(), content: .terminal()))
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         XCTAssertNil(json["name"])

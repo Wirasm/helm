@@ -122,8 +122,8 @@ final class TerminalKeyboardTests: XCTestCase {
     // MARK: - What the terminal must NOT do
 
     /// The reason the old claim was written non-stealing: it ran on every re-render, and a
-    /// terminal that re-grabs focus each tick makes the chat composer and the workspace bar
-    /// untypable. The claim is edge-triggered now, so a re-render that changes nothing about
+    /// terminal that re-grabs focus each tick makes the workspace bar and a canvas's comment
+    /// field untypable. The claim is edge-triggered now, so a re-render that changes nothing about
     /// focus must leave another view's first responder exactly where it is.
     ///
     /// **Both halves are here on purpose.** Every assertion about not-stealing is negative,
@@ -140,8 +140,8 @@ final class TerminalKeyboardTests: XCTestCase {
                 $0 != helm.workbench.bench?.focusedPane?.id
             })
 
-        // A text field rather than a bare view, because the thing being protected is the
-        // chat composer. Note what holds first responder afterwards is the window's FIELD
+        // A text field rather than a bare view, because the thing being protected is a
+        // text field. Note what holds first responder afterwards is the window's FIELD
         // EDITOR, not the field — so "is the field still being edited" is the question, and
         // `currentEditor()` is how AppKit answers it.
         let composer = NSTextField(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
@@ -210,58 +210,6 @@ final class TerminalKeyboardTests: XCTestCase {
         XCTAssertTrue(pty.received("z"))
     }
 
-    /// **The chat face gives its composer the keyboard, and ⌘T gives it back to the shell.**
-    ///
-    /// This test used to assert the opposite — that a pane reading an agent's prose still
-    /// handed the keyboard to the terminal underneath — and the reasoning was sound at the
-    /// time: `ChatComposer` set `focused = true` in exactly one place, an `onChange(of:
-    /// prefill)`, so a face-aware claim would have left *nothing* holding the keyboard on the
-    /// chat face, which is #96 again one pane over.
-    ///
-    /// The premise is what changed, not the principle. #152 made the composer take the
-    /// keyboard when its overlay opens, so the face-blind claim stopped being the safe option
-    /// and became the bug: with the grid holding the keyboard, typing on the reading face went
-    /// to the **shell**, invisible under the overlay, and the operator's sentence was executed
-    /// rather than sent.
-    ///
-    /// **Both halves are here for the reason the redraw test gives.** "The terminal does not
-    /// hold it" passes just as well if nothing holds it at all, so the second half toggles back
-    /// and requires the grid to take it — which is also the `false → true` edge that would not
-    /// fire if `holdsKeyboard` were still face-blind.
-    func testTheChatFaceTakesTheKeyboardAndGivesItBackOnToggle() throws {
-        let helm = HelmWindow(terminals: 1, layout: .oneSlotReadingChat)
-        defer { helm.close() }
-
-        Eventually.holds { helm.window.firstResponder is NSTextView }
-        XCTAssertNotEqual(
-            helm.window.firstResponder as? NSView, helm.session(0).hostView,
-            "the grid holds the keyboard on the reading face; the composer is untypable and "
-                + "everything typed reaches the shell instead")
-        XCTAssertTrue(
-            helm.window.firstResponder is NSTextView,
-            "nothing that edits text holds the keyboard — the composer did not claim it, which "
-                + "is #96 on the chat face rather than a fix for it")
-
-        let pty = try helm.pty(0)
-        helm.type("q")
-
-        // Back to the grid: the same pane, the other face.
-        helm.command(.toggleChat)
-
-        helm.expectKeyboard(
-            on: helm.session(0).hostView,
-            "⌘T returned to the terminal and nothing handed the shell its keyboard back")
-        helm.type("z")
-        XCTAssertTrue(pty.received("z"))
-        // **Checked here rather than straight after the `q`, and that is stronger, not
-        // laxer.** A leaked keystroke arrives on ghostty's own schedule, so reading the pty a
-        // moment after typing asks before the wrong answer could have shown up — the negative
-        // passes for free on a busy machine. By the time `z` has arrived the whole pipeline has
-        // demonstrably run, so a `q` that leaked is certainly here to be seen.
-        XCTAssertFalse(
-            pty.received.contains("q"), "a keystroke meant for the composer reached the pty")
-    }
-
     // MARK: - The mechanism #96 turned on
 
     /// **The regression test proper.** The old claim hung off a `DispatchQueue.main.async`
@@ -292,8 +240,6 @@ private final class HelmWindow {
     enum Layout {
         /// One column, one slot, N tabs — the frame a first-run workspace gets.
         case oneSlot
-        /// The same, with the selected pane showing the agent's writing instead of the grid.
-        case oneSlotReadingChat
         /// Two slots stacked in one column, one terminal each: two panes on screen at once,
         /// which is the state a single app-level "selected terminal" could never express.
         case twoSlots
@@ -447,7 +393,7 @@ private final class HelmWindow {
         openedWorkspaces.append(WorkspacePath(path))
         workbench.activate(
             workspacePath: WorkspacePath(path),
-            restoring: Workbench(panes: [Pane(id: pane, content: .terminal(face: .terminal))]))
+            restoring: Workbench(panes: [Pane(id: pane, content: .terminal())]))
         settle()
         return pane
     }
@@ -485,10 +431,9 @@ private final class HelmWindow {
     }
 
     private static func bench(_ ids: [UUID], _ layout: Layout) -> Workbench {
-        let face: TerminalFace = layout == .oneSlotReadingChat ? .chat : .terminal
-        let panes = ids.map { Pane(id: $0, content: .terminal(face: face)) }
+        let panes = ids.map { Pane(id: $0, content: .terminal()) }
         switch layout {
-        case .oneSlot, .oneSlotReadingChat:
+        case .oneSlot:
             return Workbench(panes: panes)
         case .twoSlots:
             var bench = Workbench(panes: [panes[0]])

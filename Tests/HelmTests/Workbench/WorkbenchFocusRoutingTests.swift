@@ -71,29 +71,6 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
             bench.workbench.bench?.focusedSlot, order[2], "focus should follow the new slot")
     }
 
-    /// ⌘T with focus resting on another pane returns silently — the guard in `toggleFace` is
-    /// correct, and the operator's evidence for *which pane is focused* is the cursor.
-    func testToggleFaceAfterAClickTogglesTheClickedPane() throws {
-        let bench = Bench(terminals: 2)
-        defer { bench.close() }
-
-        let untouched = try XCTUnwrap(bench.workbench.bench?.focusedPane?.id)
-        let clicked = try XCTUnwrap(
-            bench.workbench.bench?.panes.map(\.id).first { $0 != untouched })
-
-        try bench.clickPane(inSlot: try bench.slot(holding: clicked))
-        Eventually.holds { bench.workbench.bench?.focusedPane?.id == clicked }
-        bench.command(.toggleChat)
-
-        Eventually.holds { bench.workbench.bench?.pane(clicked)?.content == .terminal(face: .chat) }
-        XCTAssertEqual(
-            bench.workbench.bench?.pane(clicked)?.content, .terminal(face: .chat),
-            "⌘T did not reach the pane that was clicked")
-        XCTAssertEqual(
-            bench.workbench.bench?.pane(untouched)?.content, .terminal(face: .terminal),
-            "⌘T toggled the pane the operator was not looking at")
-    }
-
     /// The loop closed end to end: the click moves the bench, the bench hands the grid the
     /// keyboard, and the keystroke comes out of that pane's pty. This is also the only
     /// assertion here that would fail if the monitor ever started **consuming** the click.
@@ -403,9 +380,9 @@ private final class Bench {
     /// Two slots stacked in one column, focus put back on the first — so "focused" and "mounted
     /// first" are different answers and a test can tell a click from a coincidence.
     private static func stacked(_ ids: [UUID]) -> Workbench {
-        var bench = Workbench(panes: [Pane(id: ids[0], content: .terminal(face: .terminal))])
+        var bench = Workbench(panes: [Pane(id: ids[0], content: .terminal())])
         for id in ids.dropFirst() {
-            bench.splitDown(with: Pane(id: id, content: .terminal(face: .terminal)))
+            bench.splitDown(with: Pane(id: id, content: .terminal()))
         }
         bench.focus(bench.slots[0].id)
         return bench

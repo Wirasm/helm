@@ -68,9 +68,8 @@ both are now tenants of the **right** rail, which is the shape that fits them.
   worth having is columns-of-stacks, and depth-2 is a strict subset of the tree so nothing is
   foreclosed.
 - **Pane** — a workbench tenant. **Two types, and only two.**
-  - **Terminal** — the chat view is a second **face** on this, drawn over a terminal that
-    stays mounted underneath, toggled with ⌘T. The face is a property of the pane, so two
-    terminals side by side can show different ones.
+  - **Terminal** — a libghostty surface and its pty. The chat face that used to draw an
+    agent's transcript over it (⌘T) was removed on the operator's ruling (#375).
   - **Canvas** — renders a markdown file, an HTML file, or a URL, and accepts annotation on
     it. Modular by source, extendable to further formats. This is `ArtifactPane` promoted,
     not new work — and the promotion has shipped, so it is `CanvasView` / `CanvasModel` now.
@@ -80,24 +79,11 @@ both are now tenants of the **right** rail, which is the shape that fits them.
   nothing left for a run pane to render, and a list of two is easier to defend than a list of
   three with a footnote.
 
-Two corrections to what that list used to say, both from building it. The chat view is not
-a *swap*: the terminal view stays mounted under it, because one attached surface drives the
-ghostty runtime for every surface on it. And it does not cost the bench *nothing* — it
-costs it the decision of where the face lives, which is on the pane.
-
 The canvas is **one** primitive, not three: the integrated webview, the draw-on pane and the
 agent canvas merged into it. And the agent **receives and navigates, never drives** — full
 browser control already exists as `playwright-cli` and helm would ship a worse copy. The
 agent's route in is to write a self-contained file and print a link you ⌘-click: **offer, not
 push**. A pane appearing unbidden is helm rearranging the bench on the agent's word.
-
-## Terminal ↔ chat toggle
-
-A toggle between the terminal view and a chat view of the same session.
-
-The agent CLIs in use (pi, Claude Code) already write full logs to the filesystem. helm
-overlays a UI on those logs: a readable chat with proper markdown formatting, a chat box,
-and a calmer view for focus.
 
 ## Archon surface
 
@@ -190,7 +176,7 @@ Not decisions — things that are true today and shape what is cheap.
     actually needed its patch for. Writing into a hosted terminal costs **no vendor patch**.
     The guard on that write is a registry file read (`status == idle`), not a surface signal,
     so it needs no patch either.
-- Claude Code and pi both write full session transcripts to disk, so a chat view is a
+- Claude Code and pi both write full session transcripts to disk, so a transcript view is a
   renderer over files rather than an integration — but the grain is coarse. Measured
   2026-07-31 (`~/.prp/helm-3ec376fc/reports/nice-view-spike-reader.md`): Claude Code writes
   one **content block** per record, written whole when the block ends; pi writes one record
@@ -200,9 +186,9 @@ Not decisions — things that are true today and shape what is cheap.
 - **A from-disk view cannot show the operator the question they are being asked.** An agent
   blocked on an interactive prompt writes *nothing*. Captured live: the agent thought,
   produced 1,962 characters of prose and raised a question — none of it reached disk until
-  the operator answered **2m35s later**, then all four records flushed at once. Whatever the
-  chat view turns out to be, it cannot be *only* a file renderer: the moments that most
-  demand attention are exactly the moments the file is silent. Reading the rendered surface
+  the operator answered **2m35s later**, then all four records flushed at once. Any transcript
+  view (the chat face was one, until #375 removed it) cannot be *only* a file renderer: the
+  moments that most demand attention are exactly the moments the file is silent. Reading the rendered surface
   (`ghostty_surface_read_text`) is the only source that has them.
 - **Remote control is the agent's, not the terminal's — so it costs helm nothing.** Claude
   Code publishes a per-session `bridgeSessionId` in `~/.claude/sessions/<pid>.json`, which is
@@ -220,9 +206,7 @@ Not decisions — things that are true today and shape what is cheap.
   and a relaunch cost every terminal in every workspace.)*
 - helm already has working markdown and HTML rendering (`ArtifactPane`, `ArtifactHTML`,
   `ArtifactWebViews`, `ArtifactBrowser`) and the terminal stack (`TerminalSession`,
-  `TerminalManager`, `TerminalStrip`, `GhosttyConfig`). `PostMarkdown` + `MarkdownTheme` are a
-  markdown→SwiftUI renderer with **no caller**, kept deliberately for the chat view — many small
-  blocks of prose, where a webview per message would be absurd.
+  `TerminalManager`, `TerminalStrip`, `GhosttyConfig`).
 - **The source is sliced vertically by feature** — `App/`, `Workspaces/`, `Terminals/`,
   `Canvas/`, `Artifacts/`, `Shared/` — with each vertical owning its own commands, and `App/`
   reduced to composition. Keyboard shortcuts are a table of values (`Shortcut`) read by both the

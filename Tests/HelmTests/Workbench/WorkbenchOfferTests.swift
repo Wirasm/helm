@@ -112,13 +112,13 @@ final class WorkbenchOfferTests: XCTestCase {
     func testAnOfferedRowTakesAnEqualShareRatherThanHalfTheColumn() {
         var bench = Workbench(terminal: UUID())
         let column = bench.columns[0].id
-        bench.offer(Pane(content: .terminal(face: .terminal)), at: .row(in: column))
+        bench.offer(Pane(content: .terminal()), at: .row(in: column))
 
         assertFractions(
             bench.columns[0].slots.map(\.height), [0.5, 0.5],
             "the first spawn splits the column in two")
 
-        bench.offer(Pane(content: .terminal(face: .terminal)), at: .row(in: column))
+        bench.offer(Pane(content: .terminal()), at: .row(in: column))
 
         assertFractions(
             bench.columns[0].slots.map(\.height), [1 / 3.0, 1 / 3.0, 1 / 3.0],
@@ -142,11 +142,11 @@ final class WorkbenchOfferTests: XCTestCase {
     func testAnOfferedRowKeepsTheProportionsTheOperatorDragged() {
         var bench = Workbench(terminal: UUID())
         let column = bench.columns[0].id
-        bench.offer(Pane(content: .terminal(face: .terminal)), at: .row(in: column))
+        bench.offer(Pane(content: .terminal()), at: .row(in: column))
         let slots = bench.columns[0].slots.map(\.id)
         bench.resizeSlot(slots[0], to: 0.8, against: slots[1])
 
-        bench.offer(Pane(content: .terminal(face: .terminal)), at: .row(in: column))
+        bench.offer(Pane(content: .terminal()), at: .row(in: column))
 
         let heights = bench.columns[0].slots.map(\.height)
         XCTAssertEqual(

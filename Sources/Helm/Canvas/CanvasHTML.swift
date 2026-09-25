@@ -105,9 +105,8 @@ enum CanvasHTML {
         """
     }
 
-    /// The document type scale as CSS — ported from the retired
-    /// `MarkdownTheme.document` profile (15px body, 760px measure, 24/19/16
-    /// headings, hairline under h1, monospaced code with a subtle fill).
+    /// The document type scale as CSS: 15px body, 760px measure, 24/19/16
+    /// headings, hairline under h1, monospaced code with a subtle fill.
     /// System colors (`Canvas`/`CanvasText`) + `color-scheme` keep the page in
     /// step with the app's appearance.
     private static func documentCSS(theme: CanvasTheme) -> String {

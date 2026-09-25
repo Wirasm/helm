@@ -12,9 +12,8 @@ import HelmWire
 /// is an id helm was in a position to write down while the agent was alive. That is this
 /// value, and it is the whole of what #63 adds to the persisted bench.
 ///
-/// **On `Pane.Content.terminal`, not beside it.** A canvas has no agent, exactly as it has no
-/// face, and asking one for either must not compile (`TerminalFace`'s header makes the same
-/// argument). It also means restore is a straight read of the value the bench already
+/// **On `Pane.Content.terminal`, not beside it.** A canvas has no agent, and asking one for
+/// its agent must not compile. It also means restore is a straight read of the value the bench already
 /// persists: no second store to keep in step, no map keyed by pane id that a closed pane
 /// leaves a row in.
 ///

@@ -57,14 +57,14 @@ final class WorkbenchRestoreTests: XCTestCase {
         XCTAssertEqual(bench.canvasPanes.map(\.content), [.canvas(.file("/tmp/report.html"))])
     }
 
-    func testEveryMigratedTerminalComesBackOnTheTerminalFace() throws {
+    func testEveryMigratedTerminalComesBackWithNoAgent() throws {
         let context = WorkspaceContext(terminalSessionIDs: [UUID()])
 
         let bench = try XCTUnwrap(Workbench.migrating(from: context))
 
         XCTAssertEqual(
-            bench.face(ofSelectedPaneIn: bench.focusedSlot), .terminal,
-            "a pre-bench context could not describe a face, and the shell comes back empty")
+            bench.focusedPane?.content, .terminal(),
+            "a pre-bench context could not describe an agent, and the shell comes back empty")
     }
 
     // MARK: - Containment
@@ -179,7 +179,7 @@ final class WorkbenchRestoreTests: XCTestCase {
     /// The operator's 2+1+1, dragged to the fractions #90 reports: three columns at
     /// 0.3349 / 0.4750 / 0.1901, the first of them split into two slots at 0.4986 / 0.5014.
     private static func draggedBench() -> Workbench {
-        func terminal() -> Pane { Pane(content: .terminal(face: .terminal)) }
+        func terminal() -> Pane { Pane(content: .terminal()) }
         var bench = Workbench(terminal: UUID())
         bench.splitRight(with: terminal())
         bench.focus(bench.columns[0].slots[0].id)

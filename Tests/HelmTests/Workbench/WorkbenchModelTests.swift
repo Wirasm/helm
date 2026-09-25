@@ -35,7 +35,7 @@ final class WorkbenchModelTests: XCTestCase {
     func testARestoredBenchRebuildsItsTerminalsUnderTheirPersistedIDs() throws {
         let ids = [UUID(), UUID()]
         let restored = Workbench(
-            panes: ids.map { Pane(id: $0, content: .terminal(face: .terminal)) })
+            panes: ids.map { Pane(id: $0, content: .terminal()) })
         let manager = TerminalManager()
         let model = WorkbenchModel(terminals: manager)
 
@@ -266,7 +266,7 @@ final class WorkbenchModelTests: XCTestCase {
     func testAnOrphanedCanvasCannotRepointTheBenchThatReplacedIt() throws {
         let live = URL(string: "http://localhost:3000")!
         let page = Pane(content: .canvas(.url(live)))
-        let restored = Workbench(panes: [Pane(content: .terminal(face: .terminal)), page])
+        let restored = Workbench(panes: [Pane(content: .terminal()), page])
         let model = WorkbenchModel(terminals: TerminalManager())
         model.activate(workspacePath: workspace, restoring: restored)
         let orphan = model.canvas(for: page)
@@ -286,7 +286,7 @@ final class WorkbenchModelTests: XCTestCase {
     /// *shown its own source*, and that must not read as the canvas having moved.
     func testResolvingARestoredCanvasDoesNotRewriteItsPane() {
         let page = Pane(content: .canvas(.url(URL(string: "http://localhost:3000/status")!)))
-        let restored = Workbench(panes: [Pane(content: .terminal(face: .terminal)), page])
+        let restored = Workbench(panes: [Pane(content: .terminal()), page])
         let model = WorkbenchModel(terminals: TerminalManager())
         model.activate(workspacePath: workspace, restoring: restored)
 
@@ -456,7 +456,7 @@ final class WorkbenchModelTests: XCTestCase {
         let terminal = UUID()
         let canvas = Pane(content: .canvas(.file("/tmp/a.md")))
         let restored = Workbench(
-            panes: [Pane(id: terminal, content: .terminal(face: .terminal)), canvas],
+            panes: [Pane(id: terminal, content: .terminal()), canvas],
             selecting: canvas.id)
         let manager = TerminalManager()
         let model = WorkbenchModel(terminals: manager)
@@ -528,31 +528,6 @@ final class WorkbenchModelTests: XCTestCase {
         XCTAssertEqual(
             model.bench?.canvasPanes.count, 0,
             "a push from a workspace nobody is looking at must not seize the open bench")
-    }
-
-    func testTheFaceCommandReachesTheModelWhileNoViewHoldsIt() async throws {
-        let (model, _) = mounted()
-
-        HelmCommand.toggleChat.post()
-        try await Task.sleep(for: .milliseconds(100))
-
-        XCTAssertEqual(
-            model.bench?.face(ofSelectedPaneIn: try XCTUnwrap(model.bench?.focusedSlot)), .chat,
-            "⌘T has to reach a pane whose view may be mounted, unmounted or not yet built")
-    }
-
-    // MARK: - The face
-
-    func testTogglingTheFaceReachesTheFocusedPaneAndNothingElse() throws {
-        let (model, _) = mounted()
-        let firstSlot = try XCTUnwrap(model.bench?.focusedSlot)
-        model.splitRight()
-        let secondSlot = try XCTUnwrap(model.bench?.focusedSlot)
-
-        model.toggleFace()
-
-        XCTAssertEqual(model.bench?.face(ofSelectedPaneIn: secondSlot), .chat)
-        XCTAssertEqual(model.bench?.face(ofSelectedPaneIn: firstSlot), .terminal)
     }
 
     // MARK: - Closing
@@ -641,83 +616,5 @@ final class WorkbenchModelTests: XCTestCase {
                 + "reach back into the slot ⌘2 would have hit a moment ago")
         XCTAssertFalse(
             firstSlotPanes.map(\.id).contains(try XCTUnwrap(model.bench?.focusedPane?.id)))
-    }
-
-    // MARK: - Post
-
-    /// Post's whole routing rule. The ambiguous case is the one that matters: two chat
-    /// faces open and no focused one means there is no unambiguous answer, and a `nil`
-    /// target is what leaves the button disabled instead of posting into whichever pane
-    /// happened to sort first.
-    func testPostGoesToTheFocusedPaneWhenItIsOnTheChatFace() throws {
-        let (model, _) = mounted()
-        model.toggleFace()
-
-        XCTAssertEqual(model.composeTarget, model.bench?.focusedPane?.id)
-    }
-
-    func testPostFallsBackToTheOnlyChatFaceOpen() throws {
-        let (model, _) = mounted()
-        let reading = try XCTUnwrap(model.bench?.focusedPane?.id)
-        model.toggleFace()
-        model.splitRight()
-
-        XCTAssertEqual(
-            model.bench?.face(ofSelectedPaneIn: try XCTUnwrap(model.bench?.focusedSlot)),
-            .terminal, "focus moved to the split, which is on the terminal face")
-        XCTAssertEqual(
-            model.composeTarget, reading,
-            "the operator is looking at exactly one piece of writing — that is where notes go")
-    }
-
-    func testPostHasNoTargetWhenTwoChatFacesAreOpenAndNeitherIsFocused() throws {
-        let (model, _) = mounted()
-        model.toggleFace()
-        model.splitRight()
-        model.toggleFace()
-        model.splitDown()
-
-        XCTAssertEqual(model.bench?.canvasPanes.count, 0)
-        XCTAssertNil(
-            model.composeTarget,
-            "two chat faces and a terminal focused — guessing between them would put the "
-                + "operator's notes in the wrong agent's composer")
-    }
-
-    func testPostHasNoTargetWhenNothingIsReading() {
-        let (model, _) = mounted()
-
-        XCTAssertNil(model.composeTarget)
-    }
-
-    /// `post` is the gate, not just the messenger: with no target it must send nothing at
-    /// all rather than a request no pane will claim.
-    func testPostWithNoTargetSendsNothing() {
-        let (model, _) = mounted()
-        var received: [ComposeRequest] = []
-        let token = HelmCommand.publisher.sink {
-            if case let .composeText(request) = $0 { received.append(request) }
-        }
-        defer { token.cancel() }
-
-        model.post("## `#phase-2`\n\nthis ordering is wrong")
-
-        XCTAssertTrue(received.isEmpty)
-    }
-
-    func testPostCarriesTheNotesToTheTargetPane() throws {
-        let (model, _) = mounted()
-        model.toggleFace()
-        let target = try XCTUnwrap(model.composeTarget)
-        var received: [ComposeRequest] = []
-        let token = HelmCommand.publisher.sink {
-            if case let .composeText(request) = $0 { received.append(request) }
-        }
-        defer { token.cancel() }
-
-        model.post("this ordering is wrong")
-
-        XCTAssertEqual(received.map(\.pane), [target])
-        XCTAssertEqual(received.map(\.text), ["this ordering is wrong"])
     }
 }

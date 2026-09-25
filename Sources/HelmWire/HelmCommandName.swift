@@ -34,6 +34,6 @@ import Foundation
 package enum HelmCommandName: String, CaseIterable, Codable, Sendable {
     case newTerminal, selectTerminal, openArtifact, openCanvasFile, pushCanvasFile
     case openCanvasURL, openWorkspace, adjustFontSize, jumpToPrompt, selectWorkspace
-    case cycleWorkspace, toggleChat, splitRight, splitDown, closePane, moveFocus
-    case composeText, toggleRail, movePane, newNote, openBrowser
+    case cycleWorkspace, splitRight, splitDown, closePane, moveFocus
+    case toggleRail, movePane, newNote, openBrowser
 }

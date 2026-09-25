@@ -664,14 +664,14 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `name.name`, **read back off the bench** rather than echoed. Exit codes are 2 no answer,
     3 refused, 4 helm could not act, 6 abandoned.
 - **To drive the bench in between, `swift tools/helm-command.swift <command>`** — the fourth
-  spool kind (#269), needing what the other three need: nothing. helm has twenty-one typed
+  spool kind (#269), needing what the other three need: nothing. helm has nineteen typed
   commands (`HelmCommand`, #219, #287, #289 and #350) and **will take five of them from an
   agent**: `newTerminal`, `splitRight`, `splitDown`, `toggleRail`, `openBrowser`. `--list` names
   them without a running helm.
   - **The rule is one sentence: rearranging the bench is fine, taking focus is not.** It is
     #125's *appear, don't seize* on a channel that can now ask for anything the keymap can — an
     agent selecting your active tab mid-thought is the wrong-terminal click arriving through a
-    supported API. The other sixteen are `refused` results **naming the reason and, where one
+    supported API. The other fourteen are `refused` results **naming the reason and, where one
     exists, the route to use instead**: `closePane` points at `helm-close`, `selectTerminal` at
     `helm-select` (#284),
     `openCanvasFile` and `openArtifact` at `push.sh`, `openWorkspace` at `helm-spool` — a
@@ -680,8 +680,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   - **Every command that is still refused is one with no address**, and that is #176's rule
     extended rather than reinvented. `helm-close` names a pane and refuses the one holding the
     keyboard, and `helm-select` does the same for the other direction; `selectTerminal`
-    (an *index* into the focused slot), `closePane`, `toggleChat`, `adjustFontSize` and
-    `jumpToPrompt`
+    (an *index* into the focused slot), `closePane`, `adjustFontSize` and `jumpToPrompt`
     name nothing, so they act on whichever pane the operator is in and there is nothing for a
     policy to check. An addressed version would carry a pane and refuse it when
     `SpoolPaneState.holdsKeyboard` — the shape is `CloseRequest`'s, and for `movePane` it is
@@ -912,9 +911,9 @@ test is simple: two people building two features should not have to edit the sam
 document surface; `Workbench/` (3.8k) is columns, slots, panes and the offer/insert distinction;
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
 libghostty seam — sessions, the host view, the pane environment, and `push.sh`'s landing site;
-`Chat/` (1.7k) is the agent face; then `Spool/`, `App/`, `Board/`, `Workspaces/`,
-`Design/`, `Artifacts/`, `StatusBar/`, `Build/`, `Shared/`, `Capture/`, `Mail/`. Three of those
-have no bullet anywhere above and are the easiest to be surprised by:
+then `Spool/`, `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
+`StatusBar/`, `Build/`, `Shared/`, `Capture/`, `Mail/`. Two of those have no bullet anywhere
+above and are the easiest to be surprised by:
 
 - **`Archon/` and `Worktrees/` are the rail, and the rail is *somewhere to start work that is not
   your current work*.** Nothing docks there and nothing opens from it — run detail is read in
@@ -925,16 +924,11 @@ have no bullet anywhere above and are the easiest to be surprised by:
   things that were removed. Worktrees is `git worktree list --porcelain` and nothing else: helm
   reads no Archon database, and "merged" means Git reachability from a resolved remote default
   branch, never pull-request state. `CONTEXT.md` has both.
-- **`Chat/` is the agent *face*, read from the transcript file, and it is structurally behind.**
-  `ChatModel` **polls** rather than watching — a status change rewrites an existing file, which a
-  directory-level `DispatchSource` does not reliably see, and `BoardModel` polls for the same
-  reason. The limit is measured in `docs/direction.md` and is not a bug to fix in passing: the
-  grain is one content block per record, a median 8.8s behind, and an agent blocked on a question
-  writes **nothing** — so the moment most demanding attention is exactly when the file is silent.
 - **`Board/` is agent presence and the bench snapshot — it is not the drawable board.** The
   collision is real and worth knowing before a grep sends you to the wrong one. `Sources/Helm/Board/`
   is `BoardModel`, `AgentDot` and `BenchSnapshot`: which workspace tab has an agent that has
-  stopped, plus the JSON report an agent reads the bench from. On the presence half helm holds
+  stopped, plus the JSON report an agent reads the bench from. `AgentLocator` (a process's
+  ancestors, up to helm) and `TranscriptLocator` (a session's transcript on disk) live here too. On the presence half helm holds
   **no state of its own** — the registry file's lifecycle *is* the mark's lifecycle, so nothing
   acknowledges, decays or expires, which is what makes it safe to poll and republish rather than
   accumulate. The **drawable** board is

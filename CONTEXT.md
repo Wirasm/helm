@@ -52,12 +52,6 @@ canvas to the file or host it is showing. Persisted on the pane, so it survives 
 _Avoid_: title (that word is the shell's, one level down — OSC 0/2 — and outranked by a name),
 label, caption, tab name
 
-**face**:
-Which of a terminal pane's two presentations is drawn — the terminal, or the agent's
-writing over it. A property of the pane, so two terminals side by side can show different
-ones; a canvas has none.
-_Avoid_: mode, view, tab
-
 **visible**:
 Whether the operator can actually see a pane — it is its slot's selection, and its
 workspace is the active one. Distinct from **selected**, which is slot-local and answers

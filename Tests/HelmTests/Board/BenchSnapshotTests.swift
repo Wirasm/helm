@@ -27,8 +27,8 @@ final class BenchSnapshotTests: XCTestCase {
         let canvas = UUID()
         var bench = Workbench(
             panes: [
-                Pane(id: first, content: .terminal(face: .terminal)),
-                Pane(id: hidden, content: .terminal(face: .terminal)),
+                Pane(id: first, content: .terminal()),
+                Pane(id: hidden, content: .terminal()),
             ],
             selecting: hidden)
         bench.splitRight(with: Pane(id: canvas, content: .canvas(.file("/tmp/plan.md"))))

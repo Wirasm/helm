@@ -43,8 +43,6 @@ struct SlotTabStrip: View {
             .foregroundStyle(Color.textMuted)
             .help("New terminal (⌘N)")
 
-            faceToggle
-
             if isFocused {
                 Divider()
                     .frame(height: 14)
@@ -115,37 +113,6 @@ struct SlotTabStrip: View {
                 onSelect: { model.select(pane.id) },
                 onClose: { model.close(pane.id) }
             )
-        }
-    }
-
-    /// The two faces of this slot's selected pane. Same terminal underneath either way.
-    ///
-    /// **Always present, always pressable** — deliberately not gated on whether an agent
-    /// is running. The foreground pid moves constantly beneath it (`shell` was measured at
-    /// 947 consecutive samples), so a control that tracked it would flicker between
-    /// enabled and disabled while nothing about the operator's intent changed. Under a
-    /// bench the temptation gets stronger — N strips, N flickers — and the answer is the
-    /// same. Pressing it with no agent is not an error: the face itself names the reason.
-    ///
-    /// Absent entirely when the slot is showing a canvas, because `face(ofSelectedPaneIn:)`
-    /// answers nil for one. `if let` on a value the model computed is rendering; asking
-    /// what kind of pane it is would be a decision, and that lives in `Workbench`.
-    @ViewBuilder
-    private var faceToggle: some View {
-        if let face = model.bench?.face(ofSelectedPaneIn: slot.id) {
-            Divider()
-                .frame(height: 14)
-
-            Button {
-                model.focus(slot.id)
-                model.toggleFace()
-            } label: {
-                Image(systemName: face == .chat ? "terminal" : "text.alignleft")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(face == .chat ? Color.accent : .secondary)
-            .help(face == .chat ? "Back to the terminal (⌘T)" : "Read the agent's writing (⌘T)")
-            .accessibilityLabel(face == .chat ? "Show the terminal" : "Read the agent's writing")
         }
     }
 }
