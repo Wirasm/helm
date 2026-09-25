@@ -150,8 +150,9 @@ Research (2026-09-25, primary sources):
   exist, Windows ConPTY, is dead weight here. Use `rustix` `openpty` with our own spawn. This
   can land before the VT spike.
 - **No upstream Ghostty backend without a pty yet.** Ghostty 1.4 targets scripting and a true
-  tmux control mode; #14277 is tmux-specific. Keep the relay. helm's vendored Ghostty 1.3.1 is
-  still the latest tag.
+  tmux control mode; #14277 is tmux-specific. Keep the relay. helm vendors libghostty-spm
+  1.3.1, which embeds Ghostty at `35e1a016` (`vendor/libghostty-spm/Ghostty.ref`), not
+  Ghostty's own 1.3.1 tag. That tag has no terminal C API.
 
 Decision:
 
@@ -159,9 +160,12 @@ Decision:
   the `portable-pty` in `bench-session` today), the raw byte log it already keeps, and **a VT
   engine per session**, each on its own pinned thread, for structured reads: `bench get screen`,
   `bench send`, `bench watch --screen` (a zellij-style subscribe). A short spike under real
-  agent output picks the engine. `libghostty-vt` is preferred because it is the same engine as
-  helm's renderer, so what an agent reads is what the operator sees; `alacritty_terminal` is the
-  fallback if the bindings are too raw.
+  agent output picks the engine. **Settled 2026-09-25: `libghostty-vt`**, the same engine as
+  helm's renderer, so what an agent reads is what the operator sees. It matched helm's engine
+  at every checkpoint of real agent output. It is linked from a prebuilt, hash-pinned archive
+  at helm's Ghostty commit, so the daemon gate stays Rust-only. `alacritty_terminal` stays the
+  fallback: it diverged after resizes. Evidence, and M5b's four design rules, are in
+  `bench-roadmap.md` M5b and on #359.
 - **helm keeps Ghostty's renderer**, fed from benchd by running the attach relay inside a
   Ghostty surface. That already works (M5a, `bench attach`). The operator keeps full Ghostty
   quality, and one byte stream feeds both parsers. If upstream ever ships a non-pty backend
@@ -180,7 +184,8 @@ Decision:
    Not a priority.
 3. **No typing lock.** `--asked` and the skill's prompt rule are the whole focus mechanism.
 4. **Rules format**: TOML. Compositions of verbs go in justfiles.
-5. **Terminals**: benchd owns every pty and runs a VT engine per session; helm keeps Ghostty's
+5. **Terminals**: benchd owns every pty and runs a VT engine per session (`libghostty-vt`,
+   prebuilt and pinned to helm's Ghostty commit); helm keeps Ghostty's
    renderer through the attach relay. No custom painter.
 6. **Cross-machine means files**: the record syncs as a folder over Tailscale. No socket
    exposure and no peering protocol until files prove not to be enough.
