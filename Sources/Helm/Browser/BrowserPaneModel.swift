@@ -214,14 +214,15 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
             // A headless window still reserves room for browser UI it does not draw, so the
             // page is smaller than the window. Ask the page how much, and grow the window by
             // that, so the page is exactly the pane.
-            let chrome = try? await connection.call(
+            let inset = try? await connection.call(
                 "Runtime.evaluate",
                 Evaluate(
-                    expression: "[outerWidth - innerWidth, outerHeight - innerHeight].join(',')",
+                    expression: "[outerWidth - innerWidth, outerHeight - innerHeight]"
+                        + ".map(n => Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0)",
                     returnByValue: true),
-                session: session, returning: Evaluated.self)
-            let extra = (chrome?.result.value ?? "0,0").split(separator: ",").compactMap { Int($0) }
-            let (dw, dh) = extra.count == 2 ? (max(extra[0], 0), max(extra[1], 0)) : (0, 0)
+                session: session, returning: Evaluated<[Int]>.self)
+            let extra = inset?.result.value ?? []
+            let (dw, dh) = extra.count == 2 ? (extra[0], extra[1]) : (0, 0)
             try? await connection.call(
                 "Browser.setWindowBounds",
                 SetBounds(
@@ -284,7 +285,7 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
             """
         let result = try? await connection.call(
             "Runtime.evaluate", Evaluate(expression: expression, returnByValue: true),
-            session: session, returning: Evaluated.self)
+            session: session, returning: Evaluated<String>.self)
         return result?.result.value
     }
 
@@ -377,8 +378,8 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         let expression: String
         let returnByValue: Bool
     }
-    private struct Evaluated: Decodable {
-        struct Remote: Decodable { let value: String? }
+    private struct Evaluated<Value: Decodable>: Decodable {
+        struct Remote: Decodable { let value: Value? }
         let result: Remote
     }
 }

@@ -236,9 +236,9 @@ final class SpoolCommandPolicyTests: XCTestCase {
             "the refusal for an unknown kind lists these, so an older helm's answer and a newer "
                 + "one's have to differ in exactly this line")
         XCTAssertEqual(
-            HelmCommandName.allCases.count, 20,
-            "helm has twenty commands — eighteen from #219, plus movePane (#287) and newNote "
-                + "(#289). If that number changed, SpoolCommandPolicy's "
+            HelmCommandName.allCases.count, 21,
+            "helm has twenty-one commands — eighteen from #219, plus movePane (#287), newNote "
+                + "(#289) and openBrowser (#350). If that number changed, SpoolCommandPolicy's "
                 + "switch already forced a verdict for the new one — this only records that it "
                 + "was a deliberate change rather than a merge artefact")
     }

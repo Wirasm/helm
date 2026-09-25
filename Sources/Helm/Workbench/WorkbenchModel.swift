@@ -631,8 +631,13 @@ final class WorkbenchModel: ObservableObject {
         guard var bench else { return nil }
         let placement = bench.placementForBrowser()
         if case let .existing(open) = placement {
-            bench.select(offering: open)
-            commit(bench)
+            // Bring it forward only in a slot the operator is not in. In his own slot, showing
+            // a background tab *is* moving his keyboard — the focused slot's selection is the
+            // focused pane (`SpoolSelectPolicy`'s rule) — so the pane stays where it is.
+            if bench.slot(for: open)?.id != bench.focusedSlot {
+                bench.select(offering: open)
+                commit(bench)
+            }
             return open
         }
         let pane = Pane(content: .browser)

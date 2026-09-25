@@ -56,5 +56,10 @@ final class BrowserEndpointTests: XCTestCase {
                 try BenchRoot.resolve(environment: ["BENCH_SUITE": bad], home: home).get(),
                 "\(bad) cannot isolate, and must not fall back to the shared ~/.bench")
         }
+        XCTAssertThrowsError(
+            try BenchRoot.resolve(
+                environment: ["BENCH_DIR": "/r", "BENCH_SUITE": "a/b"], home: home
+            )
+            .get(), "bench refuses the suite before BENCH_DIR can win")
     }
 }

@@ -72,17 +72,22 @@ struct BrowserEndpoint: Codable, Equatable {
 /// shared root — the same posture as `SuiteName::validate`, whose rule this copies.
 enum BenchRoot {
     static func resolve(environment: [String: String], home: URL) -> Result<URL, BenchRootError> {
+        // The suite is judged first, as `bench` judges it before resolving anything: a name
+        // that cannot isolate is an error even when BENCH_DIR would win.
+        let suite = environment["BENCH_SUITE"]
+        if let suite {
+            let allowed = suite.allSatisfy {
+                $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "-")
+            }
+            guard !suite.isEmpty, suite.count <= 32, allowed, suite.first != "-" else {
+                return .failure(BenchRootError(suite: suite))
+            }
+        }
         if let dir = environment["BENCH_DIR"], !dir.isEmpty {
             return .success(URL(fileURLWithPath: dir, isDirectory: true))
         }
-        guard let suite = environment["BENCH_SUITE"] else {
+        guard let suite else {
             return .success(home.appendingPathComponent(".bench", isDirectory: true))
-        }
-        let allowed = suite.allSatisfy {
-            $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "-")
-        }
-        guard !suite.isEmpty, suite.count <= 32, allowed, suite.first != "-" else {
-            return .failure(BenchRootError(suite: suite))
         }
         return .success(home.appendingPathComponent(".bench-\(suite)", isDirectory: true))
     }

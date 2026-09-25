@@ -28,6 +28,23 @@ final class BrowserPaneBenchTests: XCTestCase {
             "it arrives where it can be seen")
     }
 
+    /// The case #353's review found: the browser a background tab in the slot the operator is
+    /// typing in. Showing it there would make it the focused pane — a seizure by another name.
+    func testReopeningABrowserTabBehindTheOperatorsPaneLeavesHimTyping() throws {
+        let model = mounted()
+        let browser = try XCTUnwrap(model.offerBrowser())
+        let browserSlot = try XCTUnwrap(model.bench?.slot(for: browser)?.id)
+        model.focus(browserSlot)
+        let typing = try XCTUnwrap(model.newTerminal()).id  // a tab over the browser, focused
+        XCTAssertEqual(model.bench?.focusedPane?.id, typing)
+
+        XCTAssertEqual(model.offerBrowser(), browser)
+
+        XCTAssertEqual(
+            model.bench?.focusedPane?.id, typing,
+            "an agent's openBrowser took the keyboard from the pane he was typing in")
+    }
+
     func testThereIsOneBrowserPaneAndOpeningItAgainShowsThatOne() throws {
         let model = mounted()
         let first = try XCTUnwrap(model.offerBrowser())
