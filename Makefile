@@ -1,7 +1,8 @@
 # helm build entry points. Two paths, both first-class:
 #   - SPM (`make build` / `make run` / `make test`) for fast iteration
 #   - XcodeGen (`make app`) for the real Helm.app bundle
-# Makefile (not justfile) so there's zero extra tooling beyond xcodegen.
+# Building stays in make so it needs nothing beyond xcodegen. The root justfile holds recipes
+# run against a live machine, such as `just release-resume`.
 
 DERIVED_DATA := .build/DerivedData
 APP := $(DERIVED_DATA)/Build/Products/Debug/Helm.app
