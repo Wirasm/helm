@@ -110,7 +110,16 @@ final class WorkbenchModel: ObservableObject {
     /// two agents two different sources — a second pane for a file already on screen, which is the
     /// interruption `offer` exists to avoid. It also must not persist; `CanvasOrigin`'s header has
     /// the reason.
-    private var origins: [Pane.ID: CanvasOrigin] = [:]
+    ///
+    /// **Stamped with the workspace whose bench holds the pane**, for `canvases`' reason: a push
+    /// can land on a parked bench (#349) and never be resolved into a canvas, so the canvas cache
+    /// cannot tell `closeWorkspace` it is there.
+    private var origins: [Pane.ID: PushedBy] = [:]
+
+    private struct PushedBy {
+        let origin: CanvasOrigin
+        let workspacePath: WorkspacePath
+    }
 
     /// Where a push from a workspace that is not mounted goes (#349). A parked workspace's bench
     /// is a value in `WorkspaceModel.contexts`, which this model cannot reach, and without this a
@@ -387,8 +396,8 @@ final class WorkbenchModel: ObservableObject {
         for (id, cached) in canvases where cached.workspacePath == path {
             cached.model.close()
             canvases[id] = nil
-            origins[id] = nil
         }
+        origins = origins.filter { $0.value.workspacePath != path }
     }
 
     /// Today's frame, built out of whatever sessions the manager has: one column, one
@@ -588,7 +597,7 @@ final class WorkbenchModel: ObservableObject {
     private func deliver(
         _ annotation: CanvasAnnotation, on canvas: URL, markedIn pane: Pane.ID
     ) -> CanvasNoteDelivery {
-        let route = CanvasNoteRoute.route(origin: origins[pane]) { origin in
+        let route = CanvasNoteRoute.route(origin: origins[pane]?.origin) { origin in
             // A closed pane resolves to no session, which is `.originGone` — the agent that
             // pushed this canvas is not there any more, and the operator is told so.
             notes.owner(of: terminals.sessions.first { $0.id == origin.terminal })
@@ -1100,7 +1109,7 @@ final class WorkbenchModel: ObservableObject {
             // **For a parked bench too.** `origins` is keyed by pane id and survives a switch, and
             // `deliver` resolves the origin against every workspace's sessions, so a mark made
             // after the operator switches in reaches the agent that pushed.
-            origins[pane] = request.origin
+            origins[pane] = PushedBy(origin: request.origin, workspacePath: request.workspacePath)
 
         // ⌘L is `nil` and means "show me the address field"; a URL means "open this",
         // which is what a ⌘-clicked http link sends. The distinction is now in the type
