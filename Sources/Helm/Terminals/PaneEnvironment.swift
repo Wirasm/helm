@@ -58,11 +58,25 @@ enum PaneEnvironment {
     /// obeyed at launch, so a child can never be told a suite helm refused — and under no suite
     /// nothing is published at all, because the default *is* the default and a variable saying
     /// so would be a second way to spell it.
+    ///
+    /// **And the same suite for `bench` (#393).** `bench` reads only `BENCH_SUITE` and
+    /// `BENCH_DIR`, so an agent in an isolated pane used to reach the operator's live benchd and
+    /// his signed-in browser while the pane itself showed `~/.bench-<suite>` (#378). Exporting
+    /// `BENCH_SUITE=<suite>` gives it the root `BenchRoot` gives the pane. It is not exported
+    /// when helm's environment already sets `BENCH_SUITE` or `BENCH_DIR`: the child inherits
+    /// those, and they outrank the suite in `BenchRoot` too. A suite benchd cannot name goes out
+    /// as is, so `bench` refuses it, as the pane does, rather than falling back to `~/.bench`.
     static func suiteDeclaration(
         in environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [String: String] {
         guard case .suite(let name) = DefaultsSuite.override(in: environment) else { return [:] }
-        return [DefaultsSuite.suiteVariable: name]
+        var declaration = [DefaultsSuite.suiteVariable: name]
+        if environment[BenchRoot.suiteVariable] == nil,
+            environment[BenchRoot.directoryVariable] == nil
+        {
+            declaration[BenchRoot.suiteVariable] = name
+        }
+        return declaration
     }
 
     /// What a pane's pty child is spawned with: the terminal declaration, the instance's suite

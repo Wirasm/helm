@@ -887,7 +887,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     his signed-in Chrome. Now, with no `BENCH_*` set, the suite resolves `~/.bench-<name>`, the root
     `bench` uses under `BENCH_SUITE=<name>`. A helm suite benchd's `SuiteName` cannot take, such
     as `Helm-Bench`, is refused in the pane rather than mapped to something `bench` would disagree
-    with.
+    with. The agents in its panes follow the pane (#393): `PaneEnvironment.suiteDeclaration`
+    also exports `BENCH_SUITE=<name>` unless helm's own environment already sets `BENCH_SUITE`
+    or `BENCH_DIR`, so `bench` in a pane resolves the same root, or refuses the same name.
+    `PaneEnvironmentTests` pins the two resolutions together.
   - **It could not be fixed in helm alone, and that shape recurs.** helm only *reads* the mailbox;
     it is **claimed** by `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts`, two
     processes helm does not run and cannot import from. So helm **declares** the suite into every
