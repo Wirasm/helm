@@ -133,8 +133,11 @@ extension CanvasAnnotation.Anchor {
 extension CanvasAnnotation.Mark {
     /// What the page's body names, given the `kind` the gate has already validated.
     ///
-    /// Called from exactly one place, `CanvasPageSelection.decode`, which read `kind` from the
-    /// body and passes it here so nothing reads it twice. `nil` means the gesture was real but
+    /// `CanvasSelection.init` calls it with the `kind` `CanvasPageSelection.decode` has just
+    /// validated, so nothing reads `kind` twice. It trusts that `kind` rather than re-checking it,
+    /// and nothing needs this to have a single caller: a `Mark` can be written as a literal
+    /// anyway, so the gate that matters is `CanvasSelection`'s `fileprivate` init, which only
+    /// `CanvasPageSelection.decode` can reach. `nil` means the gesture was real but
     /// named nothing helm can anchor to (a circle round empty space, an arrow with neither end
     /// on anything). The comment field still opens for it and says so, and `CanvasAnnotation`
     /// refuses the note.
