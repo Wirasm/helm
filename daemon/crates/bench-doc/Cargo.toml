@@ -1,0 +1,13 @@
+[package]
+name = "bench-doc"
+version.workspace = true
+edition.workspace = true
+description = "The bench document: workspaces, columns, slots and panes, and every rule that changes them."
+
+[dependencies]
+serde.workspace = true
+# `float_roundtrip`: the default parser is fast and not correctly rounded, so a width read
+# back from bench.json could differ in its last bit from the one written — and the file is
+# the layout (measured by `two_relaunches_do_not_move_a_single_fraction`).
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+uuid = { version = "1", features = ["v4", "serde"] }
