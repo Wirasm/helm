@@ -1,11 +1,10 @@
 {
   "format": "bench.browser-endpoint",
-  "version": 0,
+  "version": 1,
   "cdp": "http://127.0.0.1:52677",
   "ws": "ws://127.0.0.1:52677/devtools/browser/6b0f4f4e-1f2a-4c1e-9a55-3f1f7c2d9e10",
   "port": 52677,
   "pid": 41234,
-  "mode": "headless",
   "binary": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "profile": "/Users/operator/.bench/browser/profile",
   "started_at": "2026-09-25T12:00:00Z"

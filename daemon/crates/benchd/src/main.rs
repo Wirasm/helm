@@ -26,7 +26,7 @@
 //! sits behind one mutex held only for map and log operations — never across a ready
 //! wait, a prompt delivery, or an attach pump.
 
-use bench_browser::{Browser, ExitInfo, LaunchError, default_candidates};
+use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
 use bench_session::{AgentKind, Notice, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id};
 use bench_wire::{
     BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
@@ -1190,7 +1190,7 @@ fn dispatch(
             core.lock().unwrap().browser_restarts.clear();
             match start_browser(core, 0, BrowserMode::Headless) {
                 Ok((browser, already)) => {
-                    let mut data = json!(browser.endpoint);
+                    let mut data = browser_json(&browser);
                     data["already_running"] = json!(already);
                     (ok(data), AfterResponse::Done)
                 }
@@ -1206,7 +1206,7 @@ fn dispatch(
                 let c = core.lock().unwrap();
                 c.browser
                     .as_ref()
-                    .is_some_and(|b| b.is_running() && b.endpoint.mode == BrowserMode::Setup)
+                    .is_some_and(|b| b.is_running() && b.mode() == BrowserMode::Setup)
             };
             if !running_setup && let Err(why) = stop_browser(core, Duration::from_secs(5)) {
                 return (errored(why), AfterResponse::Done);
@@ -1214,7 +1214,7 @@ fn dispatch(
             core.lock().unwrap().browser_restarts.clear();
             match start_browser(core, 0, BrowserMode::Setup) {
                 Ok((browser, already)) => {
-                    let mut data = json!(browser.endpoint);
+                    let mut data = browser_json(&browser);
                     data["already_running"] = json!(already);
                     data["next"] = json!(
                         "a Chrome window is open on this profile: install extensions and sign in, then quit it (Cmd-Q) — the browser returns to headless by itself"
@@ -1229,14 +1229,7 @@ fn dispatch(
         Some(Verb::BrowserStatus) => {
             let c = core.lock().unwrap();
             let running = c.browser.as_ref().filter(|b| b.is_running());
-            let mut data = match running {
-                // Setup is the operator's window: say so, and hand out no address to drive it.
-                Some(b) if b.endpoint.mode == BrowserMode::Setup => {
-                    json!({ "mode": b.endpoint.mode, "pid": b.endpoint.pid })
-                }
-                Some(b) => json!(b.endpoint),
-                None => json!({}),
-            };
+            let mut data = running.map_or_else(|| json!({}), |b| browser_json(b));
             data["running"] = json!(running.is_some());
             (ok(data), AfterResponse::Done)
         }
@@ -1275,7 +1268,7 @@ fn start_browser(
             // caller can slip between a check and the hand-back. A setup window is the
             // operator's, mid-install or mid-sign-in: an agent handed it as "the shared
             // browser" would drive the window he is typing in.
-            return match (b.endpoint.mode, mode) {
+            return match (b.mode(), mode) {
                 (running, asked) if running == asked => Ok((Arc::clone(b), true)),
                 (BrowserMode::Setup, _) => Err(LaunchError::Refused(
                     "the shared browser is open in a window for setup — the operator is using it. When he quits it (Cmd-Q) it comes back headless by itself; `bench browser status` says when".into(),
@@ -1310,7 +1303,7 @@ fn start_browser(
     match launched {
         Ok(browser) => {
             c.browser = Some(Arc::clone(&browser));
-            let mut data = json!(browser.endpoint);
+            let mut data = browser_json(&browser);
             data["restart"] = json!(restart);
             if let Err(why) = c.append("browser/started", data) {
                 drop(c);
@@ -1344,7 +1337,7 @@ fn stop_browser(core: &Arc<Mutex<Core>>, grace: Duration) -> Result<Option<u32>,
         c.browser_wanted = false;
         match c.browser.take().filter(|b| b.is_running()) {
             Some(b) => {
-                if let Err(why) = c.append("browser/stopped", json!({ "pid": b.endpoint.pid })) {
+                if let Err(why) = c.append("browser/stopped", json!({ "pid": b.pid })) {
                     // Not logged is not a reason to leave it running untracked: the next
                     // start would launch a second browser on the same profile. Stop it and
                     // say the record failed — `start_browser`'s rule on the same failure.
@@ -1358,7 +1351,19 @@ fn stop_browser(core: &Arc<Mutex<Core>>, grace: Duration) -> Result<Option<u32>,
         }
     };
     browser.stop(grace);
-    Ok(Some(browser.endpoint.pid))
+    Ok(Some(browser.pid))
+}
+
+/// What the daemon says about a running browser — in answers, in `browser/status` and in
+/// `browser/started`, one shape for all three: the headless browser's endpoint plus its
+/// mode, or for setup just the mode and pid, because a setup browser has no address.
+fn browser_json(browser: &Browser) -> Value {
+    let mut data = match &browser.launched {
+        Launched::Headless(endpoint) => json!(endpoint),
+        Launched::Setup => json!({ "pid": browser.pid }),
+    };
+    data["mode"] = json!(browser.mode());
+    data
 }
 
 /// The supervisor's half: a requested exit was already logged as `browser/stopped`; a
@@ -1371,10 +1376,7 @@ fn browser_exited(core: Arc<Mutex<Core>>, info: ExitInfo) {
     if info.mode == BrowserMode::Setup {
         let wanted = {
             let mut c = core.lock().unwrap();
-            if c.browser
-                .as_ref()
-                .is_some_and(|b| b.endpoint.pid == info.pid)
-            {
+            if c.browser.as_ref().is_some_and(|b| b.pid == info.pid) {
                 c.browser = None;
             }
             let wanted = c.browser_wanted;
@@ -1391,10 +1393,7 @@ fn browser_exited(core: Arc<Mutex<Core>>, info: ExitInfo) {
     }
     let restart = {
         let mut c = core.lock().unwrap();
-        if c.browser
-            .as_ref()
-            .is_some_and(|b| b.endpoint.pid == info.pid)
-        {
+        if c.browser.as_ref().is_some_and(|b| b.pid == info.pid) {
             c.browser = None;
         }
         let now = Instant::now();
