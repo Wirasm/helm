@@ -1277,6 +1277,31 @@ fn browser_start_publishes_the_endpoint_it_logged_and_a_second_start_finds_it() 
     on_disk["already_running"] = serde_json::json!(false);
     assert_eq!(on_disk, answer);
 
+    // helm reads this file from Swift and cannot import the Rust type, so both sides test
+    // against one checked-in sample: the keys written here are exactly the fixture's, and
+    // helm's BrowserEndpointTests decodes the same file.
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/browser-endpoint.json"),
+        )
+        .expect("daemon/fixtures/browser-endpoint.json"),
+    )
+    .unwrap();
+    let keys = |v: &serde_json::Value| {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&endpoint_path).unwrap()).unwrap();
+    assert_eq!(
+        keys(&written),
+        keys(&fixture),
+        "endpoint.json drifted from the fixture helm reads"
+    );
+    serde_json::from_value::<bench_wire::BrowserEndpoint>(fixture)
+        .expect("the fixture is a real endpoint");
+
     // Logged before it was answered.
     let started: Vec<_> = event_kinds(&home.dir)
         .into_iter()
@@ -1560,6 +1585,12 @@ fn setup_opens_the_same_profile_headed_and_quitting_it_returns_to_headless() {
         argv.contains("--user-agent="),
         "the rest of the flags are unchanged: {argv}"
     );
+
+    // While the operator is in that window, `start` must not hand it to an agent as "the
+    // shared browser" — it refuses and says what brings the headless browser back.
+    let meanwhile = bench(&home.dir, &["browser", "start"]);
+    assert_eq!(meanwhile.code, 3, "stderr: {}", meanwhile.stderr);
+    assert!(meanwhile.stderr.contains("setup"), "{}", meanwhile.stderr);
 
     // The operator quits the window (Cmd-Q is a clean exit; TERM is how the fake gets one).
     let setup_pid = setup["pid"].as_u64().unwrap() as i32;

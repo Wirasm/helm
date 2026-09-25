@@ -1187,7 +1187,24 @@ fn dispatch(
         }
 
         Some(Verb::BrowserStart) => {
-            core.lock().unwrap().browser_restarts.clear();
+            {
+                let mut c = core.lock().unwrap();
+                // A setup window is the operator's, mid-install or mid-sign-in: an agent that
+                // was handed it as "the shared browser" would drive the window he is typing
+                // in. Refuse with the route; quitting it brings the headless browser back.
+                if c.browser
+                    .as_ref()
+                    .is_some_and(|b| b.is_running() && b.endpoint.mode == BrowserMode::Setup)
+                {
+                    return (
+                        refused(
+                            "the shared browser is open in a window for setup — the operator is using it. When he quits it (Cmd-Q) it comes back headless by itself; `bench browser status` says when".into(),
+                        ),
+                        AfterResponse::Done,
+                    );
+                }
+                c.browser_restarts.clear();
+            }
             match start_browser(core, 0, BrowserMode::Headless) {
                 Ok((browser, already)) => {
                     let mut data = json!(browser.endpoint);
@@ -1328,7 +1345,14 @@ fn stop_browser(core: &Arc<Mutex<Core>>, grace: Duration) -> Result<Option<u32>,
         c.browser_wanted = false;
         match c.browser.take().filter(|b| b.is_running()) {
             Some(b) => {
-                c.append("browser/stopped", json!({ "pid": b.endpoint.pid }))?;
+                if let Err(why) = c.append("browser/stopped", json!({ "pid": b.endpoint.pid })) {
+                    // Not logged is not a reason to leave it running untracked: the next
+                    // start would launch a second browser on the same profile. Stop it and
+                    // say the record failed — `start_browser`'s rule on the same failure.
+                    drop(c);
+                    b.stop(grace);
+                    return Err(why);
+                }
                 b
             }
             None => return Ok(None),

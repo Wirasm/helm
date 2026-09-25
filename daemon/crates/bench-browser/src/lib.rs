@@ -313,15 +313,11 @@ pub struct ExitInfo {
     pub requested: bool,
 }
 
-unsafe extern "C" {
-    fn kill(pid: i32, sig: i32) -> i32;
-}
-
 fn signal(pid: u32, sig: i32) {
     // Only ever pids this process spawned and has not yet reaped, or the browser's own
     // pid reported by that wrapper — never a pattern (repo rule).
     unsafe {
-        kill(pid as i32, sig);
+        libc::kill(pid as libc::pid_t, sig);
     }
 }
 
