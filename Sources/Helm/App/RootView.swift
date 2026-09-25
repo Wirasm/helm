@@ -124,16 +124,14 @@ struct RootView: View {
 
     /// The workspace verbs, which `LocalSink` hands here because they span the workspace list
     /// and the bench together.
-    private func apply(_ verb: BenchVerb) {
+    private func apply(_ verb: WorkspaceVerb) {
         switch verb {
-        case let .workspaceOpen(path):
+        case let .open(path):
             openWorkspace(Workspace(path: path))
-        case let .workspaceActivate(path):
+        case let .activate(path):
             if let workspace = workspace(at: path) { switchWorkspace(workspace) }
-        case let .workspaceClose(path):
+        case let .close(path):
             if let workspace = workspace(at: path) { closeWorkspace(workspace) }
-        default:
-            break
         }
     }
 

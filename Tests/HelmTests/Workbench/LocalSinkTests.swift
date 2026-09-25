@@ -136,18 +136,13 @@ final class LocalSinkTests: XCTestCase {
     /// sink hands them to whoever holds both — `RootView` in the app.
     func testWorkspaceVerbsGoToWhoeverHoldsTheWorkspaceList() {
         let model = mounted()
-        var handed: [BenchVerb] = []
+        var handed: [WorkspaceVerb] = []
         model.workspaceVerbs = { handed.append($0) }
 
         model.send(.workspaceOpen(path: "/tmp/a"), by: .operatorGesture)
         model.send(.workspaceActivate(path: "/tmp/a"), by: .operatorGesture)
         model.send(.workspaceClose(path: "/tmp/a"), by: .operatorGesture)
 
-        XCTAssertEqual(
-            handed,
-            [
-                .workspaceOpen(path: "/tmp/a"), .workspaceActivate(path: "/tmp/a"),
-                .workspaceClose(path: "/tmp/a"),
-            ])
+        XCTAssertEqual(handed, [.open("/tmp/a"), .activate("/tmp/a"), .close("/tmp/a")])
     }
 }

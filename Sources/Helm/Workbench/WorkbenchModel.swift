@@ -151,7 +151,7 @@ final class WorkbenchModel: ObservableObject {
 
     /// Opening, closing and switching workspaces, which `RootView` carries out because they span
     /// the workspace list and the bench together. nil in a test that has no workspace list.
-    var workspaceVerbs: ((BenchVerb) -> Void)?
+    var workspaceVerbs: ((WorkspaceVerb) -> Void)?
 
     /// `AnyCancellable`s rather than NotificationCenter tokens: they unsubscribe in their
     /// own deinit, and Swift 6 forbids a nonisolated deinit from touching the non-Sendable

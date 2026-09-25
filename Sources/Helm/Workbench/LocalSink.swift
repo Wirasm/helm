@@ -88,10 +88,14 @@ final class LocalSink: VerbSink {
                 workbench.resizeSlot(member, to: fraction, against: against)
             }
             return nil
-        case .workspaceOpen, .workspaceClose, .workspaceActivate:
-            // Opening, closing and switching workspaces span the workspace list and the bench
-            // together, so `RootView` carries them out (`WorkbenchModel.workspaceVerbs`).
-            workbench.workspaceVerbs?(verb)
+        case let .workspaceOpen(path):
+            workbench.workspaceVerbs?(.open(path))
+            return nil
+        case let .workspaceActivate(path):
+            workbench.workspaceVerbs?(.activate(path))
+            return nil
+        case let .workspaceClose(path):
+            workbench.workspaceVerbs?(.close(path))
             return nil
         case .get, .workspaceImport, .workspaceReset, .workspaceUnshelve, .paneRecord:
             // Verbs that only mean something to benchd. Locally the bench is already here,
@@ -136,6 +140,16 @@ final class LocalSink: VerbSink {
     private func isTerminal(_ surface: Surface?) -> Bool {
         if case .terminal = surface { true } else { false }
     }
+}
+
+/// The workspace verbs the local sink hands on, as their own closed type: opening, closing and
+/// switching workspaces span the workspace list and the bench together, so `RootView` carries
+/// them out (`WorkbenchModel.workspaceVerbs`). A type rather than `BenchVerb` so the receiver's
+/// `switch` is exhaustive and a verb added here cannot be silently dropped there.
+enum WorkspaceVerb: Equatable {
+    case open(String)
+    case activate(String)
+    case close(String)
 }
 
 extension Workbench.Direction {
