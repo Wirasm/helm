@@ -120,7 +120,9 @@ this workspace:
 
 ## How it grows
 
-M1 attention queue + taps (first new capability, purely additive) → M2 mail authority →
-M3 the CLI replaces the spool scripts → M4 the workbench document → M5 ptys → M6 reach
-over the tailnet → M7 the forge. Each milestone: new event kinds, new verbs, same spine.
-The roadmap is the sequence; the operator names the milestone that starts.
+Landed: M0 skeleton, M5a daemon ptys, mail. Next, in order (tracking issue #362): M4 the
+bench document → M3 `bench` as the whole agent surface → drawers, keymap and rules → M1
+attention → M2 finish (helm's mail hooks become sensors) → M5b every pane a benchd session
+→ M6 sync the record over Tailscale → M7 the agents' own machine. Each milestone: new event
+kinds, new verbs, same spine. The roadmap is the sequence; the operator names the milestone
+that starts.

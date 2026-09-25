@@ -179,8 +179,8 @@ bash daemon/test.sh
 same carve-out as `pi/` and `hooks/`: its gate needs only the Rust toolchain, its CI job
 triggers only on `daemon/**`, and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
-`docs/future-planning/bench-roadmap.md`, and M0 (skeleton and suite isolation) is the
-part that exists.
+`docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
+M0 (skeleton), M5a (daemon-owned ptys) and mail are the parts that exist.
 
 **If you touched `hooks/`, run its gate:**
 
@@ -325,16 +325,16 @@ worse than the absence it was added to fix. The distinction does exist, but not 
 reach it: one layer in, in transcript JSONL that Anthropic documents as internal and
 version-dependent, and in the agent's **own context** as prose. Legible is not countable.
 
-**The premise under all of this is no longer settled, and #320 is where it is being settled.**
-This file used to state flatly that nothing outside a Claude Code session can start a turn in it.
-Claude Code 2.1.224+ ships per-session sockets and a message delivered to an idle session's socket
-arrives as a new user turn — measured at **0.12s**, no watch armed. So take the sentence above as
-*"helm does not do this today"* rather than as a fact about the runtime. **The verdict is
-CONDITIONAL and the condition is helm's own posture**: under `--dangerously-skip-permissions`,
-which `SpoolUnattendedPolicy` gives every spawned `claude`, the poke is accepted, returns cleanly,
-and is **held** behind a modal in a pane nobody is watching — #179 arriving through a new door.
-Nothing is built, the arm-a-watch notice is still the working mechanism, and #322 is the same
-shape: also CONDITIONAL, also unbuilt. **Read both before designing against either.**
+**#320 and #322 are closed, and the wake that got built is not the socket.** Claude Code 2.1.224+
+ships per-session sockets, and a message delivered to an idle session's socket arrives as a new user
+turn — measured at **0.12s** — so *"Claude Code has no equivalent helm can call"* above means
+*helm does not do this*, not that the runtime cannot. #320's verdict was CONDITIONAL on helm's own
+posture: under `--dangerously-skip-permissions`, which `SpoolUnattendedPolicy` gives every spawned
+`claude`, the poke is accepted, returns cleanly, and is **held** behind a modal in a pane nobody is
+watching — #179 arriving through a new door. So the build went the other way: **benchd pastes the
+notice into an idle pty it owns**, the same for claude, codex and pi, with the loop cap in its
+courier (#342, `daemon/`). #322's single `bench mail` verb shipped in the same PR. In helm itself
+nothing changed: the arm-a-watch notice is still the working mechanism for a pane helm hosts.
 
 Both hooks are wired by hand into `~/.claude/settings.json` and
 never write themselves there; `hooks/helm-mail.mjs` is the convention, and it is a **deliberate

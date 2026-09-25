@@ -1,12 +1,14 @@
-//! benchd — the bench daemon. M0 (skeleton and isolation) + M5a (the pty core).
+//! benchd — the bench daemon. M0 (skeleton and isolation), M5a (the pty core) and mail.
 //!
 //! What exists: a suite-aware record root, an append-only event log that is the single
-//! source of truth, and one unix socket answering eight verbs — status/events/stop from
-//! M0, and spawn/sessions/attach/close/resume from M5a: daemon-owned ptys hosting full
-//! interactive agent TUIs, viewed through a dtach-grade raw relay (`bench attach`).
-//! What deliberately does not exist yet: mail, attention, taps, the painter — those are
-//! next milestones, and each arrives as new event kinds plus new verbs over this same
-//! spine, never as a second channel beside it.
+//! source of truth, and one unix socket answering eleven verbs — status/events/stop from
+//! M0; spawn/sessions/attach/close/resume from M5a: daemon-owned ptys hosting full
+//! interactive agent TUIs, viewed through a dtach-grade raw relay (`bench attach`); and
+//! mail/send, mail/list and mail/read, with the wake reactor pasting a notice into an
+//! idle recipient's pty (#342).
+//! What deliberately does not exist yet: the bench document, attention and taps (see
+//! `docs/future-planning/bench-roadmap.md` and tracking issue #362). Each arrives as new
+//! event kinds plus new verbs over this same spine, never as a second channel beside it.
 //!
 //! Design rules this file carries (argued in ../../direction.md):
 //! - **Bench-visible means logged.** Every mutation appends an event before the
