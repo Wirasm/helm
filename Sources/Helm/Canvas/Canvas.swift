@@ -1205,7 +1205,7 @@ struct CanvasView: View {
 
     /// The tools, as chrome on the canvas rather than a mode you have to know about.
     ///
-    /// Five small buttons instead of a `Picker`: a segmented control would grow the header
+    /// Two small buttons instead of a `Picker`: a segmented control would grow the header
     /// by its own chrome, and this sits beside three existing icon buttons that already
     /// establish the shape.
     ///
@@ -1311,7 +1311,7 @@ struct CanvasView: View {
                 writeToggle
             }
             // Nothing to mark while writing: the page is not on screen, and a picker over a text
-            // editor would be four buttons that do nothing.
+            // editor would be buttons that do nothing.
             if model.draft == nil {
                 markPicker
             }

@@ -96,16 +96,6 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
         XCTAssertTrue(page.drainExceptions().isEmpty)
     }
 
-    /// Between the iterations of a loop that marks more than once — the owner stays, the mail
-    /// goes, so `delivered()` keeps meaning "the message this iteration sent".
-    private func emptyTheMailbox() throws {
-        let box = mailRoot.appendingPathComponent(handle.value)
-        for name in try FileManager.default.contentsOfDirectory(atPath: box.path)
-        where name != "owner.json" {
-            try FileManager.default.removeItem(at: box.appendingPathComponent(name))
-        }
-    }
-
     private func delivered() throws -> [String: Any] {
         let box = mailRoot.appendingPathComponent(handle.value)
         let names = try FileManager.default.contentsOfDirectory(atPath: box.path)
@@ -144,8 +134,6 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
         XCTAssertTrue(body.contains("this shouldn't talk to that"))
         XCTAssertTrue(body.contains(canvas.path), "and it has to say which canvas")
     }
-
-    // MARK: - The geometry marks
 
     // MARK: - The sidecar, and the fallback
 
