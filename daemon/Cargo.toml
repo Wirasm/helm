@@ -8,6 +8,7 @@ members = [
     "crates/bench-mail",
     "crates/bench-browser",
     "crates/bench-doc",
+    "crates/bench-sessions",
     "crates/benchd",
     "crates/bench",
 ]

@@ -872,7 +872,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   window is titled `helm — <name>`, which is what `winshot --list` and `helm-capture --window` see
   when two helms are running. The window frame is not autosaved under it: that is AppKit's write
   rather than helm's, and the only one a suite cannot catch by itself.
-  - **"No reachable path" is a promise about four directories, not one, and the fourth was a
+  - **"No reachable path" is a promise about five directories, not one, and the fourth was a
     lie until #285.** The suite moves the defaults, the spool (`~/.helm/spool-<name>`), the bench
     snapshot (`~/.helm/bench-<name>`) — and now the **mailbox**, `~/.helm/mail-<name>`. It did not
     move mail, so a capability test launched under `HELM_DEFAULTS_SUITE=drivetest` spawned an
@@ -880,6 +880,16 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     addressable by them, listed to them, widening handles against them (#262) and sweeping their
     mailboxes with the reaper on every session start (#236). Isolation is the whole reason those
     tests are safe to run on a live machine, so the promise was fixed rather than narrowed.
+  - **The browser pane's bench root is the fifth, and it leaked the same way until #378.**
+    `BenchRoot` (`Sources/HelmWire/Bench/`) read only `BENCH_DIR` and `BENCH_SUITE`, so an
+    isolated helm opened the operator's `~/.bench` browser and forwarded its clicks and keys into
+    his signed-in Chrome. Now, with no `BENCH_*` set, the suite resolves `~/.bench-<name>`, the root
+    `bench` uses under `BENCH_SUITE=<name>`. A helm suite benchd's `SuiteName` cannot take, such
+    as `Helm-Bench`, is refused in the pane rather than mapped to something `bench` would disagree
+    with. The agents in its panes follow the pane (#393): `PaneEnvironment.suiteDeclaration`
+    also exports `BENCH_SUITE=<name>` unless helm's own environment already sets `BENCH_SUITE`
+    or `BENCH_DIR`, so `bench` in a pane resolves the same root, or refuses the same name.
+    `PaneEnvironmentTests` pins the two resolutions together.
   - **It could not be fixed in helm alone, and that shape recurs.** helm only *reads* the mailbox;
     it is **claimed** by `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts`, two
     processes helm does not run and cannot import from. So helm **declares** the suite into every

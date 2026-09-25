@@ -103,7 +103,7 @@ spec:
     for verb in status events stop:probe spawn sessions attach close resume \
                 select name capture cmd \
                 attn/post attn/list attn/ack watch mail/send mail/list mail/read \
-                browser/start browser/status browser/stop browser/setup \
+                sessions/all sessions/dismiss browser/start browser/status browser/stop browser/setup \
                 bench/get workspace/open workspace/close workspace/activate workspace/reset \
                 workspace/unshelve workspace/import pane/open pane/split pane/close pane/show \
                 pane/move pane/name pane/repoint pane/record focus/slot focus/step \

@@ -44,6 +44,13 @@ focus is refused unless it says `asked`. helm does not use any of it yet — its
 next step — and `just bench-proof` drives a whole session through the socket and across a
 restart.
 
+**And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
+every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's
+snapshot), benchd's own sessions, Claude Code `--bg` jobs, running subagents, and finished
+sessions — the last only from `sessions/hosted.json`, benchd's record of what it and helm
+hosted, because no harness file says where a session ran. `bench sessions dismiss` hides a
+finished row. helm's drawer is the next step.
+
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance
 gate that runs the real binaries. M5a is the pty core: `spawn` puts a real interactive

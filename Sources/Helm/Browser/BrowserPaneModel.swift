@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import HelmWire
 
 /// A browser pane's live side: finds the shared browser, shows one of its tabs, and forwards
 /// the operator's mouse and keyboard to it.
@@ -46,7 +47,7 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
         endpointURL = BenchRoot.resolve(environment: environment, home: home)
-            .map(BenchRoot.endpointURL(in:))
+            .map(BrowserEndpoint.url(in:))
         startWatching()
     }
 

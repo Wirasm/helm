@@ -83,6 +83,56 @@ final class PaneEnvironmentTests: XCTestCase {
                 "HELM_DEFAULTS_SUITE"])
     }
 
+    // MARK: - Which bench the child belongs to (#393)
+
+    /// What `bench` in a pane resolves: it reads `BENCH_*` and nothing of helm's, so this is
+    /// the child's environment with every other variable taken out.
+    private func benchRootInPane(of helm: [String: String]) -> Result<URL, BenchRootError> {
+        let child = helm.merging(PaneEnvironment.forPane(UUID(), environment: helm)) { $1 }
+        return BenchRoot.resolve(
+            environment: child.filter { $0.key.hasPrefix("BENCH_") },
+            home: URL(fileURLWithPath: "/Users/op"))
+    }
+
+    /// **The pane and the agent in it look at one bench.** helm's browser pane resolves its root
+    /// with `BenchRoot` from helm's environment (#378). An agent in a pane runs `bench`, which
+    /// resolves from the child's `BENCH_*` alone. Before #393 an isolated helm declared only
+    /// `HELM_DEFAULTS_SUITE`, so the pane showed `~/.bench-<suite>` while the agent drove the
+    /// operator's `~/.bench`.
+    func testAnAgentInAPaneResolvesTheBenchThePaneShows() throws {
+        let home = URL(fileURLWithPath: "/Users/op")
+        let fixtures: [[String: String]] = [
+            [:],
+            ["HELM_DEFAULTS_SUITE": "drivetest"],
+            ["HELM_DEFAULTS_SUITE": "com.wirasm.helm"],
+            ["HELM_DEFAULTS_SUITE": "drivetest", "BENCH_SUITE": "other"],
+            ["HELM_DEFAULTS_SUITE": "drivetest", "BENCH_DIR": "/tmp/bench"],
+        ]
+        for helm in fixtures {
+            let pane = try BenchRoot.resolve(environment: helm, home: home).get()
+            XCTAssertEqual(try benchRootInPane(of: helm).get(), pane, "helm environment \(helm)")
+        }
+    }
+
+    /// A suite helm runs under but benchd cannot name: the pane refuses it, and so must `bench`
+    /// in the pane. Falling back to `~/.bench` is the leak.
+    func testASuiteBenchdCannotNameIsRefusedInThePaneToo() {
+        let helm = ["HELM_DEFAULTS_SUITE": "Helm-Bench"]
+        XCTAssertThrowsError(
+            try BenchRoot.resolve(environment: helm, home: URL(fileURLWithPath: "/Users/op")).get())
+        XCTAssertThrowsError(
+            try benchRootInPane(of: helm).get(), "an agent must not reach the shared ~/.bench")
+    }
+
+    /// The operator's own helm declares no bench suite: his agents reach his own bench.
+    func testTheOperatorsOwnHelmDeclaresNoBenchSuite() {
+        XCTAssertNil(PaneEnvironment.forPane(UUID(), environment: [:])["BENCH_SUITE"])
+        XCTAssertNil(
+            PaneEnvironment.forPane(
+                UUID(), environment: ["HELM_DEFAULTS_SUITE": "com.wirasm.helm"])[
+                    "BENCH_SUITE"])
+    }
+
     /// **The wiring, which no fixture can prove.** `TerminalSession` calls `forPane(id)` with no
     /// environment argument, so the default parameter *is* the mechanism — and every test above
     /// hands in a dictionary and would go on passing if that default were `[:]`. This one asks
