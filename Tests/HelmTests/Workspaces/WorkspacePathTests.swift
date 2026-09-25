@@ -1,3 +1,4 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -12,16 +13,16 @@ import XCTest
 /// every persisted `Workspace`, `BenchSnapshot` and `WorkspaceContext` path on the next
 /// launch — `~/Projects/foo` staying a literal `~` directory, and a path built by any code
 /// that legitimately carries a `.` or `..` segment jumping to a different string. This suite
-/// pins the actual, narrower contract: `Workspace.normalized`'s tilde-expand-plus-trailing-
+/// pins the actual, narrower contract: `FilesystemPath.normalized`'s tilde-expand-plus-trailing-
 /// slash-trim, delegated to rather than reimplemented, with symlinks and dot segments left
 /// alone exactly as `Workspace.path` already leaves them.
 final class WorkspacePathTests: XCTestCase {
 
-    func testItMatchesWorkspacesOwnNormalizer() {
+    func testItMatchesTheSharedNormalizer() {
         for path in ["/tmp/plan", "/tmp/plan/", "~/code", "~/code/", "/", "/tmp//plan"] {
             XCTAssertEqual(
-                WorkspacePath(path).value, Workspace.normalized(path),
-                "WorkspacePath must delegate to Workspace.normalized rather than carry a "
+                WorkspacePath(path).value, FilesystemPath.normalized(path),
+                "WorkspacePath must delegate to FilesystemPath.normalized rather than carry a "
                     + "second, drifting spelling of \"normalized\"")
         }
     }
@@ -39,7 +40,7 @@ final class WorkspacePathTests: XCTestCase {
     }
 
     /// The distinguishing case from `StandardizedPath`'s `.standardizedFileURL`, and the one
-    /// a regression back to it would get wrong silently: `Workspace.normalized` does not
+    /// a regression back to it would get wrong silently: `FilesystemPath.normalized` does not
     /// touch dot segments at all, so neither does this.
     func testDotSegmentsAreNotCollapsed() {
         XCTAssertEqual(WorkspacePath("/tmp/./plan").value, "/tmp/./plan")

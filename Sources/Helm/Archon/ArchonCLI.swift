@@ -67,14 +67,7 @@ struct ArchonCLIError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
-/// The sole process and JSON boundary for Archon.
-///
-/// **stdout goes to a regular file rather than a `Pipe`, and the reason is the mechanism, not a
-/// measurement.** A `Pipe` a process is not draining fills its kernel buffer (64 KiB on macOS)
-/// and blocks the child; `waitUntilExit()` before reading is therefore a deadlock waiting for a
-/// payload that outgrows the buffer, and `workflow get --verbose` on a 27-node run is 7 KiB
-/// today with no ceiling. A file has no such limit and no reader to schedule. **stderr is a
-/// second file** — small by nature, and the only place Archon says *why* it refused.
+/// The sole process and JSON boundary for Archon. The process itself is `Subprocess`'s.
 struct ArchonCLI: ArchonClient, Sendable {
     /// **Generous on purpose: this is a deadline, not a latency budget.** A healthy call is
     /// ~0.6s (measured against Archon 0.7.0, `workflow runs`/`get`, warm). Anything past 20s is
@@ -140,9 +133,8 @@ struct ArchonCLI: ArchonClient, Sendable {
 
     func complete(branch: String, in workspacePath: WorkspacePath) async throws {
         let arguments = ["complete", branch]
-        let capture = try await capture(arguments: arguments, in: workspacePath.value)
-        defer { try? FileManager.default.removeItem(at: capture.url) }
-        let text = String(decoding: capture.data, as: UTF8.self)
+        let data = try await capture(arguments: arguments, in: workspacePath.value)
+        let text = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if text.localizedCaseInsensitiveContains("not found") {
             throw ArchonCLIError(
@@ -200,251 +192,75 @@ struct ArchonCLI: ArchonClient, Sendable {
     static func developmentEnvironment(
         inherited: [String: String], homeDirectory: String
     ) -> [String: String] {
-        var environment = inherited
-        let developmentBin = URL(fileURLWithPath: homeDirectory)
-            .appendingPathComponent(".bun/bin").path
-        let inheritedPath = inherited["PATH"].flatMap { $0.isEmpty ? nil : $0 }
-        environment["PATH"] = [developmentBin, inheritedPath].compactMap { $0 }.joined(
-            separator: ":")
-        return environment
+        let bun = URL(fileURLWithPath: homeDirectory).appendingPathComponent(".bun/bin").path
+        return Subprocess.environment(inherited: inherited, prepending: [bun])
     }
 
     private func decode<T: Decodable>(
         _ type: T.Type, arguments: [String], in workingDirectory: String
     ) async throws -> T {
-        let capture = try await capture(arguments: arguments, in: workingDirectory)
+        let data = try await capture(arguments: arguments, in: workingDirectory)
         do {
-            let value = try JSONDecoder.archon().decode(type, from: capture.data)
-            try? FileManager.default.removeItem(at: capture.url)
-            return value
+            return try JSONDecoder.archon().decode(type, from: data)
         } catch {
-            // The file survives this branch on purpose. A decode failure means helm's model
+            // The bytes are kept on this branch on purpose. A decode failure means helm's model
             // and Archon's payload have come apart, and the payload is the only thing that
             // says how — this PR shipped a decoder built from an imagined shape and 514 green
             // tests, and there was nothing on disk to check it against. macOS reaps the
             // temporary directory; a stale capture costs nothing and answers everything.
+            let kept = captureDirectory.appendingPathComponent(
+                "helm-archon-\(UUID().uuidString).json")
+            let capturedAt = (try? data.write(to: kept)).map { kept.path }
             throw ArchonCLIError(
                 command: Self.command(arguments),
-                reason: .malformedJSON(error.localizedDescription, capturedAt: capture.url.path))
+                reason: .malformedJSON(error.localizedDescription, capturedAt: capturedAt))
         }
     }
 
-    private struct Capture {
-        let data: Data
-        let url: URL
-    }
-
-    private func capture(arguments: [String], in workingDirectory: String) async throws -> Capture {
+    /// stdout of one `archon` call that exited 0 with something on it.
+    private func capture(arguments: [String], in workingDirectory: String) async throws -> Data {
         let command = Self.command(arguments)
-        let outputURL = captureDirectory.appendingPathComponent(
-            "helm-archon-\(UUID().uuidString).json")
-        let errorURL = captureDirectory.appendingPathComponent(
-            "helm-archon-\(UUID().uuidString).err")
-        guard FileManager.default.createFile(atPath: outputURL.path, contents: nil),
-            FileManager.default.createFile(atPath: errorURL.path, contents: nil)
-        else {
-            throw ArchonCLIError(
-                command: command, reason: .unreadableOutput("could not create temporary capture"))
-        }
-        // stderr is only ever read on a failure path, so it is dropped here unconditionally.
-        // stdout is dropped by every path except the malformed-JSON one above.
-        defer { try? FileManager.default.removeItem(at: errorURL) }
-
-        let output: FileHandle
-        let errors: FileHandle
+        let result: Subprocess.Result
         do {
-            output = try FileHandle(forWritingTo: outputURL)
-            errors = try FileHandle(forWritingTo: errorURL)
-        } catch {
-            try? FileManager.default.removeItem(at: outputURL)
-            throw ArchonCLIError(
-                command: command, reason: .unreadableOutput(error.localizedDescription))
-        }
-        // Closed after the wait rather than after `run()`. The child dup'd its own descriptors
-        // at exec, so helm's copies are dead weight either way — but `run()` now happens on the
-        // child's own thread, so "after run" is no longer a point this function can name.
-        defer {
-            try? output.close()
-            try? errors.close()
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["archon"] + arguments
-        process.environment = Self.developmentEnvironment(
-            inherited: inheritedEnvironment, homeDirectory: homeDirectory)
-        // **The working directory IS the project selector.** `--cwd` exists and would mostly
-        // work, but the CLI loads its repo-scoped `.archon/.env` from `process.cwd()` at import
-        // time — before it parses argv — so the flag reaches a decision the env has already
-        // been made without. Being *in* the directory is what a shell does and what Archon is
-        // written against.
-        process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
-        process.standardOutput = output
-        process.standardError = errors
-        process.standardInput = FileHandle.nullDevice
-
-        let child = ArchonChild(process)
-        do {
-            try await child.run(timeout: timeout)
-        } catch let failure as ArchonChild.LaunchFailure {
-            try? FileManager.default.removeItem(at: outputURL)
-            throw ArchonCLIError(
-                command: command, reason: .launchFailed(failure.underlying.localizedDescription))
-        } catch {
-            try? FileManager.default.removeItem(at: outputURL)
-            throw error
-        }
-        guard !child.didTimeOut else {
-            try? FileManager.default.removeItem(at: outputURL)
-            throw ArchonCLIError(command: command, reason: .timedOut(after: timeout))
+            // **The working directory IS the project selector.** `--cwd` exists and would
+            // mostly work, but the CLI loads its repo-scoped `.archon/.env` from `process.cwd()`
+            // at import time — before it parses argv — so the flag reaches a decision the env
+            // has already been made without. Being *in* the directory is what a shell does and
+            // what Archon is written against.
+            result = try await Subprocess.run(
+                ["archon"] + arguments, cwd: workingDirectory,
+                environment: Self.developmentEnvironment(
+                    inherited: inheritedEnvironment, homeDirectory: homeDirectory),
+                timeout: timeout, scratch: captureDirectory)
+        } catch let failure as Subprocess.Failure {
+            let reason: ArchonCLIError.Reason =
+                switch failure {
+                case let .captureUnavailable(why):
+                    .unreadableOutput(why ?? "could not create temporary capture")
+                case let .launchFailed(why): .launchFailed(why)
+                case .timedOut: .timedOut(after: timeout)
+                case let .unreadableOutput(why): .unreadableOutput(why)
+                }
+            throw ArchonCLIError(command: command, reason: reason)
         }
 
-        guard child.terminationStatus == 0 else {
-            let stderr = Self.snippet(of: errorURL)
-            try? FileManager.default.removeItem(at: outputURL)
+        guard result.status == 0 else {
             throw ArchonCLIError(
                 command: command,
-                reason: .nonzeroExit(status: child.terminationStatus, stderr: stderr))
+                reason: .nonzeroExit(
+                    status: result.status,
+                    stderr: result.stderrSnippet(limit: Self.errorSnippetLimit)))
         }
-
-        let data: Data
-        do {
-            data = try Data(contentsOf: outputURL)
-        } catch {
-            try? FileManager.default.removeItem(at: outputURL)
-            throw ArchonCLIError(
-                command: command, reason: .unreadableOutput(error.localizedDescription))
-        }
-        guard !data.isEmpty,
-            !String(decoding: data, as: UTF8.self)
+        guard
+            !String(decoding: result.stdout, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
-            try? FileManager.default.removeItem(at: outputURL)
             throw ArchonCLIError(command: command, reason: .emptyOutput)
         }
-        return Capture(data: data, url: outputURL)
+        return result.stdout
     }
 
     private static func command(_ arguments: [String]) -> String {
         (["archon"] + arguments).joined(separator: " ")
-    }
-
-    private static func snippet(of url: URL) -> String {
-        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > errorSnippetLimit else { return trimmed }
-        return String(trimmed.prefix(errorSnippetLimit)) + "…"
-    }
-}
-
-/// One `archon` invocation: launched, waited on without holding a cooperative thread, and
-/// killable from outside.
-///
-/// **It exists because `Task.detached { process.waitUntilExit() }` cannot be interrupted.**
-/// Detached work is unstructured, so cancelling a poll never unwound it: one hung call left
-/// `isRefreshing` true for the life of the process, and closing a pane orphaned the child. A
-/// blocked `waitUntilExit()` can only be unblocked by killing what it waits on, which is what
-/// both the deadline and the cancellation handler do.
-///
-/// **`run()` and `waitUntilExit()` happen on the SAME thread, and that is not a style choice.**
-/// `NSConcreteTask.waitUntilExit` spins the *calling thread's* run loop for a termination
-/// source the launch installed, so waiting from a different thread than the one that launched
-/// hangs forever — with the child already reaped and nothing to see in `ps`. Measured: the
-/// suite sat in `mach_msg2_trap` inside `waitUntilExit` for 10 minutes against a dead child.
-///
-/// `@unchecked Sendable` because `Process` is not `Sendable` and this has to be reachable from
-/// a cancellation handler running on whichever thread cancelled. Everything mutable it adds is
-/// two `Bool`s behind a lock.
-private final class ArchonChild: @unchecked Sendable {
-    /// `Process.run()` refusing — a missing `/usr/bin/env`, an unreadable working directory.
-    /// Wrapped rather than thrown as an `ArchonCLIError` because this type does not know which
-    /// command it is running, and the error is worth nothing without that.
-    struct LaunchFailure: Error {
-        let underlying: any Error
-    }
-
-    private let process: Process
-    private let lock = NSLock()
-    private var timedOut = false
-    private var launched = false
-    private var terminateRequested = false
-
-    init(_ process: Process) { self.process = process }
-
-    var terminationStatus: Int32 { process.terminationStatus }
-
-    var didTimeOut: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return timedOut
-    }
-
-    /// Returns when the child exits. Throws `LaunchFailure` if it never started and
-    /// `CancellationError` if the awaiting task was cancelled; sets `didTimeOut` and returns
-    /// normally when the deadline killed it, because naming the command in that error is the
-    /// caller's job.
-    func run(timeout: Duration) async throws {
-        try await withTaskCancellationHandler {
-            let watchdog = Task {
-                try await Task.sleep(for: timeout)
-                markTimedOut()
-                terminate()
-            }
-            defer { watchdog.cancel() }
-            // A dispatch thread rather than the cooperative pool: `waitUntilExit()` blocks its
-            // thread for the whole call, and Swift's pool has one thread per core to lose.
-            try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<Void, any Error>) in
-                DispatchQueue.global(qos: .userInitiated).async { [self] in
-                    do {
-                        try process.run()
-                    } catch {
-                        continuation.resume(throwing: LaunchFailure(underlying: error))
-                        return
-                    }
-                    markLaunched()
-                    process.waitUntilExit()
-                    continuation.resume()
-                }
-            }
-            try Task.checkCancellation()
-        } onCancel: {
-            terminate()
-        }
-    }
-
-    private func markTimedOut() {
-        lock.lock()
-        timedOut = true
-        lock.unlock()
-    }
-
-    /// A cancellation that arrives in the window between `run(timeout:)` being awaited and the
-    /// child actually existing has nothing to signal, so it is remembered and honoured here.
-    /// Without this the child would outlive the call that asked for it — the exact orphaning
-    /// the deadline and the handler exist to prevent, just half a millisecond earlier.
-    private func markLaunched() {
-        lock.lock()
-        launched = true
-        let owed = terminateRequested
-        lock.unlock()
-        if owed { signal() }
-    }
-
-    private func terminate() {
-        lock.lock()
-        terminateRequested = true
-        let started = launched
-        lock.unlock()
-        guard started else { return }
-        signal()
-    }
-
-    /// SIGTERM, and only while the child is alive: `Process.terminate()` raises an
-    /// Objective-C exception on a process that was never launched, and Swift cannot catch
-    /// that — it is a crash, not an error.
-    private func signal() {
-        guard process.isRunning else { return }
-        process.terminate()
     }
 }

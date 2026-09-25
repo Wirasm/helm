@@ -173,6 +173,77 @@ final class WorktreeCLITests: XCTestCase {
         try assertChildIsGone(pidRecord)
     }
 
+    /// Waiting on a child must not hold a thread of Swift's cooperative pool. The pool has one
+    /// thread per core; the old runner parked one in `waitUntilExit()` per `git`/`du` child, so a
+    /// rail refresh across a few workspaces could stop every other `async` task in helm until
+    /// git answered (#377).
+    ///
+    /// Synchronous on purpose: the test body must not need the pool it is checking. The children
+    /// wait on a gate the test opens itself, so nothing here depends on a sleep staying inside a
+    /// deadline. The probe gets 10s to run while every child is parked; on the old runner it
+    /// cannot run at all until the escape hatch opens the gate.
+    func testWaitingOnChildrenHoldsNoThreadOfTheCooperativePool() throws {
+        let gate = root.appendingPathComponent("gate")
+        let started = root.appendingPathComponent("started")
+        try FileManager.default.createDirectory(at: started, withIntermediateDirectories: true)
+        // Bounded by its own deadline (600 × 50ms), so a child outlives a crashed test by 30s
+        // at most.
+        try install(
+            """
+            touch "$STARTED/$$"
+            i=0
+            while [ ! -f "$GATE" ] && [ $i -lt 600 ]; do /bin/sleep 0.05; i=$((i+1)); done
+            """, at: git)
+        try install("exit 0\n", at: du)
+        defer { FileManager.default.createFile(atPath: gate.path, contents: nil) }
+
+        let cores = ProcessInfo.processInfo.activeProcessorCount
+        let client = client(extraEnvironment: ["GATE": gate.path, "STARTED": started.path])
+        let workspacePath = WorkspacePath(workspace)
+        let linkedPath = linked.path
+        let finished = expectation(description: "every call returned")
+        finished.expectedFulfillmentCount = cores * 2
+        for _ in 0..<(cores * 2) {
+            Task.detached {
+                try? await client.remove(path: linkedPath, in: workspacePath)
+                finished.fulfill()
+            }
+        }
+
+        // At least a pool's width of children, so on the old runner every pool thread is parked.
+        let deadline = Date().addingTimeInterval(20)
+        while (try? FileManager.default.contentsOfDirectory(atPath: started.path).count) ?? 0
+            < cores, Date() < deadline
+        {
+            usleep(20_000)
+        }
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+            FileManager.default.createFile(atPath: gate.path, contents: nil)
+        }
+        let probed = expectation(description: "the probe ran")
+        let gateWasOpen = LockedFlag()
+        Task.detached {
+            gateWasOpen.set(FileManager.default.fileExists(atPath: gate.path))
+            probed.fulfill()
+        }
+        wait(for: [probed], timeout: 30)
+        XCTAssertFalse(
+            gateWasOpen.value,
+            "an async task could not run while \(cores) children were being waited on — the "
+                + "runner is holding cooperative-pool threads")
+
+        FileManager.default.createFile(atPath: gate.path, contents: nil)
+        wait(for: [finished], timeout: 30)
+    }
+
+    private final class LockedFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored = false
+        var value: Bool { lock.withLock { stored } }
+        func set(_ newValue: Bool) { lock.withLock { stored = newValue } }
+    }
+
     private func waitForPid(_ record: URL) async throws {
         for _ in 0..<250 {
             if let text = try? String(contentsOf: record, encoding: .utf8), Int32(text) != nil {

@@ -115,35 +115,22 @@ struct ArchonRunOpener: Sendable {
     /// help — it is at `/usr/bin` — but goes through the same environment so there is one
     /// answer to "what did the subprocess see".
     static func environment(inherited: [String: String]) -> [String: String] {
-        var environment = inherited
-        let inheritedPath = inherited["PATH"].flatMap { $0.isEmpty ? nil : $0 }
-        environment["PATH"] =
-            (["/opt/homebrew/bin", "/usr/local/bin"] + [inheritedPath].compactMap { $0 })
-            .joined(separator: ":")
-        return environment
+        Subprocess.environment(
+            inherited: inherited, prepending: ["/opt/homebrew/bin", "/usr/local/bin"])
     }
 
-    /// The lightweight subprocess shape — `WorkspaceBar.resolveBranch`'s, not `ArchonCLI`'s.
-    /// A click does not need a timeout watchdog and a SIGTERM path; it needs to be off the main
-    /// actor and to give up quietly.
+    /// Trimmed stdout, or nil for any failure: a click gives up quietly. The deadline is
+    /// `ArchonCLI`'s, so a hung `gh` cannot hold the call open for ever.
     private static func capture(_ arguments: [String]) async -> String? {
-        await Task.detached { () -> String? in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = arguments
-            process.environment = Self.environment(
-                inherited: ProcessInfo.processInfo.environment)
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-            process.standardInput = FileHandle.nullDevice
-            guard (try? process.run()) != nil else { return nil }
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let value = String(decoding: data, as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return value.isEmpty ? nil : value
-        }.value
+        guard
+            let result = try? await Subprocess.run(
+                arguments,
+                environment: environment(inherited: ProcessInfo.processInfo.environment),
+                timeout: ArchonCLI.defaultTimeout),
+            result.status == 0
+        else { return nil }
+        let value = String(decoding: result.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }

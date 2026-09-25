@@ -6,10 +6,9 @@ import XCTest
 
 /// Two independent call sites normalize a workspace-shaped path — `WorkspacePath.init` and
 /// `SpoolPolicy.accept`'s spawn validation — and both call `HelmWire.FilesystemPath.normalized`
-/// directly rather than through a shared chain (`Workspace.normalized`'s header has the
-/// reasoning for why that indirection was removed). Calling the same function directly from two
-/// places is not the same guarantee as calling it through one shared caller: nothing in the
-/// type system stops either site from drifting if it is edited in isolation, and `helm-spool`
+/// directly rather than through a shared chain (`WorkspacePath`'s header has the reasoning).
+/// Calling the same function directly from two places is not the same guarantee as calling it
+/// through one shared caller: nothing in the type system stops either site from drifting if it is edited in isolation, and `helm-spool`
 /// writing a `cwd` that `WorkbenchSpoolSpawner` then compares against a `WorkspacePath` is one
 /// of the four agent-facing gates — a silent disagreement there is a spawn that lands in the
 /// wrong workspace, or in none.

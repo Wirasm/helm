@@ -41,8 +41,7 @@ import XCTest
 /// **2. Polling with `Task.sleep` while awaiting `evaluateJavaScript` stops the load dead** —
 /// `webView.isLoading` was false and no document existed after 4s. Waiting on a real callback
 /// instead loads in ~150ms. So nothing here sleeps: the load is awaited on the page's own message,
-/// and the mark on `model.$selection`. That is the same discipline `helm-spawn` is built on —
-/// wait on something observable, never on a duration.
+/// and the mark on `model.$selection` — wait on something observable, never on a duration.
 ///
 /// **Why it is safe in the gate**: no display — a `WKWebView` renders offscreen and nothing here
 /// looks at pixels — no network, no TCC grant, no new dependency (`WebKit` is already linked, and

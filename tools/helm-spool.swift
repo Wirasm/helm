@@ -4,9 +4,9 @@
 //   swift helm-spool.swift <cwd> --prompt "..." --command pi
 //   swift helm-spool.swift <cwd> -                    read the prompt from stdin
 //
-// This is the whole point of the rung. `helm-spawn.swift` next door does the same job through
-// the GUI and therefore needs an unlocked screen, a visible helm window and an Accessibility
-// grant on the invoking context — none of which an agent can grant itself, and all of which a
+// This is the whole point of the rung. The GUI spawn path it replaced (`helm-spawn.swift`,
+// deleted in #377) needed an unlocked screen, a visible helm window and an Accessibility grant
+// on the invoking context — none of which an agent can grant itself, and all of which a
 // headless or ssh session simply does not have. This writes a file and reads a file. It works
 // with the screen locked.
 //

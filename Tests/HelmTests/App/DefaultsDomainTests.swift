@@ -1,227 +1,15 @@
 import Foundation
+import HelmWire
 import XCTest
 
 @testable import Helm
 
-/// One domain for both launch paths (#45), and the move that gets the old one's state there.
+/// One domain for both launch paths (#45), and the opt-in suite that moves it (#86).
 ///
-/// The migration runs at most once per machine and empties a domain when it does, so it gets
-/// no second chance and cannot be tried out in production. Everything below is on throwaway
-/// domains from `isolatedDefaultsDomain(_:)`.
+/// Suites are exercised on throwaway domains from `isolatedDefaultsDomain(_:)`.
 final class DefaultsDomainTests: XCTestCase {
-    private let defaults = UserDefaults.standard
-
-    private func seed(_ contents: [String: Any], into domain: String) {
-        defaults.setPersistentDomain(contents, forName: domain)
-        defaults.synchronize()
-    }
-
     private func contents(of domain: String) -> [String: Any] {
-        defaults.persistentDomain(forName: domain) ?? [:]
-    }
-
-    /// The persisted workspace list as plain paths.
-    ///
-    /// Read straight out of the blob rather than through `WorkspacePersistence`, and the
-    /// contexts below the same way: what the migration owes is a readable collection with
-    /// every member in it, and a test that went through the owning slice's loader would pass
-    /// on a blob that loader happened to be lenient about.
-    ///
-    /// Key names are spelled out for the same reason — the migration reads them off the slices
-    /// that own them so it cannot drift, which means only a literal here notices a rename, and
-    /// a rename orphans every existing user's list.
-    private func workspaces(in domain: String) throws -> [String] {
-        let raw = try XCTUnwrap(contents(of: domain)["helmWorkspaces"] as? String)
-        return try JSONDecoder().decode([String].self, from: Data(raw.utf8))
-    }
-
-    private func workspaceContexts(in domain: String) throws -> [String: Any] {
-        let raw = try XCTUnwrap(contents(of: domain)["helmWorkspaceContexts"] as? String)
-        return try XCTUnwrap(
-            JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
-    }
-
-    /// The whole point of choosing a winner: the two domains disagree about live things —
-    /// which workspace is selected, which store the artifact browser opens on — and the domain
-    /// `swift run helm` has been writing is the one the operator is actually looking at.
-    ///
-    /// Both keys here are **scalars**, and that is the point. This test used to make its case
-    /// on `helmWorkspaces`, which is a set: collisions there are unioned rather than won, and
-    /// the tests below own that rule.
-    func testTheOldDomainWinsCollisionsAndKeysOnlyTheNewOneHasSurvive() {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed(
-            ["helmSelectedWorkspace": "/live", "artifactBrowserStore": "helm-3ec376fc"],
-            into: old)
-        seed(
-            [
-                "helmSelectedWorkspace": "/stale", "artifactBrowserStore": "kild-bcc2213a",
-                "helmTerminalFontSize": 15.0,
-            ], into: new)
-
-        XCTAssertTrue(DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults))
-
-        let merged = contents(of: new)
-        XCTAssertEqual(
-            merged["helmSelectedWorkspace"] as? String, "/live",
-            "the workspace the operator was last in must still be the selected one")
-        XCTAssertEqual(
-            merged["artifactBrowserStore"] as? String, "helm-3ec376fc",
-            "⌘O must keep opening on the store the operator last picked, not the other build's")
-        XCTAssertEqual(
-            merged["helmTerminalFontSize"] as? Double, 15.0,
-            "a key only the new domain has is not a collision and must not be dropped")
-    }
-
-    /// #60: the two domains hold different *subsets of one set*, so there is no winner to
-    /// pick — picking one deleted `sild` and `kild` from the operator's bar on the first
-    /// launch after #45 merged.
-    ///
-    /// These fixtures are **disjoint**, which is exactly what the older ones were not: theirs
-    /// overlapped, so replacing the list and unioning it produced the same answer and every
-    /// test passed over the bug.
-    func testDisjointWorkspaceListsAreUnionedRatherThanReplaced() throws {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed(["helmWorkspaces": #"["/live"]"#], into: old)
-        seed(["helmWorkspaces": #"["/older","/oldest"]"#], into: new)
-
-        XCTAssertTrue(DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults))
-
-        XCTAssertEqual(
-            try workspaces(in: new), ["/live", "/older", "/oldest"],
-            "every folder either domain had open must survive, the live bar's order first")
-    }
-
-    /// One folder, two spellings, one row. De-duplication is on the normalised path because
-    /// that is helm's identity for a workspace everywhere else; on the raw string it would
-    /// hand the operator two sidebar rows for one folder.
-    func testAFolderBothDomainsKnowSurvivesOnceUnderItsNormalisedPath() throws {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed(["helmWorkspaces": #"["/shared","/live"]"#], into: old)
-        seed(["helmWorkspaces": #"["/shared/","/older"]"#], into: new)
-
-        XCTAssertTrue(DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults))
-
-        XCTAssertEqual(
-            try workspaces(in: new), ["/shared", "/live", "/older"],
-            "a trailing slash is display noise, not a second workspace")
-    }
-
-    /// The same bug one shape down — the one #60 calls latent, because this dictionary
-    /// survived #45 only by the accident of the losing side being a subset. A member dropped
-    /// here is a whole workspace's tab row, not a folder that reopens with one ⌘⇧O.
-    func testWorkspaceContextsAreMergedPerPathWithTheLiveDomainWinning() throws {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed(["helmWorkspaceContexts": #"{"/shared":{"branch":"live"}}"#], into: old)
-        seed(
-            [
-                "helmWorkspaceContexts":
-                    #"{"/shared":{"branch":"stale"},"/older":{"branch":"older"}}"#
-            ], into: new)
-
-        XCTAssertTrue(DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults))
-
-        let merged = try workspaceContexts(in: new)
-        XCTAssertEqual(
-            Set(merged.keys), ["/shared", "/older"],
-            "a path only the canonical domain had a context for is still a workspace")
-        XCTAssertEqual(
-            (merged["/shared"] as? [String: Any])?["branch"] as? String, "live",
-            "where both hold one, the live domain's context wins — as the scalars do")
-    }
-
-    /// The commonest shape of all, and the one with the most to lose: a machine that only ever
-    /// ran `swift run helm` has a list on one side and nothing on the other. There is no union
-    /// to compute, so this guards the guard — reading "the other side does not decode" as
-    /// "there is nothing to keep" would migrate that machine to an empty bar.
-    func testAListOnlyTheLegacyDomainHasArrivesWhole() throws {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed(["helmWorkspaces": #"["/live","/also-live"]"#], into: old)
-
-        XCTAssertTrue(DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults))
-
-        XCTAssertEqual(
-            try workspaces(in: new), ["/live", "/also-live"],
-            "nothing on the other side is not a reason to arrive with less")
-    }
-
-    /// The move gets one attempt per machine, so a blob it cannot read must not be allowed to
-    /// overwrite one it can. An unreadable list has no members to preserve — the app reads it
-    /// as an empty bar too — so standing the readable side up whole loses nothing.
-    func testAnUnreadableLegacyListDoesNotOverwriteAReadableOne() throws {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed(["helmWorkspaces": "not json at all"], into: old)
-        seed(["helmWorkspaces": #"["/older"]"#], into: new)
-
-        XCTAssertTrue(DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults))
-
-        XCTAssertEqual(
-            try workspaces(in: new), ["/older"],
-            "last-writer-wins here would trade a readable bar for an empty one")
-    }
-
-    /// Nothing about the copy is visible from `defaults read`; only this is. Leaving a full,
-    /// plausible copy behind is precisely what cost the hours in #45.
-    func testTheOldDomainIsDrainedAndLeftPointingAtTheNewOne() {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed(["helmWorkspaces": "[live]", "helmSelectedWorkspace": "/live"], into: old)
-
-        DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults)
-
-        XCTAssertEqual(
-            contents(of: old) as? [String: String], [DefaultsDomain.movedToKey: new],
-            "a drained domain must say where its state went and hold nothing else")
-    }
-
-    /// An older build run once more refills the old domain. Migrating a second time would let
-    /// it overwrite the state that replaced it, which is a worse failure than the original.
-    func testTheMoveHappensOnceEvenIfTheOldDomainFillsUpAgain() {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed(["helmWorkspaces": "[live]"], into: old)
-        XCTAssertTrue(DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults))
-        XCTAssertEqual(contents(of: new)[DefaultsDomain.migratedFromKey] as? String, old)
-
-        seed(["helmWorkspaces": "[from an older build]"], into: old)
-
-        XCTAssertFalse(
-            DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults),
-            "the marker in the new domain is what makes this idempotent")
-        XCTAssertEqual(
-            contents(of: new)["helmWorkspaces"] as? String, "[live]",
-            "a second move would let a stale domain overwrite what replaced it")
-    }
-
-    /// A machine that has only ever run `make app` has no old domain. It must not be given a
-    /// marker key it has no use for, and must not be handed a forwarding note to nowhere.
-    func testAFreshInstallIsLeftCompletelyAlone() {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed(["helmWorkspaces": "[only ever the app]"], into: new)
-
-        XCTAssertFalse(DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults))
-
-        XCTAssertNil(contents(of: new)[DefaultsDomain.migratedFromKey], "nothing moved")
-        XCTAssertEqual(contents(of: new)["helmWorkspaces"] as? String, "[only ever the app]")
-        XCTAssertTrue(contents(of: old).isEmpty, "and no domain conjured to forward from")
-    }
-
-    /// Belt and braces on the guard above: a domain holding only its own forwarding note has
-    /// nothing to give, and must not be read as if it did.
-    func testAForwardingNoteIsNotStateAndDoesNotTravel() {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed([DefaultsDomain.movedToKey: "com.somewhere.else"], into: old)
-
-        XCTAssertFalse(DefaultsDomain.migrateLegacyDomain(from: old, to: new, using: defaults))
-        XCTAssertTrue(contents(of: new).isEmpty)
+        UserDefaults.standard.persistentDomain(forName: domain) ?? [:]
     }
 
     // MARK: - HELM_DEFAULTS_SUITE (#86)
@@ -275,15 +63,15 @@ final class DefaultsDomainTests: XCTestCase {
             "and it survives the whitespace a copied-and-pasted export brings with it")
     }
 
-    /// The legacy domain is drained by the migration and left holding a forwarding note. A
-    /// suite pointed at it would be emptied by the operator's own next launch, which is a
-    /// worse outcome than no isolation because it looks like isolation until it is gone.
+    /// The legacy domain is what `swift run helm` wrote before #45, and on a machine that ran
+    /// a build from then it still holds that state or the forwarding note the one-time move
+    /// left. A suite pointed at it is not isolated from anything.
     func testTheLegacyDomainIsRefusedRatherThanHandedOut() {
         guard
             case .refused(let why) = DefaultsDomain.override(
-                in: [DefaultsDomain.suiteVariable: DefaultsDomain.legacy])
+                in: [DefaultsDomain.suiteVariable: DefaultsSuite.legacy])
         else { return XCTFail("the drained domain must not be offered as a suite") }
-        XCTAssertTrue(why.contains(DefaultsDomain.legacy), "the refusal must name what was asked")
+        XCTAssertTrue(why.contains(DefaultsSuite.legacy), "the refusal must name what was asked")
     }
 
     /// A path is the shape a name takes when someone reaches for a file. `suiteName:` would
@@ -336,7 +124,7 @@ final class DefaultsDomainTests: XCTestCase {
     }
 
     /// **Polarity**, pinned rather than eyeballed. `AGENTS.md` has `winshot --list` and
-    /// `helm-spawn --helm-pid` telling two helms apart by this title, so backwards is not a
+    /// `helm-capture --window` telling two helms apart by this title, so backwards is not a
     /// cosmetic bug — it is a safety mechanism pointing at the wrong instance.
     func testOnlyANonCanonicalDomainReadsAsIsolated() {
         XCTAssertFalse(DefaultsDomain.isIsolated(domain: DefaultsDomain.canonical))
@@ -350,39 +138,6 @@ final class DefaultsDomainTests: XCTestCase {
             "and a test instance names its suite where a tool outside the process can read it")
     }
 
-    /// **The acceptance criterion this file exists to hold.** The move empties the legacy
-    /// domain and marks the destination so it never runs again. A test instance that ran it
-    /// would take state the operator's own build has not migrated yet and then stop it from
-    /// ever trying.
-    func testTheLegacyMigrationDoesNotFireAgainstASuite() {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("suite")
-        seed(["helmWorkspaces": #"["/live"]"#], into: old)
-
-        XCTAssertFalse(
-            DefaultsDomain.migrateLegacyDomainAtLaunch(
-                override: .suite(new), from: old, to: new, using: defaults),
-            "an isolated instance has nothing to inherit")
-
-        XCTAssertEqual(
-            contents(of: old)["helmWorkspaces"] as? String, #"["/live"]"#,
-            "and must leave the legacy domain full for the build that does")
-        XCTAssertTrue(contents(of: new).isEmpty, "nothing arrives, not even the marker")
-    }
-
-    /// The same entry point with no override still does the whole job — otherwise the guard
-    /// above would be indistinguishable from having disabled the migration outright.
-    func testTheLegacyMigrationStillFiresWithoutOne() {
-        let old = isolatedDefaultsDomain("legacy")
-        let new = isolatedDefaultsDomain("canonical")
-        seed(["helmWorkspaces": #"["/live"]"#], into: old)
-
-        XCTAssertTrue(
-            DefaultsDomain.migrateLegacyDomainAtLaunch(
-                override: .none, from: old, to: new, using: defaults))
-        XCTAssertEqual(try workspaces(in: new), ["/live"])
-    }
-
     /// The variable is only isolation if *every* default helm owns goes through
     /// `DefaultsDomain.store`. One `UserDefaults.standard` left behind is one key still
     /// landing in the operator's domain, and it would be invisible — the app runs, the badge
@@ -392,8 +147,8 @@ final class DefaultsDomainTests: XCTestCase {
     /// against: `UserDefaults.standard` resolves at the call site. `IsolatedDefaultsTests`
     /// makes the same argument for the test target's own suites.
     func testNoSourceFileReachesForStandardDefaultsOutsideTheResolver() throws {
-        // The resolver is where `.standard` legitimately survives: it is the handle the
-        // migration reads and replaces *other* domains by name through. `DefaultsSuite.swift`
+        // The resolver is where `.standard` legitimately survives: it is what `.none`
+        // resolves to. `DefaultsSuite.swift`
         // (#221) is exempt for the same reason one door over: `SpoolDirectory.resolve` needs
         // the identical `UserDefaults(suiteName:)` probe `DefaultsDomain.override` makes, to
         // tell a real suite name from one `UserDefaults` will refuse — and `DefaultsDomain`
@@ -515,23 +270,8 @@ final class DefaultsDomainTests: XCTestCase {
             "and Helm.app must be the same app as the one the SPM path now claims to be")
     }
 
-    /// The override's own drift guard. An affordance nobody knows about gets reinvented, and
-    /// that reinvention — a hand-rolled bundle identifier per PR — is what #86 was filed to
-    /// end. `AGENTS.md` is the file an agent reads before touching this repo, so the variable
-    /// has to be named in it by the same string the source resolves.
-    func testTheOverrideIsDocumentedWhereAgentsWillReadIt() throws {
-        let agents = try String(
-            contentsOf: repositoryRoot.appendingPathComponent("AGENTS.md"), encoding: .utf8)
-
-        XCTAssertTrue(
-            agents.contains(DefaultsDomain.suiteVariable),
-            "AGENTS.md must name \(DefaultsDomain.suiteVariable) — an isolated instance an "
-                + "agent cannot find out about is one they will hand-roll instead")
-    }
-
     /// Four levels up from `Tests/HelmTests/App/`, and the reason a unit test knows where the
-    /// repository is at all: the identity and the affordance are both stated in files no
-    /// compiler reads.
+    /// repository is at all: the identity is stated in files no compiler reads.
     private var repositoryRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // App/
