@@ -395,10 +395,13 @@ helm restarting.
     fetches its own pin.
   - **Every Ghostty bump** moves both pins together, and must check the crate's checked-in
     bindings against the new header. A changed struct layout compiles and misbehaves.
-  - **Open, the operator's call:** do the archives live in the repo (plain git, about
-    1.5 MB compressed per bump, no network), or as a release asset fetched by a sha256-checked
-    script (the pattern `Package.swift` uses for GhosttyKit)? The spike leans towards the
-    repo.
+  - **The archives live in the repo** (decided 2026-09-25, the operator delegated): plain
+    git, beside their `SHA256SUMS`, about 1.5 MB compressed per Ghostty bump. The daemon
+    gate and CI stay Rust-only and need no network. A release asset fetched by script was
+    the alternative: it keeps binaries out of git, at the cost of a network fetch on first
+    build and one more script to maintain. A Ghostty bump is agent work, not the operator's:
+    one script rebuilds both archives with zig 0.15.x, then the agent commits them with their
+    new sums and checks the crate's bindings against the new header.
 - **Design rules from the spikes, whichever engine:**
   1. Mid synchronized update (mode 2026), serve the last complete frame. Read naively,
      22 to 34% of checkpoints in real agent output were torn.
