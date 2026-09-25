@@ -9,13 +9,12 @@ import WebKit
 // plus the inline scripts from CanvasHTML — which include the ANNOTATION
 // BRIDGE, a script message handler the page can post to.
 //
-// The bridge is why `CanvasBridgePolicy` exists and why this file is separate
-// from URLCanvasViews.swift. A handler on a webview that loads arbitrary
-// websites would let any page post into helm, so it is installed here, on local
-// artifacts only, and each webview gets its OWN WKUserContentController — the
-// controller is a property of the configuration, so one shared instance would
-// share every registered script and handler with every webview, which is
-// exactly how the bridge would reach the URL source by accident.
+// A handler on a webview that loads arbitrary websites would let any page post
+// into helm, which is why helm has no such webview: the URL canvas was removed
+// (#376), and a web page is the shared browser's, in its own pane. Each webview
+// here still gets its OWN WKUserContentController — the controller is a property
+// of the configuration, so one shared instance would share every registered
+// script and handler with every webview.
 //
 // "OPENED EXPLICITLY BY THE USER" IS NO LONGER TRUE, and that is deliberate
 // (#125). An agent can push an artifact by printing OSC 777, and if the bench has
@@ -59,10 +58,6 @@ import WebKit
 /// render different text; the artifact's **path** for an `.html` one, because the handler reads
 /// its bytes per request and the path is all the view knows.
 ///
-/// **Deliberately not shared with `URLCanvasCoordinator`.** That one compares a URL and a
-/// generation and has no theme at all — helm does not render a remote page, so there is no third
-/// instance of this rule to unify, and pretending there is would mean a field one side must
-/// always leave empty.
 struct CanvasReloadKey: Equatable {
     let theme: CanvasTheme
     let generation: Int
@@ -82,8 +77,8 @@ struct MarkdownCanvasView: View {
     let generation: Int
     /// What the operator is holding, pushed into the page on change.
     let markTool: CanvasMarkTool
-    /// Whether a mark is still awaiting a comment. False takes the mark down — the ink, and
-    /// since #308 the text highlight with it; the page's `wipe` is one call for both.
+    /// Whether a mark is still awaiting a comment. False takes the mark — the text highlight
+    /// (#308) — down.
     ///
     /// A mark lives as long as the comment field, with one honest exception: an agent
     /// rewriting the artifact reloads the document and takes the mark with it, while the
@@ -233,7 +228,7 @@ struct HTMLCanvasView: View {
     let onSelection: (CanvasPageSelection) -> Void
     /// The operator pressing Reload on the notice — a counter, not a flag, so pressing it twice
     /// reloads twice and a demand can never be missed by arriving in the same render as the
-    /// answer that raised it. The same shape as `CanvasModel.addressFocus` and `generation`.
+    /// answer that raised it. The same shape as `generation`.
     let reloadDemand: Int
     /// What the page said about an offered update, on its way to the notice strip.
     let onUpdate: (CanvasUpdateAnswer) -> Void
@@ -370,11 +365,11 @@ enum HTMLCanvasPage {
     /// theme flip re-renders the page's diagrams in the matching mermaid theme.
     ///
     /// **Split out of `load` by #109, and `forgetPushedState` came with it deliberately.** What
-    /// that call resets is *what the page has been told* — the held tool, whether ink is up —
+    /// that call resets is *what the page has been told* — the held tool, whether a mark is up —
     /// and the only thing that makes those stale is the JS context being destroyed, which is a
     /// navigation. An offer the page applies destroys nothing, so resetting there would tell the
     /// page its tool again for no reason and, worse, would leave `markShown` claiming false
-    /// while the operator is still looking at their own ink.
+    /// while the operator is still looking at their own mark.
     private static func navigate(
         _ webView: WKWebView, path: StandardizedPath, theme: CanvasTheme,
         coordinator: CanvasFileCoordinator
@@ -482,14 +477,19 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// `contentWorld:` it, so a page's own JS sees no `helmCanvas` at all.
     static let bridgeWorld = WKContentWorld.world(name: "helm-canvas-bridge")
 
+    /// The bridge's handler name, and therefore `window.webkit.messageHandlers.helmCanvas` —
+    /// defined only inside `bridgeWorld`. `canvas-annotation.js` spells it out rather than
+    /// interpolating it; `CanvasAnnotationScriptTests` holds the two together.
+    nonisolated static let bridgeHandlerName = "helmCanvas"
+
     var loadedKey: CanvasReloadKey?
     /// The last reload the operator asked for, so a rising counter is a new demand and an
     /// unchanged one is ordinary SwiftUI churn. Starts at zero to match `CanvasModel`'s, so a
     /// pane that has never shown the notice never navigates for this reason.
     var reloadDemand = 0
     /// What the page said about an offered update, on its way to the notice strip. **A closure
-    /// rather than a delegate call**, for `CanvasModel.onSourceChange`'s reason one file over:
-    /// this object is SwiftUI's, made in `makeCoordinator`, and the model outlives it.
+    /// rather than a delegate call**: this object is SwiftUI's, made in `makeCoordinator`, and the
+    /// model outlives it.
     var onUpdate: ((CanvasUpdateAnswer) -> Void)?
     /// What the page said about itself, on its way to the latch (#110). Set by the
     /// representable exactly as `onUpdate` is; nil on a coordinator built without one, where a
@@ -517,7 +517,7 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// `CanvasHTMLTests.testAThemeFlipIsANavigationSoNoPaintedMarkOutlivesItsTint` pins the fact;
     /// this is the guard that makes being wrong about it survivable.
     private var pushedTheme: CanvasTheme?
-    /// Whether the page currently holds a mark. Starts false: a fresh document has no ink.
+    /// Whether the page currently holds a mark. Starts false: a fresh document has none.
     private var markShown = false
     /// The generated document the scheme handler should serve on the next request. Only
     /// the markdown canvas stages one; the .html canvas reads its artifact from disk.
@@ -605,7 +605,7 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// **Offer the update to the page, and reload only if it has nobody to take it** (#109).
     ///
     /// **Into `WKContentWorld.page`, and this is the one thing helm says to a canvas that goes
-    /// there.** Everything else — the held tool, taking the ink down — goes into `bridgeWorld`,
+    /// there.** Everything else — the held tool, taking the mark down — goes into `bridgeWorld`,
     /// and `evaluate(_:in:)` above exists to make that hard to get wrong. This is the exception
     /// and it is not a lapse: `window.helmCanvasUpdate` is defined by the *artifact*, whose
     /// scripts run in the page world, and a lookup in `bridgeWorld` would find nothing on every
@@ -647,7 +647,7 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     func installBridge(on controller: WKUserContentController) {
         controller.add(
             proxy, contentWorld: CanvasFileCoordinator.bridgeWorld,
-            name: CanvasBridgePolicy.handlerName)
+            name: CanvasFileCoordinator.bridgeHandlerName)
         addAnnotationScript(to: controller)
     }
 
@@ -669,7 +669,8 @@ final class CanvasFileCoordinator: NSObject, WKNavigationDelegate, WKScriptMessa
     /// both needed; neither alone is reliable.
     func removeBridge(from controller: WKUserContentController) {
         controller.removeScriptMessageHandler(
-            forName: CanvasBridgePolicy.handlerName, contentWorld: CanvasFileCoordinator.bridgeWorld
+            forName: CanvasFileCoordinator.bridgeHandlerName,
+            contentWorld: CanvasFileCoordinator.bridgeWorld
         )
     }
 
@@ -823,13 +824,12 @@ final class CanvasStateChannel: NSObject, WKScriptMessageHandler {
 /// raw so that `CanvasAnnotation.decode` would be the one thing that interpreted it. That left
 /// the gate validating `kind` and dropping it one line later: `CanvasAnnotation.decode` re-read
 /// the same string, and the comment field, with no kind to switch on, guessed at a top-level
-/// `text` that only a selection and a tap carry. Every arrow and circle opened the field with a
-/// blank quote. The mark is now decoded once, by `CanvasAnnotation.Mark.decode(_:as:)`, from the
+/// `text` that only some marks carried, and the geometry marks (since removed, #385) opened the
+/// field with a blank quote. The mark is now decoded once, by `CanvasAnnotation.Mark.decode(_:as:)`, from the
 /// kind the gate already validated. The field quotes it and the note is written from it.
 struct CanvasSelection {
-    /// What the mark names, or `nil` when the gesture was real but named nothing helm can anchor
-    /// to (a circle round blank space). The field still opens and says so, rather than the ink
-    /// staying on the page with no response, and `CanvasAnnotation.decode` refuses the note.
+    /// What the mark names, or `nil` when the selection named nothing helm can anchor to. The
+    /// field still opens and says so, and `CanvasAnnotation.decode` refuses the note.
     let mark: CanvasAnnotation.Mark?
     /// Where the selection is in the viewport, so the field can be anchored near it.
     /// Presentation only; never persisted, and never part of an anchor.
@@ -886,8 +886,8 @@ struct CanvasSelection {
 /// relation carries `from`/`to`, neither carries `text`, so both were dropped here for months
 /// while every decoder test stayed green. #216 patched the inference by admitting anything with
 /// a `mark`; this replaces the inference. `Kind` is now the only question asked, `mark` is gone
-/// from the wire rather than left beside `kind` as a second spelling of the same fact, and the
-/// values it used to carry are kinds.
+/// from the wire rather than left beside `kind` as a second spelling of the same fact. (The
+/// geometry kinds themselves left with their tools in #385.)
 ///
 /// **An unknown kind is refused, and the refusal says so.** That is the whole point of a
 /// discriminator: `Pane.Content` throws on a `kind` this build never heard of and `Slot` drops
@@ -907,16 +907,12 @@ enum CanvasPageSelection {
     /// is the gate that holds the two halves together, and `allCases` is what lets it be a gate
     /// over *every* kind rather than a sample.
     enum Kind: String, CaseIterable {
-        /// A text highlight — helm's behaviour since #39, and the only kind before #112.
+        /// A text highlight — helm's behaviour since #39. The geometry kinds #112 added
+        /// (`point`, `relation`, `enclosure`) left with their tools in #385, and a page still
+        /// posting one is refused as an unknown kind.
         case selection
         /// A click that left nothing selected: the canvas's click-elsewhere-to-dismiss (#165).
         case cleared
-        /// A tap (#112).
-        case point
-        /// An arrow (#112).
-        case relation
-        /// A circle or box (#112).
-        case enclosure
     }
 
     /// Why a body was not a message. Carried rather than collapsed into `nil` so the drop can

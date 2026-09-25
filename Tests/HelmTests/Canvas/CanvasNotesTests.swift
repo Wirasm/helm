@@ -162,15 +162,11 @@ final class CanvasNotesTests: XCTestCase {
     }
 }
 
-/// The sidecar heading for a geometric mark (#112). The verb is the gesture, and the target
-/// is what an agent greps for.
+/// The sidecar heading a mark writes, and the headings older builds wrote.
 final class CanvasNotesMarkTests: XCTestCase {
     private let stamp = Date(timeIntervalSince1970: 1_700_000_000)
 
     /// **The gesture as the page posts it, decoded** (#326) — see `CanvasAnnotationFixture`.
-    /// These were `CanvasAnnotation.Mark` values assembled by hand, which is a shape no page can
-    /// post and the decoder never saw: the heading being asserted was rendered from a mark that
-    /// had never been through the rules that produce one.
     private func heading(
         _ body: [String: Any], file: StaticString = #filePath, line: UInt = #line
     ) throws -> String {
@@ -181,53 +177,7 @@ final class CanvasNotesMarkTests: XCTestCase {
         return entry.split(separator: "\n").first.map(String.init) ?? ""
     }
 
-    func testACircleReadsAsCircled() throws {
-        XCTAssertEqual(
-            try heading([
-                "kind": "enclosure",
-                "targets": [["id": "phase-2", "text": "Phase 2: Ship"] as [String: Any]],
-            ]),
-            "## circled `#phase-2` — \"Phase 2: Ship\"")
-    }
-
-    func testCirclingSeveralListsThemWithoutTheirLabels() throws {
-        // A heading carrying three quoted labels is a paragraph, not a heading.
-        XCTAssertEqual(
-            try heading([
-                "kind": "enclosure",
-                "targets": [
-                    ["id": "phase-1", "text": "One"] as [String: Any],
-                    ["id": "phase-2", "text": "Two"] as [String: Any],
-                ],
-            ]),
-            "## circled `#phase-1`, `#phase-2`")
-    }
-
-    func testAnArrowReadsAsAnArrow() throws {
-        XCTAssertEqual(
-            try heading([
-                "kind": "relation",
-                "from": ["id": "phase-1", "text": "One"] as [String: Any],
-                "to": ["id": "phase-3", "text": "Three"] as [String: Any],
-            ]),
-            "## arrow `#phase-1` → `#phase-3`")
-    }
-
-    func testAnArrowIntoEmptySpaceSaysSo() throws {
-        XCTAssertEqual(
-            try heading([
-                "kind": "relation", "from": ["id": "phase-1", "text": "One"] as [String: Any],
-            ]),
-            "## arrow `#phase-1` → (empty space)")
-    }
-
-    func testATapReadsAsPointedAt() throws {
-        XCTAssertEqual(
-            try heading(["kind": "point", "id": "phase-2", "text": "Phase 2"]),
-            "## pointed at `#phase-2` — \"Phase 2\"")
-    }
-
-    func testASelectionIsUnchangedFromBeforeThisSlice() throws {
+    func testASelectionReadsAsItsAnchor() throws {
         XCTAssertEqual(
             try heading(["kind": "selection", "id": "phase-2", "text": "Phase 2"]),
             "## `#phase-2` — \"Phase 2\"")
@@ -236,12 +186,51 @@ final class CanvasNotesMarkTests: XCTestCase {
             "## \"the store move\"")
     }
 
-    func testADegradedMarkStillReadsAsTheGesture() throws {
-        // A mindmap node has no anchor, but the operator still circled something.
+    /// The geometry tools left in #385, and the sidecars they wrote did not. A heading is prose
+    /// to every reader — nothing parses one back into a mark — so an old note still counts and
+    /// still shows, exactly as it did.
+    @MainActor
+    func testASidecarWrittenByTheOldGeometryToolsStillReads() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-old-sidecar-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let canvas = directory.appendingPathComponent("plan.md")
+        try "# plan".write(to: canvas, atomically: true, encoding: .utf8)
+        let old = """
+            ## circled `#phase-1`, `#phase-2`
+
+            these two are one step
+
+            <sub>2026-08-10 11:02</sub>
+
+            ## arrow `#phase-1` → (empty space)
+
+            add a node here
+
+            <sub>2026-08-12 09:14</sub>
+
+            ## pointed at `#phase-3` — "Phase 3"
+
+            why?
+
+            <sub>2026-08-12 09:15</sub>
+
+            """
+        try old.write(
+            to: CanvasNotes.sidecarURL(for: canvas), atomically: true, encoding: .utf8)
+
+        let model = CanvasModel()
+        model.open(canvas)
+
         XCTAssertEqual(
-            try heading([
-                "kind": "enclosure", "targets": [["text": "branchA"] as [String: Any]],
-            ]),
-            "## circled \"branchA\"")
+            model.notes,
+            [
+                "circled `#phase-1`, `#phase-2`", "arrow `#phase-1` → (empty space)",
+                "pointed at `#phase-3` — \"Phase 3\"",
+            ])
+        XCTAssertTrue(
+            try XCTUnwrap(model.notesText).contains("add a node here"),
+            "and the drawer shows every word of them")
     }
 }

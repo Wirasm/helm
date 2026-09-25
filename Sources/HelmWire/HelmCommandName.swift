@@ -33,7 +33,7 @@ import Foundation
 /// the two added since, and both arrived refused for exactly that reason: the compiler asked.
 package enum HelmCommandName: String, CaseIterable, Codable, Sendable {
     case newTerminal, selectTerminal, openArtifact, openCanvasFile, pushCanvasFile
-    case openCanvasURL, openWorkspace, adjustFontSize, jumpToPrompt, selectWorkspace
+    case openWorkspace, adjustFontSize, jumpToPrompt, selectWorkspace
     case cycleWorkspace, splitRight, splitDown, closePane, moveFocus
     case toggleRail, movePane, newNote, openBrowser
 }

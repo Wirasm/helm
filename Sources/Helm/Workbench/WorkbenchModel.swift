@@ -97,6 +97,10 @@ final class WorkbenchModel: ObservableObject {
     /// connection instead of reconnecting. Dropped with the canvases when the workspace parks —
     /// a parked pane is not on screen, and its model reconnects when it is again.
     private var browsers: [Pane.ID: BrowserPaneModel] = [:]
+    /// How a browser pane's model is made. A test passes one pointed at a scratch bench root,
+    /// because the default finds the operator's live `~/.bench` browser, and a test that opens
+    /// a link must not open it there.
+    private let makeBrowser: @MainActor () -> BrowserPaneModel
 
     /// Which terminal put each canvas pane on the bench (#205) — the key is the **canvas** pane,
     /// the value names the **terminal** pane, which is what `CanvasOrigin` exists to keep straight.
@@ -175,8 +179,10 @@ final class WorkbenchModel: ObservableObject {
         notes: CanvasNoteCourier = CanvasNoteCourier(),
         agents: AgentObserver = .live(),
         launcher: TerminalLaunching? = nil,
-        artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot
+        artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot,
+        makeBrowser: @escaping @MainActor () -> BrowserPaneModel = { BrowserPaneModel() }
     ) {
+        self.makeBrowser = makeBrowser
         self.terminals = terminals
         self.notes = notes
         self.agents = agents
@@ -530,25 +536,12 @@ final class WorkbenchModel: ObservableObject {
             source: {
                 if case let .canvas(source) = pane.content { source } else { nil }
             }())
-        // The other direction, and the half that was missing: a canvas that goes somewhere
-        // has to take its pane with it, or the bench persists where the pane *started*
-        // (#89). Wired here because this is the only place a `CanvasModel` is made — and
-        // wired AFTER construction on purpose, so resolving a restored pane into its own
-        // canvas is not mistaken for that canvas moving.
-        //
-        // The identity check is what keeps an ORPHAN quiet. `deactivate` drops the cache
-        // without closing what is in it, so a model whose pane was re-resolved afterwards is
-        // still alive, still holding this closure, and still able to report — into a bench
-        // that now resolves that pane to a different canvas. `model` is captured weakly
-        // because the closure is stored on it; it is always there when the closure runs.
-        model.onSourceChange = { [weak self, weak model] source in
-            guard let self, let model, canvases[pane.id]?.model === model else { return }
-            canvas(pane.id, didPointAt: source)
-        }
-        // The return path (#205). Wired here for `onSourceChange`'s reasons exactly — this is the
-        // only place a `CanvasModel` is made, and the identity check keeps an orphan quiet: a
-        // model whose pane was re-resolved after `deactivate` is still alive and still holding
-        // this closure, and it has no origin to route to any more.
+        // The return path (#205). Wired here because this is the only place a `CanvasModel` is
+        // made — and AFTER construction, so resolving a restored pane into its own canvas is
+        // not mistaken for a mark. The identity check keeps an ORPHAN quiet: `deactivate` drops
+        // the cache without closing what is in it, so a model whose pane was re-resolved
+        // afterwards is still alive and still holding this closure, and it has no origin to
+        // route to any more. `model` is captured weakly because the closure is stored on it.
         model.onAnnotation = { [weak self, weak model] annotation, canvas in
             guard let self, let model, canvases[pane.id]?.model === model else {
                 return .notSent(.noOrigin)
@@ -560,29 +553,6 @@ final class WorkbenchModel: ObservableObject {
         // storing `workspacePath` on the session itself.
         canvases[pane.id] = CachedCanvas(workspacePath: workspacePath, model: model)
         return model
-    }
-
-    /// Record where a canvas is pointed now. The rule for what may be repointed is
-    /// `Workbench.repoint(_:to:)`'s; what is decided here is **when it is worth committing**.
-    ///
-    /// Only a real move. `CanvasModel.source` is unchanged by a reload, by a load failure,
-    /// and by an address the policy refuses — and every commit reaches `UserDefaults`,
-    /// because `WorkspaceModel.observe` saves on each bench change. The pane is looked up
-    /// each time rather than captured, so a canvas that outlives its pane by a moment
-    /// repoints nothing.
-    ///
-    /// **Only this workspace's bench**, because that is the only one there is: a parked
-    /// workspace's arrangement is a value in `WorkspaceModel.contexts` and nothing can
-    /// mutate it until it is activated again. A canvas belonging to one reports into a
-    /// bench that does not hold its pane and is dropped here — which is reachable only if a
-    /// webview outlives the teardown of the view that owned it, since a parked pane has no
-    /// webview left to navigate.
-    private func canvas(_ pane: Pane.ID, didPointAt source: CanvasSource) {
-        guard var bench, let target = bench.pane(pane),
-            case let .canvas(current) = target.content, current != source
-        else { return }
-        bench.repoint(pane, to: source)
-        commit(bench)
     }
 
     /// An operator's mark on a canvas pane, on its way to the agent that pushed that canvas
@@ -606,7 +576,7 @@ final class WorkbenchModel: ObservableObject {
 
     func browser(for pane: Pane) -> BrowserPaneModel {
         if let existing = browsers[pane.id] { return existing }
-        let model = BrowserPaneModel()
+        let model = makeBrowser()
         browsers[pane.id] = model
         return model
     }
@@ -617,12 +587,16 @@ final class WorkbenchModel: ObservableObject {
     /// goes on, and an agent opening it must not pull the operator out of the pane he is typing
     /// in. He clicks it when he wants to use it.
     ///
+    /// `link` is a ⌘-clicked http address (#376): it opens as a new tab of the shared browser,
+    /// by the same non-seizing route — the operator clicked in a terminal and stays there.
+    ///
     /// Returns the pane showing the browser.
     @discardableResult
-    func offerBrowser() -> Pane.ID? {
+    func offerBrowser(opening link: URL? = nil) -> Pane.ID? {
         guard var bench else { return nil }
         let placement = bench.placementForBrowser()
-        if case let .existing(open) = placement {
+        let shown: Pane
+        if case let .existing(open) = placement, let existing = bench.pane(open) {
             // Bring it forward only in a slot the operator is not in. In his own slot, showing
             // a background tab *is* moving his keyboard — the focused slot's selection is the
             // focused pane (`SpoolSelectPolicy`'s rule) — so the pane stays where it is.
@@ -630,12 +604,14 @@ final class WorkbenchModel: ObservableObject {
                 bench.select(offering: open)
                 commit(bench)
             }
-            return open
+            shown = existing
+        } else {
+            shown = Pane(content: .browser)
+            bench.offer(shown, at: placement)
+            commit(bench)
         }
-        let pane = Pane(content: .browser)
-        bench.offer(pane, at: placement)
-        commit(bench)
-        return pane.id
+        if let link { browser(for: shown).open(link) }
+        return shown.id
     }
 
     /// What ⌘+/⌘0/⌘↑ act on.
@@ -1084,7 +1060,7 @@ final class WorkbenchModel: ObservableObject {
         switch command {
         case .newTerminal: newTerminal()
         case .newNote: newNote()
-        case .openBrowser: offerBrowser()
+        case let .openBrowser(link): offerBrowser(opening: link)
         case let .selectTerminal(index): selectTab(index)
         case .openArtifact: isBrowserOpen.toggle()
         case let .adjustFontSize(step): focusedTerminal?.adjustFontSize(step)
@@ -1115,31 +1091,11 @@ final class WorkbenchModel: ObservableObject {
             // after the operator switches in reaches the agent that pushed.
             origins[pane] = PushedBy(origin: request.origin, workspacePath: request.workspacePath)
 
-        // ⌘L is `nil` and means "show me the address field"; a URL means "open this",
-        // which is what a ⌘-clicked http link sends. The distinction is now in the type
-        // rather than in whether an `Any?` happened to be absent.
-        case let .openCanvasURL(url):
-            if let url { open(.url(url)) } else { openAddressField() }
-
         // Belongs to other verticals: the workspace bar, the Archon rail and `RootView`.
         // Listed rather than defaulted silently, so adding a command forces a decision here
         // instead of producing a no-op.
         case .openWorkspace, .toggleRail, .selectWorkspace, .cycleWorkspace:
             break
         }
-    }
-
-    /// ⌘L. On a canvas already showing a page this is "edit this address" and keeps the
-    /// page; otherwise it opens an empty canvas — placement decides where — with the field
-    /// focused.
-    private func openAddressField() {
-        if let pane = bench?.focusedPane, case let .canvas(source) = pane.content,
-            case .url = source
-        {
-            canvas(for: pane).focusAddress()
-            return
-        }
-        guard let id = open(.empty), let pane = bench?.pane(id) else { return }
-        canvas(for: pane).focusAddress()
     }
 }

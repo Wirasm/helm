@@ -156,7 +156,7 @@ struct CanvasTab: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Image(systemName: icon)
+            Image(systemName: "doc.text")
                 .font(.system(size: 9))
                 .foregroundStyle(Color.textMuted)
             Text(name ?? label)
@@ -185,20 +185,11 @@ struct CanvasTab: View {
         .onTapGesture(perform: onSelect)
     }
 
-    /// The filename for a file, the host for a URL — the shortest thing that still
-    /// tells two open canvases apart, and what the tab shows when nothing has named the pane.
+    /// The filename — the shortest thing that still tells two open canvases apart, and what
+    /// the tab shows when nothing has named the pane.
     private var label: String {
         switch source {
         case let .file(path): (path.value as NSString).lastPathComponent
-        case let .url(url): url.host() ?? url.absoluteString
-        case .empty: "New canvas"
-        }
-    }
-
-    private var icon: String {
-        switch source {
-        case .file: "doc.text"
-        case .url, .empty: "globe"
         }
     }
 }

@@ -46,81 +46,19 @@ final class CanvasModel: ObservableObject {
         var generation = 0
     }
 
-    /// A URL the canvas is showing.
-    struct Page {
-        /// What the address field shows — the committed address, never a
-        /// half-typed one.
-        var address = ""
-        /// What was actually loaded. nil right after ⌘L on a closed canvas:
-        /// the field is focused and there is nothing to render yet.
-        var url: URL?
-        /// A load counter, not a revision: it rises on every navigation *and*
-        /// every reload, so re-submitting the address you are already on still
-        /// retries. That is the ordinary case — the dev server was not up yet.
-        var generation = 0
-        /// Why the last load did not render, in the operator's terms. Shown as a
-        /// strip above the page rather than instead of it: a refused link must
-        /// not throw away what you were looking at.
-        var failure: String?
-    }
-
-    /// What the canvas is rendering right now — the live half, with the loaded
-    /// content, the watcher's generation counter and the last load failure.
+    /// What the canvas is rendering right now: the open file, with the loaded content and the
+    /// watcher's generation counter. nil when the canvas is closed.
     ///
-    /// Distinct from `source`, which is the *address* and the only part a bench pane
-    /// persists. Splitting them is what lets a URL canvas be restored at all: a value
-    /// that carries a `WKWebView`'s navigation state cannot be `Codable`, and one that
-    /// carries only an address cannot render.
-    enum Showing {
-        case file(Document)
-        case url(Page)
-    }
-
-    @Published private(set) var showing: Showing? {
-        didSet {
-            if let source { onSourceChange?(source) }
-        }
-    }
-
-    /// This canvas is now pointed somewhere else — an address was committed, or a page
-    /// followed a link.
-    ///
-    /// The pane's `CanvasSource` is what the bench persists, and it is written **once**,
-    /// when the pane is made. ⌘L makes one at `.empty` because at that moment there is no
-    /// address; without this hook the URL it goes on to load reaches nothing, and the pane
-    /// restores blank however long it was read (#89). `WorkbenchModel` — which owns both
-    /// this model and the pane naming it — is what sets this.
-    ///
-    /// Fired from `showing`'s `didSet` rather than from `openURL`, `submitAddress` and
-    /// `pageDidNavigate` one at a time: `source` is a pure function of `showing`, so one
-    /// observer catches every move and there is no fourth call site to forget.
-    ///
-    /// A closure rather than a subscription on `$showing`, because `@Published` fires in
-    /// `willSet` — a subscriber reading `source` back would get the value from *before* the
-    /// change (`WorkspaceModel.observe` documents that trap and what it cost), and the
-    /// main-queue hop that fixes it would make the write-back asynchronous for no gain.
-    /// Inside `didSet` the new value is already stored.
-    ///
-    /// **`showing == nil` is deliberately not reported**, and the non-optional parameter is
-    /// what says so. `source` is nil exactly when `showing` is — an emptied canvas is not
-    /// pointed anywhere, so there is nothing to hand over. That is the whole reason, and it
-    /// holds for every caller of `close()`: the pane-level one in `WorkbenchModel.close`,
-    /// which has already dropped the pane, and the two ✕ buttons, which empty the canvas and
-    /// leave the pane where it is. Those keep the source they last reported, which is the
-    /// right answer while ✕ empties a pane rather than closing it.
-    ///
-    /// **One writer.** Swift has no access level for "settable by `WorkbenchModel` only", so
-    /// this is a plain `var` and overwriting it after `canvas(for:)` has wired it turns the
-    /// write-back off silently — which is #89 again, with no compiler to say so.
-    var onSourceChange: ((CanvasSource) -> Void)?
+    /// Distinct from `CanvasSource`, which is the *address* and the only part a bench pane
+    /// persists.
+    @Published private(set) var showing: Document?
 
     /// Hand a finished mark to whoever can route it, and hear back what happened (#205).
     ///
     /// **A canvas cannot answer "which agent?" and must not try.** Routing needs the terminal that
     /// pushed this canvas, which is bench knowledge — `WorkbenchModel` is the one thing holding
-    /// both the pane and the sessions — so this model states the mark and is told the outcome. The
-    /// same shape as `onSourceChange` one screen up, and wired in the same place for the same
-    /// reason.
+    /// both the pane and the sessions — so this model states the mark and is told the outcome.
+    /// `WorkbenchModel.canvas(for:)` wires it, because that is the one place a canvas is made.
     ///
     /// **`nil` is a real, reachable state, not a missing wire.** A `CanvasModel` built outside a
     /// bench has no pane and therefore no origin, so the honest answer is `.notSent(.noOrigin)` —
@@ -144,21 +82,6 @@ final class CanvasModel: ObservableObject {
     /// spends it. #216 is the argument for bothering: a rule and a pipeline were both green for
     /// months while nothing crossed between them.
     var copyToClipboard: (String) -> Void = Pasteboard.copy
-
-    /// Where this canvas is pointed, as the bench persists it.
-    var source: CanvasSource? {
-        switch showing {
-        case let .file(document): .file(document.url)
-        // A ⌘L pane with nothing committed is `.empty`, not a URL — restoring it must
-        // give back the blank address bar the operator left, not a load of "".
-        case let .url(page): page.url.map { CanvasSource.url($0) } ?? .empty
-        case nil: nil
-        }
-    }
-
-    /// Bumped by ⌘L. The address field watches it, which is what lets a second
-    /// press re-focus a field that is already on screen.
-    @Published private(set) var addressFocus = 0
 
     // MARK: - Annotation
 
@@ -222,7 +145,7 @@ final class CanvasModel: ObservableObject {
     /// The file this canvas would let the operator write into, when it is showing one at all.
     ///
     /// **nil is the read-only canvas**, and it is nil for an `.html` artifact, for anything helm
-    /// renders as plain text, for a `.notes.md` sidecar, and for a URL canvas. `EditableFile`'s
+    /// renders as plain text, and for a `.notes.md` sidecar. `EditableFile`'s
     /// header argues each of those; what matters here is that the writing face is unreachable
     /// without one.
     ///
@@ -512,8 +435,8 @@ final class CanvasModel: ObservableObject {
     @Published private(set) var updateNotice: String?
 
     /// The operator pressing Reload, as a counter the view hands down. A counter rather than a
-    /// flag for `addressFocus`'s reason: pressing it twice must reload twice, and a flag
-    /// consumed asynchronously can be missed.
+    /// flag because pressing it twice must reload twice, and a flag consumed asynchronously can
+    /// be missed.
     @Published private(set) var reloadDemand = 0
 
     /// What the page said about an offered update. Wired to `HTMLCanvasView` by the view below.
@@ -614,23 +537,15 @@ final class CanvasModel: ObservableObject {
 
     var isOpen: Bool { showing != nil }
 
-    /// The open file, when the canvas is showing one — nil for a URL source. What reads it
-    /// is live: the header, reveal-in-Finder, and `sidecarURL` (a URL canvas has no file to
-    /// write notes beside).
+    /// The open file, nil when the canvas is closed. What reads it is live: the header,
+    /// reveal-in-Finder, and `sidecarURL`.
     ///
-    /// **It is no longer the persistence seam.** It was — `WorkspaceModel.saveContext` read
-    /// `fileURL?.path` into `openArtifactPath`, which is why a URL canvas persisted nothing
-    /// at all. The bench persists `CanvasSource` through `Pane.Content.canvas` instead, so
-    /// a URL canvas now restores properly and `saveContext` does not read this at all.
-    var fileURL: URL? {
-        if case let .file(document) = showing { document.url } else { nil }
-    }
+    /// **It is not the persistence seam.** It was — `WorkspaceModel.saveContext` read
+    /// `fileURL?.path` into `openArtifactPath`. The bench persists `CanvasSource` through
+    /// `Pane.Content.canvas` instead, and `saveContext` does not read this at all.
+    var fileURL: URL? { showing?.url }
 
-    private var isShowingURL: Bool {
-        if case .url = showing { true } else { false }
-    }
-
-    /// **This model no longer subscribes to `openCanvasFile` / `openCanvasURL`,
+    /// **This model does not subscribe to `openCanvasFile`,
     /// and must not.** There is one of these per canvas pane now, not one per app: a
     /// subscription here would make every ⌘-clicked link replace the contents of *every*
     /// open canvas at once.
@@ -679,8 +594,6 @@ final class CanvasModel: ObservableObject {
     func show(_ source: CanvasSource) {
         switch source {
         case let .file(path): open(URL(fileURLWithPath: path.value))
-        case let .url(url): openURL(url)
-        case .empty: focusAddress()
         }
     }
 
@@ -689,7 +602,7 @@ final class CanvasModel: ObservableObject {
         // belongs to the one it is leaving — a save owed at this moment has nowhere to go once
         // `showing` has moved.
         saveDraft()
-        showing = .file(Document(url: url, content: Self.load(url)))
+        showing = Document(url: url, content: Self.load(url))
         // The draft is about the file that was here. Carried onto another one it would be the
         // wrong text over the right path, which is the one way an editor destroys work.
         draft = nil
@@ -753,10 +666,8 @@ final class CanvasModel: ObservableObject {
     /// **What `cleared` still means now that `.read` posts nothing** (#302). It was the one
     /// message a canvas produced without anyone marking, and that is exactly what it has
     /// stopped being — it is now only ever the answer to a gesture made with a tool the
-    /// operator picked up. Two live cases, so it is a long way from dead: a `.text` click that
-    /// lands away from the selection being commented on, and a `.point` tap that resolves no
-    /// target (the page wipes its ring and says so, rather than leaving ink over nothing).
-    /// Both are the operator abandoning a mark in flight, which is what this always handled;
+    /// operator picked up: a `.text` click that lands away from the selection being commented
+    /// on. That is the operator abandoning a mark in flight, which is what this always handled;
     /// what changed is that reading is no longer indistinguishable from that.
     func pageDidReport(_ report: CanvasPageSelection) {
         switch report {
@@ -931,9 +842,6 @@ final class CanvasModel: ObservableObject {
     /// string — so the counter is what the views key their reload on, and it is what makes
     /// "the bytes on disk changed under an unchanged path" expressible at all.
     ///
-    /// A `.url` canvas is deliberately not reachable here: it has no file to re-read, and
-    /// `reloadPage()` is the address bar's equivalent.
-    ///
     /// **It is also the one place a second writer can be noticed at all** (#289), which is why
     /// `reconcile` hangs here rather than on the watcher: both callers above mean *the bytes may
     /// have changed*, an open draft has to be told either way, and a rule on one of the two
@@ -941,78 +849,11 @@ final class CanvasModel: ObservableObject {
     /// to both halves — the render and the reconcile — so they cannot disagree about what is on
     /// disk.
     func refresh() {
-        guard case let .file(previous) = showing else { return }
+        guard let previous = showing else { return }
         let content = Self.load(previous.url)
         reconcile(content)
-        showing = .file(
-            Document(
-                url: previous.url,
-                content: content,
-                generation: previous.generation + 1
-            ))
-    }
-
-    // MARK: - URL source
-
-    /// Take the canvas to a URL. Single pane: this replaces whatever it was
-    /// showing, the same way opening another file does.
-    func openURL(_ url: URL) {
-        watch = nil
-        showing = .url(
-            Page(address: url.absoluteString, url: url, generation: nextGeneration))
-    }
-
-    /// ⌘L. On a canvas already showing a page this is "edit this address" and
-    /// keeps the page; otherwise it opens an empty one with the field focused.
-    func focusAddress() {
-        if !isShowingURL {
-            watch = nil
-            showing = .url(Page())
-        }
-        addressFocus += 1
-    }
-
-    /// The address field was committed. A refusal keeps the page that is up and
-    /// says why, rather than blanking the canvas over a typo.
-    func submitAddress(_ typed: String) {
-        guard case .url(var page) = showing else { return }
-        guard let url = CanvasURLPolicy.address(typed) else {
-            page.address = typed
-            page.failure =
-                "Not an address the canvas can open: "
-                + typed.trimmingCharacters(in: .whitespacesAndNewlines)
-            showing = .url(page)
-            return
-        }
-        openURL(url)
-    }
-
-    func reloadPage() {
-        guard case .url(var page) = showing, page.url != nil else { return }
-        page.generation += 1
-        page.failure = nil
-        showing = .url(page)
-    }
-
-    /// The page navigated itself — a link, a redirect. The address follows it, so
-    /// the field never lies about what is on screen and reload reloads what you
-    /// are looking at.
-    func pageDidNavigate(to url: URL) {
-        guard case .url(var page) = showing else { return }
-        page.address = url.absoluteString
-        page.url = url
-        page.failure = nil
-        showing = .url(page)
-    }
-
-    func pageDidFail(_ message: String) {
-        guard case .url(var page) = showing else { return }
-        page.failure = message
-        showing = .url(page)
-    }
-
-    private var nextGeneration: Int {
-        if case let .url(page) = showing { page.generation + 1 } else { 0 }
+        showing = Document(
+            url: previous.url, content: content, generation: previous.generation + 1)
     }
 
     private static func load(_ url: URL) -> Content {
@@ -1186,9 +1027,7 @@ final class SidecarWatcher {
 
 // MARK: - View
 
-/// The read-only canvas half of the terminal workspace split: a header over the
-/// rendered source. Which header is the source's own — a file gets its filename
-/// and reveal-in-Finder, a URL gets an address bar.
+/// A canvas pane: a header naming the file, over the rendered file.
 struct CanvasView: View {
     /// Hot reload: `.enableInjection()` below redraws this view when
     /// InjectionNext swaps a recompiled build of it into the running app.
@@ -1197,12 +1036,9 @@ struct CanvasView: View {
     @ObservedObject var model: CanvasModel
 
     var body: some View {
-        if let showing = model.showing {
+        if let document = model.showing {
             VStack(spacing: 0) {
-                switch showing {
-                case let .file(document): header(for: document)
-                case let .url(page): CanvasAddressBar(model: model, page: page)
-                }
+                header(for: document)
                 Divider()
                 // Its own `if`, not an arm of the chain below: an update helm is holding back
                 // and a note that failed to write are unrelated facts about different things,
@@ -1230,7 +1066,7 @@ struct CanvasView: View {
                 } else if let notice = model.notesNotice {
                     noticeStrip(notice, symbol: "checkmark.circle")
                 }
-                content(for: showing)
+                fileContent(for: document)
                     // Over the artifact, never squeezing it: the page keeps its layout and
                     // its scroll position, and the drawer is temporary.
                     .overlay(alignment: .trailing) { notesDrawer }
@@ -1250,12 +1086,9 @@ struct CanvasView: View {
 
     /// The sidecar over the trailing half of the pane. Sized from the pane it is over
     /// rather than from a fixed number, by `CanvasNotesDrawerMetrics`.
-    ///
-    /// A URL canvas has no sidecar to show, so `sidecarURL` is the second half of the
-    /// condition — `showsNotes` alone would put an empty drawer over a web page.
     @ViewBuilder
     private var notesDrawer: some View {
-        if model.showsNotes, model.sidecarURL != nil {
+        if model.showsNotes {
             GeometryReader { proxy in
                 CanvasNotesDrawer(model: model)
                     .frame(
@@ -1372,7 +1205,7 @@ struct CanvasView: View {
 
     /// The tools, as chrome on the canvas rather than a mode you have to know about.
     ///
-    /// Five small buttons instead of a `Picker`: a segmented control would grow the header
+    /// Two small buttons instead of a `Picker`: a segmented control would grow the header
     /// by its own chrome, and this sits beside three existing icon buttons that already
     /// establish the shape.
     ///
@@ -1397,34 +1230,6 @@ struct CanvasView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(model.markTool == tool ? Color.accent : Color.textMuted)
                 .help(tool.help)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func content(for showing: CanvasModel.Showing) -> some View {
-        switch showing {
-        case let .file(document): fileContent(for: document)
-        case let .url(page): urlContent(for: page)
-        }
-    }
-
-    /// The URL source. The failure is a strip above the page rather than a
-    /// replacement for it: a refused link must not cost you the page you were
-    /// reading, and a dead dev server should say so instead of showing WebKit's
-    /// blank white pane.
-    @ViewBuilder
-    private func urlContent(for page: CanvasModel.Page) -> some View {
-        VStack(spacing: 0) {
-            if let failure = page.failure {
-                noticeStrip(failure, symbol: "exclamationmark.triangle")
-            }
-            if let url = page.url {
-                URLCanvasView(model: model, url: url, generation: page.generation)
-            } else {
-                Text("Type a URL — localhost:3000")
-                    .foregroundStyle(Color.textFaint)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -1506,7 +1311,7 @@ struct CanvasView: View {
                 writeToggle
             }
             // Nothing to mark while writing: the page is not on screen, and a picker over a text
-            // editor would be four buttons that do nothing.
+            // editor would be buttons that do nothing.
             if model.draft == nil {
                 markPicker
             }

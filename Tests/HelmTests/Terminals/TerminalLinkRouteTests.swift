@@ -4,32 +4,32 @@ import XCTest
 
 /// Where a ⌘-clicked OSC 8 link ends up. The file half is covered by
 /// `RenderableFileTests`; this covers the routing decision built on it — including
-/// the one the canvas exists for, an agent-printed http address opening in helm
-/// rather than in a browser.
+/// an agent-printed http address opening in helm's browser pane rather than in the
+/// system browser.
 final class TerminalLinkRouteTests: XCTestCase {
 
-    // MARK: - Web addresses go to the canvas
+    // MARK: - Web addresses go to the shared browser
 
-    func testWebAddressesOpenInTheCanvas() {
-        // The case the canvas exists for: an agent prints its dev server.
+    func testWebAddressesOpenInTheBrowserPane() {
+        // The common case: an agent prints its dev server.
         for address in [
             "http://localhost:3000",
             "https://example.com/path?q=1",
             "http://127.0.0.1:8080/status",
         ] {
-            XCTAssertEqual(TerminalLinkRoute.route(URL(string: address)!), .canvasURL, address)
+            XCTAssertEqual(TerminalLinkRoute.route(URL(string: address)!), .browser, address)
         }
     }
 
     func testSchemeMatchingIsCaseInsensitive() {
-        XCTAssertEqual(TerminalLinkRoute.route(URL(string: "HTTPS://example.com")!), .canvasURL)
+        XCTAssertEqual(TerminalLinkRoute.route(URL(string: "HTTPS://example.com")!), .browser)
     }
 
     // MARK: - mailto: stays with the system
 
     func testMailtoGoesToTheSystem() {
         // helm has no mail client and should not pretend to. It passes the outer
-        // allowlist and the canvas refuses it — that is the composition working,
+        // allowlist and the route refuses it — that is the composition working,
         // not a gap in it.
         XCTAssertEqual(TerminalLinkRoute.route(URL(string: "mailto:dev@example.com")!), .system)
     }
@@ -53,7 +53,7 @@ final class TerminalLinkRouteTests: XCTestCase {
 
     func testHostileSchemesNeverReachTheCanvas() {
         // Terminal content is untrusted. `TerminalURLPolicy` drops these before the
-        // route is ever asked, so neither canvas branch can be reached with one.
+        // route is ever asked, so neither in-helm branch can be reached with one.
         for hostile in [
             "javascript:alert(1)",
             "data:text/html,<script>alert(1)</script>",
@@ -68,8 +68,8 @@ final class TerminalLinkRouteTests: XCTestCase {
     func testGateAndRouteAgreeOnWhatAClickDoes() {
         // The whole decision, from the string ghostty hands over to where it lands.
         let expected: [(String, TerminalLinkRoute?)] = [
-            ("http://localhost:3000", .canvasURL),
-            ("  https://example.com\n", .canvasURL),
+            ("http://localhost:3000", .browser),
+            ("  https://example.com\n", .browser),
             ("mailto:dev@example.com", .system),
             ("file:///tmp/plan.md", .canvasFile),
             ("file:///tmp/diagram.png", .system),

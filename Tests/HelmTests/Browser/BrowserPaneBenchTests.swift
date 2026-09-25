@@ -8,8 +8,16 @@ import XCTest
 final class BrowserPaneBenchTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/helm-browser-pane")
 
+    /// A bench root nothing runs a browser in, so no pane here can reach the operator's live
+    /// `~/.bench` browser — and a link a test opens cannot open in it.
+    private let benchRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("helm-browser-pane-\(UUID().uuidString)")
+
     private func mounted() -> WorkbenchModel {
-        let model = WorkbenchModel(terminals: TerminalManager())
+        let root = benchRoot
+        let model = WorkbenchModel(
+            terminals: TerminalManager(),
+            makeBrowser: { BrowserPaneModel(environment: ["BENCH_DIR": root.path], home: root) })
         model.activate(workspacePath: workspace)
         return model
     }
@@ -50,6 +58,37 @@ final class BrowserPaneBenchTests: XCTestCase {
         let first = try XCTUnwrap(model.offerBrowser())
         let second = try XCTUnwrap(model.offerBrowser())
         XCTAssertEqual(first, second)
+        XCTAssertEqual(model.bench?.panes.filter { $0.content == .browser }.count, 1)
+    }
+
+    /// A ⌘-clicked http link (#376): the browser pane is offered, the keyboard stays in the
+    /// terminal that was clicked, and the address reaches that pane's browser to open as a tab.
+    /// No browser runs under this bench root, so it waits there until one does.
+    func testAClickedLinkOffersTheBrowserAndHandsItTheAddress() async throws {
+        let model = mounted()
+        let typing = try XCTUnwrap(model.bench?.focusedPane?.id)
+        let link = try XCTUnwrap(URL(string: "http://localhost:3000"))
+
+        HelmCommand.openBrowser(link).post()
+        try await Task.sleep(for: .milliseconds(100))
+
+        let pane = try XCTUnwrap(model.bench?.panes.first { $0.content == .browser })
+        XCTAssertEqual(model.bench?.focusedPane?.id, typing, "a link click must not seize")
+        XCTAssertEqual(model.browser(for: pane).pendingLinks, [link])
+    }
+
+    /// The second click reuses the pane and queues behind the first, rather than opening a
+    /// second browser pane or dropping the earlier link.
+    func testASecondLinkGoesToTheSameBrowserPane() throws {
+        let model = mounted()
+        let first = try XCTUnwrap(URL(string: "http://localhost:3000"))
+        let second = try XCTUnwrap(URL(string: "https://example.com/docs"))
+
+        let pane = try XCTUnwrap(model.offerBrowser(opening: first))
+        XCTAssertEqual(model.offerBrowser(opening: second), pane)
+
+        let browser = try XCTUnwrap(model.bench?.pane(pane))
+        XCTAssertEqual(model.browser(for: browser).pendingLinks, [first, second])
         XCTAssertEqual(model.bench?.panes.filter { $0.content == .browser }.count, 1)
     }
 

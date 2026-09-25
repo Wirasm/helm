@@ -71,7 +71,7 @@ final class WorkbenchSpoolCommander: SpoolCommanding {
         // spool. Listing them is what makes a *newly allowed* command fail to compile here
         // instead of silently doing nothing: flip a verdict to `.allowed` in `HelmWire` and
         // this switch is what forces a route to be chosen for it.
-        case .selectTerminal, .openArtifact, .openCanvasFile, .pushCanvasFile, .openCanvasURL,
+        case .selectTerminal, .openArtifact, .openCanvasFile, .pushCanvasFile,
             .openWorkspace, .adjustFontSize, .jumpToPrompt, .selectWorkspace, .cycleWorkspace,
             .closePane, .moveFocus, .movePane, .newNote:
             return .failure(

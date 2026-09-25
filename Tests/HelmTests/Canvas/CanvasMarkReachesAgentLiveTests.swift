@@ -21,7 +21,8 @@ import XCTest
 /// - **Injection time.** `.atDocumentEnd`, `forMainFrameOnly: true`.
 /// - **Geometry from a layout engine.** `canvas-dom-stub.js` says in as many words that its boxes
 ///   are the stub's arithmetic and not a browser's. Here `getBoundingClientRect()` is WebKit's:
-///   the page reports its own rects and the loop is drawn from those, never from a constant.
+///   the page reports its own rects and the gestures are placed from those, never from a
+///   constant.
 ///
 /// **It also crosses the origin gate for real.** `CanvasFileCoordinator.userContentController`
 /// checks `CanvasAddress.accepts(isMainFrame:originScheme:originHost:expectedHost:)` against a
@@ -151,28 +152,6 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
         XCTAssertTrue(body.contains("this is the seam #210 is about"))
         XCTAssertEqual(
             page.model.notesNotice, "Written to report.notes.md and sent to sild-611a")
-    }
-
-    /// **A circle drawn round a real element, over WebKit's real layout.** The stroke is computed
-    /// from the rect the page itself reported, so what the mark covers is decided by
-    /// `getBoundingClientRect()` and the script's own containment rule rather than by a stub's
-    /// arithmetic — the gap #196 lived in.
-    ///
-    /// It is also the geometry mark `CanvasPageSelection.init?` dropped for months (#216),
-    /// carrying `targets` and no top-level `text`, now crossing a live bridge rather than a
-    /// hand-built dictionary.
-    func testACircleDrawnRoundALiveElementReachesTheMailboxNamingWhatItCovered() async throws {
-        let page = try await Page(canvas: canvas, mailRoot: mailRoot, route: .mailbox(handle))
-
-        try await page.markLoop(around: "bridge")
-        page.model.annotate(comment: "circle exactly this one")
-
-        let body = try XCTUnwrap(try delivered()["body"] as? String)
-        XCTAssertTrue(body.contains("circled"), "the gesture is the verb — \(body)")
-        XCTAssertTrue(body.contains("`#bridge`"), "what the loop covered, by real layout")
-        XCTAssertFalse(
-            body.contains("`#summary`") || body.contains("`#closing`"),
-            "a loop round one section must not sweep in its neighbours — \(body)")
     }
 
     /// **The text mark, painted by a real WebKit and read back from the page's own world**
@@ -358,8 +337,7 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
         /// Highlight an element's contents and release — one evaluation, so the selection and the
         /// `mouseup` that posts it cannot be reordered by a completion this host never delivers.
         ///
-        /// **The tool is set here, in the same evaluation, exactly as `markLoop` sets
-        /// `.freehand`** — and #302 is why it has to be. This used to say nothing about the tool
+        /// **The tool is set here, in the same evaluation** — and #302 is why it has to be. This used to say nothing about the tool
         /// and lean on the default being armed for text; that default is now `.read`, which posts
         /// nothing, so the omission stopped being invisible. It did not fail: `marked` waits on a
         /// `withCheckedContinuation` with **no timeout**, so a mark that never arrives hangs the
@@ -442,33 +420,6 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
             return false
         }
 
-        /// A closed-ish loop just outside a real element's real rect, released short of where it
-        /// began — a person circling something does not carefully meet the ends. The tool is set
-        /// in the same evaluation as the gesture, for `markSelection`'s ordering reason.
-        func markLoop(around id: String) async throws {
-            let ring = try XCTUnwrap(rects[id], "#\(id) was not in the page's own layout report")
-                .insetBy(dx: -6, dy: -6)
-            let corners = [
-                CGPoint(x: ring.minX, y: ring.minY), CGPoint(x: ring.maxX, y: ring.minY),
-                CGPoint(x: ring.maxX, y: ring.maxY), CGPoint(x: ring.minX, y: ring.maxY),
-                CGPoint(x: ring.minX, y: ring.minY + 6),
-            ]
-            let moves = corners.dropFirst().dropLast().map {
-                Self.dispatch("mousemove", at: $0)
-            }
-            try await marked {
-                evaluate(
-                    """
-                    (function () {
-                      \(CanvasHTML.setMarkTool(.freehand, theme: .light))
-                      \(Self.dispatch("mousedown", at: corners[0]))
-                      \(moves.joined(separator: "\n  "))
-                      \(Self.dispatch("mouseup", at: corners[corners.count - 1]))
-                    })()
-                    """)
-            }
-        }
-
         /// Run a gesture and wait for the mark to come back **through helm's own bridge** into the
         /// model. Waited on, never slept for: `$selection` becoming non-nil is the observable, and
         /// it is only reachable if the script, the world, the origin gate and
@@ -486,14 +437,6 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
             }
             marks = nil
             XCTAssertTrue(arrived)
-        }
-
-        private static func dispatch(_ type: String, at point: CGPoint) -> String {
-            """
-            document.dispatchEvent(new MouseEvent(\(js(type)), {
-              bubbles: true, cancelable: true, button: 0,
-              clientX: \(point.x), clientY: \(point.y) }));
-            """
         }
 
         private static func js(_ value: String) -> String {
