@@ -147,59 +147,6 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
 
     // MARK: - The geometry marks
 
-    /// **The one #216 would have caught, and the reason this file drives the script rather than
-    /// building a body.** An enclosure carries `targets`, never a top-level `text`, so the gate at
-    /// `CanvasPageSelection.init?` is the first thing it meets on the way to a mailbox — and that
-    /// gate is exactly where every geometry mark was silently dropped for months.
-    func testACircleDrawnRoundAnElementReachesTheMailboxCarryingWhatItCovered() throws {
-        let model = openCanvas(routedTo: .mailbox(handle))
-
-        try mark(
-            { page in
-                page.setTool(.freehand)
-                page.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-            }, saying: "circle this one", on: model)
-
-        let body = try XCTUnwrap(try delivered()["body"] as? String)
-        XCTAssertTrue(
-            body.contains("circled"), "the gesture is the verb an agent greps for — \(body)")
-        XCTAssertTrue(body.contains("`#item-a`"), "and it names what the loop actually covered")
-        XCTAssertTrue(body.contains("circle this one"))
-    }
-
-    /// The other two geometry marks, for the same reason: `relation` carries `from`/`to` and
-    /// `point` carries neither `targets` nor a plain selection, so each crosses the gate on its
-    /// own discriminator.
-    func testAnArrowAndAPointBothReachTheMailboxToo() throws {
-        for (tool, gesture, expected) in [
-            (
-                CanvasMarkTool.arrow,
-                { (page: CanvasScriptRuntime) in
-                    page.drag(from: (x: 100, y: 100), to: (x: 100, y: 1410))
-                }, "arrow"
-            ),
-            (
-                CanvasMarkTool.point,
-                { (page: CanvasScriptRuntime) in page.tap(at: (x: 100, y: 110)) },
-                "pointed at"
-            ),
-        ] {
-            try emptyTheMailbox()
-
-            let model = openCanvas(routedTo: .mailbox(handle))
-            try mark(
-                { page in
-                    page.setTool(tool)
-                    gesture(page)
-                }, saying: "look here", on: model)
-
-            let body = try XCTUnwrap(try delivered()["body"] as? String)
-            XCTAssertTrue(
-                body.contains(expected),
-                "a \(tool.token) mark has to survive the whole path — \(body)")
-        }
-    }
-
     // MARK: - The sidecar, and the fallback
 
     /// **The sidecar is the memory; mail is delivery, not storage** (#205's acceptance). It is

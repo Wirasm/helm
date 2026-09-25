@@ -51,27 +51,14 @@ enum CanvasNotes {
             """
     }
 
-    /// The mark as a heading an agent reads without being taught anything.
+    /// The mark as a heading an agent reads without being taught anything: the anchor.
     ///
-    /// The verb is the gesture. `circled` and `arrow` are the operator's own vocabulary, and
-    /// an agent grepping the sidecar for what to change wants the target, not the shape.
+    /// Sidecars written before #385 also hold geometry headings — `circled …`, `arrow … → …`,
+    /// `pointed at …`. They are prose to every reader (`headings(in:)`, the drawer, an agent),
+    /// so they still read; nothing parses a heading back into a `Mark`.
     private static func describe(_ mark: CanvasAnnotation.Mark) -> String {
         switch mark {
-        case let .selection(anchor):
-            return name(anchor)
-        case let .point(anchor):
-            return "pointed at \(name(anchor))"
-        case let .enclosure(covering):
-            // One thing reads as prose; several read as a list, because circling three nodes
-            // means three and collapsing that would be helm choosing which one mattered.
-            guard covering.count > 1 else { return "circled \(name(covering[0]))" }
-            return "circled " + covering.map(shortName).joined(separator: ", ")
-        case let .relation(from, to):
-            // An arrow into empty space is a real instruction — "add a node here" — so the
-            // missing end is named rather than the whole mark being refused.
-            let start = from.map(shortName) ?? "(empty space)"
-            let end = to.map(shortName) ?? "(empty space)"
-            return "arrow \(start) → \(end)"
+        case let .selection(anchor): name(anchor)
         }
     }
 
@@ -83,24 +70,13 @@ enum CanvasNotes {
         }
     }
 
-    /// Just the handle, for a mark naming several things or two ends — a heading carrying
-    /// three quoted labels is a paragraph, not a heading.
-    private static func shortName(_ anchor: CanvasAnnotation.Anchor) -> String {
-        switch anchor {
-        case let .element(id, _): "`#\(id)`"
-        case let .quote(text): "\"\(singleLine(text))\""
-        }
-    }
-
     /// What goes on the clipboard when a comment is written, so it can be pasted straight
     /// into an agent that helm cannot reach.
     ///
     /// **The same line the sidecar writes, plus the path** — not a second format. The heading
-    /// already carries the gesture and what it covered, because that is how an anchor
-    /// renders; inventing a leaner shape here would drop the mark type (an arrow would read
-    /// as one anchor) and the covered text (which is how an agent verifies it resolved to
-    /// the right thing). Byte-identical to the file means a paste and the sidecar can never
-    /// disagree.
+    /// already carries the anchor and the text it covered, which is how an agent verifies it
+    /// resolved to the right thing. Byte-identical to the file means a paste and the sidecar
+    /// can never disagree.
     ///
     /// **One comment, never the accumulation.** Pasting every note is the same as pasting the
     /// file, and the canvas header already copies the path for that. And no image: an anchor

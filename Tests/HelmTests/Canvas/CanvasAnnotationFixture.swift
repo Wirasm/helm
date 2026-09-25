@@ -8,8 +8,7 @@ import XCTest
 /// **Why this exists at all.** `CanvasAnnotation.init` is `private`, so a fixture cannot assemble
 /// a mark beside the gate any more; before that it could, and fifteen across five files did. What
 /// they held themselves to was nothing — not a non-empty comment, not `maximumIDLength` or
-/// `maximumTextLength`, not `maximumEnclosureCount`, not the control-character strip, and not the
-/// rule that a `.relation` with both ends nil is the one shape that means nothing. Going through
+/// `maximumTextLength`, and not the control-character strip. Going through
 /// the decoder makes the next wire change fail **here**, at construction, instead of three
 /// assertions downstream on whatever the test was actually about. #293 is what that costs: a
 /// selection fixture went stale the moment #288 made `kind` the discriminator, and CI reported
@@ -27,8 +26,7 @@ import XCTest
 /// nothing.
 extension XCTestCase {
     /// The page's own message body, decoded. `kind` defaults to `selection`, as it does in
-    /// `CanvasAnnotationTests` and `CanvasMarkTests`, so a geometry fixture is the one that has to
-    /// say what it is.
+    /// `CanvasAnnotationTests` and `CanvasMarkTests`.
     ///
     /// `file`/`line` default from the caller, so a refusal is reported at the test that asked
     /// rather than here — a whole suite pointing at this line would name the drift's location
@@ -47,8 +45,7 @@ extension XCTestCase {
             file: file, line: line)
     }
 
-    /// Selected text, with the authored element id where the page found one — the ordinary mark,
-    /// and the only kind there was before #112.
+    /// Selected text, with the authored element id where the page found one.
     func annotation(
         selecting text: String, id: String? = nil, comment: String,
         file: StaticString = #filePath, line: UInt = #line

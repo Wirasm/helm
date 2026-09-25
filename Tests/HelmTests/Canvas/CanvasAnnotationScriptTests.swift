@@ -23,14 +23,10 @@ final class CanvasAnnotationScriptTests: XCTestCase {
     func testTheScriptParsesAndArmsThePage() throws {
         let page = try CanvasScriptRuntime()
 
-        for gesture in ["mousedown", "mousemove", "mouseup", "mouseleave"] {
-            XCTAssertEqual(
-                page.listenerCount(on: "document", for: gesture), 1,
-                "the page must listen for \(gesture) exactly once")
-        }
-        XCTAssertEqual(page.listenerCount(on: "window", for: "blur"), 1)
+        XCTAssertEqual(
+            page.listenerCount(on: "document", for: "mouseup"), 1,
+            "the page must listen for mouseup exactly once")
         XCTAssertTrue(page.hasGlobal("__helmWipeMark"), "Swift takes a posted mark down")
-        XCTAssertTrue(page.hasGlobal("__helmAbandonMark"), "a tool change drops half-drawn work")
         XCTAssertTrue(page.drainExceptions().isEmpty)
     }
 
@@ -80,55 +76,17 @@ final class CanvasAnnotationScriptTests: XCTestCase {
 
     // MARK: The tool decides the mark
 
-    /// #112's own contract, and the first cut got it wrong by inferring the mark from the
-    /// gesture's shape. One identical drag, three tools, three different marks — which a
-    /// substring check cannot express at all.
-    func testOneGestureMeansWhateverToolIsHeld() throws {
-        var marks: [String] = []
-        for tool in [CanvasMarkTool.arrow, .freehand] {
-            let page = try CanvasScriptRuntime()
-            page.setTool(tool)
-            page.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-            marks.append(try XCTUnwrap(page.lastPosted?["kind"] as? String))
-        }
-
-        let tapping = try CanvasScriptRuntime()
-        tapping.setTool(.point)
-        tapping.tap(at: (x: 100, y: 110))
-        marks.append(try XCTUnwrap(tapping.lastPosted?["kind"] as? String))
-
-        XCTAssertEqual(marks, ["relation", "enclosure", "point"])
-    }
-
-    /// The fall-through used to be freehand, so a garbage token silently drew a circle.
+    /// A tool token the page does not know marks nothing — it must not fall through to one
+    /// that does.
     func testAToolHelmDoesNotKnowDoesNothingAtAll() throws {
         let page = try CanvasScriptRuntime()
         page.evaluateFromSwift("window.\(CanvasHTML.markToolGlobal) = \"sketch\";")
 
-        page.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
+        page.select(id: "intro", text: "Why this exists")
+        page.mouse("mouseup", 100, 110)
 
         XCTAssertTrue(page.posted.isEmpty, "an unknown tool must not post a mark")
         XCTAssertTrue(page.drainExceptions().isEmpty)
-    }
-
-    /// A tool is a sticky selection, unlike the modifier it replaced: a right-click for the
-    /// page's own context menu would otherwise start a stroke the menu's tracking loop eats.
-    func testOnlyThePrimaryButtonStartsAStroke() throws {
-        let page = try CanvasScriptRuntime()
-        page.setTool(.freehand)
-
-        XCTAssertFalse(
-            page.mouse("mousedown", 100, 40, button: 2),
-            "the default must survive, or the page's own context menu never opens")
-        page.mouse("mousemove", 200, 200)
-        page.mouse("mouseup", 200, 200)
-
-        XCTAssertTrue(page.posted.isEmpty)
-        XCTAssertFalse(page.hasMarkLayer, "and nothing was drawn on the way")
-
-        XCTAssertTrue(
-            page.mouse("mousedown", 100, 40),
-            "while a primary press does take the pointer, or the drag selects text instead")
     }
 
     // MARK: The text tool, whose behaviour predates every tool
@@ -175,10 +133,9 @@ final class CanvasAnnotationScriptTests: XCTestCase {
 
     // MARK: The text mark stays painted (#308)
 
-    /// **The whole of #308, as one journey.** Three tools kept their mark and one did not:
-    /// freehand and arrow leave ink, point leaves a ring, and a text mark was the browser's own
-    /// selection — which greys the instant the comment field takes the keyboard, so the operator
-    /// was asked to comment on a passage that had stopped looking marked.
+    /// **The whole of #308, as one journey.** A text mark was the browser's own selection —
+    /// which greys the instant the comment field takes the keyboard, so the operator was asked
+    /// to comment on a passage that had stopped looking marked.
     ///
     /// Every step here is a real event the script listens for, in the order a person produces
     /// them: mark, the field takes focus (`blur`), the operator leaves for a terminal pane and
@@ -282,7 +239,7 @@ final class CanvasAnnotationScriptTests: XCTestCase {
     /// A click away from the passage takes the mark down **here**, rather than waiting to be
     /// told. Swift answers a `cleared` by closing the field, which comes back as a wipe — but a
     /// render later, and in between the operator is looking at a highlight over the thing they
-    /// just clicked away from. Exactly what `point` already does when it resolves no target.
+    /// just clicked away from.
     func testAClickThatSelectedNothingTakesTheTextMarkDownAtOnce() throws {
         let page = try CanvasScriptRuntime()
         page.setTool(.text)
@@ -297,77 +254,8 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         XCTAssertEqual(page.lastPosted?["kind"] as? String, "cleared")
     }
 
-    /// **One mark on screen, across a tool change — the case every existing test missed** by
-    /// building a fresh page per tool and calling `setTool` exactly once.
-    ///
-    /// Both halves of the round trip, because only one of them was broken and the diagnosis
-    /// depends on knowing which. A drawing tool wipes at `mousedown`, so `.text` → `.freehand`
-    /// was always clean. `.text` is exempted from that wipe on purpose — cancelling `mousedown`
-    /// is what would stop the operator selecting at all — so `.freehand` → `.text` had nothing
-    /// clearing the ink, and the arrow stayed painted beside the new highlight with only one of
-    /// them being what the comment field is about.
-    ///
-    /// **Latent before this slice and real after it**, which is why it belongs to #308 rather
-    /// than to #112: `.text` painted nothing of its own, so the orphaned ink was the only thing
-    /// on screen instead of one of two contradictory marks.
-    func testANewMarkReplacesWhateverToolMadeTheLastOne() throws {
-        let drawnFirst = try CanvasScriptRuntime()
-        drawnFirst.setTool(.arrow)
-        drawnFirst.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-        XCTAssertTrue(drawnFirst.hasMarkLayer, "the arrow is the mark awaiting a comment")
-
-        // Picking a tool up must NOT drop a committed mark — that is the contract
-        // `testAPostedMarkOutlivesEverythingExceptSwiftTakingItDown` pins — so the ink is still
-        // there when the text gesture starts, and clearing it is the text branch's job.
-        drawnFirst.evaluateFromSwift(CanvasHTML.setMarkTool(.text, theme: .light))
-        drawnFirst.select(id: "intro", text: "Why this exists")
-        drawnFirst.mouse("mouseup", 100, 110)
-
-        XCTAssertEqual(drawnFirst.textMark?.text, "Why this exists", "the new mark is painted")
-        XCTAssertFalse(
-            drawnFirst.hasMarkLayer,
-            "and the arrow is gone — two marks on screen with one comment field between them "
-                + "is a mark that lies about what is under discussion")
-
-        let textFirst = try CanvasScriptRuntime()
-        textFirst.setTool(.text)
-        textFirst.select(id: "intro", text: "Why this exists")
-        textFirst.mouse("mouseup", 100, 110)
-        XCTAssertNotNil(textFirst.textMark)
-
-        textFirst.evaluateFromSwift(CanvasHTML.setMarkTool(.freehand, theme: .light))
-        textFirst.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-
-        XCTAssertTrue(textFirst.hasMarkLayer, "the loop is the mark now")
-        XCTAssertNil(
-            textFirst.textMark,
-            "and the highlight went with the drawing tool's own mousedown wipe — this half was "
-                + "already correct, and is here so a fix to the other half cannot break it")
-    }
-
-    /// **A control, and named as one.** The three tools built for #112 already kept their mark
-    /// and none of them goes near the highlight registry; a change that started painting text
-    /// highlights for a loop or a tap would be overshoot, and this is what fails on it. It
-    /// passes with the whole of #308 removed, which is the point of a control.
-    func testTheThreeDrawingToolsMarkTheirOwnWayAndRegisterNoTextHighlight() throws {
-        for tool in CanvasMarkTool.allCases where tool.draws {
-            let page = try CanvasScriptRuntime()
-            page.setTool(tool)
-            switch tool {
-            case .point: page.tap(at: (x: 100, y: 110))
-            case .arrow: page.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-            default: page.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-            }
-
-            XCTAssertTrue(page.hasMarkLayer, "\(tool.token) still marks the way it always did")
-            XCTAssertEqual(
-                page.highlightNames, [], "\(tool.token) has no text range and must paint none")
-            XCTAssertEqual(page.adoptedSheetCount, 0, "and adopts no stylesheet either")
-        }
-    }
-
     /// **`data-helm-surface` still wins, and it wins before the paint** (#111/#300). Inside a
-    /// declared surface helm does nothing at all — no stroke, no `cleared`, and now no highlight:
+    /// declared surface helm does nothing at all — no `cleared`, and no highlight:
     /// a board is one `<canvas>` and a highlight over it would mean nothing.
     ///
     /// It is the `.text` branch's own early return that does this, which is why it is asserted
@@ -386,202 +274,27 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         XCTAssertEqual(page.highlightNames, [], "and nothing painted over the board")
     }
 
-    // MARK: Coordinate spaces (#196)
-
-    /// The stroke is in PAGE coordinates so the ink scrolls with its subject. The rect that
-    /// travels to Swift is not: it places the comment field on screen. #196 moved both and the
-    /// field landed off screen; every substring assertion passed.
-    ///
-    /// Every tool, because each posts its own `rect:` and #196 was one call site out of three.
-    func testTheStrokeIsPageRelativeAndEveryPostedRectIsNot() throws {
-        let scroll = 500.0
-        // Each gesture, and the topmost PAGE coordinate its bounding box should have.
-        let gestures: [(CanvasMarkTool, (CanvasScriptRuntime) -> Void, Double)] = [
-            (.point, { $0.tap(at: (x: 100, y: 1410)) }, 1410),
-            (.arrow, { $0.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410)) }, 40),
-            (.freehand, { $0.loop(around: (x: 10, y: 1390, width: 320, height: 50)) }, 1390),
-        ]
-
-        for (tool, gesture, pageTop) in gestures {
-            let page = try CanvasScriptRuntime()
-            page.scroll(x: 0, y: scroll)
-            page.setTool(tool)
-
-            gesture(page)
-
-            let rect = try XCTUnwrap(page.lastPosted?["rect"] as? [String: Any])
-            XCTAssertEqual(
-                rect["y"] as? Double, pageTop - scroll,
-                "\(tool.token) places the comment field in the viewport, not on the page")
-        }
-
-        // …and the ink itself stays where the hand drew it, which is the other half of #196.
-        let drawing = try CanvasScriptRuntime()
-        drawing.scroll(x: 0, y: scroll)
-        drawing.setTool(.freehand)
-        drawing.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-        XCTAssertTrue(
-            try XCTUnwrap(drawing.inkPaths.first).d.contains("1390"),
-            "the ink is drawn at the page coordinate, so it scrolls with its subject")
-    }
-
-    /// The other half of the same conversion: element rects come back viewport-relative, so
-    /// what a loop covers must be scroll-invariant.
-    func testALoopCoversTheSameThingsWhateverTheScrollPositionIs() throws {
-        func targetIDs(scrolledTo y: Double) throws -> [String] {
-            let page = try CanvasScriptRuntime()
-            page.scroll(x: 0, y: y)
-            page.setTool(.freehand)
-            page.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-            let targets = try XCTUnwrap(page.lastPosted?["targets"] as? [Any])
-            return targets.compactMap { ($0 as? [String: Any])?["id"] as? String }
-        }
-
-        XCTAssertEqual(try targetIDs(scrolledTo: 0), ["item-a"])
-        XCTAssertEqual(try targetIDs(scrolledTo: 900), ["item-a"])
-    }
-
-    // MARK: The ink
+    // MARK: The mark's lifetime
 
     /// Two ways a completed mark used to vanish before the operator had looked at it: the
-    /// comment field autofocusing (which blurs the webview) and switching tools. Both called
-    /// the same unconditional wipe as an abandoned drag.
-    ///
-    /// Every tool that posts a mark, because each commits at its own `return` — a fourth kind
-    /// added later that forgot to would be the same bug back.
-    ///
-    /// **`.text` is that fourth kind, and it is here now** (#308). It was the tool this loop
-    /// could not include, because the only mark it left was the browser's own selection and
-    /// nothing here could see it; `where tool.draws` read as a description of the enum and was
-    /// really the omission. Exhaustive over every tool but `.read` — which marks nothing by
-    /// design — so a fifth tool has to state which kind of mark it leaves rather than being
-    /// quietly skipped.
+    /// comment field autofocusing (which blurs the webview) and switching tools.
     func testAPostedMarkOutlivesEverythingExceptSwiftTakingItDown() throws {
-        for tool in CanvasMarkTool.allCases where tool != .read {
-            let page = try CanvasScriptRuntime()
-            page.setTool(tool)
-            switch tool {
-            case .read: continue
-            case .text:
-                page.select(id: "intro", text: "Why this exists")
-                page.mouse("mouseup", 100, 110)
-            case .point: page.tap(at: (x: 100, y: 110))
-            case .arrow: page.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-            case .freehand: page.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-            }
-            // What "the mark is up" means differs by tool and the difference is the point: the
-            // drawn three leave ink on the paper, `.text` leaves a highlight over the passage.
-            // One question, asked of whichever answer that tool gives.
-            func markIsUp() -> Bool { tool == .text ? page.textMark != nil : page.hasMarkLayer }
-
-            XCTAssertFalse(page.posted.isEmpty, "\(tool.token) posted nothing to comment on")
-            XCTAssertTrue(markIsUp(), "\(tool.token): releasing must not erase the mark")
-
-            page.blurWindow()
-            XCTAssertTrue(
-                markIsUp(), "\(tool.token): the field taking the keyboard is not an abandon")
-
-            page.evaluateFromSwift(CanvasHTML.setMarkTool(.read, theme: .light))
-            XCTAssertTrue(markIsUp(), "\(tool.token): nor is changing tools")
-
-            page.evaluateFromSwift(CanvasHTML.clearMarkScript())
-            XCTAssertFalse(
-                markIsUp(), "\(tool.token): only Swift closing the field takes it down")
-        }
-    }
-
-    /// The case the guard above must not break: a drag released outside the document never
-    /// fires mouseup, and its ink would otherwise sit at max z-index until the next stroke.
-    /// Both routes out of the document, because both are wired to `abandon`.
-    func testAnInFlightGestureIsStillDiscardedWhenItLeavesTheDocument() throws {
-        for leave in ["blur", "mouseleave"] {
-            let page = try CanvasScriptRuntime()
-            page.setTool(.freehand)
-            page.mouse("mousedown", 20, 1400)
-            page.mouse("mousemove", 300, 1420)
-            XCTAssertTrue(page.hasMarkLayer, "the stroke is being drawn")
-
-            if leave == "blur" { page.blurWindow() } else { page.mouseLeaveDocument() }
-
-            XCTAssertFalse(page.hasMarkLayer, "\(leave) must take an in-flight stroke down")
-            XCTAssertTrue(page.posted.isEmpty, "and nothing was ever posted about it")
-        }
-    }
-
-    /// A tap draws nothing on its way, so it is the one gesture that would otherwise leave no
-    /// visible subject for the comment field.
-    func testATapLeavesARing() throws {
         let page = try CanvasScriptRuntime()
-        page.setTool(.point)
+        page.setTool(.text)
+        page.select(id: "intro", text: "Why this exists")
+        page.mouse("mouseup", 100, 110)
 
-        page.tap(at: (x: 100, y: 110))
+        XCTAssertFalse(page.posted.isEmpty, "the mark posted nothing to comment on")
+        XCTAssertNotNil(page.textMark, "releasing must not erase the mark")
 
-        XCTAssertEqual(page.ringCount, 1)
-    }
+        page.blurWindow()
+        XCTAssertNotNil(page.textMark, "the field taking the keyboard is not an abandon")
 
-    /// An unresolvable `marker-end` url() is IGNORED rather than erroring, so a missing
-    /// `<marker>` is a silently bare line — the one cue that tells arrow from freehand
-    /// mid-draw. Referenced *and* defined, checked together.
-    func testTheArrowheadTheInkPointsAtIsActuallyDefined() throws {
-        let page = try CanvasScriptRuntime()
-        page.setTool(.arrow)
+        page.evaluateFromSwift(CanvasHTML.setMarkTool(.read, theme: .light))
+        XCTAssertNotNil(page.textMark, "nor is changing tools")
 
-        page.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-
-        XCTAssertEqual(try XCTUnwrap(page.inkPaths.first).markerEnd, "url(#helm-mark-head)")
-        XCTAssertTrue(
-            page.markLayerIDs.contains("helm-mark-head"), "referenced but never defined")
-    }
-
-    func testTheInkIsInertSoThePageCanNeverComeToNeedIt() throws {
-        let page = try CanvasScriptRuntime()
-        page.setTool(.freehand)
-        page.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-
-        XCTAssertTrue(page.markLayerStyle.contains("pointer-events:none"))
-        XCTAssertTrue(
-            page.markLayerStyle.contains("position:absolute"),
-            "fixed positioning would leave the ink over whatever scrolled underneath")
-    }
-
-    /// The mark layer sits at the top of the stacking order over the whole document, so a hit
-    /// test run without hiding it resolves every gesture to helm's own ink.
-    func testTheHitTestSeesThePageAndNotThePaperOverIt() throws {
-        let page = try CanvasScriptRuntime()
-        page.setTool(.arrow)
-
-        // The paper exists by mouseup — it was created on the first mousemove.
-        page.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-
-        let to = try XCTUnwrap(page.lastPosted?["to"] as? [String: Any])
-        XCTAssertEqual(to["id"] as? String, "item-a")
-    }
-
-    /// helm's chrome is marked as such so an agent reading the DOM can tell it from what it
-    /// authored — and so a loop can never report it as something the operator marked.
-    ///
-    /// **The chrome is laid out and given text here on purpose.** As shipped, the arrowhead
-    /// `<marker>` is excluded twice over before `closest("[data-helm-mark]")` is consulted:
-    /// once for having no size, once for having no text. Deleting the guard therefore changes
-    /// nothing, and a test written against the DOM as it stands passes either way — measured,
-    /// by deleting it. So this constructs the state the guard is actually for, which is any
-    /// chrome that is visible and readable, such as a labelled mark.
-    func testHelmsOwnChromeIsNeverSomethingTheOperatorMarked() throws {
-        let page = try CanvasScriptRuntime()
-        page.setTool(.freehand)
-        page.mouse("mousedown", 10, 1390)
-        page.mouse("mousemove", 330, 1390)
-        XCTAssertTrue(
-            page.layOut(id: "helm-mark-head", x: 100, y: 1400, width: 20, height: 20),
-            "the arrowhead def has to exist by now, or this test proves nothing")
-        XCTAssertTrue(page.giveText(id: "helm-mark-head", text: "helm's own ink"))
-        page.mouse("mousemove", 330, 1440)
-        page.mouse("mousemove", 10, 1440)
-        page.mouse("mouseup", 10, 1396)
-
-        let targets = try XCTUnwrap(page.lastPosted?["targets"] as? [Any])
-        let ids = targets.compactMap { ($0 as? [String: Any])?["id"] as? String }
-        XCTAssertEqual(ids, ["item-a"], "helm's own ink is inside the loop and must be excluded")
+        page.evaluateFromSwift(CanvasHTML.clearMarkScript())
+        XCTAssertNil(page.textMark, "only Swift closing the field takes it down")
     }
 
     // MARK: The seam
@@ -592,29 +305,6 @@ final class CanvasAnnotationScriptTests: XCTestCase {
     /// cannot compile against a Swift type, which `AGENTS.md` names as the standard this
     /// cannot meet, so the standard it does meet is stated instead of implied.
     func testEveryMarkThePagePostsDecodesThroughTheRealDecoder() throws {
-        let point = try CanvasScriptRuntime()
-        point.setTool(.point)
-        point.tap(at: (x: 100, y: 110))
-        XCTAssertEqual(
-            try decode(point.lastPosted),
-            .point(.element(id: "intro", text: "Why this exists")))
-
-        let arrow = try CanvasScriptRuntime()
-        arrow.setTool(.arrow)
-        arrow.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-        XCTAssertEqual(
-            try decode(arrow.lastPosted),
-            .relation(
-                from: .element(id: "title", text: "The Plan"),
-                to: .element(id: "item-a", text: "Item A")))
-
-        let loop = try CanvasScriptRuntime()
-        loop.setTool(.freehand)
-        loop.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-        XCTAssertEqual(
-            try decode(loop.lastPosted),
-            .enclosure(covering: [.element(id: "item-a", text: "Item A")]))
-
         let selection = try CanvasScriptRuntime()
         selection.setTool(.text)
         selection.select(id: "intro", text: "Why this exists")
@@ -630,38 +320,20 @@ final class CanvasAnnotationScriptTests: XCTestCase {
     /// `CanvasAnnotation.decode` is ever reached. The test above proves the decoder
     /// understands a mark; it says nothing about whether the mark gets there; #216 shipped
     /// with every decoder test green because the gate one layer up required a top-level
-    /// `text` an enclosure and a relation never carry. Feeding `lastPosted` — the real
-    /// script's output, not a hand-typed literal — through the real gate is what would have
-    /// caught it: a JS key rename or a dropped `mark` fails here even though `decode` never
-    /// sees it.
+    /// `text` the geometry marks never carried. Feeding `lastPosted` — the real script's
+    /// output, not a hand-typed literal — through the real gate is what would have caught it: a
+    /// JS key rename fails here even though `decode` never sees it.
     func testEveryMarkThePagePostsIsAdmittedByTheRealGate() throws {
-        let point = try CanvasScriptRuntime()
-        point.setTool(.point)
-        point.tap(at: (x: 100, y: 110))
+        let selection = try CanvasScriptRuntime()
+        selection.setTool(.text)
+        selection.select(id: "intro", text: "Why this exists")
+        selection.mouse("mouseup", 100, 110)
         guard
-            case .selected = try CanvasPageSelection.decode(try XCTUnwrap(point.lastPosted)).get()
+            case .selected = try CanvasPageSelection.decode(
+                try XCTUnwrap(selection.lastPosted)
+            ).get()
         else {
-            return XCTFail("a point must be admitted as a selection")
-        }
-
-        let arrow = try CanvasScriptRuntime()
-        arrow.setTool(.arrow)
-        arrow.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-        guard
-            case .selected = try CanvasPageSelection.decode(try XCTUnwrap(arrow.lastPosted)).get()
-        else {
-            return XCTFail(
-                "a relation must be admitted as a selection — it carries no top-level text")
-        }
-
-        let loop = try CanvasScriptRuntime()
-        loop.setTool(.freehand)
-        loop.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-        guard
-            case .selected = try CanvasPageSelection.decode(try XCTUnwrap(loop.lastPosted)).get()
-        else {
-            return XCTFail(
-                "an enclosure must be admitted as a selection — it carries no top-level text")
+            return XCTFail("a selection must be admitted by the gate")
         }
     }
 
@@ -686,21 +358,6 @@ final class CanvasAnnotationScriptTests: XCTestCase {
                     + "declare — the gate refuses it by name and the mark is dropped")
         }
 
-        let point = try CanvasScriptRuntime()
-        point.setTool(.point)
-        point.tap(at: (x: 100, y: 110))
-        XCTAssertEqual(try kind(point.lastPosted), .point)
-
-        let arrow = try CanvasScriptRuntime()
-        arrow.setTool(.arrow)
-        arrow.drag(from: (x: 100, y: 40), to: (x: 100, y: 1410))
-        XCTAssertEqual(try kind(arrow.lastPosted), .relation)
-
-        let loop = try CanvasScriptRuntime()
-        loop.setTool(.freehand)
-        loop.loop(around: (x: 10, y: 1390, width: 320, height: 50))
-        XCTAssertEqual(try kind(loop.lastPosted), .enclosure)
-
         let highlight = try CanvasScriptRuntime()
         highlight.setTool(.text)
         highlight.select(id: "intro", text: "Why this exists")
@@ -715,7 +372,7 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         // **`.read` is the tool that produces no kind, and that is a fact about the seam too**
         // (#302). Every case above says "this gesture posts a kind Swift declares"; this one
         // says the inert tool posts nothing for Swift to declare a kind *for*. Without it the
-        // set below reads as though five tools map onto five kinds, and the one that maps onto
+        // set below reads as though every tool maps onto a kind, and the one that maps onto
         // none is the whole of the change.
         let reading = try CanvasScriptRuntime()
         reading.setTool(.read)
@@ -727,8 +384,8 @@ final class CanvasAnnotationScriptTests: XCTestCase {
 
         XCTAssertEqual(
             Set(CanvasPageSelection.Kind.allCases.map(\.rawValue)),
-            ["point", "relation", "enclosure", "selection", "cleared"],
-            "a sixth kind was declared in Swift and this test was not extended to make the "
+            ["selection", "cleared"],
+            "a third kind was declared in Swift and this test was not extended to make the "
                 + "script produce one — so nothing measures whether the page can post it")
     }
 

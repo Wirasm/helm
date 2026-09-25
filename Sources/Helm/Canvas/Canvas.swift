@@ -666,10 +666,8 @@ final class CanvasModel: ObservableObject {
     /// **What `cleared` still means now that `.read` posts nothing** (#302). It was the one
     /// message a canvas produced without anyone marking, and that is exactly what it has
     /// stopped being — it is now only ever the answer to a gesture made with a tool the
-    /// operator picked up. Two live cases, so it is a long way from dead: a `.text` click that
-    /// lands away from the selection being commented on, and a `.point` tap that resolves no
-    /// target (the page wipes its ring and says so, rather than leaving ink over nothing).
-    /// Both are the operator abandoning a mark in flight, which is what this always handled;
+    /// operator picked up: a `.text` click that lands away from the selection being commented
+    /// on. That is the operator abandoning a mark in flight, which is what this always handled;
     /// what changed is that reading is no longer indistinguishable from that.
     func pageDidReport(_ report: CanvasPageSelection) {
         switch report {
