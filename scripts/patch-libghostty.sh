@@ -27,6 +27,7 @@ base_tag=1.3.1
 patches=(
   "libghostty-spm-multi-surface-wakeup.patch|wakeupSubscribers|Sources/GhosttyTerminal/Controller/TerminalController.swift"
   "libghostty-spm-clipboard-destination.patch|TerminalClipboardDestination|Sources/GhosttyTerminal/Controller/TerminalController+Callbacks.swift"
+  "libghostty-spm-open-url-handled.patch|TerminalSurfaceOpenURLDelegate|Sources/GhosttyTerminal/Controller/TerminalController+Callbacks.swift"
 )
 
 for entry in "${patches[@]}"; do
@@ -96,6 +97,13 @@ if [ -d "$vendor" ]; then
 fi
 
 git clone https://github.com/Lakr233/libghostty-spm.git "$vendor"
+# A clone carries only what its branches reach, and upstream has since moved on
+# from the branch that once held $base — so a fresh clone does not contain the
+# pinned commit at all and the checkout below died with "unable to read tree" on
+# every new worktree, while an existing vendor/ from before the prune kept
+# working. Fetching the SHA directly is what makes a pin by SHA stay reachable;
+# the object is still served, it is just no longer advertised by any ref.
+git -C "$vendor" fetch --no-tags origin "$base"
 git -C "$vendor" checkout -b helm/patches "$base"
 for entry in "${patches[@]}"; do
   git -C "$vendor" am "$root/Patches/${entry%%|*}"

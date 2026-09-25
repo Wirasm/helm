@@ -1,0 +1,68 @@
+From c950adc65394f3dafd240ffa7e7ba445439b3ef7 Mon Sep 17 00:00:00 2001
+From: Rasmus Widing <rasmus.widing@gmail.com>
+Date: Wed, 2 Sep 2026 15:34:50 +0300
+Subject: [PATCH] fix(callbacks): report a handled open_url as handled
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Every action reported `false`, which ghostty reads as "the apprt did not
+handle this". For `open_url` its default is `internal_os.open`
+(Surface.zig `openUrl`), so a ⌘-click on a link in a pane opened twice:
+once through the host's delegate, and once through a `/usr/bin/open`
+that ghostty spawned itself.
+
+The second open is not merely redundant. Ghostty reads the child's
+stderr on a detached thread whose loop breaks only on `EndOfStream`, and
+after `/usr/bin/open` exits the reader returns zero-length slices
+forever instead — so the thread never leaves the loop, never reaches
+`exe.wait()`, and spins logging `open stderr=` at roughly 9k lines a
+second (ghostty-org/ghostty#13480, closed unmerged). Measured on a helm
+that had been up nine days: seven such threads, seven unreaped children,
+398% CPU, and 586 CPU-hours burnt. It never recovers — only a restart
+clears it, and each click adds another.
+
+It also meant the host's URL policy decided nothing. helm drops any
+scheme outside its allowlist, and ghostty opened it regardless.
+
+Reporting ownership needs the answer synchronously, so the main-thread
+case is split out: both `open_url` emitters run on the main thread, and
+an action arriving off it keeps the old async dispatch and the old
+`false`. Ownership is claimed only for `open_url`, and only when a
+delegate actually took it — every other action keeps ghostty's default.
+
+This is a backport. Upstream fixed it identically in 1.5.2; the code
+here is byte-identical to that so it retires cleanly on a repin.
+---
+ .../Controller/TerminalController+Callbacks.swift   | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/Sources/GhosttyTerminal/Controller/TerminalController+Callbacks.swift b/Sources/GhosttyTerminal/Controller/TerminalController+Callbacks.swift
+index 76632aa..cb66dec 100644
+--- a/Sources/GhosttyTerminal/Controller/TerminalController+Callbacks.swift
++++ b/Sources/GhosttyTerminal/Controller/TerminalController+Callbacks.swift
+@@ -36,11 +36,18 @@ private enum TerminalCallbacks {
+         let bridge = Unmanaged<TerminalCallbackBridge>
+             .fromOpaque(bridgePtr)
+             .takeUnretainedValue()
+-        terminalRunOnMain {
++        guard Thread.isMainThread else {
++            terminalRunOnMain { bridge.handleAction(action) }
++            return false
++        }
++        return MainActor.assumeIsolated {
+             bridge.handleAction(action)
++            // Core spawns /usr/bin/open for an open_url reported unhandled,
++            // so a host delegate that took the URL is reported as handling
++            // it. Both open_url emitters run on the main thread.
++            return action.tag == GHOSTTY_ACTION_OPEN_URL
++                && bridge.delegate is any TerminalSurfaceOpenURLDelegate
+         }
+-
+-        return false
+     }
+ 
+     static func closeSurface(
+-- 
+2.49.0
+

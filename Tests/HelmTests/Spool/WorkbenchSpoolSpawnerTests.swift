@@ -18,19 +18,19 @@ final class WorkbenchSpoolSpawnerTests: XCTestCase {
 
     private func spawner(
         activate: @escaping @MainActor (Workspace) -> Void = { _ in }
-    ) -> (WorkbenchSpoolSpawner, TerminalManager) {
+    ) -> (WorkbenchSpoolSpawner, TerminalManager, WorkbenchModel) {
         let terminals = TerminalManager()
         let workbench = WorkbenchModel(terminals: terminals)
         workbench.activate(workspacePath: mounted)
         let spawner = WorkbenchSpoolSpawner(
             workbench: workbench, terminals: terminals, activate: activate)
-        return (spawner, terminals)
+        return (spawner, terminals, workbench)
     }
 
     /// The matching case: a request naming the workspace already on screen never even needs
     /// `activate` to do anything, and a session comes back.
     func testASpawnNamingTheMountedWorkspaceSucceeds() throws {
-        let (spawner, terminals) = spawner()
+        let (spawner, terminals, _) = spawner()
         let before = terminals.sessions(for: mounted).count
 
         let result = spawner.openTerminal(cwd: mounted.value, named: .derived("claude · fixture"))
@@ -42,12 +42,37 @@ final class WorkbenchSpoolSpawnerTests: XCTestCase {
         XCTAssertTrue(terminals.sessions(for: mounted).contains { $0.id == id })
     }
 
+    /// **The boundary the reported defect actually crossed (#177).** `spawnTerminal` versus
+    /// `newTerminal` is one call in `openTerminal`, and the placement tests a layer below
+    /// (`WorkbenchModelTests`) stay green if that call is swapped: a spawn would stack as a tab
+    /// on whatever had focus and take the keyboard, which is the defect the operator reported.
+    /// This pins the adapter's own choice — a column on the right, focus unmoved — so a future
+    /// swap of that call fails here rather than shipping silently.
+    func testASpawnAppendsANewColumnOnTheRightWithoutTakingFocus() throws {
+        let (spawner, _, workbench) = spawner()
+        let focused = try XCTUnwrap(workbench.bench?.focusedSlot)
+
+        let result = spawner.openTerminal(cwd: mounted.value, named: .derived("claude · fixture"))
+
+        guard case let .success(id) = result else {
+            return XCTFail("a spawn naming the mounted workspace must succeed, got \(result)")
+        }
+        let bench = try XCTUnwrap(workbench.bench)
+        XCTAssertEqual(bench.columns.count, 2, "one spawn appends one column on the right")
+        XCTAssertEqual(
+            bench.columns.last?.slots.flatMap(\.panes).map(\.id), [id],
+            "the new pane is a column of its own at the right end")
+        XCTAssertEqual(
+            bench.focusedSlot, focused,
+            "a spawn from outside takes neither the selection nor the keyboard")
+    }
+
     /// The negative half: a request naming a workspace helm never actually mounted — the
     /// stub `activate` declines to switch, standing in for a folder that failed to open —
     /// must be refused rather than spawning into whatever IS mounted. A gate that is `true`
     /// unconditionally passes the test above for free; only this catches it.
     func testASpawnNamingAWorkspaceThatNeverBecomesMountedIsRefused() throws {
-        let (spawner, terminals) = spawner(activate: { _ in })
+        let (spawner, terminals, _) = spawner(activate: { _ in })
         let before = terminals.sessions.count
 
         let result = spawner.openTerminal(cwd: elsewhere.value, named: .derived("claude · fixture"))
