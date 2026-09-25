@@ -602,7 +602,11 @@ final class CanvasModel: ObservableObject {
     /// Where this canvas's notes accumulate — beside it, never inside it.
     var sidecarURL: URL? { fileURL.map(CanvasNotes.sidecarURL(for:)) }
 
-    private var watcher: FileWatcher?
+    /// What this canvas watches on disk: the artifact, and the notes beside it (#251). One value
+    /// so the two lifetimes cannot drift — every path that stops watching the document stops
+    /// watching its sidecar too, and a sidecar watch that outlived its document would put one
+    /// artifact's notes on the next.
+    private var watch: (artifact: FileWatcher, notes: SidecarWatcher)?
 
     /// Files beyond this are almost certainly not artifacts; refuse instead of
     /// beachballing the pane on a stray binary or log.
@@ -715,9 +719,13 @@ final class CanvasModel: ObservableObject {
         // keeps rendering what it already had. That is not an oversight to fix by widening
         // the watch: see `refresh()` below, and `WorkbenchModel.offer` (#261), for what a
         // sibling edit does reach the pane through.
-        watcher = FileWatcher(url: url) { [weak self] in
-            self?.refresh()
-        }
+        //
+        // **The sidecar is watched beside it, and never reloads the artifact** (#251): a note is
+        // not an edit to the page, so its change reads the notes again and nothing else.
+        watch = (
+            artifact: FileWatcher(url: url) { [weak self] in self?.refresh() },
+            notes: SidecarWatcher(canvas: url) { [weak self] in self?.refreshNotes() }
+        )
     }
 
     /// This pane's canvas is going away. Called by `WorkbenchModel` when the pane closes
@@ -734,7 +742,7 @@ final class CanvasModel: ObservableObject {
         // which is the whole of the warning the operator gets. Making the close ask would put a
         // modal on a path `helm-close` also reaches, where there is nobody at the pane to answer.
         saveDraft()
-        watcher = nil
+        watch = nil
         showing = nil
     }
 
@@ -889,8 +897,12 @@ final class CanvasModel: ObservableObject {
         }
     }
 
+    /// Read the sidecar again. Reached from `open`, from a comment helm just wrote, and from the
+    /// sidecar watch — which also fires for every other change in the artifact's directory, so an
+    /// unchanged read publishes nothing rather than redrawing the pane for a neighbour's write.
     func refreshNotes() {
-        notesText = sidecarURL.flatMap(CanvasNotes.markdown(in:))
+        let text = sidecarURL.flatMap(CanvasNotes.markdown(in:))
+        if text != notesText { notesText = text }
     }
 
     func revealNotes() {
@@ -949,7 +961,7 @@ final class CanvasModel: ObservableObject {
     /// Take the canvas to a URL. Single pane: this replaces whatever it was
     /// showing, the same way opening another file does.
     func openURL(_ url: URL) {
-        watcher = nil
+        watch = nil
         showing = .url(
             Page(address: url.absoluteString, url: url, generation: nextGeneration))
     }
@@ -958,7 +970,7 @@ final class CanvasModel: ObservableObject {
     /// keeps the page; otherwise it opens an empty one with the field focused.
     func focusAddress() {
         if !isShowingURL {
-            watcher = nil
+            watch = nil
             showing = .url(Page())
         }
         addressFocus += 1
@@ -1028,7 +1040,8 @@ final class CanvasModel: ObservableObject {
 
 // MARK: - File watcher
 
-/// DispatchSource-based watcher for a single file. Editors and agents replace
+/// DispatchSource-based watcher for a single path — a file, or a directory whose entries
+/// change (`SidecarWatcher` uses both). Editors and agents replace
 /// files atomically (write-to-temp + rename), which fires `.rename`/`.delete`
 /// on the OLD inode and silently orphans the file descriptor — so on those
 /// events the watcher re-opens the path (briefly retrying while the writer
@@ -1052,6 +1065,7 @@ final class FileWatcher {
     private let url: URL
     private let onChange: @MainActor () -> Void
     private let debounce: Duration
+    private let events: DispatchSource.FileSystemEvent
     private var source: DispatchSourceFileSystemObject?
     private var pending: Task<Void, Never>?
 
@@ -1060,12 +1074,20 @@ final class FileWatcher {
     ///   immediate — a rendered page arriving 120ms after the agent's last byte is not
     ///   something an operator can perceive as a delay, and the tests set their own so they
     ///   never depend on this number.
+    /// - Parameter noticesTruncation: also report a file cut short in place — `: > file`,
+    ///   `ftruncate` — which the kernel reports as an attribute change and never as a write
+    ///   (measured). Off for the artifact, where `.attrib` would also turn a `touch`, a `chmod`
+    ///   or an xattr into a page reload; on for the sidecar, whose emptying must take the Notes
+    ///   button away and whose re-read reloads nothing (#251).
     init(
-        url: URL, debounce: Duration = .milliseconds(120),
+        url: URL, debounce: Duration = .milliseconds(120), noticesTruncation: Bool = false,
         onChange: @escaping @MainActor () -> Void
     ) {
         self.url = url
         self.debounce = debounce
+        var events: DispatchSource.FileSystemEvent = [.write, .extend, .rename, .delete]
+        if noticesTruncation { events.insert(.attrib) }
+        self.events = events
         self.onChange = onChange
         watch()
     }
@@ -1087,7 +1109,7 @@ final class FileWatcher {
 
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
-            eventMask: [.write, .extend, .rename, .delete],
+            eventMask: events,
             queue: .main
         )
         source.setEventHandler { [weak self] in
@@ -1125,6 +1147,44 @@ final class FileWatcher {
         source?.cancel()
         // The pane is gone; a render scheduled a moment ago has nothing left to render into.
         pending?.cancel()
+    }
+}
+
+// MARK: - Sidecar watcher
+
+/// Watches a canvas's `.notes.md` sidecar, which — unlike the canvas — usually does not exist
+/// yet when the canvas opens (#251). `FileWatcher` opens a descriptor on a path, so on its own
+/// it cannot see a file appear; this pairs it with a second `FileWatcher` on the **directory**,
+/// whose entries change when the sidecar is created, renamed into place or removed.
+///
+/// **Both halves are needed.** An append to a sidecar that already exists — `>>`, or
+/// `CanvasNotes.append` — changes no directory entry, so only the file watch sees it; a sidecar
+/// that did not exist has no file to watch, so only the directory watch sees it arrive. Each
+/// directory change re-arms the file watch, which is how a sidecar created after the canvas
+/// opened is watched for appends from then on.
+///
+/// The directory watch also fires for every other write beside the artifact — the artifact's
+/// own atomic save, a state latch — and each one costs one read of the sidecar. `refreshNotes`
+/// publishes only a change, so that read is all it costs.
+@MainActor
+final class SidecarWatcher {
+    private let sidecar: URL
+    private let onChange: @MainActor () -> Void
+    private var directory: FileWatcher?
+    private var file: FileWatcher?
+
+    init(canvas: URL, onChange: @escaping @MainActor () -> Void) {
+        sidecar = CanvasNotes.sidecarURL(for: canvas)
+        self.onChange = onChange
+        file = FileWatcher(url: sidecar, noticesTruncation: true, onChange: onChange)
+        directory = FileWatcher(url: canvas.deletingLastPathComponent()) { [weak self] in
+            self?.directoryChanged()
+        }
+    }
+
+    private func directoryChanged() {
+        file = FileWatcher(url: sidecar, noticesTruncation: true, onChange: onChange)
+        onChange()
     }
 }
 

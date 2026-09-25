@@ -2,8 +2,9 @@ import Foundation
 
 /// Tells helm that the spool directory's contents changed.
 ///
-/// **helm has no directory watch anywhere, and this is the first one.** `FileWatcher`
-/// (`Canvas/Canvas.swift`) is a `DispatchSourceFileSystemObject` over a **single** `url`, and
+/// **This was helm's first directory watch.** `FileWatcher` (`Canvas/Canvas.swift`) was a
+/// `DispatchSourceFileSystemObject` over a **single** file `url` — `SidecarWatcher` has since
+/// pointed one at a canvas's directory for its `.notes.md` appearing (#251) — and
 /// `BoardModel` considered a directory-level source and deliberately chose polling instead —
 /// *"a status change rewrites an existing file, which the directory-level `DispatchSource`
 /// pattern would not reliably see"*. That reasoning is right, and it does not apply here.
