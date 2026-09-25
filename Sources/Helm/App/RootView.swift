@@ -58,6 +58,9 @@ struct RootView: View {
         .isolatedInstanceWindow()
         .task {
             model.observe(terminals: terminalManager, workbench: workbench)
+            // A push from a parked workspace lands on its stored bench, which this model holds
+            // (#349).
+            workbench.parked = model
             activateSelectedWorkspace()
             benchSnapshot.start(
                 workspaces: model, workbench: workbench, terminals: terminalManager)

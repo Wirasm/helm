@@ -162,6 +162,38 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         XCTAssertEqual(try messages(in: otherHandle), [])
     }
 
+    /// #349: the canvas is pushed while its workspace is **parked**, and the mark is made after the
+    /// operator switches in. The origin has to survive both hops, the parked bench and the mount,
+    /// or the note falls back to the clipboard and tells the operator nobody pushed it.
+    func testAMarkOnACanvasPushedFromAParkedWorkspaceReachesThePusherAfterSwitchingIn()
+        async throws
+    {
+        let (model, manager) = mounted()
+        let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
+        pids[terminal.id] = agentPid
+        let workspaces = WorkspaceModel(defaults: try isolatedDefaults("origin-parked"))
+        model.parked = workspaces
+
+        // Park it the way `RootView.switchWorkspace` does.
+        workspaces.open(Workspace(path: workspace.value))
+        workspaces.saveContext(terminalManager: manager, workbench: model)
+        let elsewhere = WorkspacePath("/tmp/helm-canvas-origin-elsewhere")
+        workspaces.open(Workspace(path: elsewhere.value))
+        model.activate(workspacePath: elsewhere)
+
+        try await push(from: terminal.id)
+
+        workspaces.saveContext(terminalManager: manager, workbench: model)
+        workspaces.open(Workspace(path: workspace.value))
+        model.activate(
+            workspacePath: workspace,
+            restoring: workspaces.contexts[workspace.value]?.workbench)
+        try mark("pushed while parked", on: try pushedCanvas(of: model))
+
+        XCTAssertEqual(try messages(in: handle).count, 1)
+        XCTAssertEqual(copied, [], "a routed mark is mailed, not left on the clipboard")
+    }
+
     /// **The negative half, and the one that matters.** A route that always picks the first live
     /// mailbox passes the test above for free. Here two agents are reachable, in two panes, and
     /// only one of them pushed — *"more than one agent plausibly wants it — do not guess; the
