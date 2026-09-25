@@ -137,8 +137,8 @@
                           "surface": {
                             "kind": "canvas",
                             "source": {
-                              "kind": "url",
-                              "url": "http://localhost:3000"
+                              "kind": "file",
+                              "path": "/Users/operator/Projects/helm/docs/review.md"
                             }
                           }
                         }
@@ -199,7 +199,8 @@
                           "surface": {
                             "kind": "canvas",
                             "source": {
-                              "kind": "empty"
+                              "kind": "file",
+                              "path": "/Users/operator/.prp/helm/notes/2026-09-25.md"
                             }
                           }
                         }
@@ -348,20 +349,6 @@
         "text": "review"
       },
       "pane": "00000003-0000-4000-8000-000000000003"
-    },
-    "by": {
-      "kind": "operator"
-    }
-  },
-  {
-    "id": "v-16",
-    "verb": "pane/repoint",
-    "args": {
-      "pane": "00000005-0000-4000-8000-000000000005",
-      "source": {
-        "kind": "url",
-        "url": "http://localhost:3000/pr/367"
-      }
     },
     "by": {
       "kind": "operator"

@@ -1,3 +1,4 @@
+import HelmWire
 import Inject
 import SwiftUI
 
@@ -5,11 +6,11 @@ import SwiftUI
 ///
 /// **Composition only**, and more so than before. The canvas is no longer a special case
 /// wired in here — it is a bench pane, so the dock's `HSplitView` and the single
-/// `CanvasModel` are both gone. Every subscription left below touches two or more
-/// verticals at once: persisting a workspace's context needs the workspace and its bench
-/// together, and switching workspaces has to move both. Anything that can name a single
-/// vertical belongs in that vertical's slice — the terminal and canvas commands live on
-/// `WorkbenchModel`, whose lifetime is right for them.
+/// `CanvasModel` are both gone. What is left here touches two or more verticals at once:
+/// persisting a workspace's context needs the workspace and its bench together, switching
+/// workspaces has to move both (`apply`, where the sink hands the workspace verbs), and a key's
+/// action needs every owner it might touch (`LocalActions`). Anything that can name a single
+/// vertical belongs in that vertical's slice.
 struct RootView: View {
     @ObserveInjection private var inject
     @StateObject private var model = WorkspaceModel()
@@ -25,6 +26,9 @@ struct RootView: View {
     @StateObject private var spool = SpoolModel()
     @StateObject private var benchSnapshot = BenchSnapshotModel()
     @ObservedObject private var terminalManager = TerminalManager.shared
+    /// What a key, a menu item or a button asks for is carried out here (`Actions`). Held so
+    /// `Actions.performer`, which is weak, has something to point at.
+    @State private var actions: LocalActions?
 
     init(benchSnapshot: BenchSnapshotModel = BenchSnapshotModel()) {
         _benchSnapshot = StateObject(wrappedValue: benchSnapshot)
@@ -32,9 +36,16 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // A tab click and a tab's Close are the operator's workspace verbs, sent through the
+            // bench's one door like every other gesture.
             WorkspaceBar(
-                model: model, select: switchWorkspace, open: openWorkspace,
-                close: closeWorkspace)
+                model: model,
+                select: {
+                    workbench.send(.workspaceActivate(path: $0.path.value), by: .operatorGesture)
+                },
+                close: {
+                    workbench.send(.workspaceClose(path: $0.path.value), by: .operatorGesture)
+                })
             HStack(spacing: 0) {
                 WorkbenchView(
                     model: workbench, workspaceRoot: model.selectedWorkspaceRoot?.value)
@@ -58,6 +69,12 @@ struct RootView: View {
         .isolatedInstanceWindow()
         .task {
             model.observe(terminals: terminalManager, workbench: workbench)
+            workbench.workspaceVerbs = apply
+            let actions = LocalActions(
+                workbench: workbench, workspaces: model, rail: archonRail,
+                terminals: terminalManager)
+            self.actions = actions
+            Actions.performer = actions
             // A push from a parked workspace lands on its stored bench, which this model holds
             // (#349).
             workbench.parked = model
@@ -68,8 +85,9 @@ struct RootView: View {
             // driving helm into a given state without keystroke injection. It opens into
             // whichever pane placement chooses, exactly like a ⌘-clicked link.
             if let path = LaunchOptions.artifactPath {
-                workbench.open(
-                    .file(URL(fileURLWithPath: (path as NSString).expandingTildeInPath)))
+                workbench.send(
+                    .paneOpen(surface: .canvas(path: (path as NSString).expandingTildeInPath)),
+                    by: .operatorGesture)
             }
             // The spool (#54) — the one seam an agent with no display can drive. It is wired
             // here for the same reason `observe` is: opening a workspace spans the workspace
@@ -101,30 +119,24 @@ struct RootView: View {
             spool.start()
         }
         .onDisappear { benchSnapshot.stop() }
-        // The context is written by `WorkspaceModel.observe`, which sinks BOTH the
-        // manager's and the bench's `objectWillChange`. It lives on the model rather than
-        // here for the reason that file records at length: two earlier attempts in this
-        // view lost writes, one by rebuilding its publisher on every body evaluation and
-        // one by trapping the app outright.
-        .onReceive(HelmCommand.publisher) { command in
-            switch command {
-            case let .selectWorkspace(index):
-                guard model.workspaces.indices.contains(index) else { return }
-                switchWorkspace(model.workspaces[index])
-            case let .cycleWorkspace(delta):
-                guard !model.workspaces.isEmpty else { return }
-                let current =
-                    model.selectedWorkspace.flatMap { model.workspaces.firstIndex(of: $0) } ?? 0
-                let next = (current + delta + model.workspaces.count) % model.workspaces.count
-                switchWorkspace(model.workspaces[next])
-            default:
-                // Every other command belongs to a vertical. `default` rather than an
-                // exhaustive list because this is composition, not a feature: `App/` should
-                // not have to be edited when a vertical adds a command of its own.
-                break
-            }
-        }
         .enableInjection()
+    }
+
+    /// The workspace verbs, which `LocalSink` hands here because they span the workspace list
+    /// and the bench together.
+    private func apply(_ verb: WorkspaceVerb) {
+        switch verb {
+        case let .open(path):
+            openWorkspace(Workspace(path: path))
+        case let .activate(path):
+            if let workspace = workspace(at: path) { switchWorkspace(workspace) }
+        case let .close(path):
+            if let workspace = workspace(at: path) { closeWorkspace(workspace) }
+        }
+    }
+
+    private func workspace(at path: String) -> Workspace? {
+        model.workspaces.first { $0.path == WorkspacePath(path) }
     }
 
     private func persistCurrentContext() {

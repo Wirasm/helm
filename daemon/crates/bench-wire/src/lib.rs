@@ -170,7 +170,6 @@ pub const KNOWN_VERBS: &[&str] = &[
     "pane/show",
     "pane/move",
     "pane/name",
-    "pane/repoint",
     "pane/record",
     "focus/slot",
     "focus/step",
@@ -666,7 +665,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            35,
+            34,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

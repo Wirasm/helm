@@ -66,14 +66,6 @@ fn the_fixture_holds_one_of_everything() {
         "a file canvas"
     );
     assert!(
-        canvas(|s| matches!(s, CanvasSource::Url { .. })),
-        "a url canvas"
-    );
-    assert!(
-        canvas(|s| matches!(s, CanvasSource::Empty)),
-        "an empty canvas"
-    );
-    assert!(
         panes.iter().any(|p| matches!(p.name, PaneName::Derived(_))),
         "a derived name"
     );

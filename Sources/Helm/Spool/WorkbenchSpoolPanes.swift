@@ -68,8 +68,8 @@ final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting, SpoolNaming {
     }
 
     /// **Reports the bench's answer, not the request's hope** — `close`'s rule below, and it is
-    /// the same rule for the same reason: `WorkbenchModel.offerSelect` answers whether the pane is
-    /// actually *visible* afterwards, and saying "shown" about a pane still hidden behind another
+    /// the same rule for the same reason: this reads back whether the pane is actually *visible*
+    /// afterwards, and saying "shown" about a pane still hidden behind another
     /// would be the exact silence #284 exists to remove.
     func select(_ id: UUID) -> Result<SelectReport, SpoolRefusal> {
         guard let bench = workbench.bench else {
@@ -79,7 +79,8 @@ final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting, SpoolNaming {
                         + "its cwd is what opens one."))
         }
         let before = bench.focusedPane?.id
-        let visible = workbench.offerSelect(id)
+        workbench.send(.paneShow(id), by: .agent())
+        let visible = workbench.bench?.visiblePaneIDs.contains(id) ?? false
         // Bound rather than written inline, for `WorkbenchSpoolCommander`'s reason:
         // `workbench.bench?.focusedPane?.id.map(…)` keeps the optional chain going and calls
         // `map` on the `UUID` itself, which does not compile.
@@ -102,7 +103,7 @@ final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting, SpoolNaming {
                     "helm has no bench to name a pane on. Open a workspace, or send a spawn — "
                         + "its cwd is what opens one."))
         }
-        guard let previous = workbench.name(id, to: name) else {
+        guard let previous = workbench.bench?.pane(id)?.name else {
             // Unreachable through the spool — `SpoolNamePolicy` has already refused a uuid this
             // bench has no pane for — and reported rather than assumed away, exactly as
             // `SpoolModel`'s `staysHidden` branch is.
@@ -110,6 +111,7 @@ final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting, SpoolNaming {
                 SpoolRefusal(
                     "helm's bench has no pane \(id.uuidString) to name. Nothing was changed"))
         }
+        workbench.send(.paneName(id, name), by: .agent())
         let applied: String
         if let confirmed = workbench.bench?.pane(id)?.name.text {
             applied = confirmed
@@ -131,7 +133,7 @@ final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting, SpoolNaming {
     /// about a pane still sitting there would be the exact silence #176 exists to remove.
     func close(_ id: UUID) -> Bool {
         guard workbench.bench?.pane(id) != nil else { return false }
-        workbench.close(id)
+        workbench.send(.paneClose(id), by: .agent())
         return workbench.bench?.pane(id) == nil
     }
 

@@ -47,7 +47,7 @@ final class SpoolCommandPolicyTests: XCTestCase {
         for command in [
             HelmCommandName.closePane, .adjustFontSize, .jumpToPrompt,
             // #287's half of it, and the one worth reading twice: `Workbench.move` *is*
-            // addressed — it names the pane it moves — but `HelmCommand.movePane` carries only a
+            // addressed — it names the pane it moves — but the `movePane` command carries only a
             // direction and applies it to the focused pane. The operation is allowable and the
             // command is not, which is a refusal about the wire rather than about the bench.
             .movePane,

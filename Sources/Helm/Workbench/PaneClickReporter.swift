@@ -16,11 +16,11 @@ import SwiftUI
 /// **Why a local monitor rather than a tap gesture or a `mouseDown` override.** The tenant
 /// consumes the event first — a terminal grid takes mouse-down for selection, a `WKWebView`
 /// takes it for the page — so nothing helm puts *in* the responder chain hears the click that
-/// matters. `Keymap` already makes this argument for keys: *"a local monitor runs before any
+/// matters. `KeymapMonitor` already makes this argument for keys: *"a local monitor runs before any
 /// view's key handling, so helm's bindings always win"*. The mouse is the same problem and this
 /// is the same answer, with the one difference that matters below.
 ///
-/// **It never consumes.** `Keymap` returns nil to keep a keystroke from reaching the pty; this
+/// **It never consumes.** `KeymapMonitor` returns nil to keep a keystroke from reaching the pty; this
 /// returns the event on every path, so text selection, link clicks and the terminal's own mouse
 /// reporting are untouched. The only effect is `onClick`.
 ///
@@ -71,7 +71,7 @@ final class ClickWatchingView: NSView {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
             [weak self] event in
-            // The monitor runs on the main thread, so assumeIsolated is safe — `Keymap`
+            // The monitor runs on the main thread, so assumeIsolated is safe — `KeymapMonitor`
             // installs helm's key monitor the same way and says so for the same reason.
             MainActor.assumeIsolated { self?.report(event) }
             // Never consumed. See the type's header: this watches the mouse, it does not

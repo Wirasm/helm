@@ -2,7 +2,7 @@
 //! and `assertInvariants`, so each Rust test reads line for line against the one it mirrors.
 #![allow(dead_code)]
 
-use bench_doc::{Bench, CanvasSource, Pane, PaneId, Surface};
+use bench_doc::{Bench, Pane, PaneId, Surface};
 
 pub fn terminal() -> Pane {
     Pane::new(Surface::terminal())
@@ -14,10 +14,6 @@ pub fn canvas(path: &str) -> Pane {
 
 pub fn file(path: &str) -> Surface {
     Surface::file(path).unwrap()
-}
-
-pub fn url(url: &str) -> CanvasSource {
-    CanvasSource::Url { url: url.into() }
 }
 
 pub fn bench_of(panes: Vec<Pane>, selecting: Option<PaneId>) -> Bench {

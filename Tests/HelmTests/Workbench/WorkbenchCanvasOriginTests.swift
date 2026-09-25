@@ -104,13 +104,10 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         return (model, manager)
     }
 
-    private func push(from terminal: UUID) async throws {
-        HelmCommand.pushCanvasFile(
-            CanvasPushRequest(
-                artifact: canvas, workspacePath: workspace,
-                origin: CanvasOrigin(terminal: terminal))
-        ).post()
-        try await Task.sleep(for: .milliseconds(100))
+    /// `push.sh`'s sequence, arriving at the session that printed it — the route an agent's push
+    /// takes, from the terminal's own callback onto the bench.
+    private func push(from terminal: TerminalSession) {
+        terminal.terminalDidRequestDesktopNotification(title: CanvasPush.marker, body: canvas.path)
     }
 
     private func mark(_ comment: String, on model: CanvasModel) throws {
@@ -155,7 +152,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         pids[terminal.id] = agentPid
 
-        try await push(from: terminal.id)
+        push(from: terminal)
         try mark("this shouldn't talk to that", on: try pushedCanvas(of: model))
 
         XCTAssertEqual(try messages(in: handle).count, 1)
@@ -181,7 +178,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         workspaces.open(Workspace(path: elsewhere.value))
         model.activate(workspacePath: elsewhere)
 
-        try await push(from: terminal.id)
+        push(from: terminal)
 
         workspaces.saveContext(terminalManager: manager, workbench: model)
         workspaces.open(Workspace(path: workspace.value))
@@ -205,7 +202,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         pids[pusher.id] = agentPid
         pids[bystander.id] = otherPid
 
-        try await push(from: pusher.id)
+        push(from: pusher)
         try mark("route this to the pusher", on: try pushedCanvas(of: model))
 
         XCTAssertEqual(try messages(in: handle).count, 1)
@@ -245,7 +242,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         pids[terminal.id] = 999_999
 
-        try await push(from: terminal.id)
+        push(from: terminal)
         let pane = try XCTUnwrap(model.bench?.canvasPanes.first)
         try mark("the pusher has gone", on: model.canvas(for: pane))
 
@@ -267,8 +264,8 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         pids[first.id] = agentPid
         pids[second.id] = otherPid
 
-        try await push(from: first.id)
-        try await push(from: second.id)
+        push(from: first)
+        push(from: second)
 
         XCTAssertEqual(model.bench?.canvasPanes.count, 1, "the second push found the pane open")
         try mark("the second agent owns this now", on: try pushedCanvas(of: model))
@@ -284,7 +281,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         pids[terminal.id] = agentPid
 
-        try await push(from: terminal.id)
+        push(from: terminal)
         let pane = try XCTUnwrap(model.bench?.canvasPanes.first)
         model.close(pane.id)
 

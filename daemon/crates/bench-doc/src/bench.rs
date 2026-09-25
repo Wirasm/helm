@@ -22,7 +22,7 @@
 
 use crate::ids::{ColumnId, PaneId, SlotId};
 use crate::refusal::Refusal;
-use crate::surface::{CanvasSource, PaneName, ResumableAgent, Surface};
+use crate::surface::{PaneName, ResumableAgent, Surface};
 use serde::{Deserialize, Serialize};
 
 /// Whether an operation may move the operator's focus. Decided once, from who asked, by
@@ -630,21 +630,6 @@ impl Bench {
                 Ok(())
             }
             _ => Err(Refusal::NotATerminal(pane)),
-        }
-    }
-
-    /// A canvas went somewhere: an address committed on a ⌘L pane, or a page followed a link.
-    /// The pane carries the source, so this is what the bench persists (helm #89). A canvas
-    /// only — `CanvasSource` is the type that makes "a terminal quietly became a canvas"
-    /// impossible to ask for.
-    pub fn repoint(&mut self, pane: PaneId, source: CanvasSource) -> Result<(), Refusal> {
-        let a = self.address_of(pane).ok_or(Refusal::UnknownPane(pane))?;
-        match &mut self.columns[a.column].slots[a.slot].panes[a.pane].surface {
-            Surface::Canvas { source: held } => {
-                *held = source;
-                Ok(())
-            }
-            _ => Err(Refusal::NotACanvas(pane)),
         }
     }
 

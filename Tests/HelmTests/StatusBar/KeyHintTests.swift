@@ -5,7 +5,7 @@ import XCTest
 
 /// The hints, against the real map.
 ///
-/// Deliberately asserted on `Shortcut.all` rather than on fixtures wherever the point is
+/// Deliberately asserted on `KeyBindings.all` rather than on fixtures wherever the point is
 /// "what will the operator actually see" — a hint rendered from a two-row toy map proves
 /// the renderer and nothing about the bar. Fixtures appear only where a rule needs a shape
 /// the real map does not happen to contain.
@@ -61,8 +61,8 @@ final class KeyHintTests: XCTestCase {
     /// real map has no two-digit binding to prove it with.
     func testShortDigitListsAreNotCollapsedToARange() {
         let rows = (1...2).map { index in
-            Shortcut(
-                .character("\(index)"), .command, does: .selectTerminal(index: index - 1))
+            KeyBinding(
+                .character("\(index)"), .command, .verb(.showTab(index: index - 1)), hint: "pane")
         }
         XCTAssertEqual(
             KeyHints.visible(terminalFocused: true, in: rows).first?.keys, "⌘1 ⌘2")
@@ -72,14 +72,14 @@ final class KeyHintTests: XCTestCase {
     /// bound, which is exactly the drift this file exists to prevent.
     func testNonConsecutiveDigitsAreNotCollapsed() {
         let rows = [1, 2, 4].map { index in
-            Shortcut(
-                .character("\(index)"), .command, does: .selectTerminal(index: index - 1))
+            KeyBinding(
+                .character("\(index)"), .command, .verb(.showTab(index: index - 1)), hint: "pane")
         }
         XCTAssertEqual(
             KeyHints.visible(terminalFocused: true, in: rows).first?.keys, "⌘1 ⌘2 ⌘4")
     }
 
-    // MARK: - One command's keys, for surfaces outside the bar
+    // MARK: - One action's keys, for surfaces outside the bar
 
     /// **The bug this exists to make impossible.** The empty bench said `⌘⇧O` and the
     /// workspace bar's `+` tooltip said the same, while the status bar an inch below said
@@ -88,91 +88,69 @@ final class KeyHintTests: XCTestCase {
     /// this file may type a glyph now; it asks here, and gets the bar's answer by
     /// construction.
     func testABindingRendersTheSameGlyphsTheBarShows() {
-        XCTAssertEqual(KeyGlyph.binding(for: .openWorkspace), "⇧⌘O")
+        XCTAssertEqual(KeyGlyph.binding(for: .local(.openWorkspacePanel)), "⇧⌘O")
         XCTAssertEqual(
-            KeyGlyph.binding(for: .openWorkspace), keys("folder", terminalFocused: true),
+            KeyGlyph.binding(for: .local(.openWorkspacePanel)),
+            keys("folder", terminalFocused: true),
             "the empty bench and the status bar must not be able to disagree")
-        XCTAssertEqual(KeyGlyph.binding(for: .newTerminal), "⌘N")
-        XCTAssertEqual(KeyGlyph.binding(for: .toggleRail), "⇧⌘R")
+        XCTAssertEqual(KeyGlyph.binding(for: .verb(.newTerminal)), "⌘N")
+        XCTAssertEqual(KeyGlyph.binding(for: .local(.toggleRail)), "⇧⌘R")
     }
 
-    /// A command nothing binds gets nil rather than a plausible-looking string, so a caller
+    /// An action nothing binds gets nil rather than a plausible-looking string, so a caller
     /// can decline to advertise a key instead of naming one that does not fire.
-    func testAnUnboundCommandHasNoGlyphs() {
-        XCTAssertNil(KeyGlyph.binding(for: .pushCanvasFile))
+    func testAnUnboundActionHasNoGlyphs() {
+        XCTAssertNil(KeyGlyph.binding(for: .verb(.showTab(index: 20))))
     }
 
     // MARK: - Drift
 
-    /// **The guard that makes this a helper and not a second keymap.** Every command the
-    /// map binds is either named on the bar or explicitly left off it; adding a shortcut
-    /// without deciding which fails here. Nothing else in the toolchain would say a word.
-    func testEveryBoundCommandIsEitherNamedOrDeliberatelyOmitted() {
-        let bound = Set(Shortcut.all.map(\.command.name))
-        let accounted = Set(KeyHintCatalog.named.map(\.command))
-            .union(KeyHintCatalog.omitted)
-        XCTAssertEqual(
-            bound.subtracting(accounted), [],
-            "a bound command with no hint and no reason for having none"
-        )
-        XCTAssertEqual(
-            accounted.subtracting(bound), [],
-            "a hint (or an omission) for a command nothing binds any more"
-        )
+    /// **The guard that the label moving onto the row left to keep.** A hint's word used to
+    /// live in a catalogue beside the keymap, and a test made every bound command either named
+    /// there or deliberately omitted. The word is on the row now, so there is nothing to keep
+    /// in step — but a row added with no `hint` would still vanish from the bar silently. The
+    /// one deliberate omission is font size (`KeyHint`'s header), so it is the only one allowed.
+    func testEveryRowWithoutAHintIsFontSize() {
+        for row in KeyBindings.all where row.hint == nil {
+            guard case .local(.adjustFontSize) = row.action else {
+                XCTFail("\(row.action) has no hint and no reason for having none")
+                continue
+            }
+        }
     }
 
-    /// **Totality, which the test above cannot reach.** That one asks whether every command the
-    /// map *happens to bind today* is accounted for. This asks the stronger question
-    /// `HelmCommand.Name.allCases` makes available: is every command helm has — bound or not —
-    /// either advertised, deliberately left off the bar, or deliberately not a keystroke at all.
-    ///
-    /// Written because `Name`'s doc comment claimed this test existed before it did. The
-    /// conformance was added, the assertion was not, and a comment promising a machine check
-    /// that nothing performs is the exact defect `AGENTS.md:354` names — found by review, not
-    /// by the compiler, because nothing in the toolchain would say a word.
-    func testEveryCommandIsAccountedForOnTheBarOrDeliberatelyIsNot() {
-        // Not keystrokes: an OSC 8 ⌘-click and terminal OUTPUT respectively. A bar hint for
-        // one of these would advertise a key that does not exist.
-        let neverBound: Set<HelmCommand.Name> = [.openCanvasFile, .pushCanvasFile]
-
-        // The exemption list is itself a hand-maintained set, so it is held to the map rather
-        // than trusted: binding one of these to a key must fail here instead of silently
-        // exempting it from the bar for ever.
-        XCTAssertEqual(
-            neverBound.intersection(Set(Shortcut.all.map(\.command.name))), [],
-            "a command listed as never-bound now has a key — it belongs on the bar or in `omitted`"
-        )
-
-        let accounted = Set(KeyHintCatalog.named.map(\.command))
-            .union(KeyHintCatalog.omitted)
-            .union(neverBound)
-        XCTAssertEqual(
-            Set(HelmCommand.Name.allCases).subtracting(accounted), [],
-            "a command with no hint, no omission, and no reason for being unbindable"
-        )
-    }
-
-    /// **The half the drift test above cannot see.** It asks whether a *command* is
-    /// accounted for; this asks whether the command's KEYS can be drawn. `KeyGlyph.trigger`
-    /// answers nil for a keyCode it does not name, and `render` quietly drops it — so
-    /// binding a named command to Escape, Tab or a function key would pass every other test
-    /// here while the hint silently lost a glyph or vanished outright. That the four codes
-    /// helm binds today are all arrows is a fact about today, not a guarantee.
-    func testEveryKeyCodeTheMapBindsCanBeDrawn() {
-        for shortcut in Shortcut.all {
-            guard case .keyCode = shortcut.trigger else { continue }
+    /// **The half the test above cannot see.** It asks whether a row is on the bar; this asks
+    /// whether its KEYS can be drawn. `KeyGlyph.trigger` answers nil for a keyCode it does not
+    /// name, and `render` quietly drops it — so binding a hinted action to Escape, Tab or a
+    /// function key would pass every other test here while the hint silently lost a glyph or
+    /// vanished outright. That the codes helm binds today are all arrows is a fact about today.
+    func testEveryKeyCodeTheTableBindsCanBeDrawn() {
+        for row in KeyBindings.all {
+            guard case .keyCode = row.trigger else { continue }
             XCTAssertNotNil(
-                KeyGlyph.trigger(shortcut.trigger),
-                "\(shortcut.command.name.rawValue) binds a keyCode KeyGlyph cannot draw"
-            )
+                KeyGlyph.trigger(row.trigger), "\(row.action) binds a keyCode KeyGlyph cannot draw")
         }
     }
 
     /// `KeyHint.id` is its label, so a duplicated one is two rows with one identity — which
-    /// SwiftUI's `ForEach` renders wrong rather than refusing. Cheap to make impossible.
-    func testCatalogLabelsAreUnique() {
-        let labels = KeyHintCatalog.named.map(\.label)
-        XCTAssertEqual(Set(labels).count, labels.count, "duplicate hint label in \(labels)")
+    /// SwiftUI's `ForEach` renders wrong rather than refusing. Rows share a label on purpose
+    /// (⌘↑ and ⌘↓ are one "turn"), so this asks it of what the bar draws.
+    func testVisibleLabelsAreUnique() {
+        for focused in [true, false] {
+            let labels = KeyHints.visible(terminalFocused: focused).map(\.label)
+            XCTAssertEqual(Set(labels).count, labels.count, "duplicate hint label in \(labels)")
+        }
+    }
+
+    /// The bar reads in the table's order, and the pane keys lead because they are the ones an
+    /// operator needs on day one and nothing else in the window hints at.
+    func testHintsReadInTheTablesOrder() {
+        XCTAssertEqual(
+            KeyHints.visible(terminalFocused: true).map(\.label),
+            [
+                "new", "note", "split", "split down", "close", "pane", "focus", "move",
+                "artifact", "turn", "workspace", "folder", "archon", "browser",
+            ])
     }
 
     /// Every hint the bar draws says something in both halves. An empty glyph string would

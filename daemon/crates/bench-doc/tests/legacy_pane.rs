@@ -262,3 +262,16 @@ fn an_active_workspace_that_did_not_survive_falls_back_to_the_first() {
 fn terminal_pane_fresh() -> Value {
     terminal_pane(&PaneId::mint().to_string())
 }
+
+/// helm's URL and empty canvases were removed (#376): a stored one is a pane this build cannot
+/// read, skipped with a note like any other, and never migrated to something it was not.
+#[test]
+fn a_url_or_empty_canvas_from_before_376_is_skipped_and_named() {
+    let url = json!({"id": ARCHON, "surface": {"kind": "canvas", "source": {"kind": "url", "url": "http://localhost:3000"}}});
+    let empty = json!({"id": CANVAS, "surface": {"kind": "canvas", "source": {"kind": "empty"}}});
+
+    let read = Bench::read_tolerant(bench(vec![terminal_pane(TERMINAL), url, empty])).unwrap();
+
+    assert_eq!(ids(&read.value), vec![TERMINAL]);
+    assert_eq!(read.notes.len(), 2, "{:?}", read.notes);
+}

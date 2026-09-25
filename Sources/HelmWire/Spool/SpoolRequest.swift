@@ -315,16 +315,15 @@ package struct CloseRequest: Codable, Equatable {
 
 /// Drive the bench: one of the commands helm can already carry out (#269).
 ///
-/// **Not a new capability — a route to one that exists.** `HelmCommand`'s typed cases are what
-/// the keymap and the menu have been able to fire since #219. Nothing outside the process
+/// **Not a new capability — a route to one that exists.** The commands named here are what the
+/// keymap and the menu have been able to fire since #219. Nothing outside the process
 /// could fire any of them: the spool knew `spawn`, `capture` and `close`, so an agent could
 /// create a pane and destroy one and photograph the window, and could do nothing to the bench in
 /// between. This is the fourth kind, and it costs one `case` on the envelope that was built to
 /// take it.
 ///
-/// **The command travels as its name, and the name is `HelmCommandName` — the same enumeration
-/// the keymap and the status bar's hint catalogue key on** (`Sources/HelmWire/HelmCommandName
-/// .swift`, moved out of `Helm` for exactly this). There is no second list of command names
+/// **The command travels as its name, and the name is `HelmCommandName`**
+/// (`Sources/HelmWire/HelmCommandName.swift`, moved out of `Helm` for exactly this). There is no second list of command names
 /// anywhere, which is the thing #152 cost this repo when a payload had one shape at the source
 /// and another at the destination.
 ///
@@ -336,7 +335,7 @@ package struct CloseRequest: Codable, Equatable {
 /// becomes a `HelmCommandName`, once.
 ///
 /// **There is no payload field, and its absence is a measurement rather than an omission.** Every
-/// command `SpoolCommandPolicy` allows is payload-free, because a `HelmCommand`'s payload is
+/// command `SpoolCommandPolicy` allows is payload-free, because a command's payload is
 /// always an *address* — an index, a direction, a delta, a URL, a pane — and every one of those
 /// addresses the operator's focus point, which is what the focus rule refuses. So the name is
 /// currently the whole payload. If a payload-carrying command is ever allowed, the payload joins
@@ -383,7 +382,7 @@ package struct CommandRequest: Codable, Equatable {
 /// whichever slot they are working in, **because the command carries no pane**"* — and that
 /// refusal names its own fix: the problem is the missing address, not the act. A `CommandRequest`
 /// cannot carry one; its header records the absence of a payload field as a measurement rather
-/// than an omission, and `HelmCommand.selectTerminal(index:)` is ⌘1–⌘9, a *position in the focused
+/// than an omission, and `selectTerminal` is ⌘1–⌘9, a *position in the focused
 /// slot*, which is not "this pane" and cannot be made into it. So this takes `CloseRequest`'s
 /// shape, which is the shape `SpoolCommandPolicy` already predicted an addressed command would
 /// have to take.
@@ -978,7 +977,7 @@ package enum SpoolPolicy {
 /// **`SpoolClosePolicy`'s nuance is extended here rather than reinvented.** #176 found that a
 /// command can be focus-taking *for the operator* and harmless *for a pane the agent owns*, and
 /// answered it by making the request **addressed**: `helm-close` names a pane, refuses the one
-/// holding the keyboard, and `force` does not override that. Every `HelmCommand` below that
+/// holding the keyboard, and `force` does not override that. Every command below that
 /// still fails is one with **no address at all** — it acts on `focusedSlot`/`focusedTerminal`,
 /// which is to say on whatever pane the operator happens to be in. There is nothing for a
 /// policy to check, because the request never said which pane it meant. So a refusal names the
@@ -1134,8 +1133,8 @@ package enum SpoolCommandPolicy {
         /// **The one refusal that is about the wire rather than about the command** (#287), and
         /// worth reading as such: `Workbench.move(_:_:)` is already addressed — it names the
         /// pane it moves — and rearranging the bench is exactly what #269 says an agent may do.
-        /// What is missing is a *request* that can carry that address. `HelmCommand.movePane`
-        /// carries only a direction and applies it to `focusedSlot`'s pane, so sending this name
+        /// What is missing is a *request* that can carry that address. `movePane` carries only
+        /// a direction and applies it to `focusedSlot`'s pane, so sending this name
         /// down a wire that has nothing else on it moves whichever pane the operator is in, and
         /// moves their keyboard with it — `Workbench.move` follows the pane, deliberately, for
         /// the caller it has today.
@@ -1172,9 +1171,9 @@ package enum SpoolCommandPolicy {
 
         case .pushCanvasFile:
             return .refused(
-                "pushCanvasFile carries a CanvasPushRequest — the workspace it belongs to and "
-                    + "the terminal that emitted it — which helm assembles from a pane's own "
-                    + "output. push.sh is the route, and it is already the non-seizing one")
+                "pushCanvasFile carries the workspace it belongs to and the terminal that "
+                    + "emitted it, which helm assembles from a pane's own output. push.sh is the route, and it is already the non-seizing one"
+            )
         }
     }
 }

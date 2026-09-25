@@ -28,25 +28,29 @@ final class ArchonRailModelTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: ArchonRailModel.visibilityKey))
     }
 
-    /// ⇧⌘R end to end. It was tested in two halves that never met — one proving the shortcut
-    /// maps to `.toggleRail`, one proving `toggleVisibility()` flips a flag — so the
-    /// subscription in between, which is the part that can actually be deleted by accident,
-    /// was never exercised at all.
+    /// ⇧⌘R end to end: the key table's row, carried out by the performer `RootView` composes.
+    /// It was once tested in two halves that never met — one proving the shortcut maps to the
+    /// action, one proving `toggleVisibility()` flips a flag — so the route in between, which is
+    /// the part that can actually be deleted by accident, was never exercised at all.
     @MainActor
-    func testPostingTheToggleNotificationReachesTheModel() throws {
+    func testTheToggleKeyReachesTheModel() throws {
         let defaults = try isolatedDefaults("archon-rail-notification")
         let model = ArchonRailModel(client: FakeArchonClient(), defaults: defaults)
-        let flipped = expectation(description: "isVisible changed")
-        let observer = model.$isVisible.dropFirst().sink { _ in flipped.fulfill() }
+        let terminals = TerminalManager()
+        let actions = LocalActions(
+            workbench: WorkbenchModel(terminals: terminals, agents: .blind),
+            workspaces: WorkspaceModel(defaults: defaults), rail: model, terminals: terminals)
+        let row = try XCTUnwrap(
+            KeyBindings.match(
+                characters: "R", keyCode: 15, modifiers: [.command, .shift],
+                terminalFocused: true))
 
-        HelmCommand.toggleRail.post()
+        actions.perform(row.action)
 
-        wait(for: [flipped], timeout: 2)
-        observer.cancel()
         XCTAssertTrue(model.isVisible)
         XCTAssertTrue(
             defaults.bool(forKey: ArchonRailModel.visibilityKey),
-            "the rail is hidden by default, so the shortcut has to work with no rail view alive")
+            "the rail is hidden by default, so the key has to work with no rail view alive")
     }
 
     // MARK: - Polling

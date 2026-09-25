@@ -12,8 +12,8 @@
 mod common;
 
 use bench_doc::{
-    Bench, CanvasSource, Direction, Focus, MINIMUM_FRACTION, Pane, PaneId, Placement, Refusal,
-    Slot, SlotId, Split, Surface,
+    Bench, Direction, Focus, MINIMUM_FRACTION, Pane, PaneId, Placement, Refusal, Slot, SlotId,
+    Split, Surface,
 };
 use common::*;
 
@@ -504,59 +504,6 @@ fn a_slot_divider_refuses_a_pair_from_two_different_columns() {
     assert_eq!(bench, before, "nothing moved");
 }
 
-// MARK: - Repoint
-
-#[test]
-fn repointing_a_canvas_records_where_it_went() {
-    let mut bench = Bench::terminal(PaneId::mint());
-    let page = Pane::new(Surface::Canvas {
-        source: CanvasSource::Empty,
-    });
-    let page_id = page.id;
-    bench.split(Split::Right, page, Focus::Take).unwrap();
-
-    bench.repoint(page_id, url("https://example.com")).unwrap();
-
-    assert_eq!(
-        bench.pane(page_id).unwrap().surface,
-        Surface::Canvas {
-            source: url("https://example.com")
-        },
-        "⌘L opens empty; the address that follows is what a relaunch has to give back"
-    );
-    assert_invariants(&bench, "repoint");
-}
-
-#[test]
-fn repointing_a_terminal_pane_is_refused() {
-    let shell = terminal();
-    let shell_id = shell.id;
-    let mut bench = bench_of(vec![shell], None);
-    let before = bench.clone();
-
-    assert_eq!(
-        bench.repoint(shell_id, url("https://example.com")),
-        Err(Refusal::NotACanvas(shell_id))
-    );
-    assert_eq!(
-        bench, before,
-        "a terminal that became a canvas has nowhere to render its pty"
-    );
-}
-
-#[test]
-fn repointing_a_pane_the_bench_does_not_hold_is_a_no_op() {
-    let mut bench = Bench::terminal(PaneId::mint());
-    let before = bench.clone();
-    let stranger = PaneId::mint();
-
-    assert_eq!(
-        bench.repoint(stranger, url("https://example.com")),
-        Err(Refusal::UnknownPane(stranger))
-    );
-    assert_eq!(bench, before, "a canvas may outlive its pane by a moment");
-}
-
 // MARK: - Select
 
 #[test]
@@ -668,22 +615,14 @@ fn codable_round_trips_every_pane_kind() {
     let focused = bench.focused_slot();
     bench
         .place(
-            Pane::new(Surface::Canvas {
-                source: url("http://localhost:3000"),
-            }),
+            canvas("/tmp/tasks.md"),
             Placement::Tab(focused),
             Focus::Take,
         )
         .unwrap();
     let column = bench.columns()[0].id;
     bench
-        .place(
-            Pane::new(Surface::Canvas {
-                source: CanvasSource::Empty,
-            }),
-            Placement::Row(column),
-            Focus::Take,
-        )
+        .place(canvas("/tmp/notes.md"), Placement::Row(column), Focus::Take)
         .unwrap();
     bench
         .place(Pane::new(Surface::Browser), Placement::Column, Focus::Take)

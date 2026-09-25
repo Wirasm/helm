@@ -8,7 +8,7 @@ import HelmWire
 /// **The identity existed at push time and was thrown away** (#205, and #210's second seam).
 /// `TerminalSession.terminalDidRequestDesktopNotification` classifies the push with the session
 /// — and therefore its pid, and therefore its mailbox — right there in scope, and
-/// `CanvasPushRequest` carried `{artifact, workspacePath}` onward. So a mark made on that canvas
+/// the push request carried only `{artifact, workspacePath}` onward. So a mark made on that canvas
 /// had no route home and ended at the operator's clipboard, which is #115's own measurement of
 /// why marking lost to typing.
 ///

@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyTerminal
+import HelmWire
 import SwiftUI
 import XCTest
 
@@ -65,7 +66,7 @@ final class TerminalKeyboardTests: XCTestCase {
         defer { helm.close() }
 
         helm.command(.newTerminal)
-        helm.command(.selectTerminal(index: 0))
+        helm.command(.showTab(index: 0))
 
         helm.expectKeyboard(
             on: helm.session(0).hostView, "the selected terminal did not take the keyboard")
@@ -109,7 +110,7 @@ final class TerminalKeyboardTests: XCTestCase {
 
         let first = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
 
-        helm.command(.moveFocus(.down))
+        helm.command(.stepFocus(.down))
         let second = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
         XCTAssertNotEqual(first, second, "the bench did not move focus; the test proves nothing")
 
@@ -167,7 +168,7 @@ final class TerminalKeyboardTests: XCTestCase {
             "the terminal stole the keyboard back")
 
         // The positive control: the same machinery, asked a question it must answer.
-        helm.command(.moveFocus(.down))
+        helm.command(.stepFocus(.down))
 
         helm.expectKeyboard(
             on: helm.view(of: elsewhere),
@@ -182,7 +183,7 @@ final class TerminalKeyboardTests: XCTestCase {
         defer { helm.close() }
 
         let closing = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
-        helm.command(.closePane)
+        helm.command(.closeFocused)
 
         let survivor = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
         XCTAssertNotEqual(closing, survivor, "nothing closed; the test proves nothing")
@@ -378,9 +379,12 @@ private final class HelmWindow {
         return pty
     }
 
-    /// Post one of helm's commands the way the menu does, and let it land.
-    func command(_ command: HelmCommand) {
-        command.post()
+    /// Carry out one of the key table's gestures the way a key does — resolved against the
+    /// bench and sent as the operator — and let it land.
+    func command(_ gesture: VerbTemplate) {
+        if let verb = gesture.resolve(bench: workbench.bench, workspaces: [], active: nil) {
+            workbench.send(verb, by: .operatorGesture)
+        }
         settle()
     }
 

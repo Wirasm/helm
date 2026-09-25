@@ -2,6 +2,12 @@ import Foundation
 
 /// A helm command's stable identity, without its payload.
 ///
+/// **`HelmCommand` itself is gone (#354, PR 3b), and these names outlive it on purpose.** Keys
+/// became rows of `KeyBindings` and every change to the bench became a `BenchVerb`, so nothing in
+/// `Helm` fires a command by this name any more. What still speaks it is the spool: `helm-command`
+/// sends one, `SpoolCommandPolicy` rules on it, and `WorkbenchSpoolCommander` turns an allowed one
+/// into a verb. The spool's `command` kind is replaced by verbs in M3, and this goes with it.
+///
 /// **This was `HelmCommand.Name`, nested inside `Helm` (#219), and it moved here for #269.**
 /// It is the same enumeration doing the same job — its own header in `HelmCommand.swift` called
 /// it *"not a convenience for the status bar — the command's public name"* and said the names
@@ -11,12 +17,11 @@ import Foundation
 /// `SpoolResult.command` reports which one ran. All three live in `HelmWire`, which depends on
 /// nothing in `Helm`, so the identity had to be reachable from here.
 ///
-/// **What did not move is `HelmCommand` itself, and that is the seam decision #269 asks for.**
-/// `HelmCommand`'s payloads are `Workbench.Direction`, `CanvasPushRequest`, `Pane.ID`,
-/// `FontSizeStep` and `URL` — the live app's vocabulary. Dragging them into `HelmWire` to
-/// expose a handful of commands would invert the dependency this target exists to keep one-way. So the
-/// *identity* is shared and the *payloads* stay where they are, and `Helm` keeps
-/// `HelmCommand.Name` as a typealias onto this type so no call site there had to change.
+/// **What did not move was `HelmCommand` itself, and that was the seam decision #269 asked
+/// for.** Its payloads were the live app's vocabulary — directions, panes, font steps, URLs —
+/// and dragging them into `HelmWire` to expose a handful of commands would have inverted the
+/// dependency this target exists to keep one-way. So the *identity* was shared and the
+/// *payloads* stayed where they were.
 ///
 /// **The payloads staying behind costs nothing today, and that is a consequence rather than a
 /// coincidence.** Every command `SpoolCommandPolicy` allows is payload-free, because every

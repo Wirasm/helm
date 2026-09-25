@@ -16,7 +16,6 @@ struct WorkspaceBar: View {
     /// `TerminalManager`. The bar renders a dot; it does not learn what a registry is.
     @ObservedObject private var board = BoardModel.shared
     let select: (Workspace) -> Void
-    let open: (Workspace) -> Void
     let close: (Workspace) -> Void
 
     var body: some View {
@@ -29,24 +28,25 @@ struct WorkspaceBar: View {
                     }
                 }
             }
-            Button(action: openWorkspace) { Image(systemName: "plus") }
-                .buttonStyle(.plain).foregroundStyle(Color.textMuted)
-                // Rendered from the map rather than typed. This tooltip said ⌘⇧O while the
-                // status bar said ⇧⌘O — macOS prints modifiers ⌃⌥⇧⌘, so the bar was right
-                // and one window disagreed with itself about one key (#149).
-                .help(
-                    KeyGlyph.binding(for: .openWorkspace).map { "Open workspace (\($0))" }
-                        ?? "Open workspace")
+            Button {
+                Actions.perform(.local(.openWorkspacePanel))
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.plain).foregroundStyle(Color.textMuted)
+            // Rendered from the map rather than typed. This tooltip said ⌘⇧O while the
+            // status bar said ⇧⌘O — macOS prints modifiers ⌃⌥⇧⌘, so the bar was right
+            // and one window disagreed with itself about one key (#149).
+            .help(
+                KeyGlyph.binding(for: .local(.openWorkspacePanel))
+                    .map { "Open workspace (\($0))" }
+                    ?? "Open workspace")
             Spacer(minLength: 8)
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
         .foregroundStyle(Color.textPrimary)
         .background(ChromeBackground())
         .task { await board.poll() }
-        .onReceive(HelmCommand.publisher) { command in
-            guard case .openWorkspace = command else { return }
-            openWorkspace()
-        }
     }
 
     /// Hoisted out of `body` because the type-checker gave up on the nested conditionals
@@ -79,16 +79,5 @@ struct WorkspaceBar: View {
         // Keyed on selection so the branch is asked again when the tab appears and whenever it
         // is switched to or away from (#379). `ForEach` already keys the tab by workspace.
         .task(id: isSelected) { await model.refreshBranch(for: workspace) }
-    }
-
-    private func openWorkspace() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Open"
-        panel.message = "Choose a folder to work in"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        open(Workspace(url: url))
     }
 }

@@ -106,7 +106,7 @@ spec:
                 sessions/all sessions/dismiss browser/start browser/status browser/stop browser/setup \
                 bench/get workspace/open workspace/close workspace/activate workspace/reset \
                 workspace/unshelve workspace/import pane/open pane/split pane/close pane/show \
-                pane/move pane/name pane/repoint pane/record focus/slot focus/step \
+                pane/move pane/name pane/record focus/slot focus/step \
                 layout/resize; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then

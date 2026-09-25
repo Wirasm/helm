@@ -1,4 +1,5 @@
 import Combine
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -348,57 +349,48 @@ final class WorkbenchModelTests: XCTestCase {
 
     // MARK: - The commands that moved off TerminalWorkspace and CanvasModel
 
-    /// The subscription moved here from `CanvasModel`, and it had to: there is one canvas
-    /// model per pane now, so a receiver on the model would make a single ⌘-clicked link
-    /// replace the contents of every open canvas at once.
-    func testAClickedLinkOpensACanvasThroughPlacement() async throws {
-        let (model, _) = mounted()
-        let file = URL(fileURLWithPath: "/tmp/offered.md")
+    /// A ⌘-click on a file link in a terminal, from the session's own callback to the bench: it
+    /// is the operator's `pane/open`, placed by the bench. Driven from the session because the
+    /// hop between the two is the part that changed shape — it was a broadcast every model heard.
+    func testAClickedLinkOpensACanvasThroughPlacement() throws {
+        let (model, manager) = mounted()
+        let session = try XCTUnwrap(manager.sessions.first)
 
-        HelmCommand.openCanvasFile(file).post()
-        try await Task.sleep(for: .milliseconds(100))
+        session.terminalDidRequestOpenURL("file:///tmp/offered.md", kind: .unknown)
 
         XCTAssertEqual(
-            model.bench?.canvasPanes.map(\.content), [.canvas(.file(file))],
-            "the offer arrives as a notification and placement decides where it lands")
+            model.bench?.canvasPanes.map(\.content), [.canvas(.file("/tmp/offered.md"))],
+            "the link arrives as a verb and placement decides where it lands")
         XCTAssertEqual(model.bench?.columns.count, 2, "…which at 1x1 is a new column")
     }
 
     // MARK: - Push routing (#227)
 
-    /// `CanvasPushRequestTests` (`CanvasPushTests.swift`) pins the request TYPE — that two
-    /// workspaces asking for the same artifact compare unequal. What it cannot pin is that
-    /// `WorkbenchModel` actually acts on that difference: a push fires from terminal OUTPUT,
-    /// so it can arrive from a session in a workspace the operator parked hours ago, and the
-    /// guard at `WorkbenchModel.handle(.pushCanvasFile:)` is the only thing standing between
-    /// that and a background build landing on whatever bench happens to be open.
-    func testAPushNamingTheMountedWorkspaceLands() async throws {
-        let (model, _) = mounted()
+    /// A push fires from terminal OUTPUT, so it can arrive from a session in a workspace the
+    /// operator parked hours ago. The verb names the pushing session's workspace, and that is
+    /// the only thing standing between a background build and whatever bench happens to be
+    /// open. Driven from the session's own callback, as `push.sh` reaches it.
+    func testAPushNamingTheMountedWorkspaceLands() throws {
+        let (model, manager) = mounted()
+        let session = try XCTUnwrap(manager.sessions.first)
 
-        HelmCommand.pushCanvasFile(
-            CanvasPushRequest(
-                artifact: URL(fileURLWithPath: "/tmp/push.md"), workspacePath: workspace,
-                origin: CanvasOrigin(terminal: UUID()))
-        ).post()
-        try await Task.sleep(for: .milliseconds(100))
+        session.terminalDidRequestDesktopNotification(
+            title: CanvasPush.marker, body: "/tmp/push.md")
 
         XCTAssertEqual(
             model.bench?.canvasPanes.map(\.content), [.canvas(.file("/tmp/push.md"))],
-            "a push naming the workspace on screen has to reach its bench")
+            "a push from the workspace on screen has to reach its bench")
     }
 
-    /// The negative half, and the one that matters: a gate that is `true` unconditionally
-    /// passes the test above for free. Only a push naming a workspace that is NOT mounted,
-    /// asserted to land nowhere, catches that.
-    func testAPushNamingAnUnmountedWorkspaceIsDropped() async throws {
-        let (model, _) = mounted()
+    /// The negative half, and the one that matters: a route that ignored the workspace would
+    /// pass the test above for free. Only a push from a session in a workspace that is NOT
+    /// mounted, asserted to land nowhere on the open bench, catches that.
+    func testAPushFromAnUnmountedWorkspaceDoesNotLandOnTheOpenBench() {
+        let (model, manager) = mounted()
+        let parked = manager.newTerminal(in: other)
 
-        HelmCommand.pushCanvasFile(
-            CanvasPushRequest(
-                artifact: URL(fileURLWithPath: "/tmp/push.md"), workspacePath: other,
-                origin: CanvasOrigin(terminal: UUID()))
-        ).post()
-        try await Task.sleep(for: .milliseconds(100))
+        parked.terminalDidRequestDesktopNotification(
+            title: CanvasPush.marker, body: "/tmp/push.md")
 
         XCTAssertEqual(
             model.bench?.canvasPanes.count, 0,
@@ -445,6 +437,16 @@ final class WorkbenchModelTests: XCTestCase {
 
     // MARK: - ⌘1–⌘9
 
+    /// ⌘1–⌘9 as the key does it: the table's gesture, resolved against the bench as it is now,
+    /// sent as the operator. A tab that is not there resolves to no verb at all.
+    private func pressTab(_ index: Int, on model: WorkbenchModel) {
+        guard
+            let verb = VerbTemplate.showTab(index: index).resolve(
+                bench: model.bench, workspaces: [], active: nil)
+        else { return }
+        model.send(verb, by: .operatorGesture)
+    }
+
     /// The eighth of the tests that moved off `TerminalManager` when selection became the
     /// slot's. Select-by-index changed meaning on the way — it was a position in the
     /// workspace's one row, and a bench has no such row — so it is by position **within the
@@ -455,20 +457,20 @@ final class WorkbenchModelTests: XCTestCase {
         let panes = try XCTUnwrap(model.bench?.slot(try XCTUnwrap(model.bench?.focusedSlot))?.panes)
         XCTAssertEqual(panes.count, 2, "⌘1 and ⌘2 need two tabs to choose between")
 
-        model.selectTab(0)
+        pressTab(0, on: model)
         XCTAssertEqual(model.bench?.focusedPane?.id, panes[0].id)
 
-        model.selectTab(1)
+        pressTab(1, on: model)
         XCTAssertEqual(model.bench?.focusedPane?.id, panes[1].id)
     }
 
     func testSelectingATabOutOfRangeChangesNothing() throws {
         let (model, _) = mounted()
-        model.selectTab(0)
+        pressTab(0, on: model)
         let before = try XCTUnwrap(model.bench)
 
-        model.selectTab(8)
-        model.selectTab(-1)
+        pressTab(8, on: model)
+        pressTab(-1, on: model)
 
         XCTAssertEqual(model.bench, before, "⌘9 over a slot with one tab is a no-op, not a crash")
     }
@@ -483,7 +485,7 @@ final class WorkbenchModelTests: XCTestCase {
         model.splitRight()
         let split = try XCTUnwrap(model.bench?.focusedPane?.id)
 
-        model.selectTab(1)
+        pressTab(1, on: model)
 
         XCTAssertEqual(
             model.bench?.focusedPane?.id, split,

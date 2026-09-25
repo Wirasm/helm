@@ -106,7 +106,6 @@ final class ArchonRailModel: ObservableObject {
     /// Not `@Published`: nothing renders the dismissals themselves, only their effect on
     /// `finished`, and publishing a store the view never reads would invalidate it for nothing.
     private var dismissals: ArchonInboxDismissals
-    private var commands: Set<AnyCancellable> = []
 
     init(
         client: any ArchonClient = ArchonCLI(),
@@ -130,26 +129,10 @@ final class ArchonRailModel: ObservableObject {
             defaults.data(forKey: Self.configKey)
             .flatMap { try? JSONDecoder().decode(ArchonLaunchConfig.self, from: $0) }
             ?? .empty
-        HelmCommand.publisher
-            .filter { if case .toggleRail = $0 { true } else { false } }
-            // Hopped to main because `@Published` fires in `willSet`: a handler that read
-            // state synchronously would see the value from *before* the change. The same
-            // reason `WorkbenchModel.subscribe` gives, and the same shape.
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                // The hop above guarantees the main thread but not main-actor *isolation*,
-                // which Swift 6 requires separately. `assumeIsolated` asserts what
-                // `.receive(on: DispatchQueue.main)` has already made true; the alternative
-                // is a `Task { @MainActor in … }` per notification, which would also reorder
-                // ⇧⌘R against anything else queued.
-                MainActor.assumeIsolated { self?.toggleVisibility() }
-            }
-            .store(in: &commands)
     }
 
-    /// ⇧⌘R, and the reason the subscription above lives on the model: the rail is hidden by
-    /// default, so the view that would otherwise own it does not exist in the one state the
-    /// shortcut has to work in.
+    /// ⇧⌘R, and the reason it lives on the model: the rail is hidden by default, so the view
+    /// that would otherwise own it does not exist in the one state the shortcut has to work in.
     func toggleVisibility() {
         isVisible.toggle()
         defaults.set(isVisible, forKey: Self.visibilityKey)

@@ -79,8 +79,8 @@
                         "surface": {
                           "kind": "canvas",
                           "source": {
-                            "kind": "url",
-                            "url": "http://localhost:3000"
+                            "kind": "file",
+                            "path": "/Users/operator/Projects/helm/docs/review.md"
                           }
                         }
                       }
@@ -141,7 +141,8 @@
                         "surface": {
                           "kind": "canvas",
                           "source": {
-                            "kind": "empty"
+                            "kind": "file",
+                            "path": "/Users/operator/.prp/helm/notes/2026-09-25.md"
                           }
                         }
                       }
