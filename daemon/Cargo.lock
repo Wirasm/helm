@@ -44,6 +44,7 @@ dependencies = [
 name = "bench-wire"
 version = "0.0.1"
 dependencies = [
+ "bench-doc",
  "serde",
  "serde_json",
 ]
@@ -53,6 +54,7 @@ name = "benchd"
 version = "0.0.1"
 dependencies = [
  "bench-browser",
+ "bench-doc",
  "bench-mail",
  "bench-session",
  "bench-wire",

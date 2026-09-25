@@ -103,7 +103,11 @@ spec:
     for verb in status events stop:probe spawn sessions attach close resume \
                 select name capture cmd \
                 attn/post attn/list attn/ack watch mail/send mail/list mail/read \
-                browser/start browser/status browser/stop browser/setup; do
+                browser/start browser/status browser/stop browser/setup \
+                bench/get workspace/open workspace/close workspace/activate workspace/reset \
+                workspace/unshelve workspace/import pane/open pane/split pane/close pane/show \
+                pane/move pane/name pane/repoint pane/record focus/slot focus/step \
+                layout/resize; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then
             # probed last for real; listed here so the row exists
@@ -119,6 +123,42 @@ spec:
         fi
     done
     cargo run -q -p bench -- stop >/dev/null 2>&1 || true
+
+# M4 — the bench document, driven entirely through the socket as the operator: open a
+# workspace, split, open a canvas, move it, close a pane — then restart the daemon and show
+# the same document comes back from bench.json.
+bench-proof:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PROOF=$(mktemp -d "${TMPDIR:-/tmp}/bprf.XXXX")
+    export BENCH_DIR="$PROOF/r"
+    cargo build -q --workspace
+    (timeout 60 ./target/debug/benchd &)
+    for _ in $(seq 100); do ./target/debug/bench status >/dev/null 2>&1 && break; sleep 0.1; done
+    python3 - "$BENCH_DIR/benchd.sock" > "$PROOF/before.json" <<'PY'
+    import socket, sys, json
+    def verb(v, args=None):
+        s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
+        s.sendall((json.dumps({"id": "proof", "verb": v, "args": args, "by": {"kind": "operator"}}) + "\n").encode())
+        line = b""
+        while not line.endswith(b"\n"): line += s.recv(65536)
+        r = json.loads(line); assert r["status"] == "ok", (v, r); return r.get("data")
+    verb("workspace/open", {"path": "/tmp/bench-proof"})
+    shell = verb("pane/split", {"direction": "right"})["pane_created"]
+    page = verb("pane/open", {"surface": {"kind": "canvas", "source": {"kind": "file", "path": "/tmp/bench-proof/plan.md"}}})["pane_created"]
+    verb("pane/move", {"pane": page, "to": {"step": "left"}})
+    verb("pane/close", {"pane": shell})
+    print(json.dumps(verb("bench/get"), sort_keys=True))
+    PY
+    ./target/debug/bench stop >/dev/null
+    while ./target/debug/bench status >/dev/null 2>&1; do sleep 0.1; done
+    (timeout 60 ./target/debug/benchd &)
+    for _ in $(seq 100); do ./target/debug/bench status >/dev/null 2>&1 && break; sleep 0.1; done
+    ./target/debug/bench get | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin), sort_keys=True))" > "$PROOF/after.json"
+    ./target/debug/bench stop >/dev/null
+    diff "$PROOF/before.json" "$PROOF/after.json"
+    echo "bench-proof: the document survived a daemon restart ($(python3 -c "import json; d=json.load(open('$PROOF/after.json')); print(sum(len(s['panes']) for w in d['document']['workspaces'] for c in w['bench']['columns'] for s in c['slots']))") panes, seq $(python3 -c "import json; print(json.load(open('$PROOF/after.json'))['seq'])"))"
+    rm -rf "$PROOF"
 
 # The live proof, repeatable: spawn a real claude through the daemon, attach over the
 # socket, demand arithmetic back through the relay. Costs one small claude turn — not

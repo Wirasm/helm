@@ -1,0 +1,446 @@
+[
+  {
+    "id": "v-01",
+    "verb": "bench/get",
+    "args": null
+  },
+  {
+    "id": "v-02",
+    "verb": "workspace/open",
+    "args": {
+      "path": "/Users/operator/Projects/helm"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-03",
+    "verb": "workspace/close",
+    "args": {
+      "path": "/Users/operator/Projects/kild"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-04",
+    "verb": "workspace/activate",
+    "args": {
+      "path": "/Users/operator/Projects/prp"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-05",
+    "verb": "workspace/reset",
+    "args": {
+      "path": "/Users/operator/Projects/prp"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-06",
+    "verb": "workspace/unshelve",
+    "args": {
+      "path": "/Users/operator/Projects/prp"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-07",
+    "verb": "workspace/import",
+    "args": {
+      "document": {
+        "active": "/Users/operator/Projects/helm",
+        "workspaces": [
+          {
+            "bench": {
+              "columns": [
+                {
+                  "id": "00000201-0000-4000-8000-000000000201",
+                  "slots": [
+                    {
+                      "height": 0.75,
+                      "id": "00000101-0000-4000-8000-000000000101",
+                      "panes": [
+                        {
+                          "id": "00000001-0000-4000-8000-000000000001",
+                          "name": {
+                            "source": "derived",
+                            "text": "claude · helm"
+                          },
+                          "surface": {
+                            "agent": {
+                              "command": "claude",
+                              "cwd": "/Users/operator/Projects/helm",
+                              "session": "0b5e7a1c-3f7d-4d7e-9a51-5b3f7d6c2e10"
+                            },
+                            "kind": "terminal"
+                          }
+                        },
+                        {
+                          "id": "00000002-0000-4000-8000-000000000002",
+                          "surface": {
+                            "kind": "terminal"
+                          }
+                        }
+                      ],
+                      "selected": "00000001-0000-4000-8000-000000000001"
+                    },
+                    {
+                      "height": 0.25,
+                      "id": "00000102-0000-4000-8000-000000000102",
+                      "panes": [
+                        {
+                          "id": "00000003-0000-4000-8000-000000000003",
+                          "name": {
+                            "source": "chosen",
+                            "text": "the plan"
+                          },
+                          "surface": {
+                            "kind": "canvas",
+                            "source": {
+                              "kind": "file",
+                              "path": "/Users/operator/.prp/helm/plans/m4.plan.md"
+                            }
+                          }
+                        }
+                      ],
+                      "selected": "00000003-0000-4000-8000-000000000003"
+                    }
+                  ],
+                  "width": 0.5
+                },
+                {
+                  "id": "00000202-0000-4000-8000-000000000202",
+                  "slots": [
+                    {
+                      "height": 1.0,
+                      "id": "00000103-0000-4000-8000-000000000103",
+                      "panes": [
+                        {
+                          "id": "00000004-0000-4000-8000-000000000004",
+                          "surface": {
+                            "kind": "browser"
+                          }
+                        },
+                        {
+                          "id": "00000005-0000-4000-8000-000000000005",
+                          "surface": {
+                            "kind": "canvas",
+                            "source": {
+                              "kind": "url",
+                              "url": "http://localhost:3000"
+                            }
+                          }
+                        }
+                      ],
+                      "selected": "00000004-0000-4000-8000-000000000004"
+                    }
+                  ],
+                  "width": 0.5
+                }
+              ],
+              "focused_slot": "00000101-0000-4000-8000-000000000101"
+            },
+            "path": "/Users/operator/Projects/helm"
+          },
+          {
+            "bench": {
+              "columns": [
+                {
+                  "id": "00000204-0000-4000-8000-000000000204",
+                  "slots": [
+                    {
+                      "height": 1.0,
+                      "id": "00000105-0000-4000-8000-000000000105",
+                      "panes": [
+                        {
+                          "id": "00000007-0000-4000-8000-000000000007",
+                          "surface": {
+                            "kind": "terminal"
+                          }
+                        }
+                      ],
+                      "selected": "00000007-0000-4000-8000-000000000007"
+                    }
+                  ],
+                  "width": 1.0
+                }
+              ],
+              "focused_slot": "00000105-0000-4000-8000-000000000105"
+            },
+            "path": "/Users/operator/Projects/prp",
+            "shelved": {
+              "columns": [
+                {
+                  "id": "00000205-0000-4000-8000-000000000205",
+                  "slots": [
+                    {
+                      "height": 1.0,
+                      "id": "00000106-0000-4000-8000-000000000106",
+                      "panes": [
+                        {
+                          "id": "00000008-0000-4000-8000-000000000008",
+                          "surface": {
+                            "kind": "terminal"
+                          }
+                        },
+                        {
+                          "id": "00000009-0000-4000-8000-000000000009",
+                          "surface": {
+                            "kind": "canvas",
+                            "source": {
+                              "kind": "empty"
+                            }
+                          }
+                        }
+                      ],
+                      "selected": "00000009-0000-4000-8000-000000000009"
+                    }
+                  ],
+                  "width": 1.0
+                }
+              ],
+              "focused_slot": "00000106-0000-4000-8000-000000000106"
+            }
+          },
+          {
+            "bench": {
+              "columns": [
+                {
+                  "id": "00000203-0000-4000-8000-000000000203",
+                  "slots": [
+                    {
+                      "height": 1.0,
+                      "id": "00000104-0000-4000-8000-000000000104",
+                      "panes": [
+                        {
+                          "id": "00000006-0000-4000-8000-000000000006",
+                          "surface": {
+                            "kind": "terminal"
+                          }
+                        }
+                      ],
+                      "selected": "00000006-0000-4000-8000-000000000006"
+                    }
+                  ],
+                  "width": 1.0
+                }
+              ],
+              "focused_slot": "00000104-0000-4000-8000-000000000104"
+            },
+            "path": "/Users/operator/Projects/kild"
+          }
+        ]
+      }
+    },
+    "by": {
+      "kind": "helm"
+    }
+  },
+  {
+    "id": "v-08",
+    "verb": "pane/open",
+    "args": {
+      "surface": {
+        "kind": "canvas",
+        "source": {
+          "kind": "file",
+          "path": "/Users/operator/.prp/helm/plans/m4.plan.md"
+        }
+      }
+    },
+    "by": {
+      "kind": "agent",
+      "pane": "00000001-0000-4000-8000-000000000001",
+      "handle": "claude-helm"
+    }
+  },
+  {
+    "id": "v-09",
+    "verb": "pane/open",
+    "args": {
+      "surface": {
+        "kind": "terminal"
+      },
+      "workspace": "/Users/operator/Projects/helm"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-10",
+    "verb": "pane/split",
+    "args": {
+      "direction": "right"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-11",
+    "verb": "pane/split",
+    "args": {
+      "direction": "down",
+      "surface": {
+        "kind": "browser"
+      }
+    },
+    "by": {
+      "kind": "agent",
+      "pane": "00000001-0000-4000-8000-000000000001",
+      "handle": "claude-helm"
+    },
+    "asked": true
+  },
+  {
+    "id": "v-12",
+    "verb": "pane/close",
+    "args": {
+      "pane": "00000002-0000-4000-8000-000000000002"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-13",
+    "verb": "pane/show",
+    "args": {
+      "pane": "00000005-0000-4000-8000-000000000005"
+    },
+    "by": {
+      "kind": "agent",
+      "pane": "00000001-0000-4000-8000-000000000001",
+      "handle": "claude-helm"
+    }
+  },
+  {
+    "id": "v-14",
+    "verb": "pane/move",
+    "args": {
+      "pane": "00000003-0000-4000-8000-000000000003",
+      "to": {
+        "step": "left"
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-15",
+    "verb": "pane/name",
+    "args": {
+      "name": {
+        "source": "chosen",
+        "text": "review"
+      },
+      "pane": "00000003-0000-4000-8000-000000000003"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-16",
+    "verb": "pane/repoint",
+    "args": {
+      "pane": "00000005-0000-4000-8000-000000000005",
+      "source": {
+        "kind": "url",
+        "url": "http://localhost:3000/pr/367"
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-17",
+    "verb": "pane/record",
+    "args": {
+      "agent": {
+        "command": "claude",
+        "cwd": "/Users/operator/Projects/helm",
+        "session": "0b5e7a1c-3f7d-4d7e-9a51-5b3f7d6c2e10"
+      },
+      "pane": "00000001-0000-4000-8000-000000000001"
+    },
+    "by": {
+      "kind": "helm"
+    }
+  },
+  {
+    "id": "v-18",
+    "verb": "pane/record",
+    "args": {
+      "agent": null,
+      "pane": "00000001-0000-4000-8000-000000000001"
+    },
+    "by": {
+      "kind": "helm"
+    }
+  },
+  {
+    "id": "v-19",
+    "verb": "focus/slot",
+    "args": {
+      "slot": "00000103-0000-4000-8000-000000000103"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-20",
+    "verb": "focus/step",
+    "args": {
+      "direction": "up"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-21",
+    "verb": "layout/resize",
+    "args": {
+      "divider": {
+        "against": "00000202-0000-4000-8000-000000000202",
+        "between": "columns",
+        "member": "00000201-0000-4000-8000-000000000201"
+      },
+      "fraction": 0.6
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-22",
+    "verb": "layout/resize",
+    "args": {
+      "divider": {
+        "against": "00000102-0000-4000-8000-000000000102",
+        "between": "slots",
+        "member": "00000101-0000-4000-8000-000000000101"
+      },
+      "fraction": 0.7
+    },
+    "by": {
+      "kind": "operator"
+    }
+  }
+]

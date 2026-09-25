@@ -1736,3 +1736,595 @@ fn the_bench_browser_skills_snippets_execute_against_a_real_daemon() {
     );
     assert!(String::from_utf8_lossy(&refused.stdout).trim().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// M4: the bench document — layout verbs, bench.json, events --follow
+// ---------------------------------------------------------------------------
+
+/// One layout verb over the raw socket, as helm (`by: operator`) or an agent (`by: None`).
+/// Bounded: a daemon that stops answering is a failed assertion here, never a hung run.
+fn layout(
+    socket: &Path,
+    verb: &str,
+    args: serde_json::Value,
+    by: Option<serde_json::Value>,
+    asked: bool,
+) -> serde_json::Value {
+    let stream = UnixStream::connect(socket).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut req = serde_json::json!({ "id": "m4", "verb": verb, "args": args });
+    if let Some(by) = by {
+        req["by"] = by;
+    }
+    if asked {
+        req["asked"] = serde_json::json!(true);
+    }
+    (&stream).write_all(format!("{req}\n").as_bytes()).unwrap();
+    let mut reply = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut reply)
+        .unwrap_or_else(|e| panic!("{verb}: no answer ({e})"));
+    serde_json::from_str(&reply).unwrap_or_else(|e| panic!("{verb}: {e}: {reply:?}"))
+}
+
+fn operator() -> Option<serde_json::Value> {
+    Some(serde_json::json!({ "kind": "operator" }))
+}
+
+fn ok_data(reply: serde_json::Value) -> serde_json::Value {
+    assert_eq!(reply["status"], "ok", "{reply}");
+    reply["data"].clone()
+}
+
+fn log_of(root: &Path) -> Vec<serde_json::Value> {
+    fs::read_to_string(root.join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+/// The operator's working bench: a workspace, a second terminal to the right, and a canvas.
+/// Answers the pane ids: (first terminal, right terminal, canvas).
+fn working_bench(socket: &Path) -> (String, String, String) {
+    let first = ok_data(layout(
+        socket,
+        "workspace/open",
+        serde_json::json!({ "path": "/tmp/m4-proof" }),
+        operator(),
+        false,
+    ))["pane_created"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let right = ok_data(layout(
+        socket,
+        "pane/split",
+        serde_json::json!({ "direction": "right" }),
+        operator(),
+        false,
+    ))["pane_created"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let canvas = ok_data(layout(
+        socket,
+        "pane/open",
+        serde_json::json!({ "surface": { "kind": "canvas", "source": { "kind": "file", "path": "/tmp/m4-proof/plan.md" } } }),
+        operator(),
+        false,
+    ))["pane_created"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    (first, right, canvas)
+}
+
+#[test]
+fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
+    let home = TestHome::claim("m4-session");
+    let root = home.dir.join(".bench");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (_, right, canvas) = working_bench(&daemon.socket);
+    ok_data(layout(
+        &daemon.socket,
+        "pane/move",
+        serde_json::json!({ "pane": canvas, "to": { "step": "left" } }),
+        operator(),
+        false,
+    ));
+    ok_data(layout(
+        &daemon.socket,
+        "pane/close",
+        serde_json::json!({ "pane": right }),
+        operator(),
+        false,
+    ));
+    let before = ok_data(layout(
+        &daemon.socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ));
+    // What the daemon actually sends decodes as the wire types helm's client will read.
+    serde_json::from_value::<bench_wire::DocumentAt>(before.clone())
+        .expect("bench/get is a DocumentAt");
+    drop(daemon);
+
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let after = ok_data(layout(
+        &daemon.socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ));
+    assert_eq!(
+        after, before,
+        "bench.json brought the whole document back, seq and all"
+    );
+
+    // Files are the record: the file and the log, read with no daemon in the loop.
+    let record: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root.join("bench.json")).unwrap()).unwrap();
+    assert_eq!(record["format"], "bench.document");
+    assert_eq!(record["document"], before["document"]);
+    let changes: Vec<_> = log_of(&root)
+        .into_iter()
+        .filter(|e| e["kind"] == "bench/changed")
+        .collect();
+    let verbs: Vec<_> = changes
+        .iter()
+        .map(|e| e["data"]["verb"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        verbs,
+        [
+            "workspace/open",
+            "pane/split",
+            "pane/open",
+            "pane/move",
+            "pane/close"
+        ],
+        "every change is one event, in order"
+    );
+    assert!(
+        changes
+            .iter()
+            .all(|e| e["data"]["by"]["kind"] == "operator"),
+        "and each says who asked"
+    );
+    for change in &changes {
+        let typed: bench_wire::DocumentChange = serde_json::from_value(change["data"].clone())
+            .expect("a bench/changed event's data is a DocumentChange");
+        assert_eq!(
+            typed.report.seq, change["seq"],
+            "the report names its own event"
+        );
+    }
+    assert_eq!(
+        record["seq"],
+        changes.last().unwrap()["seq"],
+        "the file names its event"
+    );
+}
+
+#[test]
+fn an_agent_rearranges_the_bench_and_never_moves_the_operators_focus() {
+    let home = TestHome::claim("m4-focus");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (first, right, canvas) = working_bench(&daemon.socket);
+    // The operator is in the canvas they just opened.
+    let held = canvas.clone();
+
+    for (verb, args) in [
+        (
+            "pane/open",
+            serde_json::json!({ "surface": { "kind": "canvas", "source": { "kind": "file", "path": "/tmp/m4-proof/tasks.md" } } }),
+        ),
+        ("pane/split", serde_json::json!({ "direction": "down" })),
+        (
+            "pane/open",
+            serde_json::json!({ "surface": { "kind": "terminal" } }),
+        ),
+        (
+            "pane/move",
+            serde_json::json!({ "pane": first, "to": { "step": "right" } }),
+        ),
+        ("pane/close", serde_json::json!({ "pane": right })),
+    ] {
+        let data = ok_data(layout(&daemon.socket, verb, args, None, false));
+        serde_json::from_value::<bench_wire::LayoutReport>(data.clone())
+            .unwrap_or_else(|e| panic!("{verb}: the reply is a LayoutReport: {e}"));
+        assert_eq!(data["focused_pane_before"], held.as_str(), "{verb}");
+        assert_eq!(
+            data["focused_pane_after"],
+            held.as_str(),
+            "{verb}: the keyboard stayed"
+        );
+        assert_eq!(
+            data["changed"], true,
+            "{verb}: and it was a real change, not a no-op"
+        );
+    }
+
+    // tasks.md landed as a background tab of the operator's own slot (the canvas rule), so
+    // showing it would take the keyboard (#284) — refused, where showing it anywhere else
+    // would not be.
+    let bench = ok_data(layout(
+        &daemon.socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ));
+    let tasks = bench["document"]["workspaces"][0]["bench"]["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| c["slots"].as_array().unwrap().iter())
+        .flat_map(|s| s["panes"].as_array().unwrap().iter())
+        .find(|p| p["surface"]["source"]["path"] == "/tmp/m4-proof/tasks.md")
+        .unwrap()["id"]
+        .clone();
+    let shown = layout(
+        &daemon.socket,
+        "pane/show",
+        serde_json::json!({ "pane": tasks }),
+        None,
+        false,
+    );
+    assert_eq!(shown["status"], "refused", "{shown}");
+
+    let refused = layout(
+        &daemon.socket,
+        "pane/close",
+        serde_json::json!({ "pane": held }),
+        None,
+        false,
+    );
+    assert_eq!(refused["status"], "refused", "{refused}");
+    assert!(
+        refused["reason"].as_str().unwrap().contains("--asked"),
+        "the refusal names the route: {refused}"
+    );
+
+    let asked = ok_data(layout(
+        &daemon.socket,
+        "pane/close",
+        serde_json::json!({ "pane": held }),
+        None,
+        true,
+    ));
+    assert_ne!(
+        asked["focused_pane_after"],
+        held.as_str(),
+        "with --asked it may"
+    );
+}
+
+#[test]
+fn a_layout_refusal_names_what_was_wrong_and_changes_nothing() {
+    let home = TestHome::claim("m4-refuse");
+    let root = home.dir.join(".bench");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    working_bench(&daemon.socket);
+    let events_before = log_of(&root).len();
+
+    for (verb, args, names) in [
+        ("pane/close", serde_json::json!({}), "pane"),
+        (
+            "pane/open",
+            serde_json::json!({ "surface": { "kind": "archonRun" } }),
+            "archonRun",
+        ),
+        (
+            "pane/close",
+            serde_json::json!({ "pane": "00000000-0000-4000-8000-000000000000" }),
+            "no pane",
+        ),
+        (
+            "workspace/open",
+            serde_json::json!({ "path": "relative/dir" }),
+            "absolute",
+        ),
+    ] {
+        let reply = layout(&daemon.socket, verb, args, operator(), false);
+        assert_eq!(reply["status"], "refused", "{verb}: {reply}");
+        assert!(
+            reply["reason"].as_str().unwrap().contains(names),
+            "{verb}: the refusal names {names:?}: {reply}"
+        );
+    }
+    let run = bench(&home.dir, &["get"]);
+    assert_eq!(run.code, 0, "and the CLI still reads it: {}", run.stderr);
+    assert_eq!(
+        log_of(&root).len(),
+        events_before,
+        "a refusal is not a change and logs nothing"
+    );
+}
+
+#[test]
+fn a_verb_that_changes_nothing_logs_nothing() {
+    let home = TestHome::claim("m4-noop");
+    let root = home.dir.join(".bench");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    working_bench(&daemon.socket);
+    let events_before = log_of(&root).len();
+
+    let data = ok_data(layout(
+        &daemon.socket,
+        "workspace/activate",
+        serde_json::json!({ "path": "/tmp/m4-proof" }),
+        None,
+        false,
+    ));
+
+    assert_eq!(data["changed"], false);
+    assert_eq!(log_of(&root).len(), events_before);
+}
+
+/// Read one newline-terminated line, bounded.
+fn read_frame(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .unwrap_or_else(|e| panic!("no frame ({e})"));
+    serde_json::from_str(&line).unwrap_or_else(|e| panic!("{e}: {line:?}"))
+}
+
+fn follow(socket: &Path) -> BufReader<UnixStream> {
+    let stream = UnixStream::connect(socket).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    (&stream)
+        .write_all(b"{\"id\":\"f\",\"verb\":\"events\",\"args\":{\"follow\":true}}\n")
+        .unwrap();
+    BufReader::new(stream)
+}
+
+#[test]
+fn a_follower_gets_the_document_then_every_change_with_the_document_attached() {
+    let home = TestHome::claim("m4-follow");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let mut reader = follow(&daemon.socket);
+    let first = read_frame(&mut reader);
+    assert_eq!(first["status"], "ok", "{first}");
+    assert_eq!(
+        first["data"]["document"]["workspaces"],
+        serde_json::json!([])
+    );
+
+    let opened = ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": "/tmp/m4-follow" }),
+        operator(),
+        false,
+    ));
+    let frame = read_frame(&mut reader);
+    assert_eq!(frame["event"]["kind"], "bench/changed");
+    assert_eq!(frame["event"]["seq"], opened["seq"]);
+    assert_eq!(
+        frame["document"]["workspaces"][0]["path"], "/tmp/m4-follow",
+        "the frame carries the whole document after the change"
+    );
+
+    // Every event reaches a follower, not only document changes — and one that did not
+    // change the document carries none.
+    let mail = bench(
+        &home.dir,
+        &["mail", "send", "--to", "operator", "--body", "hi"],
+    );
+    assert_eq!(mail.code, 0, "{}", mail.stderr);
+    let frame = read_frame(&mut reader);
+    assert_eq!(frame["event"]["kind"], "mail/sent");
+    assert!(frame.get("document").is_none(), "{frame}");
+}
+
+#[test]
+fn a_follower_that_stops_reading_never_parks_the_daemon() {
+    let home = TestHome::claim("m4-stall");
+    let root = home.dir.join(".bench");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    working_bench(&daemon.socket);
+    // Connected, answered, and never read again.
+    let _stalled = follow(&daemon.socket);
+    let columns = ok_data(layout(
+        &daemon.socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ))["document"]["workspaces"][0]["bench"]["columns"]
+        .clone();
+    let (member, against) = (columns[0]["id"].clone(), columns[1]["id"].clone());
+
+    // Enough changes, each with the whole document attached, to fill the socket's buffer
+    // and the follower's queue several times over.
+    // The bound is on the worst single verb. A follower written to under the mutex parks
+    // every verb for as long as that write blocks — DAEMON_IO_TIMEOUT, 5 s — while a verb
+    // here takes milliseconds; 3 s sits between the two with room on a loaded machine.
+    let started = Instant::now();
+    let mut slowest = Duration::ZERO;
+    for i in 0..600 {
+        let fraction = if i % 2 == 0 { 0.3 } else { 0.7 };
+        let sent = Instant::now();
+        let reply = layout(
+            &daemon.socket,
+            "layout/resize",
+            serde_json::json!({ "divider": { "between": "columns", "member": member, "against": against }, "fraction": fraction }),
+            operator(),
+            false,
+        );
+        assert_eq!(
+            reply["status"],
+            "ok",
+            "verb {i} after {:?}: {reply}",
+            started.elapsed()
+        );
+        slowest = slowest.max(sent.elapsed());
+    }
+    assert!(
+        slowest < Duration::from_secs(3),
+        "no verb waited on the stalled follower: the slowest took {slowest:?}"
+    );
+    assert!(
+        log_of(&root)
+            .iter()
+            .any(|e| e["kind"] == "events/follower-dropped"),
+        "the stalled follower was dropped, and that is on the record"
+    );
+}
+
+#[test]
+fn an_unreadable_bench_json_is_moved_aside_and_the_daemon_starts_empty() {
+    let home = TestHome::claim("m4-bad");
+    let root = home.dir.join(".bench");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("bench.json"), "this was never a document").unwrap();
+
+    let daemon = DaemonGuard::start(&home.dir, None);
+
+    let data = ok_data(layout(
+        &daemon.socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ));
+    assert_eq!(data["document"]["workspaces"], serde_json::json!([]));
+    assert!(
+        !root.join("bench.json").exists(),
+        "moved, not left to be read again"
+    );
+    let aside: Vec<_> = fs::read_dir(&root)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("bench.json.bad-")
+        })
+        .collect();
+    assert_eq!(aside.len(), 1, "and kept, never deleted");
+    assert!(
+        log_of(&root)
+            .iter()
+            .any(|e| e["kind"] == "bench/quarantined")
+    );
+}
+
+#[test]
+fn a_bench_json_with_one_unreadable_pane_loses_only_that_pane() {
+    let home = TestHome::claim("m4-tolerant");
+    let root = home.dir.join(".bench");
+    fs::create_dir_all(&root).unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bench-document.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let panes = document["workspaces"][0]["bench"]["columns"][0]["slots"][0]["panes"]
+        .as_array_mut()
+        .unwrap();
+    let before = panes.len();
+    panes.push(serde_json::json!({ "id": "99999999-9999-4999-8999-999999999999", "surface": { "kind": "archonRun" } }));
+    fs::write(
+        root.join("bench.json"),
+        serde_json::json!({ "format": "bench.document", "version": 0, "seq": 0, "document": document }).to_string(),
+    )
+    .unwrap();
+
+    let daemon = DaemonGuard::start(&home.dir, None);
+
+    let data = ok_data(layout(
+        &daemon.socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ));
+    let workspaces = data["document"]["workspaces"].as_array().unwrap();
+    assert_eq!(workspaces.len(), 3, "every workspace survived");
+    assert_eq!(
+        workspaces[0]["bench"]["columns"][0]["slots"][0]["panes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        before,
+        "only the unreadable pane went"
+    );
+    let repaired: Vec<_> = log_of(&root)
+        .into_iter()
+        .filter(|e| e["kind"] == "bench/repaired")
+        .collect();
+    assert_eq!(repaired.len(), 1, "and the loss is on the record");
+}
+
+#[test]
+fn a_bench_json_older_than_the_log_says_so() {
+    let home = TestHome::claim("m4-behind");
+    let root = home.dir.join(".bench");
+    fs::create_dir_all(&root).unwrap();
+    let mut log = String::new();
+    log.push_str("{\"seq\":0,\"at\":\"2026-09-25T00:00:00Z\",\"kind\":\"log/format\",\"data\":{\"format\":\"bench.events-log\",\"version\":0}}\n");
+    log.push_str("{\"seq\":1,\"at\":\"2026-09-25T00:00:01Z\",\"kind\":\"bench/changed\",\"data\":{\"verb\":\"workspace/open\"}}\n");
+    log.push_str("{\"seq\":2,\"at\":\"2026-09-25T00:00:02Z\",\"kind\":\"bench/changed\",\"data\":{\"verb\":\"pane/split\"}}\n");
+    fs::write(root.join("events.jsonl"), log).unwrap();
+    fs::write(
+        root.join("bench.json"),
+        serde_json::json!({ "format": "bench.document", "version": 0, "seq": 1, "document": { "workspaces": [], "active": null } }).to_string(),
+    )
+    .unwrap();
+
+    let _daemon = DaemonGuard::start(&home.dir, None);
+
+    let behind: Vec<_> = log_of(&root)
+        .into_iter()
+        .filter(|e| e["kind"] == "bench/behind")
+        .collect();
+    assert_eq!(behind.len(), 1);
+    assert_eq!(behind[0]["data"]["log_seq"], 2);
+    assert_eq!(behind[0]["data"]["document_seq"], 1);
+}
+
+#[test]
+fn the_cli_follows_the_bench_line_by_line() {
+    let home = TestHome::claim("m4-cli");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let mut child = Command::new(bench_bin())
+        .env_remove("BENCH_DIR")
+        .env_remove("BENCH_SUITE")
+        .env("HOME", &home.dir)
+        .args(["events", "--follow"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn bench events --follow");
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let first: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert!(
+        first.get("document").is_some(),
+        "the first line is the document: {first}"
+    );
+
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": "/tmp/m4-cli" }),
+        operator(),
+        false,
+    ));
+    let frame: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(frame["event"]["kind"], "bench/changed");
+}

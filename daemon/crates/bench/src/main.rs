@@ -32,6 +32,9 @@ fn usage() -> &'static str {
     "usage: bench [--suite <name>] <verb> [args]\n\
      verbs: status                              daemon identity, root, uptime, counts\n\
      \x20     events [--since N]                  read the record back from seq N\n\
+     \x20     events --follow                     the bench document, then one line per event as it\n\
+     \x20                                         happens (the document attached when it changed)\n\
+     \x20     get                                 the bench document and the seq it reflects\n\
      \x20     stop                                log the stop, kill sessions, exit\n\
      \x20     spawn --agent <a> --cwd <dir>       spawn an agent into a bench pty\n\
      \x20           [--name <handle>] [--prompt-file <p>] [--model <m>] [--effort <e>]\n\
@@ -66,6 +69,7 @@ fn run() -> i32 {
     let mut positional: Vec<String> = Vec::new();
     let mut flags: Vec<(String, String)> = Vec::new();
     let mut since: u64 = 0;
+    let mut follow = false;
 
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -77,6 +81,7 @@ fn run() -> i32 {
                 Some(n) => since = n,
                 None => return refuse("--since needs a sequence number"),
             },
+            "--follow" => follow = true,
             "--agent" | "--cwd" | "--prompt-file" | "--model" | "--effort" | "--rows"
             | "--cols" | "--name" | "--to" | "--from" | "--subject" | "--body" | "--body-file"
             | "--handle" => {
@@ -106,6 +111,12 @@ fn run() -> i32 {
             return refuse("mail needs a subcommand: send, list, read");
         }
         verb = format!("mail/{}", positional.remove(0));
+    }
+    if verb == "get" {
+        verb = "bench/get".into();
+    }
+    if follow && verb != "events" {
+        return refuse("--follow is for `events`");
     }
     if verb == "browser" {
         if positional.is_empty() {
@@ -146,6 +157,7 @@ fn run() -> i32 {
     // typed in that PR, the CLI half was not): the CLI cannot spell a key the daemon
     // does not read.
     let args: Value = match verb.as_str() {
+        "events" if follow => json!({ "follow": true }),
         "events" if since > 0 => json!({ "since": since }),
         "spawn" => {
             let mut spawn = SpawnArgs {
@@ -249,6 +261,8 @@ fn run() -> i32 {
     };
     if verb == "attach" {
         attach(cli)
+    } else if follow {
+        follow_events(cli)
     } else {
         simple(cli)
     }
@@ -289,6 +303,57 @@ fn simple(cli: Cli) -> i32 {
 
 /// The attach path: response line, then the connection is a raw relay. Local terminal
 /// goes raw (keystrokes reach the agent unmangled, Ctrl-C included); Ctrl-\ detaches.
+/// `events --follow`: the answer (the document and its seq) as one JSON line, then every
+/// frame as the daemon sends it, one JSON line each, until the daemon goes away. Lines, not
+/// pretty JSON, so a reader can take them one at a time.
+fn follow_events(cli: Cli) -> i32 {
+    let (stream, request_line) = match open(&cli) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    if let Err(e) = (&stream).write_all(request_line.as_bytes()) {
+        eprintln!("bench: write failed ({e})");
+        return EXIT_NO_DAEMON;
+    }
+    let reply = match read_response_line(&stream) {
+        Some(r) => r,
+        None => {
+            eprintln!("bench: no answer within {}s", CLIENT_READ_TIMEOUT.as_secs());
+            return EXIT_NO_DAEMON;
+        }
+    };
+    let response: Response = match serde_json::from_str(&reply) {
+        Ok(r) => r,
+        Err(e) => return fail(&format!("unreadable response ({e}): {}", reply.trim())),
+    };
+    if response.status != Status::Ok {
+        if let Some(reason) = &response.reason {
+            eprintln!("bench: {reason}");
+        }
+        return response.status.exit_code();
+    }
+    let mut out = std::io::stdout();
+    if let Some(data) = &response.data {
+        let _ = writeln!(out, "{data}");
+        let _ = out.flush();
+    }
+    // A follower waits as long as the bench runs; the daemon bounds its own writes.
+    let _ = stream.set_read_timeout(None);
+    let mut chunk = [0u8; 16384];
+    let mut sock = &stream;
+    loop {
+        match sock.read(&mut chunk) {
+            Ok(0) | Err(_) => return 0,
+            Ok(n) => {
+                if out.write_all(&chunk[..n]).is_err() {
+                    return 0;
+                }
+                let _ = out.flush();
+            }
+        }
+    }
+}
+
 fn attach(cli: Cli) -> i32 {
     let (stream, request_line) = match open(&cli) {
         Ok(pair) => pair,
@@ -410,6 +475,10 @@ fn open(cli: &Cli) -> Result<(UnixStream, String), i32> {
         id: request_id(),
         verb: cli.verb.clone(),
         args: cli.args.clone(),
+        // The CLI speaks for an agent until M3 gives it `--asked` and the layout verbs; an
+        // absent `by` already means exactly that.
+        by: None,
+        asked: false,
     };
     let mut line = match serde_json::to_string(&request) {
         Ok(l) => l,
