@@ -1187,7 +1187,10 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
     // With no daemon, the read snippet must fail with bench's own code — never exit 0 and
     // look like an empty inbox, which is what an agent would then report.
     drop(_daemon);
-    let read = snippets.last().expect("the read snippet");
+    let read = snippets
+        .iter()
+        .find(|s| s.contains("mail read"))
+        .expect("the skill's read snippet");
     let out = Command::new("bash")
         .args(["-c", read])
         .env_remove("BENCH_SUITE")

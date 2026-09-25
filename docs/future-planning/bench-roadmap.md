@@ -164,7 +164,7 @@ against the real CLI.
 **Unwire:** nothing.
 
 > **Running order, operator-ruled 2026-09-25.** Milestone numbers below are kept as
-> written; they no longer say what comes next. **Landed:** M0 (#340), M5a (#341), and
+> written; they no longer say what comes next. **Landed:** M0 (#340), M5a (#341),
 > mail in benchd (#342, the core of M2), and the shared browser (#350: #352, #363).
 > **Next, in this order:**
 >
