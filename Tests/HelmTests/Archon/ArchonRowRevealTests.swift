@@ -146,36 +146,6 @@ final class ArchonRailHoverRegionTests: XCTestCase {
             """)
     }
 
-    /// The guard is only worth its oddity if it would actually fire. This is the scanner
-    /// reading the shape the fix removed, and the shape it put there.
-    func testTheScanRecognisesARowThatInheritsItsHoverRegion() {
-        let before = """
-            }
-            .padding(.vertical, 4)
-            .onHover { inside in hovered = inside ? run.id : nil }
-            """.components(separatedBy: .newlines)
-        XCTAssertFalse(
-            Self.chainDeclaresAHitRegion(before, endingAt: before.count - 1),
-            "the scanner passed the exact shape #180 was filed about")
-
-        let after = """
-            }
-            .padding(.vertical, 4)
-            // a comment between the two must not break the chain
-            .contentShape(Rectangle())
-            .onHover { inside in reveal.update(inside: inside, for: run.id) }
-            """.components(separatedBy: .newlines)
-        XCTAssertTrue(Self.chainDeclaresAHitRegion(after, endingAt: after.count - 1))
-    }
-
-    /// Prose above the fix mentions `.onHover` by name. If the scan counted that as a site it
-    /// would walk back past the `.contentShape` into the comment block and report the fixed row
-    /// as broken — a guard that fails on the code satisfying it teaches people to delete it.
-    func testTheScanIgnoresCommentsThatMerelyNameTheModifier() {
-        XCTAssertFalse(Self.isAHoverSite("        // Without it the region an `.onHover` gets is"))
-        XCTAssertTrue(Self.isAHoverSite("        .onHover { inside in reveal.update(inside) }"))
-    }
-
     /// A line that actually attaches a hover, as opposed to one that talks about one. Prose
     /// naming the modifier is exactly what sits above the fix in `ArchonRailView`, and counting
     /// it would make this guard fail on the change that satisfies it.

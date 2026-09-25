@@ -100,9 +100,9 @@ final class SpoolPolicyTests: XCTestCase {
         XCTAssertEqual(accepted.args, ["--dangerously-skip-permissions"])
     }
 
-    func testTheSpoolAndTheGuiPathAgreeAboutStartingAClaudeAgent() throws {
-        // `helm-spawn` types `cls`, which is `claude --dangerously-skip-permissions`. Two spawn
-        // paths that disagree about what "start a Claude agent" means is the defect.
+    func testTheSpoolStartsAClaudeAgentTheWayClsDoes() throws {
+        // The operator starts Claude with `cls`, which is `claude --dangerously-skip-permissions`.
+        // A spawned agent that disagrees about what "start a Claude agent" means is the defect.
         let accepted = try accept(request(command: "claude"))
         XCTAssertEqual(
             SpoolLaunchLine.compose(accepted, promptPath: nil),

@@ -56,43 +56,9 @@ struct BrowserEndpoint: Codable, Equatable {
     }
 
     var webSocketURL: URL? { URL(string: ws) }
-}
 
-/// Where a bench keeps its state — `bench_wire::resolve_root`'s rule, spelled again because
-/// Swift cannot call Rust: `BENCH_DIR` names the root outright, else `~/.bench-<BENCH_SUITE>`,
-/// else `~/.bench`. A suite that could not isolate is refused rather than defaulted to the
-/// shared root — the same posture as `SuiteName::validate`, whose rule this copies.
-enum BenchRoot {
-    static func resolve(environment: [String: String], home: URL) -> Result<URL, BenchRootError> {
-        // The suite is judged first, as `bench` judges it before resolving anything: a name
-        // that cannot isolate is an error even when BENCH_DIR would win.
-        let suite = environment["BENCH_SUITE"]
-        if let suite {
-            let allowed = suite.allSatisfy {
-                $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "-")
-            }
-            guard !suite.isEmpty, suite.count <= 32, allowed, suite.first != "-" else {
-                return .failure(BenchRootError(suite: suite))
-            }
-        }
-        if let dir = environment["BENCH_DIR"], !dir.isEmpty {
-            return .success(URL(fileURLWithPath: dir, isDirectory: true))
-        }
-        guard let suite else {
-            return .success(home.appendingPathComponent(".bench", isDirectory: true))
-        }
-        return .success(home.appendingPathComponent(".bench-\(suite)", isDirectory: true))
-    }
-
-    static func endpointURL(in root: URL) -> URL {
+    /// Where benchd writes this file under a bench root (`BenchRoot.resolve`).
+    static func url(in root: URL) -> URL {
         root.appendingPathComponent("browser/endpoint.json")
-    }
-}
-
-struct BenchRootError: Error, Equatable {
-    let suite: String
-    var sentence: String {
-        "BENCH_SUITE=\(suite) is not a suite name (lowercase letters, digits and '-', at most 32) "
-            + "— helm will not guess which bench you meant"
     }
 }

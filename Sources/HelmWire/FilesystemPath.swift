@@ -10,8 +10,8 @@ import Foundation
 /// a sidebar-facing value (`Hashable`, `Identifiable`, persisted through `UserDefaults`) with no
 /// business in a library that exists to hold the spool's wire format, so rather than moving it
 /// whole or restating its three-line body a second time — the exact "typed on one side, spelled
-/// out on the other" shape `AGENTS.md`'s architecture section warns against —
-/// `Workspace.normalized` delegates to this instead.
+/// out on the other" shape `AGENTS.md`'s architecture section warns against — `WorkspacePath`
+/// calls this instead.
 package enum FilesystemPath {
     /// A trailing slash and a leading `~` are display noise, not identity: two values differing
     /// only by one would be two sidebar rows, or two spawns, for one folder. Symlinks are

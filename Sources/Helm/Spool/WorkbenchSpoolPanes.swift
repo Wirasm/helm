@@ -146,8 +146,8 @@ final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting, SpoolNaming {
     ///
     /// There is no `getppid(pid)` — the libc call answers only about the caller — so this is
     /// the one sysctl helm makes. A single-pid query rather than `KERN_PROC_ALL`: helm asks
-    /// about one process, and snapshotting the whole table to answer that would be `helm-spawn`
-    /// solving a problem it has and this does not.
+    /// about one process, and snapshotting the whole table to answer that would be solving a
+    /// problem this does not have.
     private static func parent(of pid: pid_t) -> pid_t? {
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
