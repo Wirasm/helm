@@ -88,6 +88,9 @@ enum HelmCommand: Equatable {
     case newNote
     /// ⇧⌘R — show or hide the remembered Archon monitor rail.
     case toggleRail
+    /// ⌘⇧B — show the shared browser benchd runs (#350), in a pane of its own. Offered, not
+    /// seized: the pane appears and the keyboard stays put (`WorkbenchModel.offerBrowser`).
+    case openBrowser
 }
 
 // MARK: - Payloads with no other home
@@ -147,6 +150,7 @@ extension HelmCommand {
         case .composeText: .composeText
         case .toggleRail: .toggleRail
         case .newNote: .newNote
+        case .openBrowser: .openBrowser
         }
     }
 }

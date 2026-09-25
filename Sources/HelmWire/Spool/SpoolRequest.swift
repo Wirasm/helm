@@ -1045,6 +1045,14 @@ package enum SpoolCommandPolicy {
         /// the operator undoes it with the same shortcut.
         case .toggleRail: return .allowed
 
+        /// ⌘⇧B, routed to `WorkbenchModel.offerBrowser()` (#350), which is the same offer the
+        /// operator's own key makes and never changes the focused pane: a new browser pane is
+        /// offered in a column of its own, and an open one is brought forward only when it sits
+        /// in a slot the operator is not in — in his own slot, showing a background tab would
+        /// be moving his keyboard (`SpoolSelectPolicy`'s rule), so it is left alone. An agent
+        /// working in the shared browser is exactly who wants the operator able to see it.
+        case .openBrowser: return .allowed
+
         // MARK: Refused — it moves the operator's keyboard.
 
         case .moveFocus:

@@ -970,6 +970,9 @@ struct Pane: Codable, Equatable, Identifiable {
         /// and says nothing.
         case terminal(face: TerminalFace, agent: ResumableAgent? = nil)
         case canvas(CanvasSource)
+        /// A view onto the shared browser benchd runs (#350). No payload: there is one
+        /// browser per bench root, and which tab it shows is live state, not arrangement.
+        case browser
     }
 }
 
@@ -1032,7 +1035,7 @@ extension Pane {
 /// of the cases and are unreadable in the stored blob.
 extension Pane.Content: Codable {
     private enum CodingKeys: String, CodingKey { case kind, source, agent }
-    private enum Kind: String, Codable { case terminal, canvas }
+    private enum Kind: String, Codable { case terminal, canvas, browser }
 
     /// **A `kind` this build does not know throws, and `Slot` skips the pane.** The build
     /// before this one had a third pane type and wrote `{"kind":"archonRun"}` into benches
@@ -1056,6 +1059,7 @@ extension Pane.Content: Codable {
                 agent: (try? container.decodeIfPresent(ResumableAgent.self, forKey: .agent))
                     ?? nil)
         case .canvas: self = .canvas(try container.decode(CanvasSource.self, forKey: .source))
+        case .browser: self = .browser
         }
     }
 
@@ -1080,6 +1084,8 @@ extension Pane.Content: Codable {
         case let .canvas(source):
             try container.encode(Kind.canvas, forKey: .kind)
             try container.encode(source, forKey: .source)
+        case .browser:
+            try container.encode(Kind.browser, forKey: .kind)
         }
     }
 }
