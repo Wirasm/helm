@@ -136,6 +136,18 @@ pub fn list(root: &Path, handle: &str) -> Vec<MailMeta> {
     out
 }
 
+/// How many messages wait unread in a handle's inbox — the files `list` reports as unread,
+/// counted without reading them.
+pub fn unread(root: &Path, handle: &str) -> usize {
+    fs::read_dir(inbox(root, handle))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 /// (from, at, subject) out of the front-matter block. Absent fields come back empty —
 /// a listing must render whatever is on disk, not refuse a file a human hand-wrote.
 fn parse_front_matter(text: &str) -> (String, String, Option<String>) {
@@ -224,6 +236,8 @@ mod tests {
         let (id1, _) = deliver(&r, 1, "x", "b", Some("one"), "t1", "SECRET-BODY").unwrap();
         let (_id2, _) = deliver(&r, 2, "y", "b", None, "t2", "another").unwrap();
         retire(&r, "b", &id1).unwrap();
+        assert_eq!(unread(&r, "b"), 1, "the retired one no longer counts");
+        assert_eq!(unread(&r, "nobody"), 0, "no mailbox is no mail");
         let listing = list(&r, "b");
         assert_eq!(listing.len(), 2);
         assert!(listing[0].unread && listing[0].from == "y");

@@ -5,8 +5,8 @@
 use bench_doc::{PaneId, StandardPath};
 use bench_sessions::{BenchSession, Built, Cache, Inputs, build};
 use bench_wire::{
-    Activity, Dismissal, Harness, Host, HostedSession, HostedVia, OpenAction, SessionRow,
-    SessionState,
+    Activity, Dismissal, Harness, Host, HostedSession, HostedVia, MailAddress, OpenAction,
+    SessionRow, SessionState,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -34,6 +34,8 @@ struct Fixture {
     bench: Vec<BenchSession>,
     hosted: Vec<HostedSession>,
     dismissed: Vec<Dismissal>,
+    /// handle → messages in its inbox.
+    unread: HashMap<String, usize>,
 }
 
 impl Drop for Fixture {
@@ -74,6 +76,7 @@ impl Fixture {
             bench: Vec::new(),
             hosted: Vec::new(),
             dismissed: Vec::new(),
+            unread: HashMap::new(),
         };
         // ws/.git with one worktree inside the repo and one outside it.
         let git = f.ws().join(".git");
@@ -203,6 +206,12 @@ impl Fixture {
                 .is_some_and(|real| claimed.is_none_or(|c| c == *real))
         };
         let ws = StandardPath::new(&workspace.display().to_string()).unwrap();
+        // benchd's rule: wakeable when a live bench session holds the handle.
+        let mailbox = |handle: &str| MailAddress {
+            handle: handle.into(),
+            wakeable: self.bench.iter().any(|b| b.live && b.handle == handle),
+            unread: self.unread.get(handle).copied().unwrap_or(0),
+        };
         build(
             &Inputs {
                 home: &self.home(),
@@ -211,6 +220,7 @@ impl Fixture {
                 bench: &self.bench,
                 hosted: &self.hosted,
                 dismissed: &self.dismissed,
+                mailbox: &mailbox,
                 now_ms: now_ms(),
                 now: "2026-09-25T12:00:00Z",
                 alive: &alive,
@@ -683,6 +693,7 @@ fn a_bench_session_is_listed_to_attach_with_its_registry_status() {
         pid: 400,
         live: true,
         spawned_ms: now_ms(),
+        handle: "worker".into(),
     });
     f.bench.push(BenchSession {
         session: "s2".into(),
@@ -692,6 +703,7 @@ fn a_bench_session_is_listed_to_attach_with_its_registry_status() {
         pid: 401,
         live: true,
         spawned_ms: now_ms(),
+        handle: "s2".into(),
     });
     let built = f.build();
     assert_eq!(ids(&built), ["bench-claude", "s2"]);
@@ -704,6 +716,114 @@ fn a_bench_session_is_listed_to_attach_with_its_registry_status() {
         }
     );
     assert_eq!(*activity(row(&built, "s2").unwrap()), Activity::Unknown);
+}
+
+fn bench_session(
+    session: &str,
+    runtime: &str,
+    cwd: &str,
+    handle: &str,
+    live: bool,
+) -> BenchSession {
+    BenchSession {
+        session: session.into(),
+        harness: Harness::Pi,
+        runtime_session: Some(runtime.into()),
+        cwd: cwd.into(),
+        pid: 500,
+        live,
+        spawned_ms: now_ms(),
+        handle: handle.into(),
+    }
+}
+
+fn address(handle: &str, wakeable: bool, unread: usize) -> Option<MailAddress> {
+    Some(MailAddress {
+        handle: handle.into(),
+        wakeable,
+        unread,
+    })
+}
+
+#[test]
+fn a_bench_session_carries_its_mail_address_and_a_pane_agent_carries_none() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    f.bench
+        .push(bench_session("s1", "pi-live", &ws, "worker", true));
+    f.unread.insert("worker".into(), 2);
+    f.claude(100, "in-pane", &ws, json!({}));
+    f.pane(PANE, pane_owner(100, "in-pane", &ws));
+    f.unread.insert("operator".into(), 3);
+    let built = f.build();
+    assert_eq!(
+        row(&built, "pi-live").unwrap().mail,
+        address("worker", true, 2)
+    );
+    assert_eq!(
+        row(&built, "in-pane").unwrap().mail,
+        None,
+        "a pane agent has helm's mailbox, not benchd's, until #358"
+    );
+    assert_eq!(built.list.operator, address("operator", false, 3).unwrap());
+}
+
+#[test]
+fn a_finished_row_keeps_the_mailbox_its_session_was_spawned_with() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    let pi_dir = f
+        .home()
+        .join(".pi/agent/sessions")
+        .join(bench_sessions::pi::dir_name(&ws));
+    for id in ["pi-dead", "pi-unnamed"] {
+        write(
+            &pi_dir.join(format!("2026-09-25T10-00-00-000Z_{id}.jsonl")),
+            &jsonl(&[json!({"type": "session", "version": 3, "id": id, "cwd": ws})]),
+        );
+    }
+    // Both ran as bench session s1, in two lives of the daemon — ids begin again at s1 after
+    // a restart. The daemon holds neither now; only the record remembers them.
+    for (id, handle) in [("pi-dead", Some("worker")), ("pi-unnamed", None)] {
+        f.hosted.push(HostedSession {
+            harness: Harness::Pi,
+            id: id.into(),
+            cwd: ws.clone(),
+            via: HostedVia::Bench {
+                session: "s1".into(),
+                handle: handle.map(String::from),
+            },
+            recorded_at: "2026-09-25T10:00:00Z".into(),
+        });
+    }
+    f.unread.insert("worker".into(), 1);
+    let built = f.build();
+    assert_eq!(ids(&built), ["pi-dead", "pi-unnamed"]);
+    assert_eq!(
+        row(&built, "pi-dead").unwrap().mail,
+        address("worker", false, 1),
+        "mail waits for it, and nothing will wake it"
+    );
+    assert_eq!(
+        row(&built, "pi-unnamed").unwrap().mail,
+        None,
+        "recorded before handles were: no address is invented"
+    );
+
+    // A new live session claims the same handle, as `--name worker` may once the first is
+    // closed: a send to it now wakes, and the row says so.
+    f.bench
+        .push(bench_session("s1", "pi-new", &ws, "worker", true));
+    let built = f.build();
+    assert_eq!(
+        row(&built, "pi-dead").unwrap().mail,
+        address("worker", true, 1)
+    );
+    assert_eq!(
+        row(&built, "pi-unnamed").unwrap().mail,
+        None,
+        "never by bench session id, which the new s1 reuses"
+    );
 }
 
 #[test]
@@ -785,6 +905,11 @@ fn a_snapshot_version_this_build_does_not_read_is_reported_and_places_no_one() {
             bench: &[],
             hosted: &[],
             dismissed: &[],
+            mailbox: &|h: &str| MailAddress {
+                handle: h.into(),
+                wakeable: false,
+                unread: 0,
+            },
             now_ms: now_ms(),
             now: "t",
             alive: &alive,

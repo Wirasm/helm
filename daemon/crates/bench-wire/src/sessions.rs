@@ -58,8 +58,24 @@ pub struct SessionRow {
     pub state: SessionState,
     pub host: Host,
     pub open: OpenAction,
+    /// Where to mail this session, when it has a benchd mailbox — today only sessions benchd
+    /// spawned. `null` otherwise, and always sent: agents in helm panes use helm's own
+    /// mailroom (`~/.helm/mail`) until #358, so their rows say `null`.
+    pub mail: Option<MailAddress>,
     /// Claude's `statusUpdatedAt` for a live registry session; a file's mtime otherwise.
     pub updated_at_ms: u64,
+}
+
+/// A benchd mailbox: who to `bench mail send --to`, and what that send will do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailAddress {
+    pub handle: String,
+    /// benchd holds a live session with this handle, so a send answers `"wake": "queued"`
+    /// and the wake reactor pastes the notice (subject to its cap). False: the mail waits in
+    /// the inbox and nothing nudges the recipient.
+    pub wakeable: bool,
+    /// Messages in the inbox: delivered and neither read nor retired by a wake.
+    pub unread: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +189,9 @@ pub struct SessionList {
     pub workspace: String,
     /// The repo and every worktree git knows about — what `root` on a row is one of.
     pub roots: Vec<String>,
+    /// The operator's mailbox. Always addressable, claimable by no session, and never
+    /// wakeable: benchd hosts no session for the operator.
+    pub operator: MailAddress,
     pub rows: Vec<SessionRow>,
     pub total: usize,
     pub returned: usize,
@@ -193,8 +212,17 @@ pub struct SessionKey {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HostedVia {
-    Pane { pane: PaneId },
-    Bench { session: String },
+    Pane {
+        pane: PaneId,
+    },
+    Bench {
+        session: String,
+        /// The session's mailbox handle, which outlives the session: its finished row still
+        /// says where its mail waits after `close` or a daemon restart. Absent in entries
+        /// recorded before #396.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handle: Option<String>,
+    },
 }
 
 /// One entry of the hosted-sessions record.
@@ -331,6 +359,28 @@ mod tests {
             ]
         );
         assert!(!list.unreadable.is_empty());
+        // Both answers to "can I mail it": no benchd mailbox (`null`, and sent as `null`), and
+        // an address — wakeable and not.
+        let mail: Vec<Option<bool>> = {
+            let mut m: Vec<Option<bool>> = list
+                .rows
+                .iter()
+                .map(|r| r.mail.as_ref().map(|a| a.wakeable))
+                .collect();
+            m.sort();
+            m.dedup();
+            m
+        };
+        assert_eq!(mail, [None, Some(false), Some(true)]);
+        assert!(
+            value["list"]["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r.as_object().unwrap().contains_key("mail")),
+            "every row says whether it has a mailbox"
+        );
+        assert_eq!(list.operator.handle, crate::OPERATOR_HANDLE);
 
         let written = serde_json::to_string_pretty(
             &json!({ "list": list, "hosted": hosted, "dismissed": dismissed }),

@@ -14,7 +14,7 @@ use bench_sessions::{BenchSession, Cache, Inputs};
 use bench_wire::{
     DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
     HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, HostedRecord, HostedSession, HostedVia,
-    SessionKey, SessionsArgs, Unreadable, dismissed_path, hosted_path,
+    MailAddress, SessionKey, SessionsArgs, Unreadable, dismissed_path, hosted_path,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -49,7 +49,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
     let workspace = StandardPath::new(&args.workspace)
         .map_err(|why| Refusal::Refused(format!("workspace: {why}")))?;
 
-    let (home, bench, hosted, dismissed) = {
+    let (home, root, live_handles, bench, hosted, dismissed) = {
         let c = core.lock().unwrap();
         let bench: Vec<BenchSession> = c
             .sessions
@@ -63,15 +63,25 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
                     pid: s.pid,
                     live: s.is_live(),
                     spawned_ms: now_ms().saturating_sub(s.spawned_at.elapsed().as_millis() as u64),
+                    handle: s.handle.clone(),
                 })
             })
             .collect();
         (
             c.home.clone(),
+            c.root.clone(),
+            c.live_handles(),
             bench,
             c.session_records.hosted.clone(),
             c.session_records.dismissed.clone(),
         )
+    };
+    // Read during the build, outside the core mutex, like the harness files. `wakeable` is
+    // `mail/send`'s own test for queueing a wake, taken from the same snapshot.
+    let mailbox = |handle: &str| MailAddress {
+        handle: handle.to_string(),
+        wakeable: live_handles.contains(handle),
+        unread: bench_mail::unread(&root, handle),
     };
     let helm_bench_dir = helm_bench_dir(&home);
     let now = now_rfc3339();
@@ -85,6 +95,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
                 bench: &bench,
                 hosted: &hosted,
                 dismissed: &dismissed,
+                mailbox: &mailbox,
                 now_ms: now_ms(),
                 now: &now,
                 alive: &bench_sessions::process::alive,
@@ -140,6 +151,7 @@ pub fn record_spawn(
     id: Option<&str>,
     cwd: &str,
     session: &str,
+    handle: &str,
 ) -> Result<(), String> {
     let (Some(harness), Some(id)) = (harness, id) else {
         return Ok(());
@@ -152,6 +164,7 @@ pub fn record_spawn(
             cwd: cwd.to_string(),
             via: HostedVia::Bench {
                 session: session.to_string(),
+                handle: Some(handle.to_string()),
             },
             recorded_at: now_rfc3339(),
         }],

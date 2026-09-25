@@ -1112,7 +1112,7 @@ skills share one, because the send and the mailbox listing are documented identi
   covers both, and it **executes the snippets out of `SKILL.md`** rather than restating them.
 - **`pi-extensions`** — how to build one without taking the pi CLI down, how to read the installed
   pi rather than guess at its API, and how to test one without spending a model call.
-- **`bench-mail`** — sending and reading mail through benchd's mailroom.
+- **`bench-mail`** — sending and reading mail through benchd's mailroom, and finding who can be mailed.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
   start`, drive it with `playwright-cli attach`, and put it in front of him with `openBrowser`.
 

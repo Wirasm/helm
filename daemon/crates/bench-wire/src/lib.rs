@@ -28,8 +28,8 @@ mod sessions;
 pub use sessions::{
     Activity, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
     HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host, HostedRecord, HostedSession,
-    HostedVia, OpenAction, SessionKey, SessionList, SessionRow, SessionState, SessionsArgs,
-    Unreadable, dismissed_path, hosted_path, sessions_dir,
+    HostedVia, MailAddress, OpenAction, SessionKey, SessionList, SessionRow, SessionState,
+    SessionsArgs, Unreadable, dismissed_path, hosted_path, sessions_dir,
 };
 
 /// A request line larger than this is refused, not read. The cap is about the reader:
