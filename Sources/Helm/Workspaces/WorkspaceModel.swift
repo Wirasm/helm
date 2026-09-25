@@ -16,17 +16,25 @@ final class WorkspaceModel: ObservableObject, ParkedBenches {
     /// change `helmWorkspaceContexts`'s shape and strand a context saved before this type
     /// existed.
     @Published private(set) var contexts: [String: WorkspaceContext]
+    /// Each workspace's current git branch, for its tab label. Never persisted: see
+    /// `refreshBranch(for:)`.
+    @Published private(set) var branches: [WorkspacePath: String] = [:]
 
     /// The selected workspace's path, for anything that needs a root without needing the
     /// workspace itself.
     var selectedWorkspaceRoot: WorkspacePath? { selectedWorkspace?.path }
 
     private let defaults: UserDefaults
+    private let readBranch: @Sendable (WorkspacePath) async -> String?
     private var terminalChanges: AnyCancellable?
     private var workbenchChanges: AnyCancellable?
 
-    init(defaults: UserDefaults = DefaultsDomain.store) {
+    init(
+        defaults: UserDefaults = DefaultsDomain.store,
+        readBranch: @escaping @Sendable (WorkspacePath) async -> String? = currentBranch(in:)
+    ) {
         self.defaults = defaults
+        self.readBranch = readBranch
         workspaces = WorkspacePersistence.load(from: defaults)
         contexts = WorkspaceContextStore.load(from: defaults)
         selectedWorkspace = WorkspacePersistence.loadSelection(
@@ -49,6 +57,7 @@ final class WorkspaceModel: ObservableObject, ParkedBenches {
         WorkspacePersistence.save(workspaces, to: defaults)
         contexts[workspace.path.value] = nil
         WorkspaceContextStore.save(contexts, to: defaults)
+        branches[workspace.path] = nil
         if selectedWorkspace == workspace { select(nil) }
     }
 
@@ -155,15 +164,37 @@ final class WorkspaceModel: ObservableObject, ParkedBenches {
         return pane
     }
 
-    /// Remember a workspace's git branch for its tab label.
+    /// Ask git which branch a workspace is on now, for its tab label.
     ///
-    /// `branchResolved` is set whether or not a branch was found, so a folder that is not a
-    /// repository is asked once rather than on every render. Absence is a resolved answer.
-    func cacheBranch(_ branch: String?, for workspace: Workspace) {
-        var context = contexts[workspace.path.value] ?? WorkspaceContext()
-        context.branch = branch
-        context.branchResolved = true
-        contexts[workspace.path.value] = context
-        WorkspaceContextStore.save(contexts, to: defaults)
+    /// Asked every time, never remembered: before #379 the answer was persisted with a
+    /// `branchResolved` flag that stopped every later ask, so a tab showed the branch its folder
+    /// had the first time it was opened, across relaunches, forever. A nil answer clears the label,
+    /// because a folder that stopped being a repository, or a detached HEAD, has no branch to show.
+    ///
+    /// The answer is dropped when it arrives too late to be true: the tab's task was cancelled
+    /// because the selection moved on and a newer ask is running, or the workspace was closed
+    /// while git was running and would otherwise get a label back.
+    func refreshBranch(for workspace: Workspace) async {
+        let branch = await readBranch(workspace.path)
+        guard !Task.isCancelled, workspaces.contains(workspace) else { return }
+        branches[workspace.path] = branch
+    }
+}
+
+extension WorkspaceModel {
+    /// `git branch --show-current`, through `Subprocess`, so the wait holds no thread. Nil when
+    /// git fails, times out or prints nothing: not a repository, or a detached HEAD. A cancelled
+    /// ask is nil too, and `refreshBranch` drops it.
+    nonisolated static func currentBranch(in path: WorkspacePath) async -> String? {
+        guard
+            let result = try? await Subprocess.run(
+                ["git", "-C", path.value, "branch", "--show-current"],
+                environment: ProcessInfo.processInfo.environment,
+                timeout: .seconds(10)),
+            result.status == 0
+        else { return nil }
+        let value = String(decoding: result.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }

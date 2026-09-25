@@ -31,6 +31,15 @@ knows nor needs the Rust toolchain, in either direction.
   argv (one spelling, unit-tested), the ring, the attach relay, drain-then-die close.
 - `crates/bench-browser` — the shared browser: find, configure and launch one Chromium
   on a pipe leash. Knows no sockets or events; the daemon supervises it.
+- `crates/bench-sessions` — the session list (#384): reads Claude Code's registry, `--bg` jobs
+  and subagent transcripts, pi's sessions and helm's `snapshot.json`, scopes them to a workspace
+  by its git worktrees, and builds typed `SessionRow`s with the one action that opens each. No
+  sockets, events or record files — benchd owns `<root>/sessions/hosted.json` and
+  `dismissed.json` and logs `sessions/*`. Every harness file it reads is internal and
+  undocumented, so a shape it does not know is a skipped row and a `sessions/unreadable` event,
+  never a guess. `fixtures/session-rows.json` pins the reply helm's drawer will decode. Tests
+  build fixture trees under a temp HOME; none reads the operator's `~/.claude`, `~/.pi` or
+  `~/.helm`.
 - `crates/benchd` — the daemon. Foreground, one unix socket, a thread per connection.
   `src/layout.rs` is the bench document's whole mutation path: the layout verbs, `bench.json`,
   and booting from it.

@@ -13,9 +13,9 @@
 //! These are helm's spool codes, kept on purpose.
 
 use bench_wire::{
-    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, MailListArgs, MailReadArgs,
-    MailSendArgs, OPERATOR_HANDLE, Request, RequestId, Response, SessionArgs, SpawnArgs, Status,
-    SuiteName, resolve_root, socket_path,
+    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, MailListArgs, MailReadArgs,
+    MailSendArgs, OPERATOR_HANDLE, Request, RequestId, Response, SessionArgs, SessionKey,
+    SessionsArgs, SpawnArgs, Status, SuiteName, resolve_root, socket_path,
 };
 use serde_json::{Value, json};
 use std::io::{IsTerminal, Read, Write};
@@ -39,6 +39,10 @@ fn usage() -> &'static str {
      \x20     spawn --agent <a> --cwd <dir>       spawn an agent into a bench pty\n\
      \x20           [--name <handle>] [--prompt-file <p>] [--model <m>] [--effort <e>]\n\
      \x20     sessions                            list bench sessions\n\
+     \x20     sessions --all [--workspace <dir>]  every agent session in a workspace (default: the\n\
+     \x20                                         cwd's): helm panes, bench sessions, --bg jobs,\n\
+     \x20                                         running subagents, and finished hosted sessions\n\
+     \x20     sessions dismiss <id> --harness <h> hide a finished row until it finishes again\n\
      \x20     attach <session>                    raw relay to a session's pty (Ctrl-\\ detaches)\n\
      \x20     close <session>                     drain-then-die the session\n\
      \x20     resume <session>                    re-enter an exited session's runtime state\n\
@@ -70,6 +74,7 @@ fn run() -> i32 {
     let mut flags: Vec<(String, String)> = Vec::new();
     let mut since: u64 = 0;
     let mut follow = false;
+    let mut all = false;
 
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -82,9 +87,10 @@ fn run() -> i32 {
                 None => return refuse("--since needs a sequence number"),
             },
             "--follow" => follow = true,
+            "--all" => all = true,
             "--agent" | "--cwd" | "--prompt-file" | "--model" | "--effort" | "--rows"
             | "--cols" | "--name" | "--to" | "--from" | "--subject" | "--body" | "--body-file"
-            | "--handle" => {
+            | "--handle" | "--workspace" | "--harness" => {
                 let key = arg.trim_start_matches("--").replace('-', "_");
                 match argv.next() {
                     Some(v) => flags.push((key, v)),
@@ -117,6 +123,20 @@ fn run() -> i32 {
     }
     if follow && verb != "events" {
         return refuse("--follow is for `events`");
+    }
+    if all && verb != "sessions" {
+        return refuse("--all is for `sessions`");
+    }
+    if verb == "sessions" && all && !positional.is_empty() {
+        return refuse(
+            "--all lists sessions; `bench sessions dismiss <id> --harness <h>` takes no --all",
+        );
+    }
+    if verb == "sessions" && all {
+        verb = "sessions/all".into();
+    } else if verb == "sessions" && positional.first().map(String::as_str) == Some("dismiss") {
+        positional.remove(0);
+        verb = "sessions/dismiss".into();
     }
     if verb == "browser" {
         if positional.is_empty() {
@@ -237,6 +257,30 @@ fn run() -> i32 {
                 from: flag("from").unwrap_or_else(own_handle),
                 subject: flag("subject"),
                 body,
+            })
+        }
+        "sessions/all" => {
+            // A relative path means the caller's cwd, which only the caller knows.
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let workspace = flag("workspace").map_or(cwd.clone(), |w| cwd.join(w));
+            json!(SessionsArgs {
+                workspace: workspace.display().to_string(),
+            })
+        }
+        "sessions/dismiss" => {
+            let Some(id) = positional.first() else {
+                return refuse(
+                    "sessions dismiss needs a session id — `bench sessions --all` lists them",
+                );
+            };
+            let Some(harness) = flag("harness").as_deref().and_then(Harness::parse) else {
+                return refuse(
+                    "sessions dismiss needs --harness <claude|codex|pi>, the row's own harness",
+                );
+            };
+            json!(SessionKey {
+                harness,
+                id: id.clone(),
             })
         }
         "mail/list" => json!(MailListArgs {

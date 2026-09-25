@@ -3,9 +3,10 @@ import Foundation
 /// One child process: launched, waited on without holding a thread, and killed by a deadline or
 /// by cancelling the task that awaits it.
 ///
-/// Every caller that needs more than a fire-and-forget process goes through this — `ArchonCLI`,
-/// `WorktreeCLI` and `ArchonRunOpener`. Each maps `Failure` onto its own error type, because
-/// only the caller knows what the command was for.
+/// Every caller that needs more than a fire-and-forget process goes through this (search for
+/// `Subprocess.run`; a list here went stale with the fourth caller). Each maps `Failure` onto its
+/// own error type, or onto nil where any failure means "no answer", because only the caller knows
+/// what the command was for.
 ///
 /// **Waiting holds no thread.** The wait is `Process.terminationHandler`, which Foundation calls
 /// when the child exits. The two runners this replaced blocked in `waitUntilExit()`, one on a

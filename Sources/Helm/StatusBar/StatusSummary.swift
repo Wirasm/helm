@@ -14,7 +14,7 @@ import Foundation
 struct StatusSummary: Equatable {
     /// The folder's name, or nil when nothing is open.
     let workspace: String?
-    /// Its git branch, when it has one and it has been resolved.
+    /// Its git branch, when it has one.
     let branch: String?
     /// Whether an agent in this workspace is working, or has stopped and wants you.
     let agents: AgentPresence?
@@ -38,17 +38,13 @@ struct StatusSummary: Equatable {
     /// key to get wrong, and so "no workspace" is answered once, here.
     static func of(
         workspace: Workspace?,
-        contexts: [String: WorkspaceContext],
+        branches: [WorkspacePath: String],
         presence: [String: AgentPresence]
     ) -> StatusSummary {
         guard let workspace else { return .none }
-        let branch = contexts[workspace.path.value]?.branch
         return StatusSummary(
             workspace: workspace.name,
-            // An empty string is not a branch. `cacheBranch` already stores nil for a
-            // folder that is not a repository, but a persisted context predates that
-            // guard and would render as a gap with a separator on either side.
-            branch: (branch?.isEmpty ?? true) ? nil : branch,
+            branch: branches[workspace.path],
             agents: presence[workspace.path.value]
         )
     }

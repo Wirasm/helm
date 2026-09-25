@@ -27,6 +27,7 @@
 //! wait, a prompt delivery, or an attach pump.
 
 mod layout;
+mod sessions;
 
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
 use bench_session::{AgentKind, Notice, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id};
@@ -261,6 +262,8 @@ struct Core {
     browser_restarts: Vec<Instant>,
     /// The bench document (M4): what `bench.json` holds, and the seq that produced it.
     bench: layout::BenchState,
+    /// The hosted-sessions record and the dismissals (#384).
+    session_records: sessions::SessionRecords,
     /// `events --follow` connections, each with its own bounded queue and writer thread.
     /// A frame is handed over here and written there, **never under this mutex**: a 16 KB
     /// frame is larger than a unix socket's send buffer, so one follower that stopped
@@ -420,6 +423,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         last_document_change,
     } = scan_log(&events)?;
     let (bench, bench_events) = layout::load(&root, last_document_change);
+    let (session_records, session_events) = sessions::load(&root);
 
     let log = OpenOptions::new()
         .create(true)
@@ -458,6 +462,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         browser_wanted: false,
         browser_restarts: Vec::new(),
         bench,
+        session_records,
         followers: Vec::new(),
         unflushed: Arc::new(AtomicBool::new(false)),
     }));
@@ -488,7 +493,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
             )
             .map_err(StartError::Failed)?;
         }
-        for (kind, data) in bench_events {
+        for (kind, data) in bench_events.into_iter().chain(session_events) {
             c.append(kind, data).map_err(StartError::Failed)?;
         }
         let unflushed = Arc::clone(&c.unflushed);
@@ -998,6 +1003,17 @@ fn dispatch(
                 ) {
                     return (errored(why), AfterResponse::Done);
                 }
+                // Recorded at spawn only: `resume` re-enters the same runtime session id
+                // (bench_session::argv), which this record already holds.
+                if let Err(why) = sessions::record_spawn(
+                    &mut c,
+                    bench_wire::Harness::parse(agent.name()),
+                    spec.runtime_session.as_deref(),
+                    &spec.cwd,
+                    &id,
+                ) {
+                    return (errored(why), AfterResponse::Done);
+                }
             }
             // Ready wait and prompt delivery happen WITHOUT the core lock.
             let mut ready = true;
@@ -1047,6 +1063,18 @@ fn dispatch(
                 .collect();
             (ok(json!({ "sessions": list })), AfterResponse::Done)
         }
+
+        Some(Verb::SessionsAll) => match sessions::answer_all(core, &req.args) {
+            Ok(data) => (ok(data), AfterResponse::Done),
+            Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
+            Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
+        },
+
+        Some(Verb::SessionsDismiss) => match sessions::answer_dismiss(core, &req.args) {
+            Ok(data) => (ok(data), AfterResponse::Done),
+            Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
+            Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
+        },
 
         Some(Verb::Attach) => {
             let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {

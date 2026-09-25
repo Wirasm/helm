@@ -178,8 +178,8 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(
             model.selectedWorkspace?.path.value, "/a/b",
             "the remembered selection must still resolve against the normalized list")
-        XCTAssertEqual(
-            model.contexts["/a/b"]?.branch, "main",
+        XCTAssertNotNil(
+            model.contexts["/a/b"],
             "and its context must still be found under the same key the old build wrote")
     }
 }

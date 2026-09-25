@@ -75,6 +75,8 @@ impl DaemonGuard {
             // The browser's default binary is looked up in the Playwright cache under
             // HOME; a runner's own override must not reach past the test home.
             .env_remove("PLAYWRIGHT_BROWSERS_PATH")
+            // helm's snapshot is found under HOME; a runner's override must not reach past it.
+            .env_remove("HELM_BENCH_DIR")
             .env("BENCH_SESSION_TEST_AGENT", "1")
             .env("HOME", home)
             .stdout(Stdio::null())
@@ -2350,4 +2352,214 @@ fn the_cli_follows_the_bench_line_by_line() {
     let _ = child.kill();
     let _ = child.wait();
     assert_eq!(frame["event"]["kind"], "bench/changed");
+}
+
+// ---------------------------------------------------------------------------
+// The session list (#384)
+// ---------------------------------------------------------------------------
+
+/// Every file under `dir` with its size and mtime — the negative control that reading the
+/// harness files never wrote to them.
+fn tree_state(dir: &Path) -> Vec<(PathBuf, u64, std::time::SystemTime)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d).into_iter().flatten().flatten() {
+            let md = e.metadata().unwrap();
+            if md.is_dir() {
+                stack.push(e.path());
+            } else {
+                out.push((e.path(), md.len(), md.modified().unwrap()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn mangle(cwd: &Path) -> String {
+    bench_sessions::claude::mangle(&cwd.display().to_string())
+}
+
+#[test]
+fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
+    use bench_wire::{Harness, Host, OpenAction, SessionList, SessionState};
+    let home = TestHome::claim("sessions");
+    let h = &home.dir;
+    let ws = h.join("ws");
+    fs::create_dir_all(ws.join(".git")).unwrap();
+    let write = |p: PathBuf, text: String| {
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    let daemon = DaemonGuard::start(h, None);
+    let root = h.join(".bench");
+
+    // Two live Claude processes in the workspace: this test (in a helm pane) and the daemon
+    // (in no pane — foreign). Their registry rows carry their real start times.
+    let started = |pid: u32| bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
+    let me = std::process::id();
+    let foreign = daemon.child.id();
+    let pane = "0E8E8CC6-159B-45D8-BC02-485120975998";
+    for (pid, sid) in [(me, "in-pane"), (foreign, "in-zed")] {
+        write(
+            h.join(format!(".claude/sessions/{pid}.json")),
+            serde_json::json!({"pid": pid, "sessionId": sid, "cwd": ws, "startedAt": started(pid),
+                "status": "idle", "kind": "interactive", "entrypoint": "cli"})
+            .to_string(),
+        );
+    }
+    // A pane whose agent exited: helm recorded it as resumable, and its transcript remains.
+    // And an Archon run's transcript: in scope, never hosted.
+    for sid in ["gone", "archon-run", "in-zed"] {
+        write(
+            h.join(".claude/projects")
+                .join(mangle(&ws))
+                .join(format!("{sid}.jsonl")),
+            "{\"type\":\"user\"}\n".into(),
+        );
+    }
+    let terminal =
+        |t: serde_json::Value| serde_json::json!({"id": pane, "kind": "terminal", "terminal": t});
+    write(
+        h.join(".helm/bench/snapshot.json"),
+        serde_json::json!({"format": "helm.bench-snapshot", "version": 1, "writtenAt": "2026-09-25T12:00:00Z",
+            "workspaces": [{"columns": [{"slots": [{"panes": [
+                terminal(serde_json::json!({"foregroundPid": me,
+                    "owner": {"runtime": "claude", "pid": me, "sessionId": "in-pane", "cwd": ws}})),
+                {"id": "3C47FA92-A0BE-4012-A697-F7BE06AEDE28", "kind": "terminal", "terminal":
+                    {"resumable": {"command": "claude", "session": "gone", "cwd": ws}}},
+            ]}]}]}]})
+        .to_string(),
+    );
+    // A job in a state no reader knows.
+    write(
+        h.join(".claude/jobs/j1/state.json"),
+        serde_json::json!({"state": "hibernating", "sessionId": "j", "cwd": ws}).to_string(),
+    );
+    let harness_files = [h.join(".claude"), h.join(".helm")];
+    let before: Vec<_> = harness_files.iter().map(|d| tree_state(d)).collect();
+
+    let list = |extra: &[&str]| -> SessionList {
+        let mut args = vec!["sessions", "--all"];
+        args.extend(extra);
+        let run = bench(h, &args);
+        assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+        serde_json::from_str(&run.stdout).unwrap_or_else(|e| panic!("{e}: {}", run.stdout))
+    };
+    let ws_arg = ws.display().to_string();
+    let first = list(&["--workspace", &ws_arg]);
+    let ids: Vec<&str> = first.rows.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["in-pane", "gone"],
+        "running first, and nothing foreign"
+    );
+    assert_eq!(
+        serde_json::json!(first.rows[0].open),
+        serde_json::json!({"kind": "focus_pane", "pane": pane.to_lowercase()})
+    );
+    assert!(matches!(first.rows[1].state, SessionState::Finished { .. }));
+    assert_eq!(first.rows[1].host, Host::None);
+    assert!(
+        matches!(&first.rows[1].open, OpenAction::Resume { argv, .. } if argv.contains(&"gone".to_string()))
+    );
+    assert_eq!(first.unreadable.len(), 1, "{:?}", first.unreadable);
+    assert_eq!(first.unreadable[0].source, "claude-job");
+
+    // Logged before it was answered, and written to the record.
+    let log = log_of(&root);
+    let hosted: Vec<&serde_json::Value> = log
+        .iter()
+        .filter(|e| e["kind"] == "sessions/hosted")
+        .collect();
+    assert_eq!(hosted.len(), 1);
+    let recorded: Vec<&str> = hosted[0]["data"]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(recorded, ["in-pane", "gone"]);
+    let record: bench_wire::HostedRecord =
+        serde_json::from_str(&fs::read_to_string(root.join("sessions/hosted.json")).unwrap())
+            .unwrap();
+    assert_eq!(record.sessions.len(), 2);
+
+    // A second build adds nothing to the record and logs the unreadable job no second time.
+    let second = list(&["--workspace", &ws_arg]);
+    assert_eq!(second.rows, first.rows);
+    assert_eq!(
+        second.unreadable, first.unreadable,
+        "every reply still says which file"
+    );
+    let log = log_of(&root);
+    assert_eq!(
+        log.iter()
+            .filter(|e| e["kind"] == "sessions/hosted")
+            .count(),
+        1
+    );
+    assert_eq!(
+        log.iter()
+            .filter(|e| e["kind"] == "sessions/unreadable")
+            .count(),
+        1
+    );
+
+    // Dismissing: only what was hosted, and it hides the finished row across a restart.
+    let refused = bench(
+        h,
+        &["sessions", "dismiss", "archon-run", "--harness", "claude"],
+    );
+    assert_eq!(refused.code, 3, "stderr: {}", refused.stderr);
+    assert!(
+        refused.stderr.contains("bench sessions --all"),
+        "{}",
+        refused.stderr
+    );
+    let with_all = bench(
+        h,
+        &[
+            "sessions",
+            "dismiss",
+            "gone",
+            "--harness",
+            "claude",
+            "--all",
+        ],
+    );
+    assert_eq!(
+        with_all.code, 3,
+        "--all never turns a dismiss into a listing"
+    );
+    let no_harness = bench(h, &["sessions", "dismiss", "gone"]);
+    assert_eq!(no_harness.code, 3);
+    let dismissed = bench(h, &["sessions", "dismiss", "gone", "--harness", "claude"]);
+    assert_eq!(dismissed.code, 0, "stderr: {}", dismissed.stderr);
+    let d: bench_wire::Dismissal = serde_json::from_str(&dismissed.stdout).unwrap();
+    assert_eq!((d.harness, d.id.as_str()), (Harness::Claude, "gone"));
+    assert!(
+        log_of(&root)
+            .iter()
+            .any(|e| e["kind"] == "sessions/dismissed" && e["data"]["id"] == "gone")
+    );
+    drop(daemon);
+    let _daemon = DaemonGuard::start(h, None);
+    // The foreign row's pid died with the first daemon; the pane agent is still this test.
+    let after = list(&["--workspace", &ws.join("src").display().to_string()]);
+    let ids: Vec<&str> = after.rows.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["in-pane"],
+        "dismissed, and the record survived the restart"
+    );
+    assert_eq!(
+        after.workspace, ws_arg,
+        "any path inside resolves to the workspace"
+    );
+
+    // Reading never wrote to a harness file.
+    let after_state: Vec<_> = harness_files.iter().map(|d| tree_state(d)).collect();
+    assert_eq!(before, after_state);
 }

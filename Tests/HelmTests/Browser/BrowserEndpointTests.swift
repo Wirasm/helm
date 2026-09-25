@@ -37,28 +37,4 @@ final class BrowserEndpointTests: XCTestCase {
             BrowserEndpoint.read(at: url.appendingPathExtension("missing")), .absent,
             "no file is the ordinary state: no browser running")
     }
-
-    /// `bench_wire::resolve_root`, spelled again: BENCH_DIR wins, then the suite, then ~/.bench.
-    func testTheBenchRootIsResolvedByTheDaemonsRule() {
-        let home = URL(fileURLWithPath: "/Users/op")
-        XCTAssertEqual(
-            try BenchRoot.resolve(environment: ["BENCH_DIR": "/r", "BENCH_SUITE": "x"], home: home)
-                .get().path,
-            "/r")
-        XCTAssertEqual(
-            try BenchRoot.resolve(environment: ["BENCH_SUITE": "dev"], home: home).get().path,
-            "/Users/op/.bench-dev")
-        XCTAssertEqual(
-            try BenchRoot.resolve(environment: [:], home: home).get().path, "/Users/op/.bench")
-        for bad in ["", "a/b", "UP", "-x", String(repeating: "x", count: 33)] {
-            XCTAssertThrowsError(
-                try BenchRoot.resolve(environment: ["BENCH_SUITE": bad], home: home).get(),
-                "\(bad) cannot isolate, and must not fall back to the shared ~/.bench")
-        }
-        XCTAssertThrowsError(
-            try BenchRoot.resolve(
-                environment: ["BENCH_DIR": "/r", "BENCH_SUITE": "a/b"], home: home
-            )
-            .get(), "bench refuses the suite before BENCH_DIR can win")
-    }
 }
