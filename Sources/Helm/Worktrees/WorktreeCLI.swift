@@ -167,8 +167,7 @@ struct WorktreeCLI: WorktreeClient, Sendable {
             (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date
         let bytes: Int64?
         if let result = try? await run(
-            executable: "/usr/bin/env", arguments: [duExecutable, "-sk", path],
-            commandName: "du -sk \(path)"),
+            arguments: [duExecutable, "-sk", path], commandName: "du -sk \(path)"),
             let kilobytes = Int64(result.stdout.split(whereSeparator: \.isWhitespace).first ?? "")
         {
             bytes = kilobytes * 1_024
@@ -182,164 +181,36 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         let executableArguments =
             gitExecutable == "/usr/bin/env" ? ["git"] + arguments : [gitExecutable] + arguments
         return try await run(
-            executable: "/usr/bin/env",
             arguments: executableArguments,
             commandName: (["git"] + arguments).joined(separator: " "))
     }
 
-    private func run(
-        executable: String, arguments: [String], commandName: String
-    ) async throws
-        -> ProcessResult
-    {
-        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "helm-worktree-\(UUID().uuidString).out")
-        let errorURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "helm-worktree-\(UUID().uuidString).err")
-        guard FileManager.default.createFile(atPath: outputURL.path, contents: nil),
-            FileManager.default.createFile(atPath: errorURL.path, contents: nil)
-        else {
+    private func run(arguments: [String], commandName: String) async throws -> ProcessResult {
+        let result: Subprocess.Result
+        do {
+            result = try await Subprocess.run(
+                arguments, environment: environment, timeout: timeout)
+        } catch let failure as Subprocess.Failure {
+            let reason: WorktreeCLIError.Reason =
+                switch failure {
+                case let .captureUnavailable(why): .launchFailed(why)
+                case let .launchFailed(why): .launchFailed(why)
+                case .timedOut: .timedOut(after: timeout)
+                case let .unreadableOutput(why): .unreadableOutput(why)
+                }
+            throw WorktreeCLIError(command: commandName, reason: reason)
+        }
+        guard result.status == 0 else {
             throw WorktreeCLIError(
                 command: commandName,
-                reason: .launchFailed("could not create temporary command capture"))
+                reason: .nonzeroExit(
+                    status: result.status,
+                    stderr: result.stderrSnippet(limit: Self.errorSnippetLimit)))
         }
-        defer {
-            try? FileManager.default.removeItem(at: outputURL)
-            try? FileManager.default.removeItem(at: errorURL)
-        }
-        let output: FileHandle
-        let errors: FileHandle
-        do {
-            output = try FileHandle(forWritingTo: outputURL)
-            errors = try FileHandle(forWritingTo: errorURL)
-        } catch {
-            throw WorktreeCLIError(
-                command: commandName, reason: .launchFailed(error.localizedDescription))
-        }
-        defer {
-            try? output.close()
-            try? errors.close()
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.environment = environment
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = output
-        process.standardError = errors
-        let child = WorktreeChild(process)
-        do {
-            try await child.run(timeout: timeout)
-        } catch let failure as WorktreeChild.LaunchFailure {
-            throw WorktreeCLIError(
-                command: commandName, reason: .launchFailed(failure.underlying.localizedDescription)
-            )
-        }
-        guard !child.didTimeOut else {
-            throw WorktreeCLIError(command: commandName, reason: .timedOut(after: timeout))
-        }
-        let outputData: Data
-        let errorData: Data
-        do {
-            outputData = try Data(contentsOf: outputURL)
-            errorData = try Data(contentsOf: errorURL)
-        } catch {
-            throw WorktreeCLIError(
-                command: commandName, reason: .unreadableOutput(error.localizedDescription))
-        }
-        let stderr = Self.snippet(String(decoding: errorData, as: UTF8.self))
-        guard child.terminationStatus == 0 else {
-            throw WorktreeCLIError(
-                command: commandName,
-                reason: .nonzeroExit(status: child.terminationStatus, stderr: stderr))
-        }
-        return ProcessResult(stdout: String(decoding: outputData, as: UTF8.self))
-    }
-
-    private static func snippet(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > errorSnippetLimit else { return trimmed }
-        return String(trimmed.prefix(errorSnippetLimit)) + "…"
+        return ProcessResult(stdout: String(decoding: result.stdout, as: UTF8.self))
     }
 
     private struct ProcessResult {
         let stdout: String
-    }
-}
-
-private final class WorktreeChild: @unchecked Sendable {
-    struct LaunchFailure: Error { let underlying: any Error }
-
-    private let process: Process
-    private let lock = NSLock()
-    private var timedOut = false
-    private var launched = false
-    private var terminateRequested = false
-
-    init(_ process: Process) { self.process = process }
-
-    var terminationStatus: Int32 { process.terminationStatus }
-
-    var didTimeOut: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return timedOut
-    }
-
-    func run(timeout: Duration) async throws {
-        try await withTaskCancellationHandler {
-            let watchdog = Task {
-                try await Task.sleep(for: timeout)
-                markTimedOut()
-                terminate()
-            }
-            defer { watchdog.cancel() }
-            try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<Void, any Error>) in
-                Task.detached { [self] in
-                    do {
-                        try process.run()
-                    } catch {
-                        continuation.resume(throwing: LaunchFailure(underlying: error))
-                        return
-                    }
-                    markLaunched()
-                    process.waitUntilExit()
-                    continuation.resume()
-                }
-            }
-            try Task.checkCancellation()
-        } onCancel: {
-            terminate()
-        }
-    }
-
-    private func markTimedOut() {
-        lock.lock()
-        timedOut = true
-        lock.unlock()
-    }
-
-    private func markLaunched() {
-        lock.lock()
-        launched = true
-        let owed = terminateRequested
-        lock.unlock()
-        if owed { signal() }
-    }
-
-    private func terminate() {
-        lock.lock()
-        terminateRequested = true
-        let started = launched
-        lock.unlock()
-        guard started else { return }
-        signal()
-    }
-
-    private func signal() {
-        guard process.isRunning else { return }
-        process.terminate()
     }
 }

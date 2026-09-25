@@ -3,9 +3,9 @@ import Foundation
 /// What a caller asks helm to do, as one of the kinds helm knows.
 ///
 /// **This is the request side of the only capability on the ladder that a headless agent can
-/// use.** Every other way of driving helm is GUI puppetry — `helm-spawn.swift` needs an
-/// unlocked screen, a visible window and an Accessibility grant on the invoking context, none
-/// of which an agent can grant itself. A file appearing in a directory needs none of them, so
+/// use.** The GUI path it replaced (`helm-spawn.swift`, deleted in #377) needed an unlocked
+/// screen, a visible window and an Accessibility grant on the invoking context, none of which
+/// an agent can grant itself. A file appearing in a directory needs none of them, so
 /// this works over ssh, with the screen locked, from a process with no display at all.
 ///
 /// **A file, not an API (#54).** The operator's standing rule is that capability lives in
@@ -1297,9 +1297,8 @@ package struct SpoolPaneState: Equatable {
     /// **Measured live, 2026-08-05, because the obvious rule is wrong.** `getsid(fg) == fg`
     /// looks like the same test and is not: the session leader is `login`, never the shell, so
     /// it reports *every* idle pane as busy. Both panes of a live isolated helm read
-    /// `helm(42210) → /usr/bin/login → -fish`, with `getsid(fish) == login`. It is also the
-    /// layout `helm-spawn.swift` has depended on since #51 — *"one `login` per terminal"*,
-    /// and the shell is the single child of it.
+    /// `helm(42210) → /usr/bin/login → -fish`, with `getsid(fish) == login`: one `login` per
+    /// terminal, and the shell is the single child of it.
     ///
     /// **If libghostty ever exec'd the shell in place of `login`, the shell would become the
     /// session leader and this would read an idle pane as busy** — a refusal that `force`
@@ -1539,9 +1538,9 @@ package enum SpoolNamePolicy {
 ///
 /// - **`claude` → `--dangerously-skip-permissions`.** This is the operator's standing choice
 ///   on this machine, not helm's invention: `/Users/rasmus/.local/bin/cls` is exactly
-///   `exec claude --dangerously-skip-permissions "$@"`, and `helm-spawn` — the GUI spawn path —
-///   already types `cls`. Matching it is what makes the two paths agree about what "start a
-///   Claude agent" means, which they did not. Claude Code has no sandbox, so there is nothing
+///   `exec claude --dangerously-skip-permissions "$@"`, and it is what the operator types to
+///   start a Claude agent himself. Matching it is what makes a spawned agent and his own agree
+///   about what "start a Claude agent" means. Claude Code has no sandbox, so there is nothing
 ///   narrower to preserve: the flag removes prompts, and prompts are the whole failure.
 ///
 /// - **`codex` → `-p yolo`, which is what `cdxy` is.** `/Users/rasmus/.local/bin/cdxy` is
@@ -1660,8 +1659,8 @@ package enum SpoolUnattendedPolicy {
 /// The one line helm writes into the new terminal's pty.
 ///
 /// **Nothing here is a synthesised keystroke, and that is the acceptance criterion.**
-/// `helm-spawn` had to drive CGEvents at whatever pane happened to hold the keyboard, which is
-/// how #96 was filed. helm owns this surface, so the bytes go straight into *that* pty through
+/// The GUI spawn path this replaced had to drive CGEvents at whatever pane happened to hold the
+/// keyboard, which is how #96 was filed. helm owns this surface, so the bytes go straight into *that* pty through
 /// `ghostty_surface_text` — no focus, no display, no chance of landing in the wrong pane.
 ///
 /// **The prompt is handed over as a path, and the agent opens it (#93).** It used to be staged

@@ -450,21 +450,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   from them every time. A click at a stale coordinate does not miss harmlessly: it activates
   whatever app is underneath and types into it. That happened — a pane click landed in the
   operator's other terminal.
-- **Frontmost is not focused.** An app can be frontmost with *no key window*, and then every
-  keystroke sent at it vanishes with no error at all. That is what an app on another macOS
-  desktop looks like from outside: `AXFrontmost: true`, `AXWindows count: 0`,
-  `AXFocusedWindow: NONE (-25212)`. Only the ⌘N before it landed, because a menu command routes
-  to the app rather than to a first responder — so the run looks half-successful and tempts you
-  to type the next thing. `focus.swift` now proves the key window too and exits **5** when
-  there is none, **6** when it cannot ask (no Accessibility grant, or the app not answering —
-  told apart, because blaming a grant the operator does have is its own wasted hour).
-  `helm-spawn` checks before ⌘N, so it refuses for free instead of after a 90s timeout with a
-  stray terminal left open. Verified 2026-08-02 against windowless Terminal and Safari.
 - **To start another agent in helm, prefer the spool: `swift tools/helm-spool.swift <cwd> --prompt-file <p>`.**
   It writes `{id, cwd, command, args, prompt}` into `~/.helm/spool` and waits on
   `results/<id>.json`. **No display, no focused window, no Accessibility grant, no keystrokes**
-  — so it works with the screen locked, headless and over ssh, which is the ceiling
-  `helm-spawn` cannot get past. The result carries the new agent's `terminalId`, `pid`,
+  — so it works with the screen locked, headless and over ssh. The result carries the new agent's `terminalId`, `pid`,
   `sessionId` and **`handle`**, so the next move — sending it mail — needs no lookup: helm
   created the terminal, so it knows the pid, and it *reads* the handle out of
   `~/.helm/mail/*/owner.json` rather than deriving it (a derivation is silently wrong whenever
@@ -484,8 +473,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `SpoolUnattendedPolicy`.** A bare `claude` stops at a permission prompt, and a prompt in a
     pane nobody is watching is indistinguishable from an agent that never started — measured on
     the first real use of the spool (#179). Each agent gets the operator's own standing choice:
-    `claude` → `--dangerously-skip-permissions` (what `cls` is, and what `helm-spawn` already
-    types, so the two spawn paths now agree), `codex` → `-p yolo` (what `cdxy` is), `pi` →
+    `claude` → `--dangerously-skip-permissions` (what `cls` is), `codex` → `-p yolo` (what `cdxy` is), `pi` →
     `--approve`. A request that names a flag from the same family gets exactly what it asked for
     and nothing added. **A posture removes a prompt; it never withholds capability.** Blocking
     belongs in hooks and sandboxes — the operator's gate is the pull request — and a spawn that
@@ -511,9 +499,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     sits there. Measured, and it cost the first live run: a terminal opened, a shell ran, and
     no agent ever started. `WorkbenchSpoolSpawner.send` pastes, then sends Return as a
     `text:` binding action.
-- **Why the spool is a script, and must stay one.** It exists because `helm-spawn` cannot work
-  headless: that path needs an unlocked screen, a visible helm window and an Accessibility grant
-  on the invoking context, and no agent can grant itself any of them. #51's rung 2 is a channel
+- **Why the spool is a script, and must stay one.** It exists because the GUI spawn path it
+  replaced (`helm-spawn`, deleted in #377) could not work headless: it needed an unlocked screen,
+  a visible helm window and an Accessibility grant on the invoking context, and no agent can
+  grant itself any of them. #51's rung 2 is a channel
   needing none — a file appears, helm acts, helm writes a file back.
 
   That buys nothing unless the **caller** is equally unencumbered, and three properties are what
@@ -799,20 +788,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     the note goes to the clipboard and the pane says which of the two failures it was** — nobody
     pushed this canvas, or the agent that did is gone. A silent no-op is the worst outcome here,
     because the operator believes the note was sent.
-- **`helm-spawn` is the GUI path, and still there** — `swift tools/helm-spawn.swift <cwd> --prompt-file <p>`
-  (also `<cwd> -` for stdin, or a prompt in argv). It is the five-step GUI dance — focus, ⌘N,
-  type `cls`, wait, type the prompt, submit — with every step waiting on something observable
-  instead of on a `sleep`: focus polled until helm really is frontmost, the new terminal
-  confirmed by a new child of helm's pid, that terminal's shell required to have **no** child
-  before anything is typed (every terminal already hosting an agent has a `claude` under its
-  zsh, so this is what stops keystrokes landing in a live session), and the agent confirmed by
-  its row appearing in `~/.claude/sessions/`. It prints the new agent's pid and session id.
-  **A nonzero exit is the whole point** — each refusal has its own code and says on stderr
-  whether anything was typed. The prompt never goes through the keyboard or the shell's word
-  splitting: it is staged in a 0600 temp file and **argv carries that file's path**, so
-  multi-line prompts, quotes, and a leading `/` are all ordinary.
-- **What `ps` shows of a spawned agent, and what it does not (#93).** Both spawn paths hand the
-  agent a **path**; neither hands it the prompt. The line used to be `cls "$(cat <file>)"`, which
+- **What `ps` shows of a spawned agent, and what it does not (#93).** The spool hands the agent a
+  **path**, never the prompt. The line used to be `cls "$(cat <file>)"`, which
   reads as private and is not — a shell resolves a command substitution *before* exec, so the
   whole prompt became an element of the agent's own `argv`. Measured live 2026-08-07:
   `ps -o command= -p <pid>` printed a running agent's entire multi-line prompt, and the disclosure
@@ -823,36 +800,15 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   channel already assumes. **No agent has a flag for this**, measured against `claude --help`,
   `pi --help` and `codex --help`: all three take the first prompt as an argv element and none
   reads it from a file interactively, so delivery is the agent's own first act and **the prompt
-  file must outlive the spawn** — `helm-spawn` no longer deletes it, and the spool keeps
-  `prompts/<id>.txt`.
-- **Do NOT click, type or switch tabs in helm while a spawn is in flight.** Every guard
-  helm-spawn has is about the *app* — frontmost, key window, a new terminal, an idle shell —
-  and none of them can see **which pane inside helm holds the keyboard**, because that is not
-  observable from outside the process. Move focus mid-run and the launch line is typed into
-  whatever pane you moved to. That is how #96 was filed, and it is a real precondition rather
-  than advice. It is now *caught* rather than prevented: after Return, helm-spawn requires the
-  target terminal's shell to gain a child within 10s and refuses with **20** if it does not
-  (verified: 11s and exit 20 with focus stolen mid-spawn, against 90s before; an uninterrupted
-  spawn still finishes in about 2s, because the check is charged against `--timeout`, not
-  added to it).
-- **helm-spawn needs the display, and refuses rather than typing into nothing.** Unlocked
-  screen, a visible helm window, and an Accessibility grant on the invoking context — the
-  same per-context TCC rule as winshot's Screen Recording grant, and one no agent can grant
-  itself. A headless agent cannot use it at all; that ceiling is the argument for #51's rung 2.
-  `--dry-run` answers "could I spawn right now?" without sending a keystroke.
-- **With two helms running, pass `--helm-pid`.** Two is the *normal* state while building helm
-  — the operator's, plus a worktree build under test — and they are identical by name, so
-  helm-spawn used to refuse (`manyHelms`, 13) exactly when an agent was doing helm work. The
-  refusal now lists the pids to choose from. `winshot --list` shows which is which, subject to
-  the Space caveat above.
-- **A spawn needs Claude Code to already trust the directory, and helm-spawn checks first.**
+  file must outlive the spawn** — the spool keeps `prompts/<id>.txt`.
+- **A spawn needs Claude Code to already trust the directory.**
   An interactive `claude` in an untrusted directory stops at "Is this a project you trust?"
   *before* it registers a session, which from the outside is indistinguishable from an agent
   that is merely slow — it cost a full 90s timeout to find. Trust is **inherited from an
   ancestor**, so accepting it once at a project root covers every worktree under it; a fresh
   worktree under `~/Projects/mine/sild` needs nothing. There is no non-interactive way to grant
-  it (`claude -p` skips the dialog but records nothing), so the refusal tells you to run
-  `cd <dir> && claude` once by hand.
+  it (`claude -p` skips the dialog but records nothing), so run `cd <dir> && claude` once by
+  hand.
 - `swift run helm` to iterate, `make app` for the real bundle.
 - **`make release` builds the real bundle and tells a running helm about it; `make install` is
   that plus the copy.** The split exists because `install` refuses against a live bundle —
@@ -894,8 +850,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   persist?" is `defaults read com.wirasm.helm` whichever way it was started, unless
   `HELM_DEFAULTS_SUITE` overrides it (next bullet). `swift run helm`
   used to land in a `helm` domain of its own, and reading the wrong one is how #45 produced a
-  confident, wrong diagnosis. A build with the fix drains `helm` on first launch and leaves a
-  single `helmDefaultsMovedTo` key there saying so. The identity lives in `SPMInfo.plist`,
+  confident, wrong diagnosis. The one-time move of that domain's contents ran once per machine
+  and was deleted in #377. The identity lives in `SPMInfo.plist`,
   `project.yml`'s `PRODUCT_BUNDLE_IDENTIFIER` and `DefaultsDomain.canonical` — keep all three
   in step, `DefaultsDomainTests` fails if you don't.
 - **A second helm must run on its own defaults suite: `HELM_DEFAULTS_SUITE=<name>`.** Unset is the
@@ -914,10 +870,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   the legacy `helm` domain, a path, and `NSGlobalDomain` all stop the launch, because falling back
   to `com.wirasm.helm` under a variable that promised isolation is precisely the disaster. An
   isolated instance says so — the status bar carries the suite name on an accent capsule, and the
-  window is titled `helm — <name>`, which is what `winshot --list` and `helm-spawn --helm-pid` see
-  when two helms are running. The legacy-domain migration never fires under it, and the window
-  frame is not autosaved: that last one is AppKit's write rather than helm's, and the only one a
-  suite cannot catch by itself.
+  window is titled `helm — <name>`, which is what `winshot --list` and `helm-capture --window` see
+  when two helms are running. The window frame is not autosaved under it: that is AppKit's write
+  rather than helm's, and the only one a suite cannot catch by itself.
   - **"No reachable path" is a promise about four directories, not one, and the fourth was a
     lie until #285.** The suite moves the defaults, the spool (`~/.helm/spool-<name>`), the bench
     snapshot (`~/.helm/bench-<name>`) — and now the **mailbox**, `~/.helm/mail-<name>`. It did not
@@ -1021,8 +976,8 @@ against `RequestID.pattern` (#260) plus the `HELM_DEFAULTS_SUITE` branch of
 directory resolution, so a drift anywhere in that surface fails a test rather than shipping
 silently. The one branch it cannot reach is the bare default resolution, which the test file's
 own header explains — it resolves to the operator's live spool, and a test does not get to write
-there. `focus.swift`, `winshot.swift`, `ticklog.swift` and `helm-spawn.swift` stay
-standalone scripts too, for a simpler reason — none of them touch the spool's wire format at all.
+there. `winshot.swift` stays a
+standalone script too, for a simpler reason — it does not touch the spool's wire format at all.
 
 **A payload that can grow a second kind carries a discriminator from the first one.**
 `SpoolRequest`'s `{id, kind}` envelope and `Pane.Content`'s string `kind` cost one field each and

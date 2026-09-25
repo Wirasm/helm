@@ -16,13 +16,13 @@ import Foundation
 /// **Why this one piece of `DefaultsDomain` and not the rest.** `SpoolDirectory` needs to know
 /// exactly one thing to find the right spool: is this process isolated, and under what name —
 /// `AGENTS.md` calls it "the suite moves the spool too, automatically, rather than by
-/// remembering". Everything else `DefaultsDomain` does — draining the legacy domain, merging
-/// collections, resolving an actual `UserDefaults` — is `@MainActor`-adjacent app lifecycle with
+/// remembering". Everything else `DefaultsDomain` does — resolving an actual `UserDefaults`,
+/// naming the window — is `@MainActor`-adjacent app lifecycle with
 /// no reason to exist outside the process, and stays there. This is the one part that is
 /// already pure: a function of an environment dictionary, with no live state to read. Moving
 /// only that out is what keeps `HelmWire` a library of values rather than a second `DefaultsDomain`.
 ///
-/// `DefaultsDomain.canonical`, `.legacy`, `.suiteVariable`, `.Override` and `.override(in:)` now
+/// `DefaultsDomain.canonical`, `.suiteVariable`, `.Override` and `.override(in:)` now
 /// delegate here; nothing about its public shape changed, so every existing call site and every
 /// `DefaultsDomainTests` assertion still holds.
 package enum DefaultsSuite {
@@ -31,7 +31,10 @@ package enum DefaultsSuite {
     /// delegates to this rather than restating the literal a second time.
     package static let canonical = "com.wirasm.helm"
 
-    /// What `swift run helm` got before #45: no bundle identifier, so the process name.
+    /// What `swift run helm` got before #45: no bundle identifier, so the process name. The
+    /// domain still exists on machines that ran a build from then, holding either old state or
+    /// the forwarding note the one-time move left (deleted in #377), so it is never a suite.
+    /// The mail hooks, the pi extension and both mail skills refuse it by the same rule (#285).
     package static let legacy = "helm"
 
     /// Set this to move every default helm owns — and, via `SpoolDirectory`, its spool — into a
@@ -76,8 +79,8 @@ package enum DefaultsSuite {
 
         guard name != legacy else {
             return .refused(
-                "\(suiteVariable)=\(name) names the domain the legacy migration drains, "
-                    + "so anything written there is liable to be emptied. Pick another name.")
+                "\(suiteVariable)=\(name) names the domain `swift run helm` wrote before #45, "
+                    + "which is not an isolated suite. Pick another name.")
         }
         guard !name.contains("/") else {
             return .refused("\(suiteVariable)=\(name) looks like a path; a suite name is a domain.")

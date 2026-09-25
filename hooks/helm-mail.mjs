@@ -496,8 +496,7 @@ function mineIn(root, sessionId, cwd) {
  * first cut of this file recorded `process.ppid` and the gate caught it doing exactly that.
  *
  * Claude Code already answers this. It writes `<config>/sessions/<pid>.json` carrying its own
- * pid, sessionId and cwd — the registry `tools/helm-spawn.swift` polls to know an agent really
- * started. Reading it is strictly better than inferring from the process tree, because it is
+ * pid, sessionId and cwd. Reading it is strictly better than inferring from the process tree, because it is
  * the runtime stating its own identity rather than us guessing at how it invoked us.
  *
  * `process.ppid` stays as the fallback for a Claude Code that has not written a row yet — see

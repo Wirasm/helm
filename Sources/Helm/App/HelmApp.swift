@@ -19,13 +19,6 @@ struct HelmApp: App {
     }
 
     init() {
-        // First, before anything reads a default. Until #45 the two launch paths resolved
-        // `UserDefaults.standard` to two different domains; this carries what the SPM one
-        // accumulated into the domain both now use. One-time and marker-guarded — and
-        // skipped outright under `HELM_DEFAULTS_SUITE`, because draining the legacy domain
-        // into a test instance would take it from the build entitled to it (#86).
-        DefaultsDomain.migrateLegacyDomainAtLaunch()
-
         // Before any pty exists, because a pane's environment is built from this process's
         // (#139). The session that launched helm exported its own `CLAUDE_*`/`PI_*` identity
         // and helm has been handing it to every agent it hosts; the pane's own identity is
@@ -39,11 +32,10 @@ struct HelmApp: App {
         // workspace bar, which is indistinguishable from having lost one. The status bar and
         // the window title say so too, and both need a window — this is what a headless
         // launch, or one that dies before drawing, leaves behind. The house convention is a
-        // line wherever a fallback or a skip quietly changes behaviour; two do so here, and
-        // this names both.
+        // line wherever a fallback or a skip quietly changes behaviour.
         if DefaultsDomain.isIsolated {
             NSLog(
-                "helm: %@=%@ — persisting to that suite only; legacy-domain migration skipped",
+                "helm: %@=%@ — persisting to that suite only",
                 DefaultsDomain.suiteVariable, DefaultsDomain.activeDomain)
         }
 

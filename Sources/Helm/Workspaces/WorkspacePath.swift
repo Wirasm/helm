@@ -22,17 +22,10 @@ import HelmWire
 /// leak; the other ~47 sites passing a bare `String` between verticals — never routed
 /// through `Workspace` at all — were.
 ///
-/// **Normalization is `HelmWire.FilesystemPath.normalized`'s, called directly rather than
-/// through `Workspace.normalized`.** An earlier draft of this type called `Workspace
-/// .normalized`, which itself only delegates to `FilesystemPath.normalized` (#221) — a working
-/// chain, but an indirect one: it stated "this agrees with `Workspace`" where the thing that
-/// actually has to agree is the spool's own `SpoolPolicy.accept`, which normalizes a spawn's
-/// `cwd` through `FilesystemPath.normalized` directly and never touches `Workspace` at all.
-/// Calling the shared layer directly says what is actually true — `WorkspacePath` is a thin
-/// wrapper over the wire-layer normalizer, not a dependent of `Workspace`'s — and it is one
-/// fewer link for a future edit to quietly break. `WorkspacePathSpoolAgreementTests` proves the
-/// two call sites still agree, rather than leaving that as a fact about which functions happen
-/// to call which other functions.
+/// **Normalization is `HelmWire.FilesystemPath.normalized`'s, called directly.** The thing that
+/// has to agree is the spool's own `SpoolPolicy.accept`, which normalizes a spawn's `cwd`
+/// through the same function. `WorkspacePathSpoolAgreementTests` proves the two call sites
+/// still agree, rather than leaving that as a fact about which functions happen to call which.
 ///
 /// An even earlier draft built on `URL.standardizedFileURL`, which resolves `.`/`..` but does
 /// NOT expand `~` — a different function from `FilesystemPath.normalized`'s

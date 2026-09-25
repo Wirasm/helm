@@ -4,8 +4,8 @@ import Foundation
 ///
 /// **A request channel with no response is half a protocol.** Without this the caller learns
 /// which agent it started by polling `~/.claude/sessions/` for *"a new row whose pid descends
-/// from that terminal and whose cwd matches"* — which is what `helm-spawn` does, and it is a
-/// heuristic: two agents starting in one directory at the same time misattribute, and a
+/// from that terminal and whose cwd matches"* — which is what the GUI spawn path did, and it is
+/// a heuristic: two agents starting in one directory at the same time misattribute, and a
 /// worktree makes that ordinary rather than exotic. helm is the one party that cannot get it
 /// wrong, because it created the terminal and therefore knows the pid.
 ///
