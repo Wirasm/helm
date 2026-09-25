@@ -42,11 +42,12 @@ final class ReleaseResumeScriptTests: XCTestCase {
     }
 
     private func bash(
-        _ arguments: [String]
+        _ arguments: [String], environment: [String: String] = [:]
     ) throws -> (status: Int32, stdout: String, stderr: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
         let out = Pipe()
         let err = Pipe()
         process.standardOutput = out
@@ -88,10 +89,10 @@ final class ReleaseResumeScriptTests: XCTestCase {
     }
 
     /// Runs an executable, bounded by its own argument rather than by this suite remembering.
-    private func run(_ executable: URL) throws -> pid_t {
+    private func run(_ executable: URL, _ arguments: [String] = ["30"]) throws -> pid_t {
         let process = Process()
         process.executableURL = executable
-        process.arguments = ["30"]
+        process.arguments = arguments
         try process.run()
         spawned.append(process)
         return process.processIdentifier
@@ -139,5 +140,47 @@ final class ReleaseResumeScriptTests: XCTestCase {
         XCTAssertTrue(result.stderr.contains("is not running from"), result.stderr)
         XCTAssertFalse(result.stdout.contains("detached"), "it detached after refusing")
         XCTAssertTrue(spawned[0].isRunning, "the refused pid was touched")
+    }
+
+    // MARK: - Only a session inside that helm is resumed
+
+    /// A session running somewhere other than the helm being quit would survive the quit, so the
+    /// recipe would close every pane for nothing and then resume a second copy of it. Refused
+    /// before anything detaches. The registry row lives under a scratch `HOME`.
+    func testRefusesASessionThatIsNotInsideTheHelm() throws {
+        let bundle = try makeBundle(named: "Target.app")
+        _ = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
+        let elsewhere = try run(URL(fileURLWithPath: "/bin/sleep"))
+        let session = "11111111-2222-3333-4444-555555555555"
+        let home = scratch.appendingPathComponent("home")
+        let sessions = home.appendingPathComponent(".claude/sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try Data(#"{"pid":\#(elsewhere),"sessionId":"\#(session)"}"#.utf8)
+            .write(to: sessions.appendingPathComponent("\(elsewhere).json"))
+
+        let result = try bash(
+            [script.path, session, scratch.path, "--bundle", bundle.path],
+            environment: ["HOME": home.path])
+
+        XCTAssertEqual(result.status, 3, result.stderr)
+        XCTAssertTrue(result.stderr.contains("is not running inside helm"), result.stderr)
+        XCTAssertFalse(result.stdout.contains("detached"), "it detached after refusing")
+    }
+
+    /// The control for the refusal above: a real child of the process is found inside it, or
+    /// a guard that refused every session would pass alone.
+    func testASessionInAChildOfTheHelmIsInsideIt() throws {
+        // `; :` keeps bash from exec-ing sleep, so sleep is bash's child rather than bash itself.
+        let parent = try run(URL(fileURLWithPath: "/bin/bash"), ["-c", "/bin/sleep 30; :"])
+        var child = ""
+        for _ in 0..<50 where child.isEmpty {
+            child = try bash(["-c", "pgrep -P \(parent)"]).stdout
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if child.isEmpty { Thread.sleep(forTimeInterval: 0.1) }
+        }
+        XCTAssertFalse(child.isEmpty, "the child never started")
+
+        XCTAssertEqual(try call("descends_from", child, String(parent)).status, 0)
+        XCTAssertNotEqual(try call("descends_from", String(parent), child).status, 0)
     }
 }

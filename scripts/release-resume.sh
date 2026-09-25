@@ -166,6 +166,15 @@ parse() {
   local kv
   for kv in ${extra_env[@]+"${extra_env[@]}"}; do
     [[ "$kv" == [A-Za-z_]*=* ]] || { echo "release-resume: --env $kv is not KEY=VALUE" >&2; exit 1; }
+    # These move where helm and benchd keep their state. The script waits on the snapshot, writes
+    # to the spool and restarts benchd by the suites alone, so an override here would point the
+    # new helm somewhere the script never looks. Isolate with --suite and --bench-suite instead.
+    case "${kv%%=*}" in
+    HELM_DEFAULTS_SUITE | BENCH_SUITE | HELM_SPOOL_DIR | HELM_BENCH_DIR | BENCH_DIR)
+      echo "release-resume: --env ${kv%%=*} is not supported; use --suite and --bench-suite" >&2
+      exit 1
+      ;;
+    esac
   done
 }
 
@@ -190,11 +199,6 @@ check() {
   [ -n "$(swap_script)" ] || refuse "cannot read BundleSwap.script out of $repo/Sources/Helm/Build/BundleSwap.swift"
   pid="$(resolve_helm_pid "$bundle" "$pid")" || exit 3
 
-  local tool
-  for tool in timeout claude cargo swift make xcodegen perl; do
-    command -v "$tool" >/dev/null || refuse "$tool is not on PATH"
-  done
-
   # The session must be inside the helm being quit. One that is not keeps running, and resuming
   # it would start a second copy of the same conversation.
   local holders holder inside=0
@@ -202,6 +206,11 @@ check() {
   for holder in $holders; do descends_from "$holder" "$pid" && inside=1; done
   [ -n "$holders" ] || refuse "no live process holds session $session"
   [ "$inside" -eq 1 ] || refuse "session $session (pid $holders) is not running inside helm pid $pid"
+
+  local tool
+  for tool in timeout claude cargo swift make xcodegen perl; do
+    command -v "$tool" >/dev/null || refuse "$tool is not on PATH"
+  done
 
   if [ -z "$cwd" ]; then
     cwd="$(session_field "$session" cwd)" || refuse "cannot read the cwd of $session; pass it"
@@ -277,6 +286,9 @@ detached_run() {
   # goes to its own file, so this log stays short enough to read from a phone.
   local build_log="${detached_log%/log}/build.log"
   log "step 1: make release (output in $build_log)"
+  # A fresh worktree has no patched libghostty to link against; on a patched one this is instant.
+  timeout 900 bash "$repo/scripts/patch-libghostty.sh" >>"$build_log" 2>&1 ||
+    { tail -30 "$build_log"; fail "scripts/patch-libghostty.sh"; }
   timeout 1800 make -C "$repo" release >>"$build_log" 2>&1 || { tail -30 "$build_log"; fail "make release"; }
   local product="$repo/.build/DerivedData/Build/Products/Release/Helm.app" sha
   sha="$(/usr/libexec/PlistBuddy -c "Print :HelmBuildSHA" "$product/Contents/Info.plist" 2>/dev/null)" ||
@@ -317,10 +329,16 @@ detached_run() {
   log "step 4: swapping $bundle for $product"
   timeout 600 /bin/sh -c "$(swap_script)" helm-update "$pid" "$product" "$bundle" 60 "$launcher"
   local swap=$?
+  # 1–4 are BundleSwap's own exits. Anything else (the launcher failing after a good rename,
+  # or this timeout killing a copy midway) leaves the bundle in a state only a listing can tell.
   case "$swap" in
   0) log "swapped; relaunched through $launcher" ;;
-  1) exit_code=1 finish "helm pid $pid did not exit within 60s; nothing swapped, helm and the session are where they were" ;;
-  *) fail "the swap failed with exit $swap (the previous bundle was restored and relaunched)" ;;
+  1) fail "helm pid $pid did not exit within 60s; nothing was swapped" ;;
+  2 | 3 | 4) fail "the swap failed with exit $swap; the previous bundle was restored and relaunched" ;;
+  *)
+    ls -ld "$bundle" "$bundle.helm-update" "$bundle.helm-previous" 2>&1
+    fail "the swap ended with exit $swap; the bundle's state is unknown, see the listing above"
+    ;;
   esac
 
   # 5. The new helm is up when its bench snapshot is written after the relaunch.
