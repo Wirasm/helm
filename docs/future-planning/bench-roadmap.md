@@ -184,8 +184,8 @@ against the real CLI.
 >    projections of the event log by now.
 > 5. **M2 finish** (#358) — unwire helm's mail hooks and the pi watcher down to sensors.
 > 6. **M5b** (#359) — every pane is a benchd session, shown through the attach relay in a
->    Ghostty surface; a VT engine in benchd (by spike: `libghostty-vt` preferred,
->    `alacritty_terminal` the fallback) gives `get screen` / `send` / `watch`. No custom
+>    Ghostty surface; a VT engine in benchd (`libghostty-vt`, settled by spike 2026-09-25,
+>    prebuilt and pinned to helm's Ghostty) gives `get screen` / `send` / `watch`. No custom
 >    painter.
 > 7. **M6** (#360) — sync: the record root as a synced folder, show-requests as files.
 > 8. **M7** (#361) — the second machine, same entry condition as before.
@@ -307,9 +307,10 @@ First in the running order, because every later verb is "mutate the document".
   through bench verbs (operator keystrokes → helm → socket, same door as agents —
   invariant 1 becomes mechanically true).
 - **The surface model**: a pane is a view of one surface named by a typed source
-  (`term:<session>`, `file:<path>`, `browser:<tab>`), and helm resolves each kind to a
-  view through one `SurfaceKind` seam (`bench-architecture.md`). Drawers are part of
-  the document from the start, even before the keymap exists to toggle them.
+  (`term:<session>`, `file:<path>`, `browser`), and helm resolves each kind to a
+  view through one `SurfaceKind` seam (`bench-architecture.md`). Drawers are **not** in M4
+  (ruled 2026-09-25, D1 in the plan): nothing in M4 draws or changes one, so their shape is
+  #356's to design, and the versioned document makes adding them later additive.
 - helm keeps hosting ptys via its existing `SpoolSpawning`/`TerminalLaunching` protocol
   seams, now driven by benchd — the substitution those seams were built for.
 - Canvas sources become **daemon-served**: the `helm-canvas://` scheme handler asks
@@ -322,8 +323,21 @@ First in the running order, because every later verb is "mutate the document".
 **Prove:** the ported invariant tests; a full session (spawn, split, move, close,
 restore) driven entirely through the socket; canvas renders an artifact it never read
 from local disk.
-**Unwire:** `WorkspacePersistence`'s workbench half, `BenchSnapshotModel` (the snapshot
-becomes a benchd projection of the event stream, same file shape for readers).
+**Unwire:** `WorkspacePersistence`'s workbench half. `BenchSnapshotModel` **stays**
+(ruled 2026-09-25, D2), fed from the document: its terminal fields (pid, title, Claude's
+status) come from ptys and registries only helm has until M5b, and removing it early loses
+the stalled-at-a-prompt signal (#283). It goes at M5b, or at M3 if `bench get` replaces its
+readers first.
+
+**Plan (2026-09-25):** `~/.prp/helm-3ec376fc/plans/m4-bench-document-in-benchd.plan.md`,
+published on #354. Four PRs: (1) the bench document ported to a pure Rust crate,
+`bench-doc`, with the Swift tests mirrored; (2) layout verbs on the socket, `bench.json`
+and `events --follow`; (3) helm as a client behind `HELM_BENCH=daemon`, with a one-time
+import; (4) delete the Swift made dead. Also ruled: **D3** `make install` installs benchd
+as a launchd agent in PR 4, and helm never spawns it; **D4** the restore-or-fresh question
+(#85) stays in helm until M5b. Known gap until M5b: a spool spawn still switches the
+operator to its workspace, because a pty helm hosts only starts once its pane is on
+screen.
 
 > **Split, operator-ruled 2026-08-18: M5a is pulled forward to land before mail; M5b
 > stays here.** M5a **landed 2026-08-18, PR #341.** The pty spike proved daemon-owned
@@ -359,13 +373,41 @@ helm restarting.
 - **Replace `portable-pty`** (nothing published in 19 months; its Windows support is
   dead weight) with `rustix` `openpty` and our own spawn. Near-term, and it can land
   before the VT spike.
-- **A VT engine per session in benchd**, chosen by a short spike under real agent output:
-  `libghostty-vt` preferred (the same engine as helm's renderer, so what an agent reads
-  is what the operator sees), `alacritty_terminal` the fallback. libghostty-vt is
-  pre-1.0 in both its C API and its Rust bindings, and its `Terminal` is never `Send` by
-  upstream design, so each session's VT state is pinned to one thread for its lifetime;
-  the spike must prove that model under benchd's task layout, and the crate is a vendored
-  pin rather than a tracked dependency.
+- **A VT engine per session in benchd: `libghostty-vt`**, settled by two spikes on
+  2026-09-25 (verdicts on #359; reports `spike-vt-engine-choice.md` and
+  `spike-prebuilt-vt-archive.md` in `~/.prp/helm-3ec376fc/spikes/`).
+  - **Fidelity:** on recorded claude, codex, pi and fish sessions it matched helm's own
+    Ghostty engine (text and cursor) at every checkpoint. `alacritty_terminal` matched
+    outside resizes, but diverged in 4 of 8 resize cases and on emoji width under mode
+    2027. It stays the fallback.
+  - **Threads:** one VT thread per session, fed by the pty drain thread over a bounded
+    channel, because `Terminal` is never `Send` (upstream won't-fix). Snapshot p99 was under
+    0.52 ms at 50 sessions. Reads get a lane separate from output. Memory is 11 to 12 MB per
+    session, against 33 MB for alacritty.
+  - **Build, with no zig in the gate:** a stripped, hash-pinned `libghostty-vt.a` per
+    platform (macOS arm64 2.0 MB, x86_64 Linux 2.7 MB), built once per Ghostty bump by a
+    script that needs zig 0.15.x. It is linked through a Cargo `links` override, so the
+    crate's `build.rs` never runs. A 15-line `build.rs` in a crate of ours passes the
+    absolute path, and the crate is not forked. Replayed output was byte-identical to the
+    zig build.
+  - **Pin to helm's Ghostty**, the commit in `vendor/libghostty-spm/Ghostty.ref`
+    (`35e1a016`), not the crate's own `a887df42`. Without the override, the crate silently
+    fetches its own pin.
+  - **Every Ghostty bump** moves both pins together, and must check the crate's checked-in
+    bindings against the new header. A changed struct layout compiles and misbehaves.
+  - **Open, the operator's call:** do the archives live in the repo (plain git, about
+    1.5 MB compressed per bump, no network), or as a release asset fetched by a sha256-checked
+    script (the pattern `Package.swift` uses for GhosttyKit)? The spike leans towards the
+    repo.
+- **Design rules from the spikes, whichever engine:**
+  1. Mid synchronized update (mode 2026), serve the last complete frame. Read naively,
+     22 to 34% of checkpoints in real agent output were torn.
+  2. Resize the engine in lockstep with the pty.
+  3. The scrollback limit is in bytes (16 MiB, matching helm). The C header's "lines" is
+     wrong.
+  4. Decide who answers terminal queries. With no viewer attached only benchd can, and
+     all three agents ask at startup. With one attached, Ghostty answers too, and replies
+     would be doubled.
 - **`bench get screen`, `bench send`, `bench watch --screen`** on any pane. zellij's
   `action subscribe` (pane content streamed as JSON) is the reference design for
   `watch`.
@@ -436,8 +478,8 @@ Playwright (`playwright-cli attach --cdp=…`); the bench is a supervisor and a 
 **never a browser driver**. The Chrome question is settled: **real Google Chrome** by
 default, so the Claude in Chrome and Codex extensions can run in it, with Chrome for
 Testing as the fallback (`bench browser setup` opens the profile headed to install them).
-The pane becomes the `browser:<tab>` surface kind with M4 and moves into a drawer once
-drawers exist.
+The pane becomes the `browser` surface kind with M4 (no tab field, as in #353) and moves
+into a drawer once drawers exist.
 
 ---
 
@@ -449,6 +491,11 @@ drawers exist.
 - **benchd restart vs. pty survival**: accepted as a resume-storm (decision 3). Revisit
   the per-session pty-holder shim only if upgrade frequency hurts — likely once agents
   are actively developing the bench itself; until then `BENCH_SUITE` covers it.
+- **Browser gaps** (#350, not built): IME inline preview (text commits, the composition
+  is not drawn), a file-chooser or download UI, and a start button in the pane. Also
+  unproven until the operator runs it: extensions working while the browser runs headless.
+- **Canvas notes** (#251 follow-ups, not built): a `HelmCommand` to open the notes drawer
+  (needs its own `SpoolCommandPolicy` ruling), and a "no sidecar" notice on URL canvases.
 - **Rich reading of a session's history** ("what happened overnight"): scrollback +
   transcripts + asking the agent. Deliberately not designed yet; do not build a chat
   renderer (audit doc, "What not to build").
