@@ -26,8 +26,8 @@ pub mod snapshot;
 use bench_doc::StandardPath;
 use bench_session::{AgentKind, SpawnSpec};
 use bench_wire::{
-    Activity, Dismissal, Harness, Host, HostedSession, HostedVia, OpenAction, SessionKey,
-    SessionList, SessionRow, SessionState, Unreadable,
+    Activity, Dismissal, Harness, Host, HostedSession, HostedVia, MailAddress, OPERATOR_HANDLE,
+    OpenAction, SessionKey, SessionList, SessionRow, SessionState, Unreadable,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -52,6 +52,21 @@ pub struct BenchSession {
     pub pid: u32,
     pub live: bool,
     pub spawned_ms: u64,
+    /// Its mailbox handle, and how many messages wait in that inbox.
+    pub handle: String,
+    pub unread: usize,
+}
+
+impl BenchSession {
+    /// The one place `wakeable` is decided: a live session, which is exactly what `mail/send`
+    /// and the wake reactor check before queueing a wake.
+    fn mail(&self) -> MailAddress {
+        MailAddress {
+            handle: self.handle.clone(),
+            wakeable: self.live,
+            unread: self.unread,
+        }
+    }
 }
 
 /// Everything a build reads besides the harness files.
@@ -64,6 +79,8 @@ pub struct Inputs<'a> {
     pub bench: &'a [BenchSession],
     pub hosted: &'a [HostedSession],
     pub dismissed: &'a [Dismissal],
+    /// Messages waiting in the operator's inbox.
+    pub operator_unread: usize,
     pub now_ms: u64,
     /// Stamped on sessions this build adds to the record.
     pub now: &'a str,
@@ -141,6 +158,7 @@ struct Draft {
     cwd: String,
     state: SessionState,
     host: Host,
+    mail: Option<MailAddress>,
     updated_at_ms: u64,
 }
 
@@ -171,6 +189,7 @@ impl Rows<'_> {
             state: d.state,
             host: d.host,
             open,
+            mail: d.mail,
             updated_at_ms: d.updated_at_ms,
         });
     }
@@ -222,6 +241,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 host: Host::Bench {
                     session: b.session.clone(),
                 },
+                mail: Some(b.mail()),
                 updated_at_ms: registered
                     .and_then(|r| r.status_updated_ms)
                     .unwrap_or(b.spawned_ms),
@@ -279,6 +299,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                         activity: r.activity.clone(),
                     },
                     host,
+                    mail: None,
                     updated_at_ms: r.status_updated_ms.unwrap_or(r.started_ms),
                 },
             );
@@ -303,6 +324,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                             activity: Activity::Unknown,
                         },
                         host,
+                        mail: None,
                         updated_at_ms: inputs.now_ms,
                     },
                 );
@@ -334,6 +356,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                     activity: j.activity,
                 },
                 host: Host::Background { job: j.job },
+                mail: None,
                 updated_at_ms: j.updated_ms,
             },
         );
@@ -398,6 +421,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                         parent: r.session.clone(),
                         transcript: transcript.display().to_string(),
                     },
+                    mail: None,
                     updated_at_ms: claude::mtime_ms(&transcript),
                 },
             );
@@ -450,6 +474,14 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 cwd: h.cwd.clone(),
                 state: SessionState::Finished { at_ms },
                 host: Host::None,
+                // The benchd session that ran it, by the runtime id the bench minted. Never
+                // by `HostedVia::Bench`'s session id: those begin again at s1 when the
+                // daemon restarts, and would lend this row a stranger's mailbox.
+                mail: inputs
+                    .bench
+                    .iter()
+                    .find(|b| b.harness == h.harness && b.runtime_session.as_ref() == Some(&h.id))
+                    .map(BenchSession::mail),
                 updated_at_ms: at_ms,
             },
         );
@@ -473,6 +505,11 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
         list: SessionList {
             workspace: ws.root.clone(),
             roots: ws.roots.clone(),
+            operator: MailAddress {
+                handle: OPERATOR_HANDLE.into(),
+                wakeable: false,
+                unread: inputs.operator_unread,
+            },
             returned: rows.len(),
             truncated: rows.len() < total,
             total,

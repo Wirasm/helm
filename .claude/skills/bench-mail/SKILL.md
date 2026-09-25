@@ -1,6 +1,6 @@
 ---
 name: bench-mail
-description: Send and receive mail between agents on the bench (benchd). Use when you have a BENCH_HANDLE, when a "You have mail" notice appears in your session, or when you need to message another bench agent or the operator.
+description: Send and receive mail between agents on the bench (benchd). Use when you have a BENCH_HANDLE, when a "You have mail" notice appears in your session, when you need to message another bench agent or the operator, or when you need to find out who you can mail.
 ---
 
 # bench mail
@@ -34,6 +34,39 @@ Facts with edges:
   mail waits **unread in your inbox** — nothing is lost, but nothing further will nudge
   you. `bench mail list` is how you find what accumulated.
 - Nothing else wakes you. No polling loop exists to arm.
+
+## Who can I mail
+
+`bench sessions --all` is the list of agents in your workspace, and each row says whether
+it has a mailbox here. There is no separate directory.
+
+```bash
+BENCH="${BENCH:-bench}"
+OUT=$($BENCH sessions --all) || exit
+printf '%s' "$OUT" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+o = d["operator"]
+print(o["handle"], "unread=%d" % o["unread"])
+for r in d["rows"]:
+    m = r["mail"]
+    if m:
+        print(m["handle"], "wakeable" if m["wakeable"] else "not-wakeable",
+              "unread=%d" % m["unread"], r["harness"], r.get("name") or r["id"])
+'
+```
+
+- The workspace is your cwd's repo and all its worktrees. `--workspace <dir>` asks about
+  another one.
+- `operator` is a top-level field, not a row. It is always addressable and never
+  wakeable: the operator reads mail when they choose to.
+- `mail` on a row is `null` when the session has no benchd mailbox. **Today that is every
+  agent in a helm pane**: those use helm's older mailroom (`~/.helm/mail`) until #358, and
+  `bench mail` cannot reach them.
+- `wakeable: true` means benchd hosts that session live, so a send answers
+  `"wake": "queued"` and a notice follows (idle-gated and capped, as above). `false`
+  means the mail waits in their inbox and nothing nudges them.
+- `unread` is how much mail already waits in that inbox.
 
 ## Sending
 

@@ -69,7 +69,20 @@ struct DaemonGuard {
 
 impl DaemonGuard {
     fn start(home: &Path, suite: Option<&str>) -> DaemonGuard {
+        DaemonGuard::start_with(home, suite, Command::new(benchd_bin()))
+    }
+
+    /// A daemon whose `pi` is [`write_fake_pi`]'s: a real harness name, so its sessions are
+    /// rows in `sessions/all`, and no real agent behind it.
+    fn start_with_fake_pi(home: &Path) -> DaemonGuard {
+        let bin = write_fake_pi(home);
+        let path = std::env::var("PATH").unwrap_or_default();
         let mut cmd = Command::new(benchd_bin());
+        cmd.env("PATH", format!("{}:{path}", bin.display()));
+        DaemonGuard::start_with(home, None, cmd)
+    }
+
+    fn start_with(home: &Path, suite: Option<&str>, mut cmd: Command) -> DaemonGuard {
         cmd.env_remove("BENCH_DIR")
             .env_remove("BENCH_SUITE")
             // The browser's default binary is looked up in the Playwright cache under
@@ -858,6 +871,133 @@ fn libc_alive(pid: i32) -> bool {
 // Mail: the mailroom, the notice discipline, the wake reactor, the cap
 // ---------------------------------------------------------------------------
 
+/// `<home>/bin/pi`: a stand-in that reads its pty and prints nothing, so it is idle, live,
+/// and dies when its pid is killed. Returns the directory to put on the daemon's PATH.
+fn write_fake_pi(home: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = home.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let pi = bin.join("pi");
+    fs::write(&pi, "#!/bin/sh\nexec cat\n").unwrap();
+    fs::set_permissions(&pi, fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// A git workspace under the test home: what `sessions/all` scopes rows by. Canonical,
+/// because a snippet run from inside it resolves its cwd physically (`/private/var/…` on
+/// macOS), and scope is compared lexically.
+fn workspace(home: &Path) -> PathBuf {
+    let ws = home.join("ws");
+    fs::create_dir_all(ws.join(".git")).unwrap();
+    ws.canonicalize().unwrap()
+}
+
+/// `bench spawn --agent pi --name <handle>` in `ws`, answering (pid, runtime session id).
+fn spawn_pi(home: &Path, ws: &Path, handle: &str) -> (i32, String) {
+    let ws = ws.display().to_string();
+    let run = bench(
+        home,
+        &["spawn", "--agent", "pi", "--cwd", &ws, "--name", handle],
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let v = json_of(&run);
+    (
+        v["pid"].as_i64().unwrap() as i32,
+        v["runtime_session"].as_str().unwrap().to_string(),
+    )
+}
+
+#[test]
+fn a_session_row_says_where_to_mail_it_and_whether_a_send_will_wake_it() {
+    use bench_wire::{MailAddress, SessionList};
+    let home = TestHome::claim("mailrow");
+    let h = &home.dir;
+    let _daemon = DaemonGuard::start_with_fake_pi(h);
+    let ws = workspace(h);
+    let ws_arg = ws.display().to_string();
+    let (pid, runtime) = spawn_pi(h, &ws, "worker");
+    let list = || -> SessionList {
+        let run = bench(h, &["sessions", "--all", "--workspace", &ws_arg]);
+        assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+        let raw: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+        assert!(
+            raw["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r.as_object().unwrap().contains_key("mail")),
+            "every row says, even when the answer is null: {}",
+            run.stdout
+        );
+        serde_json::from_value(raw).unwrap()
+    };
+    let send = |to: &str| -> String {
+        let run = bench(h, &["mail", "send", "--to", to, "--body", "x"]);
+        assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+        json_of(&run)["wake"].as_str().unwrap().to_string()
+    };
+    let inbox = |handle: &str| {
+        fs::read_dir(h.join(".bench/mail").join(handle).join("inbox"))
+            .map(|d| d.count())
+            .unwrap_or(0)
+    };
+
+    let live = list();
+    assert_eq!(live.rows.len(), 1, "{:?}", live.rows);
+    assert_eq!(
+        live.rows[0].mail,
+        Some(MailAddress {
+            handle: "worker".into(),
+            wakeable: true,
+            unread: 0
+        })
+    );
+    assert_eq!(
+        live.operator,
+        MailAddress {
+            handle: "operator".into(),
+            wakeable: false,
+            unread: 0
+        }
+    );
+    // wakeable is what a send does: queued for the live session, not for the operator.
+    assert_eq!(send("worker"), "queued");
+    assert_eq!(send("operator"), "no-live-session");
+    assert_eq!(list().operator.unread, 1);
+
+    // The worker dies. Its finished row keeps the address, and the send agrees it will not
+    // be woken.
+    libc_kill(pid);
+    wait_until("the worker is dead", Duration::from_secs(5), || {
+        json_of(&bench(h, &["sessions"]))["sessions"][0]["live"] == false
+    });
+    let pi_dir = h
+        .join(".pi/agent/sessions")
+        .join(bench_sessions::pi::dir_name(&ws_arg));
+    fs::create_dir_all(&pi_dir).unwrap();
+    fs::write(
+        pi_dir.join(format!("2026-09-25T10-00-00-000Z_{runtime}.jsonl")),
+        serde_json::json!({"type": "session", "version": 3, "id": runtime, "cwd": ws_arg})
+            .to_string()
+            + "\n",
+    )
+    .unwrap();
+    assert_eq!(send("worker"), "no-live-session");
+    let dead = list();
+    assert_eq!(dead.rows.len(), 1, "{:?}", dead.rows);
+    assert_eq!(dead.rows[0].id, runtime);
+    assert!(!dead.rows[0].state.is_running());
+    assert_eq!(
+        dead.rows[0].mail,
+        Some(MailAddress {
+            handle: "worker".into(),
+            wakeable: false,
+            unread: inbox("worker"),
+        })
+    );
+    assert!(inbox("worker") >= 1, "the last send waits unread");
+}
+
 #[test]
 fn mail_to_a_handle_nobody_hosts_waits_in_the_record() {
     let home = TestHome::claim("ghostmail");
@@ -1156,11 +1296,17 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
     );
 
     let home = TestHome::claim("skill");
-    let _daemon = DaemonGuard::start(&home.dir, None);
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
     let root = home.dir.join(".bench");
+    // The snippets run from inside a workspace holding one live bench session, so "who can I
+    // mail" has somebody to find besides the operator.
+    let ws = workspace(&home.dir);
+    spawn_pi(&home.dir, &ws, "worker");
+    let mut who = None;
     for (i, snippet) in snippets.iter().enumerate() {
         let out = Command::new("bash")
             .args(["-euo", "pipefail", "-c", snippet])
+            .current_dir(&ws)
             .env_remove("BENCH_SUITE")
             .env_remove("BENCH_HANDLE")
             .env("HOME", &home.dir)
@@ -1176,7 +1322,21 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
             snippet,
             String::from_utf8_lossy(&out.stderr)
         );
+        if snippet.contains("sessions --all") {
+            who = Some(String::from_utf8_lossy(&out.stdout).into_owned());
+        }
     }
+    let who = who.expect("the skill's who-can-I-mail snippet");
+    let handles: Vec<&str> = who
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+    assert_eq!(
+        handles,
+        ["operator", "worker"],
+        "the operator and the live session: {who}"
+    );
+    assert!(who.contains("worker wakeable"), "{who}");
     // The sequence is the story the skill tells: a send exists, the listing shows it
     // or its retirement, and the read snippet retired it.
     let listing = bench(&home.dir, &["mail", "list", "--handle", "operator"]);
@@ -1188,27 +1348,31 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
 
     // With no daemon, the read snippet must fail with bench's own code — never exit 0 and
     // look like an empty inbox, which is what an agent would then report.
+    // The same for the who-can-I-mail snippet: an empty list is not "nobody to mail".
     drop(_daemon);
-    let read = snippets
-        .iter()
-        .find(|s| s.contains("mail read"))
-        .expect("the skill's read snippet");
-    let out = Command::new("bash")
-        .args(["-c", read])
-        .env_remove("BENCH_SUITE")
-        .env_remove("BENCH_HANDLE")
-        .env("HOME", &home.dir)
-        .env("BENCH_DIR", &root)
-        .env("BENCH", bench_bin())
-        .output()
-        .expect("run snippet");
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "no daemon reaches the caller as exit 2: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
+    for needle in ["mail read", "sessions --all"] {
+        let snippet = snippets
+            .iter()
+            .find(|s| s.contains(needle))
+            .expect("the skill's snippet");
+        let out = Command::new("bash")
+            .args(["-c", snippet])
+            .current_dir(&ws)
+            .env_remove("BENCH_SUITE")
+            .env_remove("BENCH_HANDLE")
+            .env("HOME", &home.dir)
+            .env("BENCH_DIR", &root)
+            .env("BENCH", bench_bin())
+            .output()
+            .expect("run snippet");
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{needle}: no daemon reaches the caller as exit 2: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
+    }
 }
 
 // ---------------------------------------------------------------------------

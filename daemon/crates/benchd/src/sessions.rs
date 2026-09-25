@@ -14,7 +14,7 @@ use bench_sessions::{BenchSession, Cache, Inputs};
 use bench_wire::{
     DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
     HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, HostedRecord, HostedSession, HostedVia,
-    SessionKey, SessionsArgs, Unreadable, dismissed_path, hosted_path,
+    OPERATOR_HANDLE, SessionKey, SessionsArgs, Unreadable, dismissed_path, hosted_path,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -49,7 +49,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
     let workspace = StandardPath::new(&args.workspace)
         .map_err(|why| Refusal::Refused(format!("workspace: {why}")))?;
 
-    let (home, bench, hosted, dismissed) = {
+    let (home, root, mut bench, hosted, dismissed) = {
         let c = core.lock().unwrap();
         let bench: Vec<BenchSession> = c
             .sessions
@@ -63,16 +63,24 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
                     pid: s.pid,
                     live: s.is_live(),
                     spawned_ms: now_ms().saturating_sub(s.spawned_at.elapsed().as_millis() as u64),
+                    handle: s.handle.clone(),
+                    unread: 0,
                 })
             })
             .collect();
         (
             c.home.clone(),
+            c.root.clone(),
             bench,
             c.session_records.hosted.clone(),
             c.session_records.dismissed.clone(),
         )
     };
+    // The mailroom is read here, outside the core mutex, like the harness files.
+    for b in &mut bench {
+        b.unread = bench_mail::unread(&root, &b.handle);
+    }
+    let operator_unread = bench_mail::unread(&root, OPERATOR_HANDLE);
     let helm_bench_dir = helm_bench_dir(&home);
     let now = now_rfc3339();
     let built = {
@@ -85,6 +93,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
                 bench: &bench,
                 hosted: &hosted,
                 dismissed: &dismissed,
+                operator_unread,
                 now_ms: now_ms(),
                 now: &now,
                 alive: &bench_sessions::process::alive,

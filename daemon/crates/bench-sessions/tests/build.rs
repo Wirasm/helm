@@ -5,8 +5,8 @@
 use bench_doc::{PaneId, StandardPath};
 use bench_sessions::{BenchSession, Built, Cache, Inputs, build};
 use bench_wire::{
-    Activity, Dismissal, Harness, Host, HostedSession, HostedVia, OpenAction, SessionRow,
-    SessionState,
+    Activity, Dismissal, Harness, Host, HostedSession, HostedVia, MailAddress, OpenAction,
+    SessionRow, SessionState,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -34,6 +34,7 @@ struct Fixture {
     bench: Vec<BenchSession>,
     hosted: Vec<HostedSession>,
     dismissed: Vec<Dismissal>,
+    operator_unread: usize,
 }
 
 impl Drop for Fixture {
@@ -74,6 +75,7 @@ impl Fixture {
             bench: Vec::new(),
             hosted: Vec::new(),
             dismissed: Vec::new(),
+            operator_unread: 0,
         };
         // ws/.git with one worktree inside the repo and one outside it.
         let git = f.ws().join(".git");
@@ -211,6 +213,7 @@ impl Fixture {
                 bench: &self.bench,
                 hosted: &self.hosted,
                 dismissed: &self.dismissed,
+                operator_unread: self.operator_unread,
                 now_ms: now_ms(),
                 now: "2026-09-25T12:00:00Z",
                 alive: &alive,
@@ -683,6 +686,8 @@ fn a_bench_session_is_listed_to_attach_with_its_registry_status() {
         pid: 400,
         live: true,
         spawned_ms: now_ms(),
+        handle: "worker".into(),
+        unread: 0,
     });
     f.bench.push(BenchSession {
         session: "s2".into(),
@@ -692,6 +697,8 @@ fn a_bench_session_is_listed_to_attach_with_its_registry_status() {
         pid: 401,
         live: true,
         spawned_ms: now_ms(),
+        handle: "s2".into(),
+        unread: 0,
     });
     let built = f.build();
     assert_eq!(ids(&built), ["bench-claude", "s2"]);
@@ -704,6 +711,104 @@ fn a_bench_session_is_listed_to_attach_with_its_registry_status() {
         }
     );
     assert_eq!(*activity(row(&built, "s2").unwrap()), Activity::Unknown);
+}
+
+fn bench_session(
+    session: &str,
+    runtime: &str,
+    cwd: &str,
+    live: bool,
+    unread: usize,
+) -> BenchSession {
+    BenchSession {
+        session: session.into(),
+        harness: Harness::Pi,
+        runtime_session: Some(runtime.into()),
+        cwd: cwd.into(),
+        pid: 500,
+        live,
+        spawned_ms: now_ms(),
+        handle: format!("h-{session}"),
+        unread,
+    }
+}
+
+fn address(handle: &str, wakeable: bool, unread: usize) -> Option<MailAddress> {
+    Some(MailAddress {
+        handle: handle.into(),
+        wakeable,
+        unread,
+    })
+}
+
+#[test]
+fn a_bench_session_carries_its_mail_address_and_a_pane_agent_carries_none() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    f.bench.push(bench_session("s1", "pi-live", &ws, true, 2));
+    f.claude(100, "in-pane", &ws, json!({}));
+    f.pane(PANE, pane_owner(100, "in-pane", &ws));
+    f.operator_unread = 3;
+    let built = f.build();
+    assert_eq!(
+        row(&built, "pi-live").unwrap().mail,
+        address("h-s1", true, 2)
+    );
+    assert_eq!(
+        row(&built, "in-pane").unwrap().mail,
+        None,
+        "a pane agent has helm's mailbox, not benchd's, until #358"
+    );
+    assert_eq!(
+        built.list.operator,
+        MailAddress {
+            handle: "operator".into(),
+            wakeable: false,
+            unread: 3
+        }
+    );
+}
+
+#[test]
+fn a_finished_row_takes_the_address_of_the_bench_session_that_ran_it_and_no_other() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    let pi_dir = f
+        .home()
+        .join(".pi/agent/sessions")
+        .join(bench_sessions::pi::dir_name(&ws));
+    for id in ["pi-dead", "pi-before-restart"] {
+        write(
+            &pi_dir.join(format!("2026-09-25T10-00-00-000Z_{id}.jsonl")),
+            &jsonl(&[json!({"type": "session", "version": 3, "id": id, "cwd": ws})]),
+        );
+    }
+    // Both were hosted by a bench session called s1: one in this daemon's life, one before a
+    // restart, when session ids began again at s1.
+    for id in ["pi-dead", "pi-before-restart"] {
+        f.hosted.push(HostedSession {
+            harness: Harness::Pi,
+            id: id.into(),
+            cwd: ws.clone(),
+            via: HostedVia::Bench {
+                session: "s1".into(),
+            },
+            recorded_at: "2026-09-25T10:00:00Z".into(),
+        });
+    }
+    f.bench.push(bench_session("s1", "pi-dead", &ws, false, 1));
+    let built = f.build();
+    assert_eq!(ids(&built), ["pi-before-restart", "pi-dead"]);
+    assert_eq!(
+        row(&built, "pi-dead").unwrap().mail,
+        address("h-s1", false, 1),
+        "mail waits for it, and nothing will wake it"
+    );
+    assert_eq!(
+        row(&built, "pi-before-restart").unwrap().mail,
+        None,
+        "matched by runtime id, never by a bench session id a restart reused"
+    );
 }
 
 #[test]
@@ -785,6 +890,7 @@ fn a_snapshot_version_this_build_does_not_read_is_reported_and_places_no_one() {
             bench: &[],
             hosted: &[],
             dismissed: &[],
+            operator_unread: 0,
             now_ms: now_ms(),
             now: "t",
             alive: &alive,
