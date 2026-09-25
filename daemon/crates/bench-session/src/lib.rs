@@ -129,6 +129,17 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
                 );
             }
             args.push("--dangerously-bypass-approvals-and-sandbox".into());
+            // No modals: nobody is at an unattended pane to answer one, so the next pasted
+            // Return does. Both measured. The update prompt: the brief's Return accepted
+            // "Update now" and the pane ran `brew upgrade --cask codex` and quit (0.155.1).
+            // The rate-limit nudge: raised after a turn near the weekly limit, with "Switch
+            // to <cheaper model>" as the default a mail wake would select (0.157.0).
+            args.extend([
+                "-c".into(),
+                "check_for_update_on_startup=false".into(),
+                "-c".into(),
+                "notice.hide_rate_limit_model_nudge=true".into(),
+            ]);
             if let Some(m) = &spec.model {
                 args.extend(["-m".into(), m.clone()]);
             }
@@ -544,7 +555,16 @@ mod tests {
         assert_eq!(a, vec!["--dangerously-skip-permissions"]);
         let (p, a) = argv(&spec(AgentKind::Codex)).unwrap();
         assert_eq!(p, "codex");
-        assert_eq!(a, vec!["--dangerously-bypass-approvals-and-sandbox"]);
+        assert_eq!(
+            a,
+            vec![
+                "--dangerously-bypass-approvals-and-sandbox",
+                "-c",
+                "check_for_update_on_startup=false",
+                "-c",
+                "notice.hide_rate_limit_model_nudge=true"
+            ]
+        );
         let (p, a) = argv(&spec(AgentKind::Pi)).unwrap();
         assert_eq!(p, "pi");
         assert_eq!(a, vec!["--approve"]);
@@ -575,6 +595,10 @@ mod tests {
             a,
             vec![
                 "--dangerously-bypass-approvals-and-sandbox",
+                "-c",
+                "check_for_update_on_startup=false",
+                "-c",
+                "notice.hide_rate_limit_model_nudge=true",
                 "-m",
                 "gpt-5.3-codex",
                 "-c",
