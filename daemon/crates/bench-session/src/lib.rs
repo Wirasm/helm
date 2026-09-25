@@ -217,6 +217,58 @@ pub fn mint_session_id() -> String {
     )
 }
 
+/// claude's footer under `--dangerously-skip-permissions`: once it is drawn, the TUI
+/// accepts a paste.
+const CLAUDE_READY_MARKER: &str = "bypass permissions";
+
+/// Whether `marker` is on screen in raw pty output. Escape sequences and whitespace are
+/// dropped from both sides first: a renderer that places each word with a cursor move
+/// (claude's inline renderer does, measured on 2.1.282) draws the phrase without ever
+/// writing it contiguously. An OSC's payload (a window title, say) is not on screen.
+fn shows_marker(bytes: &[u8], marker: &str) -> bool {
+    let mut drawn = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            0x1b => {
+                i += 1;
+                match bytes.get(i) {
+                    // CSI: parameters, then one final byte in @..~.
+                    Some(b'[') => {
+                        i += 1;
+                        while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
+                            i += 1;
+                        }
+                    }
+                    // OSC: up to BEL or ST (ESC \).
+                    Some(b']') => {
+                        while i < bytes.len() && bytes[i] != 0x07 {
+                            if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
+                                i += 1;
+                                break;
+                            }
+                            i += 1;
+                        }
+                    }
+                    // Any other escape is ESC plus one byte.
+                    _ => {}
+                }
+                i += 1;
+            }
+            b if b.is_ascii_whitespace() => i += 1,
+            b => {
+                drawn.push(b);
+                i += 1;
+            }
+        }
+    }
+    let wanted: Vec<u8> = marker
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    drawn.windows(wanted.len()).any(|w| w == wanted.as_slice())
+}
+
 // ---------------------------------------------------------------------------
 // The live session
 // ---------------------------------------------------------------------------
@@ -442,8 +494,8 @@ impl Session {
                 let ring = self.ring.lock().unwrap();
                 match self.agent {
                     AgentKind::Claude => {
-                        let text: String = ring.bytes.iter().map(|&b| b as char).collect();
-                        if text.contains("bypass permissions") {
+                        let bytes: Vec<u8> = ring.bytes.iter().copied().collect();
+                        if shows_marker(&bytes, CLAUDE_READY_MARKER) {
                             drop(ring);
                             std::thread::sleep(Duration::from_secs(1));
                             return true;
@@ -661,6 +713,29 @@ mod tests {
         let id = mint_session_id();
         assert_eq!(id.len(), 36, "{id}");
         assert_eq!(id.chars().filter(|&c| c == '-').count(), 4);
+    }
+
+    #[test]
+    fn claudes_ready_marker_is_found_when_words_are_placed_by_cursor_moves() {
+        // claude 2.1.282's inline renderer, measured: the words sit at columns, not
+        // behind spaces. This is what `wait_ready` saw while `mail-proof` timed out.
+        let inline = b"\xe2\x8f\xb5\xe2\x8f\xb5\x1b[6Gbypass\x1b[13Gpermissions\x1b[25Gon";
+        assert!(shows_marker(inline, CLAUDE_READY_MARKER));
+        // The fullscreen renderer writes the plain phrase, with colour around it.
+        assert!(shows_marker(
+            b"\x1b[38;2;1;2;3mbypass permissions on\x1b[39m",
+            CLAUDE_READY_MARKER
+        ));
+        // A title OSC carrying the words is not the footer being drawn, and a screen
+        // without the footer is not ready.
+        assert!(!shows_marker(
+            b"\x1b]0;bypass permissions\x07claude starting",
+            CLAUDE_READY_MARKER
+        ));
+        assert!(!shows_marker(
+            b"bypass mode, no permissions",
+            CLAUDE_READY_MARKER
+        ));
     }
 
     #[test]
