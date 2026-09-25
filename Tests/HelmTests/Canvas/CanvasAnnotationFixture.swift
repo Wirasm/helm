@@ -22,8 +22,9 @@ import XCTest
 /// because that is how `IsolatedDefaults` already hands a suite to every test class here.
 ///
 /// **What deliberately does NOT come through here**: anything whose subject *is* the decoder.
-/// `CanvasMarkTests` and `CanvasAnnotationTests` drive `CanvasAnnotation.decode` directly and must
-/// keep doing so — a gate tested through a helper that goes through the gate asserts nothing.
+/// `CanvasMarkTests` and `CanvasAnnotationTests` drive `CanvasAnnotation.decode(posted:)` directly
+/// and must keep doing so — a gate tested through a helper that goes through the gate asserts
+/// nothing.
 extension XCTestCase {
     /// The page's own message body, decoded. `kind` defaults to `selection`, as it does in
     /// `CanvasAnnotationTests` and `CanvasMarkTests`, so a geometry fixture is the one that has to
@@ -39,7 +40,7 @@ extension XCTestCase {
         var body = body
         body["kind"] = body["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
         return try XCTUnwrap(
-            CanvasAnnotation.decode(body, comment: comment),
+            CanvasAnnotation.decode(posted: body, comment: comment),
             "the annotation fixture this test is built on is not a body helm accepts any more — "
                 + "`CanvasAnnotation.decode` refused \(body) commented \"\(comment)\". Rebuild it "
                 + "to the shape `canvas-annotation.js` posts; do not loosen the decoder.",
@@ -55,5 +56,23 @@ extension XCTestCase {
         var body: [String: Any] = ["text": text]
         if let id { body["id"] = id }
         return try annotation(marking: body, comment: comment, file: file, line: line)
+    }
+}
+
+extension CanvasAnnotation {
+    /// A body the page posted, through **both** real gates in the order the app runs them:
+    /// `CanvasPageSelection.decode` (the bridge's, which reads `kind` and decodes the mark) and
+    /// then `CanvasAnnotation.decode` (the comment's). `nil` when either refuses.
+    ///
+    /// Test-only, and not a third gate. Since #210 there is no production function that takes a
+    /// raw body and a comment together, because the app never holds both at once: the body is
+    /// decoded when the page posts it and the comment arrives later. Tests about what a posted
+    /// body becomes want exactly that composition, and `CanvasSelection.init` is `fileprivate`,
+    /// so this cannot build a selection any other way.
+    static func decode(posted body: Any, comment: String) -> CanvasAnnotation? {
+        guard case let .success(.selected(selection)) = CanvasPageSelection.decode(body) else {
+            return nil
+        }
+        return decode(selection, comment: comment)
     }
 }

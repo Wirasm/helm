@@ -739,12 +739,12 @@ final class CanvasAnnotationScriptTests: XCTestCase {
         page.mouse("mouseup", 100, 110)
 
         XCTAssertNil(
-            CanvasAnnotation.decode(try XCTUnwrap(page.lastPosted), comment: "a comment"))
+            CanvasAnnotation.decode(posted: try XCTUnwrap(page.lastPosted), comment: "a comment"))
     }
 
     private func decode(_ body: [String: Any]?) throws -> CanvasAnnotation.Mark {
         let annotation = try XCTUnwrap(
-            CanvasAnnotation.decode(try XCTUnwrap(body), comment: "a comment"),
+            CanvasAnnotation.decode(posted: try XCTUnwrap(body), comment: "a comment"),
             "the page posted a payload the real decoder refuses")
         return annotation.mark
     }
