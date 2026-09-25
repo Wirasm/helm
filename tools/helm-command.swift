@@ -19,7 +19,7 @@
 // the reason and, where one exists, the route to use instead — `helm-close` names a pane and
 // refuses the operator's, `push.sh` puts an artifact on the bench without seizing, and a
 // `helm-spool` spawn's `cwd` is the workspace helm opens for it.
-// `--list` names the four without sending anything; send any other command to read helm's own
+// `--list` names the five without sending anything; send any other command to read helm's own
 // refusal, which says why. `SpoolCommandPolicy` in `Sources/HelmWire/Spool/SpoolRequest.swift`
 // argues the whole verdict.
 //
