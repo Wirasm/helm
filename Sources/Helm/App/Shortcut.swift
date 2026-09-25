@@ -186,6 +186,11 @@ extension Shortcut {
             Shortcut(
                 .character("l"), .command, does: .openCanvasURL(nil),
                 menu: .init(title: "Open URL…", key: "l", modifiers: .command)),
+            // ⌘⇧B — the shared browser (#350). Offered like everything that arrives on the
+            // bench: the pane appears and the keyboard stays where it was.
+            Shortcut(
+                .character("b"), [.command, .shift], does: .openBrowser,
+                menu: .init(title: "Shared Browser", key: "b", modifiers: [.command, .shift])),
             Shortcut(
                 .character("r"), [.command, .shift], does: .toggleRail,
                 menu: .init(title: "Toggle Archon Rail", key: "r", modifiers: [.command, .shift])),

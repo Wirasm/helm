@@ -18,10 +18,11 @@ final class SpoolCommandPolicyTests: XCTestCase {
 
     /// **The allowlist itself, written out.** A change to it has to change this line, which is
     /// the point: an allowlist that can widen without a diff anyone reads is not a decision.
-    func testTheAllowlistIsExactlyTheFourCommandsThatDoNotTakeTheKeyboard() {
+    func testTheAllowlistIsExactlyTheFiveCommandsThatDoNotTakeTheKeyboard() {
         XCTAssertEqual(
-            SpoolCommandPolicy.allowed, [.newTerminal, .splitRight, .splitDown, .toggleRail],
-            "these four grow the bench and leave the operator's keyboard where it is. Widening "
+            SpoolCommandPolicy.allowed,
+            [.newTerminal, .splitRight, .splitDown, .toggleRail, .openBrowser],
+            "these five grow the bench and leave the operator's keyboard where it is. Widening "
                 + "this set is a decision about the operator's focus — read "
                 + "SpoolCommandPolicy's header before changing it")
     }

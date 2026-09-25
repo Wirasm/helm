@@ -673,10 +673,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `name.name`, **read back off the bench** rather than echoed. Exit codes are 2 no answer,
     3 refused, 4 helm could not act, 6 abandoned.
 - **To drive the bench in between, `swift tools/helm-command.swift <command>`** — the fourth
-  spool kind (#269), needing what the other three need: nothing. helm has twenty typed
-  commands (`HelmCommand`, #219, #287 and #289) and **will take four of them from an agent**:
-  `newTerminal`, `splitRight`, `splitDown`, `toggleRail`. `--list` names them without a running
-  helm.
+  spool kind (#269), needing what the other three need: nothing. helm has twenty-one typed
+  commands (`HelmCommand`, #219, #287, #289 and #350) and **will take five of them from an
+  agent**: `newTerminal`, `splitRight`, `splitDown`, `toggleRail`, `openBrowser`. `--list` names
+  them without a running helm.
   - **The rule is one sentence: rearranging the bench is fine, taking focus is not.** It is
     #125's *appear, don't seize* on a channel that can now ask for anything the keymap can — an
     agent selecting your active tab mid-thought is the wrong-terminal click arriving through a

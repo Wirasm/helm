@@ -4,6 +4,7 @@
 //   swift helm-command.swift splitDown         a new row under the focused slot
 //   swift helm-command.swift newTerminal       a bare login shell in a pane of its own
 //   swift helm-command.swift toggleRail        show/hide the Archon rail
+//   swift helm-command.swift openBrowser       show the shared browser in a pane of its own
 //   swift helm-command.swift --list            the commands helm will take from an agent
 //
 // The fourth sibling of `helm-spool.swift`, `helm-close.swift` and `helm-capture.swift`, and it
@@ -11,7 +12,7 @@
 // no keystrokes — a file appears in the spool, helm acts, helm writes a file back. It works with
 // the screen locked, headless and over ssh.
 //
-// helm has twenty commands and will take four of them from an agent. The rule is one sentence:
+// helm has twenty-one commands and will take five of them from an agent. The rule is one sentence:
 // REARRANGING THE BENCH IS FINE, TAKING FOCUS IS NOT. An agent selecting the operator's active tab
 // mid-thought is the wrong-terminal click in a supported API — so every command that moves the
 // keyboard, or that acts on "the focused pane" without saying which pane it means, is refused with
@@ -76,12 +77,12 @@ func spoolRoot(_ override: String?) -> URL {
 /// restated on purpose.** `--list` has to answer without a running helm — "may I send this?" is
 /// exactly the question an agent asks *before* deciding to send anything — and a single-file
 /// script cannot `import HelmWire` (see `AGENTS.md`, "Why the spool is a script, and must stay
-/// one"). So the four names live here as well as in `SpoolCommandPolicy.verdict`, and
+/// one"). So the allowed names live here as well as in `SpoolCommandPolicy.verdict`, and
 /// `SpoolWireConformanceTests.testHelmCommandListsExactlyTheCommandsSpoolCommandPolicyAllows`
 /// runs this script and compares its output against the real policy — the same way every other
 /// duplicate across this boundary is kept honest. Sending an unlisted command still works and
 /// still gets helm's own refusal with its own reason; this list only saves a round trip.
-let allowed = ["newTerminal", "splitRight", "splitDown", "toggleRail"]
+let allowed = ["newTerminal", "splitRight", "splitDown", "toggleRail", "openBrowser"]
 
 let usage = """
     usage: helm-command.swift <command> [--id NAME] [--spool DIR] [--timeout SECONDS]
