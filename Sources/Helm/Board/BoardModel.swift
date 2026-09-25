@@ -71,7 +71,7 @@ final class BoardModel: ObservableObject {
 
     /// Foreground pid of every live surface, grouped by workspace.
     ///
-    /// Reads `TerminalManager.sessions`, which is flat and app-wide and keeps a
+    /// Reads `TerminalManager.sessions` (the registry's terminal entries), which is flat and app-wide and keeps a
     /// parked workspace's terminals alive across a switch. That is the whole point:
     /// a board that could only see the workspace you are looking at would report
     /// nothing worth knowing.

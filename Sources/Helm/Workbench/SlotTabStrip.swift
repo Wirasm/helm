@@ -76,43 +76,11 @@ struct SlotTabStrip: View {
         .enableInjection()
     }
 
+    /// The kind draws the tab (`SurfaceKind.tab`); the bench says whether it is selected and
+    /// whether it can close — the bench's rule, not the slot's: a pane can close unless it is
+    /// the bench's last.
     @ViewBuilder
     private func tab(for pane: Pane) -> some View {
-        let isSelected = pane.id == slot.selected
-        // `canClose` is the BENCH's rule — a pane can close unless it is the bench's last,
-        // not unless it is the slot's last.
-        let canClose = model.bench?.canClose(pane.id) ?? false
-        switch pane.content {
-        case .terminal:
-            if let session = model.session(for: pane) {
-                TerminalTab(
-                    session: session,
-                    isSelected: isSelected,
-                    canClose: canClose,
-                    onSelect: { model.select(pane.id) },
-                    onClose: { model.close(pane.id) }
-                )
-            }
-        case let .canvas(source):
-            CanvasTab(
-                source: source,
-                // A terminal's name reaches its tab through its session (`reconcileSessions`);
-                // a canvas has no session, so it comes from the pane this file already holds.
-                name: pane.name.text,
-                isSelected: isSelected,
-                canClose: canClose,
-                onSelect: { model.select(pane.id) },
-                onClose: { model.close(pane.id) }
-            )
-        case .browser:
-            BrowserTabLabel(
-                model: model.browser(for: pane),
-                name: pane.name.text,
-                isSelected: isSelected,
-                canClose: canClose,
-                onSelect: { model.select(pane.id) },
-                onClose: { model.close(pane.id) }
-            )
-        }
+        model.surfaceTab(of: pane, in: model.surfaceSlot(for: pane, in: slot))
     }
 }
