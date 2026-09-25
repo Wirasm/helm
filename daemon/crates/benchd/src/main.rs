@@ -1431,8 +1431,8 @@ fn start_browser(
         if let Some(b) = c.browser.as_ref().filter(|b| b.is_running()) {
             // Decided here, under the lifecycle lock that serializes every start, so no
             // caller can slip between a check and the hand-back. A setup window is the
-            // operator's, mid-install or mid-sign-in: an agent handed it as "the shared
-            // browser" would drive the window he is typing in.
+            // operator's, mid-install or mid-sign-in, on the one profile: it has no address
+            // to hand out, and a headless start beside it would take the profile from him.
             return match (b.mode(), mode) {
                 (running, asked) if running == asked => Ok((Arc::clone(b), true)),
                 (BrowserMode::Setup, _) => Err(LaunchError::Refused(
