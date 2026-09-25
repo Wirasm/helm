@@ -399,7 +399,9 @@ helm restarting.
     git, beside their `SHA256SUMS`, about 1.5 MB compressed per Ghostty bump. The daemon
     gate and CI stay Rust-only and need no network. A release asset fetched by script was
     the alternative: it keeps binaries out of git, at the cost of a network fetch on first
-    build and one more script to maintain.
+    build and one more script to maintain. A Ghostty bump is agent work, not the operator's:
+    one script rebuilds both archives with zig 0.15.x, then the agent commits them with their
+    new sums and checks the crate's bindings against the new header.
 - **Design rules from the spikes, whichever engine:**
   1. Mid synchronized update (mode 2026), serve the last complete frame. Read naively,
      22 to 34% of checkpoints in real agent output were torn.
