@@ -10,7 +10,7 @@ import HelmWire
 /// every command an agent may not send, and this type is only reached with one it may. What is
 /// genuinely here is *how*: which of helm's two shapes an allowed command routes to.
 ///
-/// **Three of the four route to a non-seizing twin, and the fourth needs none.** helm has drawn
+/// **Four of the five route to a non-seizing twin, and the fifth needs none.** helm has drawn
 /// that distinction since #125 and named both halves — `Workbench.insert` is the operator
 /// asking, `Workbench.offer` is an agent offering, and they differ in the line that assigns
 /// `focusedSlot`. So:
@@ -19,6 +19,7 @@ import HelmWire
 ///   and predates this ticket entirely — it is what the spool's own `spawn` kind already uses.
 /// - `splitRight`/`splitDown` → `offerSplitRight()`/`offerSplitDown()`, the twins added for
 ///   #269 on top of `Workbench.splitRight(offering:)`.
+/// - `openBrowser` → `WorkbenchModel.offerBrowser()`, which offers the browser pane (#350).
 /// - `toggleRail` → posted as the real `HelmCommand`, because there is no seizing to avoid: it
 ///   shows or hides chrome beside the bench and touches no pane. Posting rather than calling
 ///   `ArchonRailModel.toggleVisibility()` directly would be a second route to the same state
