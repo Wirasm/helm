@@ -169,15 +169,14 @@ fn parse_front_matter(text: &str) -> (String, String, Option<String>) {
 mod tests {
     use super::*;
 
+    /// One root per test. A clock reading was the old suffix, and two tests starting on the
+    /// same tick shared a mailroom: `a_hand_written_file_still_lists` then counted the other
+    /// test's mail, about one run in ten.
     fn root() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "bmail-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .subsec_nanos()
-        ));
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("bmail-{}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
     }

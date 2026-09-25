@@ -7,3 +7,8 @@ description = "The bench CLI: the one agent-facing surface over the benchd socke
 [dependencies]
 bench-wire = { path = "../bench-wire" }
 serde_json.workspace = true
+
+[dev-dependencies]
+# The conformance suite asks for its own process's start time, to write a registry row a
+# real daemon will believe.
+bench-sessions = { path = "../bench-sessions" }
