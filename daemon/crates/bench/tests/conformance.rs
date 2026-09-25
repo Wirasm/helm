@@ -1421,7 +1421,10 @@ fn browser_stop_and_daemon_stop_each_leave_no_browser_and_no_endpoint() {
         Duration::from_secs(8),
         || !libc_alive(pid),
     );
-    assert!(!endpoint.exists());
+    // The wrapper removes the file after its browser exits, a moment after the pid goes.
+    wait_until("the endpoint to be removed", Duration::from_secs(2), || {
+        !endpoint.exists()
+    });
 }
 
 #[test]
