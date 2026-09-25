@@ -168,7 +168,7 @@ final class CanvasSidecarWatchTests: XCTestCase {
     // MARK: - Helpers
 
     private func generation(of model: CanvasModel) throws -> Int {
-        guard case let .file(document) = model.showing else {
+        guard let document = model.showing else {
             throw XCTSkip("the canvas is not showing a file")
         }
         return document.generation

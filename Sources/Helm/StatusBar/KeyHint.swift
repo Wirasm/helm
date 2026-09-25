@@ -42,7 +42,6 @@ enum KeyHintCatalog {
         // ⇧⌥⌘arrows), and reading them side by side is what teaches the second one.
         (.movePane, "move"),
         (.openArtifact, "artifact"),
-        (.openCanvasURL, "url"),
         (.jumpToPrompt, "turn"),
         (.selectWorkspace, "workspace"),
         (.cycleWorkspace, "cycle"),

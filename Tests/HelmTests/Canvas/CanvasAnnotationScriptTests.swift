@@ -58,7 +58,8 @@ final class CanvasAnnotationScriptTests: XCTestCase {
 
         XCTAssertFalse(script.isEmpty, "the resource must ship in the bundle")
         XCTAssertTrue(
-            script.contains("window.webkit.messageHandlers.\(CanvasBridgePolicy.handlerName)"),
+            script.contains(
+                "window.webkit.messageHandlers.\(CanvasFileCoordinator.bridgeHandlerName)"),
             "the page reads a handler Swift never registered, and marking is silently dead")
         XCTAssertTrue(
             script.contains("window.\(CanvasHTML.markToolGlobal)"),

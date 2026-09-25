@@ -56,7 +56,7 @@ final class PaneNameTests: XCTestCase {
         XCTAssertEqual(try roundTrip(pane).name, .chosen("the plan"))
 
         let derived = Pane(
-            id: UUID(), content: .canvas(.empty), name: .derived("claude · helm"))
+            id: UUID(), content: .canvas(.file("/tmp/plan.md")), name: .derived("claude · helm"))
         XCTAssertEqual(
             try roundTrip(derived).name, .derived("claude · helm"),
             "and the provenance travels with it, or the ownership rule means something different "

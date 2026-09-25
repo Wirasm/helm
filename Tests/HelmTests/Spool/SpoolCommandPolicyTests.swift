@@ -32,7 +32,7 @@ final class SpoolCommandPolicyTests: XCTestCase {
     func testEveryCommandThatMovesTheOperatorsKeyboardIsRefused() {
         for command in [
             HelmCommandName.moveFocus, .selectTerminal, .selectWorkspace, .cycleWorkspace,
-            .openCanvasFile, .openCanvasURL,
+            .openCanvasFile,
         ] {
             XCTAssertNotEqual(
                 SpoolCommandPolicy.verdict(for: command), .allowed,
@@ -236,10 +236,11 @@ final class SpoolCommandPolicyTests: XCTestCase {
             "the refusal for an unknown kind lists these, so an older helm's answer and a newer "
                 + "one's have to differ in exactly this line")
         XCTAssertEqual(
-            HelmCommandName.allCases.count, 19,
-            "helm has nineteen commands — eighteen from #219, plus movePane (#287), newNote "
+            HelmCommandName.allCases.count, 18,
+            "helm has eighteen commands — eighteen from #219, plus movePane (#287), newNote "
                 + "(#289) and openBrowser (#350), less toggleChat and composeText, which left "
-                + "with the chat face (#375). If that number changed, SpoolCommandPolicy's "
+                + "with the chat face (#375), and openCanvasURL, which left with the URL canvas "
+                + "(#376). If that number changed, SpoolCommandPolicy's "
                 + "switch already forced a verdict for the new one — this only records that it "
                 + "was a deliberate change rather than a merge artefact")
     }

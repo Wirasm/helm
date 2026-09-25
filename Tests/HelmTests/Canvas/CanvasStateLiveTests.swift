@@ -78,7 +78,7 @@ final class CanvasStateLiveTests: XCTestCase {
             visible[CanvasPageState.handlerName], true,
             "the page must be able to report — that is the whole slice")
         XCTAssertEqual(
-            visible[CanvasBridgePolicy.handlerName], false,
+            visible[CanvasFileCoordinator.bridgeHandlerName], false,
             "an artifact that can reach the annotation bridge can forge an operator's mark, "
                 + "which is exactly what #164's named world exists to prevent and what this "
                 + "channel was designed around rather than through")
@@ -276,7 +276,7 @@ final class CanvasStateLiveTests: XCTestCase {
         /// Asked from the page content world, which is where an artifact's scripts run.
         func handlersVisibleToTheArtifact() async -> [String: Bool] {
             var seen: [String: Bool] = [:]
-            for name in [CanvasPageState.handlerName, CanvasBridgePolicy.handlerName] {
+            for name in [CanvasPageState.handlerName, CanvasFileCoordinator.bridgeHandlerName] {
                 let answer = await ask(
                     """
                     String(!!(window.webkit && window.webkit.messageHandlers

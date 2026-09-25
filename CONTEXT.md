@@ -69,8 +69,9 @@ keyboard was held by none of them.
 _Avoid_: active, current, selected, first responder (that word is AppKit's, one level down)
 
 **canvas**:
-The pane type that renders content — a markdown file, an HTML file, or a URL — and accepts
-annotation on it. Modular by source; extendable to further formats. A **markdown** canvas also
+The pane type that renders a file — markdown or HTML — and accepts annotation on it. Modular by
+source; extendable to further formats. A web page is not a canvas: it is a tab of the shared
+browser, in the **browser pane**. A **markdown** canvas also
 has a writing face the operator enters deliberately; **read is the default**, and helm stops
 saving rather than overwrite a file somebody else wrote since it last looked.
 _Avoid_: artifact pane, webview, browser, draw-on pane
@@ -80,8 +81,9 @@ The pane type that shows the **shared browser** — the one Chrome benchd runs p
 (`bench browser start`), which agents drive with Playwright and the operator uses by hand. helm
 neither starts nor automates it: the pane reads benchd's `browser/endpoint.json`, draws the tab
 it follows over CDP, and forwards mouse, keys and the clipboard. One per bench; it appears
-without taking the keyboard (⌘⇧B, or an agent's `helm-command openBrowser`). Not a canvas: a
-canvas renders a file or URL in helm's own webview.
+without taking the keyboard (⌘⇧B, or an agent's `helm-command openBrowser`). A ⌘-clicked http
+link in a terminal opens here too, as a new tab, and the keyboard stays in the terminal. Not a
+canvas: a canvas renders a file in helm's own webview.
 _Avoid_: webview, canvas, embedded browser
 
 ### What helm looks like

@@ -118,7 +118,7 @@ struct CanvasPageState: Equatable {
     /// The handler an `.html` artifact posts to:
     /// `window.webkit.messageHandlers.helmCanvasState.postMessage(…)`.
     ///
-    /// **Deliberately not `CanvasBridgePolicy.handlerName`, and deliberately not near it.** The
+    /// **Deliberately not `CanvasFileCoordinator.bridgeHandlerName`, and deliberately not near it.** The
     /// annotation bridge answers to `helmCanvas` in a named world; this answers to
     /// `helmCanvasState` in the page world. Two names, two worlds, two receivers — the day they
     /// share any of the three is the day a page can forge an annotation.

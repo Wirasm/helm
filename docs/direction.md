@@ -67,17 +67,19 @@ both are now tenants of the **right** rail, which is the shape that fits them.
   stack, each slot tabbed. A real window manager, but not a general tree — every arrangement
   worth having is columns-of-stacks, and depth-2 is a strict subset of the tree so nothing is
   foreclosed.
-- **Pane** — a workbench tenant. **Two types, and only two.**
+- **Pane** — a workbench tenant. **Three types.**
   - **Terminal** — a libghostty surface and its pty. The chat face that used to draw an
     agent's transcript over it (⌘T) was removed on the operator's ruling (#375).
-  - **Canvas** — renders a markdown file, an HTML file, or a URL, and accepts annotation on
+  - **Canvas** — renders a markdown file or an HTML file, and accepts annotation on
     it. Modular by source, extendable to further formats. This is `ArtifactPane` promoted,
     not new work — and the promotion has shipped, so it is `CanvasView` / `CanvasModel` now.
+  - **Browser** — a view onto the shared browser benchd runs (#350). A ⌘-clicked http link
+    opens there as a new tab (#376); the URL canvas that used to take it was removed.
 
   A third type was built for Archon and then removed with the rail it served. The argument for
   it is not preserved here: the operator reads run detail in Archon's own web UI, so there is
-  nothing left for a run pane to render, and a list of two is easier to defend than a list of
-  three with a footnote.
+  nothing left for a run pane to render, and a short list is easier to defend than a longer
+  one with a footnote.
 
 The canvas is **one** primitive, not three: the integrated webview, the draw-on pane and the
 agent canvas merged into it. And the agent **receives and navigates, never drives** — full

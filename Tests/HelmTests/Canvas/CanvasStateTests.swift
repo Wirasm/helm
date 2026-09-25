@@ -141,7 +141,7 @@ final class CanvasStateTests: XCTestCase {
     func testTheHandlerIsTheNameTheContractDocumentsAndIsNotTheAnnotationBridges() {
         XCTAssertEqual(CanvasPageState.handlerName, "helmCanvasState")
         XCTAssertNotEqual(
-            CanvasPageState.handlerName, CanvasBridgePolicy.handlerName,
+            CanvasPageState.handlerName, CanvasFileCoordinator.bridgeHandlerName,
             "sharing a name would put page speech and operator intent on one receiver, which is "
                 + "the one thing #164 exists to prevent")
     }
@@ -401,15 +401,6 @@ final class CanvasStateTests: XCTestCase {
                 as? [String: Any])
         XCTAssertEqual(latch["artifact"] as? String, "other.html")
         XCTAssertEqual((latch["state"] as? [String: Any])?["score"] as? Int, 7)
-    }
-
-    /// A URL canvas has no file to write beside, and a report from one must go nowhere rather
-    /// than somewhere invented.
-    func testAReportFromACanvasWithNoFileIsDropped() throws {
-        let model = CanvasModel()
-        model.openURL(URL(string: "https://example.com/dashboard")!)
-        model.pageDidReportState(try state(["score": 7]))
-        XCTAssertNil(try latchOnDisk())
     }
 
     private func state(_ object: [String: Any]) throws -> CanvasPageState {

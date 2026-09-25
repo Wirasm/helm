@@ -130,17 +130,4 @@ final class WorkbenchPlacementTests: XCTestCase {
             .existing(open.id),
             "rule 1 compares by value, so an unstandardised path silently opens a second copy")
     }
-
-    func testAURLSourceIsMatchedByValueToo() {
-        var bench = Workbench(terminal: UUID())
-        let localhost = URL(string: "http://localhost:3000")!
-        let open = Pane(content: .canvas(.url(localhost)))
-        bench.insert(open, at: .column)
-
-        XCTAssertEqual(bench.placement(forOpening: .url(localhost)), .existing(open.id))
-        XCTAssertEqual(
-            bench.placement(forOpening: .url(URL(string: "http://localhost:4000")!)),
-            .tab(in: bench.focusedSlot),
-            "a different address is a different canvas, beside the one already open")
-    }
 }
