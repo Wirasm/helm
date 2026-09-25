@@ -223,32 +223,22 @@ a rate-limit message.
 **Mail landed 2026-09-25, PR #342**: the mailroom (`bench-mail`), `bench mail
 send|list|read`, and the wake reactor — benchd pastes the notice into an idle pty it
 owns, uniformly across claude, codex and pi, with the loop cap as a per-recipient token
-bucket in the courier. The Claude Code socket poke described below was **not built**:
-#320 measured it CONDITIONAL (a yolo session holds the poke behind a modal nobody is
-watching), and pasting into a pty benchd owns needs no per-runtime transport. What is
-left is **M2 finish**: the unwire list at the end of this section.
+bucket in the courier. The Claude Code socket poke this section first planned was
+**not built**: #320 measured it CONDITIONAL (a yolo session holds the poke behind a modal
+nobody is watching), and pasting into a pty benchd owns needs no per-runtime transport.
+What is left is **M2 finish**: the unwire list at the end of this section.
 
 **Goal:** one owner for registry, liveness, and delivery; the flaky N-pairwise stitching
 collapses into taps.
 
 - benchd owns the mailbox root: claims, handles (port helm's widening + reserved
   `operator` rules), retire-never-delete, delivery notices (path, never body).
-- Wake transports, per recipient runtime: Claude Code — poke the session's
-  cross-session messaging socket (`/tmp/cc-socks/<pid>.sock`, arrives as a new user
-  turn); pi — in-process wake via the extension; any TUI at an idle prompt — benchd
-  pastes the notice into the composer and submits (guarded by the tap's idle check;
-  paste, then Return separately). Deliver-before-turn remains the no-transport
-  fallback. Note M2 is *small*: the socket post is the entire CC delivery mechanism —
-  the file record stays canonical and survives any socket incident untouched.
-- **Named precondition (verified 2026-08-11, not a footnote): every spawned Claude Code
-  agent must carry `crossSessionInbound: "accept"` in its settings.** The inbound
-  default derives from permission modes, and a bypass-permissions (yolo) session
-  **silently holds** any message whose sender doesn't identify as also bypassing — held
-  mail is dropped after the dialog expiry (default 5 min) in unattended contexts. benchd
-  never qualifies for the unverified-sender exception because that exception is for the
-  session's own *children* and benchd is the parent. Without this setting, every wake in
-  this design silently fails; the M2 prove-matrix must include a yolo→yolo wake through
-  benchd.
+- Wake: benchd pastes the notice into the recipient's idle pty (paste, then Return
+  separately), the same for claude, codex and pi, because it owns the pty. The file
+  record stays canonical; deliver-before-turn remains the fallback for a pane benchd
+  does not own. (Superseded: per-runtime transports, including the Claude Code
+  session-socket poke and its `crossSessionInbound: "accept"` precondition. #320
+  measured that a yolo session holds the poke behind a modal, so it was not built.)
 - `bench mail send|list|read` verbs; hooks and pi extension thin to sensors +
   claim-reporting; benchd optionally registers bench tenants on the CC discovery path
   so `ListAgents` sees them.
@@ -394,7 +384,8 @@ background tab on the Mac without moving focus.
 
 ## M7 — The forge
 
-**Goal:** the agents' own machine; the Mac becomes an attach point.
+**Goal:** the agents' own machine, sharing the record with the Mac through M6's synced
+folder.
 
 **Entry condition: M0–M6 complete and proven in daily use on the Mac.** This milestone
 starts when the second machine is actually purchased and wanted — not before, and never
