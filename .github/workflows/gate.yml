@@ -128,3 +128,5 @@ jobs:
       # drift this workflow exists to stop — #291 is the same lesson from the other side.
       - name: board skill
         run: bash .claude/skills/helm-board/test.sh
+      - name: post-canvas skill
+        run: bash .claude/skills/post-canvas/test.sh

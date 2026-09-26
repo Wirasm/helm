@@ -152,7 +152,8 @@ the Swift gate must not.
   either suite passes CI, and running the full command before the PR is the only thing that
   catches it.
 - **Broader on everything else**, and this is the half that surprises people: CI runs
-  `hooks/test.sh`, `helm-mail-cc/test.sh`, `helm-canvas/test.sh` and `helm-board/test.sh`
+  `hooks/test.sh`, `helm-mail-cc/test.sh`, `helm-canvas/test.sh`, `helm-board/test.sh` and
+  `post-canvas/test.sh`
   **unconditionally, on every PR**, where the rules above ask you to run each only when you
   touched what it covers. *"A gate that exists, is documented in `AGENTS.md`, and runs only when
   somebody remembers is the drift this workflow exists to stop."* The `pi-extensions` gate is the
@@ -211,6 +212,17 @@ them — checks `new-board.sh`'s refusals, and re-hashes the vendored bytes agai
 Needs node, which is why it is not in the Swift gate. **The one thing in that seam the Swift
 gate does own is `data-helm-surface`**, because three files spell it and one of them is Swift —
 see `CanvasSurface` and `CanvasSurfaceTests`.
+
+**If you touched `.claude/skills/post-canvas/`, run its gate:**
+
+```
+bash .claude/skills/post-canvas/test.sh
+```
+
+That skill previews a video stored by the archon-video workflow pack as a canvas. Its gate builds
+stored runs in a temp `ARCHON_HOME` shaped like the pack's `store.py` output, runs the driver
+against them with `--no-push` only, and executes the `SKILL.md` snippet under zsh with `PRP_HOME`
+redirected. Needs node, git and zsh, which is why it is not in the Swift gate.
 
 **If you touched either mail skill, run its gate:**
 
@@ -1137,11 +1149,11 @@ cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
 ### The helm-local skills
 
-`.claude/skills/` holds fourteen; **seven are vendored** from `mattpocock/skills` and pinned in
+`.claude/skills/` holds fifteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
-not a change. The other seven are hand-written. The first five below are helm's, the surface an agent
+not a change. The other eight are hand-written. The first six below are helm's, the surface an agent
 hosted in helm actually uses. The last two, `bench-mail` and `bench-browser`, are benchd's, and their
-snippets run in the daemon gate's conformance suite. Four gates cover the five, all listed in *Working here* above — the two mail
+snippets run in the daemon gate's conformance suite. Five gates cover the six, all listed in *Working here* above — the two mail
 skills share one, because the send and the mailbox listing are documented identically in each.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
@@ -1149,6 +1161,9 @@ skills share one, because the send and the mailbox listing are documented identi
   *what* to put in a canvas.
 - **`helm-board`** — the drawable board (#111): an agent authors labelled shapes, the operator
   draws on it by hand, and what they drew comes back as named records. Not `Sources/Helm/Board/`.
+- **`post-canvas`** — a video stored by the archon-video pack, rendered as a post preview canvas:
+  the video beside the copy that would ship with it. It pushes through `helm-canvas`'s `push.sh`,
+  so the two are installed side by side.
 - **`helm-mail-cc`** and **`helm-mail-pi`** — sending and reading mail from each runtime. One gate
   covers both, and it **executes the snippets out of `SKILL.md`** rather than restating them.
 - **`pi-extensions`** — how to build one without taking the pi CLI down, how to read the installed
