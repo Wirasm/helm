@@ -144,6 +144,7 @@ package struct BenchRequest: Codable, Equatable, Sendable {
     private enum StepKeys: String, CodingKey { case step }
     private enum DividerKeys: String, CodingKey { case between, member, against }
 
+    // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 16, limit 15
     package func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
@@ -211,6 +212,7 @@ package struct BenchRequest: Codable, Equatable, Sendable {
 
     /// Decoding exists for the conformance tests, which read the daemon's own sample requests
     /// back into this type; helm itself only ever sends.
+    // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 18, limit 15
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)

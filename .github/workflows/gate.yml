@@ -1,9 +1,10 @@
 name: gate
 
-# The three things that must be true before a merge: it builds, the tests pass, the
-# formatter is happy. Nothing else — no coverage threshold, no lint-of-the-lint, no
-# required reviewers. This project is three of us and our agents, and every rule added
-# here is a rule an agent has to satisfy at 3am with nobody to ask.
+# The things that must be true before a merge: it builds, the tests pass, the formatter is
+# happy, and no new code crosses a size or complexity limit (`.swiftlint.yml`, #418; code that
+# was already over one is marked and does not fail). Nothing else — no coverage threshold, no
+# lint-of-the-lint, no required reviewers. This project is three of us and our agents, and
+# every rule added here is a rule an agent has to satisfy at 3am with nobody to ask.
 #
 # WHY THIS EXISTS AT ALL. Two PRs merged 56 seconds apart on 2026-08-06, both green on
 # their own branches, both reviewed. #254 replaced a function; #255 called it. Git merged
@@ -72,6 +73,7 @@ jobs:
       - name: test
         run: INJECTION_NOGENERICS=1 swift test --skip TerminalKeyboardTests --skip WorkbenchFocusRoutingTests
 
+      # `make lint` is formatting plus the size and complexity limits (scripts/check-size.sh).
       - name: format
         run: make lint
 

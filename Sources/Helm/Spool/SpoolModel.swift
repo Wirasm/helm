@@ -541,6 +541,7 @@ final class SpoolModel: ObservableObject {
     }
 
     /// Start the agent, then say what was started and how to reach it.
+    // swiftlint:disable:next function_body_length - legacy (#418): 62 lines, limit 60
     private func act(on request: AcceptedSpawnRequest) async {
         guard let spawner else {
             answer(request.id, .failed, reason: "helm has no workbench to open a terminal in")
