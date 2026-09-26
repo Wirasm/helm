@@ -84,7 +84,8 @@ Claude and codex put in front of the model as hook context: a busy agent gets it
 next tool call, with nothing typed into a pty. The first event of a session helm or benchd
 declared (`HELM_PANE`, `BENCH_SESSION`) and that runs on a terminal claims its address, recorded
 in `sessions/hosted.json` so it survives a restart. A session resumed in another pane keeps its
-handle, and its record moves to the pane it reports from under the same rule (`mail/moved`). An
+handle, and its record moves to the pane it reports from under the same rule (`mail/moved`); one
+resumed outside helm keeps its handle and mail, and its old pane stops answering for it. An
 idle agent is started through its own channel instead: benchd posts the notice to a Claude
 session's inbox socket (which its hooks
 report), and a push that starts no turn in 10 s goes back to the inbox. A spawn hands its prompt
