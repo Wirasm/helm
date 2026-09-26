@@ -95,15 +95,12 @@ final class ReleaseResumeScriptTests: XCTestCase {
     /// forbids copying an Apple system binary in a test (#409, #426). Compiled once per class run,
     /// removed with it.
     private struct Stubs {
-        let directory: URL
         /// Sleeps 30s and exits: the fake helm, and a process running outside it.
         let sleeper: URL
         /// Forks one child and both sleep 30s, so a fake helm can have a descendant.
         let forker: URL
 
-        static func compile() throws -> Stubs {
-            let directory = FileManager.default.temporaryDirectory
-                .appendingPathComponent("release-resume-stubs-\(UUID().uuidString)")
+        static func compile(into directory: URL) throws -> Stubs {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
             func stub(_ name: String, _ body: String) throws -> URL {
@@ -124,7 +121,6 @@ final class ReleaseResumeScriptTests: XCTestCase {
                 return binary
             }
             return Stubs(
-                directory: directory,
                 sleeper: try stub("sleeper", "sleep(30); return 0;"),
                 forker: try stub("forker", "fork(); sleep(30); return 0;"))
         }
@@ -138,17 +134,22 @@ final class ReleaseResumeScriptTests: XCTestCase {
 
     // XCTest runs a class's `setUp`, its tests and its `tearDown` serially on one thread, so
     // nothing races on this.
+    // The directory is held apart from the result so a compile that fails halfway is still
+    // cleaned up.
+    nonisolated(unsafe) private static var stubDirectory: URL?
     nonisolated(unsafe) private static var stubs: Result<Stubs, any Error>?
 
     override class func setUp() {
         super.setUp()
-        stubs = Result { try Stubs.compile() }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("release-resume-stubs-\(UUID().uuidString)")
+        stubDirectory = directory
+        stubs = Result { try Stubs.compile(into: directory) }
     }
 
     override class func tearDown() {
-        if case .success(let built)? = stubs {
-            try? FileManager.default.removeItem(at: built.directory)
-        }
+        if let stubDirectory { try? FileManager.default.removeItem(at: stubDirectory) }
+        stubDirectory = nil
         stubs = nil
         super.tearDown()
     }
