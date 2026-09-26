@@ -3,13 +3,10 @@ import HelmWire
 
 @testable import Helm
 
-/// The bench's gestures, spelled as the methods tests have always called, and each one a verb.
-///
-/// `WorkbenchModel`'s own mutation methods take a `LocalBenchKey` only `LocalSink` can make, so
-/// nothing — tests included — can change the bench around `send`. These keep the old names so a test reads as
-/// what it does ("split right", "open this file"), and every one of them goes through the sink
-/// with the actor the old method stood for: the operator's gestures take the keyboard, the
-/// offering twins are an agent's.
+/// The bench's gestures, spelled as what they do ("split right", "open this file"), and each one a
+/// verb sent through `send` with the actor it stands for: the operator's gestures, and the
+/// offering ones an agent's. What comes back is whatever benchd — in a test, the toy
+/// (`ToyBench`) — made of it.
 @MainActor
 extension WorkbenchModel {
     @discardableResult
@@ -96,14 +93,8 @@ extension WorkbenchModel {
             by: .operatorGesture)
     }
 
-    func moveFocus(_ direction: Workbench.Direction) {
-        send(
-            .focusStep(direction: BenchDirection(rawValue: direction.rawValue)!),
-            by: .operatorGesture)
-    }
-
-    func move(_ pane: Pane.ID, _ direction: Workbench.Direction) {
-        send(.paneMove(pane, BenchDirection(rawValue: direction.rawValue)!), by: .operatorGesture)
+    func moveFocus(_ direction: BenchDirection) {
+        send(.focusStep(direction: direction), by: .operatorGesture)
     }
 
     private func session(_ pane: Pane.ID?) -> TerminalSession? {

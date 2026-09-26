@@ -25,7 +25,7 @@ final class TerminalKeyboardTests: XCTestCase {
     /// The baseline the whole suite was missing: helm, one terminal, one key, does the byte
     /// come out the other side.
     func testASynthesisedKeystrokeReachesThePty() throws {
-        let helm = HelmWindow(terminals: 1)
+        let helm = try HelmWindow(terminals: 1)
         defer { helm.close() }
 
         helm.expectKeyboard(on: helm.session(0).hostView)
@@ -41,7 +41,7 @@ final class TerminalKeyboardTests: XCTestCase {
     /// #96 as reported: ⌘N opens a tab that renders as selected, with a cursor, and swallows
     /// everything typed at it.
     func testATerminalCreatedByCommandNTakesTheKeyboard() throws {
-        let helm = HelmWindow(terminals: 1)
+        let helm = try HelmWindow(terminals: 1)
         defer { helm.close() }
 
         helm.command(.newTerminal)
@@ -62,7 +62,7 @@ final class TerminalKeyboardTests: XCTestCase {
     /// ⌘1–9. The pane comes back from the same slot, so nothing is created — the other
     /// session's long-lived view is simply mounted again.
     func testATerminalSelectedByCommandNumberTakesTheKeyboard() throws {
-        let helm = HelmWindow(terminals: 1)
+        let helm = try HelmWindow(terminals: 1)
         defer { helm.close() }
 
         helm.command(.newTerminal)
@@ -84,7 +84,7 @@ final class TerminalKeyboardTests: XCTestCase {
     /// A bench restored with two slots mounts two terminals at once. Exactly one of them is
     /// the focused pane, and the other must not fight it for the keyboard.
     func testOnlyTheFocusedSlotsTerminalTakesTheKeyboard() throws {
-        let helm = HelmWindow(terminals: 2, layout: .twoSlots)
+        let helm = try HelmWindow(terminals: 2, layout: .twoSlots)
         defer { helm.close() }
 
         let focused = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
@@ -105,7 +105,7 @@ final class TerminalKeyboardTests: XCTestCase {
     /// ⌘⌥↓ moves focus to another slot without remounting anything, so there is no window
     /// change to hear — the intent flag's own edge has to carry it.
     func testMovingFocusBetweenSlotsMovesTheKeyboard() throws {
-        let helm = HelmWindow(terminals: 2, layout: .twoSlots)
+        let helm = try HelmWindow(terminals: 2, layout: .twoSlots)
         defer { helm.close() }
 
         let first = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
@@ -133,7 +133,7 @@ final class TerminalKeyboardTests: XCTestCase {
     /// ignored. So the test goes on to move focus for real: the terminal must then take the
     /// keyboard, which is the positive control proving the pipeline was live the whole time.
     func testARedrawDoesNotStealTheKeyboardBackButAFocusChangeStillDoes() throws {
-        let helm = HelmWindow(terminals: 2, layout: .twoSlots)
+        let helm = try HelmWindow(terminals: 2, layout: .twoSlots)
         defer { helm.close() }
 
         let elsewhere = try XCTUnwrap(
@@ -179,7 +179,7 @@ final class TerminalKeyboardTests: XCTestCase {
     /// same update that hands focus to a neighbour. `testMovingFocusBetweenSlots…` proves the
     /// edge fires when both panes stay mounted; this is the same edge racing a teardown.
     func testClosingTheFocusedPaneHandsTheKeyboardToItsNeighbour() throws {
-        let helm = HelmWindow(terminals: 2)
+        let helm = try HelmWindow(terminals: 2)
         defer { helm.close() }
 
         let closing = try XCTUnwrap(helm.workbench.bench?.focusedPane?.id)
@@ -197,10 +197,10 @@ final class TerminalKeyboardTests: XCTestCase {
     /// Switching workspaces unmounts one workspace's panes and mounts another's — the fourth
     /// way a terminal gains a window, and the most frequent one in real use.
     func testSwitchingWorkspacesMovesTheKeyboardToTheNewBench() throws {
-        let helm = HelmWindow(terminals: 1)
+        let helm = try HelmWindow(terminals: 1)
         defer { helm.close() }
 
-        let arriving = helm.openAnotherWorkspace()
+        let arriving = try helm.openAnotherWorkspace()
 
         helm.expectKeyboard(
             on: helm.view(of: arriving),
@@ -220,7 +220,7 @@ final class TerminalKeyboardTests: XCTestCase {
     /// window. Under the old code the keyboard was lost for good, with no second update
     /// coming; under `viewDidMoveToWindow` it arrives with the window.
     func testATerminalThatGainsItsWindowLateStillTakesTheKeyboard() throws {
-        let helm = HelmWindow(terminals: 1, attach: .afterTheHop)
+        let helm = try HelmWindow(terminals: 1, attach: .afterTheHop)
         defer { helm.close() }
 
         helm.expectKeyboard(
@@ -259,10 +259,11 @@ private final class HelmWindow {
     let window: NSWindow
     private let ptys = PtyRegistry()
     private let workspacePath = NSTemporaryDirectory()
-    /// Every workspace this harness has activated, so `close()` can tear all of them down.
-    private var openedWorkspaces: [WorkspacePath] = []
+    /// The toy benchd the bench is drawn from (`ToyBench`), and helm's client for it.
+    private let server: FakeBenchd
+    private let client: BenchClient
 
-    init(terminals count: Int, layout: Layout = .oneSlot, attach: Attach = .immediately) {
+    init(terminals count: Int, layout: Layout = .oneSlot, attach: Attach = .immediately) throws {
         // A test bundle is not an app, and AppKit will not deliver a key event through a
         // window that belongs to no application. `.accessory` keeps it out of the Dock and
         // off the operator's screen — nothing here activates, so nothing steals their focus.
@@ -271,14 +272,16 @@ private final class HelmWindow {
 
         let registry = ptys
         terminals = TerminalManager(command: { registry.next() })
-        workbench = WorkbenchModel(terminals: terminals)
-
-        // Restore rather than open, so the ids are known before anything mounts — which is
-        // also the launch path, and one of the three cases #96 lists.
+        // Drawn from a document that already names the panes, so the ids are known before
+        // anything mounts — which is also the launch path, and one of the three cases #96 lists.
         let ids = (0..<count).map { _ in UUID() }
-        openedWorkspaces.append(WorkspacePath(workspacePath))
-        workbench.activate(
-            workspacePath: WorkspacePath(workspacePath), restoring: Self.bench(ids, layout))
+        (server, client) = try startToyBenchd(.only(workspacePath, Self.bench(ids, layout)))
+        let workbench = WorkbenchModel(terminals: terminals, agents: .blind, client: client)
+        self.workbench = workbench
+        XCTAssertNotNil(client.document(atLeast: 1, within: 5), "benchd never answered")
+        // Two panes are worth #85's question; answer it as the operator would.
+        if workbench.restoreOffer != nil { workbench.answer(.restore) }
+        XCTAssertNotNil(workbench.bench, "no bench was drawn")
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
@@ -306,16 +309,15 @@ private final class HelmWindow {
     /// Explicit rather than a `deinit`: a nonisolated deinit may not touch main-actor state,
     /// and leaving the window in the run loop leaks a Metal-backed surface into the next test.
     ///
-    /// `closeWorkspace` and not just `deactivate`, for every workspace this harness opened.
-    /// `WorkbenchModel.deactivate` clears the bench and by design never touches the manager's
-    /// sessions — so without this, releasing the ptys depends on ARC reaching `terminals`
-    /// when the harness goes out of scope. That works today and is one stray strong reference
-    /// away from a live Metal layer and display link outliving its test.
+    /// Every session is closed through the registry rather than left to ARC reaching
+    /// `terminals` when the harness goes out of scope: that is one stray strong reference away
+    /// from a live Metal layer and display link outliving its test.
     func close() {
         window.contentView = nil
         window.close()
-        for path in openedWorkspaces { terminals.closeWorkspace(path) }
-        workbench.deactivate()
+        for session in terminals.sessions { terminals.surfaces.close(session.id) }
+        client.stop()
+        server.stop()
     }
 
     /// Let AppKit, SwiftUI and ghostty run for a moment.
@@ -387,18 +389,13 @@ private final class HelmWindow {
         settle()
     }
 
-    /// Activate a second workspace on the same bench, the way `RootView` does when the
-    /// operator picks another folder. Returns the pane its terminal arrives under.
+    /// Open a second workspace, the way the operator's ⌘⇧O does. Returns the pane its terminal
+    /// arrives under.
     @discardableResult
-    func openAnotherWorkspace() -> Pane.ID {
-        let path = workspacePath + "another/"
-        let pane = UUID()
-        openedWorkspaces.append(WorkspacePath(path))
-        workbench.activate(
-            workspacePath: WorkspacePath(path),
-            restoring: Workbench(panes: [Pane(id: pane, content: .terminal())]))
+    func openAnotherWorkspace() throws -> Pane.ID {
+        workbench.send(.workspaceOpen(path: workspacePath + "another/"), by: .operatorGesture)
         settle()
-        return pane
+        return try XCTUnwrap(workbench.bench?.panes.first?.id)
     }
 
     /// A keystroke through the window, not into a view: `sendEvent` walks the responder
@@ -433,19 +430,20 @@ private final class HelmWindow {
         return codes[character] ?? 0
     }
 
-    private static func bench(_ ids: [UUID], _ layout: Layout) -> Workbench {
-        let panes = ids.map { Pane(id: $0, content: .terminal()) }
+    private static func bench(_ ids: [UUID], _ layout: Layout) -> BenchDocument.Bench {
+        let panes = ids.map { ToyBench.terminal($0) }
         switch layout {
         case .oneSlot:
-            return Workbench(panes: panes)
+            return ToyBench.bench(panes)
         case .twoSlots:
-            var bench = Workbench(panes: [panes[0]])
-            for pane in panes.dropFirst() { bench.splitDown(with: pane) }
-            // `splitDown` leaves focus on the new slot; put it back on the first, so
-            // "focused" and "mounted first" are different answers and the test can tell
-            // them apart.
-            bench.focus(bench.slots[0].id)
-            return bench
+            // Stacked, with focus on the first, so "focused" and "mounted first" are different
+            // answers and the test can tell them apart.
+            let slots = panes.map {
+                BenchDocument.Slot(
+                    id: UUID(), panes: [$0], selected: $0.id, height: 1 / Double(panes.count))
+            }
+            return .init(
+                columns: [.init(id: UUID(), slots: slots, width: 1)], focusedSlot: slots[0].id)
         }
     }
 

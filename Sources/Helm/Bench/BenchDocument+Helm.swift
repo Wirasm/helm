@@ -100,29 +100,6 @@ extension BenchDocument {
         return Set(benches + drawers.flatMap(\.panes).map(\.id))
     }
 
-    /// Every pane id on a workspace's bench or shelf — the panes helm has seen arrive. A terminal
-    /// in a drawer (#356) is not among them: a drawer belongs to no workspace, so a terminal there
-    /// has nowhere to start, and when it is moved onto a bench it arrives there, and starts.
-    var workspacePaneIDs: Set<UUID> {
-        Set(
-            workspaces.flatMap { workspace in
-                ([workspace.bench] + (workspace.shelved.map { [$0] } ?? []))
-                    .flatMap(\.columns).flatMap(\.slots).flatMap(\.panes).map(\.id)
-            })
-    }
-
-    /// The terminals on each workspace's bench that are not in `known`: what arrived since the
-    /// document those ids came from, to be started where they landed.
-    func terminals(arrivedSince known: Set<UUID>) -> [(WorkspacePath, [UUID])] {
-        workspaces.compactMap { workspace in
-            let arrived = workspace.bench.columns.flatMap(\.slots).flatMap(\.panes)
-                .filter { !known.contains($0.id) }
-                .filter { if case .terminal = $0.surface { true } else { false } }
-                .map(\.id)
-            return arrived.isEmpty ? nil : (WorkspacePath(workspace.path), arrived)
-        }
-    }
-
     /// The drawer a pane is in, if it is in one.
     func drawer(holding pane: UUID) -> Drawer? {
         drawers.first { $0.panes.contains { $0.id == pane } }

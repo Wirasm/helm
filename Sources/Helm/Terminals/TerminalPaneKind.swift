@@ -17,9 +17,6 @@ final class TerminalPaneKind: SurfaceKind {
 
     let kind: Pane.Content.Kind = .terminal
 
-    /// A pty is the work itself, and a shell in a parked workspace keeps running.
-    let survivesUnmount = true
-
     func make(for pane: Pane, in workspace: WorkspacePath?) -> TerminalSession? { nil }
 
     func view(of session: TerminalSession, in slot: SurfaceSlot) -> AnyView {

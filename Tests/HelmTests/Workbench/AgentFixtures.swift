@@ -11,8 +11,8 @@ import Foundation
 extension AgentObserver {
     /// An observer that sees no agents anywhere and finds every transcript present.
     ///
-    /// The default for any test whose subject is not #63: it makes `activate` and `mount`
-    /// deterministic without asserting anything about them.
+    /// The default for any test whose subject is not #63: it makes drawing a bench
+    /// deterministic without asserting anything about agents.
     @MainActor
     static var blind: AgentObserver {
         AgentObserver(

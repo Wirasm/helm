@@ -5,33 +5,37 @@ import XCTest
 
 @MainActor
 final class BenchSnapshotTests: XCTestCase {
-    private func defaults() throws -> UserDefaults {
-        try isolatedDefaults("bench-snapshot")
-    }
-
+    /// helm drawn from a toy benchd with `workspace` open on `bench`, and the workspace list
+    /// following the document as `RootView` wires it.
     private func mounted(
         workspace: Workspace,
-        restoring bench: Workbench? = nil
+        restoring bench: BenchDocument.Bench = ToyBench.bench([ToyBench.terminal()])
     ) throws -> (WorkspaceModel, WorkbenchModel, TerminalManager) {
-        let terminals = TerminalManager()
-        let workbench = WorkbenchModel(terminals: terminals)
-        let workspaces = WorkspaceModel(defaults: try defaults())
-        workspaces.open(workspace)
-        workbench.activate(workspacePath: workspace.path, restoring: bench)
-        return (workspaces, workbench, terminals)
+        let rig = try toyRig(
+            document: BenchDocument(
+                workspaces: [.init(path: workspace.path.value, bench: bench)],
+                active: workspace.path.value))
+        let workspaces = WorkspaceModel()
+        rig.model.followDocuments { workspaces.follow($0) }
+        return (workspaces, rig.model, rig.terminals)
     }
 
     func testProjectionPreservesVisualOrderSelectionVisibilityAndFocus() throws {
         let first = UUID()
         let hidden = UUID()
         let canvas = UUID()
-        var bench = Workbench(
-            panes: [
-                Pane(id: first, content: .terminal()),
-                Pane(id: hidden, content: .terminal()),
+        let tabs = BenchDocument.Slot(
+            id: UUID(), panes: [ToyBench.terminal(first), ToyBench.terminal(hidden)],
+            selected: hidden, height: 1)
+        let right = BenchDocument.Slot(
+            id: UUID(), panes: [.init(id: canvas, surface: .canvas(path: "/tmp/plan.md"))],
+            selected: canvas, height: 1)
+        let bench = BenchDocument.Bench(
+            columns: [
+                .init(id: UUID(), slots: [tabs], width: 0.5),
+                .init(id: UUID(), slots: [right], width: 0.5),
             ],
-            selecting: hidden)
-        bench.splitRight(with: Pane(id: canvas, content: .canvas(.file("/tmp/plan.md"))))
+            focusedSlot: right.id)
         let workspace = Workspace(path: "/tmp/bench-snapshot-order")
         let (workspaces, workbench, terminals) = try mounted(
             workspace: workspace, restoring: bench)
@@ -55,20 +59,23 @@ final class BenchSnapshotTests: XCTestCase {
         XCTAssertEqual(record.columns[1].slots[0].panes[0].canvas?.source, .file("/tmp/plan.md"))
     }
 
+    /// Two workspaces, `parked` shown first and then left for `live` — so `parked`'s terminal
+    /// is running, in the background, when the snapshot is taken.
+    private func parkedAndLive(
+        _ parked: Workspace, _ live: Workspace
+    ) throws -> (WorkspaceModel, WorkbenchModel, TerminalManager) {
+        let (workspaces, workbench, terminals) = try mounted(workspace: parked)
+        workbench.send(.workspaceOpen(path: live.path.value), by: .operatorGesture)
+        XCTAssertEqual(workbench.workspacePath, live.path)
+        return (workspaces, workbench, terminals)
+    }
+
     func testParkedWorkspaceKeepsLiveTerminalIdentityButNeverClaimsVisibility() throws {
         let first = Workspace(path: "/tmp/bench-snapshot-live")
         let parked = Workspace(path: "/tmp/bench-snapshot-parked")
-        let terminals = TerminalManager()
-        let workbench = WorkbenchModel(terminals: terminals)
-        let workspaces = WorkspaceModel(defaults: try defaults())
-
-        workspaces.open(parked)
-        workbench.activate(workspacePath: parked.path)
+        let (workspaces, workbench, terminals) = try parkedAndLive(parked, first)
         let parkedTerminal = try XCTUnwrap(terminals.sessions(for: parked.path).first)
-        workspaces.saveContext(terminalManager: terminals, workbench: workbench)
 
-        workspaces.open(first)
-        workbench.activate(workspacePath: first.path)
         let value = BenchSnapshot.project(
             writtenAt: .now,
             workspaces: workspaces,
@@ -79,33 +86,22 @@ final class BenchSnapshotTests: XCTestCase {
         let parkedRecord = try XCTUnwrap(value.workspaces.first { $0.path == parked.path })
         let pane = try XCTUnwrap(parkedRecord.columns.first?.slots.first?.panes.first)
         XCTAssertEqual(parkedRecord.state, .parked)
-        XCTAssertTrue(pane.isSelected, "the persisted selection is still useful arrangement")
-        XCTAssertFalse(pane.isVisible, "a parked selection is not on screen")
-        XCTAssertFalse(pane.isFocused, "parked focusedSlot is only persisted arrangement")
+        XCTAssertTrue(pane.isSelected, "the selection is still useful arrangement")
+        XCTAssertFalse(pane.isVisible, "a background selection is not on screen")
+        XCTAssertFalse(pane.isFocused, "a background focusedSlot is only arrangement")
         XCTAssertTrue(pane.terminal?.isLive == true)
         XCTAssertEqual(pane.terminal?.sessionId, parkedTerminal.id)
     }
 
     /// The gate everything else in `project` is decided by: `workspace.path == mountedPath`.
-    /// #227 — `testParkedWorkspaceKeepsLiveTerminalIdentityButNeverClaimsVisibility` above
-    /// pins one workspace's own record; this pins the JOIN across two, which is what the
-    /// gate actually routes. A snapshot scoped to the mounted workspace has to carry its own
-    /// terminal and must not carry a parked workspace's — and the reverse for the parked
-    /// workspace's own record.
+    /// #227 — the test above pins one workspace's own record; this pins the JOIN across two,
+    /// which is what the gate actually routes. The background workspace's bench comes from
+    /// benchd's document (plan D2 of #354).
     func testMountedWorkspaceShowsItsOwnTerminalAndExcludesAParkedWorkspaces() throws {
         let parked = Workspace(path: "/tmp/bench-snapshot-routing-parked")
         let live = Workspace(path: "/tmp/bench-snapshot-routing-live")
-        let terminals = TerminalManager()
-        let workbench = WorkbenchModel(terminals: terminals)
-        let workspaces = WorkspaceModel(defaults: try defaults())
-
-        workspaces.open(parked)
-        workbench.activate(workspacePath: parked.path)
+        let (workspaces, workbench, terminals) = try parkedAndLive(parked, live)
         let parkedTerminal = try XCTUnwrap(terminals.sessions(for: parked.path).first)
-        workspaces.saveContext(terminalManager: terminals, workbench: workbench)
-
-        workspaces.open(live)
-        workbench.activate(workspacePath: live.path)
         let liveTerminal = try XCTUnwrap(terminals.sessions(for: live.path).first)
 
         let value = BenchSnapshot.project(

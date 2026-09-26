@@ -74,8 +74,9 @@ struct WorkbenchView: View {
                         axis: .horizontal, extent: geo.size.width, members: bench.columns,
                         fraction: { $0.width }, minimumExtent: Self.minimumColumnWidth,
                         resize: {
-                            model.resize(
-                                .columns(member: $0, against: $2), to: $1, released: $3)
+                            model.send(
+                                .layoutResize(.columns(member: $0, against: $2), fraction: $1),
+                                by: .operatorGesture)
                         }
                     ) { column in
                         ColumnView(
@@ -218,7 +219,9 @@ private struct ColumnView: View {
             axis: .vertical, extent: height, members: column.slots,
             fraction: { $0.height }, minimumExtent: WorkbenchView.minimumSlotHeight,
             resize: {
-                model.resize(.slots(member: $0, against: $2), to: $1, released: $3)
+                model.send(
+                    .layoutResize(.slots(member: $0, against: $2), fraction: $1),
+                    by: .operatorGesture)
             }
         ) { slot in
             SlotView(

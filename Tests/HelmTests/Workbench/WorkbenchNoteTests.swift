@@ -1,4 +1,5 @@
 import AppKit
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -6,8 +7,8 @@ import XCTest
 /// ⌘⇧N end to end on the bench: the file, the pane, the keyboard, and what happens when helm
 /// cannot make one (#289).
 ///
-/// A real `WorkbenchModel` against an isolated `TerminalManager` and a **temporary artifact
-/// root** — nothing here can reach the operator's own `~/.prp`.
+/// A real `WorkbenchModel` against a toy benchd (`ToyBench`), an isolated `TerminalManager` and a
+/// **temporary artifact root** — nothing here can reach the operator's own `~/.prp`.
 @MainActor
 final class WorkbenchNoteTests: XCTestCase {
     private var root: URL!
@@ -28,16 +29,44 @@ final class WorkbenchNoteTests: XCTestCase {
         try? FileManager.default.removeItem(at: root.deletingLastPathComponent())
     }
 
-    private func mounted() -> WorkbenchModel {
-        let model = WorkbenchModel(terminals: TerminalManager(), artifactRoot: root)
-        model.activate(workspacePath: workspace)
-        return model
+    private var rig: ToyRig?
+
+    /// helm with `workspace` open, or nothing open when `open` is false.
+    private func mounted(
+        open: Bool = true, artifactRoot: URL? = nil,
+        resolveRepository: (@Sendable (String) async throws -> String)? = nil
+    ) throws -> WorkbenchModel {
+        let root = artifactRoot ?? self.root!
+        let document =
+            open
+            ? BenchDocument(
+                workspaces: [
+                    .init(path: workspace.value, bench: ToyBench.bench([ToyBench.terminal()]))
+                ], active: workspace.value)
+            : BenchDocument(workspaces: [], active: nil)
+        let rig = try toyRig(document: document) { terminals, client in
+            if let resolveRepository {
+                WorkbenchModel(
+                    terminals: terminals, agents: .blind, artifactRoot: root,
+                    resolveRepository: resolveRepository, client: client)
+            } else {
+                WorkbenchModel(
+                    terminals: terminals, agents: .blind, artifactRoot: root, client: client)
+            }
+        }
+        self.rig = rig
+        return rig.model
+    }
+
+    /// Closing the last workspace, as the operator does it.
+    private func closeTheWorkspace(_ model: WorkbenchModel) {
+        model.send(.workspaceClose(path: workspace.value), by: .operatorGesture)
     }
 
     // MARK: - What ⌘⇧N does
 
     func testANoteBecomesAFileAPaneAndAnOpenEditor() async throws {
-        let model = mounted()
+        let model = try mounted()
 
         let id = try await note(model, on: day("2026-08-07"))
 
@@ -61,21 +90,22 @@ final class WorkbenchNoteTests: XCTestCase {
     }
 
     /// **This one seizes, deliberately** — and it is the contrast that makes the spool's refusal
-    /// mean something. `Workbench.offer` exists for what nobody asked for; the operator pressed a
-    /// key and expects to type.
-    func testANoteTakesTheKeyboardBecauseTheOperatorAskedForIt() async throws {
-        let model = mounted()
+    /// mean something. An agent's push is an agent's verb and appears without focus (#125); the
+    /// operator pressed a key and expects to type, so the note is his `pane/open`.
+    func testANoteIsTheOperatorsOpen() async throws {
+        let model = try mounted()
 
-        let id = try await note(model)
+        _ = try await note(model)
 
+        let sent = try XCTUnwrap(rig?.server.verbs.last)
+        XCTAssertEqual(sent["verb"] as? String, "pane/open")
         XCTAssertEqual(
-            model.bench?.focusedPane?.id, id,
-            "an agent's push appears without focus (#125); the operator's own note is the case "
-                + "that is supposed to take it")
+            (sent["by"] as? [String: Any])?["kind"] as? String, "operator",
+            "the operator's own note is the case that is supposed to take the keyboard")
     }
 
     func testASecondNoteIsASecondPaneAndASecondFile() async throws {
-        let model = mounted()
+        let model = try mounted()
 
         let first = try await note(model, on: day("2026-08-07"))
         let second = try await note(model, on: day("2026-08-07"))
@@ -86,12 +116,12 @@ final class WorkbenchNoteTests: XCTestCase {
                 .count, 2)
     }
 
-    /// **`deactivate` lets the canvases go**, through the canvas kind's `close()` since PR 3a of
-    /// #354 (it used to drop them unclosed after a separate flush). Either way it is a teardown
-    /// that would take a note being typed with it if nothing saved first: a pending save holds its
-    /// model weakly, so the model deallocs and the keystrokes since the last write are gone.
+    /// **Closing the workspace lets the canvases go**, through the canvas kind's `close()` as each
+    /// pane leaves the document. It is a teardown that would take a note being typed with it if
+    /// nothing saved first: a pending save holds its model weakly, so the model deallocs and the
+    /// keystrokes since the last write are gone.
     func testClosingTheLastWorkspaceSavesANoteBeingTyped() async throws {
-        let model = mounted()
+        let model = try mounted()
         let id = try await note(model, on: day("2026-08-07"))
         let pane = try XCTUnwrap(model.bench?.pane(id))
         guard case let .canvas(.file(path)) = pane.content else {
@@ -99,7 +129,7 @@ final class WorkbenchNoteTests: XCTestCase {
         }
         model.canvas(for: pane).edit("typed, and then the workspace went away")
 
-        model.deactivate()
+        closeTheWorkspace(model)
 
         XCTAssertEqual(
             try String(contentsOfFile: path.value, encoding: .utf8),
@@ -113,7 +143,7 @@ final class WorkbenchNoteTests: XCTestCase {
     /// and quitting there lost the whole note. Posted here as the notification rather than
     /// simulated, so what is measured is the subscription — the thing that was missing.
     func testQuittingWritesANoteThatHasNeverBeenSavedEvenOnce() async throws {
-        let model = mounted()
+        let model = try mounted()
         let id = try await note(model, on: day("2026-08-07"))
         let pane = try XCTUnwrap(model.bench?.pane(id))
         guard case let .canvas(.file(path)) = pane.content else {
@@ -133,13 +163,14 @@ final class WorkbenchNoteTests: XCTestCase {
     }
 
     /// **The third exit that takes the same position, and the one whose own comment used to say
-    /// the debounce race was the only thing it could lose.** `deactivate` saves through
-    /// `saveDraft` (the canvas kind's `close`), which refuses while a conflict is up, so switching workspace with the strip on
-    /// screen drops that buffer exactly as closing the pane and quitting do.
+    /// the debounce race was the only thing it could lose.** A closing pane saves through
+    /// `saveDraft` (the canvas kind's `close`), which refuses while a conflict is up, so closing
+    /// the workspace with the strip on screen drops that buffer exactly as closing the pane and
+    /// quitting do.
     ///
     /// One test per exit: it was claimed in three comments and checked in one.
     func testClosingTheLastWorkspaceWithAnUnresolvedConflictKeepsTheFile() async throws {
-        let model = mounted()
+        let model = try mounted()
         let id = try await note(model, on: day("2026-08-07"))
         let pane = try XCTUnwrap(model.bench?.pane(id))
         guard case let .canvas(.file(path)) = pane.content else {
@@ -152,12 +183,12 @@ final class WorkbenchNoteTests: XCTestCase {
         canvas.refresh()
         XCTAssertNotNil(canvas.draft?.conflict, "the arrangement is the conflict, so it must exist")
 
-        model.deactivate()
+        closeTheWorkspace(model)
 
         XCTAssertEqual(
             try String(contentsOfFile: path.value, encoding: .utf8),
             "somebody else got here first",
-            "switching workspace must not become a way a conflict gets decided by a write")
+            "closing the workspace must not become a way a conflict gets decided by a write")
     }
 
     /// **The cost of the conflict guard at the one exit that cannot ask, stated as a test rather
@@ -172,7 +203,7 @@ final class WorkbenchNoteTests: XCTestCase {
     /// Posted as the real notification, like the test above it, so what is measured is the
     /// subscription rather than a simulation of it.
     func testQuittingWithAnUnresolvedConflictKeepsTheFileAndLosesTheBuffer() async throws {
-        let model = mounted()
+        let model = try mounted()
         let id = try await note(model, on: day("2026-08-07"))
         let pane = try XCTUnwrap(model.bench?.pane(id))
         guard case let .canvas(.file(path)) = pane.content else {
@@ -199,8 +230,8 @@ final class WorkbenchNoteTests: XCTestCase {
     /// A keystroke that silently does nothing is the failure shape `AGENTS.md` records paying for
     /// repeatedly. With no workspace there is no project whose store a note would belong to, and
     /// the operator is told which thing to do about it.
-    func testWithNoWorkspaceOpenTheOperatorIsToldRatherThanNothingHappening() async {
-        let model = WorkbenchModel(terminals: TerminalManager(), artifactRoot: root)
+    func testWithNoWorkspaceOpenTheOperatorIsToldRatherThanNothingHappening() async throws {
+        let model = try mounted(open: false)
 
         let id = await model.newNote()
         XCTAssertNil(id)
@@ -208,11 +239,9 @@ final class WorkbenchNoteTests: XCTestCase {
         XCTAssertEqual(model.noteFailure, OperatorNote.Failure.noWorkspace.sentence)
     }
 
-    func testAnArtifactRootHelmCannotWriteIntoIsReportedOnTheBench() async {
-        let model = WorkbenchModel(
-            terminals: TerminalManager(),
+    func testAnArtifactRootHelmCannotWriteIntoIsReportedOnTheBench() async throws {
+        let model = try mounted(
             artifactRoot: URL(fileURLWithPath: "/System/helm-should-not-write-here"))
-        model.activate(workspacePath: workspace)
 
         let id = await model.newNote()
         XCTAssertNil(id)
@@ -226,11 +255,8 @@ final class WorkbenchNoteTests: XCTestCase {
 
     /// **A git that does not answer is a sentence, not a frozen window or a note in the wrong
     /// store** (#390). The resolver throws what `Subprocess` throws at its deadline.
-    func testAGitThatDoesNotAnswerIsReportedAndWritesNothing() async {
-        let model = WorkbenchModel(
-            terminals: TerminalManager(), artifactRoot: root,
-            resolveRepository: { _ in throw Subprocess.Failure.timedOut })
-        model.activate(workspacePath: workspace)
+    func testAGitThatDoesNotAnswerIsReportedAndWritesNothing() async throws {
+        let model = try mounted(resolveRepository: { _ in throw Subprocess.Failure.timedOut })
         let before = model.bench?.panes.count
 
         let id = await model.newNote()
@@ -251,20 +277,17 @@ final class WorkbenchNoteTests: XCTestCase {
     func testSwitchingWorkspaceWhileGitRunsStartsNoNote() async throws {
         let (entered, enteredSignal) = AsyncStream<Void>.makeStream()
         let (release, releaseSignal) = AsyncStream<Void>.makeStream()
-        let model = WorkbenchModel(
-            terminals: TerminalManager(), artifactRoot: root,
-            resolveRepository: { path in
-                enteredSignal.yield()
-                for await _ in release { break }
-                return WorkspaceStore.resolved(path)
-            })
-        model.activate(workspacePath: workspace)
+        let model = try mounted(resolveRepository: { path in
+            enteredSignal.yield()
+            for await _ in release { break }
+            return WorkspaceStore.resolved(path)
+        })
         let other = folder.deletingLastPathComponent().appendingPathComponent("other")
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
 
         let pending = Task { await model.newNote() }
         for await _ in entered { break }
-        model.activate(workspacePath: WorkspacePath(other.path))
+        model.send(.workspaceOpen(path: other.path), by: .operatorGesture)
         releaseSignal.yield()
         let id = await pending.value
 
@@ -278,11 +301,9 @@ final class WorkbenchNoteTests: XCTestCase {
     /// **The control**: a failure must not leave the bench different from how it found it. It
     /// would pass by doing nothing at all, which is exactly what it is measuring — the two tests
     /// above are what stop "does nothing" being an acceptable answer overall.
-    func testAFailedNoteAddsNoPane() async {
-        let model = WorkbenchModel(
-            terminals: TerminalManager(),
+    func testAFailedNoteAddsNoPane() async throws {
+        let model = try mounted(
             artifactRoot: URL(fileURLWithPath: "/System/helm-should-not-write-here"))
-        model.activate(workspacePath: workspace)
         let before = model.bench?.panes.count
 
         _ = await model.newNote()

@@ -31,7 +31,7 @@ import HelmWire
 /// NOT expand `~` — a different function from `FilesystemPath.normalized`'s
 /// tilde-expand-plus-trailing-slash-trim, and one that would have silently changed a persisted
 /// `~/Projects/foo` into a literal `~` directory on the next launch, and re-normalized every
-/// `BenchSnapshot` and `WorkspaceContext` path to a different string. `FilesystemPath
+/// `BenchSnapshot` and saved workspace path to a different string. `FilesystemPath
 /// .normalized` deliberately does NOT resolve symlinks either — the path the operator chose is
 /// the path helm shows and filters on.
 ///
@@ -64,7 +64,7 @@ struct WorkspacePath: Equatable, Hashable, Codable, Sendable {
 
     /// A single-value container, so the wire shape is a bare string — byte-identical to the
     /// `String` this type replaces. `BenchSnapshot.WorkspaceRecord.path` is read by agents
-    /// outside the process and `WorkspaceContext` is restored across a relaunch; neither may
+    /// outside the process and helm's old saved list is read by `BenchImport`; neither may
     /// change shape for this refactor to be safe.
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()

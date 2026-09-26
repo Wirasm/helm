@@ -11,8 +11,7 @@ import HelmWire
 /// genuinely here is *how*: which of helm's two shapes an allowed command routes to.
 ///
 /// **Four of the five are bench verbs, sent as an agent**, so the sink leaves the keyboard where
-/// the operator put it — the same rule every agent's verb gets (`LocalSink`, and benchd's
-/// `Focus`). `newTerminal` is `pane/open` of a terminal, the splits are `pane/split`, and
+/// the operator put it — the same rule every agent's verb gets (benchd's `Focus`). `newTerminal` is `pane/open` of a terminal, the splits are `pane/split`, and
 /// `openBrowser` is `pane/open` of the browser (#350).
 ///
 /// `toggleRail` is the fifth and touches no pane: it shows or hides chrome beside the bench, so

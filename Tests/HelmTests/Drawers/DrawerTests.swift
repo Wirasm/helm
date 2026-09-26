@@ -29,7 +29,7 @@ final class DrawerTests: XCTestCase {
             terminals: terminals, agents: .blind,
             makeBrowser: makeBrowser
                 ?? { BrowserPaneModel(environment: ["BENCH_DIR": root.path], home: root) },
-            mode: .daemon(client))
+            client: client)
         addTeardownBlock { @MainActor in
             client.stop()
             server.stop()
@@ -121,8 +121,11 @@ final class DrawerTests: XCTestCase {
 
         rig.server.push(document(bench, seq: 2, drawers: [drawer]))
         XCTAssertTrue(Eventually.holds { rig.model.openDrawer == nil })
-        rig.model.closeWorkspace(WorkspacePath(path))
-        rig.server.push(document(bench, seq: 3, drawers: [drawer], open: "browser"))
+        rig.server.push(
+            DocumentAt(
+                seq: 3, document: BenchDocument(workspaces: [], active: nil, drawers: [drawer])))
+        XCTAssertTrue(Eventually.holds { rig.model.document?.workspaces.isEmpty == true })
+        rig.server.push(document(bench, seq: 4, drawers: [drawer], open: "browser"))
         XCTAssertTrue(Eventually.holds { rig.model.openDrawer != nil })
         XCTAssertNotNil(rig.model.surfaceView(of: pane, in: slot))
 
@@ -136,7 +139,7 @@ final class DrawerTests: XCTestCase {
         let rig = try rig(document(BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
         let defaults = try isolatedDefaults("drawer-key")
         let actions = LocalActions(
-            workbench: rig.model, workspaces: WorkspaceModel(defaults: defaults),
+            workbench: rig.model, workspaces: WorkspaceModel(),
             rail: ArchonRailModel(client: FakeArchonClient(), defaults: defaults),
             terminals: rig.terminals)
 
@@ -205,6 +208,6 @@ final class DrawerTests: XCTestCase {
                 DrawerCapsule(name: "browser", isOpen: true, isBadged: false),
                 DrawerCapsule(name: "notes", isOpen: false, isBadged: true),
             ])
-        XCTAssertEqual(DrawerCapsule.of(nil), [], "local mode has no drawers")
+        XCTAssertEqual(DrawerCapsule.of(nil), [], "before the first document there are no drawers")
     }
 }

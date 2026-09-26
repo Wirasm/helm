@@ -83,9 +83,7 @@ struct StatusBarView: View {
                 workbench.send(.paneOpen(surface: .canvas(path: log)), by: .operatorGesture)
             }
             DrawerCapsules(model: workbench)
-            if let client = workbench.mode.client {
-                BenchStatusBadge(client: client, workbench: workbench)
-            }
+            BenchStatusBadge(client: workbench.client, workbench: workbench)
             isolationBadge
             keymapBadge
             buildBadge

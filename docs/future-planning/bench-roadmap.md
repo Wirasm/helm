@@ -171,8 +171,8 @@ against the real CLI.
 >
 > Tracking issue: **#362**; each step below has its own.
 >
-> 1. **M4** (#354) — the bench document, the verb seam and the surface model move to benchd.
->    The foundation: helm becomes a client of one document, and every later verb is
+> 1. **M4** (#354), **landed 2026-09-26** — the bench document, the verb seam and the surface
+>    model are benchd's, and helm is a client of that one document: every later verb is
 >    "mutate the document".
 > 2. **M2 finish** (#358) — one mailroom: unwire helm's mail hooks and the pi watcher down to
 >    sensors, so `bench mail` reaches every agent, the ones in helm panes included. Moved
@@ -348,7 +348,9 @@ readers first.
 published on #354. Four PRs: (1) the bench document ported to a pure Rust crate,
 `bench-doc`, with the Swift tests mirrored; (2) layout verbs on the socket, `bench.json`
 and `events --follow`; (3) helm as a client behind `HELM_BENCH=daemon`, with a one-time
-import; (4) delete the Swift made dead. Also ruled: **D3** `make install` installs benchd
+import; (4) delete the Swift made dead. **Landed 2026-09-26:** client mode is the only mode;
+the local bench, its defaults persistence and the switch are gone, and the import stays until
+every machine has run it. D3 shipped earlier as `just benchd-install`. Also ruled: **D3** `make install` installs benchd
 as a launchd agent in PR 4, and helm never spawns it; **D4** the restore-or-fresh question
 (#85) stays in helm until M5b. Known gap until M5b: a spool spawn still switches the
 operator to its workspace, because a pty helm hosts only starts once its pane is on

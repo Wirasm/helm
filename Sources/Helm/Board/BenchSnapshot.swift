@@ -3,8 +3,9 @@ import HelmWire
 
 /// The agent-readable projection of helm's current bench.
 ///
-/// This is reporting state, never restore state. `WorkspaceContext.workbench` remains the
-/// persistence authority; a reader uses `writtenAt` to decide whether this file is fresh.
+/// This is reporting state, never restore state: benchd's document is the bench, and this adds
+/// what only helm can see — ptys, titles, visibility, each agent's own status (plan D2 of #354).
+/// A reader uses `writtenAt` to decide whether this file is fresh.
 struct BenchSnapshot: Codable, Equatable {
     /// Everything except *when it was written*. `BenchSnapshotModel` skips a write whose content
     /// is unchanged, so that `writtenAt` is a change signal rather than a heartbeat — and the one
@@ -53,9 +54,8 @@ struct BenchSnapshot: Codable, Equatable {
                 let bench =
                     mounted
                     ? workbench.bench
-                    : workspaces.contexts[workspace.path.value]?.workbench
-                        ?? Workbench.migrating(
-                            from: workspaces.contexts[workspace.path.value] ?? WorkspaceContext())
+                    : workbench.document?.workspace(at: workspace.path)
+                        .flatMap { Workbench(document: $0.bench) }
                 return WorkspaceRecord(
                     workspace: workspace,
                     state: mounted ? .mounted : .parked,

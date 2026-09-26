@@ -244,7 +244,7 @@ package struct NameReport: Codable, Equatable {
 /// That policy argues at length that showing a pane in another slot cannot move the keyboard. An
 /// argument in a header is a claim; two readings of `Workbench.focusedPane` taken either side of
 /// the mutation are a measurement, and the caller gets to make it rather than trusting this
-/// repo's comments. They are equal on every select helm allows — `WorkbenchTests` and
+/// repo's comments. They are equal on every select helm allows — `bench-doc`'s focus tests and
 /// `SpoolSelectPolicyTests` both pin it — and a change that broke it would say so in its own
 /// result rather than only in a review.
 package struct SelectReport: Codable, Equatable {
@@ -288,7 +288,7 @@ package struct SelectReport: Codable, Equatable {
 /// keyboard. An argument in a header is a claim; two readings of `Workbench.focusedPane` taken
 /// either side of the mutation are a measurement, and the caller gets to make it rather than
 /// trusting this repo's comments. They are equal on every command in the allowlist —
-/// `SpoolCommandPolicyTests` and `WorkbenchTests` both assert it — and a future command that
+/// `SpoolCommandPolicyTests` and `bench-doc`'s focus tests both assert it — and a future command that
 /// broke that would say so in its own result rather than only in a review.
 ///
 /// A `TerminalID` for a pane that may hold a canvas is the currency the spool already uses:

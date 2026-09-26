@@ -19,9 +19,6 @@ final class SessionsPaneKind: SurfaceKind {
 
     let kind: Pane.Content.Kind = .sessions
 
-    /// Rebuilt on demand: the list is benchd's, and a model holds nothing worth keeping.
-    let survivesUnmount = false
-
     func make(for pane: Pane, in workspace: WorkspacePath?) -> SessionsModel? {
         guard let workbench, let terminals else { return nil }
         return SessionsModel(actions: .live(workbench: workbench, terminals: terminals))

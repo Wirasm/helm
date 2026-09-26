@@ -1,3 +1,4 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -9,6 +10,14 @@ import XCTest
 final class WorkspaceBranchTests: XCTestCase {
     private let workspace = Workspace(path: "/tmp/helm-branch-tests")
 
+    /// benchd's document naming `workspaces`, the first on screen.
+    private func document(_ workspaces: [Workspace]) -> BenchDocument {
+        BenchDocument(
+            workspaces: workspaces.map {
+                .init(path: $0.path.value, bench: ToyBench.bench([ToyBench.terminal()]))
+            }, active: workspaces.first?.path.value)
+    }
+
     /// What git answers, changed by the test between asks.
     private actor Git {
         var branch: String?
@@ -17,9 +26,8 @@ final class WorkspaceBranchTests: XCTestCase {
 
     func testTheLabelFollowsTheBranchTheFolderIsOnNow() async throws {
         let git = Git()
-        let model = WorkspaceModel(
-            defaults: try isolatedDefaults("branch-follows"), readBranch: { _ in await git.branch })
-        model.open(workspace)
+        let model = WorkspaceModel(readBranch: { _ in await git.branch })
+        model.follow(document([workspace]))
 
         await git.set("main")
         await model.refreshBranch(for: workspace)
@@ -40,13 +48,12 @@ final class WorkspaceBranchTests: XCTestCase {
     /// A workspace closed while git was still answering does not get its label back.
     func testAnAnswerForAClosedWorkspaceIsDropped() async throws {
         let git = SlowGit()
-        let model = WorkspaceModel(
-            defaults: try isolatedDefaults("branch-closed"), readBranch: { _ in await git.ask() })
-        model.open(workspace)
+        let model = WorkspaceModel(readBranch: { _ in await git.ask() })
+        model.follow(document([workspace]))
 
         let refresh = Task { await model.refreshBranch(for: workspace) }
         await git.untilAsked()
-        model.close(workspace)
+        model.follow(document([]))
         await git.answer("main")
         await refresh.value
 
@@ -75,23 +82,6 @@ final class WorkspaceBranchTests: XCTestCase {
             pending?.resume(returning: branch)
             pending = nil
         }
-    }
-
-    /// A relaunch starts with no label and asks, even over a blob an older build wrote with
-    /// `branchResolved: true`, the flag that used to stop every later ask.
-    func testARelaunchRemembersNoBranch() async throws {
-        let defaults = try isolatedDefaults("branch-relaunch")
-        defaults.set(
-            #"{"\#(workspace.path.value)":{"branch":"old","branchResolved":true}}"#,
-            forKey: WorkspaceContextStore.key)
-        let first = WorkspaceModel(defaults: defaults, readBranch: { _ in "main" })
-        first.open(workspace)
-        await first.refreshBranch(for: workspace)
-
-        let relaunched = WorkspaceModel(defaults: defaults, readBranch: { _ in "today" })
-        XCTAssertNil(relaunched.branches[workspace.path], "nothing about the branch persisted")
-        await relaunched.refreshBranch(for: workspace)
-        XCTAssertEqual(relaunched.branches[workspace.path], "today")
     }
 
     /// The default reader against a real repository: the branch it is on, and a new one after a

@@ -6,17 +6,14 @@ import XCTest
 @MainActor
 final class BenchSnapshotModelTests: XCTestCase {
     private var root: URL!
-    private var defaults: UserDefaults!
 
     override func setUp() async throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("helm-bench-model-\(UUID().uuidString)")
-        defaults = try isolatedDefaults("bench-snapshot-model")
     }
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: root)
-        defaults = nil
         root = nil
     }
 
@@ -25,12 +22,13 @@ final class BenchSnapshotModelTests: XCTestCase {
         now: @escaping () -> Date = Date.init,
         foregroundPid: @escaping (TerminalSession) -> pid_t? = { _ in nil },
         writer: BenchSnapshotModel.Writer? = nil
-    ) -> (BenchSnapshotModel, WorkspaceModel, WorkbenchModel, TerminalManager) {
-        let terminals = TerminalManager()
-        let workbench = WorkbenchModel(terminals: terminals)
-        let workspaces = WorkspaceModel(defaults: defaults)
-        workspaces.open(Workspace(path: "/tmp/bench-snapshot-model"))
-        workbench.activate(workspacePath: WorkspacePath("/tmp/bench-snapshot-model"))
+    ) throws -> (BenchSnapshotModel, WorkspaceModel, WorkbenchModel, TerminalManager) {
+        let rig = try toyRig("/tmp/bench-snapshot-model")
+        let terminals = rig.terminals
+        let workbench = rig.model
+        // The workspace list follows the document, as `RootView` wires it.
+        let workspaces = WorkspaceModel()
+        workbench.followDocuments { workspaces.follow($0) }
         let model = BenchSnapshotModel(
             directory: BenchSnapshotDirectory(root: root),
             // Never the operator's real `~/.claude/sessions`: a test that reads it measures the
@@ -43,9 +41,9 @@ final class BenchSnapshotModelTests: XCTestCase {
         return (model, workspaces, workbench, terminals)
     }
 
-    func testStartWritesImmediatelyAndDuplicateStartDoesNotWriteAgain() {
+    func testStartWritesImmediatelyAndDuplicateStartDoesNotWriteAgain() throws {
         var writes: [BenchSnapshot] = []
-        let (model, workspaces, workbench, terminals) = fixture(writer: { value in
+        let (model, workspaces, workbench, terminals) = try fixture(writer: { value in
             writes.append(value)
             return true
         })
@@ -69,7 +67,7 @@ final class BenchSnapshotModelTests: XCTestCase {
     func testTheTimerDoesNotRewriteAnUnchangedSnapshot() async throws {
         var writes: [BenchSnapshot] = []
         var instant = Date(timeIntervalSince1970: 10)
-        let (model, workspaces, workbench, terminals) = fixture(
+        let (model, workspaces, workbench, terminals) = try fixture(
             refreshInterval: .milliseconds(20),
             now: { instant },
             writer: { value in
@@ -96,7 +94,7 @@ final class BenchSnapshotModelTests: XCTestCase {
     /// passes the test above. This one fails if the skip overshoots.
     func testARealChangeIsStillWritten() async throws {
         var writes: [BenchSnapshot] = []
-        let (model, workspaces, workbench, terminals) = fixture(
+        let (model, workspaces, workbench, terminals) = try fixture(
             refreshInterval: .milliseconds(20),
             writer: { value in
                 writes.append(value)
@@ -107,7 +105,8 @@ final class BenchSnapshotModelTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(60))
         let quiet = writes.count
 
-        workspaces.open(Workspace(path: "/tmp/bench-snapshot-model-second"))
+        workbench.send(
+            .workspaceOpen(path: "/tmp/bench-snapshot-model-second"), by: .operatorGesture)
         try await Task.sleep(for: .milliseconds(200))
 
         XCTAssertGreaterThan(
@@ -120,7 +119,7 @@ final class BenchSnapshotModelTests: XCTestCase {
     func testWorkbenchAndTerminalBurstPublishesSettledStateOnce() async throws {
         var writes: [BenchSnapshot] = []
         var instant = Date(timeIntervalSince1970: 10)
-        let (model, workspaces, workbench, terminals) = fixture(
+        let (model, workspaces, workbench, terminals) = try fixture(
             now: { instant },
             writer: {
                 writes.append($0)
@@ -129,7 +128,7 @@ final class BenchSnapshotModelTests: XCTestCase {
         model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
 
         instant = Date(timeIntervalSince1970: 11)
-        let session = try XCTUnwrap(workbench.newTerminal())
+        let session = try XCTUnwrap(workbench.splitRight())
         for _ in 0..<8 { await Task.yield() }
 
         XCTAssertEqual(writes.count, 2, "terminal and bench notifications are one logical change")
@@ -140,23 +139,21 @@ final class BenchSnapshotModelTests: XCTestCase {
         model.stop()
     }
 
-    func testWorkspaceSwitchAndClosePublishSettledWorkspaceState() async {
+    func testWorkspaceSwitchAndClosePublishSettledWorkspaceState() async throws {
         var writes: [BenchSnapshot] = []
-        let (model, workspaces, workbench, terminals) = fixture(writer: {
+        let (model, workspaces, workbench, terminals) = try fixture(writer: {
             writes.append($0)
             return true
         })
         model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
 
         let second = Workspace(path: "/tmp/bench-snapshot-model-second")
-        workspaces.open(second)
-        workbench.activate(workspacePath: second.path)
+        workbench.send(.workspaceOpen(path: second.path.value), by: .operatorGesture)
         for _ in 0..<8 { await Task.yield() }
         XCTAssertEqual(
             writes.last?.workspaces.first { $0.path == second.path }?.state, .mounted)
 
-        workspaces.close(second)
-        workbench.deactivate()
+        workbench.send(.workspaceClose(path: second.path.value), by: .operatorGesture)
         for _ in 0..<8 { await Task.yield() }
         XCTAssertFalse(writes.last?.workspaces.contains { $0.path == second.path } ?? true)
         model.stop()
@@ -187,7 +184,7 @@ final class BenchSnapshotModelTests: XCTestCase {
             to: sessions.appendingPathComponent("41436.json"), atomically: true, encoding: .utf8)
 
         var writes: [BenchSnapshot] = []
-        let (model, workspaces, workbench, terminals) = fixture(
+        let (model, workspaces, workbench, terminals) = try fixture(
             foregroundPid: { _ in 41436 },
             writer: {
                 writes.append($0)
@@ -219,7 +216,7 @@ final class BenchSnapshotModelTests: XCTestCase {
         try Self.workingRow.write(to: row, atomically: true, encoding: .utf8)
 
         var writes: [BenchSnapshot] = []
-        let (model, workspaces, workbench, terminals) = fixture(
+        let (model, workspaces, workbench, terminals) = try fixture(
             foregroundPid: { _ in 41436 },
             writer: {
                 writes.append($0)
@@ -246,9 +243,9 @@ final class BenchSnapshotModelTests: XCTestCase {
         model.stop()
     }
 
-    func testStopPreventsFutureWritesAndFailureCanRetry() async {
+    func testStopPreventsFutureWritesAndFailureCanRetry() async throws {
         var attempts = 0
-        let (model, workspaces, workbench, terminals) = fixture(writer: { _ in
+        let (model, workspaces, workbench, terminals) = try fixture(writer: { _ in
             attempts += 1
             return attempts > 1
         })
@@ -258,7 +255,8 @@ final class BenchSnapshotModelTests: XCTestCase {
         model.refresh()
         XCTAssertEqual(attempts, 2, "a later publication retries")
         model.stop()
-        workspaces.select(nil)
+        workbench.send(
+            .workspaceOpen(path: "/tmp/bench-snapshot-model-after-stop"), by: .operatorGesture)
         for _ in 0..<4 { await Task.yield() }
         XCTAssertEqual(attempts, 2)
     }
@@ -280,7 +278,7 @@ final class BenchSnapshotModelTests: XCTestCase {
     /// less than a test saying which half it covers.
     func testTheTimerStopsWhenTheModelDoes() async throws {
         var writes: [BenchSnapshot] = []
-        let (model, workspaces, workbench, terminals) = fixture(
+        let (model, workspaces, workbench, terminals) = try fixture(
             refreshInterval: .milliseconds(5),
             writer: {
                 writes.append($0)

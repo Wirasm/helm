@@ -4,23 +4,17 @@ import SwiftUI
 
 /// helm's permanent frame: the workspace bar above the workbench, the status bar below it.
 ///
-/// **Composition only**, and more so than before. The canvas is no longer a special case
-/// wired in here — it is a bench pane, so the dock's `HSplitView` and the single
-/// `CanvasModel` are both gone. What is left here touches two or more verticals at once:
-/// persisting a workspace's context needs the workspace and its bench together, switching
-/// workspaces has to move both (`apply`, where the sink hands the workspace verbs), and a key's
-/// action needs every owner it might touch (`LocalActions`). Anything that can name a single
-/// vertical belongs in that vertical's slice.
+/// **Composition only.** What is here touches two or more verticals at once: the workspace list
+/// follows the document the bench is drawn from, a key's action needs every owner it might touch
+/// (`LocalActions`), and the spool's adapters need the bench and the rail. Anything that can
+/// name a single vertical belongs in that vertical's slice.
 struct RootView: View {
     @ObserveInjection private var inject
     @StateObject private var model = WorkspaceModel()
     /// A `@StateObject` rather than a `.shared`: `TerminalManager.shared` and
     /// `BoardModel.shared` are singletons because other slices reach them, and nothing
-    /// outside the workbench reaches this one.
-    /// Drawn from benchd's document under `HELM_BENCH=daemon` (#354), from helm's own state
-    /// otherwise.
-    @StateObject private var workbench = WorkbenchModel(
-        terminals: .shared, mode: .fromEnvironment())
+    /// outside the workbench reaches this one. Drawn from benchd's document (#354).
+    @StateObject private var workbench = WorkbenchModel(terminals: .shared, client: .live())
     @StateObject private var archonRail = ArchonRailModel()
     /// The operator's just runs (#356): started by his keys, failures shown on the status bar.
     @StateObject private var justRuns = JustRuns()
@@ -75,28 +69,17 @@ struct RootView: View {
         // catch because AppKit makes it rather than helm.
         .isolatedInstanceWindow()
         .task {
-            if workbench.mode.client != nil {
-                // benchd holds the workspaces and their benches; helm follows the document and
-                // saves none of it.
-                workbench.followDocuments(BenchImport.follower(model: model, workbench: workbench))
-            } else {
-                model.observe(terminals: terminalManager, workbench: workbench)
-                workbench.workspaceVerbs = apply
-            }
-            // benchd's follower hears how a run ended; only daemon mode has one.
-            workbench.mode.client?.onEvent = { [justRuns] in justRuns.receive($0) }
+            // benchd holds the workspaces and their benches; helm follows the document, after
+            // moving the benches it used to save into an empty one once (`BenchImport`).
+            workbench.followDocuments(
+                BenchImport.follower(workspaces: model, workbench: workbench))
+            // benchd's follower hears how a `just` run ended.
+            workbench.client.onEvent = { [justRuns] in justRuns.receive($0) }
             let actions = LocalActions(
                 workbench: workbench, workspaces: model, rail: archonRail,
                 terminals: terminalManager, just: justRuns)
             self.actions = actions
             Actions.performer = actions
-            // A push from a parked workspace lands on its stored bench, which this model holds
-            // (#349). Drawn from benchd, a parked bench is benchd's, and the document says
-            // which workspace is on screen.
-            if workbench.mode.client == nil {
-                workbench.parked = model
-                activateSelectedWorkspace()
-            }
             benchSnapshot.start(
                 workspaces: model, workbench: workbench, terminals: terminalManager)
             // `--artifact <path>` (`LaunchOptions.artifactPath`) — a launch seam for
@@ -107,15 +90,11 @@ struct RootView: View {
                     .paneOpen(surface: .canvas(path: (path as NSString).expandingTildeInPath)),
                     by: .operatorGesture)
             }
-            // The spool (#54) — the one seam an agent with no display can drive. It is wired
-            // here for the same reason `observe` is: opening a workspace spans the workspace
-            // list and the bench together, and `openWorkspace` is where that already lives.
+            // The spool (#54) — the one seam an agent with no display can drive.
             spool.attach(
                 spawner: WorkbenchSpoolSpawner(
                     workbench: workbench, terminals: terminalManager,
-                    // The non-asking open, and it is load-bearing rather than tidy — see
-                    // `openWorkspaceForRequest`.
-                    activate: openWorkspaceForRequest))
+                    activate: workbench.openWorkspaceForSpawn))
             // #174's capturer. It needs nothing from this view — it resolves helm's window from
             // `NSApp` at capture time — so it is attached here only because this is where the
             // spool is wired, and a second seam for one line would be worse.
@@ -138,95 +117,5 @@ struct RootView: View {
         }
         .onDisappear { benchSnapshot.stop() }
         .enableInjection()
-    }
-
-    /// The workspace verbs, which `LocalSink` hands here because they span the workspace list
-    /// and the bench together.
-    private func apply(_ verb: WorkspaceVerb) {
-        switch verb {
-        case let .open(path):
-            openWorkspace(Workspace(path: path))
-        case let .activate(path):
-            if let workspace = workspace(at: path) { switchWorkspace(workspace) }
-        case let .close(path):
-            if let workspace = workspace(at: path) { closeWorkspace(workspace) }
-        }
-    }
-
-    private func workspace(at path: String) -> Workspace? {
-        model.workspaces.first { $0.path == WorkspacePath(path) }
-    }
-
-    private func persistCurrentContext() {
-        model.saveContext(terminalManager: terminalManager, workbench: workbench)
-    }
-
-    private func openWorkspace(_ workspace: Workspace) {
-        persistCurrentContext()
-        model.open(workspace)
-        activateSelectedWorkspace()
-    }
-
-    /// The same open, reached from a **spool spawn** whose `cwd` becomes a workspace (#54).
-    ///
-    /// It differs in one line — the mount it takes — and the difference is spelled here rather
-    /// than behind a flag, which is `Workbench.splitRight(_:movingFocus:)`'s shape. A spawn
-    /// must never raise #85's restore question: the spool exists for the case where nobody is
-    /// at the pane, so a question raised from one is #179's silent hang with a different cause.
-    private func openWorkspaceForRequest(_ workspace: Workspace) {
-        // Drawn from benchd, a spawn's workspace is an agent's `workspace/open`: it opens in the
-        // background, and the spawned terminal lands there (`WorkbenchSpoolSpawner`).
-        if workbench.mode.client != nil {
-            workbench.send(.workspaceOpen(path: workspace.path.value), by: .agent())
-            return
-        }
-        persistCurrentContext()
-        model.open(workspace)
-        activateSelectedWorkspace(asking: false)
-    }
-
-    private func closeWorkspace(_ workspace: Workspace) {
-        persistCurrentContext()
-        let wasSelected = model.selectedWorkspace == workspace
-        // Both teardowns are unconditional, and both have to be: the branches below run
-        // only when the workspace being closed was the selected one, and a background
-        // workspace can be closed from any tab's context menu.
-        terminalManager.closeWorkspace(workspace.path)
-        workbench.closeWorkspace(workspace.path)
-        model.close(workspace)
-        if wasSelected, let replacement = model.workspaces.first {
-            model.select(replacement)
-            activateSelectedWorkspace()
-        } else if wasSelected {
-            terminalManager.deactivate()
-            workbench.deactivate()
-        }
-    }
-
-    private func switchWorkspace(_ workspace: Workspace) {
-        guard model.selectedWorkspace != workspace else { return }
-        persistCurrentContext()
-        model.select(workspace)
-        activateSelectedWorkspace()
-    }
-
-    /// The persisted bench, else the one a pre-bench context describes, else nothing —
-    /// which `WorkbenchModel.activate` turns into today's 1×1 frame.
-    ///
-    /// **Whether any of it is opened is the bench's decision, not this view's** (#85).
-    /// `BenchMountPolicy` is where "restore or ask" is decided and it is pure; this hands over
-    /// both candidates and nothing else. Three defects in two days came from logic living in a
-    /// view, which is why the ticket names that as an acceptance criterion.
-    private func activateSelectedWorkspace(asking: Bool = true) {
-        guard let workspace = model.selectedWorkspace else { return }
-        let context = model.contexts[workspace.path.value] ?? WorkspaceContext()
-        let saved = context.workbench ?? .migrating(from: context)
-        if asking {
-            workbench.activate(
-                workspacePath: workspace.path, offering: saved, shelved: context.shelvedBench)
-        } else {
-            workbench.activate(
-                workspacePath: workspace.path, restoring: saved, shelved: context.shelvedBench)
-        }
     }
 }

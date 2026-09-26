@@ -1,9 +1,10 @@
 import Foundation
+import HelmWire
 import XCTest
 
 @testable import Helm
 
-/// The workspace value type and the open-workspace list's persistence.
+/// The workspace value type, and the open-workspace list following benchd's document.
 /// Store resolution moved to `WorkspaceStoreTests` with the type itself.
 final class WorkspaceTests: XCTestCase {
     private var tempRoot: URL!
@@ -55,38 +56,23 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(decoded, [Workspace(path: "/a/b")])
     }
 
-    // MARK: - Persistence
+    // MARK: - The list follows benchd's document
 
-    func testWorkspaceListRoundTripsThroughDefaults() throws {
-        let defaults = try isolatedDefaults("workspace")
-        let workspaces = [Workspace(path: "/a/b"), Workspace(path: "/a/b/.worktrees/fix")]
+    @MainActor
+    func testTheListAndTheSelectionAreTheDocuments() {
+        let model = WorkspaceModel(readBranch: { _ in nil })
+        let bench = ToyBench.bench([ToyBench.terminal()])
 
-        WorkspacePersistence.save(workspaces, to: defaults)
-        XCTAssertEqual(WorkspacePersistence.load(from: defaults), workspaces)
-        // Stored as a plain string under the @AppStorage-compatible key.
-        XCTAssertNotNil(defaults.string(forKey: "helmWorkspaces"))
+        model.follow(
+            BenchDocument(
+                workspaces: [.init(path: "/a/b/", bench: bench), .init(path: "/c", bench: bench)],
+                active: "/c"))
+
+        XCTAssertEqual(model.workspaces, [Workspace(path: "/a/b"), Workspace(path: "/c")])
+        XCTAssertEqual(model.selectedWorkspace, Workspace(path: "/c"))
+
+        model.follow(BenchDocument(workspaces: [], active: nil))
+        XCTAssertEqual(model.workspaces, [])
+        XCTAssertNil(model.selectedWorkspace)
     }
-
-    func testCorruptOrMissingBlobLoadsAsEmptyList() throws {
-        let defaults = try isolatedDefaults("workspace")
-        XCTAssertEqual(WorkspacePersistence.load(from: defaults), [])
-
-        defaults.set("{not json", forKey: WorkspacePersistence.listKey)
-        XCTAssertEqual(WorkspacePersistence.load(from: defaults), [])
-    }
-
-    func testSelectionPersistsOnlyWhileItIsStillOpen() throws {
-        let defaults = try isolatedDefaults("workspace")
-        let open = [Workspace(path: "/a/b")]
-
-        WorkspacePersistence.saveSelection(open[0], to: defaults)
-        XCTAssertEqual(WorkspacePersistence.loadSelection(from: defaults, in: open), open[0])
-
-        // A remembered selection that is no longer in the list falls back to All.
-        XCTAssertNil(WorkspacePersistence.loadSelection(from: defaults, in: []))
-
-        WorkspacePersistence.saveSelection(nil, to: defaults)
-        XCTAssertNil(WorkspacePersistence.loadSelection(from: defaults, in: open))
-    }
-
 }

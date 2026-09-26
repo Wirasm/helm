@@ -211,8 +211,8 @@ against it) changed, and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
 `docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
 M0 (skeleton), M5a (daemon-owned ptys), mail, the shared browser (#350) and the daemon half
-of the bench document (M4, #354) are the parts that exist. helm renders from that document
-when launched with `HELM_BENCH=daemon`, and from its own saved state otherwise.
+of the bench document (M4, #354) are the parts that exist. helm renders the bench from that
+document and keeps none of its own.
 
 **If you touched `.archon/workflows/helm/`, run its gate:**
 
@@ -590,7 +590,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
 - **To bring a pane forward, `swift tools/helm-select.swift <pane-uuid>`** — the fifth spool
   kind (#284), needing what the other four need: nothing. It makes the pane the one its slot is
   **showing**, which is what *visible* means, and leaves **focus** where the operator put it
-  (`Workbench.select(offering:)`, the non-seizing twin of the tab click). Same uuid namespace and
+  (an agent's `pane/show`, which benchd's focus rule leaves off the keyboard). Same uuid namespace and
   the same three ways to know one as `helm-close`.
   - **It exists because `push.sh` offers rather than inserts.** On a busy bench a pushed artifact
     lands as a background tab — `isSelected: false`, `isVisible: false` — so #272's re-push
@@ -610,8 +610,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     4 helm could not act, 6 abandoned.
 - **To call a pane something, `swift tools/helm-name.swift <pane-uuid> <name> [--rename]`** — the
   sixth spool kind (#313), needing what the other five need: nothing. The name goes on the tab and
-  **survives the restart the pane already survives** — it is persisted on `Pane`, not on the
-  session. Same uuid namespace and the same three ways to know one as `helm-close`; a canvas is
+  **survives the restart the pane already survives** — it is on the pane in benchd's document,
+  not on the session. Same uuid namespace and the same three ways to know one as `helm-close`; a canvas is
   named exactly as a terminal is.
   - **Where it can be read back, exactly, because the first draft of this bullet overclaimed it.**
     The result's own `name` block always carries it. `snapshot.json` carries it only for a **live
@@ -669,8 +669,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `newTerminal` → `pane/open` of a terminal, the splits → `pane/split`, `openBrowser` →
     `pane/open` of the browser; `toggleRail` touches no pane and calls the rail. The verb's focus
     rule is what keeps it from seizing — the keyboard moves only for the operator, or when the
-    caller says he asked — which is the line `Workbench.insert` (the operator asking) and
-    `Workbench.offer` (an agent offering) have differed by since #125. The honest cost,
+    caller says he asked (#125), and benchd applies it. The honest cost,
     recorded: an agent's split still **halves the column the operator is in**, because a bench
     command carries no address — a layout change around them, not a focus change to them,
     exactly as a pushed artifact already rebalances columns.
@@ -688,8 +687,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   editable canvas is indistinguishable from a read-only one until he presses it. Write opens a
   `TextEditor` over the markdown **source** (not the rendered page — that would be an
   HTML→markdown round trip over a document nobody asked helm to reformat), autosaves 600ms after
-  typing stops, and flushes on Read, on close, on the canvas being pointed elsewhere, on the last
-  workspace closing (`WorkbenchModel.deactivate`, which closes each canvas through its kind) and
+  typing stops, and flushes on Read, on close (its pane or its workspace leaving benchd's
+  document, which closes each canvas through its kind), on the canvas being pointed elsewhere and
   on ⌘Q. The path is on the editor's footer as a `CopyableLabel`; **it is not
   put on the clipboard** — a clipboard that changes under an act nobody asked for destroys
   whatever was in it.
@@ -859,6 +858,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   `defaults read <name>`, and prove the negative with `defaults read com.wirasm.helm`.
 
   ```
+  BENCH_SUITE=helm-bench benchd &    # its own benchd first: the suite moves benchd's root too
   HELM_DEFAULTS_SUITE=helm-bench swift run helm
   ```
 
@@ -897,10 +897,11 @@ that genuinely spans features stays in `App/`, which is composition and nothing 
 test is simple: two people building two features should not have to edit the same file.
 
 **The slices, largest first, so a stranger knows where to look**: `Canvas/` (6.1k lines) is the
-document surface; `Workbench/` (3.8k) is columns, slots, panes and the offer/insert distinction;
+document surface; `Workbench/` (2.6k) is drawing benchd's bench — columns, slots, panes — and
+the door every change goes out through;
 `Surfaces/` is `SurfaceKind` and the one registry every pane kind's live object is kept in;
 `Keymap/` is the key table and its readers (below); `Bench/` is helm as benchd's client —
-the socket, the follower, `DaemonSink` and the one-time import (below);
+the socket, the follower and the one-time import (below);
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
 libghostty seam — sessions, the host view, the pane environment, and `push.sh`'s landing site;
 then `Spool/`, `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
@@ -927,10 +928,9 @@ above and are the easiest to be surprised by:
   `.claude/skills/helm-board/`, a kind of canvas an agent authors and the operator draws on; no
   Swift in `Board/` knows it exists. `CONTEXT.md` now defines both senses.
 
-**Every change to the bench is a `BenchVerb` sent through one door** (#354).
-`WorkbenchModel.send(_:by:asked:)` is the `VerbSink` every caller uses — a key, a click, a
-drag, a ⌘-clicked link, `push.sh`, the spool — and it says who asked, which is what decides
-focus. Keys are rows of one table, read by the key monitor, the menu and the status bar's hints;
+**benchd owns the bench; helm draws it** (#354). Every change is a `BenchVerb` sent through
+one door, `WorkbenchModel.send(_:by:asked:)` — a key, a click, a drag, a ⌘-clicked link,
+`push.sh`, the spool — and it says who asked, which is what benchd's focus rule reads. Keys are rows of one table, read by the key monitor, the menu and the status bar's hints;
 a row's action is data, a `VerbTemplate` resolved against the bench when the key fires or a
 `LocalAction` that never reaches the document. The table in force is `Keymap.table`
 (`Sources/Helm/Keymap/`): the built-in `KeyBindings.all` overlaid by the operator's
@@ -939,22 +939,22 @@ it; a file that does not parse keeps the last good table and puts the line and r
 status bar. `docs/keymap.default.toml` is the built-in table in that format, and
 `KeymapFileTests` fails until it is regenerated after a built-in key changes.
 `LocalActions` in `App/` carries both out. There is no NotificationCenter command bus: do not
-add one. `WorkbenchModel`'s mutation methods each take a `LocalBenchKey`, which only
-`LocalSink` can make, so a direct call from anywhere else does not compile — send the verb. Two sinks take it: `LocalSink` applies it to helm's own
-bench, and `DaemonSink` (`Sources/Helm/Bench/`, `HELM_BENCH=daemon`) sends it to benchd and
-draws nothing until benchd's follower delivers the document the verb made
+add one. `Workbench` has no mutating method and every field is a `let`, so no Swift changes a
+bench: nothing is drawn until benchd's follower delivers the document the verb made
 (`WorkbenchModel.apply`).
 
-**Under `HELM_BENCH=daemon` benchd owns the bench** (#354, strangler until PR 4). The workspace
-list follows the document and nothing about the bench is saved in defaults; the first empty
-document gets helm's saved benches once, as `workspace/import`; #85's question stays helm's and
-its answer goes back as `workspace/reset` or `workspace/unshelve`; a status-bar capsule names the
-socket while benchd is unreachable, and the last document stays on screen. A spool spawn's
-workspace opens in the background there, because an agent's `workspace/open` does not take the
-keyboard. `BenchSnapshotModel` still reports parked workspaces from defaults (D2), so in daemon
-mode only the active workspace's part of `snapshot.json` is current. To try it without touching
-the operator's bench, run your own benchd on a suite and point an isolated helm at it:
-`BENCH_SUITE=<name> benchd` and `HELM_BENCH=daemon HELM_DEFAULTS_SUITE=<name> swift run helm`.
+- **helm keeps no bench.** The workspace list follows the document, and nothing about the bench
+  is in defaults. The benches helm used to save there go into benchd's first empty document
+  once, as `workspace/import` (`BenchImport`), and are left where they were.
+- **#85's question stays helm's** until M5b: its answer goes back as `workspace/reset` or
+  `workspace/unshelve`. A spool spawn's workspace is put on screen (an agent's `workspace/open`
+  with `asked`), because a terminal's pty starts only once it is drawn; M5b ends that.
+- **benchd unreachable** is a status-bar capsule naming the socket; the last document stays on
+  screen and a verb fails visibly. helm never starts benchd: `just benchd-install` makes it a
+  login agent.
+- **Tests draw from a stand-in** (`FakeBenchd`, `ToyBench` in `Tests/HelmTests/Bench/`), whose
+  toy rules are not benchd's: where a pane lands and who gets the keyboard are `bench-doc`'s,
+  tested in Rust. A Swift test asserts what helm sent, or what it drew from the document.
 
 **Drawers are drawn over the bench, never in it** (#356, `Sources/Helm/Drawers/`). `DrawerHost`
 is an overlay on the bench and the rail, so the layout under an open drawer is untouched; while

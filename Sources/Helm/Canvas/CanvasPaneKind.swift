@@ -16,10 +16,6 @@ final class CanvasPaneKind: SurfaceKind {
 
     let kind: Pane.Content.Kind = .canvas
 
-    /// A view onto a file, rebuilt on demand; keeping it would keep a `FileWatcher` and its
-    /// open descriptor for a canvas nothing shows.
-    let survivesUnmount = false
-
     func make(for pane: Pane, in workspace: WorkspacePath?) -> CanvasModel? {
         guard case let .canvas(source) = pane.content else { return nil }
         let model = CanvasModel(source: source)

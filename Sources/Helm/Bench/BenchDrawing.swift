@@ -18,8 +18,7 @@ struct BenchDrawing: Equatable {
         else { return BenchDrawing(workspace: nil, shelved: nil, mount: .empty) }
         let shelved = workspace.shelved.flatMap(Workbench.init(document:))
         if !answered.contains(active),
-            case let .ask(offer) = BenchMountPolicy.mount(
-                saved: bench, shelved: shelved, answered: false)
+            let offer = BenchMountPolicy.offer(bench: bench, shelved: shelved)
         {
             return BenchDrawing(workspace: active, shelved: shelved, mount: .awaitingRestore(offer))
         }

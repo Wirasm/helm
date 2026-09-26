@@ -14,7 +14,7 @@ import SwiftUI
 ///
 /// **An action is data, not a closure**, so the table loads from the operator's keymap file by
 /// name (`KeymapFile`, #356). A `.verb` action is a gesture on the bench and becomes a
-/// `BenchVerb` sent through the `VerbSink` as the operator; a `.local` action never reaches the
+/// `BenchVerb` sent through `WorkbenchModel.send` as the operator; a `.local` action never reaches the
 /// document.
 struct KeyBinding: Equatable {
     let trigger: Trigger

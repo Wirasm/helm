@@ -14,9 +14,6 @@ final class BrowserPaneKind: SurfaceKind {
 
     let kind: Pane.Content.Kind = .browser
 
-    /// A parked pane is not on screen; its connection is reopened when it is again.
-    let survivesUnmount = false
-
     func make(for pane: Pane, in workspace: WorkspacePath?) -> BrowserPaneModel? {
         makeModel()
     }

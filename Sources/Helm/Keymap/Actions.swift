@@ -1,6 +1,6 @@
 /// What carries out a binding's action.
 ///
-/// A `.verb` action is resolved against the bench and sent through the `VerbSink` as the
+/// A `.verb` action is resolved against the bench and sent through `WorkbenchModel.send` as the
 /// operator; a `.local` one is carried out by whoever owns what it touches. `RootView`
 /// composes the one that does both (`LocalActions`), because it holds every owner.
 @MainActor

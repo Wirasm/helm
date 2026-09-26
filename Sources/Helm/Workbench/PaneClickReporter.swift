@@ -31,8 +31,8 @@ import SwiftUI
 struct PaneClickReporter: NSViewRepresentable {
     /// Called for every mouse-down inside this view's rectangle, including repeated clicks in
     /// the pane that is already focused. Deciding that such a click changes nothing is
-    /// `WorkbenchModel.focus`'s, not this view's — a reporter that filtered would need its own
-    /// copy of what the bench already knows.
+    /// benchd's (a `focus/slot` that changes nothing is not an event), not this view's — a
+    /// reporter that filtered would need its own copy of what the bench already knows.
     let onClick: () -> Void
 
     func makeNSView(context _: Context) -> ClickWatchingView { ClickWatchingView() }
