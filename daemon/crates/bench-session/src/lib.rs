@@ -130,7 +130,7 @@ codex app-server --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
 p=$!
 ( trap '' HUP INT TERM; while kill -0 $$ 2>/dev/null; do sleep 1; done; kill $p 2>/dev/null ) </dev/null >/dev/null 2>&1 &
 i=0
-while [ ! -S "$s" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+while [ ! -S "$s" ] && [ $i -lt 100 ] && kill -0 $p 2>/dev/null; do sleep 0.1; i=$((i+1)); done
 exec codex --remote "unix://$s" "$@"
 "#;
 

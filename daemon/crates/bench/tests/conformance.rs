@@ -4020,6 +4020,29 @@ fn a_codex_turn_that_failed_is_found_idle_by_its_thread_status() {
 }
 
 #[test]
+fn a_codex_spawn_clears_a_socket_an_earlier_daemons_session_left_behind() {
+    // Session ids restart at s1 with the daemon, and a codex app-server that died uncleanly
+    // leaves its socket, which the next app-server on that path refuses to bind ("File
+    // exists", measured on 0.157.0).
+    let home = TestHome::claim("cxstalesock");
+    let h = &home.dir;
+    let stale = h.join(".bench/codex/s1.sock");
+    fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("/nonexistent/codex-daemon/gone", &stale).unwrap();
+    let _daemon = DaemonGuard::start_with_fake(h, "codex");
+    let run = bench(
+        h,
+        &["spawn", "--agent", "codex", "--cwd", "/tmp", "--name", "cx"],
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    assert_eq!(json_of(&run)["session"], "s1");
+    assert!(
+        fs::symlink_metadata(&stale).is_err(),
+        "the stale socket is gone before the app-server binds"
+    );
+}
+
+#[test]
 fn a_push_that_starts_no_turn_goes_back_to_the_inbox_and_stops_pushing() {
     // What a session without crossSessionInbound "accept" does: takes the message and holds
     // it behind a dialog, so no UserPromptSubmit follows. Waits out the 10 s answer window.

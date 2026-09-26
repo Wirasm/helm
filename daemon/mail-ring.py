@@ -36,6 +36,7 @@ TARGET = os.path.join(DAEMON_DIR, "target", "debug")
 BENCH = os.path.join(TARGET, "bench")
 BENCHD = os.path.join(TARGET, "benchd")
 SEED = 100
+# The `channel` values benchd logs on `mail/delivered` (benchd/src/hook.rs: `hand_out` and `push`).
 CHANNELS = {"hook", "socket", "pi", "codex"}
 DEFAULT_MODELS = {"claude": "haiku", "pi": "minimax/MiniMax-M2.7-highspeed"}
 
@@ -67,6 +68,7 @@ class Bench:
                     if k not in ("BENCH_DIR", "BENCH_SESSION", "BENCH_HANDLE", "HELM_PANE")}
         self.env["BENCH_SUITE"] = suite
         self.daemon = None
+        self.log = os.path.join(tempfile.gettempdir(), f"benchd-{suite}.log")
 
     def __call__(self, *args, check=True):
         out = subprocess.run([BENCH, *args], env=self.env, capture_output=True, text=True, timeout=30)
@@ -79,7 +81,6 @@ class Bench:
     def start(self):
         if os.path.exists(self.root):
             sys.exit(f"mail-ring: {self.root} already exists; pick another suite")
-        self.log = os.path.join(tempfile.gettempdir(), f"benchd-{self.suite}.log")
         self.daemon = subprocess.Popen(["timeout", "1800", BENCHD], env=self.env,
                                        stdout=subprocess.DEVNULL, stderr=open(self.log, "w"))
         for _ in range(100):
@@ -101,7 +102,8 @@ class Bench:
             print(f"mail-ring: kept {self.root} and {self.log}")
         else:
             shutil.rmtree(self.root, ignore_errors=True)
-            os.remove(self.log)
+            if os.path.exists(self.log):
+                os.remove(self.log)
 
     def events(self):
         with open(os.path.join(self.root, "events.jsonl")) as f:

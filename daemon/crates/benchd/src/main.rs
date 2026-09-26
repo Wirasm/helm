@@ -987,6 +987,11 @@ fn dispatch(
                         AfterResponse::Done,
                     );
                 }
+                // Session ids restart at s1 with the daemon, so a server that died uncleanly
+                // under an earlier daemon can have left this socket (codex then refuses to bind:
+                // "File exists"). No live session holds this id, so what is there is stale.
+                let _ = fs::remove_file(&socket);
+                let _ = fs::remove_file(socket.with_extension("sock.log"));
                 spec.codex_server = Some(socket.display().to_string());
             }
             // The session learns its address and root, so `bench mail send` inside it

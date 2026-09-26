@@ -465,6 +465,7 @@ fn push(core: &Arc<Mutex<Core>>, root: &Path, key: &SessionKey, handle: &str, ch
     );
     let ids: Vec<String> = taken.iter().map(|t| t.id.clone()).collect();
     let text = lines.join("\n");
+    // The channel names are read back by `daemon/mail-ring.py`'s CHANNELS.
     let (name, sent) = match channel {
         Channel::ClaudeSocket(socket) => ("socket", poke(socket, &text)),
         Channel::CodexServer(socket) => ("codex", crate::codex::start_turn(socket, &key.id, &text)),
