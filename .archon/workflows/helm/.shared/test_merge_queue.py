@@ -126,6 +126,14 @@ class AfterTheMergeCommand(unittest.TestCase):
         self.assertEqual(report["queued"], [])
         self.assertIn("could not be confirmed", report["stopped"])
 
+    def test_a_merge_command_that_times_out_is_unverified(self):
+        timed_out = merge_queue.Refusal("gh pr merge 7 did not answer in 120s")
+        with mock.patch.object(merge_queue, "gh_text", return_value="tip"), \
+             mock.patch.object(merge_queue, "run", side_effect=timed_out):
+            self.queue.merge(self.queue.items[0], "head")
+        report = self.queue.report()
+        self.assertEqual((report["unverified"], report["held"]), ([7], []))
+
     def test_wrong_parents_are_unverified_and_a_clean_merge_is_merged(self):
         views = [{"state": "MERGED", "mergeCommit": {"oid": "m"}}, ["other", "head"]]
         item, report = self.merge_with(views)

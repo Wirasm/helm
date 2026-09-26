@@ -403,13 +403,14 @@ class Queue:
     def merge(self, item: dict[str, Any], head: str) -> None:
         number = item["number"]
         old_tip = gh_text("api", f"repos/{self.repo}/branches/{BASE}", "--jq", ".commit.sha")
-        # Exit status is not the answer: on a PR GitHub will not merge, gh can print a hint
-        # and merge nothing. The PR's state is the answer.
-        attempt = run(
-            ["gh", "pr", "merge", str(number), "--merge", "--match-head-commit", head], ok=tuple(range(256))
-        )
-        # From here the PR may have merged, so no failure may leave it looking untouched.
+        # From the merge command on, the PR may have merged (a timed-out call included), so no
+        # failure may leave it looking untouched. Exit status is not the answer either: on a PR
+        # GitHub will not merge, gh can print a hint and merge nothing. The PR's state is.
         try:
+            attempt = run(
+                ["gh", "pr", "merge", str(number), "--merge", "--match-head-commit", head],
+                ok=tuple(range(256)),
+            )
             self.read_back(item, head, old_tip, attempt)
         except Exception as error:  # noqa: BLE001
             self.state["stopped"] = (
