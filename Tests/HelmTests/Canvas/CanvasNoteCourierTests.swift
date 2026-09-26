@@ -78,7 +78,7 @@ final class CanvasNoteCourierTests: XCTestCase {
     }
 
     /// The subject is all a recipient's notice shows of a message
-    /// (`hooks/helm-mail.mjs`'s `notice`), so it has to name the artifact on one line.
+    /// (benchd's pointer line), so it has to name the artifact on one line.
     func testTheSubjectNamesTheCanvasOnOneLine() {
         let subject = CanvasNoteCourier.subject(for: canvas)
 
