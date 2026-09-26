@@ -1494,6 +1494,7 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
 /// answers with a version line, and once "listening" it writes `DevToolsActivePort`
 /// into its `--user-data-dir`. It records its argv there, dies on TERM, and with
 /// `--die-after=<s>` crashes by itself — a profile that takes Chromium down on launch.
+/// `--slow-start=<s>` holds off "listening" that long, so a launch can be caught in flight.
 fn write_fake_browser(home: &Path) -> PathBuf {
     let path = home.join("fake-chromium");
     fs::write(
@@ -1505,6 +1506,7 @@ for a in "$@"; do
   case "$a" in
     --user-data-dir=*) dir="${a#--user-data-dir=}" ;;
     --die-after=*) die="${a#--die-after=}" ;;
+    --slow-start=*) sleep "${a#--slow-start=}" ;;
   esac
 done
 printf '%s\n' "$@" > "$dir/argv"
@@ -1951,6 +1953,45 @@ fn a_stopped_browser_stays_stopped_across_a_restart() {
             .iter()
             .any(|(k, _)| k == "browser/started" || k == "browser/resuming"),
         "{events:?}"
+    );
+}
+
+#[test]
+fn a_stop_that_lands_during_a_launch_still_unwants_the_browser() {
+    // The launch a restart makes routine: benchd comes back, starts the wanted browser, and
+    // `bench browser stop` arrives before it is up. The stop waits for the launch and takes the
+    // browser down; the marker must go with it, or the next daemon brings it back.
+    let home = TestHome::claim("brrace");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(
+        &home.dir,
+        serde_json::json!({ "binary": fake, "args": ["--slow-start=1.5"] }),
+    );
+    let marker = home.dir.join(".bench/browser/wanted");
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+
+    let starter = {
+        let home = home.dir.clone();
+        std::thread::spawn(move || bench(&home, &["browser", "start"]))
+    };
+    std::thread::sleep(Duration::from_millis(400));
+    let stop = bench(&home.dir, &["browser", "stop"]);
+    assert_eq!(stop.code, 0, "stderr: {}", stop.stderr);
+    assert_eq!(starter.join().unwrap().code, 0);
+    assert_eq!(
+        json_of(&stop)["was_running"],
+        true,
+        "the stop waited for the launch"
+    );
+    assert!(!marker.exists(), "a stopped browser is not wanted");
+
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        json_of(&bench(&home.dir, &["browser", "status"]))["running"],
+        false
     );
 }
 

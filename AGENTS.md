@@ -849,10 +849,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
 - **`just release-resume <session-id> [cwd]` is the swap for an operator who is away (#404).**
   It builds (`make release`, `cargo install` of `bench` and `benchd`), quits helm by pid, restarts
   benchd (with `launchctl kickstart -k` when the login agent from `just benchd-install` is loaded,
-  so it never starts a second one), swaps the bundle with `BundleSwap.script` itself (read out of the Swift source, so there
-  is one swap), and resumes that Claude Code session in the new helm through the spool with
-  `--remote-control`. It detaches first, because the caller is normally an agent in a pane the
-  quit closes. **Once helm is quit the session always comes back**: any later failure resumes it
+  so it never starts a second one), swaps the bundle with `BundleSwap.script` itself (read out of
+  the Swift source, so there is one swap), and resumes that Claude Code session in the new helm
+  through the spool with `--remote-control`. It detaches first, because the caller is normally an
+  agent in a pane the quit closes. **Once helm is quit the session always comes back**: any later failure resumes it
   outside helm with `claude --bg --resume`, and the log says which happened. Logs go to
   `~/.helm/build/release-resume.log`, last line `RESULT:`. Every target is a flag (`--bundle`,
   `--pid`, `--suite`, `--bench-suite`, `--cargo-root`, `--env`, `--no-remote-control`), which is

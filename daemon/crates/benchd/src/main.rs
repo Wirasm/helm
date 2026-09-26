@@ -790,7 +790,7 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
             for s in sessions {
                 let _ = s.close(Duration::from_secs(1));
             }
-            let _ = stop_browser(&core, Duration::from_secs(2));
+            let _ = stop_browser(&core, Duration::from_secs(2), Unwant::No);
             // The flusher runs every FLUSH_EVERY; the last events must not wait on it.
             let _ = core.lock().unwrap().log.sync_data();
             let root = core.lock().unwrap().root.clone();
@@ -1435,7 +1435,9 @@ fn dispatch(
                     .as_ref()
                     .is_some_and(|b| b.is_running() && b.mode() == BrowserMode::Setup)
             };
-            if !running_setup && let Err(why) = stop_browser(core, Duration::from_secs(5)) {
+            if !running_setup
+                && let Err(why) = stop_browser(core, Duration::from_secs(5), Unwant::No)
+            {
                 return (errored(why), AfterResponse::Done);
             }
             core.lock().unwrap().browser_restarts.clear();
@@ -1461,17 +1463,13 @@ fn dispatch(
             (ok(data), AfterResponse::Done)
         }
 
-        Some(Verb::BrowserStop) => {
-            // The one route that unwants the browser; every other stop leaves it wanted.
-            let _ = fs::remove_file(browser_wanted_path(&core.lock().unwrap().root));
-            match stop_browser(core, Duration::from_secs(5)) {
-                Ok(pid) => (
-                    ok(json!({ "was_running": pid.is_some(), "pid": pid })),
-                    AfterResponse::Done,
-                ),
-                Err(why) => (errored(why), AfterResponse::Done),
-            }
-        }
+        Some(Verb::BrowserStop) => match stop_browser(core, Duration::from_secs(5), Unwant::Yes) {
+            Ok(pid) => (
+                ok(json!({ "was_running": pid.is_some(), "pid": pid })),
+                AfterResponse::Done,
+            ),
+            Err(why) => (errored(why), AfterResponse::Done),
+        },
 
         None => (
             refused(format!(
@@ -1564,13 +1562,30 @@ fn start_browser(
     }
 }
 
+/// Whether a stop also removes `<root>/browser/wanted`. Only `browser/stop` does: a daemon
+/// stop and setup making way leave the browser wanted, so the next daemon brings it back.
+#[derive(PartialEq)]
+enum Unwant {
+    Yes,
+    No,
+}
+
 /// Stop the browser if one runs: logged, then the leash is dropped and the exit
 /// awaited. Returns the pid that was stopped.
-fn stop_browser(core: &Arc<Mutex<Core>>, grace: Duration) -> Result<Option<u32>, String> {
+fn stop_browser(
+    core: &Arc<Mutex<Core>>,
+    grace: Duration,
+    unwant: Unwant,
+) -> Result<Option<u32>, String> {
     let _life = BROWSER_LIFECYCLE.lock().unwrap();
     let browser = {
         let mut c = core.lock().unwrap();
         c.browser_wanted = false;
+        // Under the lifecycle lock, like the write in `start_browser`: a launch in flight when
+        // the stop arrived has finished and written the marker by now, so this removal is last.
+        if unwant == Unwant::Yes {
+            let _ = fs::remove_file(browser_wanted_path(&c.root));
+        }
         match c.browser.take().filter(|b| b.is_running()) {
             Some(b) => {
                 if let Err(why) = c.append("browser/stopped", json!({ "pid": b.pid })) {

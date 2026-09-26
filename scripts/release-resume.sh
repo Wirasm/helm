@@ -49,7 +49,8 @@ refuse() {
 
 realdir() { (cd "$1" 2>/dev/null && pwd -P); }
 
-# agent_label, agent_loaded and bench_pid: how benchd runs under launchd, spelled once.
+# agent_label, agent_loaded, bench_pid and agent_crates: how benchd is installed and run under
+# launchd, spelled once.
 # shellcheck source=benchd-agent.sh
 source "$repo/scripts/benchd-agent.sh"
 
@@ -302,7 +303,7 @@ detached_run() {
 
   local bin crate
   bin="${cargo_root:-${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}}/bin"
-  for crate in bench benchd; do
+  for crate in "${agent_crates[@]}"; do
     log "step 1: cargo install $crate into $bin"
     timeout 1200 cargo install --locked --force --path "$repo/daemon/crates/$crate" \
       --target-dir "$repo/daemon/target" ${cargo_root:+--root "$cargo_root"} >>"$build_log" 2>&1 ||

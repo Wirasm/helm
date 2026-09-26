@@ -25,7 +25,10 @@ agent_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # release-resume derives the same label to decide whether to restart through launchctl.
 agent_label() { printf 'com.wirasm.benchd%s\n' "${1:+.$1}"; }
 
-agent_loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; }
+agent_loaded() { timeout 10 launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; }
+
+# The binaries the agent runs and release-resume refreshes, installed from daemon/crates.
+agent_crates=(bench benchd)
 
 # write_plist <path> <label> <benchd> <log> [suite]
 #
@@ -85,7 +88,7 @@ agent_install() {
 
   local bin="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin" crate
   if [ "$build" -eq 1 ]; then
-    for crate in bench benchd; do
+    for crate in "${agent_crates[@]}"; do
       echo "benchd-agent: cargo install $crate"
       timeout 1200 cargo install --locked --force --quiet --path "$agent_repo/daemon/crates/$crate" \
         --target-dir "$agent_repo/daemon/target" || { echo "benchd-agent: cargo install $crate failed" >&2; return 4; }
