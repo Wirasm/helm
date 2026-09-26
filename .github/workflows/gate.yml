@@ -52,35 +52,29 @@ jobs:
           swift --version
           xcodebuild -version
 
-      # The patched libghostty is gitignored, so a fresh checkout has nothing to link
-      # against. First and not optional — the same sentence AGENTS.md opens with.
-      - name: patch libghostty
-        run: bash scripts/patch-libghostty.sh
+      # Lint first: format and size findings arrive before the build and tests instead of after
+      # them. `scripts/check.sh` defines every part, so this job and `just check` run the
+      # same commands.
+      - name: lint
+        run: bash scripts/check.sh lint
 
-      - name: build
-        run: swift build
+      - name: install xcodegen
+        if: success() || failure()
+        run: brew install xcodegen
 
-      # TerminalKeyboardTests and WorkbenchFocusRoutingTests need a real ghostty surface,
-      # and a surface needs an ACTIVE display (#253). A CI runner has none, so those two
-      # would fail here for a reason that is not the diff. Excluded rather than tolerated:
-      # a gate whose red is sometimes meaningless is a gate nobody reads.
+      # Patch, build, test, xcodegen. Runs even when lint failed, so one push shows both.
       #
-      # INJECTION_NOGENERICS=1 is not optional with --skip. Anything that makes SwiftPM
-      # enumerate goes through `swiftpm-xctest-helper`, which dies with `signalled(10)`
-      # when InjectionNext rebinds symbols under it — AGENTS.md documents this for
-      # `--filter` and it is the same path. Measured: without it, `--skip` dies the same
-      # way; with it, 1041 tests, 0 failures.
-      - name: test
-        run: INJECTION_NOGENERICS=1 swift test --skip TerminalKeyboardTests --skip WorkbenchFocusRoutingTests
-
-      # `make lint` is formatting plus the size and complexity limits (scripts/check-size.sh).
-      - name: format
-        run: make lint
-
-      - name: xcodegen
-        run: |
-          brew install xcodegen
-          xcodegen generate
+      # HELM_CHECK_HEADLESS=1 skips TerminalKeyboardTests and WorkbenchFocusRoutingTests:
+      # they need a real ghostty surface, and a surface needs an ACTIVE display (#253). A CI
+      # runner has none, so those two would fail here for a reason that is not the diff.
+      # Excluded rather than tolerated: a gate whose red is sometimes meaningless is a gate
+      # nobody reads. scripts/check.sh is the one place the skip is spelled, together with
+      # the INJECTION_NOGENERICS=1 that `--skip` needs (AGENTS.md).
+      - name: build · test · xcodegen
+        if: success() || failure()
+        env:
+          HELM_CHECK_HEADLESS: '1'
+        run: bash scripts/check.sh swift
 
   # Separate job because it needs node and the Swift gate must not: a Swift contributor
   # should never need a JS toolchain to go green, which is why AGENTS.md keeps these apart.
@@ -114,19 +108,16 @@ jobs:
           # and the pin was wrong.
           node-version: '22.18'
       - name: hooks gate
-        run: bash hooks/test.sh
+        run: bash scripts/check.sh hooks
 
   skills:
     name: skill gates
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - name: mail skills
-        run: bash .claude/skills/helm-mail-cc/test.sh
-      - name: canvas skill
-        run: bash .claude/skills/helm-canvas/test.sh
-      # Needs node, which this job already has by virtue of the runner image. A gate that
-      # exists, is documented in AGENTS.md, and runs only when somebody remembers is the
-      # drift this workflow exists to stop — #291 is the same lesson from the other side.
-      - name: board skill
-        run: bash .claude/skills/helm-board/test.sh
+      # All three skill gates: mail, canvas and board (scripts/check.sh). The board gate needs
+      # node, which this job already has by virtue of the runner image. A gate that exists, is
+      # documented in AGENTS.md, and runs only when somebody remembers is the drift this
+      # workflow exists to stop — #291 is the same lesson from the other side.
+      - name: skill gates
+        run: bash scripts/check.sh skills
