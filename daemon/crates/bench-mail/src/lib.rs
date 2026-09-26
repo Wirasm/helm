@@ -95,9 +95,9 @@ pub fn deliver(
     Ok((id, path))
 }
 
-/// Retire a message: inbox → read, never delete. Returns the retired path. Retiring an
-/// already-retired message is fine and answers with where it lives.
-pub fn retire(root: &Path, handle: &str, id: &str) -> Result<PathBuf, String> {
+/// Where a message lives once retired, whether or not it has been yet — what a wake notice
+/// names before the move (#415: the reactor retires only after the paste is written).
+pub fn retired_path(root: &Path, handle: &str, id: &str) -> Result<PathBuf, String> {
     // The one place an id becomes a path, so the one place it is checked (#402): `Path::join`
     // does not collapse `..`, and `read/../../<other>/inbox/m1` read another mailbox. Any
     // single file name is an id — hand-written ones like `note` included.
@@ -106,10 +106,15 @@ pub fn retire(root: &Path, handle: &str, id: &str) -> Result<PathBuf, String> {
             "{id:?} is not a message id — an id is one file name, as `bench mail list` shows it"
         ));
     }
-    let name = format!("{id}.md");
-    let from_path = inbox(root, handle).join(&name);
+    Ok(read_dir_of(root, handle).join(format!("{id}.md")))
+}
+
+/// Retire a message: inbox → read, never delete. Returns the retired path. Retiring an
+/// already-retired message is fine and answers with where it lives.
+pub fn retire(root: &Path, handle: &str, id: &str) -> Result<PathBuf, String> {
+    let to_path = retired_path(root, handle, id)?;
+    let from_path = inbox(root, handle).join(format!("{id}.md"));
     let to_dir = read_dir_of(root, handle);
-    let to_path = to_dir.join(&name);
     if to_path.exists() {
         return Ok(to_path);
     }
