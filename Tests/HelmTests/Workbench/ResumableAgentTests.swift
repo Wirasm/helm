@@ -11,6 +11,7 @@ import XCTest
 /// plain shell"*, and *"a session whose transcript is gone says so plainly rather than offering
 /// a resume that will fail"*.
 @MainActor
+// swiftlint:disable:next type_body_length - legacy (#418): 399 lines, limit 350
 final class ResumableAgentTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/helm-resume")
 

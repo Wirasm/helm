@@ -28,6 +28,7 @@ import SwiftUI
 /// blue, a failed count is red, a completed one is the brand teal because `--success` points
 /// there. Painting the whole rail magenta would be the easy version of "looks like Archon" and
 /// the wrong one.
+// swiftlint:disable:next type_body_length - legacy (#418): 430 lines, limit 350
 struct ArchonRailView: View {
     @ObservedObject var model: ArchonRailModel
     let workspacePath: WorkspacePath?

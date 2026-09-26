@@ -3,8 +3,8 @@
 //! travel and where they are kept.
 
 use bench_doc::{
-    ColumnId, Direction, Document, PaneId, PaneName, ResumableAgent, SlotId, Split, StandardPath,
-    Surface,
+    ColumnId, Direction, Document, DrawerName, PaneId, PaneName, ResumableAgent, SlotId, Split,
+    StandardPath, Surface,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -84,22 +84,17 @@ pub enum LayoutVerb {
     /// The one-time import of helm's saved benches, into an empty document only.
     #[serde(rename = "workspace/import")]
     WorkspaceImport { document: Document },
-    /// A new pane showing `surface`, placed by the rules. A terminal gets a fresh id; a
-    /// canvas or the browser already showing is brought forward (or, for an agent, left
-    /// where it is).
+    /// A new pane showing `surface`. A terminal gets a fresh id; a canvas or the browser
+    /// already showing is brought forward (or, for an agent, left where it is).
     #[serde(rename = "pane/open")]
-    PaneOpen {
-        #[serde(default)]
-        workspace: Option<StandardPath>,
-        surface: Surface,
-    },
+    PaneOpen(PaneOpen),
     /// ⌘D / ⌘⇧D. A terminal unless a surface is named.
     #[serde(rename = "pane/split")]
     PaneSplit {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace: Option<StandardPath>,
         direction: Split,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         surface: Option<Surface>,
     },
     #[serde(rename = "pane/close")]
@@ -121,12 +116,89 @@ pub enum LayoutVerb {
     FocusSlot { slot: SlotId },
     #[serde(rename = "focus/step")]
     FocusStep {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace: Option<StandardPath>,
         direction: Direction,
     },
     #[serde(rename = "layout/resize")]
     LayoutResize { divider: Divider, fraction: f64 },
+    /// Show a drawer over the bench, or hide it if it is the one shown. `surface` is what a
+    /// drawer that does not exist yet starts with; without one, opening it is refused. Opening
+    /// is the operator's focus, so an agent needs `asked`.
+    #[serde(rename = "drawer/toggle")]
+    DrawerToggle {
+        drawer: DrawerName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surface: Option<Surface>,
+    },
+}
+
+/// `pane/open`'s arguments: what to show, and where.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "EncodedPaneOpen", into = "EncodedPaneOpen")]
+pub struct PaneOpen {
+    pub into: OpenInto,
+    pub surface: Surface,
+}
+
+/// Where `pane/open` puts a pane. One value, so a request cannot name a workspace and a drawer
+/// at once and have one of them silently ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenInto {
+    /// The active workspace's bench, placed by the rules.
+    Active,
+    /// That workspace's bench, placed by the rules.
+    Workspace(StandardPath),
+    /// That drawer, outright: the rules are not asked. Created if it has none; an agent's pane
+    /// badges it, only the operator's opens it.
+    Drawer(DrawerName),
+}
+
+/// The wire spelling: `workspace` and `drawer` are both optional keys, and naming both is
+/// refused rather than resolved — a drawer belongs to no workspace.
+#[derive(Serialize, Deserialize)]
+struct EncodedPaneOpen {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace: Option<StandardPath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    drawer: Option<DrawerName>,
+    surface: Surface,
+}
+
+impl TryFrom<EncodedPaneOpen> for PaneOpen {
+    type Error = String;
+
+    fn try_from(raw: EncodedPaneOpen) -> Result<Self, Self::Error> {
+        let into = match (raw.workspace, raw.drawer) {
+            (None, None) => OpenInto::Active,
+            (Some(path), None) => OpenInto::Workspace(path),
+            (None, Some(drawer)) => OpenInto::Drawer(drawer),
+            (Some(path), Some(drawer)) => {
+                return Err(format!(
+                    "names both workspace {path} and drawer {drawer} — a drawer belongs to no workspace, so name one"
+                ));
+            }
+        };
+        Ok(PaneOpen {
+            into,
+            surface: raw.surface,
+        })
+    }
+}
+
+impl From<PaneOpen> for EncodedPaneOpen {
+    fn from(open: PaneOpen) -> Self {
+        let (workspace, drawer) = match open.into {
+            OpenInto::Active => (None, None),
+            OpenInto::Workspace(path) => (Some(path), None),
+            OpenInto::Drawer(drawer) => (None, Some(drawer)),
+        };
+        EncodedPaneOpen {
+            workspace,
+            drawer,
+            surface: open.surface,
+        }
+    }
 }
 
 /// Where a moved pane goes. Tagged so drag and drop (#178) adds a destination rather than
@@ -166,6 +238,7 @@ pub const LAYOUT_VERBS: &[&str] = &[
     "focus/slot",
     "focus/step",
     "layout/resize",
+    "drawer/toggle",
 ];
 
 /// The event every document change is logged as. One kind, so a follower that only wants
@@ -222,7 +295,9 @@ pub struct DocumentChange {
 }
 
 pub const DOCUMENT_RECORD_FORMAT: &str = "bench.document";
-pub const DOCUMENT_RECORD_VERSION: u64 = 0;
+/// 1: the document gained drawers (#356). An older build refuses a newer record by this number
+/// rather than reading it and dropping the drawers on its next save.
+pub const DOCUMENT_RECORD_VERSION: u64 = 1;
 
 /// `<root>/bench.json`: the document as benchd last wrote it, stamped with the seq of the
 /// event that produced it. The log says what happened; this file says where things are.
@@ -239,6 +314,19 @@ pub struct DocumentRecord {
 pub fn document_path(root: &Path) -> PathBuf {
     root.join("bench.json")
 }
+
+/// `<root>/rules/placement.toml`: where new panes go (#356). The operator writes it; benchd
+/// only reads it. Absent means the built-in table.
+pub fn placement_rules_path(root: &Path) -> PathBuf {
+    root.join("rules").join("placement.toml")
+}
+
+/// A rules file was read and is now in force — or, with `source: "default"`, is absent and the
+/// built-in table is. `data`: `{file, source}`.
+pub const RULES_LOADED: &str = "rules/loaded";
+/// A rules file changed and could not be read. The table in force before it stays in force.
+/// `data`: `{file, why}`, once per version of the file.
+pub const RULES_REJECTED: &str = "rules/rejected";
 
 #[cfg(test)]
 mod tests {
@@ -296,6 +384,11 @@ mod tests {
                     .unwrap_or_else(|e| panic!("{}: {e}", req.verb));
             let back = serde_json::to_value(&verb).unwrap();
             assert_eq!(back["verb"], Value::String(req.verb.clone()));
+            assert_eq!(
+                back["args"], req.args,
+                "{}: the typed verb writes its arguments as the sample spells them",
+                req.verb
+            );
             seen.push(LAYOUT_VERBS.iter().find(|v| **v == req.verb).unwrap());
         }
         for verb in LAYOUT_VERBS {
@@ -350,6 +443,31 @@ mod tests {
             "the reply spelling drifted from {}",
             path.display()
         );
+    }
+
+    #[test]
+    fn pane_open_names_a_workspace_or_a_drawer_never_both() {
+        let surface = json!({"kind": "browser"});
+        let open = |args: Value| {
+            serde_json::from_value::<LayoutVerb>(json!({"verb": "pane/open", "args": args}))
+        };
+        let into = |args: Value| match open(args).unwrap() {
+            LayoutVerb::PaneOpen(p) => p.into,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(into(json!({"surface": surface})), OpenInto::Active);
+        assert!(matches!(
+            into(json!({"workspace": "/tmp/w", "surface": surface})),
+            OpenInto::Workspace(_)
+        ));
+        assert!(matches!(
+            into(json!({"drawer": "notes", "surface": surface})),
+            OpenInto::Drawer(_)
+        ));
+        let err = open(json!({"workspace": "/tmp/w", "drawer": "notes", "surface": surface}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("name one"), "{err}");
     }
 
     #[test]

@@ -1,3 +1,4 @@
+// swiftlint:disable file_length - legacy (#418): 900 lines, limit 600
 import Foundation
 import HelmWire
 import XCTest
@@ -83,6 +84,7 @@ import XCTest
 /// **That cost is what every deadline here is really waiting on, and it is not what any test
 /// here has an opinion about** — see `scriptBudget` below for why the number is 60s rather
 /// than the 10s that twice reported a busy machine as a drifted wire format (#291).
+// swiftlint:disable:next type_body_length - legacy (#418): 895 lines, limit 350
 final class SpoolWireConformanceTests: XCTestCase {
     private var spoolDir: URL!
     private var runningProcesses: [Process] = []

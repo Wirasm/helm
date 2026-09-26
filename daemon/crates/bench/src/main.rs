@@ -12,10 +12,11 @@
 //!
 //! These are helm's spool codes, kept on purpose.
 
+use bench_doc::{DrawerName, Surface};
 use bench_wire::{
-    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, MailListArgs, MailReadArgs,
-    MailSendArgs, OPERATOR_HANDLE, Request, RequestId, Response, SessionArgs, SessionKey,
-    SessionsArgs, SpawnArgs, Status, SuiteName, resolve_root, socket_path,
+    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, LayoutVerb, MailListArgs,
+    MailReadArgs, MailSendArgs, OPERATOR_HANDLE, Request, RequestId, Response, SessionArgs,
+    SessionKey, SessionsArgs, SpawnArgs, Status, SuiteName, resolve_root, socket_path,
 };
 use serde_json::{Value, json};
 use std::io::{IsTerminal, Read, Write};
@@ -59,6 +60,10 @@ fn usage() -> &'static str {
      \x20     browser stop                        stop the shared browser\n\
      \x20     browser setup                       the same profile in a real window, to install\n\
      \x20                                         extensions and sign in; quit it to go headless\n\
+     \x20     drawer toggle <name>                show a drawer over the bench, or hide it: the\n\
+     \x20           [--surface <s>]               operator's focus, so refused from an agent. <s>\n\
+     \x20                                         is what a new drawer starts with: browser,\n\
+     \x20                                         terminal or file:<path>\n\
      env:   BENCH_SUITE (flag wins) · BENCH_DIR (root override, wins over suite)\n\
      exit:  0 ok · 2 no daemon · 3 refused · 4 daemon failed"
 }
@@ -69,6 +74,11 @@ struct Cli {
     root: PathBuf,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "legacy (#418): 250 lines, limit 100; cognitive complexity 26, limit 25"
+)]
 fn run() -> i32 {
     let mut argv = std::env::args().skip(1).peekable();
     let mut suite_flag: Option<String> = None;
@@ -101,7 +111,7 @@ fn run() -> i32 {
             "--all" => all = true,
             "--agent" | "--cwd" | "--prompt-file" | "--model" | "--effort" | "--rows"
             | "--cols" | "--name" | "--to" | "--from" | "--subject" | "--body" | "--body-file"
-            | "--handle" | "--workspace" | "--harness" => {
+            | "--handle" | "--workspace" | "--harness" | "--surface" => {
                 let key = arg.trim_start_matches("--").replace('-', "_");
                 match argv.next() {
                     Some(v) => flags.push((key, v)),
@@ -164,6 +174,12 @@ fn run() -> i32 {
     } else if verb == "sessions" && positional.first().map(String::as_str) == Some("dismiss") {
         positional.remove(0);
         verb = "sessions/dismiss".into();
+    }
+    if verb == "drawer" {
+        if positional.is_empty() {
+            return refuse("drawer needs a subcommand: toggle");
+        }
+        verb = format!("drawer/{}", positional.remove(0));
     }
     if verb == "browser" {
         if positional.is_empty() {
@@ -310,6 +326,24 @@ fn run() -> i32 {
                 id: id.clone(),
             })
         }
+        "drawer/toggle" => {
+            let Some(name) = positional.first() else {
+                return refuse("drawer toggle needs a drawer name");
+            };
+            let drawer = match DrawerName::new(name) {
+                Ok(d) => d,
+                Err(why) => return refuse(&why),
+            };
+            let surface = match flag("surface").as_deref().map(parse_surface).transpose() {
+                Ok(s) => s,
+                Err(why) => return refuse(&why),
+            };
+            // The wire type's own encoding, so the CLI cannot spell an argument benchd does
+            // not read.
+            serde_json::to_value(LayoutVerb::DrawerToggle { drawer, surface })
+                .map(|v| v["args"].clone())
+                .unwrap_or(Value::Null)
+        }
         "mail/list" => json!(MailListArgs {
             handle: flag("handle").unwrap_or_else(own_handle),
         }),
@@ -445,6 +479,24 @@ fn kind_name(kind: bench_sessions::transcript::Kind) -> &'static str {
         Kind::Agent => "agent",
         Kind::Tool => "tool",
         Kind::Error => "error",
+    }
+}
+
+/// `--surface`: `browser`, `terminal`, or `file:<path>`, a relative path meaning the caller's
+/// cwd — which only the caller knows.
+fn parse_surface(raw: &str) -> Result<Surface, String> {
+    match raw {
+        "browser" => Ok(Surface::Browser),
+        "terminal" => Ok(Surface::terminal()),
+        _ => match raw.strip_prefix("file:") {
+            Some(path) => {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                Surface::file(&cwd.join(path).display().to_string())
+            }
+            None => Err(format!(
+                "--surface is browser, terminal or file:<path>, not {raw:?}"
+            )),
+        },
     }
 }
 

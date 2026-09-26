@@ -429,5 +429,47 @@
     "by": {
       "kind": "operator"
     }
+  },
+  {
+    "id": "v-23",
+    "verb": "pane/open",
+    "args": {
+      "drawer": "notes",
+      "surface": {
+        "kind": "canvas",
+        "source": {
+          "kind": "file",
+          "path": "/Users/operator/.prp/helm/research/drawers.md"
+        }
+      }
+    },
+    "by": {
+      "kind": "agent",
+      "pane": "00000001-0000-4000-8000-000000000001",
+      "handle": "claude-helm"
+    }
+  },
+  {
+    "id": "v-24",
+    "verb": "drawer/toggle",
+    "args": {
+      "drawer": "browser",
+      "surface": {
+        "kind": "browser"
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-25",
+    "verb": "drawer/toggle",
+    "args": {
+      "drawer": "notes"
+    },
+    "by": {
+      "kind": "operator"
+    }
   }
 ]
