@@ -153,7 +153,20 @@ final class DrawerTests: XCTestCase {
     /// A ⌘-clicked link opens the browser in the background (#376): helm's own `pane/open`, so
     /// the placement rules put it in the browser drawer and badge it rather than opening it.
     func testAClickedLinkOpensTheBrowserAsHelmNotAsTheOperator() throws {
-        let rig = try rig(document(BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("helm-drawers-\(UUID().uuidString)")
+        final class Count: @unchecked Sendable { var value = 0 }
+        let made = Count()
+        let bench = BenchFixture.bench([BenchFixture.terminal()])
+        let rig = try rig(
+            document(bench, seq: 1),
+            makeBrowser: {
+                made.value += 1
+                return BrowserPaneModel(environment: ["BENCH_DIR": root.path], home: root)
+            })
+        let created = UUID()
+        let badged = document(bench, seq: 2, drawers: [browserDrawer(created, badged: true)])
+        rig.server.answerWith({ _ in badged }, created: created)
 
         rig.model.openLink(try XCTUnwrap(URL(string: "https://example.com")))
 
@@ -161,6 +174,14 @@ final class DrawerTests: XCTestCase {
         XCTAssertEqual(sent["verb"] as? String, "pane/open")
         XCTAssertEqual((sent["by"] as? [String: Any])?["kind"] as? String, "helm")
         XCTAssertNil(sent["asked"], "the link does not ask for the keyboard")
+        XCTAssertEqual(made.value, 1, "the link went to the browser benchd put in the drawer")
+        let pane = Pane(id: created, content: .browser)
+        _ = rig.model.surfaceView(
+            of: pane,
+            in: SurfaceSlot(
+                pane: pane, holdsKeyboard: true, isSelected: true, canClose: true, select: {},
+                close: {}))
+        XCTAssertEqual(made.value, 1, "and the drawer later shows that same browser view")
     }
 
     /// One capsule per drawer, lit while it is shown and dotted while it is badged.
