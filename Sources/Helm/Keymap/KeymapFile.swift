@@ -34,6 +34,9 @@ struct KeymapFile: Equatable {
 
     let rows: [Row]
     let unbind: [KeyChord]
+    /// `[drawer.<name>]`: where a drawer sits and how wide it is. A drawer not named here uses
+    /// `DrawerStyle.builtIn(for:)`.
+    var drawers: [String: DrawerStyle] = [:]
 
     static func parse(_ text: String) throws(KeymapProblem) -> KeymapFile {
         let raw: RawFile
@@ -63,7 +66,13 @@ struct KeymapFile: Equatable {
                 throw KeymapProblem(line: nil, reason: "unbind: \(error.reason)")
             }
         }
-        return KeymapFile(rows: rows, unbind: unbind)
+        var drawers: [String: DrawerStyle] = [:]
+        for (name, style) in raw.drawer {
+            do { drawers[name] = try style.style(for: name) } catch {
+                throw KeymapProblem(line: nil, reason: "[drawer.\(name)]: \(error.reason)")
+            }
+        }
+        return KeymapFile(rows: rows, unbind: unbind, drawers: drawers)
     }
 
     /// The table this file makes of `defaults`.
@@ -127,7 +136,14 @@ struct KeymapFile: Equatable {
         # key:    cmd, ctrl, alt, shift joined by + before one character, plus, left, right, up,
         #         down or keycode:N
         # when:   anywhere (the default), terminal, away-from-terminal
-        # action: one of the names below; index is 1-based
+        # action: one of the names below; index is 1-based. `drawer` takes name and, optionally,
+        #         surface = "browser" or "file:<path>" for a drawer that holds nothing yet
+        #
+        # A drawer's place is a table of its own, e.g.
+        #   [drawer.notes]
+        #   edge = "left"             # left or right
+        #   size = 0.3                # a fraction of the window's width, 0.1 to 0.9
+        # Built in: sessions on the left at 0.28, every other drawer on the right at 0.5.
 
 
         """
@@ -173,11 +189,15 @@ struct KeymapFile: Equatable {
     private struct RawFile: Decodable {
         let bind: [RawRow]
         let unbind: [String]
+        let drawer: [String: RawDrawer]
 
         init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: FieldKey.self)
-            try FieldKey.refuseUnknown(container.allKeys, allowed: ["bind", "unbind"], in: nil)
+            try FieldKey.refuseUnknown(
+                container.allKeys, allowed: ["bind", "unbind", "drawer"], in: nil)
             unbind = try container.decodeIfPresent([String].self, forKey: "unbind") ?? []
+            drawer =
+                try container.decodeIfPresent([String: RawDrawer].self, forKey: "drawer") ?? [:]
             var rows: [RawRow] = []
             if container.contains("bind") {
                 var list = try container.nestedUnkeyedContainer(forKey: "bind")
@@ -243,7 +263,9 @@ private struct RawRow: Decodable {
             index: try c.decodeIfPresent(Int.self, forKey: "index"),
             delta: try c.decodeIfPresent(Int.self, forKey: "delta"),
             step: try c.decodeIfPresent(String.self, forKey: "step"),
-            offset: try c.decodeIfPresent(Int.self, forKey: "offset"))
+            offset: try c.decodeIfPresent(Int.self, forKey: "offset"),
+            name: try c.decodeIfPresent(String.self, forKey: "name"),
+            surface: try c.decodeIfPresent(String.self, forKey: "surface"))
         hint = try c.decodeIfPresent(String.self, forKey: "hint")
         menu = try c.decodeIfPresent(String.self, forKey: "menu")
     }
@@ -254,6 +276,37 @@ private struct RawRow: Decodable {
         let action = try KeyBinding.Action(name: action, arguments: arguments)
         return KeyBinding(
             chord.trigger, chord.modifiers, action, when: when, hint: hint, menu: menu)
+    }
+}
+
+/// One `[drawer.<name>]` table as TOML has it.
+private struct RawDrawer: Decodable {
+    let edge: String?
+    let size: Double?
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: FieldKey.self)
+        try FieldKey.refuseUnknown(c.allKeys, allowed: ["edge", "size"], in: "drawer")
+        edge = try c.decodeIfPresent(String.self, forKey: "edge")
+        size = try c.decodeIfPresent(Double.self, forKey: "size")
+    }
+
+    /// The drawer's built-in style with whatever the table sets.
+    func style(for name: String) throws(KeymapProblem) -> DrawerStyle {
+        var style = DrawerStyle.builtIn(for: name)
+        if let edge {
+            guard let parsed = DrawerStyle.Edge(rawValue: edge) else {
+                throw KeymapProblem(line: nil, reason: "edge is left or right, not '\(edge)'")
+            }
+            style.edge = parsed
+        }
+        if let size {
+            guard DrawerStyle.sizes.contains(size) else {
+                throw KeymapProblem(line: nil, reason: "size is 0.1 to 0.9, not \(size)")
+            }
+            style.size = size
+        }
+        return style
     }
 }
 

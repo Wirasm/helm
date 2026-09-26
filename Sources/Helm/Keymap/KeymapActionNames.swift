@@ -1,3 +1,4 @@
+import Foundation
 import HelmWire
 
 /// The names the keymap file gives actions, and the one argument each may take.
@@ -36,6 +37,8 @@ extension VerbTemplate {
         case .openBrowser: ("open-browser", .none)
         case let .activateWorkspace(index): ("workspace", .init(index: index + 1))
         case let .cycleWorkspace(delta): ("cycle-workspace", .init(delta: delta))
+        case let .toggleDrawer(name, surface):
+            ("drawer", .init(name: name, surface: surface?.keymapSpelling))
         }
     }
 
@@ -51,6 +54,9 @@ extension VerbTemplate {
         case "open-browser": try a.none(name); self = .openBrowser
         case "workspace": self = .activateWorkspace(index: try a.index(name))
         case "cycle-workspace": self = .cycleWorkspace(delta: try a.delta(name))
+        case "drawer":
+            let drawer = try a.drawer(name)
+            self = .toggleDrawer(name: drawer.name, surface: drawer.surface)
         default: return nil
         }
     }
@@ -81,6 +87,32 @@ extension LocalAction {
     }
 }
 
+extension Surface {
+    /// What a drawer key starts an empty drawer with, as the file spells it.
+    fileprivate init?(keymapSpelling text: String) {
+        if text == "browser" {
+            self = .browser
+        } else if text.hasPrefix("file:"), text.count > "file:".count {
+            self = .canvas(
+                path: (String(text.dropFirst("file:".count)) as NSString)
+                    .expandingTildeInPath)
+        } else {
+            return nil
+        }
+    }
+
+    /// The inverse, for rendering. A surface no key can name (a terminal, a kind this build does
+    /// not know) is spelled by its kind, which the parser then refuses.
+    fileprivate var keymapSpelling: String {
+        switch self {
+        case .browser: "browser"
+        case let .canvas(path): "file:" + path
+        case .terminal: "terminal"
+        case let .unsupported(kind): kind
+        }
+    }
+}
+
 extension FontSizeStep {
     fileprivate var spelled: String {
         switch self {
@@ -99,41 +131,63 @@ struct KeymapArguments: Equatable {
     var delta: Int?
     var step: String?
     var offset: Int?
+    /// A drawer's name, and what it starts with when it holds nothing yet (`drawer`).
+    var name: String?
+    var surface: String?
 
     static let none = KeymapArguments()
-    static let fields = ["direction", "index", "delta", "step", "offset"]
+    static let fields = ["direction", "index", "delta", "step", "offset", "name", "surface"]
 
     /// The row's argument line, empty for none.
     var rendered: [String] {
         [
             direction.map { "direction = \"\($0)\"" }, index.map { "index = \($0)" },
             delta.map { "delta = \($0)" }, step.map { "step = \"\($0)\"" },
-            offset.map { "offset = \($0)" },
+            offset.map { "offset = \($0)" }, name.map { "name = \"\($0)\"" },
+            surface.map { "surface = \"\($0)\"" },
         ].compactMap(\.self)
     }
 
     private var present: [String] {
-        zip(
-            Self.fields, [direction != nil, index != nil, delta != nil, step != nil, offset != nil]
-        )
-        .filter(\.1).map(\.0)
+        let set = [
+            direction != nil, index != nil, delta != nil, step != nil, offset != nil,
+            name != nil, surface != nil,
+        ]
+        return zip(Self.fields, set).filter(\.1).map(\.0)
     }
 
-    /// Refuses any argument but `field`.
-    private func only(_ field: String?, _ action: String) throws(KeymapProblem) {
-        if let extra = present.first(where: { $0 != field }) {
-            throw KeymapProblem(
-                line: nil,
-                reason: "'\(action)' takes "
-                    + (field.map { "only \($0)" } ?? "no argument") + ", not \(extra)")
+    /// Refuses any argument but `fields`.
+    private func only(_ fields: [String], _ action: String) throws(KeymapProblem) {
+        if let extra = present.first(where: { !fields.contains($0) }) {
+            let takes =
+                fields.isEmpty ? "no argument" : "only " + fields.joined(separator: " and ")
+            throw KeymapProblem(line: nil, reason: "'\(action)' takes \(takes), not \(extra)")
         }
+    }
+
+    private func only(_ field: String, _ action: String) throws(KeymapProblem) {
+        try only([field], action)
     }
 
     private func missing(_ field: String, _ action: String) -> KeymapProblem {
         KeymapProblem(line: nil, reason: "'\(action)' needs \(field)")
     }
 
-    func none(_ action: String) throws(KeymapProblem) { try only(nil, action) }
+    func none(_ action: String) throws(KeymapProblem) { try only([], action) }
+
+    /// A drawer's name, and the surface it starts with if it is empty: `browser`, or
+    /// `file:<path>` for a canvas. benchd judges the name when the key is pressed.
+    func drawer(_ action: String) throws(KeymapProblem) -> (name: String, surface: Surface?) {
+        try only(["name", "surface"], action)
+        guard let name, !name.isEmpty else { throw missing("name", action) }
+        guard let surface else { return (name, nil) }
+        guard let parsed = Surface(keymapSpelling: surface) else {
+            throw KeymapProblem(
+                line: nil,
+                reason: "'\(action)' surface is browser or file:<path>, not '\(surface)'")
+        }
+        return (name, parsed)
+    }
 
     func direction<Value: RawRepresentable<String>>(
         _: Value.Type, _ action: String

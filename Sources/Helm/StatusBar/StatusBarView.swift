@@ -19,7 +19,7 @@ import SwiftUI
 struct StatusBarView: View {
     @ObserveInjection private var inject
     @ObservedObject var model: WorkspaceModel
-    /// For benchd's badge in daemon mode; nothing else here reads the bench.
+    /// For benchd's badge and the drawer capsules, both drawn from benchd's document.
     let workbench: WorkbenchModel
     /// Already polled on the workspace bar's behalf; observing it here costs nothing new.
     @ObservedObject private var board = BoardModel.shared
@@ -77,6 +77,7 @@ struct StatusBarView: View {
             presence: board.presence
         )
         HStack(spacing: 6) {
+            DrawerCapsules(model: workbench)
             if let client = workbench.mode.client {
                 BenchStatusBadge(client: client, workbench: workbench)
             }
