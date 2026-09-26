@@ -26,7 +26,7 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | Part | Runs | Needs |
 | --- | --- | --- |
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
-| `swift` | `bash scripts/patch-libghostty.sh && swift build && swift test && xcodegen generate` | Swift toolchain, xcodegen |
+| `swift` | `bash scripts/patch-libghostty.sh && swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`) | Swift toolchain, xcodegen |
 | `hooks` | `hooks/test.sh` | node |
 | `skills` | the mail, canvas and board skill gates | node, zsh, python3 |
 | `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml` or a `bench-*` skill changed | cargo |
@@ -167,21 +167,22 @@ They are what a fresh worktree has to pass, and every dependency added to them i
 every contributor now needs. The other parts need node or cargo, which is why they are separate
 parts and separate CI jobs.
 
-**CI runs the same parts, with three differences.** Its jobs are `build · test · format` (`lint`
+**CI runs the same parts, with two differences.** Its jobs are `build · test · format` (`lint`
 then `swift`), `mailbox hooks · conformance` (`hooks`), `skill gates` (`skills`) and
 `fmt · clippy · build · test` (`daemon`, reporting success without running when nothing it covers
-changed). There is no `pi` job: it needs an `npm install` in `pi/`, so only `just check` runs it.
+changed). `hooks` and `skills` run on every PR, whatever it touched, and so does `just check`:
+*"a gate that exists, is documented in `AGENTS.md`, and runs only when somebody remembers is the
+drift this workflow exists to stop."* There is no `pi` job: it needs an `npm install` in `pi/`,
+so only `just check` runs it.
 
 - **Narrower on the Swift job**, by exactly the two suites this section spends forty lines
   teaching you to diagnose. CI sets `HELM_CHECK_HEADLESS=1`, which makes the `swift` part run
-  `INJECTION_NOGENERICS=1 swift test --skip TerminalKeyboardTests --skip WorkbenchFocusRoutingTests`.
+  `INJECTION_NOGENERICS=1 swift test --disable-keychain --skip TerminalKeyboardTests --skip
+  WorkbenchFocusRoutingTests`.
   A runner has no active display and those two need a real ghostty surface (#253) — excluded
   rather than tolerated, since a gate whose red is sometimes meaningless is a gate nobody reads.
   So **a green CI is not a green local gate**: a regression in either suite passes CI, and
   `just check` before the PR is the only thing that catches it.
-- **`hooks` and `skills` run on every PR**, whatever it touched. *"A gate that exists, is
-  documented in `AGENTS.md`, and runs only when somebody remembers is the drift this workflow
-  exists to stop."* `just check` runs them every time too.
 - **And a green local gate is not a green CI either**: CI runs against the
   **merge commit** rather than your branch tip. That is why it exists — two PRs merged 56 seconds
   apart on 2026-08-06, both green on their own branches, both reviewed, touching different files,

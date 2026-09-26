@@ -12,7 +12,7 @@
 # Parts: lint swift hooks skills daemon pi. Within a part the first failure stops it; across
 # parts the run continues, so one red part does not hide another.
 #
-# HELM_CHECK_HEADLESS=1 is CI's one difference from a local run: no runner has an active
+# HELM_CHECK_HEADLESS=1 is the one difference in the commands CI runs: no runner has an active
 # display, and TerminalKeyboardTests and WorkbenchFocusRoutingTests need a real ghostty
 # surface (#253), so they are skipped there. Nowhere else spells that skip.
 #
@@ -73,8 +73,11 @@ part_lint() {
 
 part_swift() {
     require xcodegen swift || return 1
+    echo "--> patch libghostty"
     bash scripts/patch-libghostty.sh || return 1
+    echo "--> build"
     swift build --disable-keychain || return 1
+    echo "--> test"
     # INJECTION_NOGENERICS=1 is not optional with --skip: anything that makes SwiftPM
     # enumerate goes through `swiftpm-xctest-helper`, which dies with `signalled(10)` when
     # InjectionNext rebinds symbols under it (AGENTS.md, the `--filter` paragraph).
@@ -84,6 +87,7 @@ part_swift() {
     else
         swift test --disable-keychain || return 1
     fi
+    echo "--> xcodegen"
     xcodegen generate
 }
 
