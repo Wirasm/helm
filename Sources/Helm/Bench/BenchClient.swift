@@ -1,8 +1,8 @@
 import Foundation
 import HelmWire
 
-/// helm as benchd's client (M4 PR 3c of #354): a request per verb, and one long `events
-/// --follow` connection that carries the document back.
+/// helm as benchd's client (#354): a request per verb, and one long `events --follow`
+/// connection that carries the document back.
 ///
 /// **Two connections, because benchd has two shapes.** A verb is one line out and one line
 /// back on a connection of its own (the daemon's framing). The follower keeps one connection
@@ -29,7 +29,8 @@ final class BenchClient: ObservableObject {
     let socketPath: String
 
     /// Each document the follower delivers, on the main actor, in order. The first after a
-    /// (re)connect is the whole state and is always delivered; after that only a newer seq is.
+    /// (re)connect is the whole state and is delivered unless a newer one already was; after that
+    /// only a newer seq is.
     var onDocument: ((DocumentAt) -> Void)?
 
     /// Each frame that carries no document — an event that changed no arrangement, such as a
@@ -69,6 +70,18 @@ final class BenchClient: ObservableObject {
         }
     }
 
+    /// This helm's client: the bench root's socket, or — for a root benchd would refuse — a
+    /// client that never connects and says why. Refused rather than falling back to anything
+    /// local: helm has no bench of its own to fall back to.
+    static func live(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> BenchClient {
+        switch resolve(environment: environment) {
+        case let .success(client): client
+        case let .failure(refused): BenchClient(unreachable: refused.sentence)
+        }
+    }
+
     func start() {
         guard follower == nil, refused == nil else { return }
         let follower = BenchFollower(path: socketPath, latest: latest) { [weak self] event in
@@ -89,6 +102,10 @@ final class BenchClient: ObservableObject {
         switch event {
         case .connected(let at):
             state = .connected
+            // A verb can have drawn a newer document (`document(atLeast:)`) while this one waited
+            // on the main queue; drawing it now would put the bench back where it was. After a
+            // disconnect nothing is drawn yet, so a benchd whose seq started again is followed.
+            if let delivered, at.seq < delivered { return }
             delivered = at.seq
             onDocument?(at)
         case .frame(let at):
@@ -97,6 +114,7 @@ final class BenchClient: ObservableObject {
             onDocument?(at)
         case .disconnected(let why):
             state = .disconnected(why)
+            delivered = nil
         case .event(let line):
             onEvent?(line)
         }
@@ -112,7 +130,7 @@ final class BenchClient: ObservableObject {
 
     /// One verb, one answer, at a socket path: for a caller that holds no client (the mail
     /// seam). Blocking and bounded by `requestTimeout`, like the instance form: a canvas note
-    /// calls it on the main actor as `DaemonSink` does, and the spool's repeated ask moves it
+    /// calls it on the main actor as `WorkbenchModel.send` does, and the spool's repeated ask moves it
     /// off.
     nonisolated static func request<Payload: Decodable & Sendable>(
         _ request: some Encodable, at socketPath: String, answering _: Payload.Type = Payload.self

@@ -65,7 +65,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     func testARePushAfterASiblingOnlyEditPutsTheNewBytesOnThePage() async throws {
         try #"{"version":"v1"}"#.write(to: sibling, atomically: true, encoding: .utf8)
 
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         try await push(artifact, from: terminal)
 
@@ -103,7 +103,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     func testEditingTheArtifactItselfStillReloadsThePaneWithNoPush() async throws {
         try #"{"version":"v1"}"#.write(to: sibling, atomically: true, encoding: .utf8)
 
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         try await push(artifact, from: terminal)
 
@@ -160,7 +160,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         try Self.svg(width: 11).write(to: sibling, atomically: true, encoding: .utf8)
         try source.write(to: markdownArtifact, atomically: true, encoding: .utf8)
 
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         try await push(markdownArtifact, from: terminal)
 
@@ -217,7 +217,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         try Self.svg(width: 11).write(to: sibling, atomically: true, encoding: .utf8)
         try source.write(to: markdownArtifact, atomically: true, encoding: .utf8)
 
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         try await push(markdownArtifact, from: terminal)
 
@@ -251,7 +251,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     /// only thing that can say *"the same path, different bytes"*, and it is what
     /// `HTMLCanvasPage.load` keys its navigation on.
     func testARePushOfAnOpenCanvasBumpsItsDocumentGeneration() async throws {
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         try await push(artifact, from: terminal)
 
@@ -274,7 +274,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     /// It passes before the fix too — before it, nothing happened at all — which is exactly what
     /// makes it a control rather than evidence.
     func testARePushStillDoesNotChangeWhatTheSlotShowsOrWhereFocusIs() async throws {
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         try await push(artifact, from: terminal)
         // Resolved, so the re-push below really does refresh something — an unresolved pane
@@ -300,7 +300,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     /// **A control against the other overshoot**: refreshing every canvas on the bench, rather
     /// than the one that was pushed, would satisfy every assertion above.
     func testPushingOneArtifactDoesNotRefreshAnother() async throws {
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         try await push(artifact, from: terminal)
         try await push(other, from: terminal)
@@ -321,11 +321,12 @@ final class CanvasSiblingRefreshTests: XCTestCase {
 
     // MARK: - The bench, and a push into it
 
-    private func mounted() -> (WorkbenchModel, TerminalManager) {
-        let manager = TerminalManager()
-        let model = WorkbenchModel(terminals: manager)
-        model.activate(workspacePath: workspace)
-        return (model, manager)
+    private func mounted() throws -> (WorkbenchModel, TerminalManager) {
+        let rig = try toyRig(workspace.value)
+        XCTAssertTrue(
+            Eventually.holds { !rig.terminals.sessions(for: workspace).isEmpty },
+            "the workspace's terminal never started")
+        return (rig.model, rig.terminals)
     }
 
     /// `push.sh`'s OSC 777, arriving at the terminal that printed it. The sleep is kept from when

@@ -11,7 +11,6 @@ final class UnsupportedPaneKind: SurfaceKind {
     }
 
     let kind: Pane.Content.Kind = .unsupported
-    let survivesUnmount = false
 
     func make(for pane: Pane, in workspace: WorkspacePath?) -> Model? {
         guard case let .unsupported(kind) = pane.content else { return nil }

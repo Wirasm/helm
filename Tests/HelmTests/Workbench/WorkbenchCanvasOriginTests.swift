@@ -51,22 +51,24 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
 
     /// A bench whose canvas notes go to this test's benchd. `who` answers for a pane only when
     /// the test says an agent reported from it — the one fact the route now asks benchd.
-    private func mounted() -> (WorkbenchModel, TerminalManager) {
-        let manager = TerminalManager()
+    private func mounted() throws -> (WorkbenchModel, TerminalManager) {
         let bench = self.bench
-        let model = WorkbenchModel(
-            terminals: manager,
-            notes: CanvasNoteCourier(
-                mail: BenchMailbox(
-                    who: { pane in
-                        bench.agents[pane].map {
-                            BenchMailWho(
-                                handle: $0, harness: "claude", session: "s-\($0.value)", pid: 1)
-                        }
-                    },
-                    send: { to, _, _, _ in bench.sent.append(to) })))
-        model.activate(workspacePath: workspace)
-        return (model, manager)
+        let rig = try toyRig(workspace.value) { terminals, client in
+            WorkbenchModel(
+                terminals: terminals,
+                notes: CanvasNoteCourier(
+                    mail: BenchMailbox(
+                        who: { pane in
+                            bench.agents[pane].map {
+                                BenchMailWho(
+                                    handle: $0, harness: "claude", session: "s-\($0.value)",
+                                    pid: 1)
+                            }
+                        },
+                        send: { to, _, _, _ in bench.sent.append(to) })),
+                agents: .blind, client: client)
+        }
+        return (rig.model, rig.terminals)
     }
 
     /// `push.sh`'s sequence, arriving at the session that printed it — the route an agent's push
@@ -111,7 +113,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
 
     /// #205's first acceptance: no pane switch, no paste.
     func testAMarkOnAPushedCanvasReachesTheAgentThatPushedIt() async throws {
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         bench.agents[terminal.id] = handle
 
@@ -122,33 +124,21 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         XCTAssertEqual(messages(in: otherHandle), [])
     }
 
-    /// #349: the canvas is pushed while its workspace is **parked**, and the mark is made after the
-    /// operator switches in. The origin has to survive both hops, the parked bench and the mount,
-    /// or the note falls back to the clipboard and tells the operator nobody pushed it.
-    func testAMarkOnACanvasPushedFromAParkedWorkspaceReachesThePusherAfterSwitchingIn()
+    /// #349: the canvas is pushed while its workspace is in the background, and the mark is made
+    /// after the operator switches in. The origin has to survive both hops, or the note falls
+    /// back to the clipboard and tells the operator nobody pushed it.
+    func testAMarkOnACanvasPushedFromABackgroundWorkspaceReachesThePusherAfterSwitchingIn()
         async throws
     {
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         bench.agents[terminal.id] = handle
-        let workspaces = WorkspaceModel(defaults: try isolatedDefaults("origin-parked"))
-        model.parked = workspaces
-
-        // Park it the way `RootView.switchWorkspace` does.
-        workspaces.open(Workspace(path: workspace.value))
-        workspaces.saveContext(terminalManager: manager, workbench: model)
-        let elsewhere = WorkspacePath("/tmp/helm-canvas-origin-elsewhere")
-        workspaces.open(Workspace(path: elsewhere.value))
-        model.activate(workspacePath: elsewhere)
+        model.send(
+            .workspaceOpen(path: "/tmp/helm-canvas-origin-elsewhere"), by: .operatorGesture)
 
         push(from: terminal)
-
-        workspaces.saveContext(terminalManager: manager, workbench: model)
-        workspaces.open(Workspace(path: workspace.value))
-        model.activate(
-            workspacePath: workspace,
-            restoring: workspaces.contexts[workspace.value]?.workbench)
-        try mark("pushed while parked", on: try pushedCanvas(of: model))
+        model.send(.workspaceActivate(path: workspace.value), by: .operatorGesture)
+        try mark("pushed while in the background", on: try pushedCanvas(of: model))
 
         XCTAssertEqual(messages(in: handle).count, 1)
         XCTAssertEqual(copied, [], "a routed mark is mailed, not left on the clipboard")
@@ -159,9 +149,9 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     /// only one of them pushed — *"more than one agent plausibly wants it — do not guess; the
     /// origin is the origin"* (#205).
     func testTheNoteGoesToThePusherAndNotToWhateverElseIsRunning() async throws {
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let pusher = try XCTUnwrap(manager.sessions(for: workspace).first)
-        let bystander = try XCTUnwrap(model.newTerminal())
+        let bystander = try XCTUnwrap(model.splitRight())
         bench.agents[pusher.id] = handle
         bench.agents[bystander.id] = otherHandle
 
@@ -177,7 +167,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     /// A canvas the operator opened by hand has no origin, so there is no route — and the pane
     /// says so rather than doing nothing silently.
     func testACanvasTheOperatorOpenedHasNoOriginAndSendsNothing() throws {
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         bench.agents[try XCTUnwrap(manager.sessions(for: workspace).first).id] = handle
 
         let opened = try XCTUnwrap(model.open(.file(canvas)))
@@ -201,7 +191,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     /// to benchd. Same fallback, a different sentence, because they are different answers to "why
     /// did nothing send?".
     func testAnOriginWhoseMailboxIsGoneFallsBackAndSaysWhich() async throws {
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         // No agent reports from the pane any more: benchd's `who` has nothing to say for it.
 
@@ -221,9 +211,9 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     /// returns before the commit. The origin has to be recorded on that path as well, or a canvas
     /// keeps routing to whoever pushed it first however many times it has been handed on since.
     func testRePushingAnOpenCanvasRoutesToTheNewestPusher() async throws {
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let first = try XCTUnwrap(manager.sessions(for: workspace).first)
-        let second = try XCTUnwrap(model.newTerminal())
+        let second = try XCTUnwrap(model.splitRight())
         bench.agents[first.id] = handle
         bench.agents[second.id] = otherHandle
 
@@ -240,13 +230,13 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     /// Closing the canvas drops the origin with it — the next canvas to land on a recycled pane
     /// id must not inherit a route nobody asked for.
     func testClosingACanvasForgetsWhoPushedIt() async throws {
-        let (model, manager) = mounted()
+        let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         bench.agents[terminal.id] = handle
 
         push(from: terminal)
         let pane = try XCTUnwrap(model.bench?.canvasPanes.first)
-        model.close(pane.id)
+        model.send(.paneClose(pane.id), by: .operatorGesture)
 
         let opened = try XCTUnwrap(model.open(.file(canvas)))
         let reopened = try XCTUnwrap(model.bench?.pane(opened))

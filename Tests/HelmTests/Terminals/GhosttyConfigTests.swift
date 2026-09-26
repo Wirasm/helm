@@ -488,7 +488,7 @@ final class GhosttyConfigTests: XCTestCase {
     @MainActor
     func testEveryTerminalChildIsToldItHasTruecolor() {
         let manager = TerminalManager()
-        manager.activate(workspacePath: WorkspacePath("/tmp/helm-truecolor"))
+        manager.adoptShell(in: WorkspacePath("/tmp/helm-truecolor"))
         guard let session = manager.sessions.first else {
             return XCTFail("activating a workspace opens one terminal")
         }

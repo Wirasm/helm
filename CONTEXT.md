@@ -30,7 +30,8 @@ _Avoid_: project, folder, repo, Archon's "workspace" (which means a repo — see
 
 **workbench**:
 The pane arrangement inside a workspace: columns of vertical stacks, each slot tabbed.
-One per workspace. If a workspace ever holds several they are numbered, never named.
+One per workspace. benchd holds it (the **bench document**); helm draws it and changes it only
+by sending verbs. If a workspace ever holds several they are numbered, never named.
 _Avoid_: layout, named layout, window manager, tab group
 
 **slot**:

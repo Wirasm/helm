@@ -1,4 +1,5 @@
 import Combine
+import HelmWire
 import SwiftUI
 import XCTest
 
@@ -13,20 +14,16 @@ import XCTest
 @MainActor
 final class SurfaceRegistryTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/helm-surface-registry")
-    private let other = WorkspacePath("/tmp/helm-surface-registry-other")
 
     /// A kind that counts. Registered for `.browser`, which it replaces.
     private final class FakeKind: SurfaceKind {
         final class Model {}
 
         let kind: Pane.Content.Kind = .browser
-        let survivesUnmount: Bool
         private(set) var made: [Pane.ID] = []
         private(set) var closed: [ObjectIdentifier] = []
         private(set) var drawn = 0
         private(set) var tabbed = 0
-
-        init(survivesUnmount: Bool = false) { self.survivesUnmount = survivesUnmount }
 
         func make(for pane: Pane, in workspace: WorkspacePath?) -> Model? {
             made.append(pane.id)
@@ -70,41 +67,6 @@ final class SurfaceRegistryTests: XCTestCase {
         XCTAssertNil(registry.existing(browser.id, as: FakeKind.Model.self))
     }
 
-    func testClosingAWorkspaceLetsGoOfWhatItOwnedAndNothingElse() throws {
-        let registry = SurfaceRegistry()
-        let fake = FakeKind()
-        registry.register(fake)
-        let mine = pane()
-        let theirs = pane()
-        let kept = try XCTUnwrap(registry.resolve(theirs, in: other))
-        _ = registry.resolve(mine, in: workspace)
-
-        registry.closeWorkspace(workspace)
-
-        XCTAssertNil(registry.existing(mine.id, as: FakeKind.Model.self))
-        XCTAssertIdentical(registry.existing(theirs.id, as: FakeKind.Model.self), kept)
-        XCTAssertEqual(fake.closed.count, 1)
-    }
-
-    func testAnUnmountLetsGoOfOnlyWhatDoesNotSurviveIt() throws {
-        let registry = SurfaceRegistry()
-        let surviving = FakeKind(survivesUnmount: true)
-        registry.register(surviving)
-        let kept = try XCTUnwrap(registry.resolve(pane(), in: workspace))
-
-        registry.unmount()
-
-        XCTAssertTrue(surviving.closed.isEmpty, "a kind that survives an unmount is left alone")
-        XCTAssertIdentical(registry.models(FakeKind.Model.self).first, kept)
-
-        let leaving = FakeKind(survivesUnmount: false)
-        registry.register(leaving)
-        registry.unmount()
-        XCTAssertEqual(
-            leaving.closed.count, 1,
-            "the rule is the kind's, read when the unmount runs, not a list the bench keeps")
-    }
-
     /// Resolving happens inside a SwiftUI body; publishing from there is a change during a view
     /// update. So resolution is quiet, and lifecycle is not.
     func testLazyResolutionIsQuietAndLifecycleIsNot() {
@@ -134,26 +96,35 @@ final class SurfaceRegistryTests: XCTestCase {
 
     // MARK: - Through the bench: the fake kind
 
-    private func benchWithFakeBrowser() throws -> (WorkbenchModel, TerminalManager, FakeKind, Pane)
-    {
-        let manager = TerminalManager()
-        let model = WorkbenchModel(terminals: manager)
+    private func benchWithFakeBrowser() throws -> (ToyRig, FakeKind, Pane) {
         let fake = FakeKind()
-        // After the model registered its own browser kind: re-registering replaces, which is
-        // exactly how a new kind would plug in.
-        manager.surfaces.register(fake)
-        model.activate(workspacePath: workspace)
-        var bench = try XCTUnwrap(model.bench)
-        let browser = pane()
-        bench.insert(browser, at: .column)
-        model.activate(workspacePath: workspace, restoring: bench)
-        return (model, manager, fake, browser)
+        let browser = BenchDocument.Pane(id: UUID(), surface: .browser)
+        let terminal = ToyBench.terminal()
+        let slots = [terminal, browser].map {
+            BenchDocument.Slot(id: UUID(), panes: [$0], selected: $0.id, height: 1)
+        }
+        let document = BenchDocument(
+            workspaces: [
+                .init(
+                    path: workspace.value,
+                    bench: .init(
+                        columns: slots.map { .init(id: UUID(), slots: [$0], width: 0.5) },
+                        focusedSlot: slots[0].id))
+            ], active: workspace.value)
+        let rig = try toyRig(document: document) { terminals, client in
+            let model = WorkbenchModel(terminals: terminals, agents: .blind, client: client)
+            // After the model registered its own browser kind: re-registering replaces, which
+            // is exactly how a new kind would plug in.
+            terminals.surfaces.register(fake)
+            return model
+        }
+        return (rig, fake, try XCTUnwrap(rig.model.bench?.pane(browser.id)))
     }
 
     func testTheBenchDrawsTabsAndClosesAKindItHasNeverHeardOf() throws {
-        let (model, _, fake, browser) = try benchWithFakeBrowser()
-        let bench = try XCTUnwrap(model.bench)
-        let slot = try XCTUnwrap(bench.slot(for: browser.id))
+        let (rig, fake, browser) = try benchWithFakeBrowser()
+        let model = rig.model
+        let slot = try XCTUnwrap(model.bench?.slot(for: browser.id))
 
         XCTAssertNotNil(
             model.surfaceView(of: browser, in: model.surfaceSlot(for: browser, in: slot)))
@@ -163,23 +134,26 @@ final class SurfaceRegistryTests: XCTestCase {
         XCTAssertEqual(fake.drawn, 1)
         XCTAssertEqual(fake.tabbed, 1)
 
-        model.close(browser.id)
+        model.send(.paneClose(browser.id), by: .operatorGesture)
 
-        XCTAssertEqual(fake.closed.count, 1, "the bench's close reached the kind's teardown")
+        XCTAssertEqual(
+            fake.closed.count, 1, "the pane leaving the document reached the kind's teardown")
     }
 
     func testClosingTheWorkspaceReachesTheKindToo() throws {
-        let (model, _, fake, browser) = try benchWithFakeBrowser()
+        let (rig, fake, browser) = try benchWithFakeBrowser()
+        let model = rig.model
         let slot = try XCTUnwrap(model.bench?.slot(for: browser.id))
         _ = model.surfaceView(of: browser, in: model.surfaceSlot(for: browser, in: slot))
 
-        model.closeWorkspace(workspace)
+        model.send(.workspaceClose(path: workspace.value), by: .operatorGesture)
 
         XCTAssertEqual(fake.closed.count, 1)
     }
 
     func testTheSlotTheBenchHandsAKindIsTheBenchsAnswer() throws {
-        let (model, _, _, browser) = try benchWithFakeBrowser()
+        let (rig, _, browser) = try benchWithFakeBrowser()
+        let model = rig.model
         let bench = try XCTUnwrap(model.bench)
         let browserSlot = try XCTUnwrap(bench.slot(for: browser.id))
 
@@ -194,21 +168,21 @@ final class SurfaceRegistryTests: XCTestCase {
 
     // MARK: - The kinds helm has
 
-    /// A shell is the work: an unmount (the last workspace closing) leaves sessions to the
-    /// manager, while the canvas — a view onto a file — is let go through its own `close`.
-    func testAnUnmountKeepsTheShellsAndClosesTheCanvases() throws {
-        let manager = TerminalManager()
-        let model = WorkbenchModel(terminals: manager)
-        model.activate(workspacePath: workspace)
-        let id = try XCTUnwrap(model.open(.file("/tmp/helm-surface-registry.md")))
+    /// Closing the last workspace lets go of everything it held, each through its own kind: the
+    /// canvas's `close` stops its watcher and render.
+    func testClosingTheLastWorkspaceClosesItsCanvasesThroughTheirKind() throws {
+        let rig = try toyRig(workspace.value)
+        let model = rig.model
+        let id = try XCTUnwrap(
+            model.send(
+                .paneOpen(surface: .canvas(path: "/tmp/helm-surface-registry.md")),
+                by: .operatorGesture))
         let canvas = model.canvas(for: try XCTUnwrap(model.bench?.pane(id)))
-        let sessions = manager.sessions(for: workspace).map(\.id)
-        XCTAssertFalse(sessions.isEmpty)
 
-        model.deactivate()
+        model.send(.workspaceClose(path: workspace.value), by: .operatorGesture)
 
-        XCTAssertEqual(manager.sessions(for: workspace).map(\.id), sessions)
-        XCTAssertNil(manager.surfaces.existing(id, as: CanvasModel.self))
+        XCTAssertNil(model.bench)
+        XCTAssertNil(rig.terminals.surfaces.existing(id, as: CanvasModel.self))
         XCTAssertNil(canvas.showing, "closed, not merely dropped: its watcher and render are gone")
     }
 }

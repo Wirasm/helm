@@ -21,12 +21,6 @@ protocol SurfaceKind: AnyObject {
     /// Which `Pane.Content` this kind renders.
     var kind: Pane.Content.Kind { get }
 
-    /// Whether a model outlives its workspace being unmounted — `WorkbenchModel.deactivate`,
-    /// the bench going empty. A terminal does: it is a pty, and the pty is the work. A canvas or
-    /// a browser view does not: it is a view onto a file or onto Chrome, rebuilt on demand, and
-    /// keeping it would keep a file watcher or a CDP connection open for nothing on screen.
-    var survivesUnmount: Bool { get }
-
     /// The live object for a pane that has none yet. nil when the kind cannot make one here —
     /// a terminal with no workspace to run in.
     func make(for pane: Pane, in workspace: WorkspacePath?) -> Model?
@@ -38,7 +32,7 @@ protocol SurfaceKind: AnyObject {
     func tab(of model: Model, in slot: SurfaceSlot) -> AnyView
 
     /// Let the model go: flush, stop watching, close a connection. Called exactly once per
-    /// model, whichever way its pane left — closed, its workspace closed, or unmounted.
+    /// model, when its pane leaves benchd's document — closed, or its workspace closed.
     func close(_ model: Model)
 }
 
@@ -62,8 +56,8 @@ struct SurfaceSlot {
 /// **Ordered**, because `TerminalManager.sessions` was an array its readers depend on (tab
 /// ordinals, the snapshot's order).
 ///
-/// **Publishes on lifecycle, not on lazy resolution.** `adopt`, `close` and `closeWorkspace`
-/// send `objectWillChange`; `resolve` creating a canvas or a browser model the first time a view
+/// **Publishes on lifecycle, not on lazy resolution.** `adopt` and `close` send
+/// `objectWillChange`; `resolve` creating a canvas or a browser model the first time a view
 /// asks for it does not, because that happens inside a SwiftUI body, and publishing from there is
 /// a change during a view update. Nothing observing the registry cares about that creation: it
 /// adds no pane, only the render of one that was already there.
@@ -128,17 +122,6 @@ final class SurfaceRegistry: ObservableObject {
         release { $0.id == id }
     }
 
-    /// Everything a workspace owned. Closing a workspace is a teardown; switching away is not,
-    /// and nothing here runs on a switch — which is what gets the same webview back.
-    func closeWorkspace(_ path: WorkspacePath) {
-        release { $0.workspace == path }
-    }
-
-    /// What does not outlive an unmount (`SurfaceKind.survivesUnmount`).
-    func unmount() {
-        release { entry in !(kinds[entry.kind]?.survivesUnmount ?? false) }
-    }
-
     private func release(where leaving: (Entry) -> Bool) {
         let gone = entries.filter(leaving)
         guard !gone.isEmpty else { return }
@@ -168,14 +151,12 @@ final class SurfaceRegistry: ObservableObject {
 /// holds that weakly or unowned.
 @MainActor
 private struct AnyKind {
-    let survivesUnmount: Bool
     let make: (Pane, WorkspacePath?) -> AnyObject?
     let view: (AnyObject, SurfaceSlot) -> AnyView
     let tab: (AnyObject, SurfaceSlot) -> AnyView
     let close: (AnyObject) -> Void
 
     init<K: SurfaceKind>(_ kind: K) {
-        survivesUnmount = kind.survivesUnmount
         make = { pane, workspace in kind.make(for: pane, in: workspace) }
         view = { model, slot in
             guard let model = model as? K.Model else { return AnyView(EmptyView()) }

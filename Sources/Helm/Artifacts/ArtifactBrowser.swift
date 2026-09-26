@@ -10,7 +10,7 @@ import SwiftUI
 struct ArtifactBrowser: View {
     /// What to do with a chosen file — a closure rather than the workbench, so the
     /// browser stays a pure view over the filesystem and never learns what a bench is.
-    /// *Where* the chosen file lands is `Workbench.placement(forOpening:)`'s decision.
+    /// *Where* the chosen file lands is benchd's placement, not this view's.
     private let onOpen: (URL) -> Void
     /// The open workspace's repo root (`WorkspaceModel.selectedWorkspaceRoot`), which
     /// preselects ITS store instead of whatever was picked last. A plain value, not the

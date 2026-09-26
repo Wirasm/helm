@@ -9,44 +9,69 @@ import XCTest
 /// `SpoolPaneState` and asks what the policy says about it; nothing there checks that a real
 /// bench ever *produces* `.inItsSlot`, and a `keyboard(for:in:)` that answered `.elsewhere` for
 /// every pane would leave every test in that file green while handing an agent the operator's
-/// own slot. This is the half that needs a bench — so it builds one, with an isolated
-/// `TerminalManager` and no window, exactly as `WorkbenchModelTests` does.
+/// own slot. This is the half that needs a bench — so it draws one from a toy benchd's document
+/// (`ToyBench`), with an isolated `TerminalManager` and no window.
 @MainActor
 final class WorkbenchSpoolPanesTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/helm-spool-panes")
-    private let plan = CanvasSource.file("/tmp/helm-spool-panes-plan.md")
+    private let plan = "/tmp/helm-spool-panes-plan.md"
 
-    /// A bench whose focused slot holds the operator's terminal, plus one pushed canvas placed
-    /// where the test asks for it — the two arrangements #284 is about.
+    private func canvas(_ path: String, name: PaneName = .unnamed) -> BenchDocument.Pane {
+        .init(id: UUID(), surface: .canvas(path: path), name: name)
+    }
+
+    /// Where the pushed canvas sits: a column of its own, or a tab behind the operator's
+    /// terminal in the slot he is in — the two arrangements #284 is about.
+    private enum Landing { case ownColumn, behindTheTerminal }
+
+    /// helm drawing `columns`, the first slot focused.
+    private func drawing(_ columns: [[BenchDocument.Slot]]) throws -> ToyRig {
+        let bench = BenchDocument.Bench(
+            columns: columns.map {
+                .init(id: UUID(), slots: $0, width: 1 / Double(columns.count))
+            },
+            focusedSlot: columns[0][0].id)
+        return try toyRig(
+            document: BenchDocument(
+                workspaces: [.init(path: workspace.value, bench: bench)],
+                active: workspace.value))
+    }
+
+    private func slot(_ panes: [BenchDocument.Pane]) -> BenchDocument.Slot {
+        .init(id: UUID(), panes: panes, selected: panes[0].id, height: 1)
+    }
+
+    /// A bench whose focused slot holds the operator's terminal, plus one pushed canvas.
     private func bench(
-        pushing canvas: Pane, at placement: (Workbench) -> Placement
-    ) -> (WorkbenchSpoolPanes, WorkbenchModel, UUID) {
-        let terminal = UUID()
-        var bench = Workbench(panes: [Pane(id: terminal, content: .terminal())])
-        bench.offer(canvas, at: placement(bench))
-        let terminals = TerminalManager()
-        let model = WorkbenchModel(terminals: terminals)
-        model.activate(workspacePath: workspace, restoring: bench)
+        pushing canvas: BenchDocument.Pane, _ landing: Landing
+    ) throws -> (WorkbenchSpoolPanes, WorkbenchModel, UUID) {
+        let terminal = ToyBench.terminal()
+        let rig =
+            switch landing {
+            case .ownColumn: try drawing([[slot([terminal])], [slot([canvas])]])
+            case .behindTheTerminal: try drawing([[slot([terminal, canvas])]])
+            }
         return (
-            WorkbenchSpoolPanes(workbench: model, terminals: terminals), model, terminal
+            WorkbenchSpoolPanes(workbench: rig.model, terminals: rig.terminals), rig.model,
+            terminal.id
         )
     }
 
     // MARK: - Where the keyboard is, relative to a pane
 
-    func testAPaneInAnotherSlotReportsTheKeyboardElsewhere() {
-        let pushed = Pane(content: .canvas(plan))
-        let (panes, _, _) = bench(pushing: pushed, at: { _ in .column })
+    func testAPaneInAnotherSlotReportsTheKeyboardElsewhere() throws {
+        let pushed = canvas(plan)
+        let (panes, _, _) = try bench(pushing: pushed, .ownColumn)
 
         XCTAssertEqual(panes.pane(pushed.id)?.keyboard, .elsewhere)
     }
 
-    func testABackgroundTabOfTheFocusedSlotReportsTheKeyboardInItsSlot() {
+    func testABackgroundTabOfTheFocusedSlotReportsTheKeyboardInItsSlot() throws {
         // **The state that only a real bench can produce, and the one the select rule turns
         // on.** A push into the slot the operator is already in lands the artifact behind their
         // terminal: not the focused pane, and one tab away from being it.
-        let pushed = Pane(content: .canvas(plan))
-        let (panes, _, _) = bench(pushing: pushed, at: { .tab(in: $0.focusedSlot) })
+        let pushed = canvas(plan)
+        let (panes, _, _) = try bench(pushing: pushed, .behindTheTerminal)
 
         XCTAssertEqual(panes.pane(pushed.id)?.keyboard, .inItsSlot)
         XCTAssertEqual(
@@ -55,17 +80,17 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
                 + "predicate cannot see it")
     }
 
-    func testThePaneTheOperatorIsInReportsTheKeyboardHere() {
-        let pushed = Pane(content: .canvas(plan))
-        let (panes, _, terminal) = bench(pushing: pushed, at: { _ in .column })
+    func testThePaneTheOperatorIsInReportsTheKeyboardHere() throws {
+        let pushed = canvas(plan)
+        let (panes, _, terminal) = try bench(pushing: pushed, .ownColumn)
 
         XCTAssertEqual(panes.pane(terminal)?.keyboard, .here)
         XCTAssertEqual(panes.pane(terminal)?.holdsKeyboard, true)
     }
 
-    func testAPaneTheBenchDoesNotHoldIsNil() {
-        let pushed = Pane(content: .canvas(plan))
-        let (panes, _, _) = bench(pushing: pushed, at: { _ in .column })
+    func testAPaneTheBenchDoesNotHoldIsNil() throws {
+        let pushed = canvas(plan)
+        let (panes, _, _) = try bench(pushing: pushed, .ownColumn)
 
         XCTAssertNil(panes.pane(UUID()))
     }
@@ -75,19 +100,13 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
     func testShowingAPaneInAnotherSlotMakesItVisibleAndLeavesTheKeyboardAlone() throws {
         // The end of #284's chain, against a real bench: the artifact an agent pushed becomes
         // the one its slot displays, and the operator's next keystroke still lands where it did.
-        let pushed = Pane(content: .canvas(plan))
-        let sibling = Pane(content: .canvas(.file("/tmp/helm-spool-panes-other.md")))
-        var arrangement = Workbench(
-            panes: [Pane(id: UUID(), content: .terminal())])
-        arrangement.offer(sibling, at: .column)
+        let pushed = canvas(plan)
+        let sibling = canvas("/tmp/helm-spool-panes-other.md")
         // Behind `sibling`, in a slot the operator is not in — exactly where a re-push lands on
         // a busy bench, and the reason #272's refresh was unobservable.
-        let dockSlot = try XCTUnwrap(arrangement.slot(for: sibling.id)?.id)
-        arrangement.offer(pushed, at: .tab(in: dockSlot))
-        let terminals = TerminalManager()
-        let model = WorkbenchModel(terminals: terminals)
-        model.activate(workspacePath: workspace, restoring: arrangement)
-        let panes = WorkbenchSpoolPanes(workbench: model, terminals: terminals)
+        let rig = try drawing([[slot([ToyBench.terminal()])], [slot([sibling, pushed])]])
+        let model = rig.model
+        let panes = WorkbenchSpoolPanes(workbench: model, terminals: rig.terminals)
         let focusedBefore = model.bench?.focusedPane?.id
 
         XCTAssertEqual(
@@ -108,12 +127,12 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
         XCTAssertEqual(model.bench?.focusedPane?.id, focusedBefore)
     }
 
-    func testShowingAPaneTheBenchDoesNotHoldReportsItAsNotVisible() {
+    func testShowingAPaneTheBenchDoesNotHoldReportsItAsNotVisible() throws {
         // `WorkbenchModel.offerSelect` reports the bench's answer, not the request's hope. The
         // policy refuses this case before the adapter sees it, so this is the belt to that
         // brace — and it is what `SpoolModel` turns into a `refused` rather than a `selected`.
-        let pushed = Pane(content: .canvas(plan))
-        let (panes, _, _) = bench(pushing: pushed, at: { _ in .column })
+        let pushed = canvas(plan)
+        let (panes, _, _) = try bench(pushing: pushed, .ownColumn)
 
         guard case .success(let report) = panes.select(UUID()) else {
             return XCTFail("no bench refusal is expected — there is a bench")
@@ -121,10 +140,9 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
         XCTAssertFalse(report.isVisible)
     }
 
-    func testWithNoBenchMountedASelectSaysSoRatherThanReportingSuccess() {
-        let terminals = TerminalManager()
-        let model = WorkbenchModel(terminals: terminals)
-        let panes = WorkbenchSpoolPanes(workbench: model, terminals: terminals)
+    func testWithNoBenchMountedASelectSaysSoRatherThanReportingSuccess() throws {
+        let rig = try toyRig(document: BenchDocument(workspaces: [], active: nil))
+        let panes = WorkbenchSpoolPanes(workbench: rig.model, terminals: rig.terminals)
 
         guard case .failure(let refusal) = panes.select(UUID()) else {
             return XCTFail("with nothing open there is no slot to show anything in")
@@ -138,9 +156,9 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
     /// file's header gives about `.inItsSlot`: it is handed a `SpoolPaneState` and asks what the
     /// policy says. An adapter that reported `.unnamed` for every pane would leave every test
     /// there green while making every pane on the bench renamable by anybody for ever.
-    func testAPaneReportsTheNameTheBenchIsHoldingForIt() {
-        let pushed = Pane(content: .canvas(plan), name: .chosen("the plan"))
-        let (panes, _, terminal) = bench(pushing: pushed, at: { _ in .column })
+    func testAPaneReportsTheNameTheBenchIsHoldingForIt() throws {
+        let pushed = canvas(plan, name: .chosen("the plan"))
+        let (panes, _, terminal) = try bench(pushing: pushed, .ownColumn)
 
         XCTAssertEqual(panes.pane(pushed.id)?.name, .chosen("the plan"))
         XCTAssertEqual(
@@ -148,12 +166,12 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
             "and a pane nothing has named says so, which is what makes the first naming free")
     }
 
-    func testNamingAPaneChangesTheBenchAndReportsWhatItReplaced() {
+    func testNamingAPaneChangesTheBenchAndReportsWhatItReplaced() throws {
         // The end of #313's chain against a real bench. `previousName` is read *before* the
         // mutation and `name` *after* it, both off the bench — a report that echoed the request
         // would pass a fake and fail here the moment the bench refused.
-        let pushed = Pane(content: .canvas(plan), name: .derived("claude · helm"))
-        let (panes, model, _) = bench(pushing: pushed, at: { _ in .column })
+        let pushed = canvas(plan, name: .derived("claude · helm"))
+        let (panes, model, _) = try bench(pushing: pushed, .ownColumn)
 
         guard case .success(let report) = panes.name(pushed.id, to: .chosen("review the diff"))
         else {
@@ -165,12 +183,12 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
         XCTAssertEqual(model.bench?.pane(pushed.id)?.name, .chosen("review the diff"))
     }
 
-    func testNamingAPaneMovesNeitherTheKeyboardNorTheSelection() {
+    func testNamingAPaneMovesNeitherTheKeyboardNorTheSelection() throws {
         // The reason `SpoolNamePolicy` has no focus rule, held rather than only argued: naming
         // the pane the operator is *typing in* must leave the bench arranged exactly as it was.
         // If this ever stopped being true the policy would need a rule it does not have.
-        let pushed = Pane(content: .canvas(plan))
-        let (panes, model, terminal) = bench(pushing: pushed, at: { _ in .column })
+        let pushed = canvas(plan)
+        let (panes, model, terminal) = try bench(pushing: pushed, .ownColumn)
         let focusedBefore = model.bench?.focusedPane?.id
         let visibleBefore = model.bench?.visiblePaneIDs
 
@@ -180,24 +198,18 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
         XCTAssertEqual(model.bench?.visiblePaneIDs, visibleBefore)
     }
 
-    func testANamedTerminalPaneReachesItsSessionSoTheTabAndTheSnapshotAgree() {
+    func testANamedTerminalPaneReachesItsSessionSoTheTabAndTheSnapshotAgree() throws {
         // **The push `reconcileSessions` does, measured.** `TerminalSession.displayTitle` is spent
         // by the tab, by `TerminalNotifier` and by `BenchSnapshot.TerminalRecord` — so a name that
         // reached only the view would leave `snapshot.json` reporting the OSC title while the tab
         // beside it read something else, which is two answers to one question.
-        let pushed = Pane(content: .canvas(plan))
-        let terminal = UUID()
-        var arrangement = Workbench(
-            panes: [Pane(id: terminal, content: .terminal())])
-        arrangement.offer(pushed, at: .column)
-        let terminals = TerminalManager()
-        let model = WorkbenchModel(terminals: terminals)
-        model.activate(workspacePath: workspace, restoring: arrangement)
-        let panes = WorkbenchSpoolPanes(workbench: model, terminals: terminals)
-        let session = terminals.sessions.first { $0.id == terminal }
+        let terminal = ToyBench.terminal()
+        let rig = try drawing([[slot([terminal])], [slot([canvas(plan)])]])
+        let panes = WorkbenchSpoolPanes(workbench: rig.model, terminals: rig.terminals)
+        let session = rig.terminals.sessions.first { $0.id == terminal.id }
 
-        XCTAssertNotNil(session, "the restore has to have built a session under the pane's id")
-        _ = panes.name(terminal, to: .chosen("review the diff"))
+        XCTAssertNotNil(session, "the document has to have started a session under the pane's id")
+        _ = panes.name(terminal.id, to: .chosen("review the diff"))
 
         XCTAssertEqual(session?.name, .chosen("review the diff"))
         XCTAssertEqual(
@@ -205,10 +217,9 @@ final class WorkbenchSpoolPanesTests: XCTestCase {
             "…and it outranks the shell's own OSC title, which since #93 is a pointer at a file")
     }
 
-    func testWithNoBenchMountedANameSaysSoRatherThanReportingSuccess() {
-        let terminals = TerminalManager()
-        let model = WorkbenchModel(terminals: terminals)
-        let panes = WorkbenchSpoolPanes(workbench: model, terminals: terminals)
+    func testWithNoBenchMountedANameSaysSoRatherThanReportingSuccess() throws {
+        let rig = try toyRig(document: BenchDocument(workspaces: [], active: nil))
+        let panes = WorkbenchSpoolPanes(workbench: rig.model, terminals: rig.terminals)
 
         guard case .failure(let refusal) = panes.name(UUID(), to: .chosen("anything")) else {
             return XCTFail("with nothing open there is no pane to name")

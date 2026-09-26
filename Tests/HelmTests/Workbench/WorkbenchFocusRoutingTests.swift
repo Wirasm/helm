@@ -31,7 +31,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     /// The whole ticket in one assertion: a click on a pane's **body**, with no tab selected
     /// first, moves the bench's focused slot.
     func testClickingAPanesBodyMovesTheFocusedSlot() throws {
-        let bench = Bench(terminals: 2)
+        let bench = try Bench(terminals: 2)
         defer { bench.close() }
 
         let focused = try XCTUnwrap(bench.workbench.bench?.focusedSlot)
@@ -49,7 +49,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     /// *mutates the layout* — halving an untouched slot and inserting a pane the operator then
     /// has to find and close. The new slot must land under the slot that was clicked.
     func testSplitDownAfterAClickSplitsTheClickedSlot() throws {
-        let bench = Bench(terminals: 2)
+        let bench = try Bench(terminals: 2)
         defer { bench.close() }
 
         let first = try XCTUnwrap(bench.workbench.bench?.slots.first?.id)
@@ -76,7 +76,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     /// keyboard, and the keystroke comes out of that pane's pty. This is also the only
     /// assertion here that would fail if the monitor ever started **consuming** the click.
     func testTypingAfterAClickReachesTheClickedTerminal() throws {
-        let bench = Bench(terminals: 2)
+        let bench = try Bench(terminals: 2)
         defer { bench.close() }
 
         let before = try XCTUnwrap(bench.workbench.bench?.focusedPane?.id)
@@ -100,7 +100,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     /// `focus` would persist the whole workspace context on every click in the pane you are
     /// typing in.
     func testClickingTheAlreadyFocusedPaneRewritesNothing() throws {
-        let bench = Bench(terminals: 2)
+        let bench = try Bench(terminals: 2)
         defer { bench.close() }
 
         let focused = try XCTUnwrap(bench.workbench.bench?.focusedSlot)
@@ -118,7 +118,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     /// converts to a point squarely inside a slot's rectangle, so without the window check it
     /// would move focus underneath a control the operator is using.
     func testAClickInAnotherWindowIsNotThisBenchsClick() throws {
-        let bench = Bench(terminals: 2)
+        let bench = try Bench(terminals: 2)
         defer { bench.close() }
 
         let focused = try XCTUnwrap(bench.workbench.bench?.focusedSlot)
@@ -145,7 +145,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     /// The two stacked slots butt against one divider, so the upper slot's bottom edge in
     /// window coordinates *is* the divider, and two points above it is inside the grab band.
     func testAClickInADividersGrabBandDoesNotMoveFocus() throws {
-        let bench = Bench(terminals: 2)
+        let bench = try Bench(terminals: 2)
         defer { bench.close() }
 
         let upper = try XCTUnwrap(bench.workbench.bench?.slots.first?.id)
@@ -189,11 +189,11 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     /// The end of it: the menu's route — the row's action, handed to the performer `RootView`
     /// composes — moves focus on a real bench, which no unit test on the table alone can reach.
     func testTheMenusFocusRowMovesFocusOnARealBench() throws {
-        let bench = Bench(terminals: 2)
+        let bench = try Bench(terminals: 2)
         defer { bench.close() }
         let defaults = try isolatedDefaults("focus-menu-route")
         let actions = LocalActions(
-            workbench: bench.workbench, workspaces: WorkspaceModel(defaults: defaults),
+            workbench: bench.workbench, workspaces: WorkspaceModel(),
             rail: ArchonRailModel(client: FakeArchonClient(), defaults: defaults),
             terminals: bench.terminals)
         Actions.performer = actions
@@ -239,17 +239,24 @@ private final class Bench {
         }
     }
 
-    init(terminals count: Int) {
+    /// The toy benchd the bench is drawn from (`ToyBench`), and helm's client for it.
+    private let server: FakeBenchd
+    private let client: BenchClient
+
+    init(terminals count: Int) throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
 
         let registry = ptys
         terminals = TerminalManager(command: { registry.next() })
-        workbench = WorkbenchModel(terminals: terminals)
-
         let ids = (0..<count).map { _ in UUID() }
-        workbench.activate(
-            workspacePath: WorkspacePath(workspacePath), restoring: Self.stacked(ids))
+        (server, client) = try startToyBenchd(.only(workspacePath, Self.stacked(ids)))
+        let workbench = WorkbenchModel(terminals: terminals, agents: .blind, client: client)
+        self.workbench = workbench
+        XCTAssertNotNil(client.document(atLeast: 1, within: 5), "benchd never answered")
+        // Two panes are worth #85's question; answer it as the operator would.
+        if workbench.restoreOffer != nil { workbench.answer(.restore) }
+        XCTAssertNotNil(workbench.bench, "no bench was drawn")
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
@@ -266,8 +273,9 @@ private final class Bench {
     func close() {
         window.contentView = nil
         window.close()
-        terminals.closeWorkspace(WorkspacePath(workspacePath))
-        workbench.deactivate()
+        for session in terminals.sessions { terminals.surfaces.close(session.id) }
+        client.stop()
+        server.stop()
     }
 
     /// Let AppKit, SwiftUI and ghostty run for a moment.
@@ -379,12 +387,13 @@ private final class Bench {
 
     /// Two slots stacked in one column, focus put back on the first — so "focused" and "mounted
     /// first" are different answers and a test can tell a click from a coincidence.
-    private static func stacked(_ ids: [UUID]) -> Workbench {
-        var bench = Workbench(panes: [Pane(id: ids[0], content: .terminal())])
-        for id in ids.dropFirst() {
-            bench.splitDown(with: Pane(id: id, content: .terminal()))
+    private static func stacked(_ ids: [UUID]) -> BenchDocument.Bench {
+        let slots = ids.map {
+            BenchDocument.Slot(
+                id: UUID(), panes: [ToyBench.terminal($0)], selected: $0,
+                height: 1 / Double(ids.count))
         }
-        bench.focus(bench.slots[0].id)
-        return bench
+        return .init(
+            columns: [.init(id: UUID(), slots: slots, width: 1)], focusedSlot: slots[0].id)
     }
 }

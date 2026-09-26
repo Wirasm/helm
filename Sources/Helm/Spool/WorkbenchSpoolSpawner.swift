@@ -36,9 +36,8 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
     /// is, which is what they would have made by hand.
     ///
     /// Switching the operator's view is the honest cost of a push channel, and #54 accepts it
-    /// explicitly — **in local mode**. Drawn from benchd (#354), opening a workspace is an
-    /// agent's `workspace/open`, which benchd's focus rule leaves in the background: the pane
-    /// lands in that workspace and starts there, and the operator's view stays put.
+    /// explicitly: a terminal's pty starts only once it is drawn, so the spawn's workspace is put
+    /// on screen (`WorkbenchModel.openWorkspaceForSpawn`) until benchd owns ptys (M5b).
     ///
     /// **`spawnTerminal`, not `newTerminal`** — the two differ in exactly the two ways a
     /// request from outside must (#177). ⌘N's rule is "a tab where you are looking", and
@@ -61,8 +60,8 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
         // through the general "was anything mounted?" branch answered that question as a side
         // effect of a condition that used to mean something else. `mountWithoutAsking` is the
         // named act, and its header argues why a spawn resolves the question rather than
-        // waiting behind it. `activate` above is the non-asking open, so a *different*
-        // workspace never leaves one behind for this to find.
+        // waiting behind it. A workspace `activate` just put on screen can raise the question
+        // too, the first time it is shown this launch, and this answers it the same way.
         workbench.mountWithoutAsking()
         // Named, so the terminal lands in the request's workspace whichever one is on screen.
         guard

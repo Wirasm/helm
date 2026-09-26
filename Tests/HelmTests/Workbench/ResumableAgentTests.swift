@@ -27,20 +27,36 @@ final class ResumableAgentTests: XCTestCase {
         AgentSession(pid: pid, cwd: cwd, status: .busy, sessionId: session)
     }
 
+    /// helm drawn from a toy benchd holding one workspace with `panes` as tabs.
+    private func rig(
+        _ panes: [BenchDocument.Pane], agents: AgentObserver,
+        launcher: RecordingLauncher = RecordingLauncher()
+    ) throws -> ToyRig {
+        try toyRig(
+            document: BenchDocument(
+                workspaces: [.init(path: workspace.value, bench: ToyBench.bench(panes))],
+                active: workspace.value)
+        ) { terminals, client in
+            WorkbenchModel(
+                terminals: terminals, agents: agents, launcher: launcher, client: client)
+        }
+    }
+
+    private func holding(_ agent: ResumableAgent?, id: UUID = UUID()) -> BenchDocument.Pane {
+        .init(id: id, surface: .terminal(agent: agent.map(BenchDocument.Agent.init)))
+    }
+
     // MARK: - The record, and that it survives a relaunch
 
-    /// The whole of #63's persistence: without this the offer has nothing to be about.
-    func testTheAgentOnAPaneSurvivesTheStore() throws {
-        let defaults = try isolatedDefaults("resumable-agent-store")
+    /// The whole of #63's persistence: without this the offer has nothing to be about. The record
+    /// crosses into benchd's document on import and comes back out of every document after.
+    func testTheAgentOnAPaneSurvivesTheDocument() throws {
         let pane = UUID()
         let bench = Workbench(
             panes: [Pane(id: pane, content: .terminal(agent: agent()))])
 
-        WorkspaceContextStore.save(
-            ["/one": WorkspaceContext(workbench: bench)], to: defaults)
+        let restored = try XCTUnwrap(Workbench(document: BenchDocument.Bench(bench)))
 
-        let restored = try XCTUnwrap(
-            WorkspaceContextStore.load(from: defaults)["/one"]?.workbench)
         XCTAssertEqual(
             restored.pane(pane)?.content, .terminal(agent: agent()),
             "the pty died with the process; the id of the conversation it held did not")
@@ -242,23 +258,21 @@ final class ResumableAgentTests: XCTestCase {
 
     // MARK: - Watching the panes
 
-    func testAnAgentSeenInAPaneIsWrittenDownOnIt() throws {
-        let terminals = TerminalManager()
-        let model = WorkbenchModel(terminals: terminals, agents: .blind)
-        model.activate(workspacePath: workspace, restoring: nil)
-        let pane = try XCTUnwrap(model.bench?.panes.first?.id)
-        let observing = WorkbenchModel(
-            terminals: terminals,
+    func testAnAgentSeenInAPaneIsSentToBenchdAsHelmsRecord() throws {
+        let pane = UUID()
+        let rig = try rig(
+            [holding(nil, id: pane)],
             agents: .fixture(
                 foreground: [pane: 4242],
-                rows: [4242: row(pid: 4242, session: "abc", cwd: "/tmp/sub")]),
-            launcher: RecordingLauncher())
-        observing.activate(workspacePath: workspace, restoring: model.bench)
+                rows: [4242: row(pid: 4242, session: "abc", cwd: "/tmp/sub")]))
 
-        observing.observeAgents()
+        rig.model.observeAgents()
 
+        let sent = try XCTUnwrap(rig.server.verbs.last)
+        XCTAssertEqual(sent["verb"] as? String, "pane/record")
+        XCTAssertEqual((sent["by"] as? [String: Any])?["kind"] as? String, "helm")
         XCTAssertEqual(
-            observing.bench?.pane(pane)?.content,
+            rig.model.bench?.pane(pane)?.content,
             .terminal(
                 agent: ResumableAgent(command: "claude", session: "abc", cwd: "/tmp/sub")),
             "the registry's own cwd, because an agent started in a subdirectory is not "
@@ -270,133 +284,104 @@ final class ResumableAgentTests: XCTestCase {
     /// would be erased and rewritten several times a minute — and would be *absent* if helm
     /// died inside one of those windows, which is the crash #63 exists for.
     func testARecordIsNotErasedWhenTheAgentStopsBeingTheForegroundProcess() throws {
-        let terminals = TerminalManager()
-        let seen = WorkbenchModel(
-            terminals: terminals,
-            agents: .fixture(foreground: [:], rows: [:]), launcher: RecordingLauncher())
-        seen.activate(workspacePath: workspace, restoring: nil)
-        let pane = try XCTUnwrap(seen.bench?.panes.first?.id)
-        let watching = WorkbenchModel(
-            terminals: terminals,
-            agents: .fixture(
-                foreground: [pane: 77], rows: [77: row(pid: 77, session: "abc", cwd: nil)]),
-            launcher: RecordingLauncher())
-        watching.activate(workspacePath: workspace, restoring: seen.bench)
-        watching.observeAgents()
-        let blind = WorkbenchModel(
-            terminals: terminals, agents: .blind, launcher: RecordingLauncher())
-        blind.activate(workspacePath: workspace, restoring: watching.bench)
+        let pane = UUID()
+        let rig = try rig([holding(agent("abc"), id: pane)], agents: .blind)
+        rig.model.resume(pane)
+        let before = rig.server.verbs.count
 
-        blind.observeAgents()
+        rig.model.observeAgents()
 
+        XCTAssertEqual(rig.server.verbs.count, before, "nothing is sent about an agent not seen")
         XCTAssertEqual(
-            blind.bench?.resumableAgents.map(\.agent.session), ["abc"],
+            rig.model.bench?.resumableAgents.map(\.agent.session), ["abc"],
             "what was running here is still what was running here")
+    }
+
+    /// Only a change is sent: the same record every two seconds would be an event per tick in
+    /// benchd's log for the life of the process.
+    func testAnAgentAlreadyRecordedIsNotSentAgain() throws {
+        let pane = UUID()
+        let rig = try rig(
+            [holding(agent("abc", cwd: "/tmp/sub"), id: pane)],
+            agents: .fixture(
+                foreground: [pane: 4242],
+                rows: [4242: row(pid: 4242, session: "abc", cwd: "/tmp/sub")]))
+
+        rig.model.observeAgents()
+
+        XCTAssertTrue(rig.server.verbs.isEmpty)
     }
 
     // MARK: - Answering
 
     func testAcceptingRunsTheAgentsOwnResumeInThatPaneAndNowhereElse() throws {
-        let terminals = TerminalManager()
         let launcher = RecordingLauncher()
         let pane = UUID()
         let other = UUID()
-        let bench = Workbench(
-            panes: [
-                Pane(id: pane, content: .terminal(agent: agent())),
-                Pane(id: other, content: .terminal()),
-            ])
-        let model = WorkbenchModel(
-            terminals: terminals,
+        let rig = try rig(
+            [holding(agent(), id: pane), holding(nil, id: other)],
             agents: .fixture(foreground: [:], rows: [:]), launcher: launcher)
-        model.activate(workspacePath: workspace, restoring: bench)
-        XCTAssertNotNil(model.resumeOffers[pane], "the restored pane asks")
-        XCTAssertNil(model.resumeOffers[other], "the pane that held nothing does not")
+        XCTAssertNotNil(rig.model.resumeOffers[pane], "the restored pane asks")
+        XCTAssertNil(rig.model.resumeOffers[other], "the pane that held nothing does not")
 
-        model.resume(pane)
+        rig.model.resume(pane)
 
         XCTAssertEqual(launcher.sent.count, 1)
-        XCTAssertEqual(launcher.sent[0].terminal, pane, "into the pane it was about")
-        XCTAssertEqual(launcher.sent[0].line, AgentResume.line(resuming: agent()))
-        XCTAssertNil(model.resumeOffers[pane], "and the question is closed")
+        let sent = try XCTUnwrap(launcher.sent.first, "nothing was run")
+        XCTAssertEqual(sent.terminal, pane, "into the pane it was about")
+        XCTAssertEqual(sent.line, AgentResume.line(resuming: agent()))
+        XCTAssertNil(rig.model.resumeOffers[pane], "and the question is closed")
     }
 
     /// *"Declining leaves a plain shell. Nothing is auto-started."* — and the record goes with
-    /// it, or the same offer returns on every launch until the pane is closed.
+    /// it, as the operator's `pane/record` of no agent, or the same offer returns on every
+    /// launch until the pane is closed.
     func testDecliningLeavesAPlainShellAndDoesNotAskAgain() throws {
-        let terminals = TerminalManager()
         let launcher = RecordingLauncher()
         let pane = UUID()
-        let model = WorkbenchModel(
-            terminals: terminals,
-            agents: .fixture(foreground: [:], rows: [:]), launcher: launcher)
-        model.activate(
-            workspacePath: workspace,
-            restoring: Workbench(
-                panes: [Pane(id: pane, content: .terminal(agent: agent()))]))
+        let rig = try rig(
+            [holding(agent(), id: pane)], agents: .fixture(foreground: [:], rows: [:]),
+            launcher: launcher)
 
-        model.dismissResume(pane)
+        rig.model.dismissResume(pane)
 
         XCTAssertTrue(launcher.sent.isEmpty, "nothing is auto-started")
-        XCTAssertNil(model.resumeOffers[pane])
+        XCTAssertNil(rig.model.resumeOffers[pane])
+        let sent = try XCTUnwrap(rig.server.verbs.last)
+        XCTAssertEqual(sent["verb"] as? String, "pane/record")
+        XCTAssertEqual((sent["by"] as? [String: Any])?["kind"] as? String, "operator")
         XCTAssertTrue(
-            model.bench?.resumableAgents.isEmpty ?? false,
+            rig.model.bench?.resumableAgents.isEmpty ?? false,
             "a declined agent left on the pane is one offered again forever")
-        XCTAssertEqual(model.bench?.terminalPaneIDs, [pane], "and the shell is still there")
+        XCTAssertEqual(rig.model.bench?.terminalPaneIDs, [pane], "and the shell is still there")
     }
 
-    /// An offer answered by events rather than by a click: the agent turned up, so there is
-    /// nothing left to ask. This is what puts an accepted resume's own band away.
-    func testAnOfferRetiresWhenTheAgentTurnsUpInThePane() throws {
-        let terminals = TerminalManager()
+    /// An offer answered by events rather than by a click: the agent is already there, so there
+    /// is nothing to ask.
+    func testNoOfferIsMadeForAPaneTheAgentIsAlreadyIn() throws {
         let pane = UUID()
-        let bench = Workbench(
-            panes: [Pane(id: pane, content: .terminal(agent: agent()))])
-        let model = WorkbenchModel(
-            terminals: terminals,
-            agents: .fixture(foreground: [:], rows: [:]), launcher: RecordingLauncher())
-        model.activate(workspacePath: workspace, restoring: bench)
-        XCTAssertNotNil(model.resumeOffers[pane])
-
-        let resumed = WorkbenchModel(
-            terminals: terminals,
+        let rig = try rig(
+            [holding(agent(), id: pane)],
             agents: .fixture(
                 foreground: [pane: 999],
-                rows: [999: row(pid: 999, session: agent().session, cwd: nil)]),
-            launcher: RecordingLauncher())
-        resumed.activate(workspacePath: workspace, restoring: bench)
+                rows: [999: row(pid: 999, session: agent().session, cwd: nil)]))
 
         XCTAssertNil(
-            resumed.resumeOffers[pane],
+            rig.model.resumeOffers[pane],
             "a pane that already holds the conversation must not be asked about it")
     }
 
-    /// **A bench comes off disk, so two panes can carry one id — and building the offers must
-    /// not trap on that.** `AgentRegistry.rows(in:)`, added on this same branch, argues the rule
-    /// in its own header: *"`Dictionary(_:uniquingKeysWith:)` rather than `uniqueKeysWithValues:`,
-    /// because the latter traps and a hand-edited registry directory is not worth a crash."*
-    /// The offers were built the trapping way, over a value decoded from `UserDefaults` rather
-    /// than from a directory — a worse place for it, because the crash is at mount and every
-    /// relaunch reaches it again.
-    ///
-    /// `Workbench.normalize()` says so itself one type over: *"unreachable through any mutation
-    /// — but a decoded bench is not built by a mutation, so this is not an assertion."* Nothing
-    /// dedupes pane ids on the way in.
+    /// **Two panes can carry one id — and building the offers must not trap on that.** Nothing
+    /// helm can check dedupes pane ids on the way in; `uniqueKeysWithValues:` would trap, and
+    /// the crash would be at the first showing of the workspace, on every launch.
     func testTwoPanesCarryingOneIdDoNotTrapWhenTheOffersAreBuilt() throws {
         let pane = UUID()
-        let bench = Workbench(
-            panes: [
-                Pane(id: pane, content: .terminal(agent: agent("first"))),
-                Pane(id: pane, content: .terminal(agent: agent("second"))),
-            ])
-        let model = WorkbenchModel(
-            terminals: TerminalManager(),
-            agents: .fixture(foreground: [:], rows: [:]), launcher: RecordingLauncher())
-
-        model.activate(workspacePath: workspace, restoring: bench)
+        let rig = try rig(
+            [holding(agent("first"), id: pane), holding(agent("second"), id: pane)],
+            agents: .fixture(foreground: [:], rows: [:]))
 
         XCTAssertEqual(
-            model.resumeOffers.count, 1,
+            rig.model.resumeOffers.count, 1,
             "one id, one offer — the duplicate is degenerate, and picking one is the answer; "
                 + "trapping is not")
     }
@@ -416,7 +401,7 @@ final class ResumableAgentTests: XCTestCase {
                 panes: [
                     Pane(id: pane, content: .terminal(agent: agent())),
                     Pane(content: .terminal()),
-                ]), suite: "resume-snapshot-offered")
+                ]))
 
         let records = try panes(in: snapshot)
         let offered = try XCTUnwrap(records[pane]?.resumable)
@@ -437,7 +422,7 @@ final class ResumableAgentTests: XCTestCase {
         let snapshot = try project(
             bench: Workbench(
                 panes: [Pane(id: pane, content: .terminal(agent: agent()))]),
-            transcripts: [], suite: "resume-snapshot-blocked")
+            transcripts: [])
 
         let record = try XCTUnwrap(try panes(in: snapshot)[pane]?.resumable)
         XCTAssertTrue(record.isOffered)
@@ -449,8 +434,7 @@ final class ResumableAgentTests: XCTestCase {
     func testAPaneThatNeverHeldAnAgentCarriesNoResumeRecord() throws {
         let pane = UUID()
         let snapshot = try project(
-            bench: Workbench(panes: [Pane(id: pane, content: .terminal())]),
-            suite: "resume-snapshot-control")
+            bench: Workbench(panes: [Pane(id: pane, content: .terminal())]))
 
         XCTAssertNil(try panes(in: snapshot)[pane]?.resumable)
         let json = try XCTUnwrap(
@@ -461,54 +445,43 @@ final class ResumableAgentTests: XCTestCase {
             "an absent record is an absent key, not a null one")
     }
 
-    /// **A parked workspace still says what its panes were holding — and never that it is being
-    /// asked about them.** The two halves come from different places on purpose: the *record*
-    /// is on the bench, which is a value in `WorkspaceModel.contexts` and outlives any mount;
-    /// the *question* is `WorkbenchModel.resumeOffers`, which is this launch's, about the one
-    /// workspace the model currently holds.
+    /// **A background workspace still says what its panes were holding — and never that it is
+    /// being asked about them.** The two halves come from different places on purpose: the
+    /// *record* is on the bench, in benchd's document; the *question* is
+    /// `WorkbenchModel.resumeOffers`, which is this launch's, about the workspace on screen.
     ///
-    /// Without this a reader has to mount a workspace to learn whether anything was running in
-    /// it, which defeats the point of a snapshot that reports every workspace at once.
-    ///
-    /// **`isOffered == false` here is a control and passes either way**, and it is worth saying
-    /// why rather than leaving it to look like a measurement. `project` guards the parked branch
-    /// with `mounted ? workbench.resumeOffers : [:]`, but the model recomputes `resumeOffers` on
-    /// every mount — so by the time this workspace is parked the dictionary is the *other*
-    /// workspace's and holds none of these pane ids anyway. The guard is belt-and-braces, and
-    /// this assertion is what fails if a later change ever makes the offers survive a mount.
-    func testAParkedWorkspaceStillReportsWhatItsPanesHeldWithoutClaimingAnOpenQuestion() throws {
-        let defaults = try isolatedDefaults("resume-snapshot-parked")
-        let workspaces = WorkspaceModel(defaults: defaults)
-        let terminals = TerminalManager()
-        let model = WorkbenchModel(
-            terminals: terminals,
-            agents: .fixture(foreground: [:], rows: [:]), launcher: RecordingLauncher())
-
+    /// **`isOffered == false` here is a control and passes either way**: `project` guards the
+    /// background branch with `mounted ? workbench.resumeOffers : [:]`, and this assertion is
+    /// what fails if a later change ever makes the offers leak across workspaces.
+    func testABackgroundWorkspaceStillReportsWhatItsPanesHeldWithoutClaimingAnOpenQuestion()
+        throws
+    {
         let parked = Workspace(path: "/tmp/helm-resume-parked")
-        let pane = UUID()
-        workspaces.open(parked)
-        model.activate(
-            workspacePath: parked.path,
-            restoring: Workbench(
-                panes: [Pane(id: pane, content: .terminal(agent: agent()))]))
-        XCTAssertNotNil(model.resumeOffers[pane], "it is asked about while it is mounted")
-        workspaces.saveContext(terminalManager: terminals, workbench: model)
-
-        // Mounting another workspace parks the first — the model holds one at a time.
         let mounted = Workspace(path: "/tmp/helm-resume-mounted")
-        workspaces.open(mounted)
-        model.activate(workspacePath: mounted.path, restoring: nil)
+        let rig = try toyRig(
+            document: BenchDocument(
+                workspaces: [
+                    .init(path: parked.path.value, bench: ToyBench.bench([holding(agent())])),
+                    .init(path: mounted.path.value, bench: ToyBench.bench([ToyBench.terminal()])),
+                ], active: mounted.path.value)
+        ) { terminals, client in
+            WorkbenchModel(
+                terminals: terminals, agents: .fixture(foreground: [:], rows: [:]),
+                launcher: RecordingLauncher(), client: client)
+        }
+        let workspaces = WorkspaceModel()
+        workspaces.follow(try XCTUnwrap(rig.model.document))
 
         let snapshot = BenchSnapshot.project(
             writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,
-            workbench: model, terminals: terminals
+            workbench: rig.model, terminals: rig.terminals
         ) { _ in nil }
 
         let record = try XCTUnwrap(snapshot.workspaces.first { $0.path == parked.path })
         XCTAssertEqual(record.state, .parked)
         let resumable = try XCTUnwrap(
             record.columns.flatMap(\.slots).flatMap(\.panes).first?.terminal?.resumable,
-            "the record is on the bench, so parking a workspace does not erase what it held")
+            "the record is on the bench, so a workspace in the background still has it")
         XCTAssertEqual(resumable.session, agent().session)
         XCTAssertFalse(
             resumable.isOffered,
@@ -516,20 +489,23 @@ final class ResumableAgentTests: XCTestCase {
     }
 
     private func project(
-        bench: Workbench, transcripts: Set<String>? = nil, suite: String
+        bench: Workbench, transcripts: Set<String>? = nil
     ) throws -> BenchSnapshot {
-        let workspace = Workspace(path: workspace.value)
-        let workspaces = WorkspaceModel(defaults: try isolatedDefaults(suite))
-        workspaces.open(workspace)
-        let terminals = TerminalManager()
-        let model = WorkbenchModel(
-            terminals: terminals,
-            agents: .fixture(foreground: [:], rows: [:], transcripts: transcripts),
-            launcher: RecordingLauncher())
-        model.activate(workspacePath: workspace.path, restoring: bench)
+        let rig = try toyRig(
+            document: BenchDocument(
+                workspaces: [.init(path: workspace.value, bench: BenchDocument.Bench(bench))],
+                active: workspace.value)
+        ) { terminals, client in
+            WorkbenchModel(
+                terminals: terminals,
+                agents: .fixture(foreground: [:], rows: [:], transcripts: transcripts),
+                launcher: RecordingLauncher(), client: client)
+        }
+        let workspaces = WorkspaceModel()
+        workspaces.follow(try XCTUnwrap(rig.model.document))
         return BenchSnapshot.project(
             writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,
-            workbench: model, terminals: terminals
+            workbench: rig.model, terminals: rig.terminals
         ) { _ in nil }
     }
 
@@ -547,28 +523,18 @@ final class ResumableAgentTests: XCTestCase {
     // assertion above by offering more, and these are what fail if it does.
 
     func testAPaneThatNeverHeldAnAgentIsNeverAskedAbout() throws {
-        let terminals = TerminalManager()
-        let model = WorkbenchModel(
-            terminals: terminals, agents: .blind, launcher: RecordingLauncher())
+        let rig = try rig([ToyBench.terminal()], agents: .blind)
 
-        model.activate(workspacePath: workspace, restoring: nil)
-
-        XCTAssertTrue(model.resumeOffers.isEmpty, "a fresh shell has nothing to resume")
+        XCTAssertTrue(rig.model.resumeOffers.isEmpty, "a fresh shell has nothing to resume")
     }
 
     func testARestoredShellIsStillJustAShellUntilSomebodyAnswers() throws {
-        let terminals = TerminalManager()
         let launcher = RecordingLauncher()
-        let pane = UUID()
-        let model = WorkbenchModel(
-            terminals: terminals,
-            agents: .fixture(foreground: [:], rows: [:]), launcher: launcher)
+        let rig = try rig(
+            [holding(agent())], agents: .fixture(foreground: [:], rows: [:]),
+            launcher: launcher)
 
-        model.activate(
-            workspacePath: workspace,
-            restoring: Workbench(
-                panes: [Pane(id: pane, content: .terminal(agent: agent()))]))
-
+        XCTAssertNotNil(rig.model.resumeOffers.first)
         XCTAssertTrue(
             launcher.sent.isEmpty,
             "offer, not push — an agent restarting itself unbidden after a crash is exactly "

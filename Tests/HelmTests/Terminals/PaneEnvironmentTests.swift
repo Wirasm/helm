@@ -13,7 +13,7 @@ final class PaneEnvironmentTests: XCTestCase {
 
     func testAPaneCarriesItsOwnIDIntoTheChildEnvironment() {
         let manager = TerminalManager()
-        let session = manager.newTerminal(in: workspace)
+        let session = manager.adoptShell(in: workspace)
 
         XCTAssertEqual(
             session.hostView.configuration.envVars[PaneEnvironment.paneVariable],
@@ -25,8 +25,8 @@ final class PaneEnvironmentTests: XCTestCase {
     /// the only question worth asking.
     func testEveryPaneGetsADistinctIdentity() {
         let manager = TerminalManager()
-        let first = manager.newTerminal(in: workspace)
-        let second = manager.newTerminal(in: workspace)
+        let first = manager.adoptShell(in: workspace)
+        let second = manager.adoptShell(in: workspace)
 
         let firstPane = first.hostView.configuration.envVars[PaneEnvironment.paneVariable]
         let secondPane = second.hostView.configuration.envVars[PaneEnvironment.paneVariable]
@@ -41,7 +41,7 @@ final class PaneEnvironmentTests: XCTestCase {
         let manager = TerminalManager()
         let persisted = UUID()
 
-        manager.activate(workspacePath: workspace, restoring: [persisted])
+        manager.adopt(terminals: [persisted], in: workspace)
 
         XCTAssertEqual(
             manager.sessions(for: workspace).first?.hostView.configuration

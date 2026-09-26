@@ -51,9 +51,9 @@ struct SplitLayout: Equatable {
 
     /// A stored fraction, in points. **The whole restore path** — computed, never measured.
     ///
-    /// The `max` guards an invariant `Workbench.normalize()` already enforces on every
-    /// mutation and on decode, so it is defence in depth rather than a live case — said
-    /// here so a later reader does not go looking for the caller that sends a negative.
+    /// The `max` guards an invariant benchd's `normalize()` already enforces on every document,
+    /// so it is defence in depth rather than a live case — said here so a later reader does not
+    /// go looking for the caller that sends a negative.
     func points(_ fraction: Double) -> CGFloat { max(available * fraction, 0) }
 
     /// The fraction a member takes when the divider on its far side has been dragged
@@ -94,6 +94,11 @@ struct SplitLayout: Equatable {
 /// ever survived a quit. Here a member's size is **computed, never measured**, and nothing
 /// but a drag writes a fraction — there is no mount-time measurement left to mistake for an
 /// intention.
+///
+/// **A drag is drawn here and sent once.** While the divider moves, the pair it separates is
+/// sized from `dragging`, which only this view holds; on release the fraction goes to `resize`
+/// — one `layout/resize` to benchd, rather than a round trip per mouse event — and the pair is
+/// drawn from the document again. A resize benchd did not take snaps back, which is the truth.
 struct SplitStack<Member: Identifiable, Content: View>: View {
     let axis: Axis
     /// The stack's full extent along `axis`, from the one `GeometryReader` above it.
@@ -101,12 +106,18 @@ struct SplitStack<Member: Identifiable, Content: View>: View {
     let members: [Member]
     let fraction: (Member) -> Double
     let minimumExtent: CGFloat
-    /// A divider moved: `id` now takes this fraction of the stack, and `neighbour` — the
-    /// member on the divider's other side — absorbs exactly the difference. `ended` is the
-    /// release: the drag's last position, reported once more so a caller that sends one change
-    /// per drag (benchd's, #354) knows which one to send.
-    let resize: (_ id: Member.ID, _ fraction: Double, _ neighbour: Member.ID, _ ended: Bool) -> Void
+    /// A divider was released: `id` now takes this fraction of the stack, and `neighbour` — the
+    /// member on the divider's other side — absorbs exactly the difference.
+    let resize: (_ id: Member.ID, _ fraction: Double, _ neighbour: Member.ID) -> Void
     @ViewBuilder let content: (Member) -> Content
+
+    /// The pair a divider is being dragged between, and where it is now. nil between drags.
+    @State private var dragging: SplitDrag<Member.ID>?
+
+    /// A member's fraction as drawn: the drag's, for the pair being dragged.
+    private func drawn(_ member: Member) -> Double {
+        dragging?.fraction(of: member.id) ?? fraction(member)
+    }
 
     private var layout: SplitLayout {
         SplitLayout(extent: extent, memberCount: members.count, minimumExtent: minimumExtent)
@@ -115,7 +126,7 @@ struct SplitStack<Member: Identifiable, Content: View>: View {
     var body: some View {
         stack {
             ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
-                sized(content(member), to: layout.points(fraction(member)))
+                sized(content(member), to: layout.points(drawn(member)))
                 if index < members.count - 1 { divider(after: index) }
             }
         }
@@ -142,15 +153,42 @@ struct SplitStack<Member: Identifiable, Content: View>: View {
         let member = members[index]
         let neighbour = members[index + 1]
         return SplitDivider(
-            axis: axis, leading: fraction(member), trailing: fraction(neighbour)
+            axis: axis, leading: drawn(member), trailing: drawn(neighbour)
         ) { start, against, translation, ended in
-            resize(
-                member.id, layout.dragged(from: start, against: against, by: translation),
-                neighbour.id, ended)
+            let moved = layout.dragged(from: start, against: against, by: translation)
+            guard ended else {
+                dragging = SplitDrag(
+                    member: member.id, neighbour: neighbour.id, fraction: moved,
+                    pair: start + against)
+                return
+            }
+            // Sent before the override is dropped: the send returns once the document it made
+            // is drawn, so the pair never flicks back to where it started.
+            resize(member.id, moved, neighbour.id)
+            dragging = nil
         }
         // Above the member drawn *after* it, so the half of the grab area that overhangs
         // that side is not buried by it.
         .zIndex(1)
+    }
+}
+
+// MARK: - SplitDrag
+
+/// A divider mid-drag: the member dragged, its neighbour across the divider, where the member is
+/// now, and what the two had between them when the drag began — which the drag only shares out,
+/// so every other member keeps exactly what it had.
+struct SplitDrag<ID: Hashable>: Equatable {
+    let member: ID
+    let neighbour: ID
+    let fraction: Double
+    let pair: Double
+
+    /// The fraction `id` is drawn at, or nil for a member the drag does not touch.
+    func fraction(of id: ID) -> Double? {
+        if id == member { return fraction }
+        if id == neighbour { return pair - fraction }
+        return nil
     }
 }
 

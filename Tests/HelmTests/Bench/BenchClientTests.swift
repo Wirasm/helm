@@ -62,6 +62,30 @@ final class BenchClientTests: XCTestCase {
         XCTAssertEqual(seen, [3, 4], "an older frame is not drawn over a newer one")
     }
 
+    /// The whole document the follower connects with waits on the main queue, and a verb can
+    /// draw a newer one before it runs (`document(atLeast:)`). Drawing the older one then would
+    /// put the bench back where it was until the next frame.
+    func testTheDocumentOnConnectingIsNotDrawnOverANewerOne() throws {
+        let server = try FakeBenchd(
+            document: BenchFixture.document(
+                path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+        defer { server.stop() }
+        let client = BenchClient(socketPath: server.path)
+        var seen: [UInt64] = []
+        client.onDocument = { seen.append($0.seq) }
+        client.start()
+        defer { client.stop() }
+
+        // Nothing here pumps the main queue, so the follower's own deliveries wait there.
+        XCTAssertNotNil(client.document(atLeast: 1, within: 5))
+        server.push(
+            BenchFixture.document(path, BenchFixture.bench([BenchFixture.terminal()]), seq: 2))
+        XCTAssertNotNil(client.document(atLeast: 2, within: 5))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        XCTAssertEqual(seen, [1, 2], "the document connected with was drawn over a newer one")
+    }
+
     /// benchd dropping the follower — a restart, or a follower it found too slow — costs a
     /// reconnect and a fresh document, and the state says so in between.
     func testTheFollowerReconnectsAfterTheServerDropsIt() throws {
@@ -114,7 +138,7 @@ final class BenchClientTests: XCTestCase {
         }
         let client = BenchClient(socketPath: server.path)
         let model = WorkbenchModel(
-            terminals: TerminalManager(), agents: .blind, mode: .daemon(client))
+            terminals: TerminalManager(), agents: .blind, client: client)
         defer { client.stop() }
         XCTAssertTrue(Eventually.holds { model.bench != nil })
         let before = model.bench

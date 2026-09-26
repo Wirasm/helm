@@ -49,9 +49,9 @@ enum BenchRestoreChoice: Equatable {
 enum MountState: Equatable {
     /// No workspace open. A fresh install, and where closing the last workspace returns to.
     case empty
-    /// A workspace is mounted and waiting on the operator to answer #85's question. **Nothing
-    /// is built and no pty is spawned in this state**, which is also what keeps the saved bench
-    /// intact: `WorkspaceModel.saveContext` returns early on a nil `bench`.
+    /// A workspace is on screen and waiting on the operator to answer #85's question. **Nothing
+    /// is drawn and no pty is spawned in this state**: the bench is benchd's, unchanged, until
+    /// the answer goes back as a verb.
     case awaitingRestore(BenchRestoreOffer)
     /// A bench, on screen. Never empty — `Workbench`'s first invariant is that it holds a pane.
     case mounted(Workbench)
@@ -65,69 +65,42 @@ enum MountState: Equatable {
     }
 }
 
-// MARK: - BenchMount
+// MARK: - BenchMountPolicy
 
-/// What helm does with a workspace's saved bench at the moment it is mounted.
-enum BenchMount: Equatable {
-    /// `WorkbenchModel.defaultBench` — one shell. Also the never-visited case.
-    case fresh
-    /// Put this bench back with no question. Either there is nothing worth asking about, or
-    /// the question was already answered this launch.
-    case restore(Workbench)
-    /// Stop, and ask. **Nothing is mounted and nothing is spawned while this is the state** —
-    /// which is also what keeps the saved bench intact, because `WorkspaceModel.saveContext`
-    /// returns early on a nil bench and therefore writes nothing over it.
-    case ask(BenchRestoreOffer)
-}
-
-/// When a mount asks, and which bench it asks about (#85).
+/// Whether a workspace's bench is worth asking about the first time it is shown this launch, and
+/// which bench the question is about (#85).
 ///
 /// **Pure, and that is the acceptance criterion**: *"the decision logic is reachable from
 /// `swift test` — not trapped in a `View`. Three defects in two days came from logic living
-/// in a view."*
+/// in a view."* The question stays helm's while restored terminals come back as empty shells
+/// (plan D4 of #354); `BenchDrawing` asks it, and the answer goes to benchd as a verb.
 ///
-/// **Only the operator's own mount reaches here at all**, which is
-/// `WorkbenchModel.activate(workspacePath:offering:shelved:)` — the twin of
-/// `activate(workspacePath:restoring:)`, which mounts what it is given and asks nobody. That
-/// pair is `Workbench.splitRight(with:)`/`splitRight(offering:)` one level up, and it exists
-/// because the first draft of #85 had only one door: a spool spawn's `cwd` becomes a workspace
-/// (`WorkbenchSpoolSpawner.openTerminal`), so a saved bench on that folder would have raised a
-/// question with **nobody at the pane to answer it**, and the spawn would then have failed
-/// against a bench that was never built. That is #179's silent hang reached through a
-/// different door, and #179's rule is exact: *a question nobody will be there to answer must
-/// be answered in advance, and answered so the agent can work.*
+/// A spool spawn never waits behind it: #179's rule is exact — *a question nobody will be there
+/// to answer must be answered in advance, and answered so the agent can work* — so a spawn
+/// answers it by restoring (`WorkbenchModel.mountWithoutAsking`).
 enum BenchMountPolicy {
+    /// nil when there is nothing to decide.
+    ///
     /// - Parameters:
-    ///   - saved: `WorkspaceContext.workbench` — the bench this workspace was last left in.
-    ///   - shelved: `WorkspaceContext.shelvedBench` — a bench a previous *fresh* declined.
-    ///     Kept because *"one wrong click should not destroy a layout: fresh means do not open
-    ///     it now, never forget it."*
-    ///   - answered: whether this workspace's question has already been answered **in this
-    ///     process**. A workspace switch re-mounts, and re-asking on every switch would make
-    ///     the question chrome rather than a decision. Once per launch per workspace is what
-    ///     #85 means by *"per-workspace, at mount"*.
-    static func mount(saved: Workbench?, shelved: Workbench? = nil, answered: Bool) -> BenchMount {
-        guard !answered else { return saved.map(BenchMount.restore) ?? .fresh }
-        guard let candidate = candidate(saved: saved, shelved: shelved) else { return .fresh }
+    ///   - bench: the workspace's bench, as benchd holds it.
+    ///   - shelved: a bench a previous *fresh* declined. Kept because *"one wrong click should
+    ///     not destroy a layout: fresh means do not open it now, never forget it."*
+    static func offer(bench: Workbench, shelved: Workbench?) -> BenchRestoreOffer? {
+        let candidate = candidate(bench: bench, shelved: shelved)
         // Restoring one empty shell and building one empty shell differ only in a uuid the
-        // operator cannot see, so asking would be chrome with no decision under it. Restore
-        // rather than fresh, because the uuid is not nothing: it is what `TerminalManager`
-        // rebuilds the row under, and what a later launch's agent record hangs off.
-        guard !candidate.isOneEmptyShell else { return .restore(candidate) }
-        return .ask(BenchRestoreOffer(bench: candidate))
+        // operator cannot see, so asking would be chrome with no decision under it.
+        guard !candidate.isOneEmptyShell else { return nil }
+        return BenchRestoreOffer(bench: candidate)
     }
 
     /// Which bench the question is about.
     ///
-    /// The saved one, normally. The **shelved** one when what was saved is a single empty
-    /// shell — which is precisely the "you chose fresh, did nothing with it, and relaunched"
-    /// case, and the one moment a declined bench is most worth offering back. It stops
-    /// offering itself as soon as the operator builds a bench worth saving, so a decline does
-    /// not turn into a nag: the saved bench is then no longer one empty shell and it is what
-    /// the question is about.
-    private static func candidate(saved: Workbench?, shelved: Workbench?) -> Workbench? {
-        guard let saved else { return shelved }
-        guard saved.isOneEmptyShell, let shelved else { return saved }
+    /// The bench, normally. The **shelved** one when the bench is a single empty shell — which
+    /// is precisely the "you chose fresh, did nothing with it, and relaunched" case, and the one
+    /// moment a declined bench is most worth offering back. It stops offering itself as soon as
+    /// the operator builds a bench worth keeping, so a decline does not turn into a nag.
+    private static func candidate(bench: Workbench, shelved: Workbench?) -> Workbench {
+        guard bench.isOneEmptyShell, let shelved else { return bench }
         return shelved
     }
 }

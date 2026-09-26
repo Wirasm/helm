@@ -5,8 +5,8 @@ import SwiftUI
 
 // MARK: - TerminalManager
 
-/// App-level owner of the terminal sessions' **lifecycle** — which workspace's shells exist,
-/// restoring them, making new ones — and of the app's one `SurfaceRegistry`, which is where the
+/// App-level owner of the terminal sessions' **lifecycle** — a shell for every terminal pane in
+/// benchd's document (`adopt`) — and of the app's one `SurfaceRegistry`, which is where the
 /// sessions themselves are kept, beside every other kind of pane's live object (PR 3a of #354).
 /// Selection belongs to the slot that shows a session, under a bench.
 ///
@@ -23,9 +23,9 @@ import SwiftUI
 /// same module wearing two filenames (`AGENTS.md`). Deleted rather than deprecated.
 ///
 /// Invariants:
-/// - Sessions are never removed by this type on its own account: `close` does what it is
-///   told, and refusing the bench's last pane is `Workbench.canClose`'s rule. A workspace
-///   whose panes are all canvases legitimately has no terminal left.
+/// - Sessions are never removed by this type on its own account: a session goes when its pane
+///   leaves the document (`WorkbenchModel.apply`), and refusing the bench's last pane is
+///   benchd's rule. A workspace whose panes are all canvases legitimately has no terminal left.
 /// - Sessions (and their NSViews + ptys) live exactly as long as their tab:
 ///   dropping the last reference here deallocs the view → coordinator →
 ///   surface, which is what actually kills the shell.
@@ -83,38 +83,13 @@ final class TerminalManager: ObservableObject {
         surfaces.models(TerminalSession.self, in: workspacePath)
     }
 
-    /// Makes a workspace active, lazily rebuilding its tab row on first visit.
-    /// Existing sessions are merely parked (their retained NSViews and ptys survive).
-    ///
-    /// `restoring` carries the ids persisted for this workspace. On the first visit
-    /// after a relaunch they name terminals whose ptys died with the old process, so
-    /// the row is rebuilt under those same ids — and **the shells still come back empty**.
-    ///
-    /// That last part did not change with #63, and it is worth being exact about what did.
-    /// This type still starts nothing but a login shell: helm attaches to agents, it never
-    /// owns their launch. What #63 added is one level up — a restored *pane* whose persisted
-    /// record names an agent shows an **offer** to resume it (`AgentResumeBar`), and only the
-    /// operator accepting one ever puts a `--resume` line in a pty. Nothing here re-runs
-    /// anything, and a helm nobody clicks in behaves exactly as it always has.
-    ///
-    /// Restore stays lazy on purpose. `init` creates no pty until a workspace is
-    /// visited, which bounds startup to the active context rather than every
-    /// remembered folder — eager restore would spawn each one's shells at launch.
-    func activate(workspacePath: WorkspacePath, restoring restorable: [UUID] = []) {
-        activeWorkspacePath = workspacePath
-        if sessions(for: workspacePath).isEmpty {
-            restore(restorable, in: workspacePath)
-        }
-    }
-
-    /// Rebuilds a workspace's tab row from persisted ids, or opens one fresh shell
-    /// when there is nothing to restore — which is also the never-visited case, so
-    /// a first-run workspace still behaves exactly as it always has.
+    /// A login shell under each of `ids`. After a relaunch they name terminals whose ptys died
+    /// with the old process, so the row is rebuilt under those same ids — and **the shells come
+    /// back empty**. This type starts nothing but a login shell: helm attaches to agents, it
+    /// never owns their launch. A restored *pane* whose record names an agent shows an **offer**
+    /// to resume it (`AgentResumeBar`), and only the operator accepting one puts a `--resume`
+    /// line in a pty.
     private func restore(_ ids: [UUID], in workspacePath: WorkspacePath) {
-        guard !ids.isEmpty else {
-            newTerminal(in: workspacePath)
-            return
-        }
         for id in ids {
             let session = TerminalSession(
                 id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
@@ -129,23 +104,16 @@ final class TerminalManager: ObservableObject {
         activeWorkspacePath = nil
     }
 
-    /// A session for every terminal pane in `ids` that has none — benchd's document naming
-    /// terminals this helm has not started (#354). The pane id is the session id, as on restore,
-    /// and like a restore each comes back as a fresh login shell. `active` makes `path` the
-    /// workspace on screen, which is the document's to say rather than a side effect.
-    func adopt(terminals ids: [UUID], in path: WorkspacePath, active: Bool) {
-        if active { activeWorkspacePath = path }
+    /// The workspace on screen, `path`, and a session for every terminal pane in `ids` that has
+    /// none — benchd's document naming terminals this helm has not started (#354). The pane id is
+    /// the session id, as on restore, and like a restore each comes back as a fresh login shell.
+    /// Only the workspace on screen is adopted: its shells start when it is first shown, which
+    /// bounds startup to what is drawn.
+    func adopt(terminals ids: [UUID], in path: WorkspacePath) {
+        activeWorkspacePath = path
         let missing = ids.filter { surfaces.existing($0, as: TerminalSession.self) == nil }
         guard !missing.isEmpty else { return }
         restore(missing, in: path)
-    }
-
-    /// Closing a workspace is an explicit teardown, unlike switching: every pane object it
-    /// owned goes — its sessions, so their retained NSViews release their ptys, and its
-    /// canvases and browser views, each through its own kind's `close`.
-    func closeWorkspace(_ workspacePath: WorkspacePath) {
-        surfaces.closeWorkspace(workspacePath)
-        if activeWorkspacePath == workspacePath { deactivate() }
     }
 
     /// Whether ANY terminal's view is (or contains) the key window's first responder —
@@ -164,19 +132,5 @@ final class TerminalManager: ObservableObject {
             let view = session.hostView
             return responder === view || responder.isDescendant(of: view)
         }
-    }
-
-    /// A fresh login shell in a workspace. Returns it, because the caller is the bench and
-    /// the bench needs the id to build the pane that will show it.
-    @discardableResult
-    func newTerminal(in workspacePath: WorkspacePath) -> TerminalSession {
-        let session = TerminalSession(
-            ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller,
-            command: command())
-        nextOrdinal += 1
-        session.manager = self
-        surfaces.adopt(session, as: session.id, kind: .terminal, in: workspacePath)
-        activeWorkspacePath = workspacePath
-        return session
     }
 }

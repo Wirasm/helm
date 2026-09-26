@@ -4,10 +4,8 @@ import XCTest
 
 @testable import Helm
 
-/// helm drawn from benchd (`HELM_BENCH=daemon`), against the stand-in: every gesture goes out as
-/// a verb, and nothing changes on screen until a document says so.
-///
-/// The local-mode suites are the control: they run the same model with `LocalSink`, unchanged.
+/// helm drawn from benchd, against the stand-in: every gesture goes out as a verb, and nothing
+/// changes on screen until a document says so.
 @MainActor
 final class WorkbenchClientModeTests: XCTestCase {
     private let path = "/tmp/helm-client-mode"
@@ -25,7 +23,7 @@ final class WorkbenchClientModeTests: XCTestCase {
         let server = try FakeBenchd(document: first)
         let client = BenchClient(socketPath: server.path)
         let terminals = TerminalManager()
-        let model = WorkbenchModel(terminals: terminals, agents: .blind, mode: .daemon(client))
+        let model = WorkbenchModel(terminals: terminals, agents: .blind, client: client)
         addTeardownBlock { @MainActor in
             client.stop()
             server.stop()
@@ -49,8 +47,8 @@ final class WorkbenchClientModeTests: XCTestCase {
                 BenchFixture.bench([BenchFixture.terminal(first), BenchFixture.terminal(second)]),
                 seq: 1))
         let defaults = try isolatedDefaults("client-mode-keys")
-        // The workspace list follows the document, as `RootView` wires it in daemon mode.
-        let workspaces = WorkspaceModel(defaults: defaults)
+        // The workspace list follows the document, as `RootView` wires it.
+        let workspaces = WorkspaceModel()
         workspaces.follow(try XCTUnwrap(rig.model.document))
         let actions = LocalActions(
             workbench: rig.model, workspaces: workspaces,
@@ -157,56 +155,59 @@ final class WorkbenchClientModeTests: XCTestCase {
         XCTAssertEqual(Set(rig.terminals.sessions.map(\.id)), [first, second])
     }
 
-    /// A terminal opened straight into a drawer has no workspace to start in; moved onto a
-    /// background bench later, it arrives there and starts.
-    func testATerminalMovedFromADrawerOntoABackgroundBenchStarts() throws {
+    /// A background workspace's terminals get their sessions when it is shown, not before: a
+    /// pty starts only once its pane is drawn, so a session made earlier would hold nothing.
+    func testABackgroundWorkspacesTerminalsStartWhenItIsShown() throws {
         let first = UUID()
-        let drawn = UUID()
         let other = "/tmp/helm-client-mode-other"
+        let waiting = UUID()
         let rig = try rig(
             BenchFixture.document(path, BenchFixture.bench([BenchFixture.terminal(first)]), seq: 1))
-        var inDrawer = BenchFixture.document(
-            path, BenchFixture.bench([BenchFixture.terminal(first)]), seq: 2,
-            others: [.init(path: other, bench: BenchFixture.bench([BenchFixture.terminal()]))])
-        inDrawer.document.drawers = [
-            .init(name: "scratch", panes: [BenchFixture.terminal(drawn)], selected: drawn)
-        ]
-        rig.server.push(inDrawer)
-        XCTAssertTrue(Eventually.holds { rig.model.document?.drawers.count == 1 })
-
-        rig.server.push(
-            BenchFixture.document(
-                path, BenchFixture.bench([BenchFixture.terminal(first)]), seq: 3,
-                others: [
-                    .init(path: other, bench: BenchFixture.bench([BenchFixture.terminal(drawn)]))
-                ]))
-
-        XCTAssertTrue(Eventually.holds { rig.terminals.sessions.contains { $0.id == drawn } })
-        XCTAssertEqual(
-            rig.terminals.sessions.first { $0.id == drawn }?.workspacePath, WorkspacePath(other))
-    }
-
-    /// A terminal an agent opens in a workspace that is not on screen starts at once, so a spawn
-    /// there has a shell to type into — and the operator's view stays where it was.
-    func testATerminalThatArrivesInABackgroundWorkspaceStartsThere() throws {
-        let first = UUID()
-        let rig = try rig(
-            BenchFixture.document(path, BenchFixture.bench([BenchFixture.terminal(first)]), seq: 1))
-        let spawned = UUID()
         rig.server.push(
             BenchFixture.document(
                 path, BenchFixture.bench([BenchFixture.terminal(first)]), seq: 2,
                 others: [
+                    .init(path: other, bench: BenchFixture.bench([BenchFixture.terminal(waiting)]))
+                ]))
+        XCTAssertTrue(Eventually.holds { rig.model.document?.workspaces.count == 2 })
+        XCTAssertFalse(rig.terminals.sessions.contains { $0.id == waiting })
+
+        var shown = BenchFixture.document(
+            path, BenchFixture.bench([BenchFixture.terminal(first)]), seq: 3,
+            others: [
+                .init(path: other, bench: BenchFixture.bench([BenchFixture.terminal(waiting)]))
+            ])
+        shown.document.active = other
+        rig.server.push(shown)
+
+        XCTAssertTrue(Eventually.holds { rig.terminals.sessions.contains { $0.id == waiting } })
+        XCTAssertEqual(
+            rig.terminals.sessions.first { $0.id == waiting }?.workspacePath, WorkspacePath(other))
+    }
+
+    /// **The import's first document starts nothing it has not been asked to.** benchd's first
+    /// document is empty and the import fills it, so every workspace is new at once; starting
+    /// their terminals as arrivals would spawn the very shells #85's question is about to ask
+    /// whether to restore. Measured against a live import before this was written.
+    func testTheDocumentAfterAnEmptyOneStartsNoShellBehindAnOpenQuestion() throws {
+        let rig = try rig(
+            DocumentAt(seq: 1, document: BenchDocument(workspaces: [], active: nil)),
+            restoring: false)
+        let panes = (0..<3).map { _ in BenchFixture.terminal() }
+
+        rig.server.push(
+            BenchFixture.document(
+                path, BenchFixture.bench(panes), seq: 2,
+                others: [
                     .init(
                         path: "/tmp/helm-client-mode-other",
-                        bench: BenchFixture.bench([BenchFixture.terminal(spawned)]))
+                        bench: BenchFixture.bench([BenchFixture.terminal()]))
                 ]))
 
-        XCTAssertTrue(Eventually.holds { rig.terminals.sessions.contains { $0.id == spawned } })
-        XCTAssertEqual(
-            rig.terminals.sessions.first { $0.id == spawned }?.workspacePath,
-            WorkspacePath("/tmp/helm-client-mode-other"))
-        XCTAssertEqual(rig.model.workspacePath, WorkspacePath(path), "the view did not move")
+        XCTAssertTrue(Eventually.holds { rig.model.restoreOffer != nil }, "three panes ask")
+        XCTAssertTrue(
+            rig.terminals.sessions.isEmpty,
+            "nothing is spawned while the question is open, nor in a workspace not yet shown")
     }
 
     /// The spool's `select` is an agent's verb, and the result it reports is read back off the
@@ -270,7 +271,7 @@ final class WorkbenchClientModeTests: XCTestCase {
         XCTAssertEqual(record.unsupportedKind, "whiteboard")
     }
 
-    /// #85's question stays helm's in daemon mode: a bench worth asking about is not drawn until
+    /// #85's question stays helm's (D4): a bench worth asking about is not drawn until
     /// the operator answers, and "fresh" goes to benchd as `workspace/reset`.
     func testTheRestoreQuestionIsAskedAndFreshIsAReset() throws {
         let panes = (0..<3).map { _ in BenchFixture.terminal() }
@@ -286,49 +287,6 @@ final class WorkbenchClientModeTests: XCTestCase {
         let sent = try XCTUnwrap(rig.server.verbs.last)
         XCTAssertEqual(sent["verb"] as? String, "workspace/reset")
         XCTAssertEqual(by(sent), "operator")
-    }
-
-    /// A divider drag is drawn as it moves and reaches benchd once, on release — not as a
-    /// hundred events in the log for one gesture.
-    func testADividerDragIsSentOnceOnRelease() throws {
-        let first = UUID()
-        let second = UUID()
-        let slot = UUID()
-        let other = UUID()
-        let left = UUID()
-        let right = UUID()
-        let bench = BenchDocument.Bench(
-            columns: [
-                .init(
-                    id: left,
-                    slots: [
-                        .init(
-                            id: slot, panes: [BenchFixture.terminal(first)], selected: first,
-                            height: 1)
-                    ], width: 0.5),
-                .init(
-                    id: right,
-                    slots: [
-                        .init(
-                            id: other, panes: [BenchFixture.terminal(second)], selected: second,
-                            height: 1)
-                    ], width: 0.5),
-            ],
-            focusedSlot: slot)
-        let rig = try rig(BenchFixture.document(path, bench, seq: 1))
-
-        for fraction in [0.55, 0.6, 0.65] {
-            rig.model.resize(.columns(member: left, against: right), to: fraction, released: false)
-        }
-        XCTAssertEqual(
-            rig.model.bench?.columns.first?.width ?? 0, 0.65, accuracy: 0.001, "drawn as it moves")
-        XCTAssertTrue(rig.server.verbs.isEmpty, "nothing sent while the drag moves")
-
-        rig.model.resize(.columns(member: left, against: right), to: 0.7, released: true)
-
-        XCTAssertEqual(rig.server.verbs.map { $0["verb"] as? String }, ["layout/resize"])
-        let args = try XCTUnwrap(rig.server.verbs.first?["args"] as? [String: Any])
-        XCTAssertEqual(args["fraction"] as? Double, 0.7)
     }
 
     /// A "fresh" benchd refuses leaves the question open rather than mounting the bench the

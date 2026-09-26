@@ -48,9 +48,9 @@ the layout verbs (`workspace/*`, `pane/*`, `focus/*`, `layout/resize`, `drawer/t
 `bench/get`), each logged as one `bench/changed` event that says who asked; `bench.json` as the
 record it boots from; and `events --follow`, one line per event with the whole document attached when it
 changed. The focus rule is the document's own: an agent's verb that would move the operator's
-focus is refused unless it says `asked`. helm does not use any of it yet — its client is the
-next step — and `just bench-proof` drives a whole session through the socket and across a
-restart.
+focus is refused unless it says `asked`. helm is its client and keeps no bench of its own: every
+key, click and spool request is a verb, and helm draws the document it gets back. `just
+bench-proof` drives a whole session through the socket and across a restart.
 
 **Drawers are in the document (#356).** A drawer is a named holder of tabbed panes beside the
 workspaces, shown over the bench rather than in it; one is open at a time. `drawer/toggle` opens
@@ -225,9 +225,9 @@ this workspace:
 
 ## How it grows
 
-Landed: M0 skeleton, M5a daemon ptys, mail, the shared browser (#350), and M4's daemon half
-(the bench document in benchd: #367, #373). Next, in order (tracking issue #362): the rest of
-M4, helm as the document's client → M2 finish, one mailroom (helm's mail hooks become sensors) →
+Landed: M0 skeleton, M5a daemon ptys, mail, the shared browser (#350), and M4 (the bench
+document in benchd, and helm as its only client: #354). Next, in order (tracking issue #362):
+M2 finish, one mailroom (helm's mail hooks become sensors) →
 M3 `bench` as the whole agent surface → drawers, keymap and rules → M1 attention → M5b every pane a benchd session
 → M6 sync the record over Tailscale → M7 the agents' own machine. Each milestone: new event
 kinds, new verbs, same spine. The roadmap is the sequence; the operator names the milestone

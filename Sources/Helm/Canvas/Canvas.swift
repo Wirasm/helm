@@ -541,9 +541,8 @@ final class CanvasModel: ObservableObject {
     /// The open file, nil when the canvas is closed. What reads it is live: the header,
     /// reveal-in-Finder, and `sidecarURL`.
     ///
-    /// **It is not the persistence seam.** It was — `WorkspaceModel.saveContext` read
-    /// `fileURL?.path` into `openArtifactPath`. The bench persists `CanvasSource` through
-    /// `Pane.Content.canvas` instead, and `saveContext` does not read this at all.
+    /// **It is not the persistence seam.** benchd's document holds each canvas pane's source;
+    /// nothing reads this to save it.
     var fileURL: URL? { showing?.url }
 
     /// **This model does not subscribe to `openCanvasFile`,
@@ -631,7 +630,7 @@ final class CanvasModel: ObservableObject {
         // **One url, and that is the whole of it.** A sibling the page fetches — `app.js`,
         // `data.json` — is not this file, so rewriting one fires nothing here and the pane
         // keeps rendering what it already had. That is not an oversight to fix by widening
-        // the watch: see `refresh()` below, and `WorkbenchModel.offer` (#261), for what a
+        // the watch: see `refresh()` below, and `WorkbenchModel.push` (#261), for what a
         // sibling edit does reach the pane through.
         //
         // **The sidecar is watched beside it, and never reloads the artifact** (#251): a note is
@@ -647,8 +646,9 @@ final class CanvasModel: ObservableObject {
     /// canvas header closes the **pane**, not the source.
     func close() {
         // The pane is going away and the draft with it, so this is the last moment a save can
-        // happen at all. `WorkbenchModel.close` and `closeWorkspace` both reach here, which is
-        // every way an editing pane disappears short of the process dying.
+        // happen at all. The pane leaving benchd's document reaches here (`WorkbenchModel.apply`),
+        // whether it or its workspace was closed, which is every way an editing pane disappears
+        // short of the process dying.
         //
         // **Two states leave with it, and helm has no dialog on this path to ask about either**:
         // an unresolved conflict (`saveDraft` refuses, by design) and a write the volume rejected
@@ -833,7 +833,7 @@ final class CanvasModel: ObservableObject {
     /// beside it that the page goes on to fetch.
     ///
     /// **Two callers, and they know two different things.** The `FileWatcher` above knows the
-    /// artifact changed. `WorkbenchModel.offer` knows an agent pushed this artifact again,
+    /// artifact changed. `WorkbenchModel.push` knows an agent pushed this artifact again,
     /// which is the only signal helm gets that a *sibling* changed — nothing watches those
     /// (#261). Neither can tell the other's case apart from a no-op, so both simply ask for a
     /// render and the cost of an unnecessary one is argued where the second call site is.

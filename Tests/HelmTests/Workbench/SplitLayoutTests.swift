@@ -124,4 +124,14 @@ final class SplitLayoutTests: XCTestCase {
         XCTAssertEqual(
             layout.dragged(from: 0.5, against: 0.5, by: 900), 0.5, accuracy: 1e-9)
     }
+
+    /// Mid-drag the pair shares what it had and nobody else moves: that is all a drag draws
+    /// before its one `layout/resize` goes to benchd on release (#354).
+    func testADragDrawsOnlyThePairItSitsBetweenAndKeepsTheirTotal() {
+        let drag = SplitDrag(member: "a", neighbour: "b", fraction: 0.35, pair: 0.5)
+
+        XCTAssertEqual(drag.fraction(of: "a"), 0.35)
+        XCTAssertEqual(drag.fraction(of: "b") ?? 0, 0.15, accuracy: 1e-12)
+        XCTAssertNil(drag.fraction(of: "c"), "a member the drag does not touch is drawn as stored")
+    }
 }

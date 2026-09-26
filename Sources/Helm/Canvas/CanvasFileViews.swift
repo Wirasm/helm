@@ -259,7 +259,7 @@ struct HTMLCanvasView: View {
 /// SwiftUI can make them too.
 ///
 /// **Split out for #261, and the bug is the argument.** A sibling-only edit reached the page
-/// through nothing at all: `WorkbenchModel.offer` declined to refresh an open pane, and the
+/// through nothing at all: the push path declined to refresh an open pane, and the
 /// pane's own `FileWatcher` was never watching the sibling. Each half was covered on its own
 /// and the join was not — #216's shape exactly — and the join cannot be driven through an
 /// `NSViewRepresentable`, because `NSViewRepresentableContext` has no public initializer. So

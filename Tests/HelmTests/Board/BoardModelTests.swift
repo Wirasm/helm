@@ -40,7 +40,7 @@ final class BoardModelTests: XCTestCase {
         // cwd is not the attribution; the pid is.
         try writeRow(pid: 9139, status: "idle")
         let manager = TerminalManager()
-        manager.activate(workspacePath: workspace)
+        manager.adoptShell(in: workspace)
         XCTAssertEqual(manager.sessions(for: workspace).count, 1, "the fixture needs a terminal")
 
         let board = BoardModel(manager: manager, root: root)

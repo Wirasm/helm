@@ -67,6 +67,13 @@ final class FakeBenchd: @unchecked Sendable {
     /// The layout verbs among them — not the follower's own `events` line.
     var verbs: [[String: Any]] { requests.filter { $0["verb"] as? String != "events" } }
 
+    /// The document the follower's first line would carry now: the last one set or pushed.
+    var current: DocumentAt {
+        lock.lock()
+        defer { lock.unlock() }
+        return document
+    }
+
     func setDocument(_ at: DocumentAt) {
         lock.lock()
         document = at

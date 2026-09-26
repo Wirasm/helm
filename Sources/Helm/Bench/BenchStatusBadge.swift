@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// benchd's side of the status bar, in daemon mode (#354): a capsule when the follower cannot
+/// benchd's side of the status bar (#354): a capsule when the follower cannot
 /// reach benchd, naming the socket, and the reason the last verb did not happen.
 ///
 /// **Visible failure is the whole job** (AC8). While benchd is down the last document stays on

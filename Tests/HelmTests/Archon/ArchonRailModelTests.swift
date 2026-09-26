@@ -39,8 +39,8 @@ final class ArchonRailModelTests: XCTestCase {
         let model = ArchonRailModel(client: FakeArchonClient(), defaults: defaults)
         let terminals = TerminalManager()
         let actions = LocalActions(
-            workbench: WorkbenchModel(terminals: terminals, agents: .blind),
-            workspaces: WorkspaceModel(defaults: defaults), rail: model, terminals: terminals)
+            workbench: try toyRig(terminals: terminals).model,
+            workspaces: WorkspaceModel(), rail: model, terminals: terminals)
         let row = try XCTUnwrap(
             KeyBindings.match(
                 characters: "R", keyCode: 15, modifiers: [.command, .shift],
