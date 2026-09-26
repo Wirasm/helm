@@ -5,7 +5,8 @@
 //! fails the gate that renamed it.
 //!
 //! The fixture is meant to be hand-read, so it holds one of everything: three workspaces, a
-//! shelved bench, every surface kind, both kinds of name, a recorded agent.
+//! shelved bench, every surface kind, both kinds of name, a recorded agent, and two drawers —
+//! one open, one closed and badged.
 
 use bench_doc::{CanvasSource, Document, PaneName, Surface};
 use std::path::PathBuf;
@@ -76,5 +77,13 @@ fn the_fixture_holds_one_of_everything() {
     assert!(
         panes.iter().any(|p| p.name.is_unnamed()),
         "and an unnamed pane"
+    );
+    let open = doc.open_drawer().expect("an open drawer");
+    assert!(open.panes.len() > 1, "holding more than one tab");
+    assert!(
+        doc.drawers()
+            .iter()
+            .any(|d| d.badged && d.name != open.name),
+        "a closed drawer an agent badged"
     );
 }

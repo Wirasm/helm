@@ -72,10 +72,14 @@ impl DaemonGuard {
         DaemonGuard::start_with(home, suite, Command::new(benchd_bin()))
     }
 
-    /// A daemon whose `pi` is [`write_fake_pi`]'s: a real harness name, so its sessions are
-    /// rows in `sessions/all`, and no real agent behind it.
+    /// A daemon whose `pi` is [`write_fake_agent`]'s: a real harness name, so its sessions
+    /// are rows in `sessions/all`, and no real agent behind it.
     fn start_with_fake_pi(home: &Path) -> DaemonGuard {
-        let bin = write_fake_pi(home);
+        DaemonGuard::start_with_fake(home, "pi")
+    }
+
+    fn start_with_fake(home: &Path, agent: &str) -> DaemonGuard {
+        let bin = write_fake_agent(home, agent);
         let path = std::env::var("PATH").unwrap_or_default();
         let mut cmd = Command::new(benchd_bin());
         cmd.env("PATH", format!("{}:{path}", bin.display()));
@@ -871,15 +875,16 @@ fn libc_alive(pid: i32) -> bool {
 // Mail: the mailroom, the notice discipline, the wake reactor, the cap
 // ---------------------------------------------------------------------------
 
-/// `<home>/bin/pi`: a stand-in that reads its pty and prints nothing, so it is idle, live,
-/// and dies when its pid is killed. Returns the directory to put on the daemon's PATH.
-fn write_fake_pi(home: &Path) -> PathBuf {
+/// `<home>/bin/<agent>`: a stand-in that ignores its argv, echoes its pty and prints nothing
+/// of its own, so it is quiet, live, and dies when its pid is killed. Returns the directory to
+/// put on the daemon's PATH.
+fn write_fake_agent(home: &Path, agent: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let bin = home.join("bin");
     fs::create_dir_all(&bin).unwrap();
-    let pi = bin.join("pi");
-    fs::write(&pi, "#!/bin/sh\nexec cat\n").unwrap();
-    fs::set_permissions(&pi, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = bin.join(agent);
+    fs::write(&path, "#!/bin/sh\nexec cat\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     bin
 }
 
@@ -1246,6 +1251,94 @@ fn a_send_to_a_live_session_wakes_it_with_a_path_never_the_body() {
 
     // Retired at delivery: the notice's path is where the file already lives.
     let mailbox = home.dir.join(".bench/mail/echo1");
+    assert!(mailbox.join("read").join(format!("{id}.md")).exists());
+}
+
+/// #415: a paste into a Claude permission prompt answers the prompt — measured on 2.1.283,
+/// it approved the pending command and the notice never became a turn. So a Claude session
+/// is pasted into only when its own registry row says it can take a turn, and a held wake
+/// leaves the mail unread in the inbox. The fake `claude` is `cat`: quiet, so today's pty
+/// gate alone would paste, and an echo of anything pasted shows up in the ring.
+#[test]
+fn a_wake_never_pastes_into_a_claude_session_waiting_on_a_prompt() {
+    let home = TestHome::claim("prompt");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start_with_fake(h, "claude");
+    let spawn = bench(
+        h,
+        &[
+            "spawn", "--agent", "claude", "--cwd", "/tmp", "--name", "c1",
+        ],
+    );
+    assert_eq!(spawn.code, 0, "stderr: {}", spawn.stderr);
+    let pid = json_of(&spawn)["pid"].as_u64().unwrap() as u32;
+    let started = bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
+    let registry = h.join(".claude/sessions");
+    fs::create_dir_all(&registry).unwrap();
+    let row = |status: serde_json::Value| {
+        let mut v = serde_json::json!({"pid": pid, "sessionId": "fake", "cwd": "/tmp",
+            "startedAt": started, "kind": "interactive"});
+        v.as_object_mut()
+            .unwrap()
+            .extend(status.as_object().unwrap().clone());
+        fs::write(registry.join(format!("{pid}.json")), v.to_string()).unwrap();
+    };
+    row(serde_json::json!({"status": "waiting", "waitingFor": "permission prompt"}));
+
+    let send = bench(h, &["mail", "send", "--to", "c1", "--body", "hello"]);
+    assert_eq!(send.code, 0, "stderr: {}", send.stderr);
+    let id = json_of(&send)["id"].as_str().unwrap().to_string();
+    let log = || fs::read_to_string(h.join(".bench/events.jsonl")).unwrap_or_default();
+
+    // Well past the 2 s quiet gate and many reactor ticks.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !log().contains("wake/held") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": "s1"}),
+    );
+    assert_eq!(resp["status"], "ok");
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let mut seen = Vec::new();
+    let mut chunk = [0u8; 4096];
+    if let Ok(n) = (&stream).read(&mut chunk) {
+        seen.extend_from_slice(&chunk[..n]);
+    }
+    drop(stream);
+    assert!(
+        !String::from_utf8_lossy(&seen).contains("You have mail"),
+        "pasted into a session waiting on a permission prompt: {}",
+        String::from_utf8_lossy(&seen)
+    );
+    let events = log();
+    assert!(!events.contains("agent/woken"), "{events}");
+    assert!(
+        events.contains("wake/held") && events.contains("permission prompt"),
+        "a held wake says why: {events}"
+    );
+    let mailbox = h.join(".bench/mail/c1");
+    assert!(
+        mailbox.join("inbox").join(format!("{id}.md")).exists(),
+        "a held wake leaves the mail unread in the inbox"
+    );
+    assert!(!mailbox.join("read").join(format!("{id}.md")).exists());
+
+    // Positive control: the same fake is woken the moment its row says idle, so the hold
+    // above was the gate and not a session that cannot be pasted into.
+    row(serde_json::json!({"status": "idle"}));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !log().contains("agent/woken") {
+        assert!(
+            Instant::now() < deadline,
+            "never woken once idle: {}",
+            log()
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
     assert!(mailbox.join("read").join(format!("{id}.md")).exists());
 }
 
@@ -2479,6 +2572,178 @@ fn a_follower_that_stops_reading_never_parks_the_daemon() {
             .iter()
             .any(|e| e["kind"] == "events/follower-dropped"),
         "the stalled follower was dropped, and that is on the record"
+    );
+}
+
+/// #356: an agent's pane lands in a drawer and badges it, with the operator's keyboard and
+/// every workspace exactly where they were; only the operator opens it; and the drawer comes
+/// back from `bench.json` after a restart.
+#[test]
+fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
+    let home = TestHome::claim("drawer");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (_, _, held) = working_bench(&daemon.socket);
+    let get = |socket: &Path| {
+        ok_data(layout(
+            socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]
+            .clone()
+    };
+    let workspaces = get(&daemon.socket)["workspaces"].clone();
+    let mut reader = follow(&daemon.socket);
+    read_frame(&mut reader);
+
+    let pushed = ok_data(layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "drawer": "notes", "surface": { "kind": "canvas", "source": { "kind": "file", "path": "/tmp/m4-proof/drawers.md" } } }),
+        None,
+        false,
+    ));
+    assert_eq!(pushed["changed"], true, "{pushed}");
+    assert_eq!(pushed["focused_pane_before"], held.as_str());
+    assert_eq!(
+        pushed["focused_pane_after"],
+        held.as_str(),
+        "the keyboard stayed"
+    );
+    let frame = read_frame(&mut reader);
+    assert_eq!(frame["event"]["kind"], "bench/changed");
+    let drawer = &frame["document"]["drawers"][0];
+    assert_eq!(drawer["name"], "notes");
+    assert_eq!(drawer["badged"], true, "the operator is told: {frame}");
+    assert_eq!(drawer["selected"], pushed["pane_created"]);
+    assert!(
+        frame["document"].get("open_drawer").is_none(),
+        "and nothing opened"
+    );
+    assert_eq!(
+        frame["document"]["workspaces"], workspaces,
+        "no workspace moved"
+    );
+
+    // The CLI speaks for an agent, and opening a drawer is the operator's focus.
+    let refused = bench(&home.dir, &["drawer", "toggle", "notes"]);
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(refused.stderr.contains("--asked"), "{}", refused.stderr);
+
+    let opened = ok_data(layout(
+        &daemon.socket,
+        "drawer/toggle",
+        serde_json::json!({ "drawer": "notes" }),
+        operator(),
+        false,
+    ));
+    assert_eq!(opened["focused_pane_after"], pushed["pane_created"]);
+    let document = get(&daemon.socket);
+    assert_eq!(document["open_drawer"], "notes");
+    assert_eq!(document["drawers"][0]["badged"], false, "opening clears it");
+    assert_eq!(
+        document["workspaces"], workspaces,
+        "opening a drawer re-lays-out nothing"
+    );
+    drop(daemon);
+
+    let daemon = DaemonGuard::start(&home.dir, None);
+    assert_eq!(
+        get(&daemon.socket),
+        document,
+        "the drawer came back from bench.json"
+    );
+    let record: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(home.dir.join(".bench").join("bench.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["version"], bench_wire::DOCUMENT_RECORD_VERSION);
+}
+
+/// #356: placement comes from `<root>/rules/placement.toml`, reread on the next verb with no
+/// restart; a file that cannot be read is logged naming the line, reported by `status`, and
+/// changes nothing — the last good table keeps placing.
+#[test]
+fn a_rules_file_applies_on_the_next_verb_and_a_bad_one_changes_nothing() {
+    let home = TestHome::claim("rules");
+    let root = home.dir.join(".bench");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    working_bench(&daemon.socket);
+    let rules = root.join("rules").join("placement.toml");
+    let open_canvas = |path: &str| {
+        ok_data(layout(
+            &daemon.socket,
+            "pane/open",
+            serde_json::json!({ "surface": { "kind": "canvas", "source": { "kind": "file", "path": path } } }),
+            None,
+            false,
+        ))
+    };
+    let drawer_panes = || {
+        let document = ok_data(layout(
+            &daemon.socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]
+            .clone();
+        document["drawers"]
+            .as_array()
+            .map_or(0, |d| d[0]["panes"].as_array().unwrap().len())
+    };
+    let status = || json_of(&bench(&home.dir, &["status"]))["rules"]["placement"].clone();
+    assert_eq!(status()["state"], "default");
+
+    open_canvas("/tmp/m4-proof/a.md");
+    assert_eq!(
+        drawer_panes(),
+        0,
+        "the built-in table keeps canvases on the bench"
+    );
+
+    fs::create_dir_all(rules.parent().unwrap()).unwrap();
+    fs::write(
+        &rules,
+        "[[place]]\nsurface = \"canvas\"\nby = \"agent\"\ntry = [{ drawer = \"notes\" }]\n",
+    )
+    .unwrap();
+    let focus = open_canvas("/tmp/m4-proof/b.md");
+    assert_eq!(drawer_panes(), 1, "the file applied without a restart");
+    assert_eq!(focus["focused_pane_before"], focus["focused_pane_after"]);
+    assert_eq!(status()["state"], "ok");
+
+    fs::write(
+        &rules,
+        "[[place]]\nsurface = \"canvas\"\ntry = [\"sideways\"]\n",
+    )
+    .unwrap();
+    open_canvas("/tmp/m4-proof/c.md");
+    assert_eq!(drawer_panes(), 2, "the last good table is still placing");
+    let rejected: Vec<_> = log_of(&root)
+        .into_iter()
+        .filter(|e| e["kind"] == "rules/rejected")
+        .collect();
+    assert_eq!(
+        rejected.len(),
+        1,
+        "logged once for this version of the file"
+    );
+    let why = rejected[0]["data"]["why"].as_str().unwrap();
+    assert!(why.contains("line 3") && why.contains("sideways"), "{why}");
+    assert_eq!(rejected[0]["data"]["file"], rules.display().to_string());
+    let reported = status();
+    assert_eq!(reported["state"], "rejected");
+    assert_eq!(reported["why"], why);
+    open_canvas("/tmp/m4-proof/d.md");
+    assert_eq!(
+        log_of(&root)
+            .iter()
+            .filter(|e| e["kind"] == "rules/rejected")
+            .count(),
+        1,
+        "not once per verb"
     );
 }
 

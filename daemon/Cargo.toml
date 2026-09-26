@@ -20,4 +20,7 @@ edition = "2024"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The operator's rules files (#356). Pinned exactly: a rules file is his, and a parser that
+# changes what it accepts under him is a silent change to his bench.
+toml = { version = "=1.1.6", default-features = false, features = ["parse", "serde", "std"] }
 time = { version = "0.3", features = ["formatting"] }
