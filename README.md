@@ -19,6 +19,7 @@ else rests on.
   → xcodebuild; needs `xcodegen`). The target echoes the built .app path.
 - `make build` / `make test` / `make lint` / `make clean`.
 
-Both paths build the same sources against the same pinned libghostty-spm (exact 1.3.1 in
-`Package.swift` AND `project.yml` — keep them in lockstep). The terminal is a real
-GhosttyKit surface; no toolchain needed, SPM fetches the prebuilt xcframework.
+Both paths build the same sources against the same local package, `Packages/GhosttyTerminal`
+(named in `Package.swift` AND `project.yml`). The terminal is a real GhosttyKit surface:
+official Ghostty, built by us at a pinned commit and fetched prebuilt by SPM, so no zig is
+needed to build helm. `docs/VENDORED.md` ("Ghostty") says how the pin moves.

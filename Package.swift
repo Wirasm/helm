@@ -10,21 +10,10 @@ let package = Package(
         .executable(name: "helm", targets: ["Helm"])
     ],
     dependencies: [
-        // Pinned EXACT on purpose: libghostty's embedding API is pre-1.0 and
-        // changes between releases. Bump deliberately, re-reading the wrapper's
-        // sources at the new tag — see docs/SPIKE.md.
-        //
-        // Currently a LOCAL PATH, not the upstream tag: helm runs ONE
-        // TerminalController with N surfaces, and upstream 1.3.1 cannot — its
-        // wakeup handlers are single slots that a second surface overwrites
-        // and any surface's teardown clears for everyone (TerminalManager's
-        // header has the full story). `scripts/patch-libghostty.sh` clones
-        // upstream at 1.3.1 into vendor/ (gitignored) and applies
-        // Patches/libghostty-spm-multi-surface-wakeup.patch; the pin is still
-        // exact, it is just expressed as tag + patch. docs/VENDORED.md records
-        // the retirement condition — go back to `exact:` the moment the patch
-        // is upstream, or to a fork URL + revision if it is not.
-        .package(path: "vendor/libghostty-spm"),
+        // Ghostty: official Ghostty built by us, plus the Swift wrapper helm uses, as a local
+        // package. The pin (a Ghostty commit and the checksum of our build of it) lives in
+        // Packages/GhosttyTerminal/Package.swift; docs/VENDORED.md says how it moves.
+        .package(path: "Packages/GhosttyTerminal"),
         // Hot reload for UI work — see docs/VENDORED.md. Both are DEBUG-only in
         // effect: InjectionNext compiles to nothing in release, Inject's
         // modifiers become no-ops. Kept permanently configured (upstream's own
@@ -49,8 +38,8 @@ let package = Package(
         // `helm-close.swift`, `helm-capture.swift`, `helm-command.swift`,
         // `helm-select.swift` and `helm-name.swift` do NOT, and that is not the oversight
         // #221 first took it for. An `import HelmWire` needs a resolved package: `swift run`
-        // demands the gitignored, unpatched `vendor/libghostty-spm` even though HelmSpool's own
-        // dependency graph never touches it, and it needs the caller's cwd to *be* this package,
+        // resolves and builds helm's whole graph, GhosttyKit's binary included, even though
+        // HelmWire's own dependency graph never touches it, and it needs the caller's cwd to *be* this package,
         // which breaks the premise `AGENTS.md` opens with — helm hosts an agent in whatever repo
         // the operator is in, not in this one. A single-file `swift tools/…swift` script has
         // neither requirement, which is the runtime boundary `AGENTS.md`'s own rule carves out:
@@ -74,7 +63,7 @@ let package = Package(
             name: "Helm",
             dependencies: [
                 "HelmWire",
-                .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+                .product(name: "GhosttyTerminal", package: "GhosttyTerminal"),
                 .product(name: "InjectionNext", package: "InjectionNext"),
                 .product(name: "Inject", package: "Inject"),
                 .product(name: "TOMLDecoder", package: "TOMLDecoder"),
@@ -152,6 +141,14 @@ let package = Package(
                 // with Archon's in the bundle.
                 .copy("Canvas/canvas-dom-stub.js")
             ]
+        ),
+        // The wrapper's own tests: the behaviour helm used to carry as patches (the wakeup
+        // fan-out, the clipboard a write lands on). Here rather than in
+        // Packages/GhosttyTerminal so the gate's one `swift test` runs them.
+        .testTarget(
+            name: "GhosttyTerminalTests",
+            dependencies: [.product(name: "GhosttyTerminal", package: "GhosttyTerminal")],
+            path: "Tests/GhosttyTerminalTests"
         ),
     ]
 )

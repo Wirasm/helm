@@ -26,7 +26,7 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | Part | Runs | Needs |
 | --- | --- | --- |
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
-| `swift` | `bash scripts/patch-libghostty.sh && swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
+| `swift` | `swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
 | `skills` | the canvas, board and post-canvas skill gates | node, zsh, python3, git |
 | `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml` or a `bench-*` skill changed | cargo |
 | `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
@@ -45,9 +45,12 @@ already over a limit carries a marker recording its value then
 "legacy (#418): …")]`); once that code is back under the limit the marker fails the gate until
 you delete it, so the markers only shrink.
 
-The patch script is first and not optional — the patched libghostty is gitignored, so a
-fresh worktree has nothing to link against. Never borrow another checkout's `vendor/`;
-that proves the other checkout builds.
+**Ghostty is official Ghostty built by us** (`Packages/GhosttyTerminal/`: the GhosttyKit
+binary pinned by commit and checksum, plus the Swift wrapper helm owns). A fresh worktree
+downloads the binary on its first build and needs nothing else. Moving to a newer Ghostty is
+`scripts/bump-ghostty.sh`, which needs zig; `docs/VENDORED.md` ("Ghostty") has the procedure.
+A `.build` from before that move fails with `missing required module 'libghostty'`: the old
+wrapper's `GhosttyKit.swiftmodule` shadows the official one. `rm -rf .build` once.
 
 **To run one suite alone, set `INJECTION_NOGENERICS=1`:**
 
@@ -386,9 +389,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   `included` (every terminal pane's cells are in the image), `excluded` (none are — their
   regions carry a printed marker in the PNG itself), `partial`, or `absent` (no terminal in the
   window). #174 was scoped expecting `excluded` always, because ghostty's surface is a
-  `CAMetalLayer` and Metal content does not come out of the layer tree — but the vendored
+  `CAMetalLayer` and Metal content does not come out of the layer tree — but the
   wrapper swaps that layer for an IOSurface-backed one once compositing starts
-  (`AppTerminalView+Lifecycle.swift:176`), and **that one does draw**. Measured, both ways: the
+  (`AppTerminalView.updateMetalLayerMetrics`), and **that one does draw**. Measured, both ways: the
   first build asked "is it a `CAMetalLayer`?" and reported `absent` about a capture full of
   legible terminal text. So read the field rather than either assumption.
   - **`windowVisible: false` means a blank canvas in the PNG is not a bug (#408).** With the
@@ -471,7 +474,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     bullet below); it is the agent's own report of being blocked, and it is the only thing outside
     the process that can see this.
   - **The launch line is pasted and then submitted separately, and it has to be.** libghostty
-    wraps *every* `sendText` in bracketed-paste markers when the shell has enabled mode 2004 —
+    wraps *every* pasted text (`paste(text:)`) in bracketed-paste markers when the shell has enabled mode 2004 —
     fish, zsh and bash all do — so a line ending in `\r` lands on the command line and simply
     sits there. Measured, and it cost the first live run: a terminal opened, a shell ran, and
     no agent ever started. `WorkbenchSpoolSpawner.send` pastes, then sends Return as a
@@ -487,10 +490,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   executable targets, and all three broke:
   - **No build.** `swift tools/helm-spool.swift` compiles one file and does not resolve
     `Package.swift`. An SPM target does — and SPM resolves the **whole** manifest before
-    building anything, so `swift run helm-spool` demands the gitignored `vendor/libghostty-spm`
-    and fails on a fresh checkout with `error: the package at '…/vendor/libghostty-spm' cannot
-    be accessed`. The spool would need `patch-libghostty.sh` and a build before an agent could
-    spawn anything.
+    building anything, so `swift run helm-spool` needs helm's whole graph, GhosttyKit's binary
+    included, fetched and built before an agent could spawn anything. (Measured by #221 when
+    that graph still needed a gitignored `vendor/` checkout: a fresh checkout failed outright.)
   - **No cwd.** `swift ~/…/helm/tools/helm-spool.swift` is a path any working directory can
     name. `swift run helm-spool` requires the cwd to be inside the package; from anywhere else
     it is `error: Could not find Package.swift in this directory or any of its parent
@@ -542,7 +544,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   - **Claude Code only, and absence is absence.** pi and codex publish no registry, so their panes
     carry no `agent` at all — never a false `idle`. A `status` this build does not model is absent
     too, and `waitingFor` still comes through.
-  - **helm cannot answer this from the pty, which is why it asks the agent.** The vendored ghostty
+  - **helm cannot answer this from the pty, which is why it asks the agent.** The ghostty
     wrapper surfaces parsed *actions* — title, bell, OSC 9;4 progress, OSC 133 command-finished,
     OSC 9/777 — and never bytes, so "this pane has produced nothing for N minutes" is not a
     question helm can ask at all, and *waiting at a prompt* versus *thinking hard* is not
