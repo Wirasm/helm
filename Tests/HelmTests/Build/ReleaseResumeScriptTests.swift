@@ -76,6 +76,12 @@ final class ReleaseResumeScriptTests: XCTestCase {
 
     /// A bundle whose executable is a copy of one of this suite's compiled stubs, so it can be run
     /// and seen by `ps` as a process running from inside the bundle.
+    ///
+    /// Never named `.app`, and sealed with an ad-hoc signature before anything runs from it (#439).
+    /// The script reads `Contents/Info.plist`, and that file alone makes macOS treat the directory
+    /// as a bundle whatever its suffix (`codesign -dv` says `Format=bundle`). A linker-signed stub
+    /// in an unsealed bundle fails verification, so launching it made CoreServicesUIAgent put a
+    /// "damaged and can't be opened" dialog on the operator's screen for every run.
     private func makeBundle(named name: String, executable: URL? = nil) throws -> URL {
         let bundle = scratch.appendingPathComponent(name)
         let macOS = bundle.appendingPathComponent("Contents/MacOS")
@@ -86,7 +92,18 @@ final class ReleaseResumeScriptTests: XCTestCase {
         let data = try PropertyListSerialization.data(
             fromPropertyList: plist, format: .xml, options: 0)
         try data.write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+        let codesign = Process()
+        codesign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        codesign.arguments = ["--sign", "-", "--force", bundle.path]
+        codesign.standardError = FileHandle.nullDevice
+        try codesign.run()
+        codesign.waitUntilExit()
+        guard codesign.terminationStatus == 0 else { throw SealFailed(bundle: name) }
         return bundle
+    }
+
+    private struct SealFailed: Error {
+        let bundle: String
     }
 
     // MARK: - Compiled stubs
@@ -182,7 +199,7 @@ final class ReleaseResumeScriptTests: XCTestCase {
     /// The control for the refusal below: a guard that refused every pid would pass that test
     /// alone, and would also make the recipe useless.
     func testFindsThePidRunningFromTheBundle() throws {
-        let bundle = try makeBundle(named: "Target.app")
+        let bundle = try makeBundle(named: "Target.helm-test")
         let pid = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
 
         let found = try call("resolve_helm_pid", bundle.path)
@@ -196,8 +213,8 @@ final class ReleaseResumeScriptTests: XCTestCase {
     /// A `--pid` from another bundle (the operator's installed helm, when the target is a test
     /// copy) is refused before anything is detached or quit.
     func testRefusesAPidRunningFromAnotherBundle() throws {
-        let target = try makeBundle(named: "Target.app")
-        let other = try makeBundle(named: "Other.app")
+        let target = try makeBundle(named: "Target.helm-test")
+        let other = try makeBundle(named: "Other.helm-test")
         let pid = try run(other.appendingPathComponent("Contents/MacOS/Helm"))
 
         let result = try bash([
@@ -217,7 +234,7 @@ final class ReleaseResumeScriptTests: XCTestCase {
     /// recipe would close every pane for nothing and then resume a second copy of it. Refused
     /// before anything detaches. The registry row lives under a scratch `HOME`.
     func testRefusesASessionThatIsNotInsideTheHelm() throws {
-        let bundle = try makeBundle(named: "Target.app")
+        let bundle = try makeBundle(named: "Target.helm-test")
         _ = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
         let elsewhere = try run(try compiled.sleeper)
         let session = "11111111-2222-3333-4444-555555555555"
@@ -241,7 +258,7 @@ final class ReleaseResumeScriptTests: XCTestCase {
     /// `cwd`. A guard that refused every session, or compared the pids the wrong way round,
     /// fails here.
     func testASessionInsideTheHelmPassesTheGuard() throws {
-        let bundle = try makeBundle(named: "Target.app", executable: try compiled.forker)
+        let bundle = try makeBundle(named: "Target.helm-test", executable: try compiled.forker)
         let helm = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
         var child = ""
         for _ in 0..<50 where child.isEmpty {
