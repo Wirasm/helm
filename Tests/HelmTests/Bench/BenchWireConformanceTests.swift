@@ -124,7 +124,8 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertEqual(
             try decode(#"{"drawer":"notes","workspace":null,"# + browser + "}"),
             .paneOpenInDrawer("notes", surface: .browser))
-        XCTAssertThrowsError(try decode(#"{"drawer":"notes","workspace":"/tmp/w","# + browser + "}"))
+        XCTAssertThrowsError(
+            try decode(#"{"drawer":"notes","workspace":"/tmp/w","# + browser + "}"))
     }
 
     /// A kind helm does not know is kept as `unsupported`, never dropped: the daemon owns the pane.
