@@ -82,7 +82,8 @@ final class WorkbenchClientModeTests: XCTestCase {
     /// A follower wired after benchd first answered still gets that document: `RootView` wires
     /// its follower in `.task`, which the client's first document usually beats.
     func testAFollowerSetLateGetsTheDocumentAlreadyDrawn() throws {
-        let rig = try rig(BenchFixture.document(path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+        let rig = try rig(
+            BenchFixture.document(path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
         var followed: [BenchDocument] = []
 
         rig.model.followDocuments { followed.append($0) }
