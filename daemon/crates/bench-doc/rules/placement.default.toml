@@ -47,8 +47,9 @@ surface = "terminal"
 by = "agent"
 try = ["new-column"]
 
-# The browser: the pane already showing it, else a new column.
+# The browser: the pane already showing it on the bench, else its drawer. The operator's open
+# shows the drawer; an agent's (or a ⌘-clicked link's) badges it. The bench never narrows for it.
 [[place]]
 surface = "browser"
 by = "any"
-try = ["existing", "new-column"]
+try = ["existing", { drawer = "browser" }]

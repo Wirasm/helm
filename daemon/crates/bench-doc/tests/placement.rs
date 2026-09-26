@@ -11,7 +11,8 @@ use bench_doc::{
 };
 use common::*;
 
-/// Every default rule places on the bench; a drawer destination here is a changed default.
+/// Every default rule but the browser's places on the bench; a drawer destination here is a
+/// changed default.
 fn place(bench: &Bench, surface: &Surface, caller: Caller) -> Placement {
     match Rules::defaults().place(bench, surface, caller) {
         Destination::Bench(placement) => placement,
@@ -194,13 +195,18 @@ fn paths_are_standardised_so_the_same_file_is_one_canvas() {
 // MARK: - The browser (#353's `placementForBrowser`)
 
 #[test]
-fn the_browser_goes_to_the_pane_already_showing_it_else_a_new_column() {
+fn the_browser_goes_to_its_drawer_unless_a_bench_pane_already_shows_it() {
     let mut bench = Bench::terminal(PaneId::mint());
-    assert_eq!(
-        place(&bench, &Surface::Browser, Caller::Operator),
-        Placement::Column
-    );
+    let drawer = Destination::Drawer(DrawerName::new("browser").unwrap());
+    for caller in [Caller::Operator, Caller::Agent] {
+        assert_eq!(
+            Rules::defaults().place(&bench, &Surface::Browser, caller),
+            drawer,
+            "{caller:?}: never a new column, so the bench never narrows for the browser"
+        );
+    }
 
+    // A browser pane already in a column, from before the drawer existed, keeps working.
     let browser = Pane::new(Surface::Browser);
     let browser_id = browser.id;
     bench
@@ -276,7 +282,7 @@ fn the_embedded_defaults_are_todays_four_rows() {
             Rule {
                 surface: SurfaceClass::Browser,
                 caller: None,
-                strategies: vec![Existing, NewColumn],
+                strategies: vec![Existing, Drawer(DrawerName::new("browser").unwrap())],
             },
         ],
     };

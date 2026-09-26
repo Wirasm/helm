@@ -119,8 +119,10 @@ final class BindingTableTests: XCTestCase {
         }
     }
 
-    func testShiftCommandBOpensTheSharedBrowser() {
-        XCTAssertEqual(match("B", [.command, .shift]), .verb(.openBrowser))
+    func testShiftCommandBTogglesTheBrowserDrawer() {
+        XCTAssertEqual(
+            match("B", [.command, .shift]),
+            .verb(.toggleDrawer(name: "browser", surface: .browser)))
     }
 
     func testUnboundCombinationsPassThrough() {
@@ -219,7 +221,9 @@ final class BindingTableTests: XCTestCase {
         XCTAssertEqual(resolve(.showTab(index: 0)), .paneShow(first))
         XCTAssertEqual(resolve(.stepFocus(.left)), .focusStep(direction: .left))
         XCTAssertEqual(resolve(.moveFocused(.up)), .paneMove(second, .up))
-        XCTAssertEqual(resolve(.openBrowser), .paneOpen(surface: .browser))
+        XCTAssertEqual(
+            resolve(.toggleDrawer(name: "browser", surface: .browser)),
+            .drawerToggle(name: "browser", surface: .browser))
         XCTAssertEqual(resolve(.activateWorkspace(index: 2)), .workspaceActivate(path: "/w/c"))
     }
 

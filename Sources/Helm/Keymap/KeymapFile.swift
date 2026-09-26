@@ -14,7 +14,8 @@ import TOMLDecoder
 /// [[bind]]
 /// key = "cmd+shift+b"       # cmd ctrl alt shift + a character, plus, left/right/up/down, keycode:N
 /// when = "anywhere"         # anywhere (the default) | terminal | away-from-terminal
-/// action = "open-browser"   # a name from docs/keymap.default.toml, with its one argument
+/// action = "drawer"         # a name from docs/keymap.default.toml, with its arguments
+/// name = "browser"
 /// hint = "browser"          # the status-bar label, optional
 /// menu = "Shared Browser"   # the menu item's title, optional
 /// ```

@@ -50,13 +50,15 @@ playwright-cli -s=<your-name> detach
 
 ## Show it to him
 
-If he has no browser pane open, one command puts it on the bench without taking his keyboard:
+The browser lives in his `browser` drawer, over the bench. One command puts it there and badges
+the drawer, without opening it or taking his keyboard:
 
 ```text
 swift <helm checkout>/tools/helm-command.swift openBrowser
 ```
 
-(⌘⇧B does the same from his side.)
+He opens it with ⌘⇧B or the drawer's capsule on the status bar, when he chooses. Tell him it is
+there; never try to open the drawer for him.
 
 ## Facts with edges
 

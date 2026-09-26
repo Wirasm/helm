@@ -117,9 +117,11 @@ enum KeyBindings {
         KeyBinding(
             .character("r"), [.command, .shift], .local(.toggleRail), hint: "archon",
             menu: "Toggle Archon Rail"),
-        // ⌘⇧B — the shared browser (#350), offered: it appears and the keyboard stays put.
+        // ⌘⇧B — the shared browser (#350) in its drawer (#356): shown over the bench and hidden
+        // again, and the bench under it never narrows. An empty drawer starts with the browser.
         KeyBinding(
-            .character("b"), [.command, .shift], .verb(.openBrowser), hint: "browser",
+            .character("b"), [.command, .shift],
+            .verb(.toggleDrawer(name: "browser", surface: .browser)), hint: "browser",
             menu: "Shared Browser"),
     ]
 

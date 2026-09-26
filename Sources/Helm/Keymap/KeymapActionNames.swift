@@ -34,7 +34,6 @@ extension VerbTemplate {
         case let .showTab(index): ("show-tab", .init(index: index + 1))
         case let .stepFocus(direction): ("focus", .init(direction: direction.rawValue))
         case let .moveFocused(direction): ("move-pane", .init(direction: direction.rawValue))
-        case .openBrowser: ("open-browser", .none)
         case let .activateWorkspace(index): ("workspace", .init(index: index + 1))
         case let .cycleWorkspace(delta): ("cycle-workspace", .init(delta: delta))
         case let .toggleDrawer(name, surface):
@@ -51,7 +50,6 @@ extension VerbTemplate {
         case "show-tab": self = .showTab(index: try a.index(name))
         case "focus": self = .stepFocus(try a.direction(BenchDirection.self, name))
         case "move-pane": self = .moveFocused(try a.direction(BenchDirection.self, name))
-        case "open-browser": try a.none(name); self = .openBrowser
         case "workspace": self = .activateWorkspace(index: try a.index(name))
         case "cycle-workspace": self = .cycleWorkspace(delta: try a.delta(name))
         case "drawer":

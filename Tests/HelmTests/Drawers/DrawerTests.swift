@@ -150,6 +150,19 @@ final class DrawerTests: XCTestCase {
         XCTAssertEqual((args["surface"] as? [String: Any])?["kind"] as? String, "browser")
     }
 
+    /// A ⌘-clicked link opens the browser in the background (#376): helm's own `pane/open`, so
+    /// the placement rules put it in the browser drawer and badge it rather than opening it.
+    func testAClickedLinkOpensTheBrowserAsHelmNotAsTheOperator() throws {
+        let rig = try rig(document(BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+
+        rig.model.openLink(try XCTUnwrap(URL(string: "https://example.com")))
+
+        let sent = try XCTUnwrap(rig.server.verbs.last)
+        XCTAssertEqual(sent["verb"] as? String, "pane/open")
+        XCTAssertEqual((sent["by"] as? [String: Any])?["kind"] as? String, "helm")
+        XCTAssertNil(sent["asked"], "the link does not ask for the keyboard")
+    }
+
     /// One capsule per drawer, lit while it is shown and dotted while it is badged.
     func testCapsulesSayWhichDrawerIsOpenAndWhichIsBadged() {
         let one = UUID()
