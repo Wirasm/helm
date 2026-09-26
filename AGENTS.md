@@ -217,6 +217,17 @@ when launched with `HELM_BENCH=daemon`, and from its own saved state otherwise.
 bash hooks/test.sh
 ```
 
+**If you touched `.archon/workflows/helm/`, run its gate:**
+
+```
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .archon/workflows/helm/.shared
+archon validate workflows helm-merge-queue
+```
+
+That is `helm-merge-queue` (#420), the prototype merge queue the orchestrator lands PRs with.
+Its README says how to run it and what it is testing. The rest of `.archon/` stays gitignored
+(#263).
+
 **`.claude/skills/helm-canvas/`'s gate (part of `skills`), alone:**
 
 ```
