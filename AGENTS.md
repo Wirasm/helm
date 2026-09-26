@@ -1179,11 +1179,11 @@ cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
 ### The helm-local skills
 
-`.claude/skills/` holds fourteen; **seven are vendored** from `mattpocock/skills` and pinned in
+`.claude/skills/` holds fifteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
-not a change. The other seven are hand-written. The first five below are helm's, the surface an agent
-hosted in helm actually uses. The last two, `bench-mail` and `bench-browser`, are benchd's, and their
-snippets run in the daemon gate's conformance suite. Four gates cover the five, all listed in *Working here* above — the two mail
+not a change. The other eight are hand-written. The first five below are helm's, the surface an agent
+hosted in helm actually uses. The last three, `bench-mail`, `bench-browser` and `bench-sessions`, are
+benchd's, and their snippets run in the daemon gate's conformance suite. Four gates cover the five, all listed in *Working here* above — the two mail
 skills share one, because the send and the mailbox listing are documented identically in each.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
@@ -1198,6 +1198,8 @@ skills share one, because the send and the mailbox listing are documented identi
 - **`bench-mail`** — sending and reading mail through benchd's mailroom, and finding who can be mailed.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
   start`, drive it with `playwright-cli attach`, and put it in front of him with `openBrowser`.
+- **`bench-sessions`** — who is working in a workspace (`bench sessions --all`), and what any of
+  them did (`bench log <id>`, #421), read from the transcript without mailing the agent.
 
 ### The two helm-local subagents
 

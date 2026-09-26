@@ -44,6 +44,9 @@ fn usage() -> &'static str {
      \x20                                         cwd's): helm panes, bench sessions, --bg jobs,\n\
      \x20                                         running subagents, and finished hosted sessions\n\
      \x20     sessions dismiss <id> --harness <h> hide a finished row until it finishes again\n\
+     \x20     log <session id | transcript path>  a Claude or pi session's prompts, replies, tool\n\
+     \x20         [-n N] [--since 30m|2h|1d|<time>] calls and errors, read from its transcript with no\n\
+     \x20         [--json]                        daemon; the last 40 unless -n says otherwise\n\
      \x20     attach <session>                    raw relay to a session's pty (Ctrl-\\ detaches)\n\
      \x20     close <session>                     drain-then-die the session\n\
      \x20     resume <session>                    re-enter an exited session's runtime state\n\
@@ -82,9 +85,11 @@ fn run() -> i32 {
     let mut verb: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut flags: Vec<(String, String)> = Vec::new();
-    let mut since: u64 = 0;
+    let mut since: Option<String> = None;
+    let mut count: Option<String> = None;
     let mut follow = false;
     let mut all = false;
+    let mut json_out = false;
 
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -92,10 +97,16 @@ fn run() -> i32 {
                 Some(v) => suite_flag = Some(v),
                 None => return refuse("--suite needs a name"),
             },
-            "--since" => match argv.next().and_then(|v| v.parse::<u64>().ok()) {
-                Some(n) => since = n,
-                None => return refuse("--since needs a sequence number"),
+            // `events` reads a sequence number here, `log` a duration or a time.
+            "--since" => match argv.next() {
+                Some(v) => since = Some(v),
+                None => return refuse("--since needs a value"),
             },
+            "-n" => match argv.next() {
+                Some(v) => count = Some(v),
+                None => return refuse("-n needs a count"),
+            },
+            "--json" => json_out = true,
             "--follow" => follow = true,
             "--all" => all = true,
             "--agent" | "--cwd" | "--prompt-file" | "--model" | "--effort" | "--rows"
@@ -137,6 +148,22 @@ fn run() -> i32 {
     if all && verb != "sessions" {
         return refuse("--all is for `sessions`");
     }
+    if (json_out || count.is_some()) && verb != "log" {
+        return refuse("-n and --json are for `log`");
+    }
+    if verb == "log" {
+        return log(
+            positional.first(),
+            since.as_deref(),
+            count.as_deref(),
+            json_out,
+        );
+    }
+    let since: u64 = match since.as_deref().map(str::parse::<u64>) {
+        None => 0,
+        Some(Ok(n)) => n,
+        Some(Err(_)) => return refuse("--since needs a sequence number"),
+    };
     if verb == "sessions" && all && !positional.is_empty() {
         return refuse(
             "--all lists sessions; `bench sessions dismiss <id> --harness <h>` takes no --all",
@@ -343,6 +370,115 @@ fn run() -> i32 {
         follow_events(cli)
     } else {
         simple(cli)
+    }
+}
+
+/// `bench log`: reads the transcript file directly — no socket, so it works with the daemon
+/// down. The readers and their fail-loudly contract live in `bench_sessions::transcript`.
+fn log(arg: Option<&String>, since: Option<&str>, count: Option<&str>, json_out: bool) -> i32 {
+    use bench_sessions::transcript;
+    let Some(arg) = arg else {
+        return refuse(
+            "log needs a session id or transcript path — `bench sessions --all` lists them",
+        );
+    };
+    let n = match count.map(str::parse::<usize>) {
+        None => 40,
+        Some(Ok(n)) => n,
+        Some(Err(_)) => return refuse("-n needs a count"),
+    };
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let since_ms = match since.map(|s| transcript::parse_since(s, now_ms)) {
+        None => None,
+        Some(Ok(ms)) => Some(ms),
+        Some(Err(why)) => return refuse(&why),
+    };
+    let home = match std::env::var("HOME") {
+        Ok(h) => PathBuf::from(h),
+        Err(_) => return refuse("HOME is not set; bench log cannot find transcripts"),
+    };
+    // A relative path means the caller's cwd.
+    let arg = if arg.contains('/') {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(arg)
+            .display()
+            .to_string()
+    } else {
+        arg.clone()
+    };
+    let located = match transcript::locate(&home, &arg) {
+        Ok(l) => l,
+        Err(why) => return refuse(&why),
+    };
+    let read = match transcript::read(&located) {
+        Ok(t) => t,
+        Err(why) => return fail(&why),
+    };
+    let (entries, total) = transcript::tail(read.entries, since_ms, n);
+    let path = located.path.display().to_string();
+    for p in &read.unreadable {
+        eprintln!("bench: {path}:{}: skipped, {}", p.line, p.why);
+    }
+    if json_out {
+        let out = json!({
+            "harness": located.harness,
+            "id": located.id,
+            "path": path,
+            "total": total,
+            "returned": entries.len(),
+            "entries": entries,
+            "unreadable": read.unreadable,
+        });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        return 0;
+    }
+    println!("{} {}  {path}", located.harness.name(), located.id);
+    if total > entries.len() {
+        println!(
+            "… {} earlier entries (-n to see more)",
+            total - entries.len()
+        );
+    }
+    for e in &entries {
+        let head = format!(
+            "{}  {:<5}  ",
+            transcript::display_time(e.at_ms),
+            kind_name(e.kind)
+        );
+        let text = match &e.tool {
+            Some(tool) => format!("{tool}  {}", e.text),
+            None => e.text.clone(),
+        };
+        // A pasted report or a task notification can run to a hundred lines; the tail stays
+        // readable by cutting each entry, and --json carries the whole text.
+        const MAX_LINES: usize = 12;
+        let lines: Vec<&str> = text.lines().collect();
+        println!("{head}{}", lines.first().copied().unwrap_or(""));
+        let pad = " ".repeat(head.chars().count());
+        for line in lines.iter().skip(1).take(MAX_LINES - 1) {
+            println!("{pad}{line}");
+        }
+        if lines.len() > MAX_LINES {
+            println!(
+                "{pad}… {} more lines (--json has them)",
+                lines.len() - MAX_LINES
+            );
+        }
+    }
+    0
+}
+
+fn kind_name(kind: bench_sessions::transcript::Kind) -> &'static str {
+    use bench_sessions::transcript::Kind;
+    match kind {
+        Kind::User => "user",
+        Kind::Agent => "agent",
+        Kind::Tool => "tool",
+        Kind::Error => "error",
     }
 }
 
