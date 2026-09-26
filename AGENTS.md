@@ -42,7 +42,7 @@ naming it, never a silent skip. The path rules live only in `scripts/check.sh`
 clippy's cognitive complexity 25 or 100 lines. Each finding names the file, the line, the
 declaration and the number. **Split the code; never add a marker to new code.** Code that was
 already over a limit carries a marker recording its value then
-(`// swiftlint:disable:next … - legacy (#418): 23, limit 15`, or `#[expect(clippy::…, reason =
+(`// swiftlint:disable:next … - legacy (#418): 24, limit 15`, or `#[expect(clippy::…, reason =
 "legacy (#418): …")]`); once that code is back under the limit the marker fails the gate until
 you delete it, so the markers only shrink.
 
