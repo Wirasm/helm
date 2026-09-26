@@ -270,7 +270,7 @@ private final class HelmWindow {
         NSApp.setActivationPolicy(.accessory)
 
         let registry = ptys
-        terminals = TerminalManager(backend: { registry.next() })
+        terminals = TerminalManager(command: { registry.next() })
         workbench = WorkbenchModel(terminals: terminals)
 
         // Restore rather than open, so the ids are known before anything mounts — which is
@@ -359,22 +359,21 @@ private final class HelmWindow {
     func pty(of pane: Pane.ID) throws -> Pty {
         let session = try XCTUnwrap(
             terminals.sessions.first { $0.id == pane }, "no session for pane \(pane)")
-        let backend: InMemoryTerminalSession? =
-            if case let .inMemory(memory) = session.hostView.configuration.backend {
-                memory
-            } else {
-                nil
-            }
-        let memory = try XCTUnwrap(backend, "session \(pane) is not on an in-memory backend")
         let pty = try XCTUnwrap(
-            ptys.all.first { $0.session === memory }, "no pty registered for \(pane)")
+            ptys.all.first { $0.command == session.hostView.configuration.command },
+            "no pty registered for \(pane)")
         // **The one precondition every keystroke assertion in this file rests on**, checked
         // here because this accessor is the single door all of them go through. A surface that
         // never came up and a keyboard that went to the wrong pane are the same red without
         // it — see `MissingTerminalSurface`, and #192, which that ambiguity cost two days.
         let budget: TimeInterval = 5
-        guard Eventually.holds(within: budget, { memory.hasSurface }) else {
+        guard Eventually.holds(within: budget, { session.status == .running }) else {
             throw MissingTerminalSurface(pane: pane, waited: budget)
+        }
+        // The surface is up; the recorder in it must also be in raw mode before anything is
+        // typed at it, or the keystroke waits in the line discipline for a newline.
+        guard Eventually.holds(within: budget, { pty.isReady }) else {
+            throw RecorderNeverStarted(pane: pane, pty: pty, waited: budget)
         }
         return pty
     }
@@ -463,38 +462,51 @@ private final class HelmWindow {
 
 // MARK: - Ptys
 
-/// The host side of one in-memory surface: everything the terminal has written toward its
-/// shell. For an exec surface these same bytes go into a pty file descriptor.
-final class Pty: @unchecked Sendable, CustomDebugStringConvertible {
-    private let lock = NSLock()
-    private var bytes = Data()
-
-    /// Retained because `TerminalSurfaceOptions` is the only other owner and a test wants to
-    /// outlive a session teardown.
-    private(set) var session: InMemoryTerminalSession!
+/// The program side of one test surface: every byte the terminal wrote toward it.
+///
+/// Each test surface runs this recorder instead of a login shell. It puts its tty in raw mode,
+/// so a keystroke arrives as its own bytes instead of waiting for a line, marks itself ready,
+/// and copies everything it reads into a file this object reads back. A real pty, the same
+/// exec path the operator's panes take — nothing in the wrapper is faked for the test.
+final class Pty: CustomDebugStringConvertible {
+    private let directory: URL
+    /// What the surface runs. Also this recorder's identity: `pty(of:)` matches a session to
+    /// its recorder by the command its surface was configured with.
+    let command: String
 
     init() {
-        session = InMemoryTerminalSession(
-            write: { [weak self] data in self?.append(data) },
-            resize: { _ in }
-        )
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("helm-pty-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appendingPathComponent("record")
+        let body = """
+            #!/bin/sh
+            stty raw -echo
+            : > '\(directory.path)/ready'
+            exec cat > '\(directory.path)/received'
+            """
+        try? body.write(to: script, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: script.path)
+        command = script.path
+    }
+
+    deinit { try? FileManager.default.removeItem(at: directory) }
+
+    /// The recorder is running with its tty in raw mode. A keystroke typed before this can
+    /// sit in the line discipline's canonical buffer and never reach `cat`.
+    var isReady: Bool {
+        FileManager.default.fileExists(atPath: directory.appendingPathComponent("ready").path)
     }
 
     var received: String {
-        lock.lock()
-        defer { lock.unlock() }
-        return String(decoding: bytes, as: UTF8.self)
+        let data = (try? Data(contentsOf: directory.appendingPathComponent("received"))) ?? Data()
+        return String(decoding: data, as: UTF8.self)
     }
 
     var debugDescription: String {
         let text = received
         return text.isEmpty ? "<nothing>" : String(reflecting: text)
-    }
-
-    private func append(_ data: Data) {
-        lock.lock()
-        bytes.append(data)
-        lock.unlock()
     }
 }
 
@@ -503,9 +515,9 @@ final class Pty: @unchecked Sendable, CustomDebugStringConvertible {
 private final class PtyRegistry {
     private(set) var all: [Pty] = []
 
-    func next() -> TerminalSessionBackend {
+    func next() -> String? {
         let pty = Pty()
         all.append(pty)
-        return .inMemory(pty.session)
+        return pty.command
     }
 }

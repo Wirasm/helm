@@ -58,17 +58,17 @@ final class TerminalManager: ObservableObject {
 
     private var nextOrdinal = 1
 
-    /// What each new session's surface is wired to. A factory rather than a value because
-    /// an in-memory backend carries per-session state; see `TerminalSession.init`.
-    private let backend: @MainActor () -> TerminalSessionBackend
+    /// What each new session's surface runs instead of the login shell. A factory rather than
+    /// a value because a test gives every session its own recorder; see `TerminalSession.init`.
+    private let command: @MainActor () -> String?
 
     /// Internal (not private) so tests can build isolated managers; the app
-    /// itself only ever uses `.shared`, which is `.exec` — a real login shell.
+    /// itself only ever uses `.shared`, whose command is `nil` — a real login shell.
     init(
-        backend: @escaping @MainActor () -> TerminalSessionBackend = { .exec },
+        command: @escaping @MainActor () -> String? = { nil },
         surfaces: SurfaceRegistry = SurfaceRegistry()
     ) {
-        self.backend = backend
+        self.command = command
         self.surfaces = surfaces
         controller = TerminalSession.makeController()
         surfaces.register(TerminalPaneKind(manager: self))
@@ -118,7 +118,7 @@ final class TerminalManager: ObservableObject {
         for id in ids {
             let session = TerminalSession(
                 id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
-                controller: controller, backend: backend())
+                controller: controller, command: command())
             nextOrdinal += 1
             session.manager = self
             surfaces.adopt(session, as: id, kind: .terminal, in: workspacePath)
@@ -172,7 +172,7 @@ final class TerminalManager: ObservableObject {
     func newTerminal(in workspacePath: WorkspacePath) -> TerminalSession {
         let session = TerminalSession(
             ordinal: nextOrdinal, workspacePath: workspacePath, controller: controller,
-            backend: backend())
+            command: command())
         nextOrdinal += 1
         session.manager = self
         surfaces.adopt(session, as: session.id, kind: .terminal, in: workspacePath)

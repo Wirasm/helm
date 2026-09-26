@@ -393,9 +393,9 @@ package struct CaptureReport: Codable, Equatable {
 /// **`.included` is earned per capture, never assumed.** #174 scoped this feature expecting the
 /// answer to always be no — *"the terminal is a Metal-layer NSView, so Metal content does not
 /// come out of `CALayer.render(in:)`"* — and that premise is right about `CAMetalLayer` and
-/// wrong about what helm actually runs. The vendored wrapper says so itself: *"the render
+/// wrong about what helm actually runs. The wrapper says so itself: *"the render
 /// pipeline can swap `self.layer` to an IOSurfaceLayer for IOSurface-backed compositing"*
-/// (`AppTerminalView+Lifecycle.swift:176`). An IOSurface-backed layer has real `contents`, and
+/// (`AppTerminalView.updateMetalLayerMetrics` in `Packages/GhosttyTerminal`). An IOSurface-backed layer has real `contents`, and
 /// the layer tree draws it.
 ///
 /// So the question is asked of **each surface at capture time** rather than answered once here.

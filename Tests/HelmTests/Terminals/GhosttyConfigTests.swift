@@ -144,8 +144,8 @@ final class GhosttyConfigTests: XCTestCase {
     /// #297: a mouse selection in a pane must not replace the system clipboard.
     ///
     /// The bug this pins is one layer below helm and invisible from it: ghostty's default
-    /// `copy-on-select = true` targets the *selection* clipboard, the vendored AppKit
-    /// wrapper claims macOS has one and then writes every selection to
+    /// `copy-on-select = true` targets the *selection* clipboard, and the AppKit wrapper
+    /// claimed macOS has one and then wrote every selection to
     /// `NSPasteboard.general` regardless. So dragging across a line of terminal output
     /// silently destroyed whatever the operator had copied somewhere else, and the ⌘V that
     /// followed pasted terminal text — which reads exactly like "paste is broken".

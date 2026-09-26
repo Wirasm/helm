@@ -18,20 +18,19 @@ import XCTest
 /// such threads, seven unreaped children, 398% CPU, 586 CPU-hours. Only a restart clears it,
 /// and every click adds another one.
 ///
-/// The fix is one expression in the vendored wrapper's action callback
-/// (`Patches/libghostty-spm-open-url-handled.patch`), and it claims ownership only when a
-/// delegate actually took the URL:
+/// The fix is one expression in the wrapper's action callback
+/// (`TerminalController+Callbacks.swift` in `Packages/GhosttyTerminal`), and it claims
+/// ownership only when a delegate actually took the URL:
 ///
 ///     action.tag == GHOSTTY_ACTION_OPEN_URL
 ///         && bridge.delegate is any TerminalSurfaceOpenURLDelegate
 ///
 /// **So the conformance below is load-bearing, which is the whole reason this file exists.**
-/// `scripts/patch-libghostty.sh` greps for a marker symbol, which proves the patch was
-/// *applied* and says nothing about whether its condition can still be met. Drop
+/// The callback's condition reads a conformance, and nothing checks that conformance at
+/// compile time. Drop
 /// `TerminalSurfaceOpenURLDelegate` from `TerminalSession` and nothing fails to compile:
 /// the callback simply reports `false` again, ghostty resumes opening every link itself, and
-/// the leak is back with no diagnostic anywhere. That is a silent regression a marker grep
-/// cannot see, so it is pinned here instead.
+/// the leak is back with no diagnostic anywhere, so it is pinned here.
 ///
 /// What is deliberately *not* here: the callback itself. `TerminalCallbackBridge` is internal
 /// to `GhosttyTerminal` and the callback needs live `ghostty_app_t`/`ghostty_surface_t`
@@ -42,14 +41,14 @@ import XCTest
 /// grant no agent has (AGENTS.md). The check is: ⌘-click a link, then
 /// `ps -M -p <helm pid>` for a new thread pinned near 57%, and
 /// `ps -Ao pid,ppid,stat | awk '$2==<helm pid> && $3 ~ /Z/'` for a new zombie. Neither should
-/// appear, and on a build without this patch both do.
+/// appear, and on a build without this fix both do.
 final class TerminalOpenURLOwnershipTests: XCTestCase {
-    /// The condition the patch tests at runtime, asserted against the type helm actually
+    /// The condition the callback tests at runtime, asserted against the type helm actually
     /// installs as the surface delegate.
     func testTerminalSessionTakesOpenURLSoGhosttyDoesNotOpenItToo() {
         XCTAssertTrue(
             (TerminalSession.self as Any.Type) is (any TerminalSurfaceOpenURLDelegate.Type),
-            "TerminalSession must conform to TerminalSurfaceOpenURLDelegate: the vendored callback claims open_url only when it does, and without it ghostty falls back to /usr/bin/open and leaks a spinning thread per ⌘-click"
+            "TerminalSession must conform to TerminalSurfaceOpenURLDelegate: the wrapper callback claims open_url only when it does, and without it ghostty falls back to /usr/bin/open and leaks a spinning thread per ⌘-click"
         )
     }
 
@@ -60,13 +59,13 @@ final class TerminalOpenURLOwnershipTests: XCTestCase {
         XCTAssertNotEqual(
             GHOSTTY_ACTION_OPEN_URL,
             GHOSTTY_ACTION_SET_TITLE,
-            "the patch keys on this tag; if the constants ever collapse the condition stops discriminating"
+            "the callback keys on this tag; if the constants ever collapse the condition stops discriminating"
         )
     }
 
     /// Taking the action is not the same as opening the URL, and the difference is the point
     /// of the allowlist. helm drops a scheme outside it and *still* owns the action — before
-    /// the patch ghostty opened the dropped URL anyway, which made `TerminalURLPolicy`
+    /// the fix ghostty opened the dropped URL anyway, which made `TerminalURLPolicy`
     /// advisory rather than the security boundary `TerminalSession` documents it as.
     func testADroppedSchemeIsStillHelmsDecisionToMake() {
         XCTAssertNil(

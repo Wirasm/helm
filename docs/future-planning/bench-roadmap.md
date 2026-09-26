@@ -399,13 +399,15 @@ helm restarting.
     session, against 33 MB for alacritty.
   - **Build, with no zig in the gate:** a stripped, hash-pinned `libghostty-vt.a` per
     platform (macOS arm64 2.0 MB, x86_64 Linux 2.7 MB), built once per Ghostty bump by a
-    script that needs zig 0.15.x. It is linked through a Cargo `links` override, so the
+    script that needs zig (0.15.x at the spike). It is linked through a Cargo `links` override, so the
     crate's `build.rs` never runs. A 15-line `build.rs` in a crate of ours passes the
     absolute path, and the crate is not forked. Replayed output was byte-identical to the
     zig build.
-  - **Pin to helm's Ghostty**, the commit in `vendor/libghostty-spm/Ghostty.ref`
-    (`35e1a016`), not the crate's own `a887df42`. Without the override, the crate silently
-    fetches its own pin.
+  - **Pin to helm's Ghostty**, `ghosttyCommit` in `Packages/GhosttyTerminal/Package.swift`
+    (`35e1a016` when the spike ran; `6301810a` since 2026-09-26), not the crate's own
+    `a887df42`. Without the override, the crate silently fetches its own pin. Build it from
+    the checkout `scripts/bump-ghostty.sh` makes; `docs/VENDORED.md` ("Ghostty") keeps the
+    coupling. Ghostty now needs zig 0.16, where the spike used 0.15.2.
   - **Every Ghostty bump** moves both pins together, and must check the crate's checked-in
     bindings against the new header. A changed struct layout compiles and misbehaves.
   - **The archives live in the repo** (decided 2026-09-25, the operator delegated): plain
@@ -413,7 +415,7 @@ helm restarting.
     gate and CI stay Rust-only and need no network. A release asset fetched by script was
     the alternative: it keeps binaries out of git, at the cost of a network fetch on first
     build and one more script to maintain. A Ghostty bump is agent work, not the operator's:
-    one script rebuilds both archives with zig 0.15.x, then the agent commits them with their
+    one script rebuilds both archives with zig, then the agent commits them with their
     new sums and checks the crate's bindings against the new header.
 - **Design rules from the spikes, whichever engine:**
   1. Mid synchronized update (mode 2026), serve the last complete frame. Read naively,

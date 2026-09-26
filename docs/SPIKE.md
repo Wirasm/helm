@@ -13,7 +13,7 @@ before helm gets a GitHub repo or any more features.
 3. ✅ Window resize reflows the terminal correctly.
 4. ✅ Shell exit flips the pane to the fallback instead of a dead surface.
 
-The spike is COMPLETE. Pinned: libghostty-spm 1.3.1 (revision b0930320).
+The spike is COMPLETE. Pinned then: libghostty-spm 1.3.1 (revision b0930320); see "Pin change 2026-09-26" below for today.
 
 **Non-goals for the spike**: tabs/splits, config UI, selection/clipboard polish,
 app bundling/entitlements (that's the XcodeGen graduation, after).
@@ -176,6 +176,13 @@ sh tools/kitty-icat-test.sh
 
 Record the observed outcome here when a human runs it. Same square in Ghostty.app
 or kitty makes a good positive control.
+
+## Pin change 2026-09-26 — official Ghostty, built by us
+
+Superseded everything below about the pin. helm no longer uses libghostty-spm: GhosttyKit is
+official Ghostty built from a pinned commit, and the Swift wrapper is helm's own copy in
+`Packages/GhosttyTerminal`. The three local patches are gone because the wrapper already
+carries each fix. docs/VENDORED.md ("Ghostty") is the current record.
 
 ## Pin change 2026-07-27 — tag 1.3.1 + a local patch, for one app runtime
 

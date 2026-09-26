@@ -292,9 +292,6 @@ detached_run() {
   # goes to its own file, so this log stays short enough to read from a phone.
   local build_log="${detached_log%/log}/build.log"
   log "step 1: make release (output in $build_log)"
-  # A fresh worktree has no patched libghostty to link against; on a patched one this is instant.
-  timeout 900 bash "$repo/scripts/patch-libghostty.sh" >>"$build_log" 2>&1 ||
-    { tail -30 "$build_log"; fail "scripts/patch-libghostty.sh"; }
   timeout 1800 make -C "$repo" release >>"$build_log" 2>&1 || { tail -30 "$build_log"; fail "make release"; }
   local product="$repo/.build/DerivedData/Build/Products/Release/Helm.app" sha
   sha="$(/usr/libexec/PlistBuddy -c "Print :HelmBuildSHA" "$product/Contents/Info.plist" 2>/dev/null)" ||

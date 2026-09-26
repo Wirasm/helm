@@ -103,10 +103,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .build
-          key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'scripts/patch-libghostty.sh', 'Patches/**') }}
+          key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Packages/GhosttyTerminal/Package.swift') }}
           restore-keys: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-
 
-      # Patch, build, test, xcodegen. Runs even when lint failed, so one push shows both.
+      # Build, test, xcodegen. Runs even when lint failed, so one push shows both.
       #
       # HELM_CHECK_HEADLESS=1 skips TerminalKeyboardTests and WorkbenchFocusRoutingTests:
       # they need a real ghostty surface, and a surface needs an ACTIVE display (#253). A CI
@@ -126,7 +126,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .build
-          key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'scripts/patch-libghostty.sh', 'Patches/**') }}
+          key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Packages/GhosttyTerminal/Package.swift') }}
 
   skills:
     name: skill gates
