@@ -660,6 +660,21 @@ as "$home" "$ON_TTY" claude-session-start tty-session-0001
 	ok "a session on a terminal nothing hosts — Ghostty, Terminal.app — claims nothing" ||
 	bad "claim: an undeclared session claimed: $(ls -R "$home/.helm" | head -3)"
 
+# Before Claude Code has published its registry row the hook has only its parent to ask about,
+# which is the Claude process itself — the hook runs detached, so its OWN terminal says nothing.
+# Staged with no registry at all and the hook run under a real pty, so the claim can only come
+# from that fallback; without it there is no pid to ask about and nothing is claimed.
+home=$(fresh)
+NO_ROWS=$(fresh)
+mkdir -p "$NO_ROWS/sessions"
+printf '{"session_id":"not-registered-0003","cwd":"/tmp/who-claims"}' >"$SANDBOX/payload.json"
+/usr/bin/script -q /dev/null /bin/sh -c "env -u HELM_MAIL_DIR -u HELM_DEFAULTS_SUITE -u BENCH_SESSION -u HELM_MAIL_OFF \
+	HOME='$home' CLAUDE_CONFIG_DIR='$NO_ROWS' HELM_PANE=620BCA56-782F-4230-AFD5-BFAA30D1BF18 \
+	'$HOOKS/helm-mail.mjs' claim <'$SANDBOX/payload.json'" </dev/null >/dev/null 2>&1
+[ -n "$(ls "$home/.helm/mail" 2>/dev/null)" ] &&
+	ok "with no registry row yet, the hook asks about its parent, which holds the pane's terminal" ||
+	bad "claim: a hosted session with no registry row yet claimed nothing — the parent fallback is gone"
+
 # Delivery follows the same rule, so it is not a scan of every mailbox on every prompt of every
 # session on the machine. The negative control: the SAME session, with mail waiting, gets it the
 # moment it is declared again.

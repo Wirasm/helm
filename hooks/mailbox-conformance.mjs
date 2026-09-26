@@ -103,6 +103,11 @@ const SUITE_SOURCE = path.join(REPO, "Sources", "HelmWire", "DefaultsSuite.swift
 // The one Swift WRITER into the mailbox: `CanvasNoteCourier` sends the operator's canvas note.
 // It is here for `OPERATOR_SENDER` — see `checkTheOperatorSenderAgrees`.
 const COURIER_SOURCE = path.join(REPO, "Sources", "Helm", "Canvas", "CanvasNoteCourier.swift");
+// The two HOSTS whose declaration makes a session claim a mailbox (#417): helm names the pane
+// variable here, benchd declares the session variable into every session it spawns. Neither is a
+// mailbox file, and a rename on either side would silently stop every hosted agent claiming.
+const PANE_SOURCE = path.join(REPO, "Sources", "Helm", "Terminals", "PaneEnvironment.swift");
+const BENCHD_SOURCE = path.join(REPO, "daemon", "crates", "benchd", "src", "main.rs");
 
 // ── scratch space ────────────────────────────────────────────────────────────────────────
 
@@ -1019,7 +1024,7 @@ function livenessCases() {
  * Everything a caller can vary about a run, so `selfChecks` can point the whole suite at a
  * mutated copy of any one source and require it to go red.
  */
-async function runConformance({ hooksSource, piSource, handleSource, ownerSource, courierSource, suiteSource }) {
+async function runConformance({ hooksSource, piSource, handleSource, ownerSource, courierSource, suiteSource, paneSource, benchdSource }) {
 	// The extractions are NOT in a group: if one of them cannot find its implementation there is
 	// nothing to compare at all, and carrying on would be the silent zero itself.
 	const hooks = await loadHooks(hooksSource);
@@ -1037,6 +1042,7 @@ async function runConformance({ hooksSource, piSource, handleSource, ownerSource
 	group("constants", () => checkTheConstantsAgree(hooks, pi));
 	group("the mail root", () => checkTheMailRootAgrees(hooks, pi, mailRule, suiteRule));
 	group("who claims", () => checkWhoClaimsAgrees(hooks, pi));
+	group("the hosts' declarations", () => checkTheHostsDeclareWhatTheWritersRead(hooks, pi, paneSource, benchdSource));
 	group("slug/tail", () => checkSlugAndTailAgree(hooks, pi));
 	group("deriveHandle", () => checkDerivationAgrees(hooks, pi));
 	group("the handle alphabet", () => checkSwiftAcceptsWhatTheWritersEmit(hooks, pi, rules));
@@ -1117,6 +1123,26 @@ function checkWhoClaimsAgrees(hooks, pi) {
 			// Already gone; `sleep 5` bounds it either way.
 		}
 	}
+}
+
+/**
+ * The names the writers wait for are the names the hosts actually declare (#417). Read out of
+ * helm's Swift and benchd's Rust rather than restated: a host renaming its variable would leave
+ * both writers agreeing with each other and every hosted agent without a mailbox.
+ */
+function checkTheHostsDeclareWhatTheWritersRead(hooks, pi, paneSource, benchdSource) {
+	const pane = paneSource.match(/static let paneVariable = "([^"]+)"/)?.[1];
+	check(Boolean(pane), "PaneEnvironment.swift still declares `static let paneVariable = \"…\"`");
+	check(
+		hooks.PANE_ENV === pane && pi.PANE_ENV === pane,
+		`the pane variable both writers read is the one helm declares (helm ${pane}, hooks ${hooks.PANE_ENV}, pi ${pi.PANE_ENV})`,
+	);
+	const sessions = [...benchdSource.matchAll(/\("([A-Z_]+)"\.to_string\(\), id\.clone\(\)\)/g)].map((m) => m[1]);
+	check(sessions.length >= 2, `benchd declares its session id into every spawn path (found ${sessions.length})`);
+	check(
+		sessions.every((name) => name === hooks.BENCH_SESSION_ENV && name === pi.BENCH_SESSION_ENV),
+		`the session variable both writers read is the one benchd declares (benchd ${[...new Set(sessions)].join(",")}, hooks ${hooks.BENCH_SESSION_ENV}, pi ${pi.BENCH_SESSION_ENV})`,
+	);
 }
 
 /** Run one check group. A throw is that group's failure and nobody else's. */
@@ -2043,7 +2069,9 @@ async function selfChecks() {
 	// Every mutation is this, with one source replaced — spelled once, so adding a source to the
 	// harness cannot leave a mutation quietly running against the wrong set. It did have to be
 	// spelled out in every entry, and #285 added the sixth.
-	const pristine = { hooksSource, piSource, handleSource, ownerSource, courierSource, suiteSource };
+	const paneSource = fs.readFileSync(PANE_SOURCE, "utf8");
+	const benchdSource = fs.readFileSync(BENCHD_SOURCE, "utf8");
+	const pristine = { hooksSource, piSource, handleSource, ownerSource, courierSource, suiteSource, paneSource, benchdSource };
 	const mutations = [
 		{
 			what: "a function the harness names is gone from hooks/helm-mail.mjs",
@@ -2072,6 +2100,16 @@ async function selfChecks() {
 			what: "pi claims on HELM_PANE alone, without asking for a terminal (#417)",
 			sources: { ...pristine, piSource: piSource.replace("return declared && terminal() !== \"\";", "return declared;") },
 			expect: /claimsAMailbox — /,
+		},
+		{
+			what: "helm renames the pane variable its writers wait for (#417)",
+			sources: { ...pristine, paneSource: paneSource.replace('static let paneVariable = "HELM_PANE"', 'static let paneVariable = "HELM_PANE_ID"') },
+			expect: /the pane variable both writers read is the one helm declares/,
+		},
+		{
+			what: "benchd renames the session variable its writers wait for (#417)",
+			sources: { ...pristine, benchdSource: benchdSource.replaceAll('("BENCH_SESSION".to_string(), id.clone())', '("BENCHD_SESSION".to_string(), id.clone())') },
+			expect: /the session variable both writers read is the one benchd declares/,
 		},
 		{
 			what: "the hook's slug emits a character no mailbox directory can carry",
@@ -2257,6 +2295,8 @@ async function main() {
 			ownerSource: fs.readFileSync(OWNER_SOURCE, "utf8"),
 			courierSource: fs.readFileSync(COURIER_SOURCE, "utf8"),
 			suiteSource: fs.readFileSync(SUITE_SOURCE, "utf8"),
+			paneSource: fs.readFileSync(PANE_SOURCE, "utf8"),
+			benchdSource: fs.readFileSync(BENCHD_SOURCE, "utf8"),
 		});
 	} catch (error) {
 		bad(`the harness could not run: ${error.message}`);
