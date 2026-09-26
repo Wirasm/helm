@@ -581,7 +581,8 @@ shelve "$root" twice-2222 "$week_ago"
 mkdir -p "$root/.retired/twice-2222" && printf 'earlier\n' >"$root/.retired/twice-2222/marker"
 shelve "$root" young-3333 "$recent"
 shelve "$root" live-4444 ""
-OUT=$(HELM_MAIL_DIR="$root" node "$HOOKS/helm-mail.mjs" archive </dev/null 2>&1)
+# HELM_MAIL_OFF is set on purpose: it switches sessions off, not a command a person typed.
+OUT=$(HELM_MAIL_OFF=1 HELM_MAIL_DIR="$root" node "$HOOKS/helm-mail.mjs" archive </dev/null 2>&1)
 [ "$(ls "$root" | tr '\n' ' ')" = "live-4444 young-3333 " ] &&
 	ok "the archive verb moves only mailboxes retired over seven days: $OUT" ||
 	bad "archive: the root holds $(ls "$root" | tr '\n' ' ')"

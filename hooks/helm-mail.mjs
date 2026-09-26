@@ -694,16 +694,18 @@ async function payload() {
 const verb = process.argv[2];
 const input = await payload();
 
-if (process.env[OFF_ENV]) process.exit(0);
-
 // Not a hook: run by hand, or by whoever tidies a mailroom, with nothing on stdin —
-// `node hooks/helm-mail.mjs archive </dev/null`. Needs no session, so it comes first.
+// `node hooks/helm-mail.mjs archive </dev/null`. Needs no session, so it comes first, and it is
+// above `HELM_MAIL_OFF` on purpose: that switch stops a session claiming and receiving, and a
+// person who typed this command asked for the archive — a silent exit 0 would tell them it ran.
 if (verb === "archive") {
 	const root = mailRoot();
 	const moved = archiveRetired(root);
 	process.stdout.write(`${NAME}: moved ${moved} mailbox(es) retired over ${ARCHIVE_AFTER_MS / 86_400_000} days to ${path.join(root, RETIRED_DIR)}\n`);
 	process.exit(0);
 }
+
+if (process.env[OFF_ENV]) process.exit(0);
 
 const sessionId = input.session_id || process.env.CLAUDE_CODE_SESSION_ID || "";
 const cwd = input.cwd || process.cwd();
