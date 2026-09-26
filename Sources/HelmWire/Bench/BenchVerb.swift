@@ -15,6 +15,15 @@ package enum BenchActor: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case kind, pane, handle }
 
+    /// The wire's name for who asked: `operator`, `agent` or `helm`.
+    package var kind: String {
+        switch self {
+        case .operatorGesture: "operator"
+        case .agent: "agent"
+        case .helm: "helm"
+        }
+    }
+
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .kind) {
@@ -33,8 +42,7 @@ package enum BenchActor: Codable, Equatable, Sendable {
     package func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .operatorGesture: try c.encode("operator", forKey: .kind)
-        case .helm: try c.encode("helm", forKey: .kind)
+        case .operatorGesture, .helm: try c.encode(kind, forKey: .kind)
         case let .agent(pane, handle):
             try c.encode("agent", forKey: .kind)
             try c.encodeIfPresent(pane, forKey: .pane)

@@ -1,5 +1,6 @@
 import Foundation
 import HelmWire
+import os
 
 /// Where the bench comes from (#354). `local` is helm's own state, saved in its defaults — what
 /// helm has always done. `daemon` is benchd's document: every verb is sent to benchd and the
@@ -45,6 +46,8 @@ final class DaemonSink: VerbSink {
     private unowned let workbench: WorkbenchModel
     private let client: BenchClient
 
+    private static let log = Logger(subsystem: "com.wirasm.helm", category: "bench")
+
     /// How long a caller waits for the frame its verb made before reading the bench anyway.
     static let frameWait: TimeInterval = 1
 
@@ -60,6 +63,7 @@ final class DaemonSink: VerbSink {
         if case .get = verb { return nil }
         let request = BenchRequest(
             id: "helm-\(UUID().uuidString.lowercased())", verb: verb, by: actor, asked: asked)
+        let started = DispatchTime.now()
         let answer: BenchResponse<LayoutReport>
         do {
             answer = try client.request(request, answering: LayoutReport.self)
@@ -70,7 +74,14 @@ final class DaemonSink: VerbSink {
         // An `error` can still carry a report: applied and logged, but bench.json not written.
         // The change is real, so it is drawn; the failure is said.
         if let report = answer.data, report.changed {
-            _ = client.document(atLeast: report.seq, within: Self.frameWait)
+            let drawn = client.document(atLeast: report.seq, within: Self.frameWait) != nil
+            // The round trip the operator feels: verb out, benchd's answer, the document it made
+            // drawn. Spike S1 put it under 6 ms at p99 with an idle main thread; this is the same
+            // number inside helm. `log stream --predicate 'category == "bench"'` reads it.
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e6
+            Self.log.info(
+                "\(verb.name, privacy: .public) by \(actor.kind, privacy: .public): \(ms, format: .fixed(precision: 2), privacy: .public) ms, drawn \(drawn, privacy: .public)"
+            )
         }
         guard answer.status == .ok, let report = answer.data else {
             workbench.verbFailed(
