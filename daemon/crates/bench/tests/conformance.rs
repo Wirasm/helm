@@ -5,7 +5,8 @@
 //!
 //! Ground rules carried from helm's incidents:
 //! - **Never the operator's estate.** Every test claims its own `HOME` under the OS
-//!   tempdir, and the negative control asserts the shared `~/.bench` shape was never
+//!   tempdir, every child starts through [`isolated`] without the inherited `BENCH_*` and
+//!   `HELM_PANE`, and the negative control asserts the shared `~/.bench` shape was never
 //!   created there (#285's lesson: isolation is proven, not assumed).
 //! - **Bounded children.** Every daemon is killed by the guard's Drop by the pid we
 //!   spawned — never a pattern — and waited on (#291's lesson).
@@ -16,7 +17,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -31,6 +32,35 @@ fn benchd_bin() -> PathBuf {
         "benchd binary not built — run daemon/test.sh (or cargo build --workspace) first"
     );
     p
+}
+
+/// What the shell running `cargo test` may carry that would point `bench` or `benchd` past the
+/// test's own HOME, or make a child speak as somebody. An agent in a benchd-spawned session
+/// inherits `BENCH_DIR` (the operator's live `~/.bench`), `BENCH_SESSION` and `BENCH_HANDLE`;
+/// one in a helm pane inherits `HELM_PANE`; a just recipe the operator started carries
+/// `BENCH_ASKED=1`. `HELM_BENCH_DIR` and `PLAYWRIGHT_BROWSERS_PATH` override roots benchd
+/// otherwise finds under HOME (helm's snapshot, the browser's Playwright cache).
+const INHERITED: &[&str] = &[
+    "BENCH_DIR",
+    "BENCH_SUITE",
+    "BENCH_SESSION",
+    "BENCH_HANDLE",
+    "BENCH_ASKED",
+    "HELM_PANE",
+    "HELM_BENCH_DIR",
+    "PLAYWRIGHT_BROWSERS_PATH",
+];
+
+/// The one way this suite starts a child: without any of [`INHERITED`], so a test sets only
+/// what it means. `Command` is deliberately not imported, so a bare `Command::new` does not
+/// compile. Before this, `bench status` reached the operator's live benchd through an
+/// inherited `BENCH_DIR` and exited 0 where a test expected 2.
+fn isolated(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    for name in INHERITED {
+        cmd.env_remove(name);
+    }
+    cmd
 }
 
 /// A disposable HOME under the OS tempdir. The OS tempdir, not the repo and not a long
@@ -69,7 +99,7 @@ struct DaemonGuard {
 
 impl DaemonGuard {
     fn start(home: &Path, suite: Option<&str>) -> DaemonGuard {
-        DaemonGuard::start_with(home, suite, Command::new(benchd_bin()))
+        DaemonGuard::start_with(home, suite, isolated(benchd_bin()))
     }
 
     /// A daemon whose `pi` is [`write_fake_agent`]'s: a real harness name, so its sessions
@@ -81,20 +111,13 @@ impl DaemonGuard {
     fn start_with_fake(home: &Path, agent: &str) -> DaemonGuard {
         let bin = write_fake_agent(home, agent);
         let path = std::env::var("PATH").unwrap_or_default();
-        let mut cmd = Command::new(benchd_bin());
+        let mut cmd = isolated(benchd_bin());
         cmd.env("PATH", format!("{}:{path}", bin.display()));
         DaemonGuard::start_with(home, None, cmd)
     }
 
-    fn start_with(home: &Path, suite: Option<&str>, mut cmd: Command) -> DaemonGuard {
-        cmd.env_remove("BENCH_DIR")
-            .env_remove("BENCH_SUITE")
-            // The browser's default binary is looked up in the Playwright cache under
-            // HOME; a runner's own override must not reach past the test home.
-            .env_remove("PLAYWRIGHT_BROWSERS_PATH")
-            // helm's snapshot is found under HOME; a runner's override must not reach past it.
-            .env_remove("HELM_BENCH_DIR")
-            .env("BENCH_SESSION_TEST_AGENT", "1")
+    fn start_with(home: &Path, suite: Option<&str>, mut cmd: std::process::Command) -> DaemonGuard {
+        cmd.env("BENCH_SESSION_TEST_AGENT", "1")
             .env("HOME", home)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -141,17 +164,14 @@ fn bench(home: &Path, args: &[&str]) -> CliRun {
     bench_as(home, args, &[])
 }
 
-/// `bench` with the caller's declared identity (`HELM_PANE`, `BENCH_HANDLE`) set as given and
-/// otherwise removed, so a test run from inside a helm pane does not speak for that pane.
+/// `bench` with the caller's declared identity (`HELM_PANE`, `BENCH_HANDLE`) set as given, and
+/// otherwise absent ([`isolated`]).
 fn bench_as(home: &Path, args: &[&str], env: &[(&str, &str)]) -> CliRun {
-    let mut cmd = Command::new(bench_bin());
-    cmd.env_remove("HELM_PANE").env_remove("BENCH_HANDLE");
+    let mut cmd = isolated(bench_bin());
     for (k, v) in env {
         cmd.env(k, v);
     }
     let out = cmd
-        .env_remove("BENCH_DIR")
-        .env_remove("BENCH_SUITE")
         .env("HOME", home)
         .args(args)
         .output()
@@ -291,7 +311,7 @@ fn events_reads_back_exactly_what_was_logged() {
 
 /// Run a command with a hard deadline; a hang is a FAILING outcome with its own name,
 /// never a stuck test run.
-fn run_bounded(cmd: &mut Command, deadline: Duration) -> Option<CliRun> {
+fn run_bounded(cmd: &mut std::process::Command, deadline: Duration) -> Option<CliRun> {
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -347,10 +367,8 @@ fn a_torn_last_line_is_quarantined_and_the_daemon_starts() {
     let root = home.dir.join("r");
     write_seed_log(&root, Some("{\"seq\":3,\"at\":\"2026-08-18T00:0"), false);
 
-    let mut cmd = Command::new(benchd_bin());
-    cmd.env_remove("BENCH_SUITE")
-        .env("HOME", &home.dir)
-        .env("BENCH_DIR", &root);
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("HOME", &home.dir).env("BENCH_DIR", &root);
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
     let mut child = cmd.spawn().unwrap();
     let socket = root.join("benchd.sock");
@@ -359,7 +377,7 @@ fn a_torn_last_line_is_quarantined_and_the_daemon_starts() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    let status = Command::new(bench_bin())
+    let status = isolated(bench_bin())
         .env("HOME", &home.dir)
         .env("BENCH_DIR", &root)
         .arg("status")
@@ -398,8 +416,7 @@ fn a_bad_line_in_the_middle_still_refuses_naming_the_line() {
     let root = home.dir.join("r");
     write_seed_log(&root, None, true);
 
-    let out = Command::new(benchd_bin())
-        .env_remove("BENCH_SUITE")
+    let out = isolated(benchd_bin())
         .env("HOME", &home.dir)
         .env("BENCH_DIR", &root)
         .output()
@@ -429,7 +446,7 @@ fn a_stalled_client_does_not_park_the_daemon() {
 
     let t0 = Instant::now();
     let run = run_bounded(
-        Command::new(bench_bin())
+        isolated(bench_bin())
             .env("HOME", &home.dir)
             .args(["status"]),
         Duration::from_secs(12),
@@ -458,7 +475,7 @@ fn a_daemon_that_never_answers_is_exit_2_not_a_hang() {
     });
 
     let run = run_bounded(
-        Command::new(bench_bin())
+        isolated(bench_bin())
             .env("HOME", &home.dir)
             .args(["status"]),
         Duration::from_secs(25),
@@ -553,9 +570,8 @@ fn bench_dir_overrides_everything_which_is_what_a_test_claims_into() {
     let claimed = home.dir.join("claimed");
     fs::create_dir_all(&claimed).unwrap();
 
-    let mut cmd = Command::new(benchd_bin());
-    cmd.env_remove("BENCH_SUITE")
-        .env("HOME", home.dir.join("unused-home"))
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("HOME", home.dir.join("unused-home"))
         .env("BENCH_DIR", &claimed)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -566,7 +582,7 @@ fn bench_dir_overrides_everything_which_is_what_a_test_claims_into() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    let out = Command::new(bench_bin())
+    let out = isolated(bench_bin())
         .env("HOME", home.dir.join("unused-home"))
         .env("BENCH_DIR", &claimed)
         .arg("status")
@@ -589,9 +605,7 @@ fn bench_dir_overrides_everything_which_is_what_a_test_claims_into() {
 fn a_second_daemon_on_a_claimed_root_is_refused_loudly() {
     let home = TestHome::claim("double");
     let _first = DaemonGuard::start(&home.dir, None);
-    let out = Command::new(benchd_bin())
-        .env_remove("BENCH_DIR")
-        .env_remove("BENCH_SUITE")
+    let out = isolated(benchd_bin())
         .env("HOME", &home.dir)
         .output()
         .expect("run second benchd");
@@ -809,7 +823,7 @@ fn an_exited_session_refuses_attach_and_the_exit_is_logged() {
     // pid prints nothing.
     let reap_deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let out = Command::new("ps")
+        let out = isolated("ps")
             .args(["-o", "stat=", "-p", &pid.to_string()])
             .output()
             .unwrap();
@@ -1287,11 +1301,9 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
     spawn_pi(&home.dir, &ws, "worker");
     let mut who = None;
     for (i, snippet) in snippets.iter().enumerate() {
-        let out = Command::new("bash")
+        let out = isolated("bash")
             .args(["-euo", "pipefail", "-c", snippet])
             .current_dir(&ws)
-            .env_remove("BENCH_SUITE")
-            .env_remove("BENCH_HANDLE")
             .env("HOME", &home.dir)
             .env("BENCH_DIR", &root)
             .env("BENCH", bench_bin())
@@ -1338,11 +1350,9 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
             .iter()
             .find(|s| s.contains(needle))
             .expect("the skill's snippet");
-        let out = Command::new("bash")
+        let out = isolated("bash")
             .args(["-c", snippet])
             .current_dir(&ws)
-            .env_remove("BENCH_SUITE")
-            .env_remove("BENCH_HANDLE")
             .env("HOME", &home.dir)
             .env("BENCH_DIR", &root)
             .env("BENCH", bench_bin())
@@ -1994,9 +2004,8 @@ fn the_bench_browser_skills_snippets_execute_against_a_real_daemon() {
     let fake = write_fake_browser(&home.dir);
     write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
     let _daemon = DaemonGuard::start(&home.dir, None);
-    let out = Command::new("bash")
+    let out = isolated("bash")
         .args(["-euo", "pipefail", "-c", &snippets[0]])
-        .env_remove("BENCH_SUITE")
         .env("HOME", &home.dir)
         .env("BENCH_DIR", home.dir.join(".bench"))
         .env("BENCH", bench_bin())
@@ -2022,9 +2031,8 @@ fn the_bench_browser_skills_snippets_execute_against_a_real_daemon() {
         &home.dir,
         serde_json::json!({ "binary": "/no/such/chrome" }),
     );
-    let refused = Command::new("bash")
+    let refused = isolated("bash")
         .args(["-c", &snippets[0]])
-        .env_remove("BENCH_SUITE")
         .env("HOME", &home.dir)
         .env("BENCH_DIR", home.dir.join(".bench"))
         .env("BENCH", bench_bin())
@@ -2848,9 +2856,7 @@ fn a_bench_json_older_than_the_log_says_so() {
 fn the_cli_follows_the_bench_line_by_line() {
     let home = TestHome::claim("m4-cli");
     let daemon = DaemonGuard::start(&home.dir, None);
-    let mut child = Command::new(bench_bin())
-        .env_remove("BENCH_DIR")
-        .env_remove("BENCH_SUITE")
+    let mut child = isolated(bench_bin())
         .env("HOME", &home.dir)
         .args(["events", "--follow"])
         .stdout(Stdio::piped())
@@ -3214,11 +3220,9 @@ fn the_bench_sessions_skills_snippets_execute() {
     write_claude_transcript(&home.dir, "s-2");
     let mut outputs = Vec::new();
     for (i, snippet) in snippets.iter().enumerate() {
-        let out = Command::new("bash")
+        let out = isolated("bash")
             .args(["-euo", "pipefail", "-c", snippet])
             .current_dir(&ws)
-            .env_remove("BENCH_SUITE")
-            .env_remove("BENCH_DIR")
             .env("HOME", &home.dir)
             .env("BENCH", bench_bin())
             .env("SESSION", "s-2")
@@ -3269,7 +3273,7 @@ struct Detached(Child);
 impl Detached {
     fn start() -> Detached {
         use std::os::unix::process::CommandExt;
-        let mut cmd = Command::new("sleep");
+        let mut cmd = isolated("sleep");
         cmd.arg("60");
         // SAFETY: setsid is async-signal-safe and touches nothing of the parent's.
         unsafe {
@@ -3321,11 +3325,7 @@ fn hook_verb(socket: &Path, args: serde_json::Value) -> serde_json::Value {
 
 /// `bench hook <harness>` exactly as a harness runs it: the payload on stdin.
 fn bench_hook(home: &Path, harness: &str, payload: serde_json::Value) -> CliRun {
-    let mut child = Command::new(bench_bin())
-        .env_remove("BENCH_DIR")
-        .env_remove("BENCH_SUITE")
-        .env_remove("HELM_PANE")
-        .env_remove("BENCH_SESSION")
+    let mut child = isolated(bench_bin())
         .env("HOME", home)
         .args(["hook", harness])
         .stdin(Stdio::piped())
@@ -3592,10 +3592,8 @@ fn a_hook_never_fails_its_agent() {
     let _daemon = DaemonGuard::start(h, None);
     let wrong = bench_hook(h, "cursor", payload.clone());
     assert_eq!((wrong.code, wrong.stdout.as_str()), (0, ""));
-    let mut child = Command::new(bench_bin())
+    let mut child = isolated(bench_bin())
         .env("HOME", h)
-        .env_remove("BENCH_DIR")
-        .env_remove("BENCH_SUITE")
         .args(["hook", "claude"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -3638,11 +3636,9 @@ fn a_shell_string_hook_reports_the_agent_not_the_shell() {
     let _daemon = DaemonGuard::start(h, None);
     let (session, _) = terminal_process(h, "w");
     let payload = serde_json::json!({"session_id": "thread-sh", "hook_event_name": "SessionStart", "cwd": "/tmp"});
-    let mut child = Command::new("/bin/sh")
+    let mut child = isolated("/bin/sh")
         .arg("-c")
         .arg(format!("{} hook codex; true", bench_bin().display()))
-        .env_remove("BENCH_DIR")
-        .env_remove("BENCH_SUITE")
         .env("HOME", h)
         .env("BENCH_SESSION", &session)
         .stdin(Stdio::piped())
@@ -4218,7 +4214,7 @@ fn a_spawn_hands_the_prompt_over_in_argv_and_waits_for_nothing() {
     .unwrap();
     fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
     let path = std::env::var("PATH").unwrap_or_default();
-    let mut cmd = Command::new(benchd_bin());
+    let mut cmd = isolated(benchd_bin());
     cmd.env("PATH", format!("{}:{path}", bin.display()));
     let daemon = DaemonGuard::start_with(h, None, cmd);
     let prompt = h.join("brief.txt");
@@ -5113,7 +5109,7 @@ fn an_attached_viewer_resizes_the_session_and_ends_when_it_does() {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
     let path = std::env::var("PATH").unwrap_or_default();
-    let mut cmd = Command::new(benchd_bin());
+    let mut cmd = isolated(benchd_bin());
     cmd.env("PATH", format!("{}:{path}", bin.display()));
     let daemon = DaemonGuard::start_with(&home.dir, None, cmd);
     let ws = workspace(&home.dir).display().to_string();
@@ -5163,10 +5159,8 @@ fn an_attached_viewer_resizes_the_session_and_ends_when_it_does() {
     assert_eq!(run.code, 0, "{}", run.stderr);
     let sid = json_of(&run)["session"].as_str().unwrap().to_string();
     let echo_pane = json_of(&run)["pane"].as_str().unwrap().to_string();
-    let mut viewer = Command::new(bench_bin())
+    let mut viewer = isolated(bench_bin())
         .args(["attach", &sid])
-        .env_remove("BENCH_DIR")
-        .env_remove("BENCH_SUITE")
         .env("HOME", &home.dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -5309,12 +5303,9 @@ fn the_bench_panes_skills_snippets_execute_against_a_real_daemon() {
     let brief = artifact(&home.dir, "brief.md");
     let mut pane = String::new();
     for (i, snippet) in snippets.iter().enumerate() {
-        let out = Command::new("bash")
+        let out = isolated("bash")
             .args(["-euo", "pipefail", "-c", snippet])
             .current_dir(&ws)
-            .env_remove("BENCH_SUITE")
-            .env_remove("BENCH_HANDLE")
-            .env_remove("HELM_PANE")
             .env("HOME", &home.dir)
             .env("BENCH_DIR", home.dir.join(".bench"))
             .env("BENCH", bench_bin())
@@ -5430,12 +5421,9 @@ fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
     let plan = artifact(&home.dir, "canvas-skill.md");
     let mut pane = String::new();
     for (i, snippet) in snippets.iter().enumerate() {
-        let out = Command::new("bash")
+        let out = isolated("bash")
             .args(["-euo", "pipefail", "-c", snippet])
             .current_dir(&home.dir)
-            .env_remove("BENCH_SUITE")
-            .env_remove("BENCH_HANDLE")
-            .env_remove("HELM_PANE")
             .env("HOME", &home.dir)
             .env("BENCH_DIR", home.dir.join(".bench"))
             .env("BENCH", bench_bin())
