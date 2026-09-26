@@ -1,22 +1,30 @@
-//! `bench attach <session>`: the response line, then the connection is a raw relay. The local
-//! terminal goes raw (keystrokes reach the agent unmangled, Ctrl-C included); Ctrl-\ detaches.
+//! `bench attach <session>`: the response line, then the connection is a relay. The session's
+//! output comes down raw, so escape sequences reach the local terminal unchanged. What goes up is
+//! framed (`bench_wire::attach`): the keys, raw-mode so Ctrl-C reaches the agent, and this
+//! terminal's size whenever it changes. Ctrl-\ detaches.
 //!
-//! Since M3 this is also what a helm pane runs to show a session an agent spawned, so it
-//! behaves like the pane it is in: when the pane is resized the session's pty follows (a
-//! `resize` request on its own connection, so the relay's bytes stay raw), and when the
-//! session ends the client ends too, which is what tells helm the pane's process exited.
+//! Since M3 this is also what a helm pane runs to show a session, so it behaves like the pane it
+//! is in: when the pane is resized the session's pty follows, and when the session ends the
+//! client ends too, which is what tells helm the pane's process exited. `--in-pane` is that use:
+//! nothing printed of its own, and no detach key, because in a shell Ctrl-\ is SIGQUIT.
+//!
+//! A pane dragged across the screen resizes its terminal many times a second, and every size the
+//! session's pty takes is a SIGWINCH and a full redraw of whatever runs there. So sizes are
+//! coalesced: at most one per [`SIZE_EVERY`], plus a trailing one when the changes stop, and the
+//! size sent is the one the terminal has when it is sent (#359's resize note).
 
 use crate::{Cli, EXIT_NO_DAEMON, fail, open, read_response_line};
-use bench_wire::{Response, SessionArgs, Status};
+use bench_wire::attach::Frame;
+use bench_wire::{Response, Status};
 use rustix::termios::tcgetwinsize;
 use std::io::{IsTerminal, Read, Write};
 use std::os::unix::net::UnixStream;
-use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
-/// How often the viewer's size is checked. An ioctl, so cheap; a quarter second is below what
-/// a person dragging a divider notices.
-const SIZE_POLL: Duration = Duration::from_millis(250);
+/// The shortest gap between two sizes sent to the session: one frame at 60 Hz.
+pub const SIZE_EVERY: Duration = Duration::from_millis(16);
 
 /// Why the relay stopped.
 enum Ended {
@@ -26,7 +34,12 @@ enum Ended {
     StreamClosed,
 }
 
-pub fn run(cli: Cli) -> i32 {
+pub fn run(cli: Cli, in_pane: bool) -> i32 {
+    let size_changes = hear_size_changes();
+    let sent_size = match (cli.args["rows"].as_u64(), cli.args["cols"].as_u64()) {
+        (Some(r), Some(c)) => Some((r as u16, c as u16)),
+        _ => None,
+    };
     let (stream, request_line) = match open(&cli) {
         Ok(pair) => pair,
         Err(code) => return code,
@@ -52,9 +65,10 @@ pub fn run(cli: Cli) -> i32 {
         }
         return response.status.exit_code();
     }
-    eprintln!("bench: attached — Ctrl-\\ detaches");
+    if !in_pane {
+        eprintln!("bench: attached — Ctrl-\\ detaches");
+    }
     let _ = stream.set_read_timeout(None);
-    let session = cli.args["session"].as_str().unwrap_or_default().to_string();
 
     let saved = raw_mode();
     let (done, ended) = mpsc::channel();
@@ -62,17 +76,23 @@ pub fn run(cli: Cli) -> i32 {
         Ok(sock) => sock,
         Err(_) => return fail("cannot clone stream"),
     };
+    // Two threads send frames (keys, sizes); one frame is written whole under this lock.
+    let up = Arc::new(Mutex::new(stream));
     relay_down(down, done.clone());
-    relay_up(stream, done);
-    follow_size(&cli, session);
+    relay_up(Arc::clone(&up), !in_pane, done);
+    if let (Some(changes), Some(sent)) = (size_changes, sent_size) {
+        follow_size(up, changes, sent);
+    }
 
     let ended = ended.recv().unwrap_or(Ended::Detached);
     restore(saved);
-    match ended {
-        Ended::Detached => eprintln!("\nbench: detached"),
-        Ended::StreamClosed => eprintln!(
-            "\nbench: the session's stream closed — it ended, was closed, or another attach took it over"
-        ),
+    if !in_pane {
+        match ended {
+            Ended::Detached => eprintln!("\nbench: detached"),
+            Ended::StreamClosed => eprintln!(
+                "\nbench: the session's stream closed — it ended, was closed, or another attach took it over"
+            ),
+        }
     }
     0
 }
@@ -98,58 +118,161 @@ fn relay_down(mut sock: UnixStream, done: mpsc::Sender<Ended>) {
     });
 }
 
-/// Stdin → socket, until Ctrl-\ (0x1C) or EOF. The byte itself is never forwarded.
-fn relay_up(sock: UnixStream, done: mpsc::Sender<Ended>) {
+fn send(up: &Mutex<UnixStream>, frame: &Frame) -> std::io::Result<()> {
+    let sock = up.lock().unwrap();
+    (&*sock).write_all(&frame.encode())
+}
+
+/// Stdin → socket as input frames, until EOF or, when `detach_key` is set, Ctrl-\ (0x1C), which
+/// is never forwarded.
+fn relay_up(up: Arc<Mutex<UnixStream>>, detach_key: bool, done: mpsc::Sender<Ended>) {
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin();
-        let mut chunk = [0u8; 1024];
+        let mut chunk = [0u8; 4096];
         loop {
-            match stdin.read(&mut chunk) {
+            let n = match stdin.read(&mut chunk) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if let Some(pos) = chunk[..n].iter().position(|&b| b == 0x1c) {
-                        if pos > 0 {
-                            let _ = (&sock).write_all(&chunk[..pos]);
-                        }
-                        break;
-                    }
-                    if (&sock).write_all(&chunk[..n]).is_err() {
-                        break;
-                    }
-                }
+                Ok(n) => n,
+            };
+            let detach_at = chunk[..n].iter().position(|&b| detach_key && b == 0x1c);
+            let keys = &chunk[..detach_at.unwrap_or(n)];
+            if !keys.is_empty() && send(&up, &Frame::Input(keys.to_vec())).is_err() {
+                break;
+            }
+            if detach_at.is_some() {
+                break;
             }
         }
-        let _ = sock.shutdown(std::net::Shutdown::Both);
+        let _ = up.lock().unwrap().shutdown(std::net::Shutdown::Both);
         let _ = done.send(Ended::Detached);
     });
 }
 
-/// Keep the session's pty the size of this terminal. A failed resize is not worth ending the
-/// relay over: the agent keeps its last size, and the next change tries again.
-fn follow_size(cli: &Cli, session: String) {
-    let Some(mut last) = terminal_size() else {
-        return;
-    };
-    let root = cli.root.clone();
+/// When sizes may go out, given when the terminal changed. Pure, so the rate is a unit test
+/// rather than a timing race.
+#[derive(Debug)]
+struct Coalescer {
+    every: Duration,
+    last: Option<Instant>,
+    pending: bool,
+}
+
+impl Coalescer {
+    fn new(every: Duration) -> Coalescer {
+        Coalescer {
+            every,
+            last: None,
+            pending: false,
+        }
+    }
+
+    /// The terminal changed size.
+    fn changed(&mut self) {
+        self.pending = true;
+    }
+
+    /// Whether a size goes out now. A change is sent at once when the last send is at least
+    /// `every` ago, and otherwise held until then: that held one is the trailing size.
+    fn due(&mut self, now: Instant) -> bool {
+        let ready = self
+            .last
+            .is_none_or(|last| now.saturating_duration_since(last) >= self.every);
+        if self.pending && ready {
+            self.pending = false;
+            self.last = Some(now);
+            return true;
+        }
+        false
+    }
+
+    /// How long to wait for the next change: for ever with nothing held, else until it is due.
+    fn wait(&self, now: Instant) -> Option<Duration> {
+        self.pending.then(|| {
+            self.last.map_or(Duration::ZERO, |last| {
+                self.every
+                    .saturating_sub(now.saturating_duration_since(last))
+            })
+        })
+    }
+}
+
+/// The write end of the pipe the SIGWINCH handler pokes, or -1 before there is one.
+static WINCH_PIPE: AtomicI32 = AtomicI32::new(-1);
+
+extern "C" fn on_winch(_: libc::c_int) {
+    let fd = WINCH_PIPE.load(Ordering::Relaxed);
+    if fd >= 0 {
+        // SAFETY: write(2) is async-signal-safe; the fd is non-blocking, so a full pipe (a
+        // change already waiting to be read) drops this byte instead of blocking the handler.
+        unsafe { libc::write(fd, [1u8].as_ptr().cast(), 1) };
+    }
+}
+
+/// Hear this terminal change size: SIGWINCH writes a byte into a pipe, and this answers the
+/// pipe's read end. Installed before the attach request is sent, because a change between the
+/// size that request carries and a handler existing would otherwise be lost: SIGWINCH is ignored
+/// by default.
+fn hear_size_changes() -> Option<libc::c_int> {
+    terminal_size()?;
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: pipe(2) fills two fds; fcntl only sets flags on the fd it is given.
+    unsafe {
+        if libc::pipe(fds.as_mut_ptr()) != 0 {
+            return None;
+        }
+        for fd in fds {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+        libc::fcntl(fds[1], libc::F_SETFL, libc::O_NONBLOCK);
+    }
+    WINCH_PIPE.store(fds[1], Ordering::Relaxed);
+    // SAFETY: the handler only calls write(2) on an fd it loads atomically.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = on_winch as *const () as usize;
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigaction(libc::SIGWINCH, &action, std::ptr::null_mut());
+    }
+    Some(fds[0])
+}
+
+/// Keep the session's pty the size of this terminal, starting from `sent`, the size the attach
+/// request carried. The [`Coalescer`] decides when a size goes out. A failed send ends nothing:
+/// the relay's own threads notice a dead stream.
+fn follow_size(up: Arc<Mutex<UnixStream>>, changes: libc::c_int, mut sent: (u16, u16)) {
+    let read_end = changes;
     std::thread::spawn(move || {
+        let mut sizes = Coalescer::new(SIZE_EVERY);
+        // Whatever changed while the attach was being answered is checked at once.
+        sizes.changed();
         loop {
-            std::thread::sleep(SIZE_POLL);
-            let Some(now) = terminal_size() else { continue };
-            if now == last {
-                continue;
-            }
-            last = now;
-            let resize = Cli {
-                verb: "resize".into(),
-                args: serde_json::json!(SessionArgs {
-                    session: session.clone(),
-                    rows: Some(now.0),
-                    cols: Some(now.1),
-                }),
-                root: root.clone(),
-                asked: false,
+            let timeout = sizes.wait(Instant::now()).map_or(-1, |d| {
+                i32::try_from(d.as_micros().div_ceil(1000)).unwrap_or(i32::MAX)
+            });
+            let mut poll = libc::pollfd {
+                fd: read_end,
+                events: libc::POLLIN,
+                revents: 0,
             };
-            let _ = crate::exchange(&resize);
+            // SAFETY: one valid pollfd; the drain reads into a local buffer.
+            if unsafe { libc::poll(&mut poll, 1, timeout) } > 0 {
+                let mut drain = [0u8; 64];
+                unsafe { libc::read(read_end, drain.as_mut_ptr().cast(), drain.len()) };
+                sizes.changed();
+            }
+            if sizes.due(Instant::now())
+                && let Some(now) = terminal_size()
+                && now != sent
+            {
+                sent = now;
+                let _ = send(
+                    &up,
+                    &Frame::Size {
+                        rows: now.0,
+                        cols: now.1,
+                    },
+                );
+            }
         }
     });
 }
@@ -189,5 +312,61 @@ fn restore(saved: Option<String>) {
             .arg(token)
             .stdin(std::process::Stdio::inherit())
             .status();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MS: Duration = Duration::from_millis(1);
+
+    #[test]
+    fn a_drag_sends_at_most_one_size_per_interval_and_always_the_last() {
+        // A second of dragging: the terminal changes size every 2 ms. The loop is the one
+        // `follow_size` runs, with time stepped instead of slept.
+        let start = Instant::now();
+        let mut sizes = Coalescer::new(SIZE_EVERY);
+        let mut sent = Vec::new();
+        let mut now = start;
+        let changes_end = start + Duration::from_secs(1);
+        while now < changes_end + SIZE_EVERY * 2 {
+            if now < changes_end && (now - start).as_millis().is_multiple_of(2) {
+                sizes.changed();
+            }
+            if sizes.due(now) {
+                sent.push(now - start);
+            }
+            now += MS;
+        }
+        // One per 16 ms across the second (0, 16, … 992 ms), then the trailing one.
+        assert!(
+            sent.len() <= 1000_usize.div_ceil(16) + 1,
+            "{} sizes for a second of dragging",
+            sent.len()
+        );
+        for pair in sent.windows(2) {
+            assert!(pair[1] - pair[0] >= SIZE_EVERY, "{pair:?}");
+        }
+        let last_change = Duration::from_millis(998);
+        assert!(
+            *sent.last().unwrap() >= last_change,
+            "the size after the last change goes out: last sent at {:?}",
+            sent.last()
+        );
+    }
+
+    #[test]
+    fn a_single_change_goes_out_at_once_and_a_quick_second_waits_for_the_interval() {
+        let t0 = Instant::now();
+        let mut sizes = Coalescer::new(SIZE_EVERY);
+        assert_eq!(sizes.wait(t0), None, "nothing held: wait for a change");
+        sizes.changed();
+        assert!(sizes.due(t0), "the first change is not delayed");
+        sizes.changed();
+        assert!(!sizes.due(t0 + 5 * MS));
+        assert_eq!(sizes.wait(t0 + 5 * MS), Some(11 * MS));
+        assert!(sizes.due(t0 + 16 * MS), "the trailing size");
+        assert!(!sizes.due(t0 + 40 * MS), "nothing left to send");
     }
 }
