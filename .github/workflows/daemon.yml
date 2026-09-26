@@ -1,4 +1,4 @@
-# The daemon gate as its own CI job, per the pi/-and-hooks/ pattern. It runs on EVERY
+# The daemon gate as its own CI job, apart from the Swift one like pi/. It runs on EVERY
 # pull request and exits early when daemon/ is untouched — deliberately, because this
 # check is a required status: a job that only triggers on daemon/** paths never reports
 # on a Swift-only PR, and a required check that never reports blocks the merge forever.

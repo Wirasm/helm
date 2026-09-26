@@ -173,8 +173,7 @@ nothing they cover changed, using the `swift` and `daemon` `--needs` rules (the 
 its `lint` step on the `swift` answer too). `skills` runs on every PR, whatever it touched, and so does `just check`:
 *"a gate that exists, is documented in `AGENTS.md`, and runs only when somebody remembers is the
 drift this workflow exists to stop."* There is no `pi` job: it needs an `npm install` in `pi/`,
-so only `just check` runs it. A fifth job, `mailbox hooks · conformance`, is an empty stub kept
-only because it is a required status check; it goes when the check does.
+so only `just check` runs it.
 
 - **Narrower on the Swift job**, by exactly the two suites this section spends forty lines
   teaching you to diagnose. CI sets `HELM_CHECK_HEADLESS=1`, which makes the `swift` part run

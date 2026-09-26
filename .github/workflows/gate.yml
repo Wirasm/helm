@@ -128,16 +128,6 @@ jobs:
           path: .build
           key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'scripts/patch-libghostty.sh', 'Patches/**') }}
 
-  # helm's mail hooks and their conformance harness are gone (#358): mail is benchd's, and its
-  # gate is the daemon job. This job stays only because its name is a required status check on
-  # `development`; it passes by construction. Delete it together with that check.
-  hooks:
-    name: mailbox hooks · conformance
-    runs-on: ubuntu-latest
-    steps:
-      - name: nothing left to check
-        run: echo "helm keeps no mailroom since #358; benchd's mail is checked by the daemon job"
-
   skills:
     name: skill gates
     runs-on: macos-26

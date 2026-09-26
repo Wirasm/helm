@@ -412,7 +412,7 @@ struct BenchSnapshot: Codable, Equatable {
     /// "nothing has been written for N minutes" is not a question helm can ask at all.
     ///
     /// It does not have to. Claude Code publishes the answer itself, in the registry helm
-    /// **already reads every publish** to join a pane to its mailbox: a session blocked on a
+    /// **already reads every publish** to find a pane's agent: a session blocked on a
     /// dialog writes `status: "waiting"` with `waitingFor: "permission prompt"` into
     /// `~/.claude/sessions/<pid>.json`. Measured on a real stall, same run as the reproduction
     /// above. helm modelled that value in `AgentStatus` and then dropped it on the floor here,

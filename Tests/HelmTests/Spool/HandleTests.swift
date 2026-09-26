@@ -14,7 +14,7 @@ import XCTest
 ///
 /// So the point of this file is the rule, not the type: `Handle.init(from:)` *calls*
 /// `validating:` rather than restating it, and `testEveryRouteRefusesTheSameMalformedHandle` is
-/// what would notice if it stopped. (`MailboxOwner`, the third route, left with helm's mailroom.)
+/// what would notice if it stopped.
 final class HandleTests: XCTestCase {
 
     // MARK: - validating:
@@ -32,31 +32,21 @@ final class HandleTests: XCTestCase {
         }
     }
 
-    /// **The record of #239, and it used to say the opposite.** These same three candidates were
-    /// asserted *accepted* here — the test was the deliberate record of the gap, kept so whoever
-    /// closed it would see exactly which inputs change meaning. They are the inputs that changed.
-    ///
-    /// Every one names a directory that does not exist and never will, because both writers of
-    /// the address scheme slug harder than the old rule did — `slug` in `hooks/helm-mail.mjs` and
-    /// in `pi/extensions/helm-mail/index.ts` lowercases and collapses `[^a-z0-9]+` to `-`. Since
-    /// #239 `validating:` enforces that alphabet, and every route shares the rule, so this is a
-    /// behaviour change on all three of them. `Handle`'s header carries the decision and the two
-    /// options it turned down.
+    /// None of these can be a handle: benchd's `slug` lowercases and folds every other run to
+    /// `-`, and its `validate_handle` refuses anything outside `[a-z0-9-]` (#239).
     func testValidatingEnforcesTheWritersCharacterRuleSoAHandleCanNameADirectory() throws {
         for candidate in ["Alice", "my agent", "owner_1234"] {
             XCTAssertNil(
                 Handle(validating: candidate),
-                "\(candidate.debugDescription) cannot name a mailbox directory — both owner.json "
-                    + "writers would have slugged it — so it must not become a Handle")
+                "\(candidate.debugDescription) is not a handle benchd would mint or accept, so it "
+                    + "must not become a Handle")
         }
     }
 
     /// **The case collision, which is the one with a reported cost.** The macOS default
     /// filesystem folds case, so `Alice` and `alice` are two agents to a sender and one directory
-    /// to the disk; the doc comment on `slug` in `pi/extensions/helm-mail/index.ts` records that
-    /// as having already lost someone their mail. The refusal is what closes it — and the second
-    /// half of this test is
-    /// the part that matters, because a rule that lowercased instead would also make the first
+    /// to the disk, and a case fold once lost someone their mail. The refusal is what closes it —
+    /// and the second half of this test is the part that matters, because a rule that lowercased instead would also make the first
     /// half pass while quietly handing `Alice`'s mail to a different real agent.
     func testValidatingRefusesUppercaseRatherThanFoldingItOntoAnotherAgent() throws {
         XCTAssertNil(Handle(validating: "Alice"), "Alice cannot name a directory the writers make")

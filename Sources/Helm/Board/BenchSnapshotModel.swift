@@ -92,7 +92,7 @@ final class BenchSnapshotModel: ObservableObject {
     }
 
     /// Immediate refresh for deterministic tests and callers that already observed an
-    /// external mailbox transition. Normal app use is driven by model changes and polling.
+    /// external change. Normal app use is driven by model changes and polling.
     func refresh() {
         guard isStarted else { return }
         publish()
