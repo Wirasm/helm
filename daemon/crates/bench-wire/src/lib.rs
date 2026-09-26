@@ -21,7 +21,7 @@ mod layout;
 pub use layout::{
     Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider, DocumentAt,
     DocumentChange, DocumentRecord, Frame, LAYOUT_VERBS, LayoutReport, LayoutVerb, MoveTo,
-    document_path,
+    OpenInto, PaneOpen, RULES_LOADED, RULES_REJECTED, document_path, placement_rules_path,
 };
 
 mod sessions;
@@ -174,6 +174,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "focus/slot",
     "focus/step",
     "layout/resize",
+    "drawer/toggle",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -698,7 +699,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            34,
+            35,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

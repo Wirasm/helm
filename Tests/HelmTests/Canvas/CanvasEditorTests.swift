@@ -7,6 +7,7 @@ import XCTest
 ///
 /// A real `CanvasModel` against a temporary tree — no window, no webview, no `~/.prp`.
 @MainActor
+// swiftlint:disable:next type_body_length - legacy (#418): 371 lines, limit 350
 final class CanvasEditorTests: XCTestCase {
     private var root: URL!
     private var store: URL!
