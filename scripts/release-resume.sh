@@ -278,13 +278,7 @@ detached_run() {
   done
   log "detached: pid $$, ppid 1, session leader $(ps -o sess= -p $$ | tr -d ' ')"
 
-  # The caller's own session variables must not reach the new helm or the resumed agent: the
-  # caller is usually the very session being resumed. Suites come only from the flags.
-  local v
-  for v in $(compgen -e); do
-    case "$v" in CLAUDECODE | CLAUDE_CODE_* | CLAUDE_PID | HELM_PANE | HELM_DEFAULTS_SUITE | \
-      BENCH_SUITE | BENCH_DIR | HELM_BENCH_DIR) unset "$v" ;; esac
-  done
+  scrub_caller_env
 
   log "checkout $(git -C "$repo" rev-parse --short HEAD) on $(git -C "$repo" rev-parse --abbrev-ref HEAD)$(git -C "$repo" diff --quiet HEAD || echo ', dirty')"
 
@@ -385,6 +379,24 @@ detached_run() {
 }
 
 warn() { log "WARNING: $*"; }
+
+# The caller is usually the very session being resumed, running inside a benchd session or a
+# helm pane, and everything started from here inherits what is left: the build, a hand-started
+# benchd (and every agent it spawns), the `bench spawn` that resumes, and the fallback claude.
+# Its session identity must reach none of them, or the resume is attributed to the dead agent
+# and a claude can claim its address. So whole namespaces go, not a list of names that misses
+# the next one. Suites come only from the flags. Two are locations, not identity, and stay:
+# HELM_BUILD_DIR is where `make release` announces the build, and CLAUDE_CONFIG_DIR is where the
+# fallback claude finds the session.
+scrub_caller_env() {
+  local v
+  for v in $(compgen -e); do
+    case "$v" in
+    HELM_BUILD_DIR | CLAUDE_CONFIG_DIR) ;;
+    CLAUDE* | BENCH_* | HELM_*) unset "$v" ;;
+    esac
+  done
+}
 
 # Resume <session> in a benchd pty, shown in a pane of <cwd>'s workspace and brought forward
 # (`--asked`: the operator is driving this session). Remote Control rides after the posture as
