@@ -54,7 +54,7 @@ The browser lives in his `browser` drawer, over the bench. One command puts it t
 the drawer, without opening it or taking his keyboard:
 
 ```text
-swift <helm checkout>/tools/helm-command.swift openBrowser
+bench open browser
 ```
 
 He opens it with ⌘⇧B or the drawer's capsule on the status bar, when he chooses. Tell him it is

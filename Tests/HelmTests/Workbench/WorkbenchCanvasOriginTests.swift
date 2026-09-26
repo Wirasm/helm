@@ -71,10 +71,15 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         return (rig.model, rig.terminals)
     }
 
-    /// `push.sh`'s sequence, arriving at the session that printed it — the route an agent's push
-    /// takes, from the terminal's own callback onto the bench.
-    private func push(from terminal: TerminalSession) {
-        terminal.terminalDidRequestDesktopNotification(title: CanvasPush.marker, body: canvas.path)
+    /// An agent in `terminal` putting the canvas on the bench: `bench open`, which benchd logs as
+    /// a `pane/open` from that pane. helm reads the origin off that event (`remember`), which
+    /// reaches the main actor just after the frame — hence the short wait, which only lets it
+    /// arrive.
+    private func open(from terminal: TerminalSession, model: WorkbenchModel) async throws {
+        model.send(
+            .paneOpen(workspace: workspace.value, surface: .canvas(path: canvas.path)),
+            by: .agent(pane: terminal.id.uuidString.lowercased()))
+        try await Task.sleep(for: .milliseconds(100))
     }
 
     private func mark(_ comment: String, on model: CanvasModel) throws {
@@ -117,7 +122,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         bench.agents[terminal.id] = handle
 
-        push(from: terminal)
+        try await open(from: terminal, model: model)
         try mark("this shouldn't talk to that", on: try pushedCanvas(of: model))
 
         XCTAssertEqual(messages(in: handle).count, 1)
@@ -136,7 +141,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         model.send(
             .workspaceOpen(path: "/tmp/helm-canvas-origin-elsewhere"), by: .operatorGesture)
 
-        push(from: terminal)
+        try await open(from: terminal, model: model)
         model.send(.workspaceActivate(path: workspace.value), by: .operatorGesture)
         try mark("pushed while in the background", on: try pushedCanvas(of: model))
 
@@ -155,7 +160,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         bench.agents[pusher.id] = handle
         bench.agents[bystander.id] = otherHandle
 
-        push(from: pusher)
+        try await open(from: pusher, model: model)
         try mark("route this to the pusher", on: try pushedCanvas(of: model))
 
         XCTAssertEqual(messages(in: handle).count, 1)
@@ -220,7 +225,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         // No agent reports from the pane any more: benchd's `who` has nothing to say for it.
 
-        push(from: terminal)
+        try await open(from: terminal, model: model)
         let pane = try XCTUnwrap(model.bench?.canvasPanes.first)
         try mark("the pusher has gone", on: model.canvas(for: pane))
 
@@ -242,8 +247,8 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         bench.agents[first.id] = handle
         bench.agents[second.id] = otherHandle
 
-        push(from: first)
-        push(from: second)
+        try await open(from: first, model: model)
+        try await open(from: second, model: model)
 
         XCTAssertEqual(model.bench?.canvasPanes.count, 1, "the second push found the pane open")
         try mark("the second agent owns this now", on: try pushedCanvas(of: model))
@@ -259,7 +264,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         bench.agents[terminal.id] = handle
 
-        push(from: terminal)
+        try await open(from: terminal, model: model)
         let pane = try XCTUnwrap(model.bench?.canvasPanes.first)
         model.send(.paneClose(pane.id), by: .operatorGesture)
 

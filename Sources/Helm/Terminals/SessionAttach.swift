@@ -12,7 +12,7 @@ enum SessionAttach {
     /// The line ghostty runs for a pane showing `session`. It is run the way ghostty runs its own
     /// `command`, through the shell, so every word is quoted.
     static func command(session: String, bench: String) -> String {
-        [bench, "attach", session].map(SpoolLaunchLine.quoted).joined(separator: " ")
+        [bench, "attach", session].map(LaunchLine.quoted).joined(separator: " ")
     }
 }
 

@@ -228,11 +228,11 @@ final class CanvasStateTests: XCTestCase {
     ///
     /// An artifact's JavaScript is written by whoever authored the page, from
     /// `.claude/skills/helm-canvas/SKILL.md`, and it cannot compile against anything here — the
-    /// same runtime boundary `AGENTS.md` grants the mailbox and the spool their carve-outs for.
+    /// same runtime boundary `AGENTS.md` grants its honest duplicates for.
     /// What the carve-out does **not** grant is silence: the rule is that a duplicate is honest
     /// only when something can still detect the drift. `CanvasAnnotationScriptTests
     /// .testTheScriptStillNamesTheSwiftConstantsItUsedToInterpolate` is this exact gate one file
-    /// over, for the exact same reason, and `helm-canvas/test.sh` reaches only `push.sh`.
+    /// over, for the exact same reason.
     ///
     /// **Every value here is a compile-time constant, so this is the whole of the risk.** Rename
     /// the handler, change the kind, or bump the version, and an agent authoring a page from a

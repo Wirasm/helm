@@ -273,7 +273,11 @@ deleted rather than thinned; `bench hook` and `pi/extensions/bench` are the sens
 
 ## M3 — The wire front moves
 
-Issue: #355.
+Issue: #355. **Landed 2026-09-26** in #452 (the verbs, spawn into a pane, `helm/ask`), #457
+(helm shows session panes, answers capture, records a canvas's origin from the verb) and the PR
+that retired the spool, `push.sh` and their scripts. Not built: `bench get canvas|page`, sharing
+operator → agent, the `claude --bg` backend measurement and the socketless drop-box; the plan on
+#355 lists them as follow-ups.
 
 **Goal:** `bench` CLI is the whole agent-facing surface; the six spool scripts retire.
 Runs after M4, so every verb here mutates the bench document benchd already owns.

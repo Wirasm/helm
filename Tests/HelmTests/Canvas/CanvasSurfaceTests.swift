@@ -100,9 +100,8 @@ final class CanvasSurfaceTests: XCTestCase {
                 + "quickdraw mounts into, or helm and the board fight over every gesture")
     }
 
-    /// Four levels up from `Tests/HelmTests/Canvas/` — the same walk
-    /// `SpoolWireConformanceTests` does, and for the same reason: this reads a file no compiler
-    /// touches, from a unit test that has to find it itself.
+    /// Four levels up from `Tests/HelmTests/Canvas/`: this reads a file no compiler touches,
+    /// from a unit test that has to find it itself.
     private var repositoryRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // Canvas/

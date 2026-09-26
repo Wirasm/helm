@@ -100,8 +100,6 @@ fi
 
 sandbox() {
 	SANDBOX=$(make_tempdir sandbox) || return 1
-	# No pi extension writes the spool today; helm's tools do, and the next extension might.
-	export HELM_SPOOL_DIR="$SANDBOX/spool"
 	# The bench extension reports to benchd through `bench hook pi`, which resolves the root
 	# from these. Pointed at the sandbox, it finds no daemon and says nothing.
 	export BENCH_DIR="$SANDBOX/bench"

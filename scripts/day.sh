@@ -6,9 +6,8 @@
 #   scripts/day.sh [--no-push] [since]      (or: just day …)
 #
 # `since` is a date, YYYY-MM-DD; the default is yesterday. The page goes to the prp store of
-# this repo, <store>/digests/<today>.md, and is then pushed to the bench with the helm-canvas
-# skill's push.sh, unless --no-push. Outside a helm pane push.sh refuses and the path is
-# printed instead.
+# this repo, <store>/digests/<today>.md, and is then put on the bench with `bench open`, unless
+# --no-push. With no benchd the path is printed instead.
 #
 # A source that fails says so on the page. An empty section means the source answered with
 # nothing; `_unavailable: …_` means it did not answer. BENCH and GH name the binaries.
@@ -192,8 +191,8 @@ mail() {
 
 echo "day: wrote $page"
 [ "$push" = 1 ] || exit 0
-if "$repo/.claude/skills/helm-canvas/push.sh" "$page"; then
+if "$BENCH" open "$page" >/dev/null; then
     echo "day: on the bench"
 else
-    echo "day: not pushed to the bench (push.sh exit $?); open $page"
+    echo "day: not on the bench (bench open exit $?); open $page"
 fi

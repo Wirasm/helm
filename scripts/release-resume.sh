@@ -8,7 +8,7 @@
 #   --bundle PATH          the helm bundle to replace            (default /Applications/Helm.app)
 #   --pid PID              the helm to quit; must be running from --bundle
 #                          (default: the one process running from --bundle)
-#   --suite NAME           HELM_DEFAULTS_SUITE for the relaunch and the spool (default: none)
+#   --suite NAME           HELM_DEFAULTS_SUITE for the relaunch          (default: none)
 #   --bench-suite NAME     BENCH_SUITE for the benchd restart     (default: --suite);
 #                          a loaded login agent for it is restarted with launchctl kickstart
 #   --cargo-root DIR       where bench and benchd are installed  (default: cargo's own, ~/.cargo)
@@ -21,11 +21,11 @@
 # WHY IT DETACHES. Quitting helm closes every pane, and the caller is normally an agent in one of
 # them. So this checks everything it can in the foreground, then re-runs itself in a new session
 # (double fork, nohup, setsid) and returns. The detached run waits until its parent is init
-# before it touches anything; the push.sh gate in AGENTS.md is where that race was learned.
+# before it touches anything; a skill gate's detached runner is where that race was learned.
 # Every step runs under `timeout`, so nothing outlives its deadline.
 #
 # WHAT IT NEVER LEAVES BEHIND. Once helm has been asked to quit, the session must come back
-# somewhere. If any later step fails (the swap, the relaunch, the spool, the resume), the session
+# somewhere. If any later step fails (the swap, the relaunch, the resume), the session
 # is resumed outside helm instead: `claude --bg --resume <id> --remote-control`, reachable from the
 # phone and with `claude attach`. The log says which of the two happened.
 #
@@ -172,11 +172,11 @@ parse() {
   local kv
   for kv in ${extra_env[@]+"${extra_env[@]}"}; do
     [[ "$kv" == [A-Za-z_]*=* ]] || { echo "release-resume: --env $kv is not KEY=VALUE" >&2; exit 1; }
-    # These move where helm and benchd keep their state. The script waits on the snapshot, writes
-    # to the spool and restarts benchd by the suites alone, so an override here would point the
+    # These move where helm and benchd keep their state. The script waits on the snapshot, resumes
+    # through benchd and restarts it by the suites alone, so an override here would point the
     # new helm somewhere the script never looks. Isolate with --suite and --bench-suite instead.
     case "${kv%%=*}" in
-    HELM_DEFAULTS_SUITE | BENCH_SUITE | HELM_SPOOL_DIR | HELM_BENCH_DIR | BENCH_DIR)
+    HELM_DEFAULTS_SUITE | BENCH_SUITE | HELM_BENCH_DIR | BENCH_DIR)
       echo "release-resume: --env ${kv%%=*} is not supported; use --suite and --bench-suite" >&2
       exit 1
       ;;
@@ -283,7 +283,7 @@ detached_run() {
   local v
   for v in $(compgen -e); do
     case "$v" in CLAUDECODE | CLAUDE_CODE_* | CLAUDE_PID | HELM_PANE | HELM_DEFAULTS_SUITE | \
-      BENCH_SUITE | BENCH_DIR | HELM_BENCH_DIR | HELM_SPOOL_DIR) unset "$v" ;; esac
+      BENCH_SUITE | BENCH_DIR | HELM_BENCH_DIR) unset "$v" ;; esac
   done
 
   log "checkout $(git -C "$repo" rev-parse --short HEAD) on $(git -C "$repo" rev-parse --abbrev-ref HEAD)$(git -C "$repo" diff --quiet HEAD || echo ', dirty')"
@@ -371,17 +371,13 @@ detached_run() {
     sleep 0.5
   done
 
-  # 6. Resume through the spool. Exit 5 (no mailbox) is not a failure: the registry row is the
-  # proof, and it is what gets checked next.
-  local rc_args=() line
-  [ "$remote_control" -eq 1 ] && rc_args=(--arg --remote-control --arg "helm $sha")
-  line="helm was rebuilt and restarted by release-resume; this session resumed on build $sha. Log: $detached_log."
-  log "step 6: spawning claude --resume $session through the spool"
-  env ${suite:+"HELM_DEFAULTS_SUITE=$suite"} timeout 300 swift "$repo/tools/helm-spool.swift" "$cwd" \
-    --command claude --arg --resume --arg "$session" ${rc_args[@]+"${rc_args[@]}"} \
-    --prompt "$line" --timeout 150
-  local spool=$?
-  [ "$spool" -eq 0 ] || [ "$spool" -eq 5 ] || fail "helm-spool exited $spool"
+  # 6. Resume in a benchd pty, shown in a pane of the new helm (`bench spawn --resume`). The
+  # registry row is the proof, and it is what gets checked next.
+  local notice="${detached_log%/log}/resume-notice.md"
+  printf 'helm was rebuilt and restarted by release-resume; this session resumed on build %s. Log: %s.\n' \
+    "$sha" "$detached_log" >"$notice"
+  log "step 6: bench spawn --resume $session"
+  resume_in_bench "$bin" "$session" "$cwd" "$notice" "$sha" || fail "bench spawn exited $?"
 
   local resumed
   resumed="$(await_session "$old_session_pids")" || fail "no live process took up session $session"
@@ -389,6 +385,18 @@ detached_run() {
 }
 
 warn() { log "WARNING: $*"; }
+
+# Resume <session> in a benchd pty, shown in a pane of <cwd>'s workspace and brought forward
+# (`--asked`: the operator is driving this session). Remote Control rides after the posture as
+# a flag of claude's own. The notice file is the session's next message, and outlives the spawn.
+resume_in_bench() (
+  local bin="$1" session="$2" cwd="$3" notice="$4" sha="$5"
+  [ -n "$bench_suite" ] && export BENCH_SUITE="$bench_suite"
+  local rc_args=()
+  [ "$remote_control" -eq 1 ] && rc_args=(--arg --remote-control --arg "helm $sha")
+  timeout 60 "$bin/bench" spawn --agent claude --cwd "$cwd" --resume "$session" \
+    --prompt-file "$notice" --asked ${rc_args[@]+"${rc_args[@]}"}
+)
 
 # A subshell, so BENCH_SUITE is set for bench and benchd only. It is exported only when there is
 # a suite: an empty BENCH_SUITE is a refusal to bench, not the live instance.

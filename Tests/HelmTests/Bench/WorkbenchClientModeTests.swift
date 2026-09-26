@@ -210,34 +210,6 @@ final class WorkbenchClientModeTests: XCTestCase {
             "nothing is spawned while the question is open, nor in a workspace not yet shown")
     }
 
-    /// The spool's `select` is an agent's verb, and the result it reports is read back off the
-    /// document benchd sent — not off anything helm changed itself.
-    func testASpoolSelectIsSentAsAnAgentAndReportsTheDocument() throws {
-        let first = UUID()
-        let hidden = UUID()
-        let path = self.path
-        let rig = try rig(
-            BenchFixture.document(
-                path,
-                BenchFixture.bench([BenchFixture.terminal(first), BenchFixture.terminal(hidden)]),
-                seq: 1))
-        rig.server.answerWith { _ in
-            BenchFixture.document(
-                path,
-                BenchFixture.bench(
-                    [BenchFixture.terminal(first), BenchFixture.terminal(hidden)], selected: hidden),
-                seq: 2)
-        }
-        let panes = WorkbenchSpoolPanes(workbench: rig.model, terminals: rig.terminals)
-
-        let report = try panes.select(hidden).get()
-
-        let sent = try XCTUnwrap(rig.server.verbs.last)
-        XCTAssertEqual(sent["verb"] as? String, "pane/show")
-        XCTAssertEqual(by(sent), "agent")
-        XCTAssertTrue(report.isVisible, "read back off the frame benchd pushed before answering")
-    }
-
     /// A kind this build does not know keeps its pane, with a placeholder where it is.
     func testAnUnknownKindIsAPlaceholderNotALostPane() throws {
         let whiteboard = UUID()

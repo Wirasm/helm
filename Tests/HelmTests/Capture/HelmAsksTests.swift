@@ -9,13 +9,13 @@ import XCTest
 /// rather than left to time out on the agent's side.
 @MainActor
 final class HelmAsksTests: XCTestCase {
-    private final class Capturer: SpoolCapturing {
+    private final class Capturer: WindowCapturing {
         var asked: [(String, String?)] = []
         var refusal: String?
 
-        func capture(to path: String, window: String?) -> Result<CaptureReport, SpoolRefusal> {
+        func capture(to path: String, window: String?) -> Result<CaptureReport, CaptureRefusal> {
             asked.append((path, window))
-            if let refusal { return .failure(SpoolRefusal(refusal)) }
+            if let refusal { return .failure(CaptureRefusal(refusal)) }
             return .success(
                 CaptureReport(
                     path: path, pixelWidth: 200, pixelHeight: 100, scale: 2, window: "helm — m3",

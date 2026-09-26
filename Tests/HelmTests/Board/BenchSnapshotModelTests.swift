@@ -268,8 +268,7 @@ final class BenchSnapshotModelTests: XCTestCase {
     /// gone, so the assertion went with it rather than being kept green by accident.
     ///
     /// The timer still runs, and its reason is real: a **mailbox** and a **registry row** appear
-    /// on disk while helm is running and neither publishes `objectWillChange` — `SpoolModel`
-    /// waits on precisely that. But an owner only reaches the snapshot **attached to a terminal
+    /// on disk while helm is running and neither publishes `objectWillChange`. But an owner only reaches the snapshot **attached to a terminal
     /// pane**, matched on the pane's foreground pid, and this fixture has no pane to attach one
     /// to. So the half this test can state honestly is that the loop stops when the model does;
     /// the noticing half is covered where the panes are, in `BenchSnapshotTests`.

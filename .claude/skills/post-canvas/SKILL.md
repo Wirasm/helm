@@ -13,8 +13,8 @@ from the files the pack's `store` node wrote. If one is missing the driver refus
 filling the gap — a preview that invents its own caption is worse than no preview, because you
 would ship what you saw.
 
-The driver is `build-canvas.mjs` beside this file. It pushes through `helm-canvas`'s `push.sh`,
-which must sit beside this skill (it does in helm's repo and in `~/.claude/skills`).
+The driver is `build-canvas.mjs` beside this file. It puts the page on the bench with `bench open`
+(the `bench` CLI on your PATH, or `$BENCH`).
 
 ## Run it
 
@@ -107,8 +107,8 @@ JavaScript**, which is why the driver bakes data in rather than fetching it.
 | `--store … is required` | Run the resolver block above first, or pass an existing absolute store dir. |
 | `no archon-video library — looked in: …` | Not run from the video project, or nothing stored yet. `cd` there, or set `STATE_DIR`. |
 | `… is missing <file>` | Not a finished archon-video run. A failed `store` leaves `.<run-id>.partial`, which is never picked. |
-| `push failed (exit 8)` or `(exit 6)` | Not in a helm pane. Use `--no-push` and hand the operator the printed path. |
-| `helm-canvas push.sh not found` | `helm-canvas` is not installed beside this skill. |
+| `bench open failed (2)` | No benchd running. Use `--no-push` and hand the operator the printed path. |
+| `bench open failed (ENOENT)` | No `bench` on PATH. Set `BENCH` to its path, or use `--no-push`. |
 
 ## Installing
 

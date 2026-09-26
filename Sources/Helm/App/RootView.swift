@@ -6,7 +6,7 @@ import SwiftUI
 ///
 /// **Composition only.** What is here touches two or more verticals at once: the workspace list
 /// follows the document the bench is drawn from, a key's action needs every owner it might touch
-/// (`LocalActions`), and the spool's adapters need the bench and the rail. Anything that can
+/// (`LocalActions`), and benchd's asks need the client and the window. Anything that can
 /// name a single vertical belongs in that vertical's slice.
 struct RootView: View {
     @ObserveInjection private var inject
@@ -18,11 +18,6 @@ struct RootView: View {
     @StateObject private var archonRail = ArchonRailModel()
     /// The operator's just runs (#356): started by his keys, failures shown on the status bar.
     @StateObject private var justRuns = JustRuns()
-    /// #54's watcher. A `@StateObject` here rather than a `.shared` for the same reason the
-    /// bench is: a second window gets its own, and the claim-by-rename in `SpoolDirectory` is
-    /// what stops two of them acting on one request — the same mechanism that already has to
-    /// hold between two helm *processes*.
-    @StateObject private var spool = SpoolModel()
     @StateObject private var benchSnapshot = BenchSnapshotModel()
     @ObservedObject private var terminalManager = TerminalManager.shared
     /// What a key, a menu item or a button asks for is carried out here (`Actions`). Held so
@@ -95,30 +90,6 @@ struct RootView: View {
                     .paneOpen(surface: .canvas(path: (path as NSString).expandingTildeInPath)),
                     by: .operatorGesture)
             }
-            // The spool (#54) — the one seam an agent with no display can drive.
-            spool.attach(
-                spawner: WorkbenchSpoolSpawner(
-                    workbench: workbench, terminals: terminalManager,
-                    activate: workbench.openWorkspaceForSpawn))
-            // #174's capturer. It needs nothing from this view — it resolves helm's window from
-            // `NSApp` at capture time — so it is attached here only because this is where the
-            // spool is wired, and a second seam for one line would be worse.
-            spool.attach(capturer: AppWindowCapturer())
-            // #176's teardown, #284's bring-forward and #313's naming — **one object, attached
-            // three times**, because all three requests name a pane and are judged against the
-            // same reading of it (`WorkbenchSpoolPanes`). Same two objects the spawner takes and
-            // no `activate`: none of closing a pane, showing one or renaming one opens a
-            // workspace, so it needs nothing from this view at all.
-            let panes = WorkbenchSpoolPanes(workbench: workbench, terminals: terminalManager)
-            spool.attach(closer: panes)
-            spool.attach(selector: panes)
-            spool.attach(namer: panes)
-            // #269's driver. It takes the rail as well as the bench because `toggleRail` is the
-            // one allowed command that touches neither a pane nor a pty — and both objects are
-            // this view's `@StateObject`s, which is why the wiring is here with the rest.
-            spool.attach(
-                commander: WorkbenchSpoolCommander(workbench: workbench, rail: archonRail))
-            spool.start()
         }
         .onDisappear { benchSnapshot.stop() }
         .enableInjection()

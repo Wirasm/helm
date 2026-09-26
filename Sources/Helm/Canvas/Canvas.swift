@@ -282,8 +282,8 @@ final class CanvasModel: ObservableObject {
     /// moment it happened, and pinned by `WorkbenchNoteTests`
     /// `.testQuittingWithAnUnresolvedConflictKeepsTheFileAndLosesTheBuffer` so it stays a decision
     /// rather than becoming an accident. `close()` takes the same position for the same reason,
-    /// and a confirmation is what neither path has: `helm-close` reaches one of them with nobody
-    /// at the pane, and the build-update badge quits helm on the other.
+    /// and a confirmation is what neither path has: an agent's `bench close` reaches one of them
+    /// with nobody at the pane, and the build-update badge quits helm on the other.
     ///
     /// **The other half is the read directly below it, and without it the guarantee is only
     /// probable.** `reconcile` learns about a second writer through `FileWatcher`, which debounces
@@ -654,7 +654,8 @@ final class CanvasModel: ObservableObject {
         // an unresolved conflict (`saveDraft` refuses, by design) and a write the volume rejected
         // (`writeFailure` is up). Both have had a strip on screen since the moment they happened,
         // which is the whole of the warning the operator gets. Making the close ask would put a
-        // modal on a path `helm-close` also reaches, where there is nobody at the pane to answer.
+        // modal on a path an agent's `bench close` also reaches, where there is nobody at the pane
+        // to answer.
         saveDraft()
         watch = nil
         showing = nil

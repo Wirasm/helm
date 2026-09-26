@@ -27,8 +27,8 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | --- | --- | --- |
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
-| `skills` | the canvas, board and post-canvas skill gates | node, zsh, python3, git |
-| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` skill or `RenderableFile.swift` (the CLI's `bench open` checks its list) changed | cargo |
+| `skills` | the board and post-canvas skill gates | node, zsh, python3, git |
+| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill (their snippets run against a real benchd) or `RenderableFile.swift` (the CLI's `bench open` checks its list) changed | cargo |
 | `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
 
 "Changed" means against `origin/development`, committed or not. A missing tool is a `FAIL`
@@ -98,10 +98,6 @@ Both now carry margins of 50× or more and say so in their own headers. **The di
 makes the rest of the suite safe**: a test that sleeps to let a window *elapse* is only made
 more certain by an overshoot, which is why the sibling tests beside both of these have never
 flaked — say which direction yours sleeps in before adding a third.
-
-`SpoolWireConformanceTests` is a maybe rather than a member: it was put under suspicion by
-#291's nine hours of runaway load, and its waits are on subprocesses rather than on a window,
-so it has never been reproduced deliberately.
 
 **Reproduce one by inverting its parameters, not by adding load.** Measured twice, on two
 different tests: #305's six bounded burners reached load 7.68 and the old values passed three
@@ -205,8 +201,8 @@ bash daemon/test.sh
 
 `daemon/` is the bench daemon (`benchd`) — a self-contained Rust cargo workspace, the
 same carve-out as `pi/`: its gate needs only the Rust toolchain, its CI job
-runs only when `daemon/**`, a `.claude/skills/bench-*` skill (the gate executes those skills'
-snippets) or `Sources/Helm/Shared/RenderableFile.swift` (the CLI's `bench open` checks its list
+runs only when `daemon/**`, a `.claude/skills/bench-*` skill or `.claude/skills/helm-canvas/`
+(the gate executes those skills' snippets) or `Sources/Helm/Shared/RenderableFile.swift` (the CLI's `bench open` checks its list
 against it) changed, and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
 `docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
@@ -224,12 +220,6 @@ archon validate workflows helm-merge-queue
 That is `helm-merge-queue` (#420), the prototype merge queue the orchestrator lands PRs with.
 Its README says how to run it and what it is testing. The rest of `.archon/` stays gitignored
 (#263).
-
-**`.claude/skills/helm-canvas/`'s gate (part of `skills`), alone:**
-
-```
-bash .claude/skills/helm-canvas/test.sh
-```
 
 **`.claude/skills/helm-board/`'s gate (part of `skills`), alone:**
 
@@ -258,46 +248,12 @@ stored runs in a temp `ARCHON_HOME` shaped like the pack's `store.py` output, ru
 against them with `--no-push` only, and executes the `SKILL.md` snippet under zsh with `PRP_HOME`
 redirected. Needs node, git and zsh.
 
-`push.sh` is how an agent puts an artifact on the bench, and it is the third mechanism to hold
-that job — the first two shipped broken. Both were verified from a shell the operator typed into,
-where they worked, and both were silent from an agent's tool call, where they did not: a ⌘-click
-the TUI eats before helm sees it (#124), then a bare `printf` whose stdout the harness captures
-(#184). Its gate needs bash and `ps`, which is why it is not in the Swift gate. **What no gate can
-prove is that a pane appeared — run it against a live helm before believing it.**
-
-**The third one shipped broken in the same shape, and #282 is the fix: writable is not the same
-question as helm's.** Outside a pane the walk found a real tty, wrote a real OSC into it, and exited
-`0` — every layer succeeded and nothing reached the bench, with an escape sequence left in a
-terminal that never asked for one. So the check is now about the **pty** rather than the process
-asking: libghostty opens one pty per pane and holds the master, so walking up from the tty until it
-*changes* lands on whoever opened it, and only `helm` is accepted. `$HELM_PANE` is deliberately not
-the check — it is inherited by everything a pane's agent spawns, so inside a nested pty it still
-names the pane while the bytes go where helm cannot see (measured). A foreign terminal is walked
-*past*, not refused at, so a nested pty inside a pane still delivers to the pane's own. **Exit `8`
-is new and means a terminal is reachable that helm does not own** — distinct from `6`, no terminal
-at all, because the operator's next move differs. **A paneless agent has no canvas route at all
-today**: the spool has no `canvas` kind, so `8` means hand over the path.
-
-**And its gate must never deliver, which it did for as long as it existed.** Six of `test.sh`'s
-cases ran the real `push.sh` from the gate's own process tree, so every run by an agent inside a
-pane pushed six artifacts onto the **operator's** bench, each a tab onto a `mktemp` directory the
-gate then deleted — he watched the dead tabs pile up. That is #282 from the other side and the
-better argument for the guard, because it happened rather than being hypothetical. **push.sh is now
-invoked from exactly one line of that file** — one runner everything goes through, detached — and a
-check fails the run if that stops being true. Staging each case individually was the first attempt
-and it removed the instances rather than the bug: `run_code` still called push.sh raw and was merely
-never handed a renderable path, which the next case added beside the extension list would be.
-- **The double fork does not remove the terminal, it removes the ancestry.** A controlling tty is
-  inherited across fork and reparenting does not clear it, so the run still *reports* a tty; what it
-  cannot do is prove that tty is helm's, because `pty_owner` needs the chain and ppid is 1. So the
-  refusal is `6` headless and `8` from a shell that has a terminal — assert the set, not the number,
-  or the gate fails for whoever runs it by hand.
-- **And the reparent races the runner's own startup.** `( ( cmd & ) & )` reparents only once the
-  intermediate shell exits, which can be after the grandchild is running — and a run that proceeds
-  attached is exactly the one that reaches the bench. The runner waits for ppid 1 and refuses rather
-  than proceeding without it.
-- Check it the way it was checked: diff the canvas panes in `~/.helm/bench/snapshot.json` around a
-  run, and expect zero new ones even while a *broken* `push.sh` is the thing under test.
+**The canvas skill has no gate of its own since `push.sh` retired (M3).** An agent puts an artifact
+on the bench with `bench open`, a verb to benchd rather than an escape sequence into a terminal, so
+it works from a tool call, a script and a benchd-spawned agent alike. `push.sh` was the third
+mechanism to hold that job and each shipped silent somewhere: a ⌘-click the TUI ate (#124), a bare
+`printf` the harness captured (#184), then a real OSC into a terminal helm did not own (#282). The
+skill's snippets run in the daemon gate against a real benchd, as the `bench-*` skills' do.
 
 **helm keeps no mailroom (#358). Mail is benchd's**, and helm is one of its clients. Until #358
 helm had its own: `hooks/helm-mail.mjs` for Claude Code, `pi/extensions/helm-mail` for pi, one
@@ -315,12 +271,11 @@ convention written twice, a conformance harness to keep the copies honest, and h
   from its children (#417).
 - **Which agent is in a pane is one question with one answer: benchd's `mail/who` verb**
   (`BenchMailbox` in `Sources/Helm/Mail/`, the wire types in `Sources/HelmWire/Bench/BenchMail.swift`,
-  both shapes pinned by `daemon/fixtures/mail-verbs.json`). `SpoolModel` asks it for a spawn's
-  handle and `CanvasNoteCourier` for where a mark goes. Do not add a second join: helm has no
+  both shapes pinned by `daemon/fixtures/mail-verbs.json`). `CanvasNoteCourier` asks it where a
+  mark goes; for a pane showing a benchd session benchd answers from the session itself. Do not add a second join: helm has no
   record of its own to join against any more.
 - **With no benchd, nothing is addressable, and each caller says so** rather than guessing: a
-  spawn answers `unclaimed` naming `bench wiring --check`, and a canvas note goes to the
-  clipboard with the reason on the pane.
+  canvas note goes to the clipboard with the reason on the pane.
 - **`HELM_MAIL_DIR`, `HELM_MAIL_OFF` and `HELM_MAIL_HANDLE` mean nothing now.** Isolation is
   benchd's: `BENCH_DIR` or `BENCH_SUITE` points a test at its own daemon and record root.
 
@@ -343,7 +298,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   970% of an eleven-core machine, until the operator noticed his fans.
 
   **The damage is not the heat.** A machine held at load ~111 all day is a machine where every
-  later measurement is suspect: `FileWatcherTests` and `SpoolWireConformanceTests` were both put
+  later measurement is suspect: `FileWatcherTests` and the spool's conformance suite were both put
   under suspicion by it, and #291's own numbers were taken on a machine that then *stayed*
   loaded. A confound that outlives the experiment poisons everything measured after it.
 
@@ -381,11 +336,11 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   overshoots, and name them as that.
 - **Review the tree you are shipping.** A rebase that rewrites a file invalidates every
   review of it — re-run them and post against the final sha, not the one you started from.
-- **To see the UI, ask helm to draw itself: `swift tools/helm-capture.swift --out <p.png>`.**
+- **To see the UI, ask helm to draw itself: `bench get screenshot [--out <p.png>]`.**
   **No TCC grant, no display, no keystrokes, no Accessibility** — an app rendering its own view
-  hierarchy is *drawing*, and TCC does not gate it. It is a spool request (`kind: "capture"`),
-  so it works with the screen locked and over ssh, exactly like `helm-spool`. The result names
-  the PNG and says what is in it; exit codes are 2 no answer, 3 refused, 4 could not draw.
+  hierarchy is *drawing*, and TCC does not gate it. benchd asks the helm that follows it
+  (`helm/asked`, answered by `HelmAsks`), so it works with the screen locked and over ssh. The
+  answer is helm's report; exit 4 names the cause when no helm answers within ten seconds.
   **`terminalContent` is the field to read.** It is computed per capture, never assumed:
   `included` (every terminal pane's cells are in the image), `excluded` (none are — their
   regions carry a printed marker in the PNG itself), `partial`, or `absent` (no terminal in the
@@ -397,7 +352,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   legible terminal text. So read the field rather than either assumption.
   - **`windowVisible: false` means a blank canvas in the PNG is not a bug (#408).** With the
     screen locked or the window covered, WebKit suspends an occluded page and the capture draws
-    it as an empty rectangle under a normal header. The script warns on stderr when it is false.
+    it as an empty rectangle under a normal header.
     It works locked, as above; it just cannot show web content that way.
   - **With two helms running, pass `--window <substring of the title>`.** An isolated instance
     is titled `helm — <suite>`. Ambiguity is refused and the refusal lists the titles, so a
@@ -412,7 +367,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   agent's fresh binary. `swift tools/winshot.swift helm <out.png>` exits nonzero when it is
   missing. `--list` needs no grant at all and separates a real window from a crash, a
   zero-sized one or an off-screen one — but says nothing about what is drawn. Prefer
-  `helm-capture` for anything about helm's own surfaces; `winshot` is for what helm cannot
+  `bench get screenshot` for anything about helm's own surfaces; `winshot` is for what helm cannot
   draw, such as another app.
 - **The accessibility tree is a dead end either way**: helm's centre is a Metal-layer NSView
   with no child elements to enumerate (verified against a known-good build). And **a capture
@@ -430,98 +385,58 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   from them every time. A click at a stale coordinate does not miss harmlessly: it activates
   whatever app is underneath and types into it. That happened — a pane click landed in the
   operator's other terminal.
-- **To start another agent in helm, prefer the spool: `swift tools/helm-spool.swift <cwd> --prompt-file <p>`.**
-  It writes `{id, cwd, command, args, prompt}` into `~/.helm/spool` and waits on
-  `results/<id>.json`. **No display, no focused window, no Accessibility grant, no keystrokes**
-  — so it works with the screen locked, headless and over ssh. The result carries the new agent's `terminalId`, `pid`,
-  `sessionId` and **`handle`**, so the next move — sending it mail — needs no lookup: helm
-  created the terminal, and it asks benchd (`mail/who`) for the handle the agent's own hook
-  claimed rather than deriving one (a derivation is silently wrong whenever a live holder forced a
-  longer suffix). An agent whose harness is not wired to `bench hook` is started but
-  unaddressable, exit 5. Exit codes say what happened —
-  3 refused, 4 failed, 5 started-but-unaddressable, 6 abandoned by a restart. Only the agents
-  in `SpoolPolicy.allowedCommands` may be named: a request is a file, so `sh` in a login shell
-  is what an ungated spool would actually be. `HELM_SPOOL_OFF=1` turns the watcher off, which
-  is the negative control for any claim about it. A second instance gets its own spool
-  automatically under `HELM_DEFAULTS_SUITE`.
-  - **`--no-wait` writes the request, prints its path and exits 0 without reading a result**
-    (`tools/helm-spool.swift:171`) — so **exit 0 means the file landed, and nothing more**. There
-    is no terminal, no pid, no handle and no refusal: helm has not looked at it yet, and a request
-    it goes on to refuse still exited 0 here. Use it to fan out several spawns and collect
-    `results/<id>.json` yourself (pass `--id` so you know what to read); do **not** use it to
-    decide an agent started. The default waits for exactly that reason.
-  - **helm answers the "nobody is at the pane" question for you, per agent, in
-    `SpoolUnattendedPolicy`.** A bare `claude` stops at a permission prompt, and a prompt in a
-    pane nobody is watching is indistinguishable from an agent that never started — measured on
-    the first real use of the spool (#179). Each agent gets the operator's own standing choice:
-    `claude` → `--dangerously-skip-permissions` (what `cls` is), `codex` → `-p yolo` (what `cdxy` is), `pi` →
-    `--approve`. A request that names a flag from the same family gets exactly what it asked for
-    and nothing added. **A posture removes a prompt; it never withholds capability.** Blocking
-    belongs in hooks and sandboxes — the operator's gate is the pull request — and a spawn that
-    quietly hobbles an agent produces failures nobody is watching, which is the whole of #179.
-    `allowedCommands` is untouched: `cls` is a script on `PATH` this repo cannot pin, and naming
-    the flag buys the same behaviour without handing the allowlist's meaning away. The full
-    argument, including the costs that were weighed and overruled, is in
-    `Sources/HelmWire/Spool/SpoolRequest.swift`; read it before changing a posture.
+- **Drive the bench with `bench …`** (M3, #355). One CLI is an agent's whole surface onto the
+  bench, the same door the operator's keys go through: `bench open <file|browser|terminal>`,
+  `split`, `show`, `focus`, `move`, `name`, `close <pane>`, `get pane`, `get screenshot`, and
+  `spawn`. The `bench-panes` skill is the guide; `daemon/direction.md` has the design. What an
+  agent needs to hold in its head:
+  - **Appear, don't seize (#125).** Every verb lands in the background: a tab, a column, a badge.
+    `--asked` means the operator asked, and only then may a verb bring something forward or move
+    his keyboard. benchd cannot know what he said, so "only when asked" is the agent's rule; the
+    document refuses any unasked change that would move his focus, and names `--asked`.
+  - **The rules the spool kept, now at benchd's verb boundary.** Closing a terminal needs
+    `--force` (it ends what runs there; a helm-hosted shell is opaque to benchd until M5b), and the
+    pane holding the keyboard also needs `--asked`. Closing a canvas destroys nothing: the file and
+    its `.notes.md` sidecar outlive the tab. A close stops at the pane — no worktree, no branch, no
+    git (#141's rail owns that, behind the operator's own confirmation). `show` only moves a tab in
+    a slot he is not in (#284). A name somebody chose needs `--rename` (#313); benchd's own
+    `<agent> · <folder>` label does not.
+  - **`bench spawn` puts the agent in a benchd pty, shown in a pane** of `--cwd`'s workspace: the
+    pane runs `bench attach <session>` (`SessionAttach`), so the agent keeps running while the
+    pane is hidden, the display sleeps or helm restarts, and it needs no display, no shell and no
+    launch line — which retired #253 and #324. The answer carries `handle`, `session`, `pid` and
+    `pane`, so mailing it needs no lookup. A benchd restart ends its sessions; the pane keeps the
+    `agent` record, and #85's resume offer brings it back.
+  - **Unattended postures (#179): a posture removes a prompt; it never withholds capability.**
+    `claude` → `--dangerously-skip-permissions` (what `cls` is), `codex` →
+    `--dangerously-bypass-approvals-and-sandbox`, `pi` → `--approve`, spelled once in
+    `bench_session::argv`. helm's copy (`UnattendedPosture`) serves only #85's resume line.
   - **A posture cannot remove every prompt, and no flag will fix that — #283 is the measurement.**
-    Claude Code marks some of its own guardrails **bypass-immune**: in the shipped 2.1.226 binary,
-    `CIRCUIT_BREAKER_TRAITS.dangerousRemoval = { bypassImmune: true }`, and the refusal says so
-    itself — *"This requires explicit approval and cannot be auto-allowed by permission rules."*
-    Reproduced 2026-08-10 under `claude --dangerously-skip-permissions`, which is the posture
-    verbatim: a plain `rm "$d"/*.json` raised *"Dangerous rm operation on possibly-empty variable
-    path"* and sat there. In the incident it sat there for **six and a half hours**. So when a
-    spool-spawned agent goes quiet, do **not** reach for a new flag — the posture is applied and
-    working. Read the pane's `agent` record in `snapshot.json` instead (see the bench-snapshot
-    bullet below); it is the agent's own report of being blocked, and it is the only thing outside
-    the process that can see this.
-  - **The launch line is pasted and then submitted separately, and it has to be.** libghostty
-    wraps *every* pasted text (`paste(text:)`) in bracketed-paste markers when the shell has enabled mode 2004 —
-    fish, zsh and bash all do — so a line ending in `\r` lands on the command line and simply
-    sits there. Measured, and it cost the first live run: a terminal opened, a shell ran, and
-    no agent ever started. `WorkbenchSpoolSpawner.send` pastes, then sends Return as a
-    `text:` binding action.
-- **Why the spool is a script, and must stay one.** It exists because the GUI spawn path it
-  replaced (`helm-spawn`, deleted in #377) could not work headless: it needed an unlocked screen,
-  a visible helm window and an Accessibility grant on the invoking context, and no agent can
-  grant itself any of them. #51's rung 2 is a channel
-  needing none — a file appears, helm acts, helm writes a file back.
-
-  That buys nothing unless the **caller** is equally unencumbered, and three properties are what
-  make it so. All three were measured when #221 tried converting these scripts into SPM
-  executable targets, and all three broke:
-  - **No build.** `swift tools/helm-spool.swift` compiles one file and does not resolve
-    `Package.swift`. An SPM target does — and SPM resolves the **whole** manifest before
-    building anything, so `swift run helm-spool` needs helm's whole graph, GhosttyKit's binary
-    included, fetched and built before an agent could spawn anything. (Measured by #221 when
-    that graph still needed a gitignored `vendor/` checkout: a fresh checkout failed outright.)
-  - **No cwd.** `swift ~/…/helm/tools/helm-spool.swift` is a path any working directory can
-    name. `swift run helm-spool` requires the cwd to be inside the package; from anywhere else
-    it is `error: Could not find Package.swift in this directory or any of its parent
-    directories.` **This is the one that matters most** — hosting an agent in whatever repo the
-    operator is working in is the normal case, not an edge one.
-  - **No toolchain state.** No resolved dependencies, no `.build/`, no vendored framework. A
-    machine that has never built helm can still drive it.
-
-  **So the spool's wire format and its directory-resolution rules are both duplicated between
-  `tools/*.swift` and `HelmWire`, and that duplication is honest** — the same carve-out as
-  `pi/`, for the same reason: a runtime boundary makes sharing impossible. What is
-  *not* optional is that it be **detectable**, which is what `SpoolWireConformanceTests`
-  (`Tests/HelmTests/Spool/`) is for: it runs each real script as a subprocess and checks both
-  directions — the request it writes, decoded with the real type, and its exit code and stderr
-  against a real `SpoolResult` for **every** `Status` case, not a sample — plus `helm-command`'s
-  hand-copied allowlist against `SpoolCommandPolicy` itself, plus each script's hand-copied
-  **id pattern** against `RequestID.pattern` and the refusal it drives (#260), plus the
-  `HELM_DEFAULTS_SUITE` half of directory resolution against a real, disposable suite. The one
-  branch it cannot reach is the bare default (no override, no suite), which resolves to the
-  operator's actual `~/.helm/spool` and cannot be redirected — the test file's own header has
-  the measurement. Everything else it does reach fails a test rather than shipping silently.
+    Claude Code keeps some guardrails **bypass-immune** (`CIRCUIT_BREAKER_TRAITS.dangerousRemoval =
+    { bypassImmune: true }` in 2.1.226): under `--dangerously-skip-permissions` a plain
+    `rm "$d"/*.json` raised *"Dangerous rm operation on possibly-empty variable path"* and sat
+    there for six and a half hours. When a spawned agent goes quiet, do **not** reach for a new
+    flag: read its own report — `bench sessions --all` (a row `waiting` with its `waitingFor`
+    words), or a helm pane's `agent` record in the snapshot below.
+  - **The prompt is a file, and `ps` shows its path, never its text (#93).** A spawn's argv carries
+    one sentence naming the file, which the agent reads as its first act, so the file must outlive
+    the spawn. A command substitution would put the whole prompt in the agent's argv, which is the
+    disclosure #93 was filed over.
+  - **A spawn needs Claude Code to already trust the directory.** An untrusted directory stops at
+    "Is this a project you trust?" before the session registers, which looks like a slow agent.
+    Trust is inherited from an ancestor, and there is no non-interactive way to grant it: run
+    `cd <dir> && claude` once by hand.
+  - **A line helm types into a terminal is pasted, then submitted separately.** libghostty wraps
+    every `sendText` in bracketed-paste markers when the shell has mode 2004 on, so a trailing
+    `\r` sits on the command line unsubmitted. `TerminalLaunchLine.send` pastes, then sends Return
+    as a binding action; #85's resume offer and the sessions drawer use it.
 - **To read the bench without a display, read helm's snapshot** —
   `~/.helm/bench/snapshot.json`, or `~/.helm/bench-<suite>/snapshot.json` under
   `HELM_DEFAULTS_SUITE`; `HELM_BENCH_DIR` explicitly overrides that root. It is private
   (`0700` directory, `0600` file), atomically replaced JSON *report*, never a restore format.
   Check `format == "helm.bench-snapshot"`, support its advertised `version`, and check
-  `writtenAt` before acting. Match a spool result's `terminalId` to a terminal pane's `id`;
-  `isVisible` says it is on screen and `isFocused` says it has the keyboard. Parked workspaces
+  `writtenAt` before acting. Match a pane id (`bench spawn`'s `pane`, your `HELM_PANE`) to a pane's
+  `id`; `isVisible` says it is on screen and `isFocused` says it has the keyboard. Parked workspaces
   preserve arrangement and terminal identity but cannot claim visibility or focus. Read on
   demand—do not watch the file inode across replacements.
   - **A terminal pane carries `agent`, which is how you find an agent that has stopped and is
@@ -550,138 +465,6 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     OSC 9/777 — and never bytes, so "this pane has produced nothing for N minutes" is not a
     question helm can ask at all, and *waiting at a prompt* versus *thinking hard* is not
     something it can see from outside. It does not need to: the agent says so itself.
-- **To close a pane again, `swift tools/helm-close.swift <pane-uuid> [--force]`.** The
-  inverse of `helm-spool`, needing what it needs — nothing: a file appears, helm acts, helm
-  writes a file back (#176). **It names a pane, and a pane holds a terminal or a canvas** — one
-  uuid namespace (`Pane.id`), so the request carries no discriminator and a canvas close is
-  byte-identical to a terminal one (#284). Three ways to know a uuid, and **knowing it is the
-  scoping**: a spawn or command result's `terminalId`, the `HELM_PANE` of the pane you are
-  running in, or — for an artifact you pushed, since `push.sh` hands back no id — the `id` of the
-  `"kind": "canvas"` record in `~/.helm/bench/snapshot.json`. helm deliberately does *not* check
-  that it spawned the pane for you: that would buy no safety (anything that can write into the
-  spool is already inside the trust boundary), would not survive a restart (the pane is
-  persisted, an in-process memory of spawning it is not), and would forbid the two legitimate
-  cases — an agent closing the pane it is itself in, and a coordinator tidying up a teammate.
-  `CloseRequest` argues it in full.
-  - **Two refusals, they are not the same refusal, and only one of them can fire on a canvas.**
-    A pane with a **live process** refuses unless you pass `--force`, because closing it kills
-    whatever was running and loses what it had not written down — "is anything running" is
-    `getppid(foreground) == getsid(foreground)`, the foreground being a *child* of the pty's
-    session leader meaning an idle prompt, because libghostty spawns one `/usr/bin/login` per
-    pane and that is what leads the session. (`getsid(fg) == fg` is the rule that looks right and
-    is not: it calls every idle pane busy, and `SpoolClosePolicyTests` pins that it stays gone.)
-    A **canvas** has no pty at all, so it is never busy and never needs `--force`. The pane the
-    **operator is working in** refuses *and `--force` does not override it*, whichever the pane
-    holds: force is a caller asserting about work it owns, and where the operator's eyes are is
-    not something a file on disk gets a say in. Both are `refused` results with a reason, exit 3.
-  - **Closing a canvas destroys nothing, which is why this needed no ruling (#284).** A canvas
-    pane is an address, not a document: the artifact is a file on disk helm only reads, and the
-    operator's annotations are a `.notes.md` sidecar **beside** it (`CanvasNotes.sidecarURL`).
-    Both outlive the tab, a re-push re-opens the same source, and a `closed` result for one
-    carries **no `pid`** — the honest answer to "what did I just destroy". Before this,
-    `push.sh` was add-only and a re-pushed artifact left orphan tabs only the operator could ⌘W.
-    Bringing a canvas *forward* is the other half of #284, and it is `helm-select` below.
-  - **It stops at the pane — no worktree, no branch, no git at all.** #141's rail already owns
-    that, and its safety *is* an operator confirming a modal against eligibility rules; a spool
-    request has nobody at the pane by construction, so reaching that rail from here could only
-    mean a dialog no one will answer or a confirmation skipped. That is the strongest possible
-    guarantee that unmerged work is never destroyed. `SpoolClosePolicy`'s header has the
-    argument and the shape a later worktree kind would have to take.
-- **To bring a pane forward, `swift tools/helm-select.swift <pane-uuid>`** — the fifth spool
-  kind (#284), needing what the other four need: nothing. It makes the pane the one its slot is
-  **showing**, which is what *visible* means, and leaves **focus** where the operator put it
-  (an agent's `pane/show`, which benchd's focus rule leaves off the keyboard). Same uuid namespace and
-  the same three ways to know one as `helm-close`.
-  - **It exists because `push.sh` offers rather than inserts.** On a busy bench a pushed artifact
-    lands as a background tab — `isSelected: false`, `isVisible: false` — so #272's re-push
-    refresh was real and *unobservable to the agent that triggered it*. The `selected` result
-    carries `select.isVisible`, read back off the bench, which is the answer that was missing.
-  - **The rule is one sentence: an agent may show a pane in a slot the operator is not in**, and
-    there is no override — `helm-select` has no `--force`, because `CloseRequest.force` is a
-    caller asserting about work *it* owns and where the operator's eyes are was never that.
-    Refused: the pane holding the keyboard, and — the case a close's rule cannot see — **a
-    background tab of that same slot**, because the focused slot's *selection* is the focused
-    pane, so showing one of its tabs takes the keyboard. `SpoolPaneState.keyboard` is three-valued
-    for exactly that reason (`elsewhere` / `inItsSlot` / `here`), and `SpoolSelectPolicy` is
-    exhaustive over it.
-  - **The result proves the promise rather than asserting it**: `select.focusedPaneBefore` and
-    `select.focusedPaneAfter` are two readings of `Workbench.focusedPane` taken either side of the
-    mutation, and the script warns loudly if they differ. Exit codes are 2 no answer, 3 refused,
-    4 helm could not act, 6 abandoned.
-- **To call a pane something, `swift tools/helm-name.swift <pane-uuid> <name> [--rename]`** — the
-  sixth spool kind (#313), needing what the other five need: nothing. The name goes on the tab and
-  **survives the restart the pane already survives** — it is on the pane in benchd's document,
-  not on the session. Same uuid namespace and the same three ways to know one as `helm-close`; a canvas is
-  named exactly as a terminal is.
-  - **Where it can be read back, exactly, because the first draft of this bullet overclaimed it.**
-    The result's own `name` block always carries it. `snapshot.json` carries it only for a **live
-    terminal** pane, as `terminal.title`: `BenchSnapshot` reaches a name through
-    `TerminalSession.displayTitle`, so a pane whose session is gone reports `title: null`, and
-    `CanvasRecord` has never had a title field at all. So a named canvas shows its name on the tab
-    and reports it in the result, and is silent in the snapshot — read the result. Giving the
-    snapshot a name field of its own is `BenchSnapshot`'s change to make.
-  - **It exists because #93 made the tab useless, and the trigger is fixed without it.** An agent is
-    handed a *path* rather than a prompt, so Claude Code titles its session after the pointer and
-    every spool-spawned tab read *"Read and act on spool prompt file"*. helm wrote the request, so it
-    already knows which agent is starting and where: a spawned pane now arrives called
-    `claude · <tree>` (`PaneName.derived(for:)`), and **a name outranks the shell's OSC title**.
-  - **The rule is one sentence, and it is about ownership rather than the keyboard: an agent may
-    name a pane nobody is already calling something.** The operator's ruling — *"by default they
-    name new panes, and by default they dont rename if editing existing, but i can ask for a
-    rename"* — and the half helm can **check** is *"is anybody already calling this pane
-    something?"*, answered from its own state rather than from a did-I-spawn-this ledger that would
-    not survive a restart (`CloseRequest`'s header rejects that shape at length). helm's own derived
-    label is **not** somebody's choice, so an agent replacing it needs no flag — which is why
-    `PaneName` carries provenance and is not a `String?`: without it the agent helm had just spawned
-    would be refused when it named its own pane.
-  - **`--rename` is the caller saying the operator asked, and helm cannot check that.** It is
-    `helm-close --force`'s shape, defaulting to off for its reason. Unlike `force` it overrides no
-    other rule, **because there is no other rule** — a rename moves no keyboard and destroys
-    nothing, so `SpoolNamePolicy` never reads `SpoolPaneState.keyboard` at all, and naming the pane
-    the operator is typing in is ordinary. A caller that lies costs a wrong word on a tab, and the
-    fix is another rename.
-  - **The result is the measurement**: `name.previousName` (absent when nothing had named it) and
-    `name.name`, **read back off the bench** rather than echoed. Exit codes are 2 no answer,
-    3 refused, 4 helm could not act, 6 abandoned.
-- **To drive the bench in between, `swift tools/helm-command.swift <command>`** — the fourth
-  spool kind (#269), needing what the other three need: nothing. `HelmCommandName` names
-  eighteen commands (#219, #287, #289 and #350) and helm **will take five of them from an
-  agent**: `newTerminal`, `splitRight`, `splitDown`, `toggleRail`, `openBrowser`. `--list` names
-  them without a running helm.
-  - **The rule is one sentence: rearranging the bench is fine, taking focus is not.** It is
-    #125's *appear, don't seize* on a channel that can now ask for anything the keymap can — an
-    agent selecting your active tab mid-thought is the wrong-terminal click arriving through a
-    supported API. The other thirteen are `refused` results **naming the reason and, where one
-    exists, the route to use instead**: `closePane` points at `helm-close`, `selectTerminal` at
-    `helm-select` (#284),
-    `openCanvasFile` and `openArtifact` at `push.sh`, `openWorkspace` at `helm-spool` — a
-    spawn's `cwd` is the workspace helm opens for it. The rest name no route because there
-    isn't one yet, and say so by saying what an addressed version would have to carry.
-  - **Every command that is still refused is one with no address**, and that is #176's rule
-    extended rather than reinvented. `helm-close` names a pane and refuses the one holding the
-    keyboard, and `helm-select` does the same for the other direction; `selectTerminal`
-    (an *index* into the focused slot), `closePane`, `adjustFontSize` and `jumpToPrompt`
-    name nothing, so they act on whichever pane the operator is in and there is nothing for a
-    policy to check. An addressed version would carry a pane and refuse it when
-    `SpoolPaneState.holdsKeyboard` — the shape is `CloseRequest`'s, and for `movePane` it is
-    still not built.
-  - **An allowed command becomes a bench verb sent as an agent** (`WorkbenchSpoolCommander`):
-    `newTerminal` → `pane/open` of a terminal, the splits → `pane/split`, `openBrowser` →
-    `pane/open` of the browser; `toggleRail` touches no pane and calls the rail. The verb's focus
-    rule is what keeps it from seizing — the keyboard moves only for the operator, or when the
-    caller says he asked (#125), and benchd applies it. The honest cost,
-    recorded: an agent's split still **halves the column the operator is in**, because a bench
-    command carries no address — a layout change around them, not a focus change to them,
-    exactly as a pushed artifact already rebalances columns.
-  - **The result says what happened**, so no caller has to re-read `snapshot.json` and race it:
-    `command.paneCreated` (also copied to `terminalId`, so `helm-close <terminalId>` is the next
-    move with no lookup), `command.focusedPaneBefore`/`After` — **equal, which is the focus rule
-    made checkable by the caller rather than argued in a header** — and the bench's column and
-    pane counts. Exit codes are 2 no answer, 3 refused, 4 helm could not act, 6 abandoned.
-  - `SpoolCommandPolicy` (`Sources/HelmWire/Spool/SpoolRequest.swift`) is the allowlist and the
-    argument; it is **exhaustive over `HelmCommandName`**, so a command cannot be added without
-    a verdict — `movePane` (#287) and `newNote` (#289) are the two since, and both arrived
-    refused because the compiler asked. Read it before widening the list.
 - **The operator writes on the bench now, and every markdown canvas is a file he can write in**
   (#289). The header carries a **Write ⇄ Read** toggle; **Read is where it starts**, so an
   editable canvas is indistinguishable from a read-only one until he presses it. Write opens a
@@ -719,8 +502,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
       that reason — re-reading at the click would hand him a third version he never saw).
   - **Two honest limits, and neither is silent while it is happening.** Closing the pane **or
     quitting** with a conflict unresolved takes the buffer with it — the strip has been up since
-    the moment it happened, and neither path can ask: `helm-close` reaches the first with nobody at
-    the pane, and the build-update badge quits helm on the second. **The tempting fix is worse than
+    the moment it happened, and neither path can ask: an agent's `bench close --force` reaches the
+    first with nobody at the pane, and the build-update badge quits helm on the second. **The tempting fix is worse than
     the limit**: treating those exits as an implicit *keep mine* would write what is usually a
     sentence over what is usually a whole rewrite, at the one moment nobody can be asked which — so
     helm keeps the copy another process can reproduce and loses the one it cannot, and
@@ -733,9 +516,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     wakes you when a file changes, same as the state latch. `notes/` in particular is his
     directory: writing there is still wrong, for a reason about ownership rather than about what
     helm will let anyone type into. Artifacts go to `plans/`, `research/`, … and reach the bench
-    through `push.sh`.
-- **A canvas talks back on three channels, and none of them is a notification.** `push.sh` is the
-  way out; these are the ways in, and an agent that pushed a page and then waited for something to
+    through `bench open`.
+- **A canvas talks back on three channels, and none of them is a notification.** `bench open` is
+  the way out; these are the ways in, and an agent that pushed a page and then waited for something to
   happen has misread all three. **Nothing wakes you.** The skill (`.claude/skills/helm-canvas/`)
   is the capability surface; this is which mechanisms exist and where each is argued.
   - **The state latch — a page reporting on itself** (`Sources/Helm/Canvas/CanvasState.swift`,
@@ -755,11 +538,12 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     in the **page** world on purpose: the annotation bridge lives in a named content world (#164)
     exactly so an artifact's own JavaScript cannot post to helm, and Swift is the only thing that
     can reach both worlds.
-  - **A mark the operator makes is mailed to the agent that pushed the canvas**
+  - **A mark the operator makes is mailed to the agent that opened the canvas**
     (`CanvasNoteRoute.swift`, `CanvasNoteCourier.swift`, #205). This is the one channel where
     something arrives without you asking, and it arrives as **mail** — so it reaches you the way
-    all mail does: through benchd. The route resolves **late**: helm records which *pane* pushed the
-    canvas (`CanvasOrigin`), never a pid or a handle, and asks benchd (`mail/who`) who is in that
+    all mail does: through benchd. The route resolves **late**: helm records which *pane* opened the
+    canvas (`CanvasOrigin`, read off the `bench/changed` event's `by`; benchd fills in the pane of
+    an agent it spawned), never a pid or a handle, and asks benchd (`mail/who`) who is in that
     pane at the moment the mark is made — a handle read at push time is stale the moment that agent
     restarts, and mail to it is never read. Not persisted, for the same reason: a restored
     terminal pane is a fresh empty shell, so an origin surviving a relaunch could only name
@@ -767,27 +551,6 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     the note goes to the clipboard and the pane says which of the two failures it was** — nobody
     pushed this canvas, or the agent that did is gone. A silent no-op is the worst outcome here,
     because the operator believes the note was sent.
-- **What `ps` shows of a spawned agent, and what it does not (#93).** The spool hands the agent a
-  **path**, never the prompt. The line used to be `cls "$(cat <file>)"`, which
-  reads as private and is not — a shell resolves a command substitution *before* exec, so the
-  whole prompt became an element of the agent's own `argv`. Measured live 2026-08-07:
-  `ps -o command= -p <pid>` printed a running agent's entire multi-line prompt, and the disclosure
-  #93 was filed over is an agent running `pgrep` and finding another agent's plan in its own
-  output. **What is bought is that the prompt is out of incidental process-table output. It is not
-  secret**: argv carries the path, the file is `0600` in a `0700` directory, and every agent here
-  runs as the same user, so anything that goes looking can read it — the trust boundary this
-  channel already assumes. **No agent has a flag for this**, measured against `claude --help`,
-  `pi --help` and `codex --help`: all three take the first prompt as an argv element and none
-  reads it from a file interactively, so delivery is the agent's own first act and **the prompt
-  file must outlive the spawn** — the spool keeps `prompts/<id>.txt`.
-- **A spawn needs Claude Code to already trust the directory.**
-  An interactive `claude` in an untrusted directory stops at "Is this a project you trust?"
-  *before* it registers a session, which from the outside is indistinguishable from an agent
-  that is merely slow — it cost a full 90s timeout to find. Trust is **inherited from an
-  ancestor**, so accepting it once at a project root covers every worktree under it; a fresh
-  worktree under `~/Projects/mine/sild` needs nothing. There is no non-interactive way to grant
-  it (`claude -p` skips the dialog but records nothing), so run `cd <dir> && claude` once by
-  hand.
 - `swift run helm` to iterate, `make app` for the real bundle.
 - **`make release` builds the real bundle and tells a running helm about it; `make install` is
   that plus the copy.** The split exists because `install` refuses against a live bundle —
@@ -821,7 +584,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     honest limit, and it lands on the iteration path where `swift run helm` is what anyone is
     actually using.
   - The format is written by shell and read by Swift, so it is a duplicate across a runtime
-    boundary — the same carve-out as the spool scripts, and the same
+    boundary — a runtime boundary makes sharing impossible, and that carries an
     obligation. `BuildStampScriptTests` runs both scripts as real subprocesses and decodes what
     they write with the real types, so a renamed key or field fails a test instead of shipping
     a helm that can never see an update.
@@ -829,8 +592,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   It builds (`make release`, `cargo install` of `bench` and `benchd`), quits helm by pid, restarts
   benchd (with `launchctl kickstart -k` when the login agent from `just benchd-install` is loaded,
   so it never starts a second one), swaps the bundle with `BundleSwap.script` itself (read out of
-  the Swift source, so there is one swap), and resumes that Claude Code session in the new helm
-  through the spool with `--remote-control`. It detaches first, because the caller is normally an
+  the Swift source, so there is one swap), and resumes that Claude Code session with `bench spawn
+  --resume` and `--remote-control`, in a benchd pty shown in a pane of the new helm. It detaches first, because the caller is normally an
   agent in a pane the quit closes. **Once helm is quit the session always comes back**: any later
   failure resumes it outside helm with `claude --bg --resume`, and the log says which happened.
   Logs go to `~/.helm/build/release-resume.log`, last line `RESULT:`. Every target is a flag
@@ -867,16 +630,15 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   the legacy `helm` domain, a path, and `NSGlobalDomain` all stop the launch, because falling back
   to `com.wirasm.helm` under a variable that promised isolation is precisely the disaster. An
   isolated instance says so — the status bar carries the suite name on an accent capsule, and the
-  window is titled `helm — <name>`, which is what `winshot --list` and `helm-capture --window` see
+  window is titled `helm — <name>`, which is what `winshot --list` and `bench get screenshot --window` see
   when two helms are running. The window frame is not autosaved under it: that is AppKit's write
   rather than helm's, and the only one a suite cannot catch by itself.
-  - **"No reachable path" is a promise about four directories, not one.** The suite moves the
-    defaults, the spool (`~/.helm/spool-<name>`), the bench snapshot (`~/.helm/bench-<name>`) and
-    benchd's root (next bullet). A fifth, the mailbox, leaked until #285: a capability test under
+  - **"No reachable path" is a promise about three directories, not one.** The suite moves the
+    defaults, the bench snapshot (`~/.helm/bench-<name>`) and benchd's root (next bullet). A fifth, the mailbox, leaked until #285: a capability test under
     `HELM_DEFAULTS_SUITE=drivetest` spawned an agent that claimed an address in the operator's live
     `~/.helm/mail`. helm has no mailroom since #358; mail lives under benchd's root, so the bullet
     below now covers it.
-  - **benchd's root is the fourth, and it leaked the same way until #378.**
+  - **benchd's root is the third, and it leaked the same way until #378.**
     `BenchRoot` (`Sources/HelmWire/Bench/`) read only `BENCH_DIR` and `BENCH_SUITE`, so an
     isolated helm opened the operator's `~/.bench` browser and forwarded its clicks and keys into
     his signed-in Chrome. Now, with no `BENCH_*` set, the suite resolves `~/.bench-<name>`, the root
@@ -903,8 +665,8 @@ the door every change goes out through;
 `Keymap/` is the key table and its readers (below); `Bench/` is helm as benchd's client —
 the socket, the follower and the one-time import (below);
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
-libghostty seam — sessions, the host view, the pane environment, and `push.sh`'s landing site;
-then `Spool/`, `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
+libghostty seam — sessions, the host view, the pane environment, and `SessionAttach` (a pane
+that shows a benchd session); then `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
 `StatusBar/`, `Build/`, `Shared/`, `Capture/`, `Mail/`. Two of those have no bullet anywhere
 above and are the easiest to be surprised by:
 
@@ -929,8 +691,8 @@ above and are the easiest to be surprised by:
   Swift in `Board/` knows it exists. `CONTEXT.md` now defines both senses.
 
 **benchd owns the bench; helm draws it** (#354). Every change is a `BenchVerb` sent through
-one door, `WorkbenchModel.send(_:by:asked:)` — a key, a click, a drag, a ⌘-clicked link,
-`push.sh`, the spool — and it says who asked, which is what benchd's focus rule reads. Keys are rows of one table, read by the key monitor, the menu and the status bar's hints;
+one door, `WorkbenchModel.send(_:by:asked:)` — a key, a click, a drag, a ⌘-clicked link —
+and an agent's verbs come straight to benchd through `bench`; either way it says who asked, which is what benchd's focus rule reads. Keys are rows of one table, read by the key monitor, the menu and the status bar's hints;
 a row's action is data, a `VerbTemplate` resolved against the bench when the key fires or a
 `LocalAction` that never reaches the document. The table in force is `Keymap.table`
 (`Sources/Helm/Keymap/`): the built-in `KeyBindings.all` overlaid by the operator's
@@ -947,8 +709,10 @@ bench: nothing is drawn until benchd's follower delivers the document the verb m
   is in defaults. The benches helm used to save there go into benchd's first empty document
   once, as `workspace/import` (`BenchImport`), and are left where they were.
 - **#85's question stays helm's** until M5b: its answer goes back as `workspace/reset` or
-  `workspace/unshelve`. A spool spawn's workspace is put on screen (an agent's `workspace/open`
-  with `asked`), because a terminal's pty starts only once it is drawn; M5b ends that.
+  `workspace/unshelve`. A pane showing a running benchd session is never asked about: the agent
+  is right there. **The question is invisible to benchd**, so an agent's `bench` verb into a
+  workspace helm is asking about still lands, and the operator's "fresh" shelves it with the rest.
+  Accepted until M5b dissolves the question (plan D4 of #354).
 - **benchd unreachable** is a status-bar capsule naming the socket; the last document stays on
   screen and a verb fails visibly. helm never starts benchd: `just benchd-install` makes it a
   login agent.
@@ -982,31 +746,15 @@ comment on the other is not a contract — it is a contract plus a bug waiting f
 the far half from memory. #210 caught four of these in the canvas; they are not a canvas habit.
 `Notification.object` is `Any?`, so the keymap and the menu posted different objects for the same
 row and four View ▸ Focus commands were silent no-ops from the day they were split out (#152).
-`tools/helm-close.swift` hand-rolls the spool's JSON as `["id": id, "kind": "close", …]`, and
-that is only half fixed. `HelmWire` (#221) is a library target holding `SpoolRequest`,
-`SpoolResult` and the spool's directory-resolution rules, and `Helm` and its own tests compile
-against it for one definition instead of each restating it. `tools/*.swift` cannot join them: a
-single-file script needs no `Package.swift` resolved and no cwd inside this repo, which is the
-whole reason the spool is a script rather than an SPM target — see "Why the spool is a script,
-and must stay one", above, for what #221 measured when it tried the other way. So the format is
-typed once in `HelmWire` and spelled out once more in `tools/helm-spool.swift`/`helm-close.swift`/
-`helm-capture.swift`/`helm-command.swift`/`helm-select.swift`/`helm-name.swift`, on purpose. A
-duplicate is honest
-only when a runtime boundary makes
-sharing impossible, and the spool's wire format earns that carve-out: written twice, once in
-`HelmWire` and once by hand across the six scripts, for the reasons just given. It is not left to
-drift unnoticed — `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) runs each spool script as a real
-subprocess and checks both directions of the spool format (the request it writes and, against
-every `SpoolResult.Status`, its exit code and stderr) plus each script's hand-copied id pattern
-against `RequestID.pattern` (#260) plus the `HELM_DEFAULTS_SUITE` branch of
-directory resolution, so a drift anywhere in that surface fails a test rather than shipping
-silently. The one branch it cannot reach is the bare default resolution, which the test file's
-own header explains — it resolves to the operator's live spool, and a test does not get to write
-there. `winshot.swift` stays a
-standalone script too, for a simpler reason — it does not touch the spool's wire format at all.
+The bench's wire has one spelling: the Rust types in `daemon/crates/bench-wire` (and
+`bench-doc`), with helm's Swift copies in `HelmWire` pinned by the shared fixtures in
+`daemon/fixtures/` — both gates read the same files, so a field renamed on either side turns one
+of them red. That is the honest duplicate: a runtime boundary makes sharing impossible, and a
+fixture makes the drift detectable. The spool's six hand-written scripts were the last copy with a
+weaker check; they retired with M3.
 
 **A payload that can grow a second kind carries a discriminator from the first one.**
-`SpoolRequest`'s `{id, kind}` envelope and `Pane.Content`'s string `kind` cost one field each and
+`HelmAsk`'s `kind` and `Pane.Content`'s string `kind` cost one field each and
 buy a decoder that can refuse what it does not understand — `Pane.Content` throws on a `kind` this
 build never heard of, and `Slot` drops that pane rather than guessing. The canvas bridge's
 `{id, text, rect}` has no such field, and adding one once a second kind exists is a migration
@@ -1020,69 +768,15 @@ a helper, and `WorkbenchTests` took the shortcut anyway (#88) — the explicit `
 the unstandardized value unconstructable.
 
 **What the rule has bought since, and how each defect was found.** `WorkspacePath` (#226): a
-pushed artifact is routed by comparing `request.workspacePath == model.workspacePath` **by value**,
-so a path that reached that line un-normalized matched nothing and the artifact simply never
-appeared — no error anywhere. `Handle` (#231, #233, #239): a handle *looks* derivable, and a
-derived one is silently wrong whenever `deriveHandle` widened its suffix 4 → 6 → 8 to dodge a live
-holder, which the caller cannot see. `TerminalID` (#231): a `UUID` in the app, `.uuidString` across
-the spool and `UUID(uuidString:)` on the way back — a parse a caller could forget, answered with a
-`nil` three calls downstream instead of a compile error. **All three were caught by a reviewer
-reading a comment, none by a red test**, which is the reusable part: the rule fires while the
-defect is still hypothetical, and by the time a gate can see it the newtype is a migration.
-
-**A stored raw field behind a validating constructor is not a violation — it is the shape.**
-`CloseRequest.terminal` and `SpawnRequest.cwd` stay `String` because
-a request is decoded permissively in shape and judged strictly afterwards — that is what makes a
-malformed uuid a `refused` result naming the reason rather than unreadable JSON under the wrong id.
-Each of those argues itself in its own header; do not "fix" them.
-
-**Nothing in the spool is loose today, and #260 is where the last one was closed.** That is a real
-state worth recording rather than a gap to leave unmentioned — #250 established as much when it
-found this file's previous evidence list had expired. The spool request `id` was the last field
-answered by reading upwards: gated as the filename it is — *"`..` and `/` are the whole reason: an
-ungated id writes wherever the caller likes"* — by a regex applied at exactly one edge, while the
-value itself stayed a bare `String` in seven declarations with open initializers.
-
-**The cost was reachable in two launches, with no crash involved, and it is now a red test rather
-than an argument.** `answerAbandoned` took an id straight out of a claimed request's JSON via
-`SpoolDirectory.abandoned()` — decoded with no pattern check — and handed it to a path builder;
-`appendingPathComponent` does not collapse `..`, so `results/../../../../tmp/pwned.json` was a real
-write to `/tmp/pwned.json`. `SpoolModelTests
-.testAClaimedRequestWithATraversalIdWritesNothingOutsideTheSpool` is that route, and it failed on
-`development` before `RequestID` existed.
-
-**The fix is the one this file already knew: make the unchecked value unrepresentable at the path
-builder, not add a third place to remember.** `RequestID`
-(`Sources/HelmWire/Spool/RequestID.swift`) holds the pattern and `init?(validating:)` is the only
-unrestricted route in. `SpoolDirectory`'s three builders — `write`, `result(id:)`, `stagePrompt` —
-take it, and `abandoned()` returns it, so there is no `String` overload left to reach them by. That
-is `AcceptedCloseRequest.terminal`'s argument applied to the field five lines above it, which is
-where #260 said it belonged.
-
-**Two asymmetries in it are deliberate, and both are the shape this file already argues for.** The
-six *request* types keep their bare `String` under the standing carve-out — a request is decoded
-permissively in shape and judged strictly afterwards, so a malformed id is still a `refused` result
-naming the reason rather than unreadable JSON under the wrong id, and `SpoolPolicy.accept` is still
-the single site that turns the string into a `RequestID`. `SpoolResult.id` **does** become the
-newtype, because a result is written by helm rather than read from a caller: there is no refusal to
-produce and nothing to be permissive about, and it is what closes `write`.
-
-`SpoolModel.refuse` is still a second **guard** and still not a second **spelling** — it is reached
-with `fallbackID`, an id derived from the *filename* when the JSON would not parse and `accept`
-never ran. What changed is that it no longer re-applies a shared regex by hand: it asks `RequestID`
-for one. Its sibling overload, taking a `RequestID`, carries no guard at all, and which of the two a
-call site gets is now decided by the compiler from the type it is holding.
-
-**The six scripts gate their own `--id` too, and that is a seventh hand-copy that earns its
-carve-out.** helm's gate is still the authority, but its refusal cannot be *read* from the caller's
-side: a `..` writes the request outside the spool where no helm is watching, so the caller burns its
-whole timeout — or, under `--no-wait`, exits 0 having landed the file nowhere. Measured before the
-guard: an opaque `NSCocoaErrorDomain Code=4` about `mktemp`, and exit 4. So each script refuses
-locally, exactly as `helm-close` already refuses a non-uuid pane, and
-`SpoolWireConformanceTests.testEverySpoolScriptGatesItsIdWithHelmWiresOwnPattern` reads the literal
-out of each script's source and compares it to `RequestID.pattern`, while its sibling runs the
-refusal against a real subprocess — because a pattern that is present and never applied would pass
-the first assertion alone.
+pushed artifact was routed by comparing workspace paths **by value**, so a path that reached that
+line un-normalized matched nothing and the artifact simply never appeared — no error anywhere.
+`Handle` (#231, #233, #239): a handle *looks* derivable, and a derived one is silently wrong
+whenever a live holder forced a longer suffix, which the caller cannot see. The spool's request id
+(#260) was a bare `String` behind a regex at one edge, and a claimed request's id reached a path
+builder unchecked: `results/../../../../tmp/pwned.json` was a real write. **Each was caught by a
+reviewer reading a comment before a gate could see it**, which is the reusable part: the rule fires
+while the defect is still hypothetical, and by the time a gate can see it the newtype is a
+migration.
 
 Prefer a newtype the day the comment gets written, not the day it is disbelieved.
 
@@ -1119,18 +813,19 @@ cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 `.claude/skills/` holds fifteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
 not a change. The other eight are hand-written. The first four below are helm's, the surface an
-agent hosted in helm actually uses, and each has a gate listed in *Working here* above. The last
+agent hosted in helm actually uses, and each has a gate listed in *Working here* above (the
+canvas skill's snippets run in the daemon gate). The last
 four, `bench-panes`, `bench-mail`, `bench-browser` and `bench-sessions`, are benchd's, and their
 snippets run in the daemon gate's conformance suite.
 
-- **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
+- **`helm-canvas`** — what a canvas *is* and what it can do, and `bench open`, which is how an
   artifact gets onto the bench. Read it before writing one; it deliberately says nothing about
   *what* to put in a canvas.
 - **`helm-board`** — the drawable board (#111): an agent authors labelled shapes, the operator
   draws on it by hand, and what they drew comes back as named records. Not `Sources/Helm/Board/`.
 - **`post-canvas`** — a video stored by the archon-video pack, rendered as a post preview canvas:
-  the video beside the copy that would ship with it. It pushes through `helm-canvas`'s `push.sh`,
-  so the two are installed side by side.
+  the video beside the copy that would ship with it. It puts the page on the bench with
+  `bench open`.
 - **`pi-extensions`** — how to build one without taking the pi CLI down, how to read the installed
   pi rather than guess at its API, and how to test one without spending a model call.
 - **`bench-panes`** — driving the bench with `bench` (M3, #355): open an artifact, the browser or
@@ -1139,7 +834,7 @@ snippets run in the daemon gate's conformance suite.
 - **`bench-mail`** — sending and reading mail through benchd's mailroom, finding who can be mailed,
   and wiring an agent the operator starts himself (`bench wiring`). The only mail skill since #358.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
-  start`, drive it with `playwright-cli attach`, and badge his browser drawer with `openBrowser`.
+  start`, drive it with `playwright-cli attach`, and badge his browser drawer with `bench open browser`.
 - **`bench-sessions`** — who is working in a workspace (`bench sessions --all`), and what any of
   them did (`bench log <id>`, #421), read from the transcript without mailing the agent. The
   operator sees the same list in the `sessions` drawer (⌘⇧S, `Sources/Helm/Sessions/`).

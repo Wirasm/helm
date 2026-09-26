@@ -22,8 +22,8 @@ import XCTest
 /// spans the whole distance: **a push in at one end, and what the page ends up with read off the
 /// other**.
 ///
-/// It drives the app's own objects the whole way. The push is `push.sh`'s OSC 777 arriving at a
-/// real session; `HTMLCanvasPage` is the very configuration and reload rule
+/// It drives the app's own objects the whole way. The push is an agent's `bench open`, sent from a
+/// real session's pane; `HTMLCanvasPage` is the very configuration and reload rule
 /// `HTMLCanvasWebView` gives SwiftUI. The one thing standing in for the app is SwiftUI itself —
 /// `render(_:)` below is what `updateNSView` does when the model publishes, and nothing more.
 ///
@@ -329,11 +329,13 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         return (rig.model, rig.terminals)
     }
 
-    /// `push.sh`'s OSC 777, arriving at the terminal that printed it. The sleep is kept from when
-    /// the hop was a main-queue notification: the route is synchronous now, and a later
-    /// assertion that waits on a render is only made more certain by it.
+    /// An agent in `terminal` putting `file` on the bench (`bench open`): a `pane/open` from that
+    /// pane. The wait lets the origin, read off the event just after the frame, arrive.
     private func push(_ file: URL, from terminal: TerminalSession) async throws {
-        terminal.terminalDidRequestDesktopNotification(title: CanvasPush.marker, body: file.path)
+        let model = try XCTUnwrap(terminal.manager?.bench)
+        model.send(
+            .paneOpen(workspace: terminal.workspacePath.value, surface: .canvas(path: file.path)),
+            by: .agent(pane: terminal.id.uuidString.lowercased()))
         try await Task.sleep(for: .milliseconds(100))
     }
 

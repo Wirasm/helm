@@ -8,8 +8,9 @@ import os
 /// helm's side of the bench: the ACTIVE workspace's bench as benchd last sent it, the door every
 /// change goes out through, and the resolver from the bench's values to the objects they name.
 ///
-/// **benchd owns the bench (#354); this draws it.** Every change — a key, a click, a drag, a
-/// `push.sh`, the spool — is a `BenchVerb` sent through `send`, which says who asked; benchd
+/// **benchd owns the bench (#354); this draws it.** Every change helm makes — a key, a click, a
+/// drag, a ⌘-clicked link — is a `BenchVerb` sent through `send`, which says who asked (an
+/// agent's come to benchd through `bench`); benchd
 /// applies its rules, and the document it made comes back on the follower and is drawn by
 /// `apply`. Nothing here changes a bench itself, and `Workbench` has no method that could. With
 /// benchd unreachable the last document stays on screen and a verb fails visibly
@@ -109,8 +110,8 @@ final class WorkbenchModel: ObservableObject {
     private let agents: AgentObserver
 
     /// How a resume line reaches the pty it is meant for. A seam rather than a direct
-    /// `hostView` call so `resume(_:)` is testable — the same trade `SpoolSpawning` makes for
-    /// the spool, and the default is the same paste-then-Return the spool sends.
+    /// `hostView` call so `resume(_:)` is testable, and the default is paste-then-Return
+    /// (`TerminalLaunchLine.send`).
     private let launcher: TerminalLaunching
 
     /// Where the project stores are — `~/.prp` in production (#289).
@@ -203,8 +204,8 @@ final class WorkbenchModel: ObservableObject {
         terminals.surfaces.register(BrowserPaneKind(make: makeBrowser))
         terminals.surfaces.register(UnsupportedPaneKind())
         terminals.surfaces.register(SessionsPaneKind(workbench: self, terminals: terminals))
-        // The same rewiring for the manager's sessions: a ⌘-clicked link and a `push.sh` are
-        // verbs, and this is the bench they are sent to.
+        // The same rewiring for the manager's sessions: a ⌘-clicked link is a verb, and this is
+        // the bench it is sent to.
         terminals.bench = self
         subscribe()
         client.onDocument = { [weak self] at in self?.apply(at) }
@@ -218,30 +219,6 @@ final class WorkbenchModel: ObservableObject {
     func answer(_ choice: BenchRestoreChoice) {
         guard let path = workspacePath, let offer = restoreOffer else { return }
         answerFromDaemon(choice, offer: offer, path: path)
-    }
-
-    /// A spool spawn's `cwd`, opened and put on screen (#54): an agent's `workspace/open` that
-    /// says the operator asked.
-    ///
-    /// **The one exception to "an agent's verb leaves the view alone", until M5b** (plan of
-    /// #354). A terminal gets its ghostty surface, and so its pty, only when it is drawn, and helm
-    /// draws only the workspace on screen — so a spawn opened in the background would paste its
-    /// launch line into a shell that never started, and fail after the spool's deadline.
-    func openWorkspaceForSpawn(_ workspace: Workspace) {
-        send(.workspaceOpen(path: workspace.path.value), by: .agent(), asked: true)
-    }
-
-    /// Resolve an open mount question by restoring, on a request from outside (#85 × #54).
-    ///
-    /// **This is the one place helm answers the operator's own question for them, and it is
-    /// argued rather than incidental.** A spool spawn exists for the case where nobody is at the
-    /// pane, and #179's trade is exact: *a question nobody will be there to answer must be
-    /// answered in advance, and answered so the agent can work.* **Restore rather than fresh**
-    /// is the half that keeps it from being destructive: it is one of the two answers the
-    /// operator was going to give, and it loses nothing.
-    func mountWithoutAsking() {
-        guard let path = workspacePath, let offer = restoreOffer else { return }
-        answerFromDaemon(.restore, offer: offer, path: path)
     }
 
     /// One offer per pane whose record names an agent that is **not already running there**.
@@ -466,8 +443,8 @@ final class WorkbenchModel: ObservableObject {
     /// **`open` rather than `offer`, and the cursor placed rather than left where it was.** Every
     /// other route to a canvas pane weighs *appear, don't seize* (#125) because nobody asked for
     /// what is arriving. This one is the operator pressing a key and expecting to type, so seizing
-    /// is the correct behaviour and the whole feature — which is also, exactly, why
-    /// `SpoolCommandPolicy` refuses to let an agent send it.
+    /// is the correct behaviour and the whole feature — which is also, exactly, why no agent verb
+    /// reaches it.
     ///
     /// **Three decisions live elsewhere and are only called from here**, which is what keeps this
     /// method a wiring: where the note goes and what it is called are `OperatorNote.create`'s,
@@ -562,8 +539,7 @@ final class WorkbenchModel: ObservableObject {
     /// same reason: a fact that belongs to the bench, about a session that has no way to ask.
     ///
     /// **A background workspace's sessions keep the name they were last pushed** until it is
-    /// on screen again (`WorkbenchSpoolPanes.pane` reads the mounted bench and answers nil for
-    /// everything else).
+    /// on screen again.
     ///
     /// It does nothing else. An earlier draft of this plan had it keep one `hostView`
     /// attached at 1×1pt in case zero attached ghostty surfaces stalled every pty — that
@@ -659,39 +635,19 @@ extension WorkbenchModel {
 
     private static let log = Logger(subsystem: "com.wirasm.helm", category: "bench")
 
-    /// An agent's `push.sh` (#125): the canvas is offered as a `pane/open` from that agent, and
-    /// the terminal it came from is remembered so a mark the operator later makes on the canvas
-    /// can be mailed back to it (#205).
+    /// An agent's `bench open` of a canvas (M3): remember which pane it came from, so a mark the
+    /// operator later makes on the canvas is mailed back to that agent (#205). benchd names the
+    /// pane an agent runs in (`HELM_PANE`, or the pane showing its session) in the event's `by`,
+    /// and `mail/who` resolves it late, when the mark is made.
     ///
     /// **Recorded whether the pane is new or already open, and the second case is the common
     /// one** — an agent re-offering the file it just rewrote gets the pane that was there, and
-    /// the newest pusher is the one who wants to hear about a mark on it. For a background
-    /// workspace's bench too: `origins` is keyed by pane id and survives a switch, and `deliver`
-    /// resolves the origin against every workspace's sessions.
+    /// the newest opener is the one who wants to hear about a mark on it. `origins` is keyed by
+    /// pane id, so a background workspace's canvas keeps its origin across a switch.
     ///
-    /// **A re-push re-reads the file (#261).** benchd answers the pane already showing it, and
+    /// **A re-open re-reads the file (#261).** benchd answers the pane already showing it and
     /// leaves it where it is; its render is helm's, and a canvas watches one file, so an agent
-    /// that rewrote only a sibling (`app.js`) fired no watcher at all. A pane never resolved into
-    /// a canvas has no render yet and reads the file when it first is.
-    ///
-    /// The origin is kept here rather than read back off the verb's actor: benchd records who
-    /// asked and no rule reads it, and which agent a mark goes to is helm's concern.
-    @discardableResult
-    func push(_ artifact: URL, from origin: CanvasOrigin, in workspace: WorkspacePath) -> Pane.ID? {
-        guard
-            let pane = send(
-                .paneOpen(workspace: workspace.value, surface: .canvas(path: artifact.path)),
-                by: .agent(pane: origin.terminal.uuidString))
-        else { return nil }
-        origins[pane] = origin
-        surfaces.existing(pane, as: CanvasModel.self)?.refresh()
-        return pane
-    }
-
-    /// An agent's `bench open` of a canvas (M3): remember which pane it came from, as `push`
-    /// does, so a mark on the canvas is mailed to that agent (#205). benchd names the pane an
-    /// agent runs in (`HELM_PANE`, or the pane showing its session), and `mail/who` resolves it
-    /// late, when the mark is made. A re-open of a canvas already on the bench re-reads it.
+    /// that rewrote only a sibling (`app.js`) fired no watcher at all.
     func remember(_ change: BenchChange) {
         guard change.verb == "pane/open", case let .agent(from?, _) = change.by,
             let terminal = UUID(uuidString: from), let pane = change.pane,

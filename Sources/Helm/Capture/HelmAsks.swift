@@ -6,16 +6,16 @@ import HelmWire
 /// reads. Each ask gets exactly one `helm/answer`, sent as helm, and benchd hands it to the agent
 /// waiting on the socket.
 ///
-/// The capture itself is the spool's (`SpoolCapturing`, `AppWindowCapturer`): drawing the window
-/// into a PNG with no display grant. Only the trigger changed.
+/// The capture itself is `AppWindowCapturer` (through `WindowCapturing`): drawing the window into
+/// a PNG with no display grant, the screen locked or not.
 @MainActor
 final class HelmAsks {
-    private let capturer: any SpoolCapturing
+    private let capturer: any WindowCapturing
     /// Where an answer goes. The client's own request, off the main actor, in the app.
     private let send: @Sendable (HelmAnswerRequest<CaptureReport>) -> Void
 
     init(
-        capturer: any SpoolCapturing,
+        capturer: any WindowCapturing,
         send: @escaping @Sendable (HelmAnswerRequest<CaptureReport>) -> Void
     ) {
         self.capturer = capturer
@@ -24,7 +24,7 @@ final class HelmAsks {
 
     /// The live wiring: answers through `client`, off the main actor so a slow benchd never
     /// stalls a frame.
-    static func answering(through client: BenchClient, capturer: any SpoolCapturing) -> HelmAsks {
+    static func answering(through client: BenchClient, capturer: any WindowCapturing) -> HelmAsks {
         HelmAsks(capturer: capturer) { answer in
             DispatchQueue.global(qos: .userInitiated).async {
                 _ = try? client.request(answer, answering: EmptyReply.self)

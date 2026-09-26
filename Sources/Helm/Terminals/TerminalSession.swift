@@ -59,8 +59,6 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// The workspace that groups this session in the frame. The manager remains
     /// the owner of every session and the one shared ghostty controller.
     let workspacePath: WorkspacePath
-    /// Bypassing the notification gate is safe only if a burst cannot flood it.
-    private var refusalThrottle = RefusalThrottle()
 
     @Published private(set) var status: Status = .starting
     /// Terminal title (OSC 0/2 from the shell).
@@ -109,13 +107,13 @@ final class TerminalSession: ObservableObject, Identifiable {
     ///
     /// **The derived name outranking the OSC title is the whole of #313's concrete trigger, and
     /// it is deliberate rather than incidental.** Since #93 an agent's first message is a *path*,
-    /// so Claude Code titles its session after the pointer and every spool-spawned tab read a
-    /// variant of *"Read and act on spool prompt file"*. That string is exactly the one being
-    /// outranked. An agent that wants a live, meaningful title says so through `helm-name`, which
-    /// lands above both.
+    /// so Claude Code titles its session after the pointer and every spawned tab read a variant
+    /// of *"Read and act on the prompt in …"*. That string is exactly the one being outranked. An
+    /// agent that wants a live, meaningful title says so through `bench name`, which lands above
+    /// both.
     ///
     /// `PaneName` collapses its first two cases here on purpose: a renderer has no opinion about
-    /// who chose the words, and `SpoolNamePolicy` is the only thing that does.
+    /// who chose the words, and benchd's naming rule is the only thing that does.
     var displayTitle: String {
         name.text ?? (title.isEmpty ? "shell \(ordinal)" : title)
     }
@@ -643,8 +641,9 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     ///    everything it prints, and what reached the grid was plain styled text. So the
     ///    capture is not even the binding constraint for the case #124 describes.
     ///
-    /// The agent→helm channel is `push.sh` (#125, #170, #184): an agent pushes the
-    /// artifact and helm offers it as a tab, needing no click and no operator at the pane.
+    /// The agent→helm channel is `bench open` (M3; before it `push.sh`, #125, #170, #184): an
+    /// agent opens the artifact and it arrives as a tab, needing no click and no operator at
+    /// the pane.
     /// This method stays exactly as it is — a link printed from a *shell* still works,
     /// which is a path #124 required not to regress.
     ///
@@ -692,31 +691,7 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// the background or the pane is off screen; title is the tab's, body is
     /// the message (OSC 9 carries only a body — fall back to the sequence's
     /// title so neither form delivers an empty banner).
-    /// Also helm's canvas-push channel. See `CanvasPush` for why this sequence and not one
-    /// of helm's own: helm never sees OSC *sequences*, only ghostty's *parsed actions*, and
-    /// this is the only action that both fires on output and carries arbitrary text.
     func terminalDidRequestDesktopNotification(title: String, body: String) {
-        switch CanvasPush.classify(title: title, body: body) {
-        case let .open(url):
-            // Onto the bench of *this* session's workspace, which may be parked: a push comes
-            // from output, so it can arrive hours after the operator left (#349). And from
-            // *this* terminal, which is the one moment the pushing agent's pane is known —
-            // one hop later there is a canvas and nothing saying where it came from (#205).
-            manager?.bench?.push(url, from: CanvasOrigin(terminal: id), in: workspacePath)
-            return
-        case let .refused(why):
-            // Ungated on purpose. The gate below suppresses *ambient* notifications while
-            // you are already looking at the pane — right for "build finished", wrong for
-            // the refusal of something an agent explicitly asked for. A silent refusal is
-            // indistinguishable from a channel that does not work, which is #124's whole
-            // failure mode.
-            guard refusalThrottle.allows(at: Date()) else { return }
-            TerminalNotifier.shared.deliver(title: displayTitle, body: why)
-            return
-        case .notAPush:
-            break
-        }
-
         guard
             TerminalNotificationGate.shouldDeliver(
                 appIsActive: NSApp.isActive,

@@ -1,18 +1,28 @@
 import AppKit
-import HelmWire
+
+/// Drawing helm's own window into a PNG at `path`, or saying why not, as a seam: the answering
+/// side (`HelmAsks`) is reached from `swift test` with a capturer that has no window at all.
+@MainActor
+protocol WindowCapturing: AnyObject {
+    func capture(to path: String, window: String?) -> Result<CaptureReport, CaptureRefusal>
+}
+
+/// Why a capture drew nothing, in a sentence the agent that asked can act on.
+struct CaptureRefusal: Error, Equatable {
+    let reason: String
+    init(_ reason: String) { self.reason = reason }
+}
 
 /// The capture's edge: picks which of helm's windows to draw, and hands it to `WindowCapture`.
 ///
-/// It lives in the spool's own slice rather than in `Capture/` for the same reason
-/// `WorkbenchSpoolSpawner` does — it is the spool's adapter onto a window, not a capture
-/// feature. The drawing itself is in `Capture/WindowCapture.swift`, where nothing knows a spool
-/// exists.
+/// `HelmAsks` calls it when benchd asks for a capture (`bench get screenshot`); the drawing
+/// itself is `WindowCapture`.
 ///
 /// **The window list comes in through a closure**, so "there are no windows" and "there are two
 /// and neither is key" are both reachable from `swift test` without an `NSApplication`. Those
 /// are the refusal paths, and they are exactly the ones a live run never hits by accident.
 @MainActor
-final class AppWindowCapturer: SpoolCapturing {
+final class AppWindowCapturer: WindowCapturing {
     private let windows: @MainActor () -> [NSWindow]
     private let keyWindow: @MainActor () -> NSWindow?
     /// helm's own terminal panes, so the report can say whether their cells are in the image.
@@ -33,7 +43,8 @@ final class AppWindowCapturer: SpoolCapturing {
         self.terminals = terminals
     }
 
-    func capture(to path: String, window request: String?) -> Result<CaptureReport, SpoolRefusal> {
+    func capture(to path: String, window request: String?) -> Result<CaptureReport, CaptureRefusal>
+    {
         let all = windows()
         switch Self.target(in: all, key: keyWindow(), named: request) {
         case .failure(let refusal):
@@ -41,7 +52,7 @@ final class AppWindowCapturer: SpoolCapturing {
         case .success(let window):
             guard let view = window.contentView else {
                 return .failure(
-                    SpoolRefusal("the window \"\(window.title)\" has no content view to draw"))
+                    CaptureRefusal("the window \"\(window.title)\" has no content view to draw"))
             }
             return WindowCapture.png(
                 of: view, terminals: terminals(), window: window.title,
@@ -64,11 +75,11 @@ final class AppWindowCapturer: SpoolCapturing {
     /// still unambiguous. Beyond that the caller has to say which.
     static func target(
         in windows: [NSWindow], key: NSWindow?, named request: String?
-    ) -> Result<NSWindow, SpoolRefusal> {
+    ) -> Result<NSWindow, CaptureRefusal> {
         var candidates = windows.filter { $0.isVisible && $0.contentView != nil }
         guard !candidates.isEmpty else {
             return .failure(
-                SpoolRefusal(
+                CaptureRefusal(
                     "helm has no visible window to draw (\(windows.count) window(s) exist, none "
                         + "of them visible with a content view — miniaturised or ordered out)."))
         }
@@ -78,13 +89,13 @@ final class AppWindowCapturer: SpoolCapturing {
             }
             guard !candidates.isEmpty else {
                 return .failure(
-                    SpoolRefusal(
+                    CaptureRefusal(
                         "no visible helm window's title contains \"\(request)\". Titles: "
                             + Self.titles(windows.filter { $0.isVisible })))
             }
             guard candidates.count == 1 else {
                 return .failure(
-                    SpoolRefusal(
+                    CaptureRefusal(
                         "\"\(request)\" matches \(candidates.count) windows: "
                             + Self.titles(candidates) + ". Name one of them exactly."))
             }
@@ -93,7 +104,7 @@ final class AppWindowCapturer: SpoolCapturing {
         if let key, candidates.contains(where: { $0 === key }) { return .success(key) }
         guard candidates.count == 1 else {
             return .failure(
-                SpoolRefusal(
+                CaptureRefusal(
                     "helm has \(candidates.count) visible windows and none of them is key, so "
                         + "which one to draw is the caller's to say. Pass \"window\" matching "
                         + "one of: " + Self.titles(candidates)))

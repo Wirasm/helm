@@ -3,46 +3,9 @@ import XCTest
 
 @testable import Helm
 
-/// The value a pane's name is, and the two things about it that are not obvious (#313): what helm
-/// calls a pane it opened for an agent, and what happens to a bench written before any of this
-/// existed.
+/// The value a pane's name is (#313), and what happens to a bench written before names existed.
+/// What benchd calls a spawned agent's pane is pinned by the daemon's conformance suite.
 final class PaneNameTests: XCTestCase {
-
-    // MARK: - What helm calls a spawned pane
-
-    private func spawn(command: String = "claude", cwd: String) -> AcceptedSpawnRequest {
-        AcceptedSpawnRequest(
-            id: RequestID(validating: "s")!, cwd: cwd, command: command, args: [], prompt: nil)
-    }
-
-    func testASpawnedPaneIsNamedForItsAgentAndItsTree() {
-        // The fix for #313's concrete trigger. helm wrote the request, so it needs nothing from
-        // the agent to say something better than the OSC title the agent is about to set.
-        XCTAssertEqual(
-            PaneName.derived(for: spawn(cwd: "/Users/rasmus/Projects/mine/sild/helm")).text,
-            "claude · helm")
-        XCTAssertEqual(
-            PaneName.derived(
-                for: spawn(command: "codex", cwd: "/x/.worktrees/issue-313-name-a-pane")
-            ).text,
-            "codex · issue-313-name-a-pane")
-    }
-
-    func testTheDerivedNameIsDerivedRatherThanChosen() {
-        // Load-bearing, and the whole reason `PaneName` is not a `String?`: `SpoolNamePolicy` lets
-        // an agent replace this without claiming the operator asked. A `.chosen` here would refuse
-        // the agent helm had just spawned when it named its own pane.
-        guard case .derived = PaneName.derived(for: spawn(cwd: "/tmp")) else {
-            return XCTFail("helm's own label must never read as somebody's choice")
-        }
-    }
-
-    func testACwdWithNoUsefulBasenameFallsBackToTheAgentAlone() {
-        // `lastPathComponent` answers "/" for the root and "" for a trailing slash. A bare
-        // `claude` is a worse name than a good one and a far better one than `claude · /`.
-        XCTAssertEqual(PaneName.derived(for: spawn(cwd: "/")).text, "claude")
-        XCTAssertEqual(PaneName.derived(for: spawn(cwd: "")).text, "claude")
-    }
 
     // MARK: - What survives a restart
 

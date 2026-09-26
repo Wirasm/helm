@@ -10,8 +10,9 @@ import XCTest
 /// hold the guard that refuses a pid not running from the bundle, which is what stands between a
 /// wrong `--pid` and the operator's own helm.
 ///
-/// The rest of the script quits, relaunches and resumes real processes, and is proved by the
-/// isolated end-to-end run recorded on the PR, not here.
+/// The resume itself is one `bench spawn`, and a test holds what it asks for against a stub
+/// `bench`. The rest of the script quits, relaunches and restarts real processes, and is proved by
+/// the isolated end-to-end run recorded on the PR, not here.
 final class ReleaseResumeScriptTests: XCTestCase {
     private var scratch: URL!
     private var spawned: [Process] = []
@@ -185,6 +186,49 @@ final class ReleaseResumeScriptTests: XCTestCase {
     }
 
     // MARK: - The swap is BundleSwap's
+
+    /// Step 6 (M3): the session comes back in a benchd pty, in a pane of its own directory, with
+    /// Remote Control and the notice as its next message, and under the bench suite when there is
+    /// one. A stub `bench` records what it was asked; it is a shell script of our own, never a
+    /// copied system binary.
+    func testTheResumeIsOneBenchSpawnOfThatSession() throws {
+        let bin = scratch.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let record = scratch.appendingPathComponent("argv")
+        let stub = bin.appendingPathComponent("bench")
+        try Data(
+            "#!/bin/sh\necho \"suite=$BENCH_SUITE\" > \"\(record.path)\"\nfor a in \"$@\"; do echo \"$a\" >> \"\(record.path)\"; done\n"
+                .utf8
+        ).write(to: stub)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+        // The script bounds the call with GNU `timeout`, which it requires on the operator's
+        // machine (`check`) and a CI runner lacks. The shim drops the bound and runs the rest.
+        let timeout = bin.appendingPathComponent("timeout")
+        try Data("#!/bin/sh\nshift\nexec \"$@\"\n".utf8).write(to: timeout)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: timeout.path)
+
+        let result = try bash(
+            [
+                "-c",
+                "source \"$1\"; bench_suite=trial remote_control=1; resume_in_bench \"$2\" 4b1c /tmp/w /tmp/n.md abc123",
+                "test", script.path, bin.path,
+            ],
+            environment: [
+                "PATH": bin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            ])
+        XCTAssertEqual(result.status, 0, result.stderr)
+
+        let asked = try String(contentsOf: record, encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+        XCTAssertEqual(
+            asked,
+            [
+                "suite=trial", "spawn", "--agent", "claude", "--cwd", "/tmp/w", "--resume", "4b1c",
+                "--prompt-file", "/tmp/n.md", "--asked", "--arg", "--remote-control", "--arg",
+                "helm abc123",
+            ])
+    }
 
     func testTheSwapItRunsIsBundleSwapsOwnScript() throws {
         let result = try call("swap_script")

@@ -10,7 +10,7 @@ text — and it renders as an infinite canvas the operator can draw on, move aro
 What they draw comes back to you on your next turn, resolved to the shapes you named.
 
 Read `helm-canvas` first: this composes with it and does not restate it. A board is an `.html`
-artifact, pushed with the same `push.sh`, subject to the same read boundary.
+artifact, put on the bench with the same `bench open`, subject to the same read boundary.
 
 **The engine is `@quickdrawjs/core` 0.2.0, MIT, vendored here** — 180 KB of dependency-free ESM,
 no framework, no build step, no CDN, no licence key. It is copied *beside your artifact*, so a
@@ -20,7 +20,7 @@ board renders the same in six months as it does today.
 
 ```bash
 ~/.claude/skills/helm-board/new-board.sh /absolute/path/to/plan-board.html --title "The plan"
-~/.claude/skills/helm-canvas/push.sh /absolute/path/to/plan-board.html
+${BENCH:-bench} open /absolute/path/to/plan-board.html
 ```
 
 `new-board.sh` writes four things beside the path you gave it:
@@ -94,7 +94,7 @@ palette name (`black` `grey` `blue` `green` `red` `orange` `violet` `yellow`); `
 
 ## Updating it
 
-**Rewrite `plan-board.document.json`, then push the `.html` again.** The push is what tells helm
+**Rewrite `plan-board.document.json`, then open the `.html` again.** That is what tells helm
 the artifact moved; the board takes the change as *data* and is never reloaded, so the camera,
 the selection, the undo history and — the one that matters — **the operator's drawing all
 survive**.
@@ -181,7 +181,7 @@ Say so when it matters, rather than letting someone find out:
   rebase, no conflict resolution, and none is planned here.
 - **No bindings.** Arrows are free-floating geometry.
 - **No multi-user sync.** One board, one operator, one agent.
-- **A push re-renders the whole page.** Pushing the same path again is what refreshes an
+- **A re-open re-renders the whole page.** Opening the same path again is what refreshes an
   ordinary canvas — on a board, prefer rewriting the document and letting the update channel
   carry it, which is what keeps the drawing.
 - **An appearance flip reloads the page.** helm reloads a canvas outright when the pane switches

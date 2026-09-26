@@ -20,7 +20,7 @@ is exactly the session benchd gives an address. The old helm-mail extension did 
 `~/.helm/mail` and left live, addressable mailboxes beside the operator's agents (#133).
 Self-healing is not the same as hermetic.
 
-So `scripts/test.sh` points every root the extensions honour (`BENCH_DIR`, `HELM_SPOOL_DIR`) at a
+So `scripts/test.sh` points every root the extensions honour (`BENCH_DIR`) at a
 per-run temp directory **once, before the dispatch** — not per harness. A harness added later then
 inherits the sandbox instead of having to remember it, which is exactly how `pty` came to be the
 odd one out. **A new root override goes in that block, never in a harness.**

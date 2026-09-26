@@ -1,6 +1,6 @@
 ---
 name: bench-panes
-description: Drive the operator's bench with `bench` — put an artifact on it, open the browser or a terminal, spawn another agent into a pane, show, move, name or close a pane, read where a pane is, and capture helm's window. Use when you want the operator to see something, when you start another agent, when you tidy up panes you made, or when you need to know what is on screen. Use it instead of any helm-* script or push.sh.
+description: Drive the operator's bench with `bench` — put an artifact on it, open the browser or a terminal, spawn another agent into a pane, show, move, name or close a pane, read where a pane is, and capture helm's window. Use when you want the operator to see something, when you start another agent, when you tidy up panes you made, or when you need to know what is on screen.
 ---
 
 # Driving the bench
@@ -33,6 +33,7 @@ echo "$PANE"
   relative path is your cwd's. Anything else is refused before it reaches the bench.
 - It opens in **your** workspace (the one your pane is in), not whichever one he is looking at,
   and it reuses the pane already showing that file. Write the file again and helm re-renders it.
+- A mark he makes on it is mailed to you (the `bench-mail` skill reads it).
 - `bench open browser` shows the shared browser (the `bench-browser` skill drives it);
   `bench open terminal` opens a shell. `--drawer <name>` puts it in a drawer instead.
 

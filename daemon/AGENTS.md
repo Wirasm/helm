@@ -83,5 +83,5 @@ knows nor needs the Rust toolchain, in either direction.
   single keypress, and a 16 KB frame written under the lock lets one stalled follower freeze
   every verb.
 - **Wire changes ride with their conformance test** in `crates/bench/tests/` — real
-  binaries, both directions, every status case, same as `SpoolWireConformanceTests`.
+  binaries, both directions, every status case (the shape helm's spool conformance suite had).
 - Conventional commits, written as a human — no AI attribution (repo rule).

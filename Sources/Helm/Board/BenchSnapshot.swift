@@ -42,8 +42,8 @@ struct BenchSnapshot: Codable, Equatable {
         // take it with **no default**, exactly as `foregroundPid` does, so a level that forgets to
         // forward it fails to compile rather than quietly reporting every pane under it as having
         // no agent — which is #283's own failure, an agent that has stopped reading as one that
-        // was never there. `SpoolWork`'s rule: *"has this been checked?"* is answered by the
-        // compiler at every call site instead of by reading upwards.
+        // was never there. *"Has this been checked?"* is answered by the compiler at every call
+        // site instead of by reading upwards.
         agents: [pid_t: AgentSession] = [:]
     ) -> BenchSnapshot {
         let mountedPath = workbench.workspacePath

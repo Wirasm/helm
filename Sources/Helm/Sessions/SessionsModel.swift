@@ -96,8 +96,8 @@ final class SessionsModel: ObservableObject {
 
     private func run(_ argv: [String], in cwd: String?) async {
         let line =
-            (cwd.map { "cd \(SpoolLaunchLine.quoted($0)) && " } ?? "")
-            + argv.map(SpoolLaunchLine.quoted).joined(separator: " ")
+            (cwd.map { "cd \(LaunchLine.quoted($0)) && " } ?? "")
+            + argv.map(LaunchLine.quoted).joined(separator: " ")
         actions.hideDrawer()
         if let failure = await actions.runInNewTerminal(line) {
             problem = failure
