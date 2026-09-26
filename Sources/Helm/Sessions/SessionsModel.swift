@@ -61,9 +61,8 @@ final class SessionsModel: ObservableObject {
         }
     }
 
-    /// Carry out the row's own action, then get the drawer out of the way — except for a
-    /// transcript, which opens beside the bench rather than instead of it, and for a failure,
-    /// which the drawer has to stay open to show.
+    /// Hide the drawer, then carry out the row's own action, so the keyboard lands on what the
+    /// action opened. A terminal that could not run its line leaves the reason on `problem`.
     func open(_ row: BenchSessionRow) async {
         switch row.open {
         case let .focusPane(pane):

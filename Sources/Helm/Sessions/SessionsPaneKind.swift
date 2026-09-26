@@ -7,10 +7,14 @@ import SwiftUI
 /// put one anywhere a surface can go.
 @MainActor
 final class SessionsPaneKind: SurfaceKind {
-    private let makeActions: @MainActor () -> SessionsActions
+    /// Weak: the terminal manager is shared by every window, so the registration a closed
+    /// window made can outlive its bench model. Once the model is gone this makes nothing.
+    private weak var workbench: WorkbenchModel?
+    private weak var terminals: TerminalManager?
 
-    init(actions: @escaping @MainActor () -> SessionsActions) {
-        makeActions = actions
+    init(workbench: WorkbenchModel, terminals: TerminalManager) {
+        self.workbench = workbench
+        self.terminals = terminals
     }
 
     let kind: Pane.Content.Kind = .sessions
@@ -19,7 +23,8 @@ final class SessionsPaneKind: SurfaceKind {
     let survivesUnmount = false
 
     func make(for pane: Pane, in workspace: WorkspacePath?) -> SessionsModel? {
-        SessionsModel(actions: makeActions())
+        guard let workbench, let terminals else { return nil }
+        return SessionsModel(actions: .live(workbench: workbench, terminals: terminals))
     }
 
     func view(of model: SessionsModel, in slot: SurfaceSlot) -> AnyView {

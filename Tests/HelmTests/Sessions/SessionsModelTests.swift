@@ -130,6 +130,24 @@ final class SessionsModelTests: XCTestCase {
         XCTAssertEqual(model.problem, "No workspace is open.")
     }
 
+    /// The terminal manager is shared by every window and each window registers its own kinds
+    /// on it, so a closed window's registration can outlive the window. Asking it for a
+    /// sessions list then makes nothing rather than reaching a freed model.
+    func testAClosedWindowsRegistrationMakesNoList() {
+        let terminals = TerminalManager()
+        let open = WorkbenchModel(terminals: terminals, agents: .blind)
+        var closed: WorkbenchModel? = WorkbenchModel(terminals: terminals, agents: .blind)
+        weak let gone = closed
+        closed = nil
+        XCTAssertNil(gone, "the closed window's model is released")
+
+        let pane = Pane(id: UUID(), content: .sessions)
+        let slot = SurfaceSlot(
+            pane: pane, holdsKeyboard: true, isSelected: true, canClose: true, select: {},
+            close: {})
+        XCTAssertNil(open.surfaceView(of: pane, in: slot))
+    }
+
     func testAStatusLineSaysWhatItIsDoingAndSince() {
         let now = Date(timeIntervalSince1970: 10_000)
         func running(_ activity: String, _ detail: String?, at seconds: UInt64) -> BenchSessionRow {
