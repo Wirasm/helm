@@ -38,6 +38,11 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         package var columns: [Column]
         package var focusedSlot: UUID
 
+        package init(columns: [Column], focusedSlot: UUID) {
+            self.columns = columns
+            self.focusedSlot = focusedSlot
+        }
+
         private enum CodingKeys: String, CodingKey {
             case columns
             case focusedSlot = "focused_slot"
@@ -48,6 +53,12 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         package var id: UUID
         package var slots: [Slot]
         package var width: Double
+
+        package init(id: UUID, slots: [Slot], width: Double) {
+            self.id = id
+            self.slots = slots
+            self.width = width
+        }
     }
 
     package struct Slot: Codable, Equatable, Sendable {
@@ -55,6 +66,13 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         package var panes: [Pane]
         package var selected: UUID
         package var height: Double
+
+        package init(id: UUID, panes: [Pane], selected: UUID, height: Double) {
+            self.id = id
+            self.panes = panes
+            self.selected = selected
+            self.height = height
+        }
     }
 
     package struct Pane: Codable, Equatable, Sendable {

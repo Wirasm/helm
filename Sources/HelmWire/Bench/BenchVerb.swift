@@ -277,12 +277,29 @@ package struct LayoutReport: Codable, Equatable, Sendable {
         case focusedPaneBefore = "focused_pane_before"
         case focusedPaneAfter = "focused_pane_after"
     }
+
+    package init(
+        seq: UInt64, changed: Bool, paneCreated: UUID? = nil, pane: UUID? = nil,
+        focusedPaneBefore: UUID? = nil, focusedPaneAfter: UUID? = nil
+    ) {
+        self.seq = seq
+        self.changed = changed
+        self.paneCreated = paneCreated
+        self.pane = pane
+        self.focusedPaneBefore = focusedPaneBefore
+        self.focusedPaneAfter = focusedPaneAfter
+    }
 }
 
 /// `bench/get`'s answer, and the first line of `events --follow`.
 package struct DocumentAt: Codable, Equatable, Sendable {
     package var seq: UInt64
     package var document: BenchDocument
+
+    package init(seq: UInt64, document: BenchDocument) {
+        self.seq = seq
+        self.document = document
+    }
 }
 
 /// One line of `events --follow`: the event's identity, and the whole document when the event
@@ -296,5 +313,43 @@ package struct BenchFrame: Codable, Equatable, Sendable {
         package var seq: UInt64
         package var at: String
         package var kind: String
+    }
+}
+
+// MARK: - The envelope
+
+/// Every answer's outcome (`bench-wire`'s `Status`). There is no "no daemon": that is the
+/// transport's failure, decided by the caller when the socket cannot be reached.
+package enum BenchStatus: String, Codable, Sendable {
+    case ok, refused, error
+}
+
+/// One answer line from benchd: `{id, status, reason?, data?}`, with `data` decoded as the
+/// payload the verb answers with — a `LayoutReport` for a layout verb, a `DocumentAt` for
+/// `bench/get` and for the first line of `events --follow`.
+package struct BenchResponse<Payload: Decodable & Sendable>: Decodable, Sendable {
+    package var id: String
+    package var status: BenchStatus
+    /// Why, for a refusal or an error. For humans and agents; never parsed.
+    package var reason: String?
+    package var data: Payload?
+}
+
+/// The line that turns a connection into `events --follow`: benchd answers with the document,
+/// then writes a `BenchFrame` per event for as long as the connection stays open.
+package struct BenchFollowRequest: Encodable, Sendable {
+    package var id: String
+
+    package init(id: String) { self.id = id }
+
+    private enum CodingKeys: String, CodingKey { case id, verb, args }
+    private enum ArgKeys: String, CodingKey { case follow }
+
+    package func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode("events", forKey: .verb)
+        var args = c.nestedContainer(keyedBy: ArgKeys.self, forKey: .args)
+        try args.encode(true, forKey: .follow)
     }
 }

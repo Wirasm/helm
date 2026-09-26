@@ -97,7 +97,9 @@ extension WorkbenchModel {
     }
 
     func moveFocus(_ direction: Workbench.Direction) {
-        send(.focusStep(direction: BenchDirection(rawValue: direction.rawValue)!), by: .operatorGesture)
+        send(
+            .focusStep(direction: BenchDirection(rawValue: direction.rawValue)!),
+            by: .operatorGesture)
     }
 
     func move(_ pane: Pane.ID, _ direction: Workbench.Direction) {

@@ -227,7 +227,9 @@ struct BenchSnapshot: Codable, Equatable {
     struct PaneRecord: Codable, Equatable {
         /// `browser` is a view onto the shared browser (#350); it carries neither record — the
         /// browser's own endpoint and tabs are benchd's and CDP's to report, not the bench's.
-        enum Kind: String, Codable { case terminal, canvas, browser }
+        /// `unsupported` is a pane benchd's document holds in a kind this build cannot show
+        /// (#354); only a helm rendering from benchd has one. Additive, so the version stays.
+        enum Kind: String, Codable { case terminal, canvas, browser, unsupported }
 
         let id: UUID
         let kind: Kind
@@ -271,6 +273,10 @@ struct BenchSnapshot: Codable, Equatable {
                 canvas = CanvasRecord(source: source)
             case .browser:
                 kind = .browser
+                terminal = nil
+                canvas = nil
+            case .unsupported:
+                kind = .unsupported
                 terminal = nil
                 canvas = nil
             }
