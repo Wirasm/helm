@@ -208,6 +208,6 @@ final class DrawerTests: XCTestCase {
                 DrawerCapsule(name: "browser", isOpen: true, isBadged: false),
                 DrawerCapsule(name: "notes", isOpen: false, isBadged: true),
             ])
-        XCTAssertEqual(DrawerCapsule.of(nil), [], "local mode has no drawers")
+        XCTAssertEqual(DrawerCapsule.of(nil), [], "before the first document there are no drawers")
     }
 }

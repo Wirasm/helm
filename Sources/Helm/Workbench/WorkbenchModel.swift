@@ -696,7 +696,7 @@ extension WorkbenchModel {
     /// A ⌘-clicked http address (#376): the address becomes a new tab of the shared browser, in
     /// the background. helm opens the browser pane itself rather than as the operator's gesture,
     /// so it lands where the placement rules send it without taking the keyboard from the
-    /// terminal clicked in: in daemon mode the browser drawer, which it badges (#356).
+    /// terminal clicked in: by default the browser drawer, which it badges (#356).
     func openLink(_ link: URL) {
         guard let id = send(.paneOpen(surface: .browser), by: .helm) else { return }
         browser(for: Pane(id: id, content: .browser)).open(link)
