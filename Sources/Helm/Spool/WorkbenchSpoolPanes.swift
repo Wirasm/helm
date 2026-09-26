@@ -35,7 +35,7 @@ final class WorkbenchSpoolPanes: SpoolClosing, SpoolSelecting, SpoolNaming {
         let holdsTerminal: Bool
         switch pane.content {
         case .terminal: holdsTerminal = true
-        case .canvas, .browser: holdsTerminal = false
+        case .canvas, .browser, .unsupported: holdsTerminal = false
         }
         // Still reported, and no longer a refusal on its own (#284): it is what tells
         // `SpoolPaneState.isBusy` whether the live-process rule has anything to test. A canvas
