@@ -208,6 +208,7 @@ final class WorkbenchModel: ObservableObject {
         terminals.bench = self
         subscribe()
         client.onDocument = { [weak self] at in self?.apply(at) }
+        client.onChange = { [weak self] change in self?.remember(change) }
         client.start()
     }
 
@@ -687,6 +688,19 @@ extension WorkbenchModel {
         return pane
     }
 
+    /// An agent's `bench open` of a canvas (M3): remember which pane it came from, as `push`
+    /// does, so a mark on the canvas is mailed to that agent (#205). benchd names the pane an
+    /// agent runs in (`HELM_PANE`, or the pane showing its session), and `mail/who` resolves it
+    /// late, when the mark is made. A re-open of a canvas already on the bench re-reads it.
+    func remember(_ change: BenchChange) {
+        guard change.verb == "pane/open", case let .agent(from?, _) = change.by,
+            let terminal = UUID(uuidString: from), let pane = change.pane,
+            case .canvas = document?.surface(of: pane)
+        else { return }
+        origins[pane] = CanvasOrigin(terminal: terminal)
+        surfaces.existing(pane, as: CanvasModel.self)?.refresh()
+    }
+
     /// A ⌘-clicked http address (#376): the address becomes a new tab of the shared browser, in
     /// the background. helm opens the browser pane itself rather than as the operator's gesture,
     /// so it lands where the placement rules send it without taking the keyboard from the
@@ -736,7 +750,10 @@ extension WorkbenchModel {
         mount = drawing.mount
         if let active = drawing.workspace, let bench = drawing.mount.bench {
             answered.insert(active)
-            terminals.adopt(terminals: bench.terminalPaneIDs, in: active)
+            terminals.adopt(
+                terminals: bench.terminalPaneIDs, in: active,
+                attaching: document.workspace(at: active)?.bench
+                    .attachCommands(bench: client.benchBinary) ?? [:])
             if offered.insert(active).inserted { resumeOffers = offers(in: bench) }
         } else if drawing.workspace == nil {
             terminals.deactivate()

@@ -1,0 +1,26 @@
+{
+  "asked": {
+    "ask": "a1",
+    "request": {
+      "kind": "capture",
+      "path": "/tmp/bench-capture.png",
+      "window": "helm — m3"
+    }
+  },
+  "answer": {
+    "id": "helm-answer-1",
+    "verb": "helm/answer",
+    "by": {
+      "kind": "helm"
+    },
+    "args": {
+      "ask": "a1",
+      "status": "error",
+      "reason": "no window titled like \"helm — m3\" is open"
+    }
+  },
+  "status": {
+    "id": "helm-status-1",
+    "verb": "status"
+  }
+}

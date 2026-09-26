@@ -32,6 +32,8 @@ final class BenchClient: ObservableObject {
     /// (re)connect is the whole state and is delivered unless a newer one already was; after that
     /// only a newer seq is.
     var onDocument: ((DocumentAt) -> Void)?
+    /// Who changed the document, for what helm remembers about a pane (a canvas's origin).
+    var onChange: ((BenchChange) -> Void)?
 
     /// Each frame that carries no document — an event that changed no arrangement, such as a
     /// just run finishing (#356) — as the line benchd wrote, on the main actor. Whoever reads a
@@ -102,6 +104,7 @@ final class BenchClient: ObservableObject {
         switch event {
         case .connected(let at):
             state = .connected
+            benchBinaryCache = nil
             // A verb can have drawn a newer document (`document(atLeast:)`) while this one waited
             // on the main queue; drawing it now would put the bench back where it was. After a
             // disconnect nothing is drawn yet, so a benchd whose seq started again is followed.
@@ -112,6 +115,8 @@ final class BenchClient: ObservableObject {
             if let delivered, at.seq <= delivered { return }
             delivered = at.seq
             onDocument?(at)
+        case .changed(let change):
+            onChange?(change)
         case .disconnected(let why):
             state = .disconnected(why)
             delivered = nil
@@ -119,6 +124,21 @@ final class BenchClient: ObservableObject {
             onEvent?(line)
         }
     }
+
+    /// The `bench` beside the benchd this client follows: what a pane runs to show a session
+    /// (`SessionAttach`). Asked once per connection, since a restarted benchd may be a new build
+    /// somewhere else; falls back to `bench` on the pane's PATH when benchd does not say.
+    var benchBinary: String {
+        if let known = benchBinaryCache { return known }
+        let reply = try? request(
+            BenchStatusRequest(id: "helm-status-\(UUID().uuidString)"),
+            answering: BenchStatusReply.self)
+        let bench = reply?.data?.bench ?? "bench"
+        benchBinaryCache = bench
+        return bench
+    }
+
+    private var benchBinaryCache: String?
 
     /// One verb, one answer. Blocking, and bounded by `requestTimeout`.
     nonisolated func request<Payload: Decodable & Sendable>(
@@ -188,6 +208,8 @@ final class BenchFollower: @unchecked Sendable {
     enum Event: Sendable {
         case connected(DocumentAt)
         case frame(DocumentAt)
+        /// A document change, as who asked for it (`bench/changed`), after its frame.
+        case changed(BenchChange)
         case disconnected(String)
         /// A frame with no document, as its line.
         case event(Data)
@@ -285,6 +307,12 @@ final class BenchFollower: @unchecked Sendable {
                 let at = DocumentAt(seq: frame.event.seq, document: document)
                 latest.store(at, replacing: false)
                 emit(.frame(at))
+                // After the document it changed, so whoever reads it finds the pane drawn.
+                if frame.event.kind == "bench/changed",
+                    let change = try? decoder.decode(BenchEventFrame<BenchChange>.self, from: line)
+                {
+                    emit(.changed(change.event.data))
+                }
             }
             return "benchd closed the connection at \(path)"
         } catch {

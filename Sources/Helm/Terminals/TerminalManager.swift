@@ -89,11 +89,16 @@ final class TerminalManager: ObservableObject {
     /// never owns their launch. A restored *pane* whose record names an agent shows an **offer**
     /// to resume it (`AgentResumeBar`), and only the operator accepting one puts a `--resume`
     /// line in a pty.
-    private func restore(_ ids: [UUID], in workspacePath: WorkspacePath) {
+    ///
+    /// The exception is a pane that shows a benchd session (M3): `attaching` names the command
+    /// its pty runs instead, `bench attach <session>`, so the pane is the agent benchd runs.
+    private func restore(
+        _ ids: [UUID], in workspacePath: WorkspacePath, attaching: [UUID: String] = [:]
+    ) {
         for id in ids {
             let session = TerminalSession(
                 id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
-                controller: controller, command: command())
+                controller: controller, command: attaching[id] ?? command())
             nextOrdinal += 1
             session.manager = self
             surfaces.adopt(session, as: id, kind: .terminal, in: workspacePath)
@@ -109,11 +114,15 @@ final class TerminalManager: ObservableObject {
     /// the session id, as on restore, and like a restore each comes back as a fresh login shell.
     /// Only the workspace on screen is adopted: its shells start when it is first shown, which
     /// bounds startup to what is drawn.
-    func adopt(terminals ids: [UUID], in path: WorkspacePath) {
+    ///
+    /// `attaching` is the command for each pane that shows a benchd session
+    /// (`BenchDocument.Bench.attachCommands`): `bench attach <session>`, so the pane is the agent benchd
+    /// runs. Every other pane gets a login shell.
+    func adopt(terminals ids: [UUID], in path: WorkspacePath, attaching: [UUID: String] = [:]) {
         activeWorkspacePath = path
         let missing = ids.filter { surfaces.existing($0, as: TerminalSession.self) == nil }
         guard !missing.isEmpty else { return }
-        restore(missing, in: path)
+        restore(missing, in: path, attaching: attaching)
     }
 
     /// Whether ANY terminal's view is (or contains) the key window's first responder —

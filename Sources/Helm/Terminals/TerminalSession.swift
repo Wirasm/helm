@@ -133,7 +133,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// Those need the bytes a keystroke produces to be *readable*, so each of their surfaces
     /// runs a recorder that copies its pty's input to a file (`Pty` in the tests). That is
     /// the only way to assert what #96 is about: that a synthesised keystroke actually
-    /// reaches the program in the pane.
+    /// reaches the program in the pane. A pane that shows a benchd session runs
+    /// `bench attach <session>` (M3, `SessionAttach`).
     init(
         id: UUID = UUID(), ordinal: Int, workspacePath: WorkspacePath,
         controller: TerminalController,
@@ -147,7 +148,8 @@ final class TerminalSession: ObservableObject, Identifiable {
         let view = FocusClaimingTerminalView(frame: .zero)
         view.controller = controller
         // With no `command`, ghostty runs the user's passwd shell ($SHELL) as a login shell,
-        // which is exactly the default-terminal behavior we want.
+        // which is exactly the default-terminal behavior we want. A pane showing a benchd session
+        // runs `bench attach` instead (`SessionAttach`).
         //
         // The env carries this pane's own id (#94). It is set here, before the surface is
         // created on first attach, so the uuid is baked into the child at spawn and survives

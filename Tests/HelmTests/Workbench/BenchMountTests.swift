@@ -85,6 +85,25 @@ final class BenchMountTests: XCTestCase {
         XCTAssertEqual(offer.agentCount, 1, "and the offer says what declining costs")
     }
 
+    /// A pane showing a benchd session (M3) holds that agent, running. Opening its workspace
+    /// asks nothing and offers no resume, and the pane is drawn: the agent is right there. Its
+    /// record counts again only once benchd has cleared the session (a restart).
+    func testAPaneShowingARunningSessionIsNotAskedAboutOrOfferedForResume() throws {
+        let agent = BenchDocument.Agent(command: "claude", session: "abc", cwd: "/tmp")
+        let pane = BenchDocument.Pane(id: UUID(), surface: .terminal(agent: agent, session: "s1"))
+        let rig = try showing(ToyBench.bench([pane]))
+
+        XCTAssertNil(rig.model.restoreOffer, "a running agent is not a question")
+        XCTAssertNotNil(rig.model.bench?.pane(pane.id), "its pane is drawn")
+        XCTAssertTrue(rig.model.resumeOffers.isEmpty, "nothing to resume")
+
+        let ended = BenchDocument.Pane(id: UUID(), surface: .terminal(agent: agent))
+        XCTAssertNotNil(
+            BenchMountPolicy.offer(
+                bench: try XCTUnwrap(Workbench(document: ToyBench.bench([ended]))), shelved: nil),
+            "once the session is gone the record is worth a question again")
+    }
+
     // MARK: - The shelf
 
     /// *"Fresh means do not open it now, never forget it."* The declined bench is offered
@@ -235,6 +254,22 @@ final class BenchMountTests: XCTestCase {
         }
 
         XCTAssertTrue(refusal.reason.contains("no workspace open"))
+    }
+
+    /// A spool command while #85's question is open would reach benchd and change the bench the
+    /// operator is being asked about (#453). It is refused naming the question, and nothing is
+    /// sent.
+    func testABenchCommandDuringTheQuestionIsRefusedAndSendsNothing() throws {
+        let rig = try showing(stored(terminals: 3))
+        XCTAssertNotNil(rig.model.restoreOffer)
+        let commander = WorkbenchSpoolCommander(workbench: rig.model, rail: ArchonRailModel())
+
+        guard case let .failure(refusal) = commander.run(.newTerminal) else {
+            return XCTFail("the question is open")
+        }
+
+        XCTAssertTrue(refusal.reason.contains("whether to restore"), refusal.reason)
+        XCTAssertTrue(rig.server.verbs.isEmpty, "nothing reached benchd")
     }
 
     // MARK: - A request from outside

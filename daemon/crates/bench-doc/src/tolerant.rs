@@ -11,6 +11,7 @@
 //! - a pane that cannot be read is **skipped**, and `normalize()` repairs what referred to it —
 //!   a `selected` that named it, a slot or column it leaves empty;
 //! - a malformed `agent` costs the pane its resume record, not the pane;
+//! - a malformed `session` costs the pane the session it named, not the pane;
 //! - a malformed `name` costs the pane its name, not the pane;
 //! - a bench left with no panes cannot be repaired: the workspace gets today's one-terminal
 //!   frame, and a shelved bench in that state is dropped;
@@ -24,7 +25,7 @@ use crate::bench::{Bench, Pane};
 use crate::document::Document;
 use crate::drawer::DrawerName;
 use crate::ids::{PaneId, StandardPath};
-use crate::surface::{PaneName, Surface};
+use crate::surface::{PaneName, ResumableAgent, Surface};
 use serde_json::Value;
 
 /// A document read tolerantly, and what it cost.
@@ -153,8 +154,7 @@ fn readable_path(workspace: &Value) -> Result<String, String> {
 }
 
 /// `active` must name a workspace that survived; otherwise the first one is shown — the rule
-/// helm applies when the workspace on screen goes away (`RootView.closeWorkspace`), and the one
-/// `Document::close_workspace` already follows.
+/// `Document::close_workspace` follows when the workspace on screen goes away.
 fn repair_active(value: &mut Value, kept: &[String], notes: &mut Vec<String>) {
     let Some(fields) = value.as_object_mut() else {
         return;
@@ -269,9 +269,19 @@ fn repair(mut pane: Value, notes: &mut Vec<String>) -> Option<Value> {
         && serde_json::from_value::<Surface>(surface.clone()).is_err()
         && surface.get("kind").and_then(Value::as_str) == Some("terminal")
         && let Some(record) = surface.as_object_mut()
-        && record.remove("agent").is_some()
     {
-        notes.push(format!("pane {id}: an unreadable agent record was dropped"));
+        // A terminal's two optional fields each cost only themselves.
+        if record
+            .get("agent")
+            .is_some_and(|a| serde_json::from_value::<ResumableAgent>(a.clone()).is_err())
+        {
+            record.remove("agent");
+            notes.push(format!("pane {id}: an unreadable agent record was dropped"));
+        }
+        if record.get("session").is_some_and(|s| !s.is_string()) {
+            record.remove("session");
+            notes.push(format!("pane {id}: an unreadable session was dropped"));
+        }
     }
 
     match serde_json::from_value::<Pane>(pane.clone()) {

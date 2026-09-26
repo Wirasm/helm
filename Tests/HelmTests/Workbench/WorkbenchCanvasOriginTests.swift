@@ -164,6 +164,31 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
             "an agent that happens to be running is not an agent that asked to hear")
     }
 
+    /// M3: `bench open` from an agent. benchd logs the verb with the pane the agent runs in, and
+    /// helm reads that off the follow stream (`remember`), so the mark is routed exactly as a
+    /// push's is. The same frame by the operator records nothing.
+    func testAMarkOnACanvasAnAgentOpenedWithBenchReachesThatAgent() async throws {
+        let (model, manager) = try mounted()
+        let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
+        bench.agents[terminal.id] = handle
+        let agent = BenchActor.agent(pane: terminal.id.uuidString.lowercased(), handle: "sild-611a")
+        let pane = try XCTUnwrap(
+            model.send(
+                .paneOpen(workspace: workspace.value, surface: .canvas(path: canvas.path)),
+                by: agent))
+
+        model.remember(BenchChange(verb: "pane/open", by: .operatorGesture, pane: pane))
+        model.remember(BenchChange(verb: "pane/close", by: agent, pane: pane))
+        let canvasPane = try XCTUnwrap(model.bench?.pane(pane))
+        try mark("the operator opened nothing", on: model.canvas(for: canvasPane))
+        XCTAssertEqual(messages(in: handle), [], "only an agent's pane/open names an origin")
+
+        model.remember(BenchChange(verb: "pane/open", by: agent, pane: pane))
+        try mark("this reaches the agent that opened it", on: model.canvas(for: canvasPane))
+        XCTAssertEqual(messages(in: handle).count, 1)
+        XCTAssertEqual(messages(in: otherHandle), [])
+    }
+
     /// A canvas the operator opened by hand has no origin, so there is no route — and the pane
     /// says so rather than doing nothing silently.
     func testACanvasTheOperatorOpenedHasNoOriginAndSendsNothing() throws {
