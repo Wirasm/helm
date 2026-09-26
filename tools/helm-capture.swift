@@ -21,6 +21,12 @@
 // IOSurface-backed one once compositing starts, and that one DOES draw. Both states are real,
 // so the field is the answer and neither assumption is.
 //
+// **Then read `capture.windowVisible` (#408).** `false` means helm's window was not on a display
+// when it drew itself — screen locked, or covered by another window — and WebKit suspends an
+// occluded page, so a web canvas comes out as a blank page that looks exactly like a real one.
+// This script warns on stderr when it is false. The capture still exits 0: the PNG is what helm
+// could draw, and the warning says which part of it not to trust.
+//
 // A nonzero exit is the point: each refusal has its own code, and stderr says what happened.
 
 import Foundation
@@ -96,6 +102,8 @@ while let flag = arguments.first {
             Asks the running helm to draw its own window. No TCC grant, no display, no
             keystrokes. Prints the result JSON; `capture.terminalContent` says whether
             terminal cells are in the PNG — included / excluded / partial / absent.
+            `capture.windowVisible: false` means the window was occluded (screen locked
+            or covered), so web canvases in the PNG can be blank; a warning says so.
             Exits 2 no answer, 3 refused, 4 could not draw.
             """)
         exit(Exit.ok.rawValue)
@@ -175,6 +183,15 @@ while Date() < deadline {
             let contains = (capture["terminalContent"] as? String) ?? "?"
             FileHandle.standardError.write(
                 Data("helm-capture: \(path) — terminal content \(contains)\n".utf8))
+            // Only an explicit `false` warns: a helm older than #408 sends no field, and this
+            // script cannot know about that window either way.
+            if capture["windowVisible"] as? Bool == false {
+                FileHandle.standardError.write(
+                    Data(
+                        ("helm-capture: WARNING — helm's window is not visible (screen locked or "
+                            + "covered), so web canvases in this PNG can render blank. Do not "
+                            + "read a blank canvas as a rendering bug.\n").utf8))
+            }
             exit(Exit.ok.rawValue)
         case "refused": die(json["reason"] as? String ?? "refused", .refused)
         case "failed": die(json["reason"] as? String ?? "failed", .failed)

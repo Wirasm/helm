@@ -551,14 +551,16 @@ pub struct Event {
 /// Resolve the record root. One rule, spelled once, used by both binaries:
 ///
 /// 1. `BENCH_DIR` names the root outright and wins over everything — it is what a test
-///    claims into instead of the operator's estate (helm's `HELM_MAIL_DIR` rule).
+///    claims into instead of the operator's estate (helm's `HELM_MAIL_DIR` rule). An empty
+///    value is unset, as helm's `BenchRoot` reads it (#395): taken literally it would make
+///    the cwd the root, so helm's pane and `bench` in it would use different benches.
 /// 2. else `<home>/.bench-<suite>` when a suite is set,
 /// 3. else the shared `<home>/.bench`.
 ///
 /// `home` is a parameter, not a `$HOME` read, so the rule is testable and the caller is
 /// forced to say whose home it means.
 pub fn resolve_root(bench_dir: Option<&str>, suite: Option<&SuiteName>, home: &Path) -> PathBuf {
-    if let Some(dir) = bench_dir {
+    if let Some(dir) = bench_dir.filter(|d| !d.is_empty()) {
         return PathBuf::from(dir);
     }
     match suite {
@@ -656,6 +658,30 @@ mod tests {
             resolve_root(None, None, home),
             PathBuf::from("/home/op/.bench")
         );
+    }
+
+    /// `fixtures/bench-root.json` is the table helm's `BenchRoot` is checked against too
+    /// (`BenchWireConformanceTests`), so the two copies of this rule cannot drift apart
+    /// unnoticed. Each row goes through what both binaries do with the environment: the
+    /// suite is judged first, then the root is resolved.
+    #[test]
+    fn the_bench_root_fixture_resolves_as_the_binaries_resolve_it() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bench-root.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let table: Value = serde_json::from_str(&text).unwrap();
+        let home = Path::new(table["home"].as_str().unwrap());
+        for row in table["rows"].as_array().unwrap() {
+            let var = |name: &str| row["env"][name].as_str();
+            let resolved = match var("BENCH_SUITE").map(SuiteName::validate).transpose() {
+                Err(_) => Err("BENCH_SUITE"),
+                Ok(suite) => Ok(resolve_root(var("BENCH_DIR"), suite.as_ref(), home)),
+            };
+            let expected = match row["root"].as_str() {
+                Some(root) => Ok(PathBuf::from(root)),
+                None => Err(row["refused"].as_str().unwrap()),
+            };
+            assert_eq!(resolved, expected, "{}", row["env"]);
+        }
     }
 
     #[test]
