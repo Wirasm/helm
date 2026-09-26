@@ -98,6 +98,9 @@ final class BenchdAgentScriptTests: XCTestCase {
         env["HOME"] = scratch.path
         env.removeValue(forKey: "BENCH_SUITE")
         env.removeValue(forKey: "BENCH_DIR")
+        // Cargo's bin must be the scratch HOME's, which holds no bench or benchd.
+        env.removeValue(forKey: "CARGO_HOME")
+        env.removeValue(forKey: "CARGO_INSTALL_ROOT")
         process.environment = env.merging(environment) { $1 }
         let out = Pipe()
         let err = Pipe()
@@ -186,6 +189,13 @@ final class BenchdAgentScriptTests: XCTestCase {
             XCTAssertTrue(run.stderr.contains("only the live benchd"), run.stderr)
         }
         XCTAssertEqual(recorded(), "", "a refused install called launchctl, cargo or bench")
+
+        // An empty BENCH_DIR is unset, as bench and helm read it (#412): not a refusal.
+        let empty = try bash(
+            [scripts.appendingPathComponent("benchd-agent.sh").path, "install", "--no-build"],
+            environment: ["BENCH_DIR": ""])
+        XCTAssertEqual(empty.status, 4, empty.stderr)
+        XCTAssertTrue(empty.stderr.contains("no bench/benchd"), empty.stderr)
         XCTAssertFalse(
             FileManager.default.fileExists(
                 atPath: scratch.appendingPathComponent("Library/LaunchAgents").path))

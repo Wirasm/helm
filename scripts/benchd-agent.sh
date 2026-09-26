@@ -81,8 +81,9 @@ agent_install() {
   *) echo "benchd-agent: unknown option $1" >&2; return 1 ;;
   esac
   # The agent is for the live root. Installed under either of these it would still boot the live
-  # root (the plist carries neither), which is not what anyone setting them meant.
-  if [ -n "${BENCH_SUITE+x}" ] || [ -n "${BENCH_DIR+x}" ]; then
+  # root (the plist carries neither), which is not what anyone setting them meant. An empty
+  # BENCH_DIR is unset (#412); an empty BENCH_SUITE is a refusal to bench, so it refuses here too.
+  if [ -n "${BENCH_SUITE+x}" ] || [ -n "${BENCH_DIR:-}" ]; then
     echo "benchd-agent: refusing to install with BENCH_SUITE or BENCH_DIR set — only the live benchd runs as a login agent; run a suite by hand" >&2
     return 3
   fi
