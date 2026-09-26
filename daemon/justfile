@@ -201,6 +201,15 @@ live-smoke:
     rm -rf "$SMOKE"
     echo "live-smoke: clean"
 
+# Real agents end to end: claude, codex and pi spawned by an isolated benchd pass a number
+# around by mail, +1 per hop, once with every recipient idle (a push through its own channel)
+# and once busy (the hook at its next tool call). Spends model tokens: haiku, MiniMax and
+# codex's default. codex and claude must already trust the cwd (default: this checkout).
+# `just mail-ring --ring claude,pi --passes idle` spends less; `--help` lists the options.
+# The mail ring (#358), with per-hop latency read from benchd's log.
+mail-ring *args:
+    python3 {{justfile_directory()}}/mail-ring.py {{args}}
+
 # The shared-browser proof, real browser end to end (#350): the daemon starts Chrome for
 # Testing, an agent's own tool attaches over CDP and acts, and the browser carries a
 # normal user agent. Needs Playwright's Chromium and playwright-cli; spends no tokens.
