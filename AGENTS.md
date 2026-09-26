@@ -28,7 +28,7 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `bash scripts/patch-libghostty.sh && swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
 | `skills` | the canvas, board and post-canvas skill gates | node, zsh, python3, git |
-| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml` or a `bench-*` skill changed | cargo |
+| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` skill or `RenderableFile.swift` (the CLI's `bench open` checks its list) changed | cargo |
 | `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
 
 "Changed" means against `origin/development`, committed or not. A missing tool is a `FAIL`
