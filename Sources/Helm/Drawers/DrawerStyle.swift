@@ -14,6 +14,18 @@ struct DrawerStyle: Equatable {
 
     static let sizes = 0.1...0.9
 
+    /// benchd's `DrawerName::new` (`daemon/crates/bench-doc/src/drawer.rs`): 1 to 32 of
+    /// `[a-z0-9-]`. Spelled again so the keymap file is refused when it loads, with the line,
+    /// rather than when the key is pressed; benchd still judges every name it is sent.
+    static func isDrawerName(_ raw: String) -> Bool {
+        (1...32).contains(raw.utf8.count)
+            && raw.utf8.allSatisfy {
+                (0x61...0x7A).contains($0) || (0x30...0x39).contains($0) || $0 == 0x2D
+            }
+    }
+
+    static let nameRule = "a drawer name is 1-32 of [a-z0-9-]"
+
     /// The sessions list is a narrow column on the left, like a sidebar (#384); anything else —
     /// a browser, a canvas — wants room, on the right.
     static func builtIn(for name: String) -> DrawerStyle {

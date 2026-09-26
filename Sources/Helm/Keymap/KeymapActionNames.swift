@@ -176,10 +176,14 @@ struct KeymapArguments: Equatable {
     func none(_ action: String) throws(KeymapProblem) { try only([], action) }
 
     /// A drawer's name, and the surface it starts with if it is empty: `browser`, or
-    /// `file:<path>` for a canvas. benchd judges the name when the key is pressed.
+    /// `file:<path>` for a canvas.
     func drawer(_ action: String) throws(KeymapProblem) -> (name: String, surface: Surface?) {
         try only(["name", "surface"], action)
         guard let name, !name.isEmpty else { throw missing("name", action) }
+        guard DrawerStyle.isDrawerName(name) else {
+            throw KeymapProblem(
+                line: nil, reason: "'\(action)' name '\(name)': \(DrawerStyle.nameRule)")
+        }
         guard let surface else { return (name, nil) }
         guard let parsed = Surface(keymapSpelling: surface) else {
             throw KeymapProblem(

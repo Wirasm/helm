@@ -258,6 +258,10 @@ final class KeymapFileTests: XCTestCase {
         XCTAssertEqual(
             problem("[[bind]]\nkey = \"cmd+k\"\naction = \"drawer\"\n"),
             KeymapProblem(line: 1, reason: "'drawer' needs name"))
+        XCTAssertEqual(
+            problem("[[bind]]\nkey = \"cmd+k\"\naction = \"drawer\"\nname = \"Notes\"\n"),
+            KeymapProblem(
+                line: 1, reason: "'drawer' name 'Notes': a drawer name is 1-32 of [a-z0-9-]"))
     }
 
     /// `[drawer.<name>]` sets where a drawer sits; what it leaves out is the drawer's built-in.
@@ -277,7 +281,11 @@ final class KeymapFileTests: XCTestCase {
             KeymapProblem(line: nil, reason: "[drawer.x]: size is 0.1 to 0.9, not 1.5"))
         XCTAssertEqual(
             problem("[drawer.x]\nwidth = 0.3\n"),
-            KeymapProblem(line: nil, reason: "unknown field 'width' in [[drawer]]"))
+            KeymapProblem(line: nil, reason: "unknown field 'width' in [drawer.x]"))
+        XCTAssertEqual(
+            problem("[drawer.Notes]\nsize = 0.3\n"),
+            KeymapProblem(
+                line: nil, reason: "[drawer.Notes]: a drawer name is 1-32 of [a-z0-9-]"))
     }
 
     // MARK: - Chords

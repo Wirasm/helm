@@ -68,6 +68,9 @@ struct KeymapFile: Equatable {
         }
         var drawers: [String: DrawerStyle] = [:]
         for (name, style) in raw.drawer {
+            guard DrawerStyle.isDrawerName(name) else {
+                throw KeymapProblem(line: nil, reason: "[drawer.\(name)]: \(DrawerStyle.nameRule)")
+            }
             do { drawers[name] = try style.style(for: name) } catch {
                 throw KeymapProblem(line: nil, reason: "[drawer.\(name)]: \(error.reason)")
             }
@@ -254,7 +257,7 @@ private struct RawRow: Decodable {
         try FieldKey.refuseUnknown(
             c.allKeys,
             allowed: ["key", "when", "action", "hint", "menu"] + KeymapArguments.fields,
-            in: "bind")
+            in: "[[bind]]")
         key = try c.decode(String.self, forKey: "key")
         when = try c.decodeIfPresent(String.self, forKey: "when")
         action = try c.decode(String.self, forKey: "action")
@@ -286,7 +289,8 @@ private struct RawDrawer: Decodable {
 
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: FieldKey.self)
-        try FieldKey.refuseUnknown(c.allKeys, allowed: ["edge", "size"], in: "drawer")
+        let name = decoder.codingPath.last?.stringValue ?? "<name>"
+        try FieldKey.refuseUnknown(c.allKeys, allowed: ["edge", "size"], in: "[drawer.\(name)]")
         edge = try c.decodeIfPresent(String.self, forKey: "edge")
         size = try c.decodeIfPresent(Double.self, forKey: "size")
     }
@@ -321,7 +325,7 @@ private struct FieldKey: CodingKey, ExpressibleByStringLiteral {
         if let unknown = keys.map(\.stringValue).sorted().first(where: { !allowed.contains($0) }) {
             throw KeymapProblem(
                 line: nil,
-                reason: "unknown field '\(unknown)'" + (table.map { " in [[\($0)]]" } ?? ""))
+                reason: "unknown field '\(unknown)'" + (table.map { " in \($0)" } ?? ""))
         }
     }
 }
