@@ -104,11 +104,9 @@ pub fn transition(harness: Harness, event: &str, tool: Option<&str>) -> Option<T
         // pi's extension events (`docs/extensions.md`), sent by the pi sensor.
         Harness::Pi => match event {
             "session_start" | "agent_settled" => To(Activity::Idle),
-            "agent_start"
-            | "context"
-            | "tool_execution_start"
-            | "tool_execution_end"
-            | "ui_prompt_end" => To(Activity::Busy),
+            "agent_start" | "context" | "tool_execution_end" | "ui_prompt_end" => {
+                To(Activity::Busy)
+            }
             "ui_prompt_start" => waiting(QUESTION),
             "session_shutdown" => Ended,
             // The extension saw its inbox change while idle and asks for the mail.
@@ -134,6 +132,20 @@ pub fn carries_context(harness: Harness, event: &str, tool: Option<&str>) -> boo
         Harness::Pi => matches!(event, "context" | "wake"),
     }
 }
+
+/// Every pi event the `bench` extension reports (`pi/extensions/bench`), each with a meaning in
+/// [`transition`]. A test reads the extension's source and holds the two to each other.
+pub const PI_EVENTS: [&str; 9] = [
+    "session_start",
+    "agent_start",
+    "context",
+    "tool_execution_end",
+    "ui_prompt_start",
+    "ui_prompt_end",
+    "agent_settled",
+    "wake",
+    "session_shutdown",
+];
 
 /// Every Claude Code event `bench hook claude` is wired to. The same list goes into the
 /// settings benchd gives the Claude sessions it spawns and into the operator's one-time wiring.
@@ -359,6 +371,32 @@ mod tests {
             settings["hooks"]["PostToolUse"][0]["hooks"][0]["args"],
             serde_json::json!(["hook", "claude"])
         );
+    }
+
+    /// The pi extension is TypeScript, so its event names are a second spelling across a
+    /// runtime boundary. Every name it reports (a string literal passed to `report` or `tell`)
+    /// must be one this table knows, and every pi event this table knows must be one it
+    /// reports.
+    #[test]
+    fn the_pi_extension_reports_exactly_the_events_this_table_knows() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../pi/extensions/bench/index.ts");
+        let source = std::fs::read_to_string(&path).expect("the pi extension is checked in");
+        let mut sent: Vec<&str> = Vec::new();
+        for call in ["report(\"", "tell(\""] {
+            for (at, _) in source.match_indices(call) {
+                let rest = &source[at + call.len()..];
+                sent.push(&rest[..rest.find('"').expect("a closed literal")]);
+            }
+        }
+        sent.sort_unstable();
+        sent.dedup();
+        let mut known = PI_EVENTS.to_vec();
+        known.sort_unstable();
+        assert_eq!(sent, known, "{}", path.display());
+        for event in PI_EVENTS {
+            assert!(transition(Harness::Pi, event, None).is_some(), "{event}");
+        }
     }
 
     #[test]

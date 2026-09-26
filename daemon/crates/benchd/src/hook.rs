@@ -113,7 +113,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
     let hands_out = hook::carries_context(args.harness, &args.event, tool);
 
     // Under the lock: who this is, and what it is doing now. No mailbox is read here.
-    let (handle, told, idle, root) = {
+    let (handle, rule, idle, root) = {
         let mut c = core.lock().unwrap();
         if transition.is_none()
             && c.unknown_hook_events
@@ -145,8 +145,14 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             return Ok(json!(HookReply::default()));
         };
         let changed = agent.observe(&args, transition);
-        let (handle, told) = (agent.handle.clone(), agent.told);
+        let handle = agent.handle.clone();
         let idle = agent.activity == Some(Activity::Idle);
+        // The rule is owed once per session, decided here under the lock so two hooks firing
+        // at once cannot both tell it. pi keeps it in its system prompt instead (`rule` below).
+        let rule = hands_out && !agent.told && args.harness != Harness::Pi;
+        if rule {
+            agent.told = true;
+        }
         if let Some(a) = changed {
             c.append(
                 "agent/state",
@@ -154,7 +160,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             )
             .map_err(Refusal::Failed)?;
         }
-        (handle, told, idle, c.root.clone())
+        (handle, rule, idle, c.root.clone())
     };
     // pi's extension asks for its mail when it sees its inbox change while it is idle, and
     // hands it to `sendUserMessage`, which starts a turn: benchd's wake cap decides.
@@ -164,22 +170,22 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             || idle
                 && bench_mail::unread(&root, &handle) > 0
                 && core.lock().unwrap().take_wake_token(&handle));
-    // pi keeps its rule in the system prompt instead of the context (see `HookReply.rule`).
-    let pi = args.harness == Harness::Pi;
-    let inbox = pi.then(|| bench_mail::inbox_dir(&root, &handle).display().to_string());
-    let rule = pi.then(|| hook::standing_rule(&handle));
-    if !hands_out {
-        return Ok(json!(HookReply {
+    // When pi starts it learns what to watch, and the rule for its system prompt (see
+    // `HookReply.rule`).
+    let starting = args.harness == Harness::Pi && args.event == "session_start";
+    let inbox = starting.then(|| bench_mail::inbox_dir(&root, &handle).display().to_string());
+    let pi_rule = starting.then(|| hook::standing_rule(&handle));
+    let mut reply = if hands_out {
+        let channel = if wake { "pi" } else { "hook" };
+        hand_out(core, &handle, rule, &args.event, channel)?
+    } else {
+        HookReply {
             handle: Some(handle),
-            context: None,
-            inbox,
-            rule,
-        }));
-    }
-    let channel = if wake { "pi" } else { "hook" };
-    let mut reply = hand_out(core, &key, &handle, !told && !pi, &args.event, channel)?;
+            ..HookReply::default()
+        }
+    };
     reply.inbox = inbox;
-    reply.rule = rule;
+    reply.rule = pi_rule;
     Ok(json!(reply))
 }
 
@@ -187,7 +193,6 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
 /// context is the standing rule when it is owed, then one pointer per message.
 fn hand_out(
     core: &Arc<Mutex<Core>>,
-    key: &SessionKey,
     handle: &str,
     rule: bool,
     event: &str,
@@ -195,19 +200,15 @@ fn hand_out(
 ) -> Result<HookReply, Refusal> {
     let root = core.lock().unwrap().root.clone();
     let taken = bench_mail::take_unread(&root, handle);
-    if rule || !taken.is_empty() {
-        let mut c = core.lock().unwrap();
-        if let Some(Some(agent)) = c.agents.get_mut(key) {
-            agent.told = true;
-        }
-        if !taken.is_empty() {
-            let ids: Vec<&str> = taken.iter().map(|t| t.id.as_str()).collect();
-            c.append(
+    if !taken.is_empty() {
+        let ids: Vec<&str> = taken.iter().map(|t| t.id.as_str()).collect();
+        core.lock()
+            .unwrap()
+            .append(
                 "mail/delivered",
                 json!({ "handle": handle, "mail": ids, "channel": channel, "event": event }),
             )
             .map_err(Refusal::Failed)?;
-        }
     }
     let mut lines: Vec<String> = Vec::new();
     if rule {

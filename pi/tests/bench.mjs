@@ -50,6 +50,12 @@ async function test(name, run) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Wait up to a second for `done()`: the inbox watch can run a wake of its own meanwhile. */
+async function eventually(done) {
+	for (let i = 0; i < 50 && !done(); i++) await sleep(20);
+	return done();
+}
+
 /** A fake `bench` in its own directory; `answer(json)` sets its next replies. */
 function fakeBench() {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-ext-bench-"));
@@ -213,6 +219,48 @@ await test("mail that lands while idle starts a turn with what benchd hands over
 			events.join(",").endsWith("agent_settled,wake"),
 			`settled is reported before the wake: ${events.join(",")}`,
 		);
+		record.handlers.get("session_shutdown")({}, ctx);
+	} finally {
+		bench.done();
+	}
+});
+
+await test("a turn that cannot start sends the notice with the next request instead", async () => {
+	const bench = fakeBench();
+	try {
+		const inbox = path.join(bench.dir, "inbox");
+		bench.answer({ handle: "h", inbox });
+		const { pi, record } = recordingPi({
+			sendUserMessage() {
+				throw new Error("compaction in progress");
+			},
+		});
+		factory(pi);
+		const { ctx } = recordingCtx();
+		await record.handlers.get("session_start")({}, ctx);
+		bench.answer({ handle: "h", context: "You have mail from a: /x/m1.md" });
+		await record.handlers.get("agent_settled")({}, ctx);
+		await eventually(() => bench.requests().some((r) => r.hook_event_name === "wake"));
+		await sleep(100);
+		bench.answer({ handle: "h" });
+		const next = await record.handlers.get("context")({ messages: [user("go")] }, ctx);
+		check(next?.messages?.[1]?.content?.[0]?.text === "You have mail from a: /x/m1.md", JSON.stringify(next));
+		record.handlers.get("session_shutdown")({}, ctx);
+	} finally {
+		bench.done();
+	}
+});
+
+await test("the wake asks to steer, so a turn that started meanwhile takes it instead", async () => {
+	const bench = fakeBench();
+	try {
+		bench.answer({ handle: "h", inbox: path.join(bench.dir, "inbox") });
+		const { record, ctx } = started();
+		await record.handlers.get("session_start")({}, ctx);
+		bench.answer({ handle: "h", context: "You have mail from a: /x/m1.md" });
+		await record.handlers.get("agent_settled")({}, ctx);
+		await eventually(() => record.sent.length > 0);
+		check(record.sent[0]?.options?.deliverAs === "steer", JSON.stringify(record.sent));
 		record.handlers.get("session_shutdown")({}, ctx);
 	} finally {
 		bench.done();

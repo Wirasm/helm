@@ -151,22 +151,21 @@ function install(pi: ExtensionAPI): void {
 	}
 
 	/** Mail landed while idle: ask for it, and start a turn with whatever benchd hands over. */
-	async function wake(ctx: ExtensionContext, inbox: string): Promise<void> {
+	async function wake(ctx: ExtensionContext): Promise<void> {
 		if (!who || asking || !hasMethod(pi, "sendUserMessage")) return;
 		if (typeof ctx?.isIdle === "function" && !ctx.isIdle()) return;
-		let waiting = false;
-		try {
-			waiting = fs.readdirSync(inbox).some((name) => name.endsWith(".md"));
-		} catch {
-			return;
-		}
-		if (!waiting) return;
 		asking = true;
+		let context: string | undefined;
 		try {
-			const reply = await report("wake", who);
-			if (reply?.context) pi.sendUserMessage(reply.context);
+			// benchd decides whether there is mail and whether a turn may start.
+			context = (await report("wake", who))?.context;
+			// `steer`: if a turn started while benchd answered, the notice joins it instead of
+			// throwing (pi throws on a message sent while streaming with no delivery mode).
+			if (context) pi.sendUserMessage(context, { deliverAs: "steer" });
 		} catch (error) {
-			warn("could not start a turn with the mail", error);
+			// benchd has already moved the mail to read/: keep the notice for the next request.
+			if (context) pending.push(context);
+			warn("could not start a turn with the mail; it goes with the next request", error);
 		} finally {
 			asking = false;
 		}
@@ -183,12 +182,12 @@ function install(pi: ExtensionAPI): void {
 		stopWatching();
 		try {
 			fs.mkdirSync(inbox, { recursive: true });
-			watcher = fs.watch(inbox, () => void wake(ctx, inbox));
+			watcher = fs.watch(inbox, () => void wake(ctx));
 			watcher.on("error", () => stopWatching());
 		} catch (error) {
 			warn(`cannot watch ${inbox}; mail arrives with your next request`, error);
 		}
-		poll = setInterval(() => void wake(ctx, inbox), POLL_MS);
+		poll = setInterval(() => void wake(ctx), POLL_MS);
 		poll.unref?.();
 	}
 
@@ -247,8 +246,8 @@ function install(pi: ExtensionAPI): void {
 		step("agent_settled handler", () =>
 			pi.on("agent_settled", async (_event, ctx) => {
 				if (!who) return;
-				const reply = await report("agent_settled", who);
-				if (reply?.inbox) await wake(ctx, reply.inbox);
+				await report("agent_settled", who);
+				await wake(ctx);
 			}),
 		);
 	}
