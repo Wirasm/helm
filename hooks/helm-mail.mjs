@@ -493,9 +493,9 @@ function reap(root, mine) {
  * Seven days is how long a sender holding the handle is told "retired" rather than "no such
  * mailbox", and how long a resumed session walks back into its own `read/`.
  *
- * Hook-only, and deliberately not inside `reap`: pi's `reap` must stay the same function as this
- * file's (`hooks/mailbox-conformance.mjs` runs both on one root), and one runtime archiving is
- * enough for a mailroom both share. Returns how many it moved.
+ * Both writers run it after their reap, so a machine where only one runtime starts sessions still
+ * tidies itself; `hooks/mailbox-conformance.mjs` runs both copies on one root. It is kept out of
+ * `reap` so the two reapers are still compared like for like. Returns how many it moved.
  */
 function archiveRetired(root, now = Date.now()) {
 	let moved = 0;

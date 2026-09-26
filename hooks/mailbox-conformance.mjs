@@ -345,6 +345,9 @@ const SHARED_NAMES = [
 	"ownerGone",
 	"retire",
 	"reap",
+	"RETIRED_DIR",
+	"ARCHIVE_AFTER_MS",
+	"archiveRetired",
 	"heldByAnother",
 	"deriveHandle",
 	"consume",
@@ -360,9 +363,7 @@ const SHARED_NAMES = [
  * Hooks-only helpers `claim` calls, lifted so it can run: `mineIn` finds the mailbox this
  * session already owns, `ownerRecord` decides what pid to record and whether to mark it
  * provisional. pi's `claim` is handed those answers by its caller, which is the signature
- * difference — see `checkTheOwnerRecordDecodes`. `archiveRetired` and its two constants are the
- * hook's alone (#417): one runtime moving long-retired mailboxes to `.retired/` is enough for a
- * mailroom both share, and keeping it out of `reap` keeps `checkReapAgrees` like for like.
+ * difference — see `checkTheOwnerRecordDecodes`.
  *
  * **This list is a set of names in another file, and it went stale the day it shipped.** #247
  * renamed `ownerPid` to `ownerRecord` on one branch while this list was written on another;
@@ -372,7 +373,7 @@ const SHARED_NAMES = [
  * nothing"* rather than passing with nothing to compare. Keep that guard: it is the only
  * thing standing between a renamed function and a suite that silently measures zero.
  */
-const HOOKS_EXTRA_NAMES = ["mineIn", "ownerRecord", "RETIRED_DIR", "ARCHIVE_AFTER_MS", "archiveRetired"];
+const HOOKS_EXTRA_NAMES = ["mineIn", "ownerRecord"];
 
 /**
  * pi-only helpers the shared rules above call, lifted so those rules can run at all: `warn` for
@@ -1041,6 +1042,7 @@ async function runConformance({ hooksSource, piSource, handleSource, ownerSource
 	group("heldByAnother", () => checkHeldByAnotherAgrees(hooks, pi));
 	group("retire", () => checkRetireAgrees(hooks, pi));
 	group("reap", () => checkReapAgrees(hooks, pi));
+	group("archive", () => checkArchiveAgrees(hooks, pi));
 	group("consume", () => checkConsumeAgrees(hooks, pi));
 	group("the owner record", () => checkTheOwnerRecordDecodes(hooks, pi, rules, schema));
 	group("the notice", () => checkTheNoticeAgrees(hooks, pi));
@@ -1094,7 +1096,7 @@ function checkTheSharedSurfaceIsCovered(hooksSource, piSource) {
 /** The on-disk shape's names and the bounds on another agent's text — #127's numbers. */
 function checkTheConstantsAgree(hooks, pi) {
 	let ran = 0;
-	for (const name of ["NAME", "READ_DIR", "OWNER_FILE", "OFF_ENV", "ROOT_ENV", "HANDLE_ENV", "SUITE_ENV", "CANONICAL_DOMAIN", "LEGACY_DOMAIN", "SUBJECT_MAX", "FROM_MAX", "OPERATOR_SENDER"]) {
+	for (const name of ["NAME", "READ_DIR", "OWNER_FILE", "OFF_ENV", "ROOT_ENV", "HANDLE_ENV", "SUITE_ENV", "RETIRED_DIR", "ARCHIVE_AFTER_MS", "CANONICAL_DOMAIN", "LEGACY_DOMAIN", "SUBJECT_MAX", "FROM_MAX", "OPERATOR_SENDER"]) {
 		ran += 1;
 		check(
 			hooks[name] === pi[name],
@@ -1612,6 +1614,61 @@ function checkReapAgrees(hooks, pi) {
 }
 
 /**
+ * THE ARCHIVE, BOTH COPIES ON ONE ROOT — #417. Each writer moves a mailbox retired for over seven
+ * days into `<root>/.retired/` after its reap. Run on identical roots at one fixed instant, both
+ * must leave the same tree, and nothing may be deleted. A shelf name that is already taken gets a
+ * random suffix, so it is normalised before comparing.
+ */
+function checkArchiveAgrees(hooks, pi) {
+	const now = 1_790_000_000_000;
+	const day = 86_400_000;
+	const seed = (root) => {
+		writeOwner(root, "old-1111", { runtime: "claude", pid: 1, sessionId: "s1", cwd: "/tmp", claimedAt: 1, retiredAt: now - 8 * day });
+		writeMessage(root, "old-1111", "late");
+		writeOwner(root, "edge-2222", { runtime: "pi", pid: 2, sessionId: "s2", cwd: "/tmp", claimedAt: 1, retiredAt: now - 7 * day });
+		writeOwner(root, "young-3333", { runtime: "claude", pid: 3, sessionId: "s3", cwd: "/tmp", claimedAt: 1, retiredAt: now - 6 * day });
+		writeOwner(root, "live-4444", { runtime: "claude", pid: 4, sessionId: "s4", cwd: "/tmp", claimedAt: 1 });
+		writeOwner(root, "taken-5555", { runtime: "claude", pid: 5, sessionId: "s5", cwd: "/tmp", claimedAt: 1, retiredAt: 9 });
+		fs.mkdirSync(path.join(root, ".retired", "taken-5555"), { recursive: true });
+		fs.writeFileSync(path.join(root, ".retired", "taken-5555", "earlier"), "x\n");
+		fs.mkdirSync(path.join(root, "no-owner-6666"), { recursive: true });
+	};
+	const tree = (root) =>
+		fs
+			.readdirSync(root, { recursive: true })
+			.map((entry) => String(entry).replace(/-[0-9a-f]{8}(?=\/|$)/, "-<suffix>"))
+			.sort();
+	const after = {};
+	const moved = {};
+	for (const [label, module] of [["hooks", hooks], ["pi", pi]]) {
+		const root = makeRoot();
+		seed(root);
+		moved[label] = module.archiveRetired(root, now);
+		after[label] = tree(root);
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	check(
+		JSON.stringify(after.hooks) === JSON.stringify(after.pi) && moved.hooks === moved.pi,
+		`both writers archive the same mailboxes to the same places (hooks moved ${moved.hooks}, pi ${moved.pi})`,
+	);
+	const seen = new Set(after.hooks);
+	check(
+		seen.has(".retired/old-1111/late.json") && seen.has(".retired/edge-2222/owner.json") && seen.has(".retired/taken-5555-<suffix>/owner.json"),
+		"retired seven days or more is moved, with its late mail",
+	);
+	check(
+		seen.has("young-3333/owner.json") && seen.has("live-4444/owner.json") && seen.has("no-owner-6666"),
+		"a recently retired mailbox, a live one and one with no owner.json stay in the root",
+	);
+	check(seen.has(".retired/taken-5555/earlier"), "a name already on the shelf is kept, never merged into or replaced");
+	check(
+		after.hooks.filter((entry) => entry.endsWith("owner.json")).length === 5,
+		"nothing is deleted: five owner files before, five after",
+	);
+	ranAtLeast(moved.hooks, 3, "archiveRetired");
+}
+
+/**
  * The whole `owner.json` both writers actually put on disk, run through the whole Swift
  * decoder that reads it — not just the `handle` field through `Handle`.
  *
@@ -1995,6 +2052,13 @@ async function selfChecks() {
 				),
 			},
 			expect: /ownerGone disagrees|both reapers leave the SAME shared root/,
+		},
+		{
+			// #417: a pi that stops archiving leaves the operator's mailroom to grow again whenever
+			// pi is what starts sessions.
+			what: "pi archives nothing (#417)",
+			sources: { ...pristine, piSource: piSource.replace("\tlet moved = 0;\n", "\tlet moved = 0;\n\treturn moved;\n") },
+			expect: /both writers archive the same mailboxes/,
 		},
 		{
 			what: "the hook's slug emits a character no mailbox directory can carry",

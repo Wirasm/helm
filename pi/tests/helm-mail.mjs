@@ -709,6 +709,20 @@ await test("a dead agent's empty mailbox is retired, not deleted, and keeps its 
 	check(fs.existsSync(kept), "the read/ archive was destroyed with its dead mailbox (#236)");
 });
 
+// #417: retiring never deletes, so before this every retired mailbox stayed in the root for good
+// and helm read each one every two seconds. pi's session_start now moves one retired over seven
+// days to `.retired/`, as the hook's claim does; the conformance harness compares the two.
+await test("a session start moves a mailbox retired over seven days to .retired/, and deletes nothing", () => {
+	const root = freshRoot();
+	const old = seedOwner(root, "old-9999", { pid: 4194303, retiredAt: Date.now() - 8 * 86_400_000 });
+	const kept = archive(old);
+	const young = seedOwner(root, "young-9998", { pid: 4194303, retiredAt: Date.now() - 86_400_000 });
+	started({ root });
+	check(!fs.existsSync(old), "a mailbox retired eight days ago is still in the root");
+	check(fs.existsSync(path.join(root, ".retired", "old-9999", "read", path.basename(kept))), "the moved mailbox lost its read/ archive");
+	check(fs.existsSync(young), "a mailbox retired one day ago was moved");
+});
+
 await test("a dead agent's mailbox is KEPT live while it still holds mail", () => {
 	const root = freshRoot();
 	const dead = seedOwner(root, "dead-8888", { pid: 4194303 });
@@ -814,7 +828,9 @@ await test("/helm-mail send to a handle with no mailbox refuses and says so", as
 // two, instead of writing into a live-looking directory and waiting forever for an answer.
 await test("/helm-mail send to a RETIRED mailbox refuses, and differently from an absent one", async () => {
 	const root = freshRoot();
-	seedOwner(root, "retired-5150", { retiredAt: 1 });
+	// Retired just now: one retired over seven days is moved out of the root on session start
+	// (#417), and a send to it is then the absent case.
+	seedOwner(root, "retired-5150", { retiredAt: Date.now() });
 	const s = started({ root });
 	const c = recordingCtx();
 	await s.record.commands.get("helm-mail").handler("send retired-5150 are you there", c.ctx);
@@ -828,7 +844,7 @@ await test("/helm-mail list marks a retired mailbox as retired, not as live (#23
 	const root = freshRoot();
 	// A retired owner whose pid is still ALIVE — the `/clear` ghost's shape. Reading the pid
 	// alone lists it as a perfectly healthy peer, which is exactly how mail goes unread.
-	seedOwner(root, "retired-7274", { pid: process.ppid, retiredAt: 1 });
+	seedOwner(root, "retired-7274", { pid: process.ppid, retiredAt: Date.now() });
 	const s = started({ root });
 	const c = recordingCtx();
 	await s.record.commands.get("helm-mail").handler("list", c.ctx);
