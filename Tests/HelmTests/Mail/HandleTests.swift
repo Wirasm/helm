@@ -130,9 +130,8 @@ final class HandleTests: XCTestCase {
     }
 
     func testDecodingAKeyedObjectThrowsRatherThanReadingAField() {
-        // The shape `handle` must never take on the wire — proved from the encode side, through
-        // a real script, by `SpoolWireConformanceTests
-        // .testHelmSpoolPrintsHandleAndTerminalIdAsBareStringsOnceReady`.
+        // The shape `handle` must never take on the wire; the wire's own spelling is a bare
+        // string (`daemon/fixtures/mail-verbs.json`).
         XCTAssertThrowsError(
             try JSONDecoder().decode(Handle.self, from: Data(#"{"value":"helm-4831"}"#.utf8)))
     }

@@ -45,9 +45,7 @@ struct BuildStamp: Codable, Equatable {
     /// the Makefile knows.
     ///
     /// **A `String`, deliberately, and this is the documented carve-out rather than a lapse.**
-    /// A stamp is decoded permissively in shape and judged strictly afterwards — the same
-    /// reasoning `CloseRequest.terminal` and `SpawnRequest.cwd` record in their own headers.
-    /// It is judged in exactly one place, `BuildStamp.installableProduct`, and a path that
+    /// A stamp is decoded permissively in shape and judged strictly afterwards. It is judged in exactly one place, `BuildStamp.installableProduct`, and a path that
     /// fails that check produces a refusal naming the reason instead of unreadable JSON under
     /// the wrong field.
     let product: String

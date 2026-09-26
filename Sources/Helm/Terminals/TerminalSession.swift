@@ -59,7 +59,6 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// The workspace that groups this session in the frame. The manager remains
     /// the owner of every session and the one shared ghostty controller.
     let workspacePath: WorkspacePath
-    /// Bypassing the notification gate is safe only if a burst cannot flood it.
 
     @Published private(set) var status: Status = .starting
     /// Terminal title (OSC 0/2 from the shell).

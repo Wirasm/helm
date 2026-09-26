@@ -35,8 +35,7 @@ enum TerminalLaunchLine {
 /// Running a composed line in a named pane, as a seam.
 ///
 /// `WorkbenchModel` resolves panes to sessions and could reach `hostView` directly; a protocol
-/// is here so `resume(_:)` is reachable from `swift test` without a ghostty surface — the same
-/// trade `SpoolSpawning` makes for the spool, for the same reason.
+/// is here so `resume(_:)` is reachable from `swift test` without a ghostty surface.
 @MainActor
 protocol TerminalLaunching {
     func run(_ line: String, in terminal: Pane.ID)

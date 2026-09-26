@@ -54,7 +54,8 @@ _Avoid_: pane type (in code), plugin, renderer
 **name**:
 What a pane is called on its slot's tab strip, and **who called it that**. benchd *derives* one
 for a pane it opens for an agent it spawned; an agent *chooses* one with `bench name`, and may
-replace a derived one freely but not a chosen one unless it says `--rename`, the operator asked. A pane with
+replace a derived one freely but not a chosen one unless it says `--rename`, meaning the
+operator asked for it. A pane with
 no name falls back to what it can say about itself — a terminal to its shell's **title**, a
 canvas to the file or host it is showing. Persisted on the pane, so it survives a relaunch.
 _Avoid_: title (that word is the shell's, one level down — OSC 0/2 — and outranked by a name),

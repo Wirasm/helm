@@ -6,9 +6,8 @@ import Foundation
 /// **Polling, not watching, and for the reason `BoardModel` already documents.** The stamp is
 /// one file that gets *rewritten* at the same path on every build, and a directory-level
 /// `DispatchSource` reports entries appearing and disappearing rather than a write to a file
-/// already listed there. `SpoolWatcher`'s header draws the same distinction from the other
-/// side — it watches for a file *appearing*, which is the visible case. This is the invisible
-/// one, so it polls.
+/// already listed there. A file *appearing* is the visible case; a rewrite is the invisible one,
+/// so it polls.
 ///
 /// Five seconds rather than the board's two: a build finishing is a minutes-scale event, the
 /// badge is not something anyone is waiting on with a stopwatch, and the tick is one `stat`

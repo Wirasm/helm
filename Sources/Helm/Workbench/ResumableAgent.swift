@@ -113,7 +113,7 @@ enum AgentResume {
     /// the line instead of starting an agent somewhere arbitrary — the operator clicked Resume,
     /// so they are at the pane and the shell's own error is in front of them.
     ///
-    /// **It carries the same unattended posture a spawn does**, from
+    /// **It carries the unattended posture a spawn gets from benchd**, from
     /// `UnattendedPosture` rather than a second spelling of it. The stretch is worth
     /// naming: that policy's header is written about the case where *nobody is at the pane*,
     /// and somebody just clicked Resume. The reason it still applies is the sentence

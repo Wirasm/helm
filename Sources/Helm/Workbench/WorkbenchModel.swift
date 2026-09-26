@@ -110,8 +110,8 @@ final class WorkbenchModel: ObservableObject {
     private let agents: AgentObserver
 
     /// How a resume line reaches the pty it is meant for. A seam rather than a direct
-    /// `hostView` call so `resume(_:)` is testable — the same trade `SpoolSpawning` makes for
-    /// the spool, and the default is the same paste-then-Return the spool sends.
+    /// `hostView` call so `resume(_:)` is testable, and the default is paste-then-Return
+    /// (`TerminalLaunchLine.send`).
     private let launcher: TerminalLaunching
 
     /// Where the project stores are — `~/.prp` in production (#289).

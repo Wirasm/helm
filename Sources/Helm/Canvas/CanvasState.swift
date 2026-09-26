@@ -15,7 +15,7 @@ import Foundation
 /// small enough to read"*, it is checked at exactly one edge (`CanvasPageState.decode`), and
 /// every site downstream — the latch, the file, the model's dedupe — needs it to hold. With a
 /// raw `String` each of those would be answered by reading upwards, which is the defect
-/// `SpoolWork`'s header names and `id`'s is the standing bill for.
+/// `AGENTS.md`'s newtype rule names.
 ///
 /// **A top-level object, never an array or a scalar.** MCP Apps' `structuredContent` is an
 /// object for the same reason: an agent reading the latch should be able to say `state.score`

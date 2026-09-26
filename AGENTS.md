@@ -27,8 +27,8 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | --- | --- | --- |
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
-| `skills` | the canvas, board and post-canvas skill gates | node, zsh, python3, git |
-| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` skill or `RenderableFile.swift` (the CLI's `bench open` checks its list) changed | cargo |
+| `skills` | the board and post-canvas skill gates | node, zsh, python3, git |
+| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill (their snippets run against a real benchd) or `RenderableFile.swift` (the CLI's `bench open` checks its list) changed | cargo |
 | `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
 
 "Changed" means against `origin/development`, committed or not. A missing tool is a `FAIL`
@@ -201,8 +201,8 @@ bash daemon/test.sh
 
 `daemon/` is the bench daemon (`benchd`) — a self-contained Rust cargo workspace, the
 same carve-out as `pi/`: its gate needs only the Rust toolchain, its CI job
-runs only when `daemon/**`, a `.claude/skills/bench-*` skill (the gate executes those skills'
-snippets) or `Sources/Helm/Shared/RenderableFile.swift` (the CLI's `bench open` checks its list
+runs only when `daemon/**`, a `.claude/skills/bench-*` skill or `.claude/skills/helm-canvas/`
+(the gate executes those skills' snippets) or `Sources/Helm/Shared/RenderableFile.swift` (the CLI's `bench open` checks its list
 against it) changed, and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
 `docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
@@ -710,7 +710,9 @@ bench: nothing is drawn until benchd's follower delivers the document the verb m
   once, as `workspace/import` (`BenchImport`), and are left where they were.
 - **#85's question stays helm's** until M5b: its answer goes back as `workspace/reset` or
   `workspace/unshelve`. A pane showing a running benchd session is never asked about: the agent
-  is right there.
+  is right there. **The question is invisible to benchd**, so an agent's `bench` verb into a
+  workspace helm is asking about still lands, and the operator's "fresh" shelves it with the rest.
+  Accepted until M5b dissolves the question (plan D4 of #354).
 - **benchd unreachable** is a status-bar capsule naming the socket; the last document stays on
   screen and a verb fails visibly. helm never starts benchd: `just benchd-install` makes it a
   login agent.
