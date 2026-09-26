@@ -244,8 +244,10 @@ session is started through its inbox socket (the #320 route after all, with
 `crossSessionInbound: "accept"` set once by the operator), and pi starts its own turn from its
 `bench` extension. The paste is deleted: benchd never types into a pty. helm keeps no mailroom:
 `hooks/`, `pi/extensions/helm-mail`, the conformance harness and the helm-mail skills are gone,
-and helm asks benchd who is in a pane (`mail/who`). **Left:** codex's idle channel (a
-benchd-owned app-server) and the three-runtime ring proof, which need codex's limit back.
+and helm asks benchd who is in a pane (`mail/who`). A codex benchd spawns runs its TUI against
+its own app-server, and benchd starts its idle turns there; `just mail-ring` closed the
+claude → codex → pi → claude ring through benchd, idle and busy (#358). **Left:** idle wake for
+a codex the operator starts by hand, which embeds its app-server (M5b).
 
 **Goal:** one owner for registry, liveness, and delivery; the flaky N-pairwise stitching
 collapses into taps.

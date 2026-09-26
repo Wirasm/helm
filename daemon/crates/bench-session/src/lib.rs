@@ -108,7 +108,31 @@ pub struct SpawnSpec {
     /// Claude's `--settings` file: the hooks that report to benchd, and the inbound rule that
     /// lets benchd start a turn in an idle session (#358).
     pub settings: Option<String>,
+    /// codex: the socket of the app-server this session's TUI runs against, which the session
+    /// starts beside the TUI ([`CODEX_SERVED`]). benchd starts a turn there when the agent is
+    /// idle (#358). `None` runs the TUI with its app-server embedded, which nothing outside the
+    /// process can reach.
+    pub codex_server: Option<String>,
 }
+
+/// How a served codex session starts, as a script: `$0` is the socket, `"$@"` the TUI's
+/// flags. Measured on codex 0.157.0:
+/// - The app-server runs the hooks, not the TUI, with its own environment and as the hook's
+///   parent. So it runs in the session's environment (`BENCH_SESSION`), one per session, and
+///   benchd knows which session a hook is from without matching threads.
+/// - The TUI renders and takes keys against it with `--remote`, and a second client's
+///   `turn/start` on its idle thread runs a turn the TUI shows.
+/// - Closing stdin does not stop the app-server, and macOS has no parent-death signal. The
+///   watcher is its leash: it outlives a hangup and stops the server within a second of the
+///   TUI going, however the TUI went. `$$` is the TUI's pid after the `exec`.
+pub const CODEX_SERVED: &str = r#"s="$0"
+codex app-server --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
+p=$!
+( trap '' HUP INT TERM; while kill -0 $$ 2>/dev/null; do sleep 1; done; kill $p 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+i=0
+while [ ! -S "$s" ] && [ $i -lt 100 ] && kill -0 $p 2>/dev/null; do sleep 0.1; i=$((i+1)); done
+exec codex --remote "unix://$s" "$@"
+"#;
 
 /// The sentence a first prompt becomes in argv.
 pub fn prompt_pointer(path: &str) -> String {
@@ -148,6 +172,13 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
                 );
             }
             args.push("--dangerously-bypass-approvals-and-sandbox".into());
+            // The hooks report to benchd, and hooks run only once trusted, which is a choice
+            // made in a dialog nobody is at an unattended pane to answer. An agent that already
+            // runs every command unsandboxed gains nothing a hook could add.
+            args.push("--dangerously-bypass-hook-trust".into());
+            // The thread's directory. Against a separate app-server the TUI's own cwd is not
+            // it (measured: the thread ran in the server's).
+            args.extend(["-C".into(), spec.cwd.clone()]);
             // No modals: nobody is at an unattended pane to answer one, so the next pasted
             // Return does. Both measured. The update prompt: the brief's Return accepted
             // "Update now" and the pane ran `brew upgrade --cask codex` and quit (0.155.1).
@@ -199,6 +230,11 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
     };
     if let Some(path) = spec.prompt_file.as_deref().filter(|_| !spec.resume) {
         args.push(prompt_pointer(path));
+    }
+    if let (AgentKind::Codex, Some(socket)) = (spec.agent, &spec.codex_server) {
+        let mut served = vec!["-c".to_string(), CODEX_SERVED.to_string(), socket.clone()];
+        served.extend(args);
+        return Ok(("/bin/sh".to_string(), served));
     }
     Ok((program.to_string(), args))
 }
@@ -482,6 +518,7 @@ mod tests {
             resume: false,
             prompt_file: None,
             settings: None,
+            codex_server: None,
         }
     }
 
@@ -529,6 +566,9 @@ mod tests {
             a,
             vec![
                 "--dangerously-bypass-approvals-and-sandbox",
+                "--dangerously-bypass-hook-trust",
+                "-C",
+                "/tmp",
                 "-c",
                 "check_for_update_on_startup=false",
                 "-c",
@@ -538,6 +578,95 @@ mod tests {
         let (p, a) = argv(&spec(AgentKind::Pi)).unwrap();
         assert_eq!(p, "pi");
         assert_eq!(a, vec!["--approve"]);
+    }
+
+    #[test]
+    fn a_served_codex_starts_its_app_server_and_runs_the_tui_against_it() {
+        let mut s = spec(AgentKind::Codex);
+        s.prompt_file = Some("/tmp/p.txt".into());
+        let (_, embedded) = argv(&s).unwrap();
+        s.codex_server = Some("/r/codex/s1.sock".into());
+        let (p, a) = argv(&s).unwrap();
+        assert_eq!(p, "/bin/sh");
+        assert_eq!(a[..3], ["-c", CODEX_SERVED, "/r/codex/s1.sock"]);
+        assert_eq!(
+            a[3..],
+            embedded[..],
+            "the TUI keeps every flag and the prompt"
+        );
+    }
+
+    /// A stub `codex` on PATH: `app-server` records its pid and sleeps; the TUI sleeps too, so
+    /// the test decides how it goes.
+    fn served_codex_stub(dir: &std::path::Path) -> String {
+        let stub = dir.join("codex");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = app-server ]; then echo $$ > {}/server.pid; exec sleep 30; fi\nexec sleep 30\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        format!("{}:/bin:/usr/bin", dir.display())
+    }
+
+    fn gone_within(pid: i32, limit: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < limit {
+            // SAFETY: signal 0 only asks whether the pid exists.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    }
+
+    #[test]
+    fn a_served_codexs_app_server_dies_with_its_tui_however_the_tui_goes() {
+        for signal in [libc::SIGTERM, libc::SIGKILL] {
+            let dir = std::env::temp_dir().join(format!("bcx{}-{signal}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = served_codex_stub(&dir);
+            let socket = dir.join("s.sock");
+            let _listening = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+            let mut tui = std::process::Command::new("/bin/sh")
+                .args(["-c", CODEX_SERVED, socket.to_str().unwrap()])
+                .env("PATH", path)
+                .spawn()
+                .unwrap();
+            let pid_file = dir.join("server.pid");
+            let start = Instant::now();
+            while !pid_file.exists() && start.elapsed() < Duration::from_secs(5) {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let server: i32 = std::fs::read_to_string(&pid_file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            assert!(
+                !gone_within(server, Duration::from_millis(300)),
+                "server started"
+            );
+            // SAFETY: the TUI is this test's own child.
+            unsafe { libc::kill(tui.id() as i32, signal) };
+            let _ = tui.wait();
+            let gone = gone_within(server, Duration::from_secs(4));
+            if !gone {
+                // SAFETY: the stub server is this test's own grandchild.
+                unsafe { libc::kill(server, libc::SIGKILL) };
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(
+                gone,
+                "the app-server outlived its TUI after signal {signal}"
+            );
+        }
     }
 
     #[test]
@@ -565,6 +694,9 @@ mod tests {
             a,
             vec![
                 "--dangerously-bypass-approvals-and-sandbox",
+                "--dangerously-bypass-hook-trust",
+                "-C",
+                "/tmp",
                 "-c",
                 "check_for_update_on_startup=false",
                 "-c",
