@@ -187,6 +187,10 @@ pub const KNOWN_VERBS: &[&str] = &[
     "focus/step",
     "layout/resize",
     "drawer/toggle",
+    // M3: the pty follows its viewer, and benchd asks helm for what only helm can do.
+    "resize",
+    "helm/ask",
+    "helm/answer",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +222,12 @@ pub enum Verb {
     JustRun,
     /// Every verb in `LAYOUT_VERBS`; `LayoutVerb` decodes which one and its arguments.
     Layout,
+    /// An attached viewer's terminal changed size (`SessionArgs` with `rows`/`cols`).
+    Resize,
+    /// Something only helm can do, asked of whichever helm follows the bench (`HelmAsk`).
+    HelmAsk,
+    /// helm's answer to one (`HelmAnswer`).
+    HelmAnswer,
 }
 
 impl Verb {
@@ -243,6 +253,9 @@ impl Verb {
             "browser/status" => Some(Verb::BrowserStatus),
             "browser/stop" => Some(Verb::BrowserStop),
             "browser/setup" => Some(Verb::BrowserSetup),
+            "resize" => Some(Verb::Resize),
+            "helm/ask" => Some(Verb::HelmAsk),
+            "helm/answer" => Some(Verb::HelmAnswer),
             "just/run" => Some(Verb::JustRun),
             layout if LAYOUT_VERBS.contains(&layout) => Some(Verb::Layout),
             _ => None,
@@ -270,7 +283,18 @@ pub const BROWSER_READY_WAIT: std::time::Duration = std::time::Duration::from_se
 /// `EXIT_NO_DAEMON`: no exit code at all is the one failure an unattended agent cannot
 /// act on.
 pub const CLIENT_READ_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(BROWSER_READY_WAIT.as_secs() + DAEMON_IO_TIMEOUT.as_secs() + 5);
+    std::time::Duration::from_secs(LONGEST_DAEMON_WAIT + DAEMON_IO_TIMEOUT.as_secs() + 5);
+
+/// How long `helm/ask` waits for helm to answer. A capture draws one window, well under a
+/// second; a helm that has not answered in this long is not following this bench.
+pub const HELM_ASK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The longest wait the daemon does on a caller's behalf, in seconds.
+const LONGEST_DAEMON_WAIT: u64 = if BROWSER_READY_WAIT.as_secs() > HELM_ASK_WAIT.as_secs() {
+    BROWSER_READY_WAIT.as_secs()
+} else {
+    HELM_ASK_WAIT.as_secs()
+};
 
 // ---------------------------------------------------------------------------
 // Handles and mail payloads
@@ -374,7 +398,51 @@ pub struct SpawnArgs {
     pub rows: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cols: Option<u16>,
+    /// A runtime session id to re-enter rather than start fresh: claude's `--resume`, pi's
+    /// `--session-id`. Any conversation, not only one this bench started — how `just
+    /// release-resume` brings the operator's own session back. codex is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
+    /// Flags for the agent, after its posture: added to it, never replacing it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
+
+/// What benchd asks of helm: the things only the window can do. Tagged by `kind` from the
+/// first one, so a second is an addition rather than a migration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HelmAsk {
+    /// helm draws its own window into `path` (an absolute `.png`), the one titled like
+    /// `window` when more than one is open. The answer's `data` is helm's capture report.
+    Capture {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<String>,
+    },
+}
+
+/// The data of a `helm/asked` event: which ask, and what it asks. helm reads these from its
+/// `events --follow` and answers each with `helm/answer`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelmAsked {
+    pub ask: String,
+    pub request: HelmAsk,
+}
+
+/// `helm/answer`'s payload: the ask it answers and helm's outcome, which benchd hands to the
+/// caller unchanged — its status is the caller's exit code.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HelmAnswer {
+    pub ask: String,
+    pub status: Status,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+}
+
+pub const HELM_ASKED: &str = "helm/asked";
 
 /// The payload shared by `attach`, `close` and `resume`: a session id, plus the
 /// viewer's size where the verb has a viewer.
@@ -752,7 +820,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            38,
+            41,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
@@ -763,6 +831,10 @@ mod tests {
         assert!(
             CLIENT_READ_TIMEOUT > BROWSER_READY_WAIT + DAEMON_IO_TIMEOUT,
             "the same invariant for a browser start"
+        );
+        assert!(
+            CLIENT_READ_TIMEOUT > HELM_ASK_WAIT + DAEMON_IO_TIMEOUT,
+            "and for an ask of helm"
         );
     }
 

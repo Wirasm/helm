@@ -14,17 +14,20 @@
 
 use bench_doc::{DrawerName, Surface};
 use bench_wire::{
-    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, HookArgs, HookReply,
+    Actor, CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, HookArgs, HookReply,
     JustRunArgs, LayoutVerb, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, Request,
-    RequestId, Response, SessionArgs, SessionKey, SessionsArgs, SpawnArgs, Status, SuiteName,
-    resolve_root, socket_path,
+    RequestId, Response, SessionArgs, SessionKey, SessionsArgs, Status, SuiteName, resolve_root,
+    socket_path,
 };
 use serde_json::{Value, json};
-use std::io::{IsTerminal, Read, Write};
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+mod attach;
+mod verbs;
 
 fn main() {
     // `hook` is wired into an agent's own hooks and has its own contract (exit 0, always),
@@ -33,6 +36,7 @@ fn main() {
     let code = match raw.first().map(String::as_str) {
         Some("hook") => hook(raw.get(1).map(String::as_str)),
         Some("wiring") => wiring(raw.get(1).map(String::as_str)),
+        _ if verbs::owns(&raw) => verbs::run(&raw),
         _ => run(),
     };
     process::exit(code);
@@ -46,8 +50,23 @@ fn usage() -> &'static str {
      \x20                                         happens (the document attached when it changed)\n\
      \x20     get                                 the bench document and the seq it reflects\n\
      \x20     stop                                log the stop, kill sessions, exit\n\
-     \x20     spawn --agent <a> --cwd <dir>       spawn an agent into a bench pty\n\
-     \x20           [--name <handle>] [--prompt-file <p>] [--model <m>] [--effort <e>]\n\
+     \x20     spawn --agent <a> --cwd <dir>       an agent in a bench pty, shown in a pane of\n\
+     \x20           [--name <handle>]             <dir>'s workspace; --resume <id> re-enters a\n\
+     \x20           [--prompt-file <p>]           claude or pi conversation, --arg adds a flag\n\
+     \x20           [--model <m>] [--effort <e>] [--resume <id>] [--arg <flag>]... [--asked]\n\
+     \x20     open <file|browser|terminal>        a pane in your workspace (a .md/.html file is\n\
+     \x20           [--workspace <dir> | --drawer <name>] [--asked]      a canvas)\n\
+     \x20     split <right|down> [--surface <s>]  a new column or row beside the focused slot\n\
+     \x20     show <pane> [--asked]               make it its slot's visible tab\n\
+     \x20     focus <pane> --asked                give it the operator's keyboard\n\
+     \x20     move <pane> <left|right|up|down>    move a pane on its bench\n\
+     \x20     name <pane> <words> [--rename]      name a pane; a chosen name needs --rename\n\
+     \x20     close <pane> [--force] [--asked]    close a pane; a terminal needs --force\n\
+     \x20     get pane <pane>                     where a pane is, and whether it is seen\n\
+     \x20     get screenshot [--out <p.png>]      helm draws its window (helm must follow the\n\
+     \x20           [--window <title>]            bench)\n\
+     \x20     (every pane verb lands in the background; --asked says the operator asked, and\n\
+     \x20      only then may it bring something forward or move his focus)\n\
      \x20     sessions                            list bench sessions\n\
      \x20     sessions --all [--workspace <dir>]  every agent session in a workspace (default: the\n\
      \x20                                         cwd's): helm panes, bench sessions, --bg jobs,\n\
@@ -57,7 +76,8 @@ fn usage() -> &'static str {
      \x20         [-n N] [--since 30m|2h|1d|<time>] calls and errors, read from its transcript with no\n\
      \x20         [--json]                        daemon; the last 40 unless -n says otherwise\n\
      \x20     attach <session>                    raw relay to a session's pty (Ctrl-\\ detaches)\n\
-     \x20     close <session>                     drain-then-die the session\n\
+     \x20     close <session>                     drain-then-die the session (a pane id closes\n\
+     \x20                                         the pane, above)\n\
      \x20     resume <session>                    re-enter an exited session's runtime state\n\
      \x20     mail send --to <h> --body <text>    deliver mail; a live recipient is woken\n\
      \x20               [--body-file <p>] [--subject <s>] [--from <h>]\n\
@@ -91,13 +111,11 @@ struct Cli {
     verb: String,
     args: Value,
     root: PathBuf,
+    /// `--asked`: the caller says the operator asked, so the verb may move his focus.
+    asked: bool,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    reason = "legacy (#418): 250 lines, limit 100; cognitive complexity 27, limit 25"
-)]
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 250 lines, limit 100")]
 fn run() -> i32 {
     let mut argv = std::env::args().skip(1).peekable();
     let mut suite_flag: Option<String> = None;
@@ -128,9 +146,8 @@ fn run() -> i32 {
             "--json" => json_out = true,
             "--follow" => follow = true,
             "--all" => all = true,
-            "--agent" | "--cwd" | "--prompt-file" | "--model" | "--effort" | "--rows"
-            | "--cols" | "--name" | "--to" | "--from" | "--subject" | "--body" | "--body-file"
-            | "--handle" | "--workspace" | "--harness" | "--pane" | "--surface" => {
+            "--to" | "--from" | "--subject" | "--body" | "--body-file" | "--handle"
+            | "--workspace" | "--harness" | "--pane" | "--surface" => {
                 let key = arg.trim_start_matches("--").replace('-', "_");
                 match argv.next() {
                     Some(v) => flags.push((key, v)),
@@ -234,48 +251,6 @@ fn run() -> i32 {
     let args: Value = match verb.as_str() {
         "events" if follow => json!({ "follow": true }),
         "events" if since > 0 => json!({ "since": since }),
-        "spawn" => {
-            let mut spawn = SpawnArgs {
-                agent: String::new(),
-                cwd: String::new(),
-                name: flag("name"),
-                // Absolute: the agent reads it from its own cwd, which is not the caller's.
-                prompt_file: flag("prompt_file").map(|p| {
-                    std::env::current_dir()
-                        .map(|cwd| cwd.join(&p).display().to_string())
-                        .unwrap_or(p)
-                }),
-                model: flag("model"),
-                effort: flag("effort"),
-                rows: None,
-                cols: None,
-            };
-            if let Some(a) = flag("agent") {
-                spawn.agent = a;
-            } else {
-                return refuse("spawn needs --agent <claude|codex|pi>");
-            }
-            if let Some(c) = flag("cwd") {
-                spawn.cwd = c;
-            } else {
-                return refuse("spawn needs --cwd <absolute dir>");
-            }
-            for k in ["rows", "cols"] {
-                if let Some(v) = flag(k) {
-                    match v.parse::<u16>() {
-                        Ok(n) => {
-                            if k == "rows" {
-                                spawn.rows = Some(n)
-                            } else {
-                                spawn.cols = Some(n)
-                            }
-                        }
-                        Err(_) => return refuse(&format!("--{k} needs a number")),
-                    }
-                }
-            }
-            json!(spawn)
-        }
         "attach" | "close" | "resume" => {
             let Some(sid) = positional.first() else {
                 return refuse(&format!(
@@ -284,7 +259,7 @@ fn run() -> i32 {
             };
             let (rows, cols) = if verb == "attach" {
                 // Tell the daemon the viewer's size so the pty matches before replay.
-                match terminal_size() {
+                match attach::terminal_size() {
                     Some((r, c)) => (Some(r), Some(c)),
                     None => (None, None),
                 }
@@ -399,9 +374,10 @@ fn run() -> i32 {
         verb: verb.clone(),
         args,
         root,
+        asked: false,
     };
     if verb == "attach" {
-        attach(cli)
+        attach::run(cli)
     } else if follow {
         follow_events(cli)
     } else {
@@ -734,25 +710,29 @@ fn record_root(suite_flag: Option<String>) -> Result<PathBuf, String> {
 
 /// The ordinary one-line-in, one-line-out path.
 fn simple(cli: Cli) -> i32 {
-    let (stream, request_line) = match open(&cli) {
-        Ok(pair) => pair,
-        Err(code) => return code,
-    };
+    match exchange(&cli) {
+        Ok(response) => print_response(&response),
+        Err(code) => code,
+    }
+}
+
+/// One request, one response. `Err` is the exit code of a transport failure, already said.
+fn exchange(cli: &Cli) -> Result<Response, i32> {
+    let (stream, request_line) = open(cli)?;
     if let Err(e) = (&stream).write_all(request_line.as_bytes()) {
         eprintln!("bench: write failed ({e})");
-        return EXIT_NO_DAEMON;
+        return Err(EXIT_NO_DAEMON);
     }
-    let reply = match read_response_line(&stream) {
-        Some(r) => r,
-        None => {
-            eprintln!("bench: no answer within {}s", CLIENT_READ_TIMEOUT.as_secs());
-            return EXIT_NO_DAEMON;
-        }
+    let Some(reply) = read_response_line(&stream) else {
+        eprintln!("bench: no answer within {}s", CLIENT_READ_TIMEOUT.as_secs());
+        return Err(EXIT_NO_DAEMON);
     };
-    let response: Response = match serde_json::from_str(&reply) {
-        Ok(r) => r,
-        Err(e) => return fail(&format!("unreadable response ({e}): {}", reply.trim())),
-    };
+    serde_json::from_str(&reply)
+        .map_err(|e| fail(&format!("unreadable response ({e}): {}", reply.trim())))
+}
+
+/// The reason on stderr, the data as pretty JSON on stdout, the status as the exit code.
+fn print_response(response: &Response) -> i32 {
     if let Some(reason) = &response.reason {
         eprintln!("bench: {reason}");
     }
@@ -765,8 +745,6 @@ fn simple(cli: Cli) -> i32 {
     response.status.exit_code()
 }
 
-/// The attach path: response line, then the connection is a raw relay. Local terminal
-/// goes raw (keystrokes reach the agent unmangled, Ctrl-C included); Ctrl-\ detaches.
 /// `events --follow`: the answer (the document and its seq) as one JSON line, then every
 /// frame as the daemon sends it, one JSON line each, until the daemon goes away. Lines, not
 /// pretty JSON, so a reader can take them one at a time.
@@ -818,110 +796,6 @@ fn follow_events(cli: Cli) -> i32 {
     }
 }
 
-fn attach(cli: Cli) -> i32 {
-    let (stream, request_line) = match open(&cli) {
-        Ok(pair) => pair,
-        Err(code) => return code,
-    };
-    if let Err(e) = (&stream).write_all(request_line.as_bytes()) {
-        eprintln!("bench: write failed ({e})");
-        return EXIT_NO_DAEMON;
-    }
-    let reply = match read_response_line(&stream) {
-        Some(r) => r,
-        None => {
-            eprintln!("bench: no answer within {}s", CLIENT_READ_TIMEOUT.as_secs());
-            return EXIT_NO_DAEMON;
-        }
-    };
-    let response: Response = match serde_json::from_str(&reply) {
-        Ok(r) => r,
-        Err(e) => return fail(&format!("unreadable response ({e}): {}", reply.trim())),
-    };
-    if response.status != Status::Ok {
-        if let Some(reason) = &response.reason {
-            eprintln!("bench: {reason}");
-        }
-        return response.status.exit_code();
-    }
-    eprintln!("bench: attached — Ctrl-\\ detaches");
-    let _ = stream.set_read_timeout(None);
-
-    // Raw local terminal for the duration; restored on the way out. `stty -g` gives a
-    // restore token, so whatever the mode was is what comes back.
-    let stdin_is_tty = std::io::stdin().is_terminal();
-    let saved = if stdin_is_tty {
-        let saved = std::process::Command::new("stty")
-            .arg("-g")
-            .stdin(std::process::Stdio::inherit())
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-        let _ = std::process::Command::new("stty")
-            .args(["raw", "-echo"])
-            .stdin(std::process::Stdio::inherit())
-            .status();
-        saved
-    } else {
-        None
-    };
-
-    // Down: socket → stdout, byte-for-byte — escape sequences ride through, which is
-    // what lets an OSC from the agent reach whatever terminal hosts this client.
-    let down = {
-        let mut sock = match stream.try_clone() {
-            Ok(s) => s,
-            Err(_) => return fail("cannot clone stream"),
-        };
-        std::thread::spawn(move || {
-            let mut out = std::io::stdout();
-            let mut chunk = [0u8; 8192];
-            loop {
-                match sock.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if out.write_all(&chunk[..n]).is_err() {
-                            break;
-                        }
-                        let _ = out.flush();
-                    }
-                }
-            }
-        })
-    };
-
-    // Up: stdin → socket, until Ctrl-\ (0x1C) or EOF.
-    let mut stdin = std::io::stdin();
-    let up_sock = stream;
-    let mut chunk = [0u8; 1024];
-    let code = loop {
-        match stdin.read(&mut chunk) {
-            Ok(0) | Err(_) => break 0,
-            Ok(n) => {
-                if let Some(pos) = chunk[..n].iter().position(|&b| b == 0x1c) {
-                    if pos > 0 {
-                        let _ = (&up_sock).write_all(&chunk[..pos]);
-                    }
-                    break 0;
-                }
-                if (&up_sock).write_all(&chunk[..n]).is_err() {
-                    break 0;
-                }
-            }
-        }
-    };
-    let _ = up_sock.shutdown(std::net::Shutdown::Both);
-    let _ = down.join();
-    if let Some(token) = saved {
-        let _ = std::process::Command::new("stty")
-            .arg(token)
-            .stdin(std::process::Stdio::inherit())
-            .status();
-    }
-    eprintln!("\nbench: detached");
-    code
-}
-
 fn open(cli: &Cli) -> Result<(UnixStream, String), i32> {
     let sock = socket_path(&cli.root);
     let stream = match UnixStream::connect(&sock) {
@@ -939,11 +813,10 @@ fn open(cli: &Cli) -> Result<(UnixStream, String), i32> {
         id: request_id(),
         verb: cli.verb.clone(),
         args: cli.args.clone(),
-        // The CLI speaks for an agent until M3 gives it `--asked` and the layout verbs; an
-        // absent `by` already means exactly that. `BENCH_ASKED=1` is set by benchd on a just
-        // recipe the operator started (#356): he asked, so its verbs may move his focus.
-        by: None,
-        asked: std::env::var("BENCH_ASKED").is_ok_and(|v| v == "1"),
+        by: Some(caller()),
+        // `--asked`, or `BENCH_ASKED=1`, which benchd sets on a just recipe the operator started
+        // (#356): he asked, so its verbs may move his focus.
+        asked: cli.asked || std::env::var("BENCH_ASKED").is_ok_and(|v| v == "1"),
     };
     let mut line = match serde_json::to_string(&request) {
         Ok(l) => l,
@@ -951,6 +824,17 @@ fn open(cli: &Cli) -> Result<(UnixStream, String), i32> {
     };
     line.push('\n');
     Ok((stream, line))
+}
+
+/// Who is asking: an agent, placed by what its environment declares — the helm pane it runs in
+/// and its benchd mailbox. benchd reads them to put what an agent opens in its own workspace.
+/// The operator's own gestures come from helm, never from this CLI.
+fn caller() -> Actor {
+    let declared = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    Actor::Agent {
+        pane: declared("HELM_PANE"),
+        handle: declared("BENCH_HANDLE"),
+    }
 }
 
 /// Read exactly the response line, byte by byte — a BufReader would swallow the raw
@@ -978,22 +862,6 @@ fn read_response_line(mut stream: &UnixStream) -> Option<String> {
             }
         }
     }
-}
-
-fn terminal_size() -> Option<(u16, u16)> {
-    if !std::io::stdout().is_terminal() {
-        return None;
-    }
-    let out = std::process::Command::new("stty")
-        .arg("size")
-        .stdin(std::process::Stdio::inherit())
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut parts = text.split_whitespace();
-    let rows = parts.next()?.parse().ok()?;
-    let cols = parts.next()?.parse().ok()?;
-    Some((rows, cols))
 }
 
 // Pre-socket exits derive from the same enum as socket-answered ones (R3).

@@ -26,21 +26,22 @@
 //! sits behind one mutex held only for map and log operations — never across a ready
 //! wait, a prompt delivery, or an attach pump.
 
+mod ask;
 mod codex;
 mod hook;
 mod just;
 mod layout;
 mod rules;
 mod sessions;
+mod spawn;
 
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
-use bench_session::{AgentKind, Notice, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id};
+use bench_session::{Notice, Session};
 use bench_wire::{
     BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
-    MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, Request,
-    Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb, browser_endpoint_path,
-    browser_wanted_path, check_socket_path, events_path, resolve_root, socket_path,
-    validate_handle,
+    MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, Request, Response, SessionArgs,
+    Status, SuiteName, Verb, browser_endpoint_path, browser_wanted_path, check_socket_path,
+    events_path, resolve_root, socket_path, validate_handle,
 };
 use bench_wire::{DOCUMENT_CHANGED, Frame};
 use serde_json::{Value, json};
@@ -265,6 +266,8 @@ struct Core {
     /// Every session whose hook has reported (#358): its agent when it has a mailbox, `None`
     /// when it was asked once and gets none, so the claim rule is not re-run per event.
     agents: HashMap<bench_wire::SessionKey, Option<hook::Agent>>,
+    /// Asks of helm waiting for its answer (`helm/ask`).
+    asks: ask::Waiting,
     /// Hook event names this build does not know, already logged once.
     unknown_hook_events: HashSet<(&'static str, String)>,
     /// `events --follow` connections, each with its own bounded queue and writer thread.
@@ -528,6 +531,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         agents: HashMap::new(),
         unknown_hook_events: HashSet::new(),
         followers: Vec::new(),
+        asks: ask::Waiting::default(),
         unflushed: Arc::new(AtomicBool::new(false)),
     }));
 
@@ -648,6 +652,71 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         std::thread::spawn(move || handle(core, stream));
     }
     Ok(0)
+}
+
+/// `close <session>`: drain-then-die a session by its id. Naming the session is the explicit
+/// form: a pane still showing it stays, and shows it ended, exactly as when the agent exits by
+/// itself. Closing the pane (`--force`) is the route that takes both.
+fn close_session(core: &Arc<Mutex<Core>>, req: &Request) -> Response {
+    let reply = |status: Status, reason: Option<String>, data: Option<Value>| Response {
+        id: req.id.clone(),
+        status,
+        reason,
+        data,
+    };
+    let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
+        Ok(a) => a,
+        Err(e) => return reply(Status::Refused, Some(format!("close args: {e}")), None),
+    };
+    let sid = parsed.session.as_str();
+    let session = {
+        let mut c = core.lock().unwrap();
+        let Some(session) = c.sessions.remove(sid) else {
+            let why = format!("no session {sid:?} — `bench sessions` lists them");
+            return reply(Status::Refused, Some(why), None);
+        };
+        if let Err(why) = c.append("session/closed", json!({ "session": sid })) {
+            return reply(Status::Error, Some(why), None);
+        }
+        session
+    };
+    let was_live = session.close(Duration::from_secs(2));
+    reply(
+        Status::Ok,
+        None,
+        Some(json!({ "session": sid, "was_live": was_live })),
+    )
+}
+
+/// `resize`: an attached viewer's terminal changed size, so the session's pty follows. Not
+/// logged: a pane dragged across the screen resizes many times a second, and the size is
+/// the viewer's, not a fact about the bench.
+fn resize(core: &Arc<Mutex<Core>>, req: &Request) -> Response {
+    let reply = |status: Status, reason: Option<String>| Response {
+        id: req.id.clone(),
+        status,
+        reason,
+        data: None,
+    };
+    let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
+        Ok(a) => a,
+        Err(e) => return reply(Status::Refused, Some(format!("resize args: {e}"))),
+    };
+    let (Some(rows), Some(cols)) = (parsed.rows, parsed.cols) else {
+        return reply(Status::Refused, Some("resize needs rows and cols".into()));
+    };
+    let session = core.lock().unwrap().sessions.get(&parsed.session).cloned();
+    let Some(session) = session else {
+        let why = format!(
+            "no session {:?} — `bench sessions` lists them",
+            parsed.session
+        );
+        return reply(Status::Refused, Some(why));
+    };
+    match session.resize(rows, cols) {
+        Ok(()) => reply(Status::Ok, None),
+        Err(why) => reply(Status::Refused, Some(why)),
+    }
 }
 
 /// `<root>/claude-settings.json`, rewritten at every Claude spawn so it always names the
@@ -815,11 +884,7 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    reason = "legacy (#418): 588 lines, limit 100; cognitive complexity 29, limit 25"
-)]
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 588 lines, limit 100")]
 fn dispatch(
     core: &Arc<Mutex<Core>>,
     req: &Request,
@@ -861,6 +926,11 @@ fn dispatch(
                     "events": c.next_seq,
                     "sessions": { "total": c.sessions.len(), "live": live },
                     "rules": { "placement": c.placement.status() },
+                    // The attach client beside this daemon: what helm runs in a pane that
+                    // shows a session, so viewer and daemon are always the same build.
+                    "bench": std::env::current_exe()
+                        .map(|exe| bench_wire::hook::sibling_bench(&exe).display().to_string())
+                        .ok(),
                 })),
                 AfterResponse::Done,
             )
@@ -877,8 +947,11 @@ fn dispatch(
             )
         }
         Some(Verb::Layout) => {
-            let mut c = core.lock().unwrap();
-            (layout::answer(&mut c, req), AfterResponse::Done)
+            let (response, ended) = layout::answer(&mut core.lock().unwrap(), req);
+            if let Some(session) = ended {
+                std::thread::spawn(move || session.close(Duration::from_secs(2)));
+            }
+            (response, AfterResponse::Done)
         }
         Some(Verb::Events) => {
             let since = req.args.get("since").and_then(Value::as_u64).unwrap_or(0);
@@ -899,163 +972,10 @@ fn dispatch(
             }
         }
 
-        Some(Verb::Spawn) => {
-            // Typed decode first (R3: one spelling, both sides), judged strictly after
-            // — a missing required key refuses naming the FIELD, never a rule that did
-            // not actually fire.
-            let parsed: SpawnArgs = match serde_json::from_value(req.args.clone()) {
-                Ok(a) => a,
-                Err(e) => return (refused(format!("spawn args: {e}")), AfterResponse::Done),
-            };
-            let test_ok = std::env::var(TEST_AGENT_ENV).is_ok_and(|v| v == "1");
-            let agent = match AgentKind::parse(&parsed.agent, test_ok) {
-                Ok(a) => a,
-                Err(why) => return (refused(why), AfterResponse::Done),
-            };
-            let cwd = parsed.cwd.as_str();
-            if !cwd.starts_with('/') || !PathBuf::from(cwd).is_dir() {
-                return (
-                    refused(format!(
-                        "cwd must be an absolute path to an existing directory, got {cwd:?}"
-                    )),
-                    AfterResponse::Done,
-                );
-            }
-            // The file must outlive the spawn (helm #93): the agent reads it as its first act.
-            if let Some(p) = parsed.prompt_file.as_deref()
-                && !(p.starts_with('/') && PathBuf::from(p).is_file())
-            {
-                return (
-                    refused(format!(
-                        "prompt_file must be an absolute path to a file the agent can read, got {p:?}"
-                    )),
-                    AfterResponse::Done,
-                );
-            }
-            let rows = parsed.rows.unwrap_or(40);
-            let cols = parsed.cols.unwrap_or(140);
-            let spec = SpawnSpec {
-                agent,
-                cwd: parsed.cwd.clone(),
-                model: parsed.model.clone(),
-                effort: parsed.effort.clone(),
-                runtime_session: agent.mints_session_id().then(mint_session_id),
-                resume: false,
-                prompt_file: parsed.prompt_file.clone(),
-                settings: None,
-                codex_server: None,
-            };
-            let (id, handle, root, notices) = {
-                let mut c = core.lock().unwrap();
-                let id = format!("s{}", c.next_session);
-                let handle = parsed.name.clone().unwrap_or_else(|| id.clone());
-                if let Err(why) = validate_handle(&handle) {
-                    return (refused(why), AfterResponse::Done);
-                }
-                if handle == OPERATOR_HANDLE {
-                    return (
-                        refused(format!(
-                            "{OPERATOR_HANDLE:?} is the operator's handle — addressable by anyone, claimable by no session"
-                        )),
-                        AfterResponse::Done,
-                    );
-                }
-                if c.sessions.values().any(|s| s.handle == handle) {
-                    return (
-                        refused(format!(
-                            "handle {handle:?} is already claimed — `bench sessions` lists them"
-                        )),
-                        AfterResponse::Done,
-                    );
-                }
-                c.next_session += 1;
-                (id, handle, c.root.clone(), c.notices.clone())
-            };
-            let mut spec = spec;
-            if agent == AgentKind::Claude {
-                match claude_settings(&root) {
-                    Ok(path) => spec.settings = Some(path),
-                    Err(why) => return (errored(why), AfterResponse::Done),
-                }
-            }
-            if agent == AgentKind::Codex {
-                let socket = bench_wire::codex_server_socket(&root, &id);
-                if let Some(dir) = socket.parent()
-                    && let Err(e) = fs::create_dir_all(dir)
-                {
-                    return (
-                        errored(format!("cannot create {}: {e}", dir.display())),
-                        AfterResponse::Done,
-                    );
-                }
-                // Session ids restart at s1 with the daemon, so a server that died uncleanly
-                // under an earlier daemon can have left this socket (codex then refuses to bind:
-                // "File exists"). No live session holds this id, so what is there is stale.
-                let _ = fs::remove_file(&socket);
-                let _ = fs::remove_file(socket.with_extension("sock.log"));
-                spec.codex_server = Some(socket.display().to_string());
-            }
-            // The session learns its address and root, so `bench mail send` inside it
-            // needs no flags and lands in the right mailroom.
-            let extra_env = [
-                ("BENCH_SESSION".to_string(), id.clone()),
-                ("BENCH_HANDLE".to_string(), handle.clone()),
-                ("BENCH_DIR".to_string(), root.display().to_string()),
-            ];
-            let session = match Session::spawn(
-                id.clone(),
-                handle.clone(),
-                &spec,
-                rows,
-                cols,
-                &extra_env,
-                notices,
-            ) {
-                Ok(s) => s,
-                Err(why) => return (errored(why), AfterResponse::Done),
-            };
-            {
-                let mut c = core.lock().unwrap();
-                c.sessions.insert(id.clone(), Arc::clone(&session));
-                if let Err(why) = c.append(
-                    "session/spawned",
-                    json!({
-                        "session": id,
-                        "handle": session.handle,
-                        "agent": agent.name(),
-                        "cwd": spec.cwd,
-                        "pid": session.pid,
-                        "runtime_session": spec.runtime_session,
-                        "model": spec.model,
-                        "effort": spec.effort,
-                    }),
-                ) {
-                    return (errored(why), AfterResponse::Done);
-                }
-                // Recorded at spawn only: `resume` re-enters the same runtime session id
-                // (bench_session::argv), which this record already holds.
-                if let Err(why) = sessions::record_spawn(
-                    &mut c,
-                    bench_wire::Harness::parse(agent.name()),
-                    spec.runtime_session.as_deref(),
-                    &spec.cwd,
-                    &id,
-                    &handle,
-                ) {
-                    return (errored(why), AfterResponse::Done);
-                }
-            }
-            (
-                ok(json!({
-                    "session": session.id,
-                    "handle": session.handle,
-                    "pid": session.pid,
-                    "agent": agent.name(),
-                    "runtime_session": session.runtime_session,
-                })),
-                AfterResponse::Done,
-            )
-        }
+        Some(Verb::Spawn) => (spawn::answer(core, req), AfterResponse::Done),
+        Some(Verb::HelmAsk) => (ask::ask(core, req), AfterResponse::Done),
+        Some(Verb::HelmAnswer) => (ask::answer(core, req), AfterResponse::Done),
+        Some(Verb::Resize) => (resize(core, req), AfterResponse::Done),
 
         Some(Verb::Sessions) => {
             let c = core.lock().unwrap();
@@ -1151,34 +1071,7 @@ fn dispatch(
             )
         }
 
-        Some(Verb::Close) => {
-            let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
-                Ok(a) => a,
-                Err(e) => return (refused(format!("close args: {e}")), AfterResponse::Done),
-            };
-            let sid = parsed.session.as_str();
-            let session = {
-                let mut c = core.lock().unwrap();
-                c.sessions.remove(sid)
-            };
-            let Some(session) = session else {
-                return (
-                    refused(format!("no session {sid:?} — `bench sessions` lists them")),
-                    AfterResponse::Done,
-                );
-            };
-            {
-                let mut c = core.lock().unwrap();
-                if let Err(why) = c.append("session/closed", json!({ "session": sid })) {
-                    return (errored(why), AfterResponse::Done);
-                }
-            }
-            let was_live = session.close(Duration::from_secs(2));
-            (
-                ok(json!({ "session": sid, "was_live": was_live })),
-                AfterResponse::Done,
-            )
-        }
+        Some(Verb::Close) => (close_session(core, req), AfterResponse::Done),
 
         Some(Verb::Resume) => {
             let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
@@ -1208,6 +1101,8 @@ fn dispatch(
             }
             let mut spec = old.spec.clone();
             spec.resume = true;
+            // Re-entering is not a new message: the first prompt was the spawn's.
+            spec.prompt_file = None;
             let (id, root, notices) = {
                 let mut c = core.lock().unwrap();
                 let id = format!("s{}", c.next_session);

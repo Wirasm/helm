@@ -139,6 +139,7 @@ pub fn open_action(
                 resume: true,
                 prompt_file: None,
                 settings: None,
+                extra_args: Vec::new(),
                 codex_server: None,
             })?;
             Ok(OpenAction::Resume {

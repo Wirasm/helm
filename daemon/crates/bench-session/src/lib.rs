@@ -103,8 +103,14 @@ pub struct SpawnSpec {
     /// The first prompt's file. argv carries a sentence naming it, never its text: the
     /// agent reads it as its first act, so nothing waits for a TUI to be ready and nothing is
     /// typed into the pty (#358), and `ps` shows a path rather than a plan (helm #93). The
-    /// file must outlive the spawn. Ignored on resume.
+    /// file must outlive the spawn. A resume carries one only when the caller sends a new
+    /// message into the resumed conversation (`bench spawn --resume --prompt-file`); `bench
+    /// resume` re-enters without one.
     pub prompt_file: Option<String>,
+    /// The caller's own flags, after the posture and before the prompt (`--remote-control`,
+    /// say). They add to the posture, never replace it: a posture removes a prompt, and the
+    /// operator's yolo posture is the bench's rule (roadmap invariant 4).
+    pub extra_args: Vec<String>,
     /// Claude's `--settings` file: the hooks that report to benchd, and the inbound rule that
     /// lets benchd start a turn in an idle session (#358).
     pub settings: Option<String>,
@@ -228,7 +234,8 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             return Ok(("/bin/cat".to_string(), args));
         }
     };
-    if let Some(path) = spec.prompt_file.as_deref().filter(|_| !spec.resume) {
+    args.extend(spec.extra_args.iter().cloned());
+    if let Some(path) = spec.prompt_file.as_deref() {
         args.push(prompt_pointer(path));
     }
     if let (AgentKind::Codex, Some(socket)) = (spec.agent, &spec.codex_server) {
@@ -414,6 +421,12 @@ impl Session {
                 // this finds the status already collected and signals nothing.
                 let _ = child.lock().unwrap().wait();
                 exited.store(true, Ordering::SeqCst);
+                // The viewer's relay ends with the session: every byte is relayed by now, so
+                // the attached client sees EOF and exits, rather than sitting on a relay no
+                // process will ever write to again (a helm pane showing a finished agent).
+                if let Some((_, stream)) = attached.lock().unwrap().take() {
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                }
                 let _ = notices.send(Notice::Exited {
                     session: id.clone(),
                 });
@@ -464,6 +477,15 @@ impl Session {
         }
         *guard = Some((generation, s));
         Ok(generation)
+    }
+
+    /// The viewer's terminal changed size: the pty follows, and the kernel tells the agent.
+    pub fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
+        if rows == 0 || cols == 0 {
+            return Err(format!("a terminal is at least 1x1, not {rows}x{cols}"));
+        }
+        let master = self.master.lock().unwrap();
+        pty::resize(&master, rows, cols).map_err(|e| format!("resize: {e}"))
     }
 
     /// Unconditional — for close/stop, where whatever is attached goes.
@@ -518,12 +540,34 @@ mod tests {
             resume: false,
             prompt_file: None,
             settings: None,
+            extra_args: Vec::new(),
             codex_server: None,
         }
     }
 
     #[test]
-    fn the_first_prompt_is_a_pointer_at_the_end_of_argv_and_never_on_resume() {
+    fn a_resume_of_a_named_conversation_carries_the_callers_flags_then_its_new_message() {
+        let mut s = spec(AgentKind::Claude);
+        s.runtime_session = Some("4b1c".into());
+        s.resume = true;
+        s.extra_args = vec!["--remote-control".into(), "helm abc123".into()];
+        s.prompt_file = Some("/tmp/notice.txt".into());
+        let (_, a) = argv(&s).unwrap();
+        assert_eq!(
+            a,
+            [
+                "--dangerously-skip-permissions",
+                "--resume",
+                "4b1c",
+                "--remote-control",
+                "helm abc123",
+                "Read and act on the prompt in /tmp/notice.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_first_prompt_is_a_pointer_at_the_end_of_argv() {
         for agent in [AgentKind::Claude, AgentKind::Codex, AgentKind::Pi] {
             let mut s = spec(agent);
             s.prompt_file = Some("/tmp/p.txt".into());
@@ -533,11 +577,6 @@ mod tests {
                 a.last().unwrap(),
                 "Read and act on the prompt in /tmp/p.txt"
             );
-            if agent != AgentKind::Codex {
-                s.resume = true;
-                let (_, a) = argv(&s).unwrap();
-                assert!(!a.iter().any(|x| x.contains("/tmp/p.txt")), "{a:?}");
-            }
         }
         let mut s = spec(AgentKind::TestEcho);
         s.prompt_file = Some("/tmp/p.txt".into());

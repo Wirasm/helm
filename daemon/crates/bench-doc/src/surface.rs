@@ -15,12 +15,20 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Surface {
-    /// A terminal. Its pty is helm's until M5b, keyed by the pane's own id. `agent` is what
-    /// was running in it when last looked (helm #63): an id of a conversation that outlives
-    /// the pty, which is why it is persisted where a presentation (the chat face) is not.
+    /// A terminal. `agent` is what was running in it when last looked (helm #63): an id of a
+    /// conversation that outlives the pty, which is why it is persisted where a presentation
+    /// (the chat face) is not.
+    ///
+    /// `session` names the benchd session the pane shows (`term:<session>` in
+    /// bench-architecture.md): helm runs `bench attach <session>` in it instead of a login
+    /// shell. Without one the pty is helm's own until M5b, keyed by the pane's id. No session
+    /// outlives the daemon that ran it, so benchd clears every `session` when it boots
+    /// ([`crate::Document::end_sessions`]).
     Terminal {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent: Option<ResumableAgent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session: Option<String>,
     },
     /// A document surface — markdown, HTML, a board, a page.
     Canvas { source: CanvasSource },
@@ -35,7 +43,18 @@ pub enum Surface {
 impl Surface {
     /// A terminal nothing has been recorded in.
     pub fn terminal() -> Surface {
-        Surface::Terminal { agent: None }
+        Surface::Terminal {
+            agent: None,
+            session: None,
+        }
+    }
+
+    /// The benchd session this surface shows, if it is a terminal attached to one.
+    pub fn session(&self) -> Option<&str> {
+        match self {
+            Surface::Terminal { session, .. } => session.as_deref(),
+            _ => None,
+        }
     }
 
     pub fn file(path: &str) -> Result<Surface, String> {
@@ -49,12 +68,21 @@ impl Surface {
     /// Whether a pane showing `self` is already a view of `wanted`, so opening `wanted` again
     /// should bring that pane forward rather than add a second. A canvas matches by source,
     /// **by value** — why ⌘-clicking the same link twice selects the canvas you have. The
-    /// browser matches any browser pane: there is one browser. A terminal never matches:
-    /// every one is its own.
+    /// browser matches any browser pane: there is one browser. A terminal matches only one
+    /// showing the same benchd session: a session is one process, however many ask to see it,
+    /// and every other terminal is its own.
     pub fn already_shows(&self, wanted: &Surface) -> bool {
         match (wanted, self) {
             (Surface::Canvas { source: a }, Surface::Canvas { source: b }) => a == b,
             (Surface::Browser, Surface::Browser) | (Surface::Sessions, Surface::Sessions) => true,
+            (
+                Surface::Terminal {
+                    session: Some(a), ..
+                },
+                Surface::Terminal {
+                    session: Some(b), ..
+                },
+            ) => a == b,
             _ => false,
         }
     }
@@ -123,6 +151,14 @@ impl PaneName {
             PaneName::Unnamed => None,
             PaneName::Derived(t) | PaneName::Chosen(t) => Some(t),
         }
+    }
+
+    /// helm #313's rule, for an agent naming a pane: it may name a pane nobody is calling
+    /// anything, and replace a label the bench derived, but a name somebody chose needs
+    /// `rename` — the caller saying the operator asked. Nothing checks that claim: a wrong word
+    /// on a tab costs another rename. The operator's own naming never asks this.
+    pub fn agent_may_replace(&self, rename: bool) -> bool {
+        rename || !matches!(self, PaneName::Chosen(_))
     }
 }
 
@@ -217,5 +253,33 @@ mod tests {
             assert_eq!(serde_json::to_value(&name).unwrap(), encoded);
             assert_eq!(serde_json::from_value::<PaneName>(encoded).unwrap(), name);
         }
+    }
+
+    #[test]
+    fn a_terminal_naming_a_session_round_trips_and_matches_only_that_session() {
+        let s3 = Surface::Terminal {
+            agent: None,
+            session: Some("s3".into()),
+        };
+        let encoded = json!({"kind": "terminal", "session": "s3"});
+        assert_eq!(serde_json::to_value(&s3).unwrap(), encoded);
+        assert_eq!(serde_json::from_value::<Surface>(encoded).unwrap(), s3);
+        assert_eq!(s3.session(), Some("s3"));
+        let s4 = Surface::Terminal {
+            agent: None,
+            session: Some("s4".into()),
+        };
+        assert!(s3.already_shows(&s3.clone()));
+        assert!(!s3.already_shows(&s4));
+        assert!(!Surface::terminal().already_shows(&Surface::terminal()));
+        assert!(!s3.already_shows(&Surface::terminal()));
+    }
+
+    #[test]
+    fn an_agent_replaces_a_derived_name_but_a_chosen_one_only_when_asked() {
+        assert!(PaneName::Unnamed.agent_may_replace(false));
+        assert!(PaneName::Derived("claude · helm".into()).agent_may_replace(false));
+        assert!(!PaneName::Chosen("review".into()).agent_may_replace(false));
+        assert!(PaneName::Chosen("review".into()).agent_may_replace(true));
     }
 }

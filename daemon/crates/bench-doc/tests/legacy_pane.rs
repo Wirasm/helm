@@ -121,7 +121,7 @@ fn one_workspaces_legacy_pane_does_not_wipe_every_other_workspaces_layout() {
     );
     assert!(matches!(
         fallback.bench.panes().next().unwrap().surface,
-        Surface::Terminal { agent: None }
+        Surface::Terminal { agent: None, .. }
     ));
     assert_eq!(fallback.shelved, None, "an unreadable shelf is dropped");
     assert_eq!(
@@ -151,7 +151,7 @@ fn a_malformed_agent_costs_the_pane_its_resume_record_not_the_pane() {
 
     let kept = read.value.panes().next().unwrap();
     assert_eq!(kept.id.to_string(), TERMINAL);
-    assert_eq!(kept.surface, Surface::Terminal { agent: None });
+    assert_eq!(kept.surface, Surface::terminal());
     assert!(read.notes[0].contains("agent"), "{:?}", read.notes);
 }
 

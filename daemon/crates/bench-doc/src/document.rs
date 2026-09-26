@@ -127,6 +127,46 @@ impl Document {
         self.drawers.iter().find(|d| d.pane(pane).is_some())
     }
 
+    /// A pane wherever it lives: a workspace's live bench or a drawer. (A shelved bench is not
+    /// on screen and answers no verb, so it is not searched.)
+    pub fn pane(&self, id: PaneId) -> Option<&Pane> {
+        self.workspaces
+            .iter()
+            .find_map(|w| w.bench.pane(id))
+            .or_else(|| self.drawers.iter().find_map(|d| d.pane(id)))
+    }
+
+    /// The first pane showing benchd session `session`, wherever it lives.
+    pub fn pane_showing_session(&self, session: &str) -> Option<PaneId> {
+        let benches = self.workspaces.iter().flat_map(|w| w.bench.panes());
+        let drawers = self.drawers.iter().flat_map(|d| d.panes.iter());
+        benches
+            .chain(drawers)
+            .find(|p| p.surface.session() == Some(session))
+            .map(|p| p.id)
+    }
+
+    /// Forget every benchd session a terminal pane names, answering the panes that named one.
+    /// benchd calls this when it boots: no session outlives the daemon that ran it, and session
+    /// ids restart with each daemon, so a name kept across a restart would attach a pane to
+    /// somebody else's agent. The pane stays, with its `agent` record for the resume offer.
+    pub fn end_sessions(&mut self) -> Vec<PaneId> {
+        let mut ended = Vec::new();
+        let benches = self.workspaces.iter_mut().flat_map(|w| {
+            let shelf = w.shelved.as_mut().into_iter().flat_map(Bench::panes_mut);
+            w.bench.panes_mut().chain(shelf)
+        });
+        let drawers = self.drawers.iter_mut().flat_map(|d| d.panes.iter_mut());
+        for pane in benches.chain(drawers) {
+            if let Surface::Terminal { session, .. } = &mut pane.surface
+                && session.take().is_some()
+            {
+                ended.push(pane.id);
+            }
+        }
+        ended
+    }
+
     /// The pane holding the operator's keyboard: the open drawer's, else the active bench's
     /// focused pane.
     pub fn focused_pane(&self) -> Option<PaneId> {
@@ -377,7 +417,7 @@ impl Document {
             return self.edit(Target::Pane(pane), focus, |b| b.record_agent(pane, agent));
         };
         self.commit(focus, |doc| match &mut doc.drawers[d].panes[at].surface {
-            Surface::Terminal { agent: held } => {
+            Surface::Terminal { agent: held, .. } => {
                 *held = agent;
                 Ok(())
             }

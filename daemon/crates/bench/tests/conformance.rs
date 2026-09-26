@@ -138,7 +138,18 @@ struct CliRun {
 }
 
 fn bench(home: &Path, args: &[&str]) -> CliRun {
-    let out = Command::new(bench_bin())
+    bench_as(home, args, &[])
+}
+
+/// `bench` with the caller's declared identity (`HELM_PANE`, `BENCH_HANDLE`) set as given and
+/// otherwise removed, so a test run from inside a helm pane does not speak for that pane.
+fn bench_as(home: &Path, args: &[&str], env: &[(&str, &str)]) -> CliRun {
+    let mut cmd = Command::new(bench_bin());
+    cmd.env_remove("HELM_PANE").env_remove("BENCH_HANDLE");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd
         .env_remove("BENCH_DIR")
         .env_remove("BENCH_SUITE")
         .env("HOME", home)
@@ -2294,7 +2305,12 @@ fn an_agent_rearranges_the_bench_and_never_moves_the_operators_focus() {
             "pane/move",
             serde_json::json!({ "pane": first, "to": { "step": "right" } }),
         ),
-        ("pane/close", serde_json::json!({ "pane": right })),
+        // `force`: an agent closing a terminal says it means to end what runs there; this
+        // test is about focus, not that rule.
+        (
+            "pane/close",
+            serde_json::json!({ "pane": right, "force": true }),
+        ),
     ] {
         let data = ok_data(layout(&daemon.socket, verb, args, None, false));
         serde_json::from_value::<bench_wire::LayoutReport>(data.clone())
@@ -2342,7 +2358,7 @@ fn an_agent_rearranges_the_bench_and_never_moves_the_operators_focus() {
     let refused = layout(
         &daemon.socket,
         "pane/close",
-        serde_json::json!({ "pane": held }),
+        serde_json::json!({ "pane": held, "force": true }),
         None,
         false,
     );
@@ -2355,7 +2371,7 @@ fn an_agent_rearranges_the_bench_and_never_moves_the_operators_focus() {
     let asked = ok_data(layout(
         &daemon.socket,
         "pane/close",
-        serde_json::json!({ "pane": held }),
+        serde_json::json!({ "pane": held, "force": true }),
         None,
         true,
     ));
@@ -4777,4 +4793,562 @@ fn a_session_resumed_outside_helm_leaves_its_pane_and_keeps_its_mail() {
     // Resumed in a pane again: that pane answers.
     report(in_pane, Some(HOOK_PANE), "SessionStart");
     assert_eq!(json_of(&who())["handle"], handle.as_str());
+}
+
+// ---------------------------------------------------------------------------
+// M3: the bench is the agent's whole surface — the CLI's pane verbs, spawn into a pane,
+// attach that follows its viewer, and asking helm for what only helm can do
+// ---------------------------------------------------------------------------
+
+/// A renderable file under the test home, so `bench open` has something real to put up.
+fn artifact(home: &Path, name: &str) -> String {
+    let path = home.join(name);
+    fs::write(&path, "# plan\n").unwrap();
+    path.canonicalize().unwrap().display().to_string()
+}
+
+fn document(socket: &Path) -> serde_json::Value {
+    ok_data(layout(
+        socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ))["document"]
+        .clone()
+}
+
+fn focused(socket: &Path) -> serde_json::Value {
+    let doc = document(socket);
+    let active = doc["active"].clone();
+    let ws = doc["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["path"] == active)
+        .cloned()
+        .unwrap();
+    let slot = ws["bench"]["focused_slot"].clone();
+    ws["bench"]["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| c["slots"].as_array().unwrap().clone())
+        .find(|s| s["id"] == slot)
+        .map(|s| s["selected"].clone())
+        .unwrap()
+}
+
+#[test]
+fn an_agents_pane_verbs_leave_the_operators_focus_until_it_says_he_asked() {
+    let home = TestHome::claim("m3-verbs");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (first, right, _canvas) = working_bench(&daemon.socket);
+    let held = focused(&daemon.socket);
+    let plan = artifact(&home.dir, "m3.md");
+
+    let opened = bench(&home.dir, &["open", &plan]);
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+    let report = json_of(&opened);
+    assert_eq!(report["focused_pane_before"], report["focused_pane_after"]);
+    let split = bench(&home.dir, &["split", "down"]);
+    assert_eq!(split.code, 0, "{}", split.stderr);
+    let made = json_of(&split)["pane_created"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for args in [
+        vec!["move", made.as_str(), "left"],
+        vec!["name", made.as_str(), "scratch", "pad"],
+    ] {
+        let run = bench(&home.dir, &args);
+        assert_eq!(run.code, 0, "{args:?}: {}", run.stderr);
+    }
+    assert_eq!(
+        focused(&daemon.socket),
+        held,
+        "nothing above moved his focus"
+    );
+
+    // Every one was logged as the agent's, and none as asked.
+    let changes: Vec<serde_json::Value> = log_of(&home.dir.join(".bench"))
+        .into_iter()
+        .filter(|e| e["kind"] == "bench/changed" && e["data"]["by"]["kind"] == "agent")
+        .collect();
+    assert_eq!(changes.len(), 4, "{changes:?}");
+    assert!(changes.iter().all(|e| e["data"]["asked"] != true));
+
+    // focus is the operator's: refused without --asked, done with it.
+    let refused = bench(&home.dir, &["focus", &first]);
+    assert_eq!(refused.code, 3);
+    assert!(refused.stderr.contains("--asked"), "{}", refused.stderr);
+    let asked = bench(&home.dir, &["focus", &first, "--asked"]);
+    assert_eq!(asked.code, 0, "{}", asked.stderr);
+    assert_eq!(focused(&daemon.socket), first.as_str());
+
+    // A terminal ends what runs in it: --force, and the pane holding the keyboard also needs
+    // --asked, whatever --force says.
+    let refused = bench(&home.dir, &["close", &right]);
+    assert_eq!(refused.code, 3);
+    assert!(refused.stderr.contains("--force"), "{}", refused.stderr);
+    let forced = bench(&home.dir, &["close", &right, "--force"]);
+    assert_eq!(forced.code, 0, "{}", forced.stderr);
+    let keyboard = bench(&home.dir, &["close", &first, "--force"]);
+    assert_eq!(keyboard.code, 3);
+    assert!(keyboard.stderr.contains("--asked"), "{}", keyboard.stderr);
+}
+
+#[test]
+fn an_agent_replaces_a_chosen_name_only_when_it_says_the_operator_asked() {
+    let home = TestHome::claim("m3-name");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (first, _, _) = working_bench(&daemon.socket);
+    ok_data(layout(
+        &daemon.socket,
+        "pane/name",
+        serde_json::json!({ "pane": first, "name": { "source": "chosen", "text": "mine" } }),
+        operator(),
+        false,
+    ));
+    let refused = bench(&home.dir, &["name", &first, "theirs"]);
+    assert_eq!(refused.code, 3);
+    assert!(refused.stderr.contains("--rename"), "{}", refused.stderr);
+    let renamed = bench(&home.dir, &["name", &first, "theirs", "--rename"]);
+    assert_eq!(renamed.code, 0, "{}", renamed.stderr);
+    let pane = json_of(&bench(&home.dir, &["get", "pane", &first]));
+    assert_eq!(pane["pane"]["name"]["text"], "theirs");
+}
+
+#[test]
+fn an_artifact_lands_in_the_workspace_of_the_agent_that_opened_it() {
+    let home = TestHome::claim("m3-where");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (in_first_workspace, _, _) = working_bench(&daemon.socket);
+    // The operator moves on to another workspace; the agent is still in the first.
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": "/tmp/m3-other" }),
+        operator(),
+        false,
+    ));
+    let held = focused(&daemon.socket);
+    let plan = artifact(&home.dir, "where.md");
+    let opened = bench_as(
+        &home.dir,
+        &["open", &plan],
+        &[("HELM_PANE", &in_first_workspace)],
+    );
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+    let pane = json_of(&opened)["pane"].as_str().unwrap().to_string();
+    let found = json_of(&bench(&home.dir, &["get", "pane", &pane]));
+    assert_eq!(found["workspace"], "/tmp/m4-proof", "{found}");
+    assert_eq!(
+        found["visible"], false,
+        "a background workspace is not on screen"
+    );
+    assert_eq!(focused(&daemon.socket), held);
+    assert_eq!(document(&daemon.socket)["active"], "/tmp/m3-other");
+
+    // A file helm cannot render, or none at all, never reaches the bench.
+    let text = home.dir.join("notes.txt");
+    fs::write(&text, "x").unwrap();
+    let refused = bench(&home.dir, &["open", &text.display().to_string()]);
+    assert_eq!(refused.code, 3);
+    assert!(refused.stderr.contains("renders"), "{}", refused.stderr);
+    assert_eq!(bench(&home.dir, &["open", "/nope/missing.md"]).code, 3);
+}
+
+#[test]
+fn a_spawned_agent_arrives_in_a_pane_that_shows_its_session_without_taking_focus() {
+    let home = TestHome::claim("m3-spawn");
+    let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    working_bench(&daemon.socket);
+    let held = focused(&daemon.socket);
+    let ws = workspace(&home.dir);
+    let ws_path = ws.display().to_string();
+
+    let spawned = bench(
+        &home.dir,
+        &["spawn", "--agent", "pi", "--cwd", &ws_path, "--name", "w1"],
+    );
+    assert_eq!(spawned.code, 0, "{}", spawned.stderr);
+    let v = json_of(&spawned);
+    let pane = v["pane"].as_str().unwrap().to_string();
+    let session = v["session"].as_str().unwrap().to_string();
+    assert_eq!(v["handle"], "w1");
+    assert_eq!(v["workspace"], ws_path.as_str());
+    assert_eq!(v["focused_pane_before"], v["focused_pane_after"]);
+    assert_eq!(focused(&daemon.socket), held);
+
+    let found = json_of(&bench(&home.dir, &["get", "pane", &pane]));
+    assert_eq!(
+        found["pane"]["surface"]["session"],
+        session.as_str(),
+        "{found}"
+    );
+    assert_eq!(found["pane"]["name"]["text"], "pi · ws");
+    assert_eq!(found["visible"], false);
+    let who = json_of(&bench(&home.dir, &["mail", "who", "--pane", &pane]));
+    assert_eq!(who["handle"], "w1", "{who}");
+
+    // A pane never names a session that is not running.
+    let split = layout(
+        &daemon.socket,
+        "pane/split",
+        serde_json::json!({ "direction": "right", "surface": { "kind": "terminal", "session": "s99" } }),
+        operator(),
+        false,
+    );
+    assert_eq!(split["status"], "refused", "{split}");
+
+    // The pane ends what it shows only when told to. (A second agent first: a workspace's
+    // last pane is not closed by anyone.)
+    let second = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws_path]);
+    assert_eq!(second.code, 0, "{}", second.stderr);
+    let refused = bench(&home.dir, &["close", &pane]);
+    assert_eq!(refused.code, 3);
+    assert!(
+        refused.stderr.contains("still running"),
+        "{}",
+        refused.stderr
+    );
+    let closed = bench(&home.dir, &["close", &pane, "--force"]);
+    assert_eq!(closed.code, 0, "{}", closed.stderr);
+    let kinds: Vec<String> = log_of(&home.dir.join(".bench"))
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(kinds.contains(&"session/closed".to_string()), "{kinds:?}");
+    let listed = json_of(&bench(&home.dir, &["sessions"]));
+    let listed = listed["sessions"].as_array().unwrap();
+    assert!(
+        listed.iter().all(|s| s["session"] != session.as_str()),
+        "{listed:?}"
+    );
+
+    // Asked, it is brought forward: its workspace active, its pane focused.
+    let asked = bench(
+        &home.dir,
+        &["spawn", "--agent", "pi", "--cwd", &ws_path, "--asked"],
+    );
+    assert_eq!(asked.code, 0, "{}", asked.stderr);
+    let pane = json_of(&asked)["pane"].as_str().unwrap().to_string();
+    assert_eq!(document(&daemon.socket)["active"], ws_path.as_str());
+    assert_eq!(focused(&daemon.socket), pane.as_str());
+}
+
+#[test]
+fn a_restarted_daemon_forgets_the_sessions_its_panes_named() {
+    let home = TestHome::claim("m3-restart");
+    let ws = workspace(&home.dir).display().to_string();
+    let pane = {
+        let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+        let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        json_of(&run)["pane"].as_str().unwrap().to_string()
+    };
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let found = json_of(&bench(&home.dir, &["get", "pane", &pane]));
+    assert!(
+        found["pane"]["surface"].get("session").is_none(),
+        "no session outlives its daemon: {found}"
+    );
+    assert_eq!(
+        found["pane"]["surface"]["agent"]["command"], "pi",
+        "the resume record stays"
+    );
+    let kinds: Vec<String> = log_of(&home.dir.join(".bench"))
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        kinds.contains(&"bench/sessions-ended".to_string()),
+        "{kinds:?}"
+    );
+}
+
+#[test]
+fn a_refused_spawn_leaves_no_process_and_no_pane() {
+    let home = TestHome::claim("m3-norun");
+    let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    working_bench(&daemon.socket);
+    let before = document(&daemon.socket);
+    let ws = workspace(&home.dir).display().to_string();
+    for (args, rule) in [
+        (vec!["--name", "operator"], "operator"),
+        (vec!["--resume", "--looks-like-a-flag"], "--resume"),
+    ] {
+        let mut cmd = vec!["spawn", "--agent", "pi", "--cwd", ws.as_str()];
+        cmd.extend(args);
+        let run = bench(&home.dir, &cmd);
+        assert_eq!(run.code, 3, "{cmd:?}: {}", run.stderr);
+        assert!(run.stderr.contains(rule), "{}", run.stderr);
+    }
+    let codex = bench(
+        &home.dir,
+        &["spawn", "--agent", "codex", "--cwd", &ws, "--resume", "x1"],
+    );
+    assert_eq!(codex.code, 3, "{}", codex.stderr);
+    assert_eq!(document(&daemon.socket), before);
+    let listed = json_of(&bench(&home.dir, &["sessions"]));
+    assert!(
+        listed["sessions"].as_array().unwrap().is_empty(),
+        "{listed}"
+    );
+}
+
+#[test]
+fn an_attached_viewer_resizes_the_session_and_ends_when_it_does() {
+    let home = TestHome::claim("m3-attach");
+    // The agent reports its size whenever the pty's changes.
+    let bin = home.dir.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let agent = bin.join("pi");
+    fs::write(
+        &agent,
+        "#!/bin/sh\ntrap 'stty size' WINCH\necho ready\nwhile :; do sleep 0.1; done\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = Command::new(benchd_bin());
+    cmd.env("PATH", format!("{}:{path}", bin.display()));
+    let daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    let ws = workspace(&home.dir).display().to_string();
+    let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(resp["status"], "ok", "{resp}");
+    // Wait until the agent is running its trap before resizing, or the signal lands first.
+    let mut seen = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !String::from_utf8_lossy(&seen).contains("ready") {
+        if let Ok(n) = (&stream).read(&mut chunk) {
+            seen.extend_from_slice(&chunk[..n]);
+        }
+    }
+    seen.clear();
+    let (resized, _) = raw_request(
+        &daemon.socket,
+        "resize",
+        serde_json::json!({"session": sid, "rows": 33, "cols": 77}),
+    );
+    assert_eq!(resized["status"], "ok", "{resized}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !String::from_utf8_lossy(&seen).contains("33 77") {
+        if let Ok(n) = (&stream).read(&mut chunk) {
+            seen.extend_from_slice(&chunk[..n]);
+        }
+    }
+    assert!(
+        String::from_utf8_lossy(&seen).contains("33 77"),
+        "the agent sees the viewer's size: {:?}",
+        String::from_utf8_lossy(&seen)
+    );
+    drop(stream);
+
+    // A real `bench attach`: when the agent ends by itself, so does the viewer. `cat` ends at
+    // the Ctrl-D below.
+    let run = bench(&home.dir, &["spawn", "--agent", "test-echo", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+    let echo_pane = json_of(&run)["pane"].as_str().unwrap().to_string();
+    let mut viewer = Command::new(bench_bin())
+        .args(["attach", &sid])
+        .env_remove("BENCH_DIR")
+        .env_remove("BENCH_SUITE")
+        .env("HOME", &home.dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    // Ctrl-D at an empty line is end of input to `cat`, which exits.
+    viewer.stdin.as_mut().unwrap().write_all(b"\x04").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = viewer.try_wait().unwrap() {
+            break Some(status);
+        }
+        if Instant::now() > deadline {
+            let _ = viewer.kill();
+            let _ = viewer.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let status = status.expect("the viewer ends when its session does");
+    assert_eq!(status.code(), Some(0));
+    let mut stderr = String::new();
+    viewer
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(stderr.contains("stream closed"), "{stderr}");
+    // Nothing runs in its pane any more, so closing it needs no --force.
+    let closed = bench(&home.dir, &["close", &echo_pane]);
+    assert_eq!(closed.code, 0, "{}", closed.stderr);
+}
+
+#[test]
+fn a_screenshot_is_helms_answer_and_no_helm_is_an_error_naming_it() {
+    let home = TestHome::claim("m3-shot");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let out = home.dir.join("shot.png").display().to_string();
+
+    // A stand-in for helm: follow the bench, answer each ask with what a capture reports.
+    let socket = daemon.socket.clone();
+    let helm = std::thread::spawn(move || {
+        let mut reader = follow(&socket);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                return;
+            }
+            let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if frame["event"]["kind"] != "helm/asked" {
+                continue;
+            }
+            let data = &frame["event"]["data"];
+            let answer = layout(
+                &socket,
+                "helm/answer",
+                serde_json::json!({
+                    "ask": data["ask"],
+                    "status": "ok",
+                    "data": { "path": data["request"]["path"], "window": "helm — m3" },
+                }),
+                Some(serde_json::json!({ "kind": "helm" })),
+                false,
+            );
+            assert_eq!(answer["status"], "ok", "{answer}");
+            return;
+        }
+    });
+    let shot = bench(&home.dir, &["get", "screenshot", "--out", &out]);
+    assert_eq!(shot.code, 0, "{}", shot.stderr);
+    assert_eq!(json_of(&shot)["path"], out.as_str());
+    helm.join().unwrap();
+
+    // An answer nobody waits for is refused, not delivered to the next ask.
+    let late = layout(
+        &daemon.socket,
+        "helm/answer",
+        serde_json::json!({ "ask": "a1", "status": "ok" }),
+        None,
+        false,
+    );
+    assert_eq!(late["status"], "refused", "{late}");
+
+    // With nothing following, the caller is told why rather than left waiting.
+    let started = Instant::now();
+    let alone = bench(&home.dir, &["get", "screenshot", "--out", &out]);
+    assert_eq!(alone.code, 4, "{}", alone.stderr);
+    assert!(
+        alone.stderr.contains("no helm answered"),
+        "{}",
+        alone.stderr
+    );
+    assert!(started.elapsed() < Duration::from_secs(15));
+    let kinds: Vec<String> = log_of(&home.dir.join(".bench"))
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap().to_string())
+        .collect();
+    for kind in ["helm/asked", "helm/answered", "helm/unanswered"] {
+        assert!(kinds.contains(&kind.to_string()), "{kind}: {kinds:?}");
+    }
+}
+
+#[test]
+fn the_bench_panes_skills_snippets_execute_against_a_real_daemon() {
+    // Executed, never restated: every ```bash fence in SKILL.md runs in order, as an agent,
+    // against a throwaway root, with the variables its prose names.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.claude/skills/bench-panes/SKILL.md"),
+    )
+    .expect("bench-panes SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(snippets.len(), 4, "open, get pane, spawn, tidy up");
+
+    let home = TestHome::claim("m3-skill");
+    let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    working_bench(&daemon.socket);
+    let held = focused(&daemon.socket);
+    let ws = workspace(&home.dir);
+    let plan = artifact(&home.dir, "skill.md");
+    let brief = artifact(&home.dir, "brief.md");
+    let mut pane = String::new();
+    for (i, snippet) in snippets.iter().enumerate() {
+        let out = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", snippet])
+            .current_dir(&ws)
+            .env_remove("BENCH_SUITE")
+            .env_remove("BENCH_HANDLE")
+            .env_remove("HELM_PANE")
+            .env("HOME", &home.dir)
+            .env("BENCH_DIR", home.dir.join(".bench"))
+            .env("BENCH", bench_bin())
+            .env("ARTIFACT", &plan)
+            .env("PANE", &pane)
+            .env("AGENT", "pi")
+            .env("WORKTREE", &ws)
+            .env("HANDLE", "helper")
+            .env("BRIEF", &brief)
+            .output()
+            .expect("run snippet");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "SKILL.md snippet {} failed (exit {:?}):\n{}\n--- stderr:\n{}",
+            i + 1,
+            out.status.code(),
+            snippet,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if i == 0 {
+            pane = stdout.trim().to_string();
+        }
+        if i == 2 {
+            assert!(stdout.starts_with("helper "), "{stdout}");
+        }
+    }
+    assert_eq!(
+        focused(&daemon.socket),
+        held,
+        "no snippet took his keyboard"
+    );
+    assert!(
+        bench(&home.dir, &["get", "pane", &pane]).code == 3,
+        "the tidy-up closed the canvas it opened"
+    );
 }

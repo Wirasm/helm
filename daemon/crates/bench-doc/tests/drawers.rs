@@ -316,7 +316,13 @@ fn a_drawer_pane_is_named_and_recorded_like_any_other() {
 
     let pane = doc.drawer(&name("scratch")).unwrap().pane(id).unwrap();
     assert_eq!(pane.name, PaneName::Chosen("scratch".into()));
-    assert_eq!(pane.surface, Surface::Terminal { agent: Some(agent) });
+    assert_eq!(
+        pane.surface,
+        Surface::Terminal {
+            agent: Some(agent),
+            session: None
+        }
+    );
 }
 
 #[test]

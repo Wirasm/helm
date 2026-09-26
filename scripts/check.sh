@@ -46,7 +46,8 @@ needs() {
         return 0
     }
     case "$part" in
-        daemon) grep -qE '^(daemon/|\.github/workflows/daemon\.yml|\.claude/skills/bench-)' <<<"$paths" ;;
+        # RenderableFile.swift: the bench CLI checks its extension list against it (bench open).
+        daemon) grep -qE '^(daemon/|\.github/workflows/daemon\.yml|\.claude/skills/bench-|Sources/Helm/Shared/RenderableFile\.swift)' <<<"$paths" ;;
         pi) grep -qE '^pi/' <<<"$paths" ;;
         swift)
             # Runs when nothing changed at all, too: an empty diff proves nothing.
@@ -81,7 +82,7 @@ swift_ignores() {
 skip_reason() {
     case "$1" in
         swift) echo "only docs/, pi/, daemon/ (not fixtures) or markdown outside Sources/, Tests/ and skills changed" ;;
-        daemon) echo "no changes under daemon/, daemon.yml or .claude/skills/bench-*" ;;
+        daemon) echo "no changes under daemon/, daemon.yml, .claude/skills/bench-* or RenderableFile.swift" ;;
         pi) echo "no changes under pi/" ;;
     esac
 }

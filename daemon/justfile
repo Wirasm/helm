@@ -70,7 +70,8 @@ mail-list handle="operator":
 mail-read id handle="operator":
     {{BENCH}} mail read {{id}} --handle {{handle}}
 
-# M5a — spawn an interactive agent into a bench pty. Prompt by FILE, never argv (#93).
+# M3 — spawn an interactive agent into a bench pty, shown in a pane of cwd's workspace.
+# Prompt by FILE, never argv (#93). Lands in the background unless you pass --asked.
 spawn agent="claude" cwd=justfile_directory() prompt-file="":
     {{BENCH}} spawn --agent {{agent}} --cwd {{cwd}} {{ if prompt-file != "" { "--prompt-file " + prompt-file } else { "" } }}
 
@@ -90,6 +91,14 @@ close session:
 resume session:
     {{BENCH}} resume {{session}}
 
+# M3 — put a file on the bench as a canvas, in the caller's workspace, in the background.
+open path:
+    {{BENCH}} open {{path}}
+
+# M3 — helm draws its window; the answer names the PNG.
+screenshot:
+    {{BENCH}} get screenshot
+
 # #356 — show a drawer over the bench, or hide it. The operator's focus: an agent is refused.
 drawer name surface="":
     {{BENCH}} drawer toggle {{name}} {{ if surface != "" { "--surface " + surface } else { "" } }}
@@ -105,7 +114,7 @@ spec:
     sleep 1
     echo "bench surface, $(date -u +%Y-%m-%dT%H:%MZ):"
     for verb in status events stop:probe spawn sessions attach close resume \
-                select name capture cmd \
+                open split show focus move name resize helm/ask helm/answer \
                 attn/post attn/list attn/ack watch mail/send mail/list mail/read mail/who hook \
                 sessions/all sessions/dismiss browser/start browser/status browser/stop browser/setup \
                 bench/get workspace/open workspace/close workspace/activate workspace/reset \

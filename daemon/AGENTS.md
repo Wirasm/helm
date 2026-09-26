@@ -48,9 +48,12 @@ knows nor needs the Rust toolchain, in either direction.
   build fixture trees under a temp HOME; none reads the operator's `~/.claude`, `~/.pi` or
   `~/.helm`.
 - `crates/benchd` — the daemon. Foreground, one unix socket, a thread per connection.
-  `src/layout.rs` is the bench document's whole mutation path: the layout verbs, `bench.json`,
-  and booting from it.
-- `crates/bench` — the CLI, the one agent-facing surface, and the attach client. Two verbs
+  `src/layout.rs` is the bench document's whole mutation path: the layout verbs, the rules an
+  agent's verb answers to (`admit`), one `commit` every change goes through, `bench.json`, and
+  booting from it. `src/spawn.rs` is a session plus the pane that shows it; `src/ask.rs` is
+  benchd asking helm for what only helm can do (`helm/ask`, `helm/answer`).
+- `crates/bench` — the CLI, the one agent-facing surface, and the attach client. `src/verbs.rs`
+  is the pane verbs and spawn (M3); `src/attach.rs` is the relay a helm pane runs. Two verbs
   never open the socket: `bench log` reads a transcript file directly, and `bench wiring` prints
   (or `--check`s) the one-time hook wiring for the operator's own agents.
 - **benchd runs as a login agent** (`com.wirasm.benchd`, `scripts/benchd-agent.sh`, #407). To

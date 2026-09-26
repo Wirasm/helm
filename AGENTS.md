@@ -28,7 +28,7 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
 | `skills` | the canvas, board and post-canvas skill gates | node, zsh, python3, git |
-| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml` or a `bench-*` skill changed | cargo |
+| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` skill or `RenderableFile.swift` (the CLI's `bench open` checks its list) changed | cargo |
 | `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
 
 "Changed" means against `origin/development`, committed or not. A missing tool is a `FAIL`
@@ -205,8 +205,9 @@ bash daemon/test.sh
 
 `daemon/` is the bench daemon (`benchd`) — a self-contained Rust cargo workspace, the
 same carve-out as `pi/`: its gate needs only the Rust toolchain, its CI job
-runs only when `daemon/**` or a `.claude/skills/bench-*` skill changed (the gate executes those
-skills' snippets), and the Swift gate never learns about it. Read
+runs only when `daemon/**`, a `.claude/skills/bench-*` skill (the gate executes those skills'
+snippets) or `Sources/Helm/Shared/RenderableFile.swift` (the CLI's `bench open` checks its list
+against it) changed, and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
 `docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
 M0 (skeleton), M5a (daemon-owned ptys), mail, the shared browser (#350) and the daemon half
@@ -1115,12 +1116,12 @@ cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
 ### The helm-local skills
 
-`.claude/skills/` holds fourteen; **seven are vendored** from `mattpocock/skills` and pinned in
+`.claude/skills/` holds fifteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
-not a change. The other seven are hand-written. The first four below are helm's, the surface an
+not a change. The other eight are hand-written. The first four below are helm's, the surface an
 agent hosted in helm actually uses, and each has a gate listed in *Working here* above. The last
-three, `bench-mail`, `bench-browser` and `bench-sessions`, are benchd's, and their snippets run in
-the daemon gate's conformance suite.
+four, `bench-panes`, `bench-mail`, `bench-browser` and `bench-sessions`, are benchd's, and their
+snippets run in the daemon gate's conformance suite.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
   artifact gets onto the bench. Read it before writing one; it deliberately says nothing about
@@ -1132,6 +1133,9 @@ the daemon gate's conformance suite.
   so the two are installed side by side.
 - **`pi-extensions`** — how to build one without taking the pi CLI down, how to read the installed
   pi rather than guess at its API, and how to test one without spending a model call.
+- **`bench-panes`** — driving the bench with `bench` (M3, #355): open an artifact, the browser or
+  a terminal, spawn an agent into a pane, show, move, name and close panes, read where one is, and
+  capture helm's window. Every verb lands in the background unless it carries `--asked`.
 - **`bench-mail`** — sending and reading mail through benchd's mailroom, finding who can be mailed,
   and wiring an agent the operator starts himself (`bench wiring`). The only mail skill since #358.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
