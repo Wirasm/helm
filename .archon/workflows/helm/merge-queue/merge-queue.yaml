@@ -4,7 +4,7 @@ description: >-
   For each PR in the order given: bring it up to date with update-branch, wait until every
   required check has passed on that exact head, merge pinned to the head, and read the merge
   commit's parents back. Stacked PRs are retargeted once the PR under them merged; a PR whose
-  head is already in development is closed as landed through another. A prototype for
+  head is already in development is reported as landed through another. A prototype for
   shaping the merge-queue design; see README.md. Use when: "merge 412 413", "run the queue".
 
 # Deterministic: the orchestrator decides what lands and in what order, so no node here is an
@@ -20,9 +20,11 @@ inputs:
   mode:
     default: merge
     description: >-
-      "merge" lands each PR. "preview" brings each PR up to date and waits for its checks,
-      then stops at tested without merging. Every PR in a preview is compared with the same
-      development, so only the first is meaningful when they touch each other.
+      "merge" lands each PR. "preview" does every step except the merge, and those steps
+      change the PRs: update-branch pushes a merge commit, a stacked PR is retargeted, and a
+      PR whose checks never started is closed and reopened. It stops at tested. Every PR in a
+      preview is compared with the same development, so only the first is meaningful when
+      they touch each other.
 
 returns: report
 
@@ -76,8 +78,9 @@ nodes:
         tested: { type: array, items: { type: integer } }
         landed_through: { type: array, items: { type: integer } }
         held: { type: array, items: { type: integer } }
+        unverified: { type: array, items: { type: integer } }
         queued: { type: array, items: { type: integer } }
         reasons: { type: object }
         stopped: { type: string }
         summary: { type: string }
-      required: [mode, base_sha, merged, tested, landed_through, held, queued, reasons, stopped, summary]
+      required: [mode, base_sha, merged, tested, landed_through, held, unverified, queued, reasons, stopped, summary]

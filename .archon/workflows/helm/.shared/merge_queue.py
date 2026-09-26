@@ -38,6 +38,7 @@ PR_DEADLINE_SECONDS = 50 * 60
 KICK_GRACE_SECONDS = 180
 MERGE_READBACK_SECONDS = 90
 MAX_PRS = 20  # the loop's max_iterations
+GH_TIMEOUT_SECONDS = 120  # one hung gh call must not outlive the queue's own deadlines
 
 PASSING = {"success", "neutral", "skipped"}
 MERGEABLE = {"CLEAN", "UNSTABLE", "HAS_HOOKS"}
@@ -98,7 +99,7 @@ class Facts:
 
 
 Move = Literal[
-    "landed",  # head already in development: close as landed through another PR
+    "landed",  # head already in development (merged, or carried in by another PR)
     "closed",
     "draft",
     "retarget",
@@ -150,7 +151,12 @@ def verify_merge(parents: list[str], old_tip: str, head: str) -> bool:
 
 def run(argv: list[str], *, ok: tuple[int, ...] = (0,)) -> subprocess.CompletedProcess[str]:
     # Captured: a node's stderr reaches the operator, and gh is chatty there.
-    result = subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603
+    try:
+        result = subprocess.run(  # noqa: S603
+            argv, capture_output=True, text=True, check=False, timeout=GH_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as expired:
+        raise Refusal(f"{' '.join(argv)} did not answer in {GH_TIMEOUT_SECONDS}s") from expired
     if result.returncode not in ok:
         raise Refusal(
             f"{' '.join(argv)} exited {result.returncode}: "
@@ -281,7 +287,7 @@ class Queue:
             return {"done": True, "number": 0, "status": "none", "summary": "nothing left"}
         try:
             self.land(item)
-        except Refusal as refusal:
+        except Exception as refusal:  # noqa: BLE001 -- any failure must reach queue.json
             # An unexpected gh failure leaves the PR in a state the queue did not observe
             # (it may even have merged), so the batch stops rather than building on it.
             self.state["stopped"] = f"#{item['number']}: {refusal}"
@@ -312,7 +318,8 @@ class Queue:
                 "--json", "number,state", "--limit", "1",
             )
             base_pr_merged = bool(owners) and owners[0]["state"] == "MERGED"
-        # One page: a helm head carries a handful of runs, far under 100.
+        # One page: a helm head carries a handful of runs, far under 100. Matched by name
+        # only; every check on helm comes from GitHub Actions, so the app is not compared.
         runs = gh_json(
             "api", f"repos/{self.repo}/commits/{head}/check-runs?per_page=100",
             "--jq", "[.check_runs[] | {id, name, status, conclusion}]",
@@ -348,10 +355,12 @@ class Queue:
                 last_move = move
 
             if move == "landed":
-                if f.state == "OPEN":
-                    run(["gh", "pr", "close", str(number), "--comment",
-                         f"Landed through `{BASE}`: head {head} is already in it."])
-                return self.settle(item, "landed_through", f"head {head[:8]} is already in {BASE}")
+                # Not closed here: ancestry alone cannot tell a PR carried in by the PR above
+                # it from a branch reset to an older commit. Whoever reads the report closes it.
+                why = "already merged" if f.state == "MERGED" else (
+                    f"head {head[:8]} is already in {BASE}; close it if another PR carried it"
+                )
+                return self.settle(item, "landed_through", why)
             if move == "closed":
                 return self.settle(item, "held", f"PR is {f.state}")
             if move == "draft":
@@ -399,10 +408,24 @@ class Queue:
         attempt = run(
             ["gh", "pr", "merge", str(number), "--merge", "--match-head-commit", head], ok=tuple(range(256))
         )
+        # From here the PR may have merged, so no failure may leave it looking untouched.
+        try:
+            self.read_back(item, head, old_tip, attempt)
+        except Exception as error:  # noqa: BLE001
+            self.state["stopped"] = (
+                f"#{number}: merge attempted but could not be confirmed ({error}); "
+                f"inspect {BASE} before landing anything else"
+            )
+            self.settle(item, "merged_unverified", self.state["stopped"])
+
+    def read_back(
+        self, item: dict[str, Any], head: str, old_tip: str, attempt: subprocess.CompletedProcess[str]
+    ) -> None:
+        number = item["number"]
         view: dict[str, Any] = {}
         for _ in range(MERGE_READBACK_SECONDS // 5):
             view = gh_json("pr", "view", str(number), "--json", "state,mergeCommit")
-            if view["state"] == "MERGED":
+            if view["state"] == "MERGED" and view.get("mergeCommit"):
                 break
             time.sleep(5)
         if view.get("state") != "MERGED":
@@ -427,7 +450,8 @@ class Queue:
         if not self.state:
             # Intake refused (its reason is on that node); there is nothing to report on.
             return {"mode": "", "base_sha": "", "merged": [], "tested": [], "landed_through": [],
-                    "held": [], "queued": [], "reasons": {}, "stopped": "intake refused",
+                    "held": [], "unverified": [], "queued": [], "reasons": {},
+                    "stopped": "intake refused",
                     "summary": "intake refused; nothing ran"}
 
         def by(*statuses: str) -> list[int]:
@@ -440,7 +464,9 @@ class Queue:
             "merged": by("merged"),
             "tested": by("tested"),
             "landed_through": by("landed_through"),
-            "held": by("held", "merged_unverified"),
+            "held": by("held"),
+            # Merged, or maybe merged, with parents nobody verified: development changed.
+            "unverified": by("merged_unverified"),
             "queued": by("queued"),
             "reasons": reasons,
             "stopped": self.state["stopped"],
@@ -448,6 +474,7 @@ class Queue:
         out["summary"] = (
             f"{out['mode']}: {BASE} was {out['base_sha'][:8]}; merged {out['merged']}; "
             f"tested {out['tested']}; landed through {out['landed_through']}; held {out['held']}"
+            + (f"; UNVERIFIED {out['unverified']}" if out["unverified"] else "")
             + (f"; not reached {out['queued']}" if out["queued"] else "")
             + (f"; stopped: {out['stopped']}" if out["stopped"] else "")
         )

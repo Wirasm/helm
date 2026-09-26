@@ -3,8 +3,12 @@
 Run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .archon/workflows/helm/.shared
 """
 
+import os
+import tempfile
 import unittest
+from unittest import mock
 
+import merge_queue
 from merge_queue import BASE, Checks, Facts, checks_at, next_move, verify_merge
 
 REQUIRED = ["build · test · format", "skill gates"]
@@ -89,6 +93,47 @@ class VerifyMerge(unittest.TestCase):
         self.assertFalse(verify_merge(["head", "tip"], "tip", "head"))
         self.assertFalse(verify_merge(["other", "head"], "tip", "head"))
         self.assertFalse(verify_merge(["tip"], "tip", "head"))  # a squash or rebase landing
+
+
+class AfterTheMergeCommand(unittest.TestCase):
+    """Once `gh pr merge` has run, the PR may have merged: no failure may report it untouched."""
+
+    def setUp(self):
+        tmp = tempfile.mkdtemp()
+        env = {"ARTIFACTS_DIR": os.path.join(tmp, "run"), "STATE_DIR": os.path.join(tmp, "state")}
+        self.env = mock.patch.dict(os.environ, env)
+        self.env.start()
+        self.queue = merge_queue.Queue()
+        self.queue.state = {"repo": "o/r", "mode": "merge", "required": [], "base_sha": "tip",
+                            "stopped": "", "items": [{"number": 7, "status": "queued", "reason": ""}]}
+
+    def tearDown(self):
+        self.env.stop()
+
+    def merge_with(self, view):
+        done = merge_queue.subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(merge_queue, "gh_text", return_value="tip"), \
+             mock.patch.object(merge_queue, "run", return_value=done), \
+             mock.patch.object(merge_queue, "gh_json", side_effect=view), \
+             mock.patch.object(merge_queue.time, "sleep"):
+            self.queue.merge(self.queue.items[0], "head")
+        return self.queue.items[0], self.queue.report()
+
+    def test_a_failed_read_back_is_unverified_and_stops_the_batch(self):
+        item, report = self.merge_with(RuntimeError("502 from GitHub"))
+        self.assertEqual(item["status"], "merged_unverified")
+        self.assertEqual(report["unverified"], [7])
+        self.assertEqual(report["queued"], [])
+        self.assertIn("could not be confirmed", report["stopped"])
+
+    def test_wrong_parents_are_unverified_and_a_clean_merge_is_merged(self):
+        views = [{"state": "MERGED", "mergeCommit": {"oid": "m"}}, ["other", "head"]]
+        item, report = self.merge_with(views)
+        self.assertEqual((item["status"], report["unverified"]), ("merged_unverified", [7]))
+        self.setUp()
+        views = [{"state": "MERGED", "mergeCommit": {"oid": "m"}}, ["tip", "head"]]
+        item, report = self.merge_with(views)
+        self.assertEqual((item["status"], report["merged"], report["stopped"]), ("merged", [7], ""))
 
 
 if __name__ == "__main__":
