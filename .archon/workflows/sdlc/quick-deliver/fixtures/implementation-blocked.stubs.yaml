@@ -1,0 +1,6 @@
+start: ''
+implement: { ready: false, summary: 'The work requires an unresolved product decision.' }
+exec-code: true
+fixture:
+  expect: failed
+  fail-node: [implementation-gate, delivery]

@@ -1,0 +1,152 @@
+name: archon-quick-deliver
+description: |
+  Deliver a clear, bounded change with one implementer and one independent reviewer.
+  Implementation owns the repository's required local checks; review judges the diff
+  and evidence without repeating the full gate. Allow at most three
+  implementation/review attempts, then open a draft PR, await CI, and mark it ready. Never merges.
+
+  Use when: the outcome and acceptance are decided and the change needs no separate
+  investigation or design. Quick means fewer steps, not smaller models.
+  NOT for: unclear requirements, broad redesigns, or bypassing repository checks.
+  Stops with evidence if the work needs the full SDLC path or cannot pass its checks.
+  This prototype requires GitHub checks to register and finish within roughly ten minutes.
+requires: [github]
+inputs:
+  work:
+    default: ''
+    description: The bounded work order; the invocation message also remains in force.
+returns: ready
+outcome_field: delivered
+nodes:
+  - id: start
+    bash: git rev-parse HEAD > "$ARTIFACTS_DIR/quick-start-sha"
+
+  - id: delivery
+    depends_on: [start]
+    loop_group:
+      max_iterations: 3
+      fresh_context: true
+      until_bash: test $review.output.ready = true
+      nodes:
+        - id: implement
+          command: implement
+          model: large
+          output_format:
+            type: object
+            properties:
+              ready: { type: boolean }
+              summary: { type: string }
+            required: [ready, summary]
+        - id: implementation-gate
+          bash: test $implement.output.ready = true
+          depends_on: [implement]
+        - id: revision
+          script: revision
+          runtime: bun
+          depends_on: [implementation-gate]
+          output_format:
+            type: object
+            properties:
+              head: { type: string }
+            required: [head]
+        - id: review
+          command: review
+          model: medium
+          context: fresh
+          mutates_checkout: false
+          depends_on: [revision]
+          output_format:
+            type: object
+            properties:
+              ready: { type: boolean }
+              summary: { type: string }
+              head: { type: string }
+            required: [ready, summary, head]
+
+  - id: accepted
+    bash: test $delivery.output.ready = true
+    depends_on: [delivery]
+
+  - id: publication-target
+    script: ci
+    runtime: bun
+    depends_on: [accepted]
+    with:
+      action: prepare
+      pr_url: ''
+      head: '$delivery.output.head'
+    output_format:
+      type: object
+      properties:
+        repository: { type: string }
+        branch: { type: string }
+      required: [repository, branch]
+
+  - id: pr
+    command: publish
+    model: medium
+    context: fresh
+    mutates_checkout: false
+    depends_on: [publication-target]
+    with:
+      repository: '$publication-target.output.repository'
+      branch: '$publication-target.output.branch'
+      head: '$delivery.output.head'
+    output_type: pull-request
+    output_format:
+      type: object
+      properties:
+        repo:
+          type: object
+          properties:
+            host: { type: string }
+            path: { type: string }
+          required: [host, path]
+        number: { type: integer }
+        url: { type: string }
+        head: { type: string }
+        base: { type: string }
+        is_draft: { type: boolean }
+      required: [repo, number, url, head, base, is_draft]
+
+  - id: checks
+    depends_on: [pr]
+    loop_group:
+      max_iterations: 21
+      until_bash: test $probe.output.state != pending
+      nodes:
+        - id: probe
+          script: ci
+          runtime: bun
+          with:
+            action: probe
+            pr_url: '$pr.output.url'
+            head: '$delivery.output.head'
+          output_format:
+            type: object
+            properties:
+              state: { type: string, enum: [pending, green, red] }
+              detail: { type: string }
+            required: [state, detail]
+        - id: pause
+          wait:
+            duration_ms: 30000
+          depends_on: [probe]
+          when: "$probe.output.state == 'pending'"
+
+  - id: ready
+    script: ci
+    runtime: bun
+    depends_on: [checks]
+    with:
+      action: ready
+      pr_url: '$pr.output.url'
+      head: '$delivery.output.head'
+    output_format:
+      type: object
+      properties:
+        delivered: { type: boolean }
+        pr_url: { type: string }
+        head: { type: string }
+        summary: { type: string }
+      required: [delivered, pr_url, head, summary]

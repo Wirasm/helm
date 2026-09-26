@@ -1,0 +1,14 @@
+# Dry-run assumes until_bash completion. The real accepted gate must still refuse.
+start: ''
+implement: { ready: true, summary: 'Local checks passed.' }
+revision: { head: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
+review:
+  {
+    ready: false,
+    summary: 'New test also passes the wrong behavior.',
+    head: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  }
+exec-code: true
+fixture:
+  expect: failed
+  fail-node: accepted
