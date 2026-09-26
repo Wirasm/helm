@@ -3963,3 +3963,83 @@ fn a_spawn_hands_the_prompt_over_in_argv_and_waits_for_nothing() {
         "nothing is typed into the pty"
     );
 }
+
+#[test]
+fn a_pi_agent_wakes_itself_only_when_idle_and_under_the_cap() {
+    // pi's extension watches the inbox benchd names and asks for its mail with `wake`; the
+    // reply is what it hands to sendUserMessage. benchd decides whether a turn may start.
+    let home = TestHome::claim("piwake");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (_, pid) = terminal_process(h, "holder");
+    let session = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
+    let event = |event: &str| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "pi", "event": event, "session": session,
+                "cwd": "/Users/op/Projects/helm", "pid": pid, "pane": HOOK_PANE}),
+        )
+    };
+    let start = event("session_start");
+    let handle = start["handle"].as_str().unwrap().to_string();
+    assert_eq!(
+        start["inbox"].as_str().unwrap(),
+        h.join(".bench/mail")
+            .join(&handle)
+            .join("inbox")
+            .display()
+            .to_string(),
+        "the extension is told what to watch"
+    );
+    assert!(
+        start["rule"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("You are `{handle}`")),
+        "and the rule for its system prompt: {start}"
+    );
+    let send = |body: &str| {
+        let run = bench(h, &["mail", "send", "--to", &handle, "--body", body]);
+        json_of(&run)["wake"].as_str().unwrap().to_string()
+    };
+    assert_eq!(send("while busy"), "queued", "a pi agent can be woken");
+
+    // Busy: a wake hands out nothing; the next model call (`context`) carries it instead.
+    event("agent_start");
+    assert!(event("wake")["context"].is_null());
+    let ctx = event("context");
+    assert_eq!(
+        ctx["context"].as_str().unwrap().lines().count(),
+        1,
+        "the pointer alone; the rule goes to the system prompt: {ctx}"
+    );
+
+    // Idle: a wake hands it out, as the pi channel, up to the burst of six.
+    for i in 0..7 {
+        event("agent_settled");
+        send(&format!("idle {i}"));
+        let reply = event("wake");
+        if i < 6 {
+            assert!(
+                reply["context"].as_str().unwrap().contains("You have mail"),
+                "wake {i}: {reply}"
+            );
+        } else {
+            assert!(
+                reply["context"].is_null(),
+                "the seventh wake is over the cap: {reply}"
+            );
+        }
+    }
+    let channels: Vec<String> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "mail/delivered")
+        .map(|(_, d)| d["channel"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        channels.iter().filter(|c| *c == "pi").count(),
+        6,
+        "{channels:?}"
+    );
+    assert_eq!(inbox_count(h, &handle), 1, "capped mail waits unread");
+}

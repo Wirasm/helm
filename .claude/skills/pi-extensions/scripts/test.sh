@@ -106,6 +106,11 @@ sandbox() {
 	# No pi extension writes the spool today; helm's tools do, and the next extension might.
 	# One line now against a whole second incident of #133.
 	export HELM_SPOOL_DIR="$SANDBOX/spool"
+	# The bench extension reports to benchd through `bench hook pi`, which resolves the root
+	# from these. Pointed at the sandbox, it finds no daemon and says nothing; left alone, a
+	# gate run inside a helm pane would claim an address in the operator's live benchd.
+	export BENCH_DIR="$SANDBOX/bench"
+	unset BENCH_SUITE BENCH_SESSION
 	# A pinned handle would name the mailbox something other than the harness's temp dir, and
 	# the sweep below identifies the gate's own mailboxes by exactly that name. Unset it so a
 	# developer who pinned a handle for their own session cannot blind the guard.

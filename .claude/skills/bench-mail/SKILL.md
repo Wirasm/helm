@@ -31,10 +31,10 @@ Facts with edges:
 - **The notice never contains the body.** Reading the file is how you get the message.
 - **Busy, you get it at your next tool call or prompt**, as hook context. A permission
   prompt or a question you asked holds it until the next tool call after it.
-- **Idle, benchd starts a turn for you** with the notice, through your harness's own
-  channel (a Claude session's inbox socket). Those turns are **capped**: burst of 6 per
-  recipient, refilling one per minute. A harness with no such channel yet (pi, codex) gets
-  its mail at its next prompt or tool call instead.
+- **Idle, a turn is started for you** with the notice, through your harness's own
+  channel: a Claude session's inbox socket, or pi's `bench` extension. Those turns are
+  **capped**: burst of 6 per recipient, refilling one per minute. codex has no such channel
+  yet and gets its mail at its next prompt or tool call instead.
 - Held or capped mail waits **unread in your inbox**. Nothing is lost; `bench mail list`
   shows what accumulated.
 - Nothing else wakes you. No polling loop exists to arm.

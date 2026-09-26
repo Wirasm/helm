@@ -53,6 +53,11 @@ fn inbox(root: &Path, handle: &str) -> PathBuf {
     mail_root(root).join(handle).join("inbox")
 }
 
+/// Where a handle's unread mail lands: what pi's extension watches.
+pub fn inbox_dir(root: &Path, handle: &str) -> PathBuf {
+    inbox(root, handle)
+}
+
 fn read_dir_of(root: &Path, handle: &str) -> PathBuf {
     mail_root(root).join(handle).join("read")
 }

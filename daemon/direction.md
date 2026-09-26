@@ -86,9 +86,10 @@ declared (`HELM_PANE`, `BENCH_SESSION`) and that runs on a terminal claims its a
 in `sessions/hosted.json` so it survives a restart. An idle agent is started through its own
 channel instead: benchd posts the notice to a Claude session's inbox socket (which its hooks
 report), and a push that starts no turn in 10 s goes back to the inbox. A spawn hands its prompt
-over in argv as a pointer, so nothing waits for a TUI to draw. pi's channel (its extension) and
-codex's (a benchd-owned app-server) are next; until then their mail waits for their next prompt
-or tool call, and the ring proof returns with codex's.
+over in argv as a pointer, so nothing waits for a TUI to draw. pi's channel is its `bench` extension
+(`pi/extensions/bench`), which reports through `bench hook pi`, watches the inbox benchd names
+and starts its own turn when benchd agrees. codex's (a benchd-owned app-server) is next; until
+then its mail waits for its next prompt or tool call, and the ring proof returns with it.
 
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance

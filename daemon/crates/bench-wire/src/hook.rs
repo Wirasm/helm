@@ -48,6 +48,15 @@ pub struct HookReply {
     /// rule the first time, then one pointer line per message. Never a message body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    /// pi only: the inbox directory its extension watches, so it can ask for its mail
+    /// (`wake`) the moment some arrives while it is idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbox: Option<String>,
+    /// pi only: the standing rule, which its extension adds to the system prompt of every run.
+    /// pi's `context` changes one request and not the history, so a rule told once there would
+    /// be gone by the next run (measured: an idle wake's turn never read its mail).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
 }
 
 /// What one event says about the agent.
