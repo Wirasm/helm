@@ -5,10 +5,12 @@ edition.workspace = true
 description = "The bench CLI: the one agent-facing surface over the benchd socket."
 
 [dependencies]
+# The document's own types, so a drawer name or a surface is spelled the way benchd reads it.
+bench-doc = { path = "../bench-doc" }
 bench-wire = { path = "../bench-wire" }
+# `bench log` reads transcripts with the session list's own harness readers.
+bench-sessions = { path = "../bench-sessions" }
 serde_json.workspace = true
 
-[dev-dependencies]
-# The conformance suite asks for its own process's start time, to write a registry row a
-# real daemon will believe.
-bench-sessions = { path = "../bench-sessions" }
+[lints]
+workspace = true

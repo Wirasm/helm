@@ -48,6 +48,11 @@ final class BenchWireConformanceTests: XCTestCase {
             surfaces.contains { if case .unsupported = $0 { true } else { false } },
             "every kind in the daemon's own sample is one helm knows")
 
+        // Drawers (#356): one open, one closed and badged.
+        let open = try XCTUnwrap(document.drawers.first { $0.name == document.openDrawer })
+        XCTAssertGreaterThan(open.panes.count, 1)
+        XCTAssertTrue(document.drawers.contains { $0.badged && $0.name != open.name })
+
         XCTAssertEqual(
             try normalized(JSONEncoder().encode(document)), try normalized(data),
             "helm writes back exactly what it read")
@@ -76,7 +81,7 @@ final class BenchWireConformanceTests: XCTestCase {
             "bench/get", "workspace/open", "workspace/close", "workspace/activate",
             "workspace/reset", "workspace/unshelve", "workspace/import", "pane/open",
             "pane/split", "pane/close", "pane/show", "pane/move", "pane/name", "pane/record",
-            "focus/slot", "focus/step", "layout/resize",
+            "focus/slot", "focus/step", "layout/resize", "drawer/toggle",
         ]
         XCTAssertEqual(sampled, helmSends)
     }
@@ -96,6 +101,31 @@ final class BenchWireConformanceTests: XCTestCase {
         let frame = try JSONDecoder().decode(BenchFrame.self, from: fixture("bench-frame.json"))
         XCTAssertEqual(frame.event.kind, "bench/changed")
         XCTAssertNotNil(frame.document)
+    }
+
+    /// A document written before drawers existed has none, and helm writes none back.
+    func testADocumentWithoutDrawersReadsAndWritesWithout() throws {
+        let data = Data(#"{"workspaces":[],"active":null}"#.utf8)
+        let document = try JSONDecoder().decode(BenchDocument.self, from: data)
+        XCTAssertEqual(document.drawers, [])
+        XCTAssertNil(document.openDrawer)
+        let written = String(decoding: try JSONEncoder().encode(document), as: UTF8.self)
+        XCTAssertFalse(written.contains("drawer"), written)
+    }
+
+    /// benchd refuses a `pane/open` naming a workspace and a drawer, and reads a null as absent;
+    /// helm's decode draws the same line.
+    func testPaneOpenNamesAWorkspaceOrADrawerNeverBoth() throws {
+        func decode(_ args: String) throws -> BenchVerb {
+            let line = #"{"id":"x","verb":"pane/open","args":"# + args + "}"
+            return try JSONDecoder().decode(BenchRequest.self, from: Data(line.utf8)).verb
+        }
+        let browser = #""surface":{"kind":"browser"}"#
+        XCTAssertEqual(
+            try decode(#"{"drawer":"notes","workspace":null,"# + browser + "}"),
+            .paneOpenInDrawer("notes", surface: .browser))
+        XCTAssertThrowsError(
+            try decode(#"{"drawer":"notes","workspace":"/tmp/w","# + browser + "}"))
     }
 
     /// A kind helm does not know is kept as `unsupported`, never dropped: the daemon owns the pane.

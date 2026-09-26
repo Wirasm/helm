@@ -1,3 +1,4 @@
+// swiftlint:disable file_length - legacy (#418): 831 lines, limit 600
 import HelmWire
 import XCTest
 
@@ -15,6 +16,7 @@ import XCTest
 /// two flaky process-spawning tests in this repo (#157, and one fixed in PR #155) both got
 /// wrong by assuming a fixed 300 ms was enough.
 @MainActor
+// swiftlint:disable:next type_body_length - legacy (#418): 706 lines, limit 350
 final class SpoolModelTests: XCTestCase {
     private var directory: SpoolDirectory!
     private var mailRoot: URL!

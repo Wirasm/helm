@@ -90,6 +90,10 @@ close session:
 resume session:
     {{BENCH}} resume {{session}}
 
+# #356 — show a drawer over the bench, or hide it. The operator's focus: an agent is refused.
+drawer name surface="":
+    {{BENCH}} drawer toggle {{name}} {{ if surface != "" { "--surface " + surface } else { "" } }}
+
 # ---- the scoreboard ---------------------------------------------------------
 
 # Probe every wanted verb against a throwaway daemon: ✓ answered / ✗ not yet.
@@ -102,12 +106,12 @@ spec:
     echo "bench surface, $(date -u +%Y-%m-%dT%H:%MZ):"
     for verb in status events stop:probe spawn sessions attach close resume \
                 select name capture cmd \
-                attn/post attn/list attn/ack watch mail/send mail/list mail/read \
+                attn/post attn/list attn/ack watch mail/send mail/list mail/read hook \
                 sessions/all sessions/dismiss browser/start browser/status browser/stop browser/setup \
                 bench/get workspace/open workspace/close workspace/activate workspace/reset \
                 workspace/unshelve workspace/import pane/open pane/split pane/close pane/show \
                 pane/move pane/name pane/record focus/slot focus/step \
-                layout/resize; do
+                layout/resize drawer/toggle; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then
             # probed last for real; listed here so the row exists
@@ -280,3 +284,56 @@ browser-proof:
     "$BENCH" stop >/dev/null
     rm -rf "$SMOKE"
     echo "browser-proof: clean"
+
+# The login agent, proved against launchd itself under a throwaway suite (#407): bootstrap a
+# suite-labelled agent from a temp plist, start the real browser, `kill -9` benchd, and require
+# launchd to bring benchd back and benchd to bring the browser back; then boot it out. Never
+# touches com.wirasm.benchd or ~/.bench. Needs a browser, as browser-proof does; spends no tokens.
+launchd-proof:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DIR="{{justfile_directory()}}"
+    cargo build -q --workspace
+    source "$DIR/../scripts/benchd-agent.sh"
+    SUITE="launchd-proof-$$"
+    export BENCH_SUITE="$SUITE"
+    unset BENCH_DIR
+    LABEL=$(agent_label "$SUITE")
+    DOMAIN="gui/$(id -u)"
+    ROOT="$HOME/.bench-$SUITE"
+    LOG="$HOME/Library/Logs/benchd-$SUITE.log"
+    PLIST=$(mktemp -d "${TMPDIR:-/tmp}/blp.XXXX")/$LABEL.plist
+    BENCH="$DIR/target/debug/bench"
+    cleanup() {
+        timeout 30 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+        rm -rf "$ROOT" "$LOG" "$(dirname "$PLIST")"
+    }
+    trap cleanup EXIT
+    [ -e "$ROOT" ] && { echo "launchd-proof: $ROOT already exists"; exit 1; }
+    write_plist "$PLIST" "$LABEL" "$DIR/target/debug/benchd" "$LOG" "$SUITE"
+    timeout 30 launchctl bootstrap "$DOMAIN" "$PLIST"
+    await_bench "$BENCH" 20 || { echo "launchd-proof: benchd never came up"; cat "$LOG"; exit 1; }
+    first=$(bench_pid "$BENCH")
+    [ "$(timeout 10 launchctl print "$DOMAIN/$LABEL" | awk '/^\tpid =/{print $3}')" = "$first" ] ||
+        { echo "launchd-proof: the benchd answering is not launchd's"; exit 1; }
+    browser=$(timeout 90 "$BENCH" browser start | plutil -extract pid raw -)
+    echo "launchd-proof: $LABEL runs benchd pid $first, browser pid $browser"
+    kill -9 "$first"
+    deadline=$(( $(date +%s) + 30 ))
+    until second=$(bench_pid "$BENCH") && [ -n "$second" ] && [ "$second" != "$first" ]; do
+        [ "$(date +%s)" -ge "$deadline" ] && { echo "launchd-proof: FAILED — benchd not back after kill -9"; exit 1; }
+        sleep 0.5
+    done
+    until [ "$(timeout 5 "$BENCH" browser status | plutil -extract running raw -)" = true ]; do
+        [ "$(date +%s)" -ge "$deadline" ] && { echo "launchd-proof: FAILED — the browser did not come back"; exit 1; }
+        sleep 0.5
+    done
+    again=$(timeout 5 "$BENCH" browser status | plutil -extract pid raw -)
+    [ "$again" != "$browser" ] || { echo "launchd-proof: FAILED — same browser pid survived its daemon"; exit 1; }
+    kill -0 "$browser" 2>/dev/null && { echo "launchd-proof: FAILED — the old browser outlived its daemon"; exit 1; }
+    echo "launchd-proof: after kill -9, launchd restarted benchd as pid $second and benchd restarted the browser as pid $again"
+    timeout 30 launchctl bootout "$DOMAIN/$LABEL"
+    await_bench "$BENCH" 20 down || { echo "launchd-proof: FAILED — benchd still answers after bootout"; exit 1; }
+    timeout 10 launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 && { echo "launchd-proof: FAILED — $LABEL still loaded"; exit 1; }
+    kill -0 "$second" 2>/dev/null && { echo "launchd-proof: FAILED — benchd $second outlived bootout"; exit 1; }
+    echo "launchd-proof: booted out; $LABEL unloaded, benchd $second gone, nothing answers"

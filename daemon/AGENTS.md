@@ -24,9 +24,10 @@ knows nor needs the Rust toolchain, in either direction.
 - `crates/bench-doc` — the bench document: workspaces → columns → slots → panes, typed
   surfaces, placement as data, and the focus rule. Pure — no IO, no sockets. Ported from helm's
   `Workbench`; its Swift tests are mirrored in `crates/bench-doc/tests/` under their own names.
-  `fixtures/bench-document.json`, `bench-verbs.json` and `bench-frame.json` are pinned by the
-  Rust tests byte for byte; helm's Swift decoder will read the same files once M4's client
-  lands (PR 3 of #354) — until then only the Rust gate reads them.
+  `fixtures/bench-document.json`, `bench-verbs.json`, `bench-frame.json` and `bench-report.json`
+  are pinned by the Rust tests byte for byte, and `bench-report.json` also key for key against a
+  live daemon's answers. helm's Swift reads the same four files in `BenchWireConformanceTests`,
+  so a change to any of these shapes has to land on both sides of the socket.
 - `crates/bench-session` — the pty core: agent allowlist, postures/model/effort/resume
   argv (one spelling, unit-tested), the ring, the attach relay, drain-then-die close.
 - `crates/bench-browser` — the shared browser: find, configure and launch one Chromium
@@ -38,15 +39,23 @@ knows nor needs the Rust toolchain, in either direction.
   `dismissed.json` and logs `sessions/*`. Every harness file it reads is internal and
   undocumented, so a shape it does not know is a skipped row and a `sessions/unreadable` event,
   never a guess. Each row also carries `mail`: the benchd mailbox of a session benchd spawned
-  (handle, `wakeable`, `unread`), `null` for everyone else — the list is the mail directory
+  or one whose hook claimed a mailbox through `bench hook` (#358) (handle, `wakeable`,
+  `unread`), `null` for everyone else — the list is the mail directory
   too (#396); benchd counts the inboxes and passes them in. `fixtures/session-rows.json`
-  pins the reply helm's drawer will decode. Tests
+  pins the reply helm's drawer will decode. `transcript` reads one Claude or pi transcript as
+  a log for `bench log` (#421), under the same rule: an unknown record is a named, skipped
+  line. Tests
   build fixture trees under a temp HOME; none reads the operator's `~/.claude`, `~/.pi` or
   `~/.helm`.
 - `crates/benchd` — the daemon. Foreground, one unix socket, a thread per connection.
   `src/layout.rs` is the bench document's whole mutation path: the layout verbs, `bench.json`,
   and booting from it.
-- `crates/bench` — the CLI, the one agent-facing surface, and the attach client.
+- `crates/bench` — the CLI, the one agent-facing surface, and the attach client. `bench log`
+  is the one verb that never opens the socket: it reads a transcript file directly.
+- **benchd runs as a login agent** (`com.wirasm.benchd`, `scripts/benchd-agent.sh`, #407). To
+  restart the live one, `launchctl kickstart -k gui/$(id -u)/com.wirasm.benchd`; starting a
+  second benchd by hand beside it is refused at the socket and leaves launchd retrying. Tests and
+  proofs use a suite or `BENCH_DIR`, never the agent.
 - There is deliberately **no root `Cargo.toml`** in the repo: `cargo` at the repo root
   fails loudly instead of half-working.
 

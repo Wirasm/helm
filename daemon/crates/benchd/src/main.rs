@@ -26,7 +26,9 @@
 //! sits behind one mutex held only for map and log operations — never across a ready
 //! wait, a prompt delivery, or an attach pump.
 
+mod hook;
 mod layout;
+mod rules;
 mod sessions;
 
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
@@ -35,8 +37,8 @@ use bench_wire::{
     Activity, BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event,
     KNOWN_VERBS, MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE,
     READY_WAIT, Request, Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb,
-    browser_endpoint_path, check_socket_path, events_path, resolve_root, socket_path,
-    validate_handle,
+    browser_endpoint_path, browser_wanted_path, check_socket_path, events_path, resolve_root,
+    socket_path, validate_handle,
 };
 use bench_wire::{DOCUMENT_CHANGED, Frame};
 use serde_json::{Value, json};
@@ -264,8 +266,15 @@ struct Core {
     browser_restarts: Vec<Instant>,
     /// The bench document (M4): what `bench.json` holds, and the seq that produced it.
     bench: layout::BenchState,
+    /// Where new panes go: the operator's `rules/placement.toml`, or the built-in table (#356).
+    placement: rules::RulesFile,
     /// The hosted-sessions record and the dismissals (#384).
     session_records: sessions::SessionRecords,
+    /// Every session whose hook has reported (#358): its agent when it has a mailbox, `None`
+    /// when it was asked once and gets none, so the claim rule is not re-run per event.
+    agents: HashMap<bench_wire::SessionKey, Option<hook::Agent>>,
+    /// Hook event names this build does not know, already logged once.
+    unknown_hook_events: HashSet<(&'static str, String)>,
     /// `events --follow` connections, each with its own bounded queue and writer thread.
     /// A frame is handed over here and written there, **never under this mutex**: a 16 KB
     /// frame is larger than a unix socket's send buffer, so one follower that stopped
@@ -306,6 +315,22 @@ impl Core {
             .values()
             .filter(|s| s.is_live())
             .map(|s| s.handle.clone())
+            .collect()
+    }
+
+    /// Every handle a new claim must not take: benchd's own sessions', and every address the
+    /// record holds — a handle outlives its session, and every claim is recorded before it is
+    /// answered, so the record covers every agent in memory too.
+    fn held_handles(&self) -> HashSet<String> {
+        self.sessions
+            .values()
+            .map(|s| s.handle.clone())
+            .chain(
+                self.session_records
+                    .hosted
+                    .iter()
+                    .filter_map(|h| h.handle().map(str::to_string)),
+            )
             .collect()
     }
 
@@ -400,6 +425,7 @@ fn spawn_flusher(log: &File, unflushed: Arc<AtomicBool>) -> Result<(), String> {
     Ok(())
 }
 
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 150 lines, limit 100")]
 fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, StartError> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true).mode(0o700);
@@ -435,6 +461,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         last_document_change,
     } = scan_log(&events)?;
     let (bench, bench_events) = layout::load(&root, last_document_change);
+    let (placement, rules_event) = rules::RulesFile::boot(bench_wire::placement_rules_path(&root));
     let (session_records, session_events) = sessions::load(&root);
 
     let log = OpenOptions::new()
@@ -478,7 +505,10 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         browser_wanted: false,
         browser_restarts: Vec::new(),
         bench,
+        placement,
         session_records,
+        agents: HashMap::new(),
+        unknown_hook_events: HashSet::new(),
         followers: Vec::new(),
         unflushed: Arc::new(AtomicBool::new(false)),
     }));
@@ -509,7 +539,11 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
             )
             .map_err(StartError::Failed)?;
         }
-        for (kind, data) in bench_events.into_iter().chain(session_events) {
+        let boot_events = bench_events
+            .into_iter()
+            .chain(session_events)
+            .chain(rules_event);
+        for (kind, data) in boot_events {
             c.append(kind, data).map_err(StartError::Failed)?;
         }
         let unflushed = Arc::clone(&c.unflushed);
@@ -563,6 +597,27 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         std::thread::spawn(move || wake_reactor(core));
     }
 
+    // A browser that was wanted when the last daemon went away comes back with this one.
+    // On its own thread: the launch waits for the browser to listen, and the socket must
+    // answer meanwhile. A `browser/start` that races it finds this browser.
+    {
+        let mut c = core.lock().unwrap();
+        let marker = browser_wanted_path(&c.root);
+        if marker.exists() {
+            let _ = c.append(
+                "browser/resuming",
+                json!({
+                    "marker": marker.display().to_string(),
+                    "why": "the browser was started and never stopped with `bench browser stop`",
+                }),
+            );
+            let core = Arc::clone(&core);
+            std::thread::spawn(move || {
+                let _ = start_browser(&core, 0, BrowserMode::Headless);
+            });
+        }
+    }
+
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let core = Arc::clone(&core);
@@ -578,6 +633,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
 /// pasted and submitted, and only then is the message retired to the path the notice named.
 /// A held or capped wake logs once and waits; a failed paste drops the wake. The mail stays
 /// unread in the inbox in all three cases.
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 135 lines, limit 100")]
 fn wake_reactor(core: Arc<Mutex<Core>>) {
     // Whose `~/.claude/sessions` holds the registry rows; fixed for the daemon's life.
     let home = core.lock().unwrap().home.clone();
@@ -625,6 +681,16 @@ fn wake_reactor(core: Arc<Mutex<Core>>) {
         }
         for (handle, mail_id, from, session) in candidates {
             if session.idle_for() < WAKE_IDLE_GATE {
+                continue;
+            }
+            // Its hook may have handed the mail out already (#358). Out of the inbox is
+            // delivered, and a second notice for it would be a second delivery.
+            let root = core.lock().unwrap().root.clone();
+            if !bench_mail::is_unread(&root, &handle, &mail_id) {
+                core.lock()
+                    .unwrap()
+                    .pending_wakes
+                    .retain(|p| p.mail_id != mail_id);
                 continue;
             }
             if session.agent == AgentKind::Claude {
@@ -753,6 +819,7 @@ enum AfterResponse {
     Follow(mpsc::Receiver<Arc<str>>),
 }
 
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 115 lines, limit 100")]
 fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
     // Bounded in time as well as bytes (R2): this connection gets DAEMON_IO_TIMEOUT to
     // deliver its line; an attach upgrade lifts the bound after the response.
@@ -821,7 +888,7 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
             for s in sessions {
                 let _ = s.close(Duration::from_secs(1));
             }
-            let _ = stop_browser(&core, Duration::from_secs(2));
+            let _ = stop_browser(&core, Duration::from_secs(2), Unwant::No);
             // The flusher runs every FLUSH_EVERY; the last events must not wait on it.
             let _ = core.lock().unwrap().log.sync_data();
             let root = core.lock().unwrap().root.clone();
@@ -884,6 +951,11 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "legacy (#418): 588 lines, limit 100; cognitive complexity 29, limit 25"
+)]
 fn dispatch(
     core: &Arc<Mutex<Core>>,
     req: &Request,
@@ -910,7 +982,8 @@ fn dispatch(
 
     match Verb::parse(&req.verb) {
         Some(Verb::Status) => {
-            let c = core.lock().unwrap();
+            let mut c = core.lock().unwrap();
+            layout::refresh_rules(&mut c);
             let live = c.sessions.values().filter(|s| s.is_live()).count();
             (
                 ok(json!({
@@ -923,6 +996,7 @@ fn dispatch(
                     "uptime_secs": c.booted.elapsed().as_secs(),
                     "events": c.next_seq,
                     "sessions": { "total": c.sessions.len(), "live": live },
+                    "rules": { "placement": c.placement.status() },
                 })),
                 AfterResponse::Done,
             )
@@ -1133,6 +1207,12 @@ fn dispatch(
         }
 
         Some(Verb::SessionsAll) => match sessions::answer_all(core, &req.args) {
+            Ok(data) => (ok(data), AfterResponse::Done),
+            Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
+            Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
+        },
+
+        Some(Verb::Hook) => match hook::answer(core, &req.args) {
             Ok(data) => (ok(data), AfterResponse::Done),
             Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
             Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
@@ -1467,7 +1547,9 @@ fn dispatch(
                     .as_ref()
                     .is_some_and(|b| b.is_running() && b.mode() == BrowserMode::Setup)
             };
-            if !running_setup && let Err(why) = stop_browser(core, Duration::from_secs(5)) {
+            if !running_setup
+                && let Err(why) = stop_browser(core, Duration::from_secs(5), Unwant::No)
+            {
                 return (errored(why), AfterResponse::Done);
             }
             core.lock().unwrap().browser_restarts.clear();
@@ -1493,7 +1575,7 @@ fn dispatch(
             (ok(data), AfterResponse::Done)
         }
 
-        Some(Verb::BrowserStop) => match stop_browser(core, Duration::from_secs(5)) {
+        Some(Verb::BrowserStop) => match stop_browser(core, Duration::from_secs(5), Unwant::Yes) {
             Ok(pid) => (
                 ok(json!({ "was_running": pid.is_some(), "pid": pid })),
                 AfterResponse::Done,
@@ -1569,6 +1651,11 @@ fn start_browser(
                 browser.stop(Duration::from_secs(2));
                 return Err(LaunchError::Failed(why));
             }
+            // The browser runs either way; an unwritten marker only means the next daemon
+            // will not bring it back, which must not be a surprise nobody can trace.
+            if let Err(e) = fs::write(browser_wanted_path(&c.root), b"") {
+                let _ = c.append("browser/unmarked", json!({ "why": e.to_string() }));
+            }
             Ok((browser, false))
         }
         Err(e) => {
@@ -1587,13 +1674,30 @@ fn start_browser(
     }
 }
 
+/// Whether a stop also removes `<root>/browser/wanted`. Only `browser/stop` does: a daemon
+/// stop and setup making way leave the browser wanted, so the next daemon brings it back.
+#[derive(PartialEq)]
+enum Unwant {
+    Yes,
+    No,
+}
+
 /// Stop the browser if one runs: logged, then the leash is dropped and the exit
 /// awaited. Returns the pid that was stopped.
-fn stop_browser(core: &Arc<Mutex<Core>>, grace: Duration) -> Result<Option<u32>, String> {
+fn stop_browser(
+    core: &Arc<Mutex<Core>>,
+    grace: Duration,
+    unwant: Unwant,
+) -> Result<Option<u32>, String> {
     let _life = BROWSER_LIFECYCLE.lock().unwrap();
     let browser = {
         let mut c = core.lock().unwrap();
         c.browser_wanted = false;
+        // Under the lifecycle lock, like the write in `start_browser`: a launch in flight when
+        // the stop arrived has finished and written the marker by now, so this removal is last.
+        if unwant == Unwant::Yes {
+            let _ = fs::remove_file(browser_wanted_path(&c.root));
+        }
         match c.browser.take().filter(|b| b.is_running()) {
             Some(b) => {
                 if let Err(why) = c.append("browser/stopped", json!({ "pid": b.pid })) {

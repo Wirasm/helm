@@ -22,6 +22,7 @@ pub mod pi;
 pub mod process;
 pub mod scope;
 pub mod snapshot;
+pub mod transcript;
 
 use bench_doc::StandardPath;
 use bench_session::{AgentKind, SpawnSpec};
@@ -184,6 +185,7 @@ impl Rows<'_> {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 296 lines, limit 100")]
 pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     let ws = Workspace::resolve(inputs.workspace);
     let mut out = Rows {
@@ -242,6 +244,17 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     let (panes, problems) = snapshot::read(inputs.helm_bench_dir);
     out.unreadable.extend(problems);
     let recorded: HashSet<SessionKey> = inputs.hosted.iter().map(HostedSession::key).collect();
+    // A pane's agent has a mailbox when its hook claimed one (#358); the record says which.
+    let claimed: HashMap<SessionKey, &str> = inputs
+        .hosted
+        .iter()
+        .filter_map(|h| Some((h.key(), h.handle()?)))
+        .collect();
+    let mail_of = |harness: Harness, id: &str| {
+        claimed
+            .get(&key(harness, id))
+            .map(|handle| (inputs.mailbox)(handle))
+    };
     let mut newly_hosted: Vec<HostedSession> = Vec::new();
     let mut record = |harness: Harness, id: &str, cwd: &str, pane: bench_doc::PaneId| {
         let k = key(harness, id);
@@ -250,7 +263,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 harness,
                 id: id.to_string(),
                 cwd: cwd.to_string(),
-                via: HostedVia::Pane { pane },
+                via: HostedVia::Pane { pane, handle: None },
                 recorded_at: inputs.now.to_string(),
             });
         }
@@ -288,7 +301,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                         activity: r.activity.clone(),
                     },
                     host,
-                    mail: None,
+                    mail: mail_of(Harness::Claude, &r.session),
                     updated_at_ms: r.status_updated_ms.unwrap_or(r.started_ms),
                 },
             );
@@ -313,7 +326,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                             activity: Activity::Unknown,
                         },
                         host,
-                        mail: None,
+                        mail: mail_of(o.harness, id),
                         updated_at_ms: inputs.now_ms,
                     },
                 );
@@ -463,16 +476,10 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 cwd: h.cwd.clone(),
                 state: SessionState::Finished { at_ms },
                 host: Host::None,
-                // The handle recorded at spawn: the mailbox outlives the session, in benchd's
-                // memory and across its restarts. Never looked up by bench session id, which
-                // begins again at s1 when the daemon restarts.
-                mail: match &h.via {
-                    HostedVia::Bench {
-                        handle: Some(handle),
-                        ..
-                    } => Some((inputs.mailbox)(handle)),
-                    _ => None,
-                },
+                // The handle recorded at spawn or claim: the mailbox outlives the session, in
+                // benchd's memory and across its restarts. Never looked up by bench session id,
+                // which begins again at s1 when the daemon restarts.
+                mail: h.handle().map(|handle| (inputs.mailbox)(handle)),
                 updated_at_ms: at_ms,
             },
         );

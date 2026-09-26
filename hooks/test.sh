@@ -560,6 +560,50 @@ grep -q '"retiredAt"' "$root/returning-7777/owner.json" &&
 	bad "claim: the re-claimed mailbox is still marked retired" ||
 	ok "coming back clears the retirement — the mailbox is live again"
 
+# ── long-retired mailboxes move to .retired/ (#417) ──────────────────────────────────────
+#
+# Retiring never deletes (#236), so before #417 every retired mailbox stayed in the root forever —
+# 12,248 on the operator's machine, each read by helm every two seconds. After seven days one is
+# MOVED under `<root>/.retired/`, which every reader already skips. Nothing is deleted: read/ and
+# any late mail travel with it, and a name already on the shelf gets a suffix, never a merge.
+week_ago=$(( $(date +%s) * 1000 - 8 * 86400000 ))
+recent=$(( $(date +%s) * 1000 - 86400000 ))
+shelve() { # <root> <handle> <retiredAt or "">
+	mkdir -p "$1/$2/read"
+	printf '{"handle":"%s","runtime":"claude","pid":%s,"sessionId":"s-%s","cwd":"/tmp","claimedAt":1%s}\n' \
+		"$2" "$gone_pid" "$2" "${3:+,\"retiredAt\":$3}" >"$1/$2/owner.json"
+}
+root=$(fresh)
+shelve "$root" old-1111 "$week_ago"
+printf '{"id":"k","from":"p","to":"old-1111","subject":"s","body":"b","sentAt":1}\n' >"$root/old-1111/read/k.json"
+printf '{"id":"late","from":"p","to":"old-1111","subject":"s","body":"b","sentAt":1}\n' >"$root/old-1111/late.json"
+shelve "$root" twice-2222 "$week_ago"
+mkdir -p "$root/.retired/twice-2222" && printf 'earlier\n' >"$root/.retired/twice-2222/marker"
+shelve "$root" young-3333 "$recent"
+shelve "$root" live-4444 ""
+# HELM_MAIL_OFF is set on purpose: it switches sessions off, not a command a person typed.
+OUT=$(HELM_MAIL_OFF=1 HELM_MAIL_DIR="$root" node "$HOOKS/helm-mail.mjs" archive </dev/null 2>&1)
+[ "$(ls "$root" | tr '\n' ' ')" = "live-4444 young-3333 " ] &&
+	ok "the archive verb moves only mailboxes retired over seven days: $OUT" ||
+	bad "archive: the root holds $(ls "$root" | tr '\n' ' ')"
+[ -f "$root/.retired/old-1111/read/k.json" ] && [ -f "$root/.retired/old-1111/late.json" ] &&
+	ok "a moved mailbox keeps its read/ archive and any mail that arrived after it retired" ||
+	bad "archive: $(find "$root/.retired" -type f | tr '\n' ' ')"
+[ -f "$root/.retired/twice-2222/marker" ] && [ "$(ls -d "$root/.retired/twice-2222-"* 2>/dev/null | wc -l | tr -d ' ')" = 1 ] &&
+	ok "a name already on the shelf is kept, and the newcomer lands beside it under a suffix" ||
+	bad "archive: the shelf's twice-2222 was merged into or replaced: $(ls "$root/.retired" | tr '\n' ' ')"
+[ "$(find "$root" -name owner.json | wc -l | tr -d ' ')" = 4 ] &&
+	ok "and nothing is deleted — four owner files before, four after" ||
+	bad "archive: $(find "$root" -name owner.json | wc -l) owner files remain of four"
+
+# And every claim does it, so a mailroom tidies itself without anyone running the verb.
+root=$(fresh)
+shelve "$root" old-5555 "$week_ago"
+run "$root" claude-session-start '{"session_id":"019fc78b-f108-7c69-b602-1d44f7639531","cwd":"/tmp/tidy"}'
+[ -d "$root/.retired/old-5555" ] && [ ! -e "$root/old-5555" ] &&
+	ok "a claim archives what has been retired for over seven days" ||
+	bad "claim: old-5555 was not archived: $(ls -a "$root" | tr '\n' ' ')"
+
 # ── the contract that must never break ───────────────────────────────────────────────────
 
 root=$(fresh)
@@ -582,6 +626,117 @@ run "$root" claude-user-prompt-submit '{"session_id":"aaaa-bbbb-cccc-1234","cwd"
 	ok "a prompt with no mail adds nothing to the turn, on either channel" ||
 	bad "injected into an empty-mailbox turn: out=[$OUT] err=[$ERR]"
 
+# ── who claims at all (#417) ─────────────────────────────────────────────────────────────
+#
+# The hook is wired globally, so before #417 every Claude session on the machine claimed a
+# mailbox: 12,497 on the operator's, most of them Archon's SDK sessions in temp directories.
+# Now only a HOSTED session does: one a host declared (`HELM_PANE`, `BENCH_SESSION`) AND that is
+# on a terminal, because the declaration is inherited by everything a pane's agent spawns and the
+# terminal is not — a tool call runs detached, with none.
+#
+# Like #285's section below, this cannot use `HELM_MAIL_DIR`: naming a mailroom opts in outright,
+# which is why every other case in this file still claims. `HOME` is redirected instead.
+#
+# Two real sessions to ask about, and their lifetimes are bounded by `sleep` rather than by this
+# script remembering to clean up: one under a real pty (`script`), one detached the way a tool
+# call is. The registry names each, so the hook asks about the process the session really runs in.
+pidfile="$SANDBOX/tty.pid"
+/usr/bin/script -q /dev/null /bin/sh -c "echo \$\$ >'$pidfile'; exec sleep 60" </dev/null >/dev/null 2>&1 &
+for _ in $(seq 50); do [ -s "$pidfile" ] && break; sleep 0.1; done
+TTY_PID=$(cat "$pidfile" 2>/dev/null)
+DETACHED_PID=$(node -e 'const c = require("node:child_process").spawn("/bin/sleep", ["60"], { detached: true, stdio: "ignore" }); console.log(c.pid); c.unref();')
+trap 'kill $TTY_PID $DETACHED_PID 2>/dev/null; rm -rf "$SANDBOX"' EXIT
+[ -n "$TTY_PID" ] && [ "$(ps -o tty= -p "$TTY_PID" | tr -d ' ')" != "??" ] &&
+	ok "the fixture: a session on a real pty ($(ps -o tty= -p "$TTY_PID" | tr -d ' '))" ||
+	bad "fixture: could not start a process under a pty with /usr/bin/script — the cases below measure nothing"
+[ "$(ps -o tty= -p "$DETACHED_PID" | tr -d ' ')" = "??" ] &&
+	ok "the fixture: a session started detached, as a tool call is, has no terminal" ||
+	bad "fixture: the detached process has a terminal — the negative cases below measure nothing"
+
+# registry <pid> <session…> → a CLAUDE_CONFIG_DIR whose rows put each session in that pid.
+registry() {
+	local pid=$1 dir
+	shift
+	dir=$(fresh)
+	mkdir -p "$dir/sessions"
+	for session in "$@"; do
+		printf '{"pid":%s,"sessionId":"%s","cwd":"/tmp","status":"idle"}\n' "$pid" "$session" \
+			>"$dir/sessions/$pid-$(printf '%s' "$session" | tr -dc 'a-z0-9').json"
+	done
+	printf '%s' "$dir"
+}
+ON_TTY=$(registry "$TTY_PID" "tty-session-0001" "019fc78b-f108-7c69-b602-1d44f7639531" "019fc78c-ec03-76f3-8e87-f0fc911898cf")
+DETACHED=$(registry "$DETACHED_PID" "detached-session-0002")
+
+# as <home> <config> <hook> <session> [VAR=value…] → runs the hook with ONLY the named
+# declarations, whatever the shell running this gate exports. It usually exports HELM_PANE: this
+# gate is normally run by an agent in a helm pane, which is the whole point of #417.
+as() {
+	local home=$1 config=$2 hook=$3 session=$4
+	shift 4
+	OUT=$(printf '{"session_id":"%s","cwd":"/tmp/who-claims"}' "$session" |
+		env -u HELM_MAIL_DIR -u HELM_DEFAULTS_SUITE -u HELM_PANE -u BENCH_SESSION -u HELM_MAIL_OFF \
+			HOME="$home" CLAUDE_CONFIG_DIR="$config" "$@" "$HOOKS/$hook" 2>/dev/null)
+}
+
+home=$(fresh)
+as "$home" "$ON_TTY" claude-session-start tty-session-0001 HELM_PANE=620BCA56-782F-4230-AFD5-BFAA30D1BF18
+hosted=$(ls "$home/.helm/mail" 2>/dev/null | head -1)
+[ -n "$hosted" ] && [ -f "$home/.helm/mail/$hosted/owner.json" ] &&
+	ok "the pane's own agent — declared, on the pane's terminal — claims a mailbox" ||
+	bad "claim: a hosted session on a terminal claimed nothing under $home/.helm/mail"
+
+home=$(fresh)
+as "$home" "$ON_TTY" claude-session-start tty-session-0001 BENCH_SESSION=s-0001
+[ -n "$(ls "$home/.helm/mail" 2>/dev/null)" ] &&
+	ok "so does a session benchd spawned onto its own pty" ||
+	bad "claim: a benchd session on a terminal claimed nothing"
+
+home=$(fresh)
+as "$home" "$DETACHED" claude-session-start detached-session-0002 HELM_PANE=620BCA56-782F-4230-AFD5-BFAA30D1BF18
+[ ! -e "$home/.helm" ] &&
+	ok "a session a pane's agent started from a tool call claims nothing — HELM_PANE inherited, no terminal (#417)" ||
+	bad "claim: an inherited HELM_PANE with no terminal claimed: $(ls -R "$home/.helm" | head -3)"
+
+home=$(fresh)
+as "$home" "$ON_TTY" claude-session-start tty-session-0001
+[ ! -e "$home/.helm" ] &&
+	ok "a session on a terminal nothing hosts — Ghostty, Terminal.app — claims nothing" ||
+	bad "claim: an undeclared session claimed: $(ls -R "$home/.helm" | head -3)"
+
+# Before Claude Code has published its registry row the hook has only its parent to ask about,
+# which is the Claude process itself — the hook runs detached, so its OWN terminal says nothing.
+# Staged with no registry at all and the hook run under a real pty, so the claim can only come
+# from that fallback; without it there is no pid to ask about and nothing is claimed. The payload
+# comes in by `<` redirect so `/bin/sh` stays the hook's parent, on the pty, rather than exec'ing.
+home=$(fresh)
+NO_ROWS=$(fresh)
+mkdir -p "$NO_ROWS/sessions"
+printf '{"session_id":"not-registered-0003","cwd":"/tmp/who-claims"}' >"$SANDBOX/payload.json"
+/usr/bin/script -q /dev/null /bin/sh -c "env -u HELM_MAIL_DIR -u HELM_DEFAULTS_SUITE -u BENCH_SESSION -u HELM_MAIL_OFF \
+	HOME='$home' CLAUDE_CONFIG_DIR='$NO_ROWS' HELM_PANE=620BCA56-782F-4230-AFD5-BFAA30D1BF18 \
+	'$HOOKS/helm-mail.mjs' claim <'$SANDBOX/payload.json'" </dev/null >/dev/null 2>&1
+[ -n "$(ls "$home/.helm/mail" 2>/dev/null)" ] &&
+	ok "with no registry row yet, the hook asks about its parent, which holds the pane's terminal" ||
+	bad "claim: a hosted session with no registry row yet claimed nothing — the parent fallback is gone"
+
+# Delivery follows the same rule, so it is not a scan of every mailbox on every prompt of every
+# session on the machine. The negative control: the SAME session, with mail waiting, gets it the
+# moment it is declared again.
+home=$(fresh)
+as "$home" "$ON_TTY" claude-session-start tty-session-0001 HELM_PANE=620BCA56-782F-4230-AFD5-BFAA30D1BF18
+box=$(ls "$home/.helm/mail" 2>/dev/null | head -1)
+seed "$home/.helm/mail/$box" >/dev/null
+as "$home" "$ON_TTY" claude-user-prompt-submit tty-session-0001
+[ -z "$OUT" ] && [ "$(find "$home/.helm/mail/$box" -maxdepth 1 -name '*.json' ! -name owner.json | wc -l | tr -d ' ')" = 1 ] &&
+	ok "an undeclared session is delivered nothing, and its mail stays queued" ||
+	bad "deliver: an undeclared session was handed its mail: $OUT"
+as "$home" "$ON_TTY" claude-user-prompt-submit tty-session-0001 HELM_PANE=620BCA56-782F-4230-AFD5-BFAA30D1BF18
+case "$OUT" in
+*"a subject"*) ok "and the same session, declared, is delivered it" ;;
+*) bad "deliver: a hosted session was not delivered its waiting mail: '$OUT'" ;;
+esac
+
 # ── an isolated instance claims where the operator never looks (#285) ────────────────────
 #
 # THE ONE SECTION THAT CANNOT USE `HELM_MAIL_DIR`, because the whole question is what happens
@@ -597,11 +752,14 @@ home=$(fresh)
 # X=v` applies the unset, then the assignment, so the empty first argument really does mean "no
 # suite" rather than "whatever the shell that ran the gate is in". Without it the control below
 # claims in the developer's own suite and reports the default branch as gone.
+# Claimed as a HOSTED session (#417): declared and on a terminal, which is what an agent in an
+# isolated helm's pane is. Without that the hook now claims nothing, and this section would be
+# measuring the gate above rather than the suite.
 isolated_claim() {
 	local suite=$1 session=$2
 	printf '{"session_id":"%s","cwd":"/tmp/isolated-instance"}' "$session" |
-		env -u HELM_MAIL_DIR -u HELM_DEFAULTS_SUITE HOME="$home" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" \
-			${suite:+HELM_DEFAULTS_SUITE="$suite"} \
+		env -u HELM_MAIL_DIR -u HELM_DEFAULTS_SUITE HOME="$home" CLAUDE_CONFIG_DIR="$ON_TTY" \
+			HELM_PANE=620BCA56-782F-4230-AFD5-BFAA30D1BF18 ${suite:+HELM_DEFAULTS_SUITE="$suite"} \
 			"$HOOKS/claude-session-start" >/dev/null 2>&1
 }
 

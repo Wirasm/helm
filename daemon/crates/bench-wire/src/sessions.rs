@@ -58,9 +58,9 @@ pub struct SessionRow {
     pub state: SessionState,
     pub host: Host,
     pub open: OpenAction,
-    /// Where to mail this session, when it has a benchd mailbox — today only sessions benchd
-    /// spawned. `null` otherwise, and always sent: agents in helm panes use helm's own
-    /// mailroom (`~/.helm/mail`) until #358, so their rows say `null`.
+    /// Where to mail this session, when it has a benchd mailbox: a session benchd spawned, or
+    /// one whose hook claimed a mailbox through `bench hook` (#358). `null` otherwise, and
+    /// always sent.
     pub mail: Option<MailAddress>,
     /// Claude's `statusUpdatedAt` for a live registry session; a file's mtime otherwise.
     pub updated_at_ms: u64,
@@ -214,6 +214,10 @@ pub struct SessionKey {
 pub enum HostedVia {
     Pane {
         pane: PaneId,
+        /// The mailbox its hook claimed (#358). Absent for a session seen only in helm's
+        /// snapshot, and in entries recorded before the hook existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handle: Option<String>,
     },
     Bench {
         session: String,
@@ -241,6 +245,13 @@ impl HostedSession {
         SessionKey {
             harness: self.harness,
             id: self.id.clone(),
+        }
+    }
+
+    /// Its mailbox, wherever it ran. A handle outlives its session.
+    pub fn handle(&self) -> Option<&str> {
+        match &self.via {
+            HostedVia::Pane { handle, .. } | HostedVia::Bench { handle, .. } => handle.as_deref(),
         }
     }
 }

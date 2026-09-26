@@ -21,8 +21,11 @@ mod layout;
 pub use layout::{
     Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider, DocumentAt,
     DocumentChange, DocumentRecord, Frame, LAYOUT_VERBS, LayoutReport, LayoutVerb, MoveTo,
-    document_path,
+    OpenInto, PaneOpen, RULES_LOADED, RULES_REJECTED, document_path, placement_rules_path,
 };
+
+pub mod hook;
+pub use hook::{HookArgs, HookReply};
 
 mod sessions;
 pub use sessions::{
@@ -151,6 +154,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "mail/send",
     "mail/list",
     "mail/read",
+    "hook",
     "browser/start",
     "browser/status",
     "browser/stop",
@@ -174,6 +178,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "focus/slot",
     "focus/step",
     "layout/resize",
+    "drawer/toggle",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +198,8 @@ pub enum Verb {
     MailSend,
     MailList,
     MailRead,
+    /// The sensor (#358): an agent's hook reports an event; the answer carries its mail.
+    Hook,
     BrowserStart,
     BrowserStatus,
     BrowserStop,
@@ -218,6 +225,7 @@ impl Verb {
             "mail/send" => Some(Verb::MailSend),
             "mail/list" => Some(Verb::MailList),
             "mail/read" => Some(Verb::MailRead),
+            "hook" => Some(Verb::Hook),
             "browser/start" => Some(Verb::BrowserStart),
             "browser/status" => Some(Verb::BrowserStatus),
             "browser/stop" => Some(Verb::BrowserStop),
@@ -444,6 +452,13 @@ pub fn browser_config_path(root: &Path) -> PathBuf {
 
 pub fn browser_endpoint_path(root: &Path) -> PathBuf {
     browser_dir(root).join("endpoint.json")
+}
+
+/// Present while the browser is wanted: written when one starts, removed only by
+/// `browser/stop`. A daemon that boots and finds it starts the browser again, so a crash,
+/// a `bench stop` or a reboot does not take the browser away with the daemon (#407).
+pub fn browser_wanted_path(root: &Path) -> PathBuf {
+    browser_dir(root).join("wanted")
 }
 
 pub fn browser_profile_dir(root: &Path) -> PathBuf {
@@ -691,7 +706,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            34,
+            36,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

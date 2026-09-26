@@ -129,6 +129,17 @@ final class TerminalManager: ObservableObject {
         activeWorkspacePath = nil
     }
 
+    /// A session for every terminal pane in `ids` that has none — benchd's document naming
+    /// terminals this helm has not started (#354). The pane id is the session id, as on restore,
+    /// and like a restore each comes back as a fresh login shell. `active` makes `path` the
+    /// workspace on screen, which is the document's to say rather than a side effect.
+    func adopt(terminals ids: [UUID], in path: WorkspacePath, active: Bool) {
+        if active { activeWorkspacePath = path }
+        let missing = ids.filter { surfaces.existing($0, as: TerminalSession.self) == nil }
+        guard !missing.isEmpty else { return }
+        restore(missing, in: path)
+    }
+
     /// Closing a workspace is an explicit teardown, unlike switching: every pane object it
     /// owned goes — its sessions, so their retained NSViews release their ptys, and its
     /// canvases and browser views, each through its own kind's `close`.

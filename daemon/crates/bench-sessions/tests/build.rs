@@ -193,6 +193,7 @@ impl Fixture {
             cwd: cwd.into(),
             via: HostedVia::Pane {
                 pane: PaneId::parse(PANE).unwrap(),
+                handle: None,
             },
             recorded_at: "2026-09-25T10:00:00Z".into(),
         });
@@ -746,7 +747,7 @@ fn address(handle: &str, wakeable: bool, unread: usize) -> Option<MailAddress> {
 }
 
 #[test]
-fn a_bench_session_carries_its_mail_address_and_a_pane_agent_carries_none() {
+fn a_bench_session_carries_its_mail_address_and_a_pane_agent_carries_the_one_its_hook_claimed() {
     let mut f = Fixture::new();
     let ws = Fixture::s(f.ws());
     f.bench
@@ -763,9 +764,33 @@ fn a_bench_session_carries_its_mail_address_and_a_pane_agent_carries_none() {
     assert_eq!(
         row(&built, "in-pane").unwrap().mail,
         None,
-        "a pane agent has helm's mailbox, not benchd's, until #358"
+        "a pane agent whose hook claimed nothing has no benchd mailbox"
     );
     assert_eq!(built.list.operator, address("operator", false, 3).unwrap());
+
+    // Its hook claims one (#358): the record now carries the handle, and so does the row,
+    // live and after it finished.
+    f.hosted.push(HostedSession {
+        harness: Harness::Claude,
+        id: "in-pane".into(),
+        cwd: ws.clone(),
+        via: HostedVia::Pane {
+            pane: PaneId::parse(PANE).unwrap(),
+            handle: Some("ws-pane".into()),
+        },
+        recorded_at: "2026-09-26T10:00:00Z".into(),
+    });
+    f.unread.insert("ws-pane".into(), 1);
+    assert_eq!(
+        row(&f.build(), "in-pane").unwrap().mail,
+        address("ws-pane", false, 1)
+    );
+    f.live.remove(&100);
+    f.transcript(&ws, "in-pane");
+    let finished = f.build();
+    let r = row(&finished, "in-pane").unwrap();
+    assert!(!r.state.is_running());
+    assert_eq!(r.mail, address("ws-pane", false, 1));
 }
 
 #[test]

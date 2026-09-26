@@ -29,6 +29,7 @@
 // never write stdout except as deliberate delivery. A hook that cannot do its job must never
 // stop the operator's prompt from running.
 
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -40,6 +41,22 @@ const OWNER_FILE = "owner.json";
 const OFF_ENV = "HELM_MAIL_OFF";
 const ROOT_ENV = "HELM_MAIL_DIR";
 const HANDLE_ENV = "HELM_MAIL_HANDLE";
+
+/** What helm declares into a pane's shell — `PaneEnvironment.paneVariable`. See `claimsAMailbox`. */
+const PANE_ENV = "HELM_PANE";
+
+/** What benchd declares into a session it spawns (`daemon/crates/benchd`). See `claimsAMailbox`. */
+const BENCH_SESSION_ENV = "BENCH_SESSION";
+
+/**
+ * Where a long-retired mailbox goes — inside the root, hidden, so every reader already skips it:
+ * `allHandles` here and in pi drop dot-names, helm lists with `skipsHiddenFiles`, and the skills'
+ * `find -maxdepth 2 -name owner.json` stops a level above `.retired/<handle>/owner.json`. #417.
+ */
+const RETIRED_DIR = ".retired";
+
+/** How long a retired mailbox stays in the root, where a sender is told it is retired. #417. */
+const ARCHIVE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * helm's own isolation switch, honoured here so an isolated instance's agents claim somewhere
@@ -155,6 +172,59 @@ function pidAlive(pid) {
 	} catch (error) {
 		return error?.code === "EPERM";
 	}
+}
+
+/**
+ * The controlling terminal of `pid` as `ps` names it (`ttys002`), or `""` for none. `ps` prints
+ * `??` for a process with no controlling terminal, and anything that fails — no such pid, no
+ * `ps` — is no terminal too, because a mailbox claimed on a guess is the leak #417 closes.
+ */
+function controllingTerminal(pid) {
+	try {
+		const tty = execFileSync("/bin/ps", ["-o", "tty=", "-p", String(pid)], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 2000,
+		}).trim();
+		return tty === "??" ? "" : tty;
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * WHO GETS A MAILBOX AT ALL — #417. The session a helm pane (or a benchd session) is hosting,
+ * and nobody else.
+ *
+ * The Claude Code hook is wired globally, so before this every Claude session on the machine
+ * claimed one: 12,497 mailboxes on the operator's machine, 9,704 of them from sessions in temp
+ * directories — Archon's test suites, whose SDK sessions each fired `SessionStart`. Nothing
+ * addresses those, nothing removes them, and helm read every one of them every two seconds.
+ *
+ * **`HELM_PANE` alone is not the answer, and that was measured rather than assumed.** helm
+ * declares it into a pane's shell, and everything that pane's agent spawns inherits it: an
+ * agent's Bash tool, `bun test`, Archon, and the SDK sessions Archon starts. What does not
+ * survive that chain is the TERMINAL. Claude Code runs its Bash tool and its hooks in a fresh
+ * session with no controlling terminal (`ps` says `??`), and pi's bash tool spawns `detached`,
+ * which is the same thing — so anything started from a tool call has none, while the pane's own
+ * agent holds the pane's pty (measured 2026-09-26: the agent on `ttys002`, its Bash tool's shell
+ * and a `SessionStart` hook both on `??`). So the rule is: **declared by a host, and
+ * attached to a terminal.** `BENCH_SESSION` is the host declaration benchd makes, into a pty of
+ * its own, so the same test holds there.
+ *
+ * `HELM_MAIL_DIR` opts in outright: naming a mailroom is a deliberate act, and it is what every
+ * test that claims does. The residual, stated: something started by hand from a pane's own
+ * shell keeps that pane's terminal and so still claims. That is a person typing a command in
+ * helm, which is the case the mailbox is for.
+ *
+ * Pure, with the terminal lookup passed in as a thunk, so a session no host declared never
+ * spawns `ps` at all — and so `hooks/mailbox-conformance.mjs` can run both copies over one
+ * matrix.
+ */
+function claimsAMailbox(env, terminal) {
+	if ((env[ROOT_ENV] ?? "").trim()) return true;
+	const declared = [PANE_ENV, BENCH_SESSION_ENV].some((name) => (env[name] ?? "").trim() !== "");
+	return declared && terminal() !== "";
 }
 
 function readJson(file) {
@@ -470,6 +540,43 @@ function reap(root, mine) {
 	}
 }
 
+/**
+ * Move every mailbox retired for longer than `ARCHIVE_AFTER_MS` into `<root>/.retired/`. #417.
+ *
+ * Retiring stopped deleting (#236), which was right, and left every retired mailbox in the root
+ * forever — 12,248 of them on the operator's machine, and helm read each one every two seconds.
+ * This MOVES, and never deletes: `read/` and any mail that arrived after retirement travel with the
+ * directory, and a name already on the shelf gets a suffix rather than being merged into or
+ * replaced. A session that comes back after that finds no mailbox by its session id and claims a
+ * fresh one; its old archive is still on disk.
+ *
+ * Seven days is how long a sender holding the handle is told "retired" rather than "no such
+ * mailbox", and how long a resumed session walks back into its own `read/`.
+ *
+ * Both writers run it after their reap, so a machine where only one runtime starts sessions still
+ * tidies itself; `hooks/mailbox-conformance.mjs` runs both copies on one root. It is kept out of
+ * `reap` so the two reapers are still compared like for like. Returns how many it moved.
+ */
+function archiveRetired(root, now = Date.now()) {
+	let moved = 0;
+	for (const handle of allHandles(root)) {
+		const dir = path.join(root, handle);
+		const owner = readJson(path.join(dir, OWNER_FILE));
+		if (typeof owner?.retiredAt !== "number" || now - owner.retiredAt < ARCHIVE_AFTER_MS) continue;
+		const shelf = path.join(root, RETIRED_DIR);
+		let target = path.join(shelf, handle);
+		if (fs.existsSync(target)) target = `${target}-${randomBytes(4).toString("hex")}`;
+		try {
+			fs.mkdirSync(shelf, { recursive: true });
+			fs.renameSync(dir, target);
+			moved += 1;
+		} catch {
+			// Another claim archived it first, or it vanished. Either way it is not in the root.
+		}
+	}
+	return moved;
+}
+
 // ── this session ─────────────────────────────────────────────────────────────────────────
 
 /**
@@ -627,6 +734,7 @@ function claim(root, sessionId, cwd) {
 	// mark from last time goes with the old object rather than being merged forward.
 	writeAtomic(path.join(dir, OWNER_FILE), ownerRecord(handle, sessionId, cwd));
 	reap(root, handle);
+	archiveRetired(root);
 	return { handle, dir };
 }
 
@@ -646,11 +754,31 @@ async function payload() {
 const verb = process.argv[2];
 const input = await payload();
 
+// Not a hook: run by hand, or by whoever tidies a mailroom, with nothing on stdin —
+// `node hooks/helm-mail.mjs archive </dev/null`. Needs no session, so it comes first, and it is
+// above `HELM_MAIL_OFF` on purpose: that switch stops a session claiming and receiving, and a
+// person who typed this command asked for the archive — a silent exit 0 would tell them it ran.
+if (verb === "archive") {
+	const root = mailRoot();
+	const moved = archiveRetired(root);
+	process.stdout.write(`${NAME}: moved ${moved} mailbox(es) retired over ${ARCHIVE_AFTER_MS / 86_400_000} days to ${path.join(root, RETIRED_DIR)}\n`);
+	process.exit(0);
+}
+
 if (process.env[OFF_ENV]) process.exit(0);
 
 const sessionId = input.session_id || process.env.CLAUDE_CODE_SESSION_ID || "";
 const cwd = input.cwd || process.cwd();
 if (!sessionId) process.exit(0);
+
+// Both verbs, not only `claim`: a session with no mailbox has nothing to deliver, and `deliver`
+// would otherwise scan every mailbox on every prompt of every Claude session on the machine to
+// find that out. The terminal asked about is the SESSION's — the registry's pid for it, else this
+// hook's parent, which is the Claude process itself (measured: the hook runs detached, so its
+// own terminal says nothing).
+if (!claimsAMailbox(process.env, () => controllingTerminal(sessionPid(sessionId) ?? process.ppid))) {
+	process.exit(0);
+}
 
 const root = mailRoot();
 

@@ -11,8 +11,8 @@ disable-model-invocation: true
 `~/.helm/mail/<handle>/`, and writing a JSON file into someone's directory is the whole of sending.
 No daemon, no helm required — `ls` and `cat` are a complete reader.
 
-You are in **pi**. The `helm-mail` extension already claimed your mailbox, watches it, and wakes you
-when mail arrives. **You only need this skill to SEND.** The Claude Code side is `helm-mail-cc`, and
+You are in **pi**. In a helm pane or a benchd session, the `helm-mail` extension already claimed your
+mailbox, watches it, and wakes you when mail arrives; a session nothing hosts claims none (#417). **You only need this skill to SEND.** The Claude Code side is `helm-mail-cc`, and
 it has to do more work — mention that if you are asked about the difference.
 
 **Every snippet below opens with these three lines, and they are not boilerplate.**
@@ -99,7 +99,9 @@ mailbox has been retired. `cwd` is what tells two agents apart — it carries th
 **Listed is not the same as live, and `retiredAt` is asked before the pid.** When any agent starts
 a session it reaps the mailboxes whose owners are gone, and reaping **rewrites `owner.json` with a
 `retiredAt` rather than deleting the directory** (#236). The directory and its `read/` stay on
-purpose: a retired mailbox is still worth reading, it is only not worth writing to. **A row
+purpose: a retired mailbox is still worth reading, it is only not worth writing to. Seven days
+after retiring, the next claim **moves** it — never deletes it — to `.retired/` inside the
+mailroom, where no listing looks (#417). **A row
 carrying `retiredAt` is not a recipient** — the file you write lands, and nobody ever opens it.
 
 **The pid cannot tell you that, which is why it is asked second.** A retired owner's pid may still

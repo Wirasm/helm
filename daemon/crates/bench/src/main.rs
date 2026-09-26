@@ -12,20 +12,29 @@
 //!
 //! These are helm's spool codes, kept on purpose.
 
+use bench_doc::{DrawerName, Surface};
 use bench_wire::{
-    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, MailListArgs, MailReadArgs,
-    MailSendArgs, OPERATOR_HANDLE, Request, RequestId, Response, SessionArgs, SessionKey,
-    SessionsArgs, SpawnArgs, Status, SuiteName, resolve_root, socket_path,
+    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, HookArgs, HookReply,
+    LayoutVerb, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, Request, RequestId,
+    Response, SessionArgs, SessionKey, SessionsArgs, SpawnArgs, Status, SuiteName, resolve_root,
+    socket_path,
 };
 use serde_json::{Value, json};
 use std::io::{IsTerminal, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn main() {
-    process::exit(run());
+    // `hook` is wired into an agent's own hooks and has its own contract (exit 0, always),
+    // so it never reaches the verb parser, whose refusals exit 3.
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let code = match raw.first().map(String::as_str) {
+        Some("hook") => hook(raw.get(1).map(String::as_str)),
+        _ => run(),
+    };
+    process::exit(code);
 }
 
 fn usage() -> &'static str {
@@ -43,6 +52,9 @@ fn usage() -> &'static str {
      \x20                                         cwd's): helm panes, bench sessions, --bg jobs,\n\
      \x20                                         running subagents, and finished hosted sessions\n\
      \x20     sessions dismiss <id> --harness <h> hide a finished row until it finishes again\n\
+     \x20     log <session id | transcript path>  a Claude or pi session's prompts, replies, tool\n\
+     \x20         [-n N] [--since 30m|2h|1d|<time>] calls and errors, read from its transcript with no\n\
+     \x20         [--json]                        daemon; the last 40 unless -n says otherwise\n\
      \x20     attach <session>                    raw relay to a session's pty (Ctrl-\\ detaches)\n\
      \x20     close <session>                     drain-then-die the session\n\
      \x20     resume <session>                    re-enter an exited session's runtime state\n\
@@ -50,12 +62,19 @@ fn usage() -> &'static str {
      \x20               [--body-file <p>] [--subject <s>] [--from <h>]\n\
      \x20     mail list [--handle <h>]            metadata only, unread first\n\
      \x20     mail read <id> [--handle <h>]       body + retirement (inbox -> read)\n\
+     \x20     hook <claude|codex|pi>              the sensor, wired into an agent's own hooks: reads\n\
+     \x20                                         the hook payload on stdin, reports it, prints the\n\
+     \x20                                         agent's mail as hook context; always exits 0\n\
      \x20     browser start                       start the shared browser, or find it running;\n\
      \x20                                         `cdp` in its answer is for playwright-cli attach\n\
      \x20     browser status                      the endpoint, or running: false\n\
      \x20     browser stop                        stop the shared browser\n\
      \x20     browser setup                       the same profile in a real window, to install\n\
      \x20                                         extensions and sign in; quit it to go headless\n\
+     \x20     drawer toggle <name>                show a drawer over the bench, or hide it: the\n\
+     \x20           [--surface <s>]               operator's focus, so refused from an agent. <s>\n\
+     \x20                                         is what a new drawer starts with: browser,\n\
+     \x20                                         terminal or file:<path>\n\
      env:   BENCH_SUITE (flag wins) · BENCH_DIR (root override, wins over suite)\n\
      exit:  0 ok · 2 no daemon · 3 refused · 4 daemon failed"
 }
@@ -66,15 +85,22 @@ struct Cli {
     root: PathBuf,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "legacy (#418): 250 lines, limit 100; cognitive complexity 27, limit 25"
+)]
 fn run() -> i32 {
     let mut argv = std::env::args().skip(1).peekable();
     let mut suite_flag: Option<String> = None;
     let mut verb: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut flags: Vec<(String, String)> = Vec::new();
-    let mut since: u64 = 0;
+    let mut since: Option<String> = None;
+    let mut count: Option<String> = None;
     let mut follow = false;
     let mut all = false;
+    let mut json_out = false;
 
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -82,15 +108,21 @@ fn run() -> i32 {
                 Some(v) => suite_flag = Some(v),
                 None => return refuse("--suite needs a name"),
             },
-            "--since" => match argv.next().and_then(|v| v.parse::<u64>().ok()) {
-                Some(n) => since = n,
-                None => return refuse("--since needs a sequence number"),
+            // `events` reads a sequence number here, `log` a duration or a time.
+            "--since" => match argv.next() {
+                Some(v) => since = Some(v),
+                None => return refuse("--since needs a value"),
             },
+            "-n" => match argv.next() {
+                Some(v) => count = Some(v),
+                None => return refuse("-n needs a count"),
+            },
+            "--json" => json_out = true,
             "--follow" => follow = true,
             "--all" => all = true,
             "--agent" | "--cwd" | "--prompt-file" | "--model" | "--effort" | "--rows"
             | "--cols" | "--name" | "--to" | "--from" | "--subject" | "--body" | "--body-file"
-            | "--handle" | "--workspace" | "--harness" => {
+            | "--handle" | "--workspace" | "--harness" | "--surface" => {
                 let key = arg.trim_start_matches("--").replace('-', "_");
                 match argv.next() {
                     Some(v) => flags.push((key, v)),
@@ -127,6 +159,22 @@ fn run() -> i32 {
     if all && verb != "sessions" {
         return refuse("--all is for `sessions`");
     }
+    if (json_out || count.is_some()) && verb != "log" {
+        return refuse("-n and --json are for `log`");
+    }
+    if verb == "log" {
+        return log(
+            positional.first(),
+            since.as_deref(),
+            count.as_deref(),
+            json_out,
+        );
+    }
+    let since: u64 = match since.as_deref().map(str::parse::<u64>) {
+        None => 0,
+        Some(Ok(n)) => n,
+        Some(Err(_)) => return refuse("--since needs a sequence number"),
+    };
     if verb == "sessions" && all && !positional.is_empty() {
         return refuse(
             "--all lists sessions; `bench sessions dismiss <id> --harness <h>` takes no --all",
@@ -138,6 +186,12 @@ fn run() -> i32 {
         positional.remove(0);
         verb = "sessions/dismiss".into();
     }
+    if verb == "drawer" {
+        if positional.is_empty() {
+            return refuse("drawer needs a subcommand: toggle");
+        }
+        verb = format!("drawer/{}", positional.remove(0));
+    }
     if verb == "browser" {
         if positional.is_empty() {
             return refuse("browser needs a subcommand: start, status, stop, setup");
@@ -147,20 +201,10 @@ fn run() -> i32 {
 
     // Suite validated before any socket is touched — a name that cannot isolate must
     // never resolve to the shared root by accident (#86). One spelling, two edges.
-    let suite_raw = suite_flag.or_else(|| std::env::var("BENCH_SUITE").ok());
-    let suite = match suite_raw.as_deref() {
-        Some(raw) => match SuiteName::validate(raw) {
-            Ok(s) => Some(s),
-            Err(why) => return refuse(&why),
-        },
-        None => None,
+    let root = match record_root(suite_flag) {
+        Ok(root) => root,
+        Err(why) => return refuse(&why),
     };
-    let home = match std::env::var("HOME") {
-        Ok(h) => PathBuf::from(h),
-        Err(_) => return refuse("HOME is not set; bench cannot resolve a record root"),
-    };
-    let bench_dir = std::env::var("BENCH_DIR").ok();
-    let root = resolve_root(bench_dir.as_deref(), suite.as_ref(), &home);
 
     let flag = |name: &str| -> Option<String> {
         flags
@@ -283,6 +327,24 @@ fn run() -> i32 {
                 id: id.clone(),
             })
         }
+        "drawer/toggle" => {
+            let Some(name) = positional.first() else {
+                return refuse("drawer toggle needs a drawer name");
+            };
+            let drawer = match DrawerName::new(name) {
+                Ok(d) => d,
+                Err(why) => return refuse(&why),
+            };
+            let surface = match flag("surface").as_deref().map(parse_surface).transpose() {
+                Ok(s) => s,
+                Err(why) => return refuse(&why),
+            };
+            // The wire type's own encoding, so the CLI cannot spell an argument benchd does
+            // not read.
+            serde_json::to_value(LayoutVerb::DrawerToggle { drawer, surface })
+                .map(|v| v["args"].clone())
+                .unwrap_or(Value::Null)
+        }
         "mail/list" => json!(MailListArgs {
             handle: flag("handle").unwrap_or_else(own_handle),
         }),
@@ -310,6 +372,242 @@ fn run() -> i32 {
     } else {
         simple(cli)
     }
+}
+
+/// `bench log`: reads the transcript file directly — no socket, so it works with the daemon
+/// down. The readers and their fail-loudly contract live in `bench_sessions::transcript`.
+fn log(arg: Option<&String>, since: Option<&str>, count: Option<&str>, json_out: bool) -> i32 {
+    use bench_sessions::transcript;
+    let Some(arg) = arg else {
+        return refuse(
+            "log needs a session id or transcript path — `bench sessions --all` lists them",
+        );
+    };
+    let n = match count.map(str::parse::<usize>) {
+        None => 40,
+        Some(Ok(n)) => n,
+        Some(Err(_)) => return refuse("-n needs a count"),
+    };
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let since_ms = match since.map(|s| transcript::parse_since(s, now_ms)) {
+        None => None,
+        Some(Ok(ms)) => Some(ms),
+        Some(Err(why)) => return refuse(&why),
+    };
+    let home = match std::env::var("HOME") {
+        Ok(h) => PathBuf::from(h),
+        Err(_) => return refuse("HOME is not set; bench log cannot find transcripts"),
+    };
+    // A relative path means the caller's cwd.
+    let arg = if arg.contains('/') {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(arg)
+            .display()
+            .to_string()
+    } else {
+        arg.clone()
+    };
+    let located = match transcript::locate(&home, &arg) {
+        Ok(l) => l,
+        Err(why) => return refuse(&why),
+    };
+    let read = match transcript::read(&located) {
+        Ok(t) => t,
+        Err(why) => return fail(&why),
+    };
+    let (entries, total) = transcript::tail(read.entries, since_ms, n);
+    let path = located.path.display().to_string();
+    for p in &read.unreadable {
+        eprintln!("bench: {path}:{}: skipped, {}", p.line, p.why);
+    }
+    if json_out {
+        let out = json!({
+            "harness": located.harness,
+            "id": located.id,
+            "path": path,
+            "total": total,
+            "returned": entries.len(),
+            "entries": entries,
+            "unreadable": read.unreadable,
+        });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        return 0;
+    }
+    println!("{} {}  {path}", located.harness.name(), located.id);
+    if total > entries.len() {
+        println!(
+            "… {} earlier entries (-n to see more)",
+            total - entries.len()
+        );
+    }
+    for e in &entries {
+        let head = format!(
+            "{}  {:<5}  ",
+            transcript::display_time(e.at_ms),
+            kind_name(e.kind)
+        );
+        let text = match &e.tool {
+            Some(tool) => format!("{tool}  {}", e.text),
+            None => e.text.clone(),
+        };
+        // A pasted report or a task notification can run to a hundred lines; the tail stays
+        // readable by cutting each entry, and --json carries the whole text.
+        const MAX_LINES: usize = 12;
+        let lines: Vec<&str> = text.lines().collect();
+        println!("{head}{}", lines.first().copied().unwrap_or(""));
+        let pad = " ".repeat(head.chars().count());
+        for line in lines.iter().skip(1).take(MAX_LINES - 1) {
+            println!("{pad}{line}");
+        }
+        if lines.len() > MAX_LINES {
+            println!(
+                "{pad}… {} more lines (--json has them)",
+                lines.len() - MAX_LINES
+            );
+        }
+    }
+    0
+}
+
+fn kind_name(kind: bench_sessions::transcript::Kind) -> &'static str {
+    use bench_sessions::transcript::Kind;
+    match kind {
+        Kind::User => "user",
+        Kind::Agent => "agent",
+        Kind::Tool => "tool",
+        Kind::Error => "error",
+    }
+}
+
+/// `--surface`: `browser`, `terminal`, or `file:<path>`, a relative path meaning the caller's
+/// cwd — which only the caller knows.
+fn parse_surface(raw: &str) -> Result<Surface, String> {
+    match raw {
+        "browser" => Ok(Surface::Browser),
+        "terminal" => Ok(Surface::terminal()),
+        _ => match raw.strip_prefix("file:") {
+            Some(path) => {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                Surface::file(&cwd.join(path).display().to_string())
+            }
+            None => Err(format!(
+                "--surface is browser, terminal or file:<path>, not {raw:?}"
+            )),
+        },
+    }
+}
+
+/// How long a hook waits on the daemon before giving up silently. A hook runs on every tool
+/// call, so a wedged daemon must cost the agent this at most, never `CLIENT_READ_TIMEOUT`.
+const HOOK_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// A hook payload larger than this is not read further; the fields it needs come first.
+const HOOK_STDIN_MAX: u64 = 8 * 1024 * 1024;
+
+/// `bench hook <harness>` (#358): one command per harness, wired once. It reads the harness's
+/// hook payload, sends benchd the typed fields plus what only this process can see — its
+/// parent (the agent) and the host declarations in its environment — and prints what the
+/// harness should put in front of the model. Its contract is the hooks': **exit 0 and print
+/// nothing on any failure**, so a missing daemon never stops an agent's tool call.
+///
+/// Output: for claude and codex, `hookSpecificOutput.additionalContext` when there is
+/// context (the shape both take on SessionStart, UserPromptSubmit, PreToolUse and
+/// PostToolUse; plain stdout is dropped on tool events, measured on Claude 2.1.283). For pi,
+/// the reply itself, which its extension reads.
+fn hook(harness: Option<&str>) -> i32 {
+    let Some(harness) = harness.and_then(Harness::parse) else {
+        eprintln!("bench hook: name the harness: claude, codex or pi");
+        return 0;
+    };
+    let mut input = String::new();
+    if std::io::stdin()
+        .take(HOOK_STDIN_MAX)
+        .read_to_string(&mut input)
+        .is_err()
+    {
+        return 0;
+    }
+    let Ok(payload) = serde_json::from_str::<Value>(&input) else {
+        return 0;
+    };
+    let field = |name: &str| payload[name].as_str().map(str::to_string);
+    let (Some(event), Some(session), Some(cwd)) =
+        (field("hook_event_name"), field("session_id"), field("cwd"))
+    else {
+        return 0;
+    };
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    let args = HookArgs {
+        harness,
+        event: event.clone(),
+        session,
+        cwd,
+        pid: std::os::unix::process::parent_id(),
+        tool: field("tool_name"),
+        pane: env("HELM_PANE"),
+        bench_session: env("BENCH_SESSION"),
+    };
+    let Some(reply) = hook_request(&args) else {
+        return 0;
+    };
+    match harness {
+        Harness::Pi => println!("{}", json!(reply)),
+        Harness::Claude | Harness::Codex => {
+            if let Some(context) = reply.context {
+                println!(
+                    "{}",
+                    json!({ "hookSpecificOutput": {
+                        "hookEventName": event,
+                        "additionalContext": context,
+                    }})
+                );
+            }
+        }
+    }
+    0
+}
+
+/// One request line, one reply line, `None` on anything short of an ok reply. The root is
+/// resolved exactly as every other verb resolves it; a suite that cannot isolate reaches no
+/// daemon at all.
+fn hook_request(args: &HookArgs) -> Option<HookReply> {
+    let root = record_root(None).ok()?;
+    let stream = UnixStream::connect(socket_path(&root)).ok()?;
+    let _ = stream.set_write_timeout(Some(HOOK_TIMEOUT));
+    let _ = stream.set_read_timeout(Some(HOOK_TIMEOUT));
+    let request = Request {
+        id: request_id(),
+        verb: "hook".into(),
+        args: json!(args),
+        by: None,
+        asked: false,
+    };
+    let line = serde_json::to_string(&request).ok()? + "\n";
+    (&stream).write_all(line.as_bytes()).ok()?;
+    let response: Response = serde_json::from_str(&read_response_line(&stream)?).ok()?;
+    if response.status != Status::Ok {
+        return None;
+    }
+    serde_json::from_value(response.data?).ok()
+}
+
+/// The record root every verb talks to: the `--suite` flag or `BENCH_SUITE`, validated
+/// before any socket is touched — a name that cannot isolate must never resolve to the
+/// shared root by accident (#86) — then `BENCH_DIR` and `HOME` by `resolve_root`'s rule.
+fn record_root(suite_flag: Option<String>) -> Result<PathBuf, String> {
+    let suite = suite_flag
+        .or_else(|| std::env::var("BENCH_SUITE").ok())
+        .map(|raw| SuiteName::validate(&raw))
+        .transpose()?;
+    let home = std::env::var("HOME")
+        .map(PathBuf::from)
+        .map_err(|_| "HOME is not set; bench cannot resolve a record root".to_string())?;
+    let bench_dir = std::env::var("BENCH_DIR").ok();
+    Ok(resolve_root(bench_dir.as_deref(), suite.as_ref(), &home))
 }
 
 /// The ordinary one-line-in, one-line-out path.

@@ -16,8 +16,35 @@ Direction: `docs/direction.md` (an entry point, not a spec).
 Gate, all green before a PR to `development`:
 
 ```
-bash scripts/patch-libghostty.sh && swift build && swift test && make lint && xcodegen generate
+just check              # or, with no `just` installed: bash scripts/check.sh
 ```
+
+`scripts/check.sh` is the one definition of the gate, and CI calls the same script. It runs
+its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <command>)`, or
+`SKIP (<why>)`. `just check swift` (or any other part names) runs only those.
+
+| Part | Runs | Needs |
+| --- | --- | --- |
+| `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
+| `swift` | `bash scripts/patch-libghostty.sh && swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
+| `hooks` | `hooks/test.sh` | node |
+| `skills` | the mail, canvas, board and post-canvas skill gates | node, zsh, python3, git |
+| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml` or a `bench-*` skill changed | cargo |
+| `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
+
+"Changed" means against `origin/development`, committed or not. A missing tool is a `FAIL`
+naming it, never a silent skip. The path rules live only in `scripts/check.sh`
+(`scripts/check.sh --needs <part> [base]` asks one), and CI's daemon job asks the same function.
+
+**Size limits (#418).** `lint` fails any new Swift function over cyclomatic complexity 15 or
+60 body lines, a closure over 50, a type over 350 or a file over 600 code lines
+(`.swiftlint.yml`, SwiftLint pinned in `tools/lint/`). `daemon` fails any new Rust function over
+clippy's cognitive complexity 25 or 100 lines. Each finding names the file, the line, the
+declaration and the number. **Split the code; never add a marker to new code.** Code that was
+already over a limit carries a marker recording its value then
+(`// swiftlint:disable:next … - legacy (#418): 24, limit 15`, or `#[expect(clippy::…, reason =
+"legacy (#418): …")]`); once that code is back under the limit the marker fails the gate until
+you delete it, so the markers only shrink.
 
 The patch script is first and not optional — the patched libghostty is gitignored, so a
 fresh worktree has nothing to link against. Never borrow another checkout's `vendor/`;
@@ -135,41 +162,40 @@ reinstating #96's contract (seven tests then also fail on the first-responder as
 not a verdict on the diff — and the evidence to bring is the CoreVideo/ghostty pair, the
 control run, or both.
 
-**This gate needs only the Swift toolchain and xcodegen. Keep it that way.** It is the one
-command a fresh worktree runs, and every dependency added to it is a dependency every
-contributor now needs.
+**The `lint` and `swift` parts need only the Swift toolchain and xcodegen. Keep it that way.**
+They are what a fresh worktree has to pass, and every dependency added to them is a dependency
+every contributor now needs. The other parts need node or cargo, which is why they are separate
+parts and separate CI jobs.
 
-**CI is not this gate, in both directions, and neither difference is stated anywhere but in
-`.github/workflows/gate.yml`'s own comments.** It runs **three** jobs — `build · test · format`,
-`mailbox hooks · conformance`, and `skill gates` — kept apart because the last two need node and
-the Swift gate must not.
+**CI runs the same parts, with two differences.** Its jobs are `build · test · format` (`lint`
+then `swift`), `mailbox hooks · conformance` (`hooks`), `skill gates` (`skills`) and
+`fmt · clippy · build · test` (`daemon`). The first and last report success without running when
+nothing they cover changed, using the `swift` and `daemon` `--needs` rules (the Swift job skips
+its `lint` step on the `swift` answer too). `hooks` and `skills` run on every PR, whatever it touched, and so does `just check`:
+*"a gate that exists, is documented in `AGENTS.md`, and runs only when somebody remembers is the
+drift this workflow exists to stop."* There is no `pi` job: it needs an `npm install` in `pi/`,
+so only `just check` runs it.
 
 - **Narrower on the Swift job**, by exactly the two suites this section spends forty lines
-  teaching you to diagnose: `INJECTION_NOGENERICS=1 swift test --skip TerminalKeyboardTests
-  --skip WorkbenchFocusRoutingTests`. A runner has no active display and those two need a real
-  ghostty surface (#253) — excluded rather than tolerated, since a gate whose red is sometimes
-  meaningless is a gate nobody reads. So **a green CI is not a green local gate**: a regression in
-  either suite passes CI, and running the full command before the PR is the only thing that
-  catches it.
-- **Broader on everything else**, and this is the half that surprises people: CI runs
-  `hooks/test.sh`, `helm-mail-cc/test.sh`, `helm-canvas/test.sh` and `helm-board/test.sh`
-  **unconditionally, on every PR**, where the rules above ask you to run each only when you
-  touched what it covers. *"A gate that exists, is documented in `AGENTS.md`, and runs only when
-  somebody remembers is the drift this workflow exists to stop."* The `pi-extensions` gate is the
-  one with no CI job — it needs an `npm install` in `pi/` — so that one really is only run by
-  whoever remembers.
-- **And a green local gate is not a green CI either**, for a third reason: CI runs against the
+  teaching you to diagnose. CI sets `HELM_CHECK_HEADLESS=1`, which makes the `swift` part run
+  `INJECTION_NOGENERICS=1 swift test --disable-keychain --skip TerminalKeyboardTests --skip
+  WorkbenchFocusRoutingTests`.
+  A runner has no active display and those two need a real ghostty surface (#253) — excluded
+  rather than tolerated, since a gate whose red is sometimes meaningless is a gate nobody reads.
+  So **a green CI is not a green local gate**: a regression in either suite passes CI, and
+  `just check` before the PR is the only thing that catches it.
+- **And a green local gate is not a green CI either**: CI runs against the
   **merge commit** rather than your branch tip. That is why it exists — two PRs merged 56 seconds
   apart on 2026-08-06, both green on their own branches, both reviewed, touching different files,
   and `development` did not compile.
 
-**If you touched `pi/`, run its gate too — it is separate on purpose:**
+**`pi/`'s gate is separate on purpose; `just check` runs it when `pi/` changed. Alone:**
 
 ```
 bash .claude/skills/pi-extensions/scripts/test.sh
 ```
 
-**If you touched `daemon/`, run its gate:**
+**`daemon/`'s gate (the `daemon` part), alone:**
 
 ```
 bash daemon/test.sh
@@ -182,9 +208,10 @@ skills' snippets), and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
 `docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
 M0 (skeleton), M5a (daemon-owned ptys), mail, the shared browser (#350) and the daemon half
-of the bench document (M4, #354; helm does not read it yet) are the parts that exist.
+of the bench document (M4, #354) are the parts that exist. helm renders from that document
+when launched with `HELM_BENCH=daemon`, and from its own saved state otherwise.
 
-**If you touched `hooks/`, run its gate:**
+**`hooks/`'s gate (the `hooks` part), alone:**
 
 ```
 bash hooks/test.sh
@@ -201,13 +228,13 @@ That is `helm-merge-queue` (#420), the prototype merge queue the orchestrator la
 Its README says how to run it and what it is testing. The rest of `.archon/` stays gitignored
 (#263).
 
-**If you touched `.claude/skills/helm-canvas/`, run its gate:**
+**`.claude/skills/helm-canvas/`'s gate (part of `skills`), alone:**
 
 ```
 bash .claude/skills/helm-canvas/test.sh
 ```
 
-**If you touched `.claude/skills/helm-board/`, run its gate:**
+**`.claude/skills/helm-board/`'s gate (part of `skills`), alone:**
 
 ```
 bash .claude/skills/helm-board/test.sh
@@ -223,7 +250,18 @@ Needs node, which is why it is not in the Swift gate. **The one thing in that se
 gate does own is `data-helm-surface`**, because three files spell it and one of them is Swift —
 see `CanvasSurface` and `CanvasSurfaceTests`.
 
-**If you touched either mail skill, run its gate:**
+**`.claude/skills/post-canvas/`'s gate (part of `skills`), alone:**
+
+```
+bash .claude/skills/post-canvas/test.sh
+```
+
+That skill previews a video stored by the archon-video workflow pack as a canvas. Its gate builds
+stored runs in a temp `ARCHON_HOME` shaped like the pack's `store.py` output, runs the driver
+against them with `--no-push` only, and executes the `SKILL.md` snippet under zsh with `PRP_HOME`
+redirected. Needs node, git and zsh.
+
+**The mail skills' gate (part of `skills`), alone:**
 
 ```
 bash .claude/skills/helm-mail-cc/test.sh
@@ -312,6 +350,26 @@ to **stdout**, which Claude Code feeds to the model as context for the turn abou
 is deliberately **before** a turn rather than after one: an agent that learns its mail on `Stop` has
 already carried out the instruction it should have read the mail first. pi does the same thing
 through its `context` event.
+
+**Only a hosted session claims a mailbox (#417), and "hosted" is two facts, not one.** The hook is
+wired globally, so before #417 every Claude session on the machine claimed — 12,497 mailboxes on
+the operator's, most of them Archon's SDK sessions in temp directories, and helm read every one
+every two seconds. Both writers now claim (and the hook delivers) only when a host **declared** the
+session — `HELM_PANE` from helm, `BENCH_SESSION` from benchd — **and** it is on a terminal.
+`HELM_PANE` alone is not enough, measured: it is inherited by everything a pane's agent spawns,
+Archon's sessions included, but tool calls run detached (Claude Code's Bash tool and hooks, pi's
+bash tool), so a session started from one has no controlling terminal. `HELM_MAIL_DIR` opts in
+outright, which is why the gates still claim. `claimsAMailbox` is the rule, written in both files
+and run over one matrix by `hooks/mailbox-conformance.mjs`.
+
+**A retired mailbox is moved after seven days, never deleted (#417).** Retiring stopped deleting in
+#236, and left every retired mailbox in the root for good — 12,248 on the operator's machine, which
+helm read every two seconds. `archiveRetired` now moves one retired over seven days to
+`<root>/.retired/` after every reap, in both writers (every reader already skips a dot-directory),
+and `node hooks/helm-mail.mjs archive </dev/null` does the same by hand. The conformance harness
+runs both copies on one root. It sits outside `reap` so the two reapers are still compared like for
+like. helm's side of the same ticket is `MailboxOwnerCache`: a publish re-reads only the mailboxes
+whose directory changed.
 
 **An idle agent is woken, and the two runtimes get there differently.** pi's extension is a live
 event loop inside the session, so it watches its own mailbox and calls `sendUserMessage` — a turn
@@ -407,6 +465,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   copied system binary on launch, and on 2026-09-25 that was the last event before `syspolicyd`
   (Gatekeeper) hung. That is a correlation, not a proof. The hang cascaded: `tccd`, then
   WindowServer, which the watchdog killed 58 times overnight until a forced reboot.
+  Tests never execute a binary from inside a `.app` they assembled, and any directory with a
+  `Contents/Info.plist` counts as a bundle whatever its name, so seal it with
+  `codesign -s - --force` before running from it or the operator gets a "damaged" dialog (#439).
 - **If a freshly compiled binary won't start, or `git`/`grep` hang for no reason, stop launching
   processes and tell the operator.** A macOS security daemon is stuck, only a reboot clears it,
   and every new launch queues behind it. That night, agents saw exactly this at 00:42 and kept
@@ -872,19 +933,21 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     a helm that can never see an update.
 - **`just release-resume <session-id> [cwd]` is the swap for an operator who is away (#404).**
   It builds (`make release`, `cargo install` of `bench` and `benchd`), quits helm by pid, restarts
-  benchd, swaps the bundle with `BundleSwap.script` itself (read out of the Swift source, so there
-  is one swap), and resumes that Claude Code session in the new helm through the spool with
-  `--remote-control`. It detaches first, because the caller is normally an agent in a pane the
-  quit closes. **Once helm is quit the session always comes back**: any later failure resumes it
-  outside helm with `claude --bg --resume`, and the log says which happened. Logs go to
-  `~/.helm/build/release-resume.log`, last line `RESULT:`. Every target is a flag (`--bundle`,
-  `--pid`, `--suite`, `--bench-suite`, `--cargo-root`, `--env`, `--no-remote-control`), which is
-  how it is tested against a bundle copy under a suite. Two things it does that are easy to undo
-  by accident: it relaunches helm through `env -i`, because `open` hands the app the caller's
-  whole environment (`CLAUDECODE`, the caller's session id) and every pane would inherit it; and
-  it holds `caffeinate -d -u` while relaunching, because with every display asleep the new helm
-  cannot create a terminal (the CoreVideo `-6661` pair above). **Quitting helm kills every pane:
-  run it for real only when the operator has said nothing is in flight.**
+  benchd (with `launchctl kickstart -k` when the login agent from `just benchd-install` is loaded,
+  so it never starts a second one), swaps the bundle with `BundleSwap.script` itself (read out of
+  the Swift source, so there is one swap), and resumes that Claude Code session in the new helm
+  through the spool with `--remote-control`. It detaches first, because the caller is normally an
+  agent in a pane the quit closes. **Once helm is quit the session always comes back**: any later
+  failure resumes it outside helm with `claude --bg --resume`, and the log says which happened.
+  Logs go to `~/.helm/build/release-resume.log`, last line `RESULT:`. Every target is a flag
+  (`--bundle`, `--pid`, `--suite`, `--bench-suite`, `--cargo-root`, `--env`,
+  `--no-remote-control`), which is how it is tested against a bundle copy under a suite. Two
+  things it does that are easy to undo by accident: it relaunches helm through `env -i`, because
+  `open` hands the app the caller's whole environment (`CLAUDECODE`, the caller's session id) and
+  every pane would inherit it; and it holds `caffeinate -d -u` while relaunching, because with
+  every display asleep the new helm cannot create a terminal (the CoreVideo `-6661` pair above).
+  **Quitting helm kills every pane: run it for real only when the operator has said nothing is in
+  flight.**
 - **helm persists to one domain, `com.wirasm.helm`, from both launch paths** — so "did it
   persist?" is `defaults read com.wirasm.helm` whichever way it was started, unless
   `HELM_DEFAULTS_SUITE` overrides it (next bullet). `swift run helm`
@@ -960,7 +1023,8 @@ test is simple: two people building two features should not have to edit the sam
 **The slices, largest first, so a stranger knows where to look**: `Canvas/` (6.1k lines) is the
 document surface; `Workbench/` (3.8k) is columns, slots, panes and the offer/insert distinction;
 `Surfaces/` is `SurfaceKind` and the one registry every pane kind's live object is kept in;
-`Keymap/` is the key table and its readers (below);
+`Keymap/` is the key table and its readers (below); `Bench/` is helm as benchd's client —
+the socket, the follower, `DaemonSink` and the one-time import (below);
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
 libghostty seam — sessions, the host view, the pane environment, and `push.sh`'s landing site;
 then `Spool/`, `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
@@ -994,8 +1058,22 @@ focus. Keys are rows of one table, `KeyBindings.all` (`Sources/Helm/Keymap/`), r
 monitor, the menu and the status bar's hints; a row's action is data, a `VerbTemplate` resolved
 against the bench when the key fires or a `LocalAction` that never reaches the document.
 `LocalActions` in `App/` carries both out. There is no NotificationCenter command bus: do not
-add one, and do not call `WorkbenchModel`'s mutation methods from a new caller — send the verb,
-so the sink that replaces the local one (benchd's, #354's PR 3c) sees it too.
+add one. `WorkbenchModel`'s mutation methods each take a `LocalBenchKey`, which only
+`LocalSink` can make, so a direct call from anywhere else does not compile — send the verb. Two sinks take it: `LocalSink` applies it to helm's own
+bench, and `DaemonSink` (`Sources/Helm/Bench/`, `HELM_BENCH=daemon`) sends it to benchd and
+draws nothing until benchd's follower delivers the document the verb made
+(`WorkbenchModel.apply`).
+
+**Under `HELM_BENCH=daemon` benchd owns the bench** (#354, strangler until PR 4). The workspace
+list follows the document and nothing about the bench is saved in defaults; the first empty
+document gets helm's saved benches once, as `workspace/import`; #85's question stays helm's and
+its answer goes back as `workspace/reset` or `workspace/unshelve`; a status-bar capsule names the
+socket while benchd is unreachable, and the last document stays on screen. A spool spawn's
+workspace opens in the background there, because an agent's `workspace/open` does not take the
+keyboard. `BenchSnapshotModel` still reports parked workspaces from defaults (D2), so in daemon
+mode only the active workspace's part of `snapshot.json` is current. To try it without touching
+the operator's bench, run your own benchd on a suite and point an isolated helm at it:
+`BENCH_SUITE=<name> benchd` and `HELM_BENCH=daemon HELM_DEFAULTS_SUITE=<name> swift run helm`.
 
 **Put a command handler where its lifetime is right, not where it looks tidy.** A subscription
 that has to work while its view is closed belongs on the model, which outlives the
@@ -1148,11 +1226,11 @@ cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
 ### The helm-local skills
 
-`.claude/skills/` holds fourteen; **seven are vendored** from `mattpocock/skills` and pinned in
+`.claude/skills/` holds sixteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
-not a change. The other seven are hand-written. The first five below are helm's, the surface an agent
-hosted in helm actually uses. The last two, `bench-mail` and `bench-browser`, are benchd's, and their
-snippets run in the daemon gate's conformance suite. Four gates cover the five, all listed in *Working here* above — the two mail
+not a change. The other nine are hand-written. The first six below are helm's, the surface an agent
+hosted in helm actually uses. The last three, `bench-mail`, `bench-browser` and `bench-sessions`, are
+benchd's, and their snippets run in the daemon gate's conformance suite. Five gates cover the six, all listed in *Working here* above — the two mail
 skills share one, because the send and the mailbox listing are documented identically in each.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
@@ -1160,6 +1238,9 @@ skills share one, because the send and the mailbox listing are documented identi
   *what* to put in a canvas.
 - **`helm-board`** — the drawable board (#111): an agent authors labelled shapes, the operator
   draws on it by hand, and what they drew comes back as named records. Not `Sources/Helm/Board/`.
+- **`post-canvas`** — a video stored by the archon-video pack, rendered as a post preview canvas:
+  the video beside the copy that would ship with it. It pushes through `helm-canvas`'s `push.sh`,
+  so the two are installed side by side.
 - **`helm-mail-cc`** and **`helm-mail-pi`** — sending and reading mail from each runtime. One gate
   covers both, and it **executes the snippets out of `SKILL.md`** rather than restating them.
 - **`pi-extensions`** — how to build one without taking the pi CLI down, how to read the installed
@@ -1167,6 +1248,8 @@ skills share one, because the send and the mailbox listing are documented identi
 - **`bench-mail`** — sending and reading mail through benchd's mailroom, and finding who can be mailed.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
   start`, drive it with `playwright-cli attach`, and put it in front of him with `openBrowser`.
+- **`bench-sessions`** — who is working in a workspace (`bench sessions --all`), and what any of
+  them did (`bench log <id>`, #421), read from the transcript without mailing the agent.
 
 ### The two helm-local subagents
 

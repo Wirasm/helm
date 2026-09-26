@@ -17,6 +17,7 @@
  * Usage: node pi/tests/helm-mail.mjs <path-to-extension-index.ts>
  */
 
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -26,6 +27,31 @@ const extensionPath = process.argv[2];
 if (!extensionPath) {
 	console.error("usage: node helm-mail.mjs <path-to-extension-index.ts>");
 	process.exit(2);
+}
+
+// **This harness runs on a terminal, and re-runs itself under one when it is not (#417).** A
+// session claims a mailbox only when a host declared it AND it is on a terminal — the pane's own
+// agent, never something a tool call started. The extension asks about ITS OWN process, which
+// here is this one, and this gate is usually run from an agent's tool call, which has none. So
+// the few tests that cannot use `HELM_MAIL_DIR` (which opts in outright) need a real pty, and
+// `/usr/bin/script` is the one every Mac has. Its exit status is the child's.
+const ownTerminal = (() => {
+	try {
+		return execFileSync("/bin/ps", ["-o", "tty=", "-p", String(process.pid)], { encoding: "utf8" }).trim();
+	} catch {
+		return "";
+	}
+})();
+if (ownTerminal === "" || ownTerminal === "??") {
+	if (process.env.HELM_MAIL_TEST_REEXEC) {
+		console.error("not ok - re-ran under /usr/bin/script and still have no terminal; the hosted tests would measure nothing");
+		process.exit(1);
+	}
+	const rerun = spawnSync("/usr/bin/script", ["-q", "/dev/null", process.execPath, ...process.argv.slice(1)], {
+		stdio: ["ignore", "inherit", "inherit"],
+		env: { ...process.env, HELM_MAIL_TEST_REEXEC: "1" },
+	});
+	process.exit(rerun.status ?? 1);
 }
 
 let failures = 0;
@@ -709,6 +735,20 @@ await test("a dead agent's empty mailbox is retired, not deleted, and keeps its 
 	check(fs.existsSync(kept), "the read/ archive was destroyed with its dead mailbox (#236)");
 });
 
+// #417: retiring never deletes, so before this every retired mailbox stayed in the root for good
+// and helm read each one every two seconds. pi's session_start now moves one retired over seven
+// days to `.retired/`, as the hook's claim does; the conformance harness compares the two.
+await test("a session start moves a mailbox retired over seven days to .retired/, and deletes nothing", () => {
+	const root = freshRoot();
+	const old = seedOwner(root, "old-9999", { pid: 4194303, retiredAt: Date.now() - 8 * 86_400_000 });
+	const kept = archive(old);
+	const young = seedOwner(root, "young-9998", { pid: 4194303, retiredAt: Date.now() - 86_400_000 });
+	started({ root });
+	check(!fs.existsSync(old), "a mailbox retired eight days ago is still in the root");
+	check(fs.existsSync(path.join(root, ".retired", "old-9999", "read", path.basename(kept))), "the moved mailbox lost its read/ archive");
+	check(fs.existsSync(young), "a mailbox retired one day ago was moved");
+});
+
 await test("a dead agent's mailbox is KEPT live while it still holds mail", () => {
 	const root = freshRoot();
 	const dead = seedOwner(root, "dead-8888", { pid: 4194303 });
@@ -814,7 +854,9 @@ await test("/helm-mail send to a handle with no mailbox refuses and says so", as
 // two, instead of writing into a live-looking directory and waiting forever for an answer.
 await test("/helm-mail send to a RETIRED mailbox refuses, and differently from an absent one", async () => {
 	const root = freshRoot();
-	seedOwner(root, "retired-5150", { retiredAt: 1 });
+	// Retired just now: one retired over seven days is moved out of the root on session start
+	// (#417), and a send to it is then the absent case.
+	seedOwner(root, "retired-5150", { retiredAt: Date.now() });
 	const s = started({ root });
 	const c = recordingCtx();
 	await s.record.commands.get("helm-mail").handler("send retired-5150 are you there", c.ctx);
@@ -828,7 +870,7 @@ await test("/helm-mail list marks a retired mailbox as retired, not as live (#23
 	const root = freshRoot();
 	// A retired owner whose pid is still ALIVE — the `/clear` ghost's shape. Reading the pid
 	// alone lists it as a perfectly healthy peer, which is exactly how mail goes unread.
-	seedOwner(root, "retired-7274", { pid: process.ppid, retiredAt: 1 });
+	seedOwner(root, "retired-7274", { pid: process.ppid, retiredAt: Date.now() });
 	const s = started({ root });
 	const c = recordingCtx();
 	await s.record.commands.get("helm-mail").handler("list", c.ctx);
@@ -970,7 +1012,12 @@ await test("an isolated instance's session claims where the operator's agents ne
 		HOME: process.env.HOME,
 		HELM_MAIL_DIR: process.env.HELM_MAIL_DIR,
 		HELM_DEFAULTS_SUITE: process.env.HELM_DEFAULTS_SUITE,
+		HELM_PANE: process.env.HELM_PANE,
+		BENCH_SESSION: process.env.BENCH_SESSION,
 	};
+	// A pane's own agent (#417): declared, and on this harness's terminal.
+	process.env.HELM_PANE = "620BCA56-782F-4230-AFD5-BFAA30D1BF18";
+	delete process.env.BENCH_SESSION;
 	delete process.env.HELM_MAIL_DIR;
 	process.env.HOME = home;
 	process.env.HELM_DEFAULTS_SUITE = "drivetest";
@@ -1001,7 +1048,12 @@ await test("and with no suite set it claims in the shared ~/.helm/mail, as it al
 		HOME: process.env.HOME,
 		HELM_MAIL_DIR: process.env.HELM_MAIL_DIR,
 		HELM_DEFAULTS_SUITE: process.env.HELM_DEFAULTS_SUITE,
+		HELM_PANE: process.env.HELM_PANE,
+		BENCH_SESSION: process.env.BENCH_SESSION,
 	};
+	// A pane's own agent (#417): declared, and on this harness's terminal.
+	process.env.HELM_PANE = "620BCA56-782F-4230-AFD5-BFAA30D1BF18";
+	delete process.env.BENCH_SESSION;
 	delete process.env.HELM_MAIL_DIR;
 	// The control is "no suite", not "whatever suite this gate happens to be running inside".
 	delete process.env.HELM_DEFAULTS_SUITE;
@@ -1017,6 +1069,47 @@ await test("and with no suite set it claims in the shared ~/.helm/mail, as it al
 			`claimed nothing under ~/.helm/mail: ${messages[0]}`,
 		);
 		check(!fs.existsSync(path.join(home, ".helm", "mail-drivetest")), "claimed in a suite's mailroom with no suite set");
+	} finally {
+		restoreEnv(restore);
+	}
+});
+
+/**
+ * #417: a session nothing hosts claims nothing, and says nothing. Before this every pi session on
+ * the machine claimed — 1,902 of the operator's 12,497 mailboxes were pi's, most from SDK runs in
+ * temp directories. This harness IS on a terminal (see the top of the file), so the only thing
+ * missing here is the host's declaration, and that alone must be enough to claim nothing.
+ * The inherited-declaration-without-a-terminal case is `claimsAMailbox`'s, and
+ * `hooks/mailbox-conformance.mjs` runs this file's copy of it over that matrix.
+ */
+await test("a session no host declared claims nothing and announces nothing (#417)", () => {
+	freshRoot();
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mail-home-"));
+	roots.push(home);
+	const restore = {
+		HOME: process.env.HOME,
+		HELM_MAIL_DIR: process.env.HELM_MAIL_DIR,
+		HELM_DEFAULTS_SUITE: process.env.HELM_DEFAULTS_SUITE,
+		HELM_PANE: process.env.HELM_PANE,
+		BENCH_SESSION: process.env.BENCH_SESSION,
+	};
+	for (const name of ["HELM_MAIL_DIR", "HELM_DEFAULTS_SUITE", "HELM_PANE", "BENCH_SESSION"]) delete process.env[name];
+	process.env.HOME = home;
+	try {
+		const { pi, record } = recordingPi();
+		factory(pi);
+		const { ctx, messages } = recordingCtx("019fc78c-ec03-76f3-8e87-f0fc911898cf", "/tmp/archon-wait-released");
+		capturingStderr(() => record.handlers.get("session_start")({ reason: "startup" }, ctx));
+		check(!fs.existsSync(path.join(home, ".helm")), "an undeclared session created ~/.helm");
+		check(messages.length === 0, `an undeclared session announced: ${JSON.stringify(messages)}`);
+		// The control: the same session, declared, does claim — so the absence above is the rule
+		// and not a harness that cannot claim at all.
+		process.env.HELM_PANE = "620BCA56-782F-4230-AFD5-BFAA30D1BF18";
+		const declared = recordingPi();
+		factory(declared.pi);
+		const again = recordingCtx("019fc78c-ec03-76f3-8e87-f0fc911898cf", "/tmp/archon-wait-released");
+		capturingStderr(() => declared.record.handlers.get("session_start")({ reason: "startup" }, again.ctx));
+		check(fs.existsSync(path.join(home, ".helm", "mail")), `the same session, declared, claimed nothing: ${again.messages[0]}`);
 	} finally {
 		restoreEnv(restore);
 	}

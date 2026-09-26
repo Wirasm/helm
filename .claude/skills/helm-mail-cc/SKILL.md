@@ -98,7 +98,9 @@ mailbox has been retired. `cwd` is what tells two agents apart — it carries th
 **Listed is not the same as live, and `retiredAt` is asked before the pid.** When any agent starts
 a session it reaps the mailboxes whose owners are gone, and reaping **rewrites `owner.json` with a
 `retiredAt` rather than deleting the directory** (#236). The directory and its `read/` stay on
-purpose: a retired mailbox is still worth reading, it is only not worth writing to. **A row
+purpose: a retired mailbox is still worth reading, it is only not worth writing to. Seven days
+after retiring, the next claim **moves** it — never deletes it — to `.retired/` inside the
+mailroom, where no listing looks (#417). **A row
 carrying `retiredAt` is not a recipient** — the send succeeds, the file lands, and nobody ever
 opens it.
 
@@ -185,8 +187,10 @@ a fresh session in the same process, claims a fresh handle, and abandons the old
 `owner.json` for your pid returns **both**, with nothing to choose between them — that happened, and
 the older box is a ghost that `kill -0` still calls live. The session id has one answer.
 
-If it prints nothing, no mailbox is yours yet — a session started before the hooks were wired. Say
-so rather than adopting the closest-looking handle.
+If it prints nothing, no mailbox is yours — a session started before the hooks were wired, or one
+nothing hosts: since #417 only a session in a helm pane or a benchd session, on its terminal, claims
+one, so a session a tool call started never does. Say so rather than adopting the
+closest-looking handle.
 
 ## Sending
 

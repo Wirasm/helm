@@ -241,17 +241,10 @@ impl Bench {
         self.slots().find(|s| s.holds(pane))
     }
 
-    /// A pane already showing this surface. A canvas matches by source, **by value** — why
-    /// ⌘-clicking the same link twice selects the canvas you have instead of opening a second.
-    /// The browser matches any browser pane: there is one browser, so a second pane onto it
-    /// would be a second copy of the same tab. A terminal never matches: every one is its own.
+    /// A pane already showing this surface (`Surface::already_shows`).
     pub fn pane_showing(&self, surface: &Surface) -> Option<PaneId> {
         self.panes()
-            .find(|p| match (surface, &p.surface) {
-                (Surface::Canvas { source: a }, Surface::Canvas { source: b }) => a == b,
-                (Surface::Browser, Surface::Browser) => true,
-                _ => false,
-            })
+            .find(|p| p.surface.already_shows(surface))
             .map(|p| p.id)
     }
 

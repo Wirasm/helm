@@ -1587,6 +1587,7 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
 /// answers with a version line, and once "listening" it writes `DevToolsActivePort`
 /// into its `--user-data-dir`. It records its argv there, dies on TERM, and with
 /// `--die-after=<s>` crashes by itself — a profile that takes Chromium down on launch.
+/// `--slow-start=<s>` holds off "listening" that long, so a launch can be caught in flight.
 fn write_fake_browser(home: &Path) -> PathBuf {
     let path = home.join("fake-chromium");
     fs::write(
@@ -1598,6 +1599,7 @@ for a in "$@"; do
   case "$a" in
     --user-data-dir=*) dir="${a#--user-data-dir=}" ;;
     --die-after=*) die="${a#--die-after=}" ;;
+    --slow-start=*) sleep "${a#--slow-start=}" ;;
   esac
 done
 printf '%s\n' "$@" > "$dir/argv"
@@ -1958,6 +1960,134 @@ fn an_endpoint_left_by_a_dead_daemon_is_cleared_at_boot_and_logged() {
     );
 }
 
+/// The pid of a running browser, once the daemon reports one.
+fn await_browser(home: &Path, what: &str) -> u64 {
+    let mut pid = 0;
+    wait_until(what, Duration::from_secs(8), || {
+        let s = json_of(&bench(home, &["browser", "status"]));
+        pid = s["pid"].as_u64().unwrap_or(0);
+        s["running"] == true
+    });
+    pid
+}
+
+#[test]
+fn a_wanted_browser_comes_back_with_the_next_daemon() {
+    // #407: launchd brings benchd back after a crash or a reboot, and the browser has to
+    // come with it — benchd decides that from `<root>/browser/wanted`, not the plist.
+    let home = TestHome::claim("brback");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let marker = home.dir.join(".bench/browser/wanted");
+
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+    let first = json_of(&bench(&home.dir, &["browser", "start"]))["pid"]
+        .as_u64()
+        .unwrap();
+    assert!(marker.exists(), "a started browser is marked wanted");
+
+    // A crash: no cleanup runs, the leash takes the browser down.
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+    wait_until(
+        "the browser to die with its daemon",
+        Duration::from_secs(5),
+        || !libc_alive(first as i32),
+    );
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+    let second = await_browser(&home.dir, "the browser after a crash");
+    assert_ne!(second, first);
+    assert!(
+        event_kinds(&home.dir)
+            .iter()
+            .any(|(k, d)| k == "browser/resuming" && d["marker"] == marker.display().to_string()),
+        "a browser nobody asked this daemon for says why it started"
+    );
+
+    // A clean `bench stop` is not `bench browser stop`: the browser is still wanted.
+    assert_eq!(bench(&home.dir, &["stop"]).code, 0);
+    let _ = daemon.child.wait();
+    assert!(marker.exists());
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let third = await_browser(&home.dir, "the browser after a daemon stop");
+    assert_ne!(third, second);
+}
+
+#[test]
+fn a_stopped_browser_stays_stopped_across_a_restart() {
+    let home = TestHome::claim("brgone");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let marker = home.dir.join(".bench/browser/wanted");
+
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+    assert_eq!(bench(&home.dir, &["browser", "start"]).code, 0);
+    assert_eq!(bench(&home.dir, &["browser", "stop"]).code, 0);
+    assert!(
+        !marker.exists(),
+        "browser/stop is the one thing that unwants it"
+    );
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        json_of(&bench(&home.dir, &["browser", "status"]))["running"],
+        false
+    );
+    let events = event_kinds(&home.dir);
+    let boot = events
+        .iter()
+        .rposition(|(k, _)| k == "daemon/started")
+        .unwrap();
+    assert!(
+        !events[boot..]
+            .iter()
+            .any(|(k, _)| k == "browser/started" || k == "browser/resuming"),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn a_stop_that_lands_during_a_launch_still_unwants_the_browser() {
+    // The launch a restart makes routine: benchd comes back, starts the wanted browser, and
+    // `bench browser stop` arrives before it is up. The stop waits for the launch and takes the
+    // browser down; the marker must go with it, or the next daemon brings it back.
+    let home = TestHome::claim("brrace");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(
+        &home.dir,
+        serde_json::json!({ "binary": fake, "args": ["--slow-start=1.5"] }),
+    );
+    let marker = home.dir.join(".bench/browser/wanted");
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+
+    let starter = {
+        let home = home.dir.clone();
+        std::thread::spawn(move || bench(&home, &["browser", "start"]))
+    };
+    std::thread::sleep(Duration::from_millis(400));
+    let stop = bench(&home.dir, &["browser", "stop"]);
+    assert_eq!(stop.code, 0, "stderr: {}", stop.stderr);
+    assert_eq!(starter.join().unwrap().code, 0);
+    assert_eq!(
+        json_of(&stop)["was_running"],
+        true,
+        "the stop waited for the launch"
+    );
+    assert!(!marker.exists(), "a stopped browser is not wanted");
+
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        json_of(&bench(&home.dir, &["browser", "status"]))["running"],
+        false
+    );
+}
+
 #[test]
 fn setup_opens_the_profile_in_a_plain_window_and_quitting_it_returns_to_headless() {
     let home = TestHome::claim("brsetup");
@@ -2213,6 +2343,75 @@ fn working_bench(socket: &Path) -> (String, String, String) {
         .unwrap()
         .to_string();
     (first, right, canvas)
+}
+
+/// `fixtures/bench-report.json` is the sample helm's Swift decodes a layout answer and
+/// `bench/get` against. The Rust gate pins its spelling from the types (`bench-wire`'s
+/// `the_reply_fixture_round_trips`); this pins it against what a live daemon actually answers,
+/// key for key, the way `browser-endpoint.json` is pinned — so the fixture cannot describe a
+/// reply benchd no longer sends.
+#[test]
+fn the_reply_fixture_is_what_a_live_daemon_answers() {
+    let home = TestHome::claim("m4-reply-fixture");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    working_bench(&daemon.socket);
+    let report = ok_data(layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "surface": { "kind": "canvas", "source": { "kind": "file", "path": "/tmp/m4-proof/review.md" } } }),
+        operator(),
+        false,
+    ));
+    let get = ok_data(layout(
+        &daemon.socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ));
+
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bench-report.json"),
+        )
+        .expect("daemon/fixtures/bench-report.json"),
+    )
+    .unwrap();
+    let keys = |v: &serde_json::Value| {
+        let mut k: Vec<String> = v
+            .as_object()
+            .unwrap_or_else(|| panic!("not an object: {v}"))
+            .keys()
+            .cloned()
+            .collect();
+        k.sort();
+        k
+    };
+    assert_eq!(
+        keys(&report),
+        keys(&fixture["report"]),
+        "a layout answer drifted from the fixture helm reads"
+    );
+    assert_eq!(keys(&get), keys(&fixture["get"]), "bench/get drifted");
+    let live = &get["document"];
+    let sample = &fixture["get"]["document"];
+    assert_eq!(keys(live), keys(sample), "the document drifted");
+    let (live, sample) = (&live["workspaces"][0], &sample["workspaces"][0]);
+    assert_eq!(keys(live), keys(sample), "a workspace drifted");
+    let (live, sample) = (&live["bench"], &sample["bench"]);
+    assert_eq!(keys(live), keys(sample), "a bench drifted");
+    let (live, sample) = (&live["columns"][0], &sample["columns"][0]);
+    assert_eq!(keys(live), keys(sample), "a column drifted");
+    let (live, sample) = (&live["slots"][0], &sample["slots"][0]);
+    assert_eq!(keys(live), keys(sample), "a slot drifted");
+    // An unnamed terminal on both sides: a name is written only when there is one.
+    assert_eq!(
+        keys(&live["panes"][0]),
+        keys(&sample["panes"][1]),
+        "a pane drifted"
+    );
+    serde_json::from_value::<bench_wire::LayoutReport>(report).expect("a LayoutReport");
+    serde_json::from_value::<bench_wire::DocumentAt>(get).expect("a DocumentAt");
 }
 
 #[test]
@@ -2575,6 +2774,178 @@ fn a_follower_that_stops_reading_never_parks_the_daemon() {
     );
 }
 
+/// #356: an agent's pane lands in a drawer and badges it, with the operator's keyboard and
+/// every workspace exactly where they were; only the operator opens it; and the drawer comes
+/// back from `bench.json` after a restart.
+#[test]
+fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
+    let home = TestHome::claim("drawer");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (_, _, held) = working_bench(&daemon.socket);
+    let get = |socket: &Path| {
+        ok_data(layout(
+            socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]
+            .clone()
+    };
+    let workspaces = get(&daemon.socket)["workspaces"].clone();
+    let mut reader = follow(&daemon.socket);
+    read_frame(&mut reader);
+
+    let pushed = ok_data(layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "drawer": "notes", "surface": { "kind": "canvas", "source": { "kind": "file", "path": "/tmp/m4-proof/drawers.md" } } }),
+        None,
+        false,
+    ));
+    assert_eq!(pushed["changed"], true, "{pushed}");
+    assert_eq!(pushed["focused_pane_before"], held.as_str());
+    assert_eq!(
+        pushed["focused_pane_after"],
+        held.as_str(),
+        "the keyboard stayed"
+    );
+    let frame = read_frame(&mut reader);
+    assert_eq!(frame["event"]["kind"], "bench/changed");
+    let drawer = &frame["document"]["drawers"][0];
+    assert_eq!(drawer["name"], "notes");
+    assert_eq!(drawer["badged"], true, "the operator is told: {frame}");
+    assert_eq!(drawer["selected"], pushed["pane_created"]);
+    assert!(
+        frame["document"].get("open_drawer").is_none(),
+        "and nothing opened"
+    );
+    assert_eq!(
+        frame["document"]["workspaces"], workspaces,
+        "no workspace moved"
+    );
+
+    // The CLI speaks for an agent, and opening a drawer is the operator's focus.
+    let refused = bench(&home.dir, &["drawer", "toggle", "notes"]);
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(refused.stderr.contains("--asked"), "{}", refused.stderr);
+
+    let opened = ok_data(layout(
+        &daemon.socket,
+        "drawer/toggle",
+        serde_json::json!({ "drawer": "notes" }),
+        operator(),
+        false,
+    ));
+    assert_eq!(opened["focused_pane_after"], pushed["pane_created"]);
+    let document = get(&daemon.socket);
+    assert_eq!(document["open_drawer"], "notes");
+    assert_eq!(document["drawers"][0]["badged"], false, "opening clears it");
+    assert_eq!(
+        document["workspaces"], workspaces,
+        "opening a drawer re-lays-out nothing"
+    );
+    drop(daemon);
+
+    let daemon = DaemonGuard::start(&home.dir, None);
+    assert_eq!(
+        get(&daemon.socket),
+        document,
+        "the drawer came back from bench.json"
+    );
+    let record: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(home.dir.join(".bench").join("bench.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["version"], bench_wire::DOCUMENT_RECORD_VERSION);
+}
+
+/// #356: placement comes from `<root>/rules/placement.toml`, reread on the next verb with no
+/// restart; a file that cannot be read is logged naming the line, reported by `status`, and
+/// changes nothing — the last good table keeps placing.
+#[test]
+fn a_rules_file_applies_on_the_next_verb_and_a_bad_one_changes_nothing() {
+    let home = TestHome::claim("rules");
+    let root = home.dir.join(".bench");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    working_bench(&daemon.socket);
+    let rules = root.join("rules").join("placement.toml");
+    let open_canvas = |path: &str| {
+        ok_data(layout(
+            &daemon.socket,
+            "pane/open",
+            serde_json::json!({ "surface": { "kind": "canvas", "source": { "kind": "file", "path": path } } }),
+            None,
+            false,
+        ))
+    };
+    let drawer_panes = || {
+        let document = ok_data(layout(
+            &daemon.socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]
+            .clone();
+        document["drawers"]
+            .as_array()
+            .map_or(0, |d| d[0]["panes"].as_array().unwrap().len())
+    };
+    let status = || json_of(&bench(&home.dir, &["status"]))["rules"]["placement"].clone();
+    assert_eq!(status()["state"], "default");
+
+    open_canvas("/tmp/m4-proof/a.md");
+    assert_eq!(
+        drawer_panes(),
+        0,
+        "the built-in table keeps canvases on the bench"
+    );
+
+    fs::create_dir_all(rules.parent().unwrap()).unwrap();
+    fs::write(
+        &rules,
+        "[[place]]\nsurface = \"canvas\"\nby = \"agent\"\ntry = [{ drawer = \"notes\" }]\n",
+    )
+    .unwrap();
+    let focus = open_canvas("/tmp/m4-proof/b.md");
+    assert_eq!(drawer_panes(), 1, "the file applied without a restart");
+    assert_eq!(focus["focused_pane_before"], focus["focused_pane_after"]);
+    assert_eq!(status()["state"], "ok");
+
+    fs::write(
+        &rules,
+        "[[place]]\nsurface = \"canvas\"\ntry = [\"sideways\"]\n",
+    )
+    .unwrap();
+    open_canvas("/tmp/m4-proof/c.md");
+    assert_eq!(drawer_panes(), 2, "the last good table is still placing");
+    let rejected: Vec<_> = log_of(&root)
+        .into_iter()
+        .filter(|e| e["kind"] == "rules/rejected")
+        .collect();
+    assert_eq!(
+        rejected.len(),
+        1,
+        "logged once for this version of the file"
+    );
+    let why = rejected[0]["data"]["why"].as_str().unwrap();
+    assert!(why.contains("line 3") && why.contains("sideways"), "{why}");
+    assert_eq!(rejected[0]["data"]["file"], rules.display().to_string());
+    let reported = status();
+    assert_eq!(reported["state"], "rejected");
+    assert_eq!(reported["why"], why);
+    open_canvas("/tmp/m4-proof/d.md");
+    assert_eq!(
+        log_of(&root)
+            .iter()
+            .filter(|e| e["kind"] == "rules/rejected")
+            .count(),
+        1,
+        "not once per verb"
+    );
+}
+
 #[test]
 fn an_unreadable_bench_json_is_moved_aside_and_the_daemon_starts_empty() {
     let home = TestHome::claim("m4-bad");
@@ -2750,6 +3121,11 @@ fn mangle(cwd: &Path) -> String {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "legacy (#418): 167 lines, limit 100; cognitive complexity 31, limit 25"
+)]
 fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
     use bench_wire::{Harness, Host, OpenAction, SessionList, SessionState};
     let home = TestHome::claim("sessions");
@@ -2934,4 +3310,614 @@ fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
     // Reading never wrote to a harness file.
     let after_state: Vec<_> = harness_files.iter().map(|d| tree_state(d)).collect();
     assert_eq!(before, after_state);
+}
+
+// ---------------------------------------------------------------------------
+// bench log (#421): a transcript read straight from its file, no daemon
+// ---------------------------------------------------------------------------
+
+/// A Claude transcript under the test home: a prompt, a reply, a tool call that failed, and
+/// one record in a shape nobody knows.
+fn write_claude_transcript(home: &Path, id: &str) -> PathBuf {
+    let at = "2026-09-25T16:49:25.973Z";
+    let lines = [
+        serde_json::json!({"type": "user", "timestamp": at,
+            "message": {"role": "user", "content": "fix the build"}}),
+        serde_json::json!({"type": "assistant", "timestamp": at,
+            "message": {"content": [{"type": "text", "text": "Looking at it."}]}}),
+        serde_json::json!({"type": "assistant", "timestamp": at,
+            "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+                "input": {"command": "cargo build"}}]}}),
+        serde_json::json!({"type": "user", "timestamp": at,
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
+                "is_error": true, "content": "error[E0425]: cannot find value"}]}}),
+        serde_json::json!({"type": "assistant", "timestamp": at,
+            "message": {"content": [{"type": "hologram"}]}}),
+    ];
+    let path = home
+        .join(".claude/projects/-ws")
+        .join(format!("{id}.jsonl"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+fn log_reads_a_transcript_with_no_daemon_and_names_what_it_skipped() {
+    let home = TestHome::claim("log");
+    write_claude_transcript(&home.dir, "s-1");
+
+    let text = bench(&home.dir, &["log", "s-1"]);
+    assert_eq!(text.code, 0, "stderr: {}", text.stderr);
+    for line in [
+        "2026-09-25 16:49:25  user   fix the build",
+        "2026-09-25 16:49:25  agent  Looking at it.",
+        "2026-09-25 16:49:25  tool   Bash  cargo build",
+        "2026-09-25 16:49:25  error  Bash  error[E0425]: cannot find value",
+    ] {
+        assert!(text.stdout.contains(line), "{line:?} in:\n{}", text.stdout);
+    }
+    assert!(
+        text.stderr.contains("s-1.jsonl:5: skipped") && text.stderr.contains("hologram"),
+        "the unknown record is reported with its line: {}",
+        text.stderr
+    );
+
+    let json = bench(&home.dir, &["log", "s-1", "-n", "1", "--json"]);
+    assert_eq!(json.code, 0, "stderr: {}", json.stderr);
+    let v = json_of(&json);
+    assert_eq!(v["harness"], "claude");
+    assert_eq!(
+        (v["total"].as_u64(), v["returned"].as_u64()),
+        (Some(4), Some(1))
+    );
+    assert_eq!(v["entries"][0]["kind"], "error");
+    assert_eq!(v["unreadable"][0]["line"], 5);
+
+    let since = bench(&home.dir, &["log", "s-1", "--since", "1h", "--json"]);
+    assert_eq!(
+        json_of(&since)["total"],
+        0,
+        "every entry is older than an hour"
+    );
+
+    let unknown = bench(&home.dir, &["log", "no-such-session"]);
+    assert_eq!(unknown.code, 3, "stderr: {}", unknown.stderr);
+    assert!(
+        unknown.stderr.contains("no transcript"),
+        "{}",
+        unknown.stderr
+    );
+    let flag = bench(&home.dir, &["status", "--json"]);
+    assert_eq!(flag.code, 3, "--json belongs to log: {}", flag.stderr);
+}
+
+#[test]
+fn the_bench_sessions_skills_snippets_execute() {
+    // The same rule as the mail skill's: every ```bash fence runs, in order.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../.claude/skills/bench-sessions/SKILL.md"),
+    )
+    .expect("bench-sessions SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        snippets.len(),
+        3,
+        "the skill's sessions and two log snippets"
+    );
+
+    let home = TestHome::claim("sskill");
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let ws = workspace(&home.dir);
+    let (_, pi_session) = spawn_pi(&home.dir, &ws, "worker");
+    write_claude_transcript(&home.dir, "s-2");
+    let mut outputs = Vec::new();
+    for (i, snippet) in snippets.iter().enumerate() {
+        let out = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", snippet])
+            .current_dir(&ws)
+            .env_remove("BENCH_SUITE")
+            .env_remove("BENCH_DIR")
+            .env("HOME", &home.dir)
+            .env("BENCH", bench_bin())
+            .env("SESSION", "s-2")
+            .output()
+            .expect("run snippet");
+        assert!(
+            out.status.success(),
+            "SKILL.md snippet {} failed (exit {:?}):\n{}\n--- stderr:\n{}",
+            i + 1,
+            out.status.code(),
+            snippet,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        outputs.push(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    assert!(
+        outputs[0].contains(&format!("pi {pi_session} running")),
+        "the live session is listed: {}",
+        outputs[0]
+    );
+    assert!(
+        outputs[1].contains("tool   Bash  cargo build"),
+        "{}",
+        outputs[1]
+    );
+    assert!(
+        outputs[2].contains("claude") && outputs[2].contains("4 of 4"),
+        "{}",
+        outputs[2]
+    );
+    assert!(outputs[2].contains("user  fix the build"), "{}", outputs[2]);
+}
+
+// ---------------------------------------------------------------------------
+// The sensor (#358): `hook` claims, keeps state, and hands out mail as hook context
+// ---------------------------------------------------------------------------
+
+const HOOK_PANE: &str = "0E8E8CC6-159B-45D8-BC02-485120975998";
+
+unsafe extern "C" {
+    fn setsid() -> i32;
+}
+
+/// A process with no controlling terminal: `sleep` moved into its own session. What a
+/// session started from an agent's tool call looks like (#427).
+struct Detached(Child);
+
+impl Detached {
+    fn start() -> Detached {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = Command::new("sleep");
+        cmd.arg("60");
+        // SAFETY: setsid is async-signal-safe and touches nothing of the parent's.
+        unsafe {
+            cmd.pre_exec(|| {
+                setsid();
+                Ok(())
+            });
+        }
+        Detached(cmd.spawn().expect("spawn sleep"))
+    }
+}
+
+impl Drop for Detached {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A process on a real terminal: a benchd test session, whose `cat` holds its pty as its
+/// controlling terminal. Answers (bench session id, pid).
+fn terminal_process(home: &Path, name: &str) -> (String, u32) {
+    let run = bench(
+        home,
+        &[
+            "spawn",
+            "--agent",
+            "test-echo",
+            "--cwd",
+            "/tmp",
+            "--name",
+            name,
+        ],
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let v = json_of(&run);
+    (
+        v["session"].as_str().unwrap().to_string(),
+        v["pid"].as_u64().unwrap() as u32,
+    )
+}
+
+/// The `hook` verb with an explicit pid, which the CLI cannot choose (it sends its parent).
+fn hook_verb(socket: &Path, args: serde_json::Value) -> serde_json::Value {
+    let (reply, _) = raw_request(socket, "hook", args);
+    assert_eq!(reply["status"], "ok", "{reply}");
+    reply["data"].clone()
+}
+
+/// `bench hook <harness>` exactly as a harness runs it: the payload on stdin.
+fn bench_hook(home: &Path, harness: &str, payload: serde_json::Value) -> CliRun {
+    let mut child = Command::new(bench_bin())
+        .env_remove("BENCH_DIR")
+        .env_remove("BENCH_SUITE")
+        .env_remove("HELM_PANE")
+        .env_remove("BENCH_SESSION")
+        .env("HOME", home)
+        .args(["hook", harness])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run bench hook");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    CliRun {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+fn hosted_record(root: &Path) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(root.join("sessions/hosted.json")).unwrap()).unwrap()
+}
+
+#[test]
+fn a_hook_claims_a_mailbox_only_for_a_declared_session_on_a_terminal() {
+    let home = TestHome::claim("hookclaim");
+    let h = &home.dir;
+    let root = h.join(".bench");
+    let daemon = DaemonGuard::start(h, None);
+    let (_, tty_pid) = terminal_process(h, "holder");
+    let detached = Detached::start();
+    let event = |session: &str, pid: u32, pane: Option<&str>| {
+        let mut args = serde_json::json!({
+            "harness": "claude", "event": "SessionStart", "session": session,
+            "cwd": "/Users/op/Projects/helm", "pid": pid,
+        });
+        if let Some(p) = pane {
+            args["pane"] = serde_json::json!(p);
+        }
+        hook_verb(&daemon.socket, args)
+    };
+
+    // Declared, no terminal: a session an agent started from its tool call (#427).
+    assert_eq!(
+        event("inherited", detached.0.id(), Some(HOOK_PANE)),
+        serde_json::json!({})
+    );
+    // A terminal, nothing declared: any Claude session the operator opens anywhere.
+    assert_eq!(event("foreign", tty_pid, None), serde_json::json!({}));
+    // Both: the pane's own agent.
+    let id = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
+    let claimed = event(id, tty_pid, Some(HOOK_PANE));
+    assert_eq!(claimed["handle"], "helm-a1b2", "{claimed}");
+    assert_eq!(event(id, tty_pid, Some(HOOK_PANE))["handle"], "helm-a1b2");
+    let claims: Vec<_> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "mail/claimed")
+        .collect();
+    assert_eq!(claims.len(), 1, "claimed once, not per event: {claims:?}");
+    let record = hosted_record(&root);
+    let entry = record["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == id)
+        .expect("the claim is in the record");
+    assert_eq!(entry["via"]["kind"], "pane");
+    assert_eq!(entry["via"]["handle"], "helm-a1b2");
+    assert!(
+        record["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["id"] != "inherited" && s["id"] != "foreign"),
+        "nothing unclaimed is recorded: {record}"
+    );
+
+    // A second session in the same directory with the same tail widens rather than shares.
+    let twin = "ffffffff-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
+    assert_eq!(
+        event(twin, tty_pid, Some(HOOK_PANE))["handle"],
+        "helm-0fa1b2"
+    );
+
+    // The address survives a restart, and is not re-derived: the record answers, so no
+    // terminal is needed to be recognised again.
+    drop(daemon);
+    let daemon = DaemonGuard::start(h, None);
+    let again = hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "claude", "event": "PostToolUse", "session": id,
+            "cwd": "/Users/op/Projects/helm", "pid": detached.0.id(), "tool": "Bash"}),
+    );
+    assert_eq!(again["handle"], "helm-a1b2");
+    assert!(!h.join(".helm").exists(), "nothing reached helm's mailroom");
+}
+
+#[test]
+fn a_benchd_session_keeps_its_handle_and_its_codex_id_joins_the_record() {
+    let home = TestHome::claim("hookbench");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (session, pid) = terminal_process(h, "worker");
+    let reply = hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "codex", "event": "SessionStart", "session": "thread-1",
+            "cwd": "/tmp", "pid": pid, "bench_session": session}),
+    );
+    assert_eq!(reply["handle"], "worker");
+    let record = hosted_record(&h.join(".bench"));
+    let entry = record["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "thread-1")
+        .expect("codex's id joins the record");
+    assert_eq!(entry["harness"], "codex");
+    assert_eq!(entry["via"]["kind"], "bench");
+    assert_eq!(entry["via"]["handle"], "worker");
+}
+
+#[test]
+fn a_hook_hands_out_mail_as_context_once_and_never_while_a_prompt_is_open() {
+    let home = TestHome::claim("hookmail");
+    let h = &home.dir;
+    let root = h.join(".bench");
+    let daemon = DaemonGuard::start(h, None);
+    let (_, tty_pid) = terminal_process(h, "holder");
+    let session = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
+    let cwd = "/Users/op/Projects/helm";
+    // Claimed with the pane's terminal; every later event is recognised by session id. The
+    // first reply that reaches the model tells it the standing rule, once.
+    let first = hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "claude", "event": "UserPromptSubmit",
+            "session": session, "cwd": cwd, "pid": tty_pid, "pane": HOOK_PANE}),
+    );
+    assert_eq!(first["handle"], "helm-a1b2");
+    assert!(
+        first["context"]
+            .as_str()
+            .unwrap()
+            .starts_with("You are `helm-a1b2` on the bench."),
+        "{first}"
+    );
+    let inbox = || {
+        fs::read_dir(root.join("mail/helm-a1b2/inbox"))
+            .map(|d| d.count())
+            .unwrap_or(0)
+    };
+    for body in ["SECRET-BODY-1", "SECRET-BODY-2"] {
+        let send = bench(h, &["mail", "send", "--to", "helm-a1b2", "--body", body]);
+        assert_eq!(send.code, 0, "stderr: {}", send.stderr);
+    }
+    let payload = |event: &str, tool: &str| {
+        serde_json::json!({"session_id": session, "hook_event_name": event, "cwd": cwd,
+            "tool_name": tool, "tool_input": {"command": "ls"}, "tool_response": {"stdout": "x"}})
+    };
+
+    // A permission prompt is open: its reply reaches no model, so nothing is handed out.
+    let prompt = bench_hook(h, "claude", payload("PermissionRequest", "Bash"));
+    assert_eq!(
+        (prompt.code, prompt.stdout.as_str()),
+        (0, ""),
+        "{}",
+        prompt.stderr
+    );
+    let question = bench_hook(h, "claude", payload("PreToolUse", "AskUserQuestion"));
+    assert_eq!((question.code, question.stdout.as_str()), (0, ""));
+    assert_eq!(inbox(), 2, "the mail waits");
+
+    // The next tool call carries it: the proven shape, a pointer per message.
+    let run = bench_hook(h, "claude", payload("PostToolUse", "Bash"));
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let out: serde_json::Value = serde_json::from_str(run.stdout.trim())
+        .unwrap_or_else(|e| panic!("one JSON line ({e}): {}", run.stdout));
+    assert_eq!(out["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+    let context = out["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    let lines: Vec<&str> = context.lines().collect();
+    assert_eq!(lines.len(), 2, "{context}");
+    for (line, id) in lines.iter().zip(["m1", "m2"]) {
+        let path = root.join(format!("mail/helm-a1b2/read/{id}.md"));
+        assert_eq!(
+            *line,
+            format!("You have mail from operator: {}", path.display())
+        );
+        assert!(path.exists(), "the pointer names the retired file");
+    }
+    assert!(!run.stdout.contains("SECRET-BODY"), "never the body");
+    assert_eq!(inbox(), 0);
+
+    // Handed out once.
+    let quiet = bench_hook(h, "claude", payload("PreToolUse", "Bash"));
+    assert_eq!((quiet.code, quiet.stdout.as_str()), (0, ""));
+    bench(h, &["mail", "send", "--to", "helm-a1b2", "--body", "third"]);
+    let third = bench_hook(h, "claude", payload("PreToolUse", "Bash"));
+    let out: serde_json::Value = serde_json::from_str(third.stdout.trim()).unwrap();
+    assert_eq!(
+        out["hookSpecificOutput"]["additionalContext"],
+        format!(
+            "You have mail from operator: {}",
+            root.join("mail/helm-a1b2/read/m3.md").display()
+        )
+    );
+
+    assert_the_hook_log(h);
+    drop(daemon);
+}
+
+/// What `a_hook_hands_out_mail_as_context_once_and_never_while_a_prompt_is_open` logged: one
+/// hand-out per call that handed something out, and a state change only when the activity
+/// changed.
+fn assert_the_hook_log(h: &Path) {
+    let kinds = event_kinds(h);
+    let delivered: Vec<_> = kinds
+        .iter()
+        .filter(|(k, _)| k == "mail/delivered")
+        .collect();
+    assert_eq!(delivered.len(), 2, "{delivered:?}");
+    assert_eq!(delivered[0].1["mail"], serde_json::json!(["m1", "m2"]));
+    assert_eq!(delivered[0].1["channel"], "hook");
+    let states: Vec<String> = kinds
+        .iter()
+        .filter(|(k, _)| k == "agent/state")
+        .map(|(_, d)| {
+            let a = &d["activity"];
+            match a["waiting_for"].as_str() {
+                Some(what) => format!("waiting: {what}"),
+                None => a["kind"].as_str().unwrap().to_string(),
+            }
+        })
+        .collect();
+    assert_eq!(
+        states,
+        [
+            "busy",
+            "waiting: permission prompt",
+            "waiting: question",
+            "busy"
+        ],
+        "transitions only: three PostToolUse/PreToolUse calls while busy log nothing"
+    );
+}
+
+#[test]
+fn a_hook_never_fails_its_agent() {
+    let home = TestHome::claim("hooksafe");
+    let h = &home.dir;
+    let payload =
+        serde_json::json!({"session_id": "s", "hook_event_name": "PostToolUse", "cwd": "/tmp"});
+    // No daemon at all, a harness nobody wired, a payload that is not JSON: exit 0, nothing
+    // on stdout.
+    let none = bench_hook(h, "claude", payload.clone());
+    assert_eq!(
+        (none.code, none.stdout.as_str()),
+        (0, ""),
+        "{}",
+        none.stderr
+    );
+    let _daemon = DaemonGuard::start(h, None);
+    let wrong = bench_hook(h, "cursor", payload.clone());
+    assert_eq!((wrong.code, wrong.stdout.as_str()), (0, ""));
+    let mut child = Command::new(bench_bin())
+        .env("HOME", h)
+        .env_remove("BENCH_DIR")
+        .env_remove("BENCH_SUITE")
+        .args(["hook", "claude"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"not json").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!((out.status.code(), out.stdout.len()), (Some(0), 0));
+    // An unaddressed session is answered and gets nothing; pi gets the reply itself.
+    let pi = bench_hook(
+        h,
+        "pi",
+        serde_json::json!({"session_id": "p", "hook_event_name": "context", "cwd": "/tmp"}),
+    );
+    assert_eq!((pi.code, pi.stdout.trim()), (0, "{}"));
+    // A new event name is logged once and changes nothing.
+    for _ in 0..2 {
+        let run = bench_hook(
+            h,
+            "claude",
+            serde_json::json!({"session_id": "s", "hook_event_name": "BrandNew", "cwd": "/tmp"}),
+        );
+        assert_eq!(run.code, 0);
+    }
+    let unknown = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "hook/unknown-event")
+        .count();
+    assert_eq!(unknown, 1);
+}
+
+#[test]
+fn mail_a_hook_handed_out_is_never_pasted_as_well() {
+    // The pty paste still exists until the next PR. A benchd session whose hook took its mail
+    // must not also get the notice pasted: that would be the same message delivered twice.
+    let home = TestHome::claim("hookpaste");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (session, pid) = terminal_process(h, "w");
+    let send = |body: &str| {
+        let run = bench(h, &["mail", "send", "--to", "w", "--body", body]);
+        assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+        json_of(&run)["id"].as_str().unwrap().to_string()
+    };
+    // Sent and handed out inside the reactor's 2 s idle gate, so the paste has not happened.
+    let taken = send("first");
+    let reply = hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "claude", "event": "PostToolUse", "session": "rt",
+            "cwd": "/tmp", "pid": pid, "bench_session": session, "tool": "Bash"}),
+    );
+    assert!(
+        reply["context"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("read/{taken}.md")),
+        "{reply}"
+    );
+    // The positive control: mail the hook never took is still pasted.
+    let pasted = send("second");
+    wait_until("the second mail is pasted", Duration::from_secs(20), || {
+        event_kinds(h)
+            .iter()
+            .any(|(k, d)| k == "agent/woken" && d["mail"] == pasted.as_str())
+    });
+    let woken: Vec<_> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "agent/woken")
+        .map(|(_, d)| d["mail"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(woken, [pasted], "the handed-out mail was not pasted too");
+}
+
+#[test]
+fn a_shell_string_hook_reports_the_agent_not_the_shell() {
+    // codex runs its hook command as a shell string. bash and macOS's sh exec a single
+    // command; dash (Ubuntu's sh) forks it, so `bench hook`'s parent is the shell. `; true`
+    // makes every shell fork, so this proves the daemon sees through the shell to the agent
+    // (here, this test process) on either system.
+    let home = TestHome::claim("hookshell");
+    let h = &home.dir;
+    let _daemon = DaemonGuard::start(h, None);
+    let (session, _) = terminal_process(h, "w");
+    let payload = serde_json::json!({"session_id": "thread-sh", "hook_event_name": "SessionStart", "cwd": "/tmp"});
+    let mut child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("{} hook codex; true", bench_bin().display()))
+        .env_remove("BENCH_DIR")
+        .env_remove("BENCH_SUITE")
+        .env("HOME", h)
+        .env("BENCH_SESSION", &session)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    assert_eq!(child.wait_with_output().unwrap().status.code(), Some(0));
+    let claimed: Vec<_> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "mail/claimed")
+        .collect();
+    assert_eq!(claimed.len(), 1, "{claimed:?}");
+    assert_eq!(claimed[0].1["pid"], std::process::id(), "{:?}", claimed[0]);
 }

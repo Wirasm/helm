@@ -9,15 +9,63 @@ import Foundation
 /// `daemon/fixtures/`, the same files the daemon gate pins byte for byte.
 ///
 /// Nested rather than top-level because helm's own `Workspace`, `Column`, `Slot` and `Pane` are
-/// the render values; these are what crosses the socket, and PR 3c converts one into the other.
+/// the render values; these are what crosses the socket, and `BenchDocument+Helm.swift` converts
+/// one into the other.
 package struct BenchDocument: Codable, Equatable, Sendable {
     package var workspaces: [Workspace]
     /// The workspace on screen, by path. nil only when nothing is open.
     package var active: String?
+    /// Named tab holders shown over the bench (#356), beside the workspaces rather than in
+    /// one. Absent on the wire when there are none, as on the Rust side.
+    package var drawers: [Drawer]
+    /// The drawer shown over the bench, by name. One at a time.
+    package var openDrawer: String?
 
-    package init(workspaces: [Workspace], active: String?) {
+    package init(
+        workspaces: [Workspace], active: String?, drawers: [Drawer] = [], openDrawer: String? = nil
+    ) {
         self.workspaces = workspaces
         self.active = active
+        self.drawers = drawers
+        self.openDrawer = openDrawer
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case workspaces, active, drawers
+        case openDrawer = "open_drawer"
+    }
+
+    package init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        workspaces = try c.decode([Workspace].self, forKey: .workspaces)
+        active = try c.decodeIfPresent(String.self, forKey: .active)
+        drawers = try c.decodeIfPresent([Drawer].self, forKey: .drawers) ?? []
+        openDrawer = try c.decodeIfPresent(String.self, forKey: .openDrawer)
+    }
+
+    package func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(workspaces, forKey: .workspaces)
+        try c.encodeIfPresent(active, forKey: .active)
+        if !drawers.isEmpty { try c.encode(drawers, forKey: .drawers) }
+        try c.encodeIfPresent(openDrawer, forKey: .openDrawer)
+    }
+
+    /// A drawer: panes shown over the bench instead of in it. Never empty — benchd removes a
+    /// drawer with its last pane — and `selected` is always a pane it holds.
+    package struct Drawer: Codable, Equatable, Sendable {
+        package var name: String
+        package var panes: [Pane]
+        package var selected: UUID
+        /// An agent put or re-offered something here that the operator has not seen yet.
+        package var badged: Bool
+
+        package init(name: String, panes: [Pane], selected: UUID, badged: Bool = false) {
+            self.name = name
+            self.panes = panes
+            self.selected = selected
+            self.badged = badged
+        }
     }
 
     package struct Workspace: Codable, Equatable, Sendable {
@@ -38,6 +86,11 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         package var columns: [Column]
         package var focusedSlot: UUID
 
+        package init(columns: [Column], focusedSlot: UUID) {
+            self.columns = columns
+            self.focusedSlot = focusedSlot
+        }
+
         private enum CodingKeys: String, CodingKey {
             case columns
             case focusedSlot = "focused_slot"
@@ -48,6 +101,12 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         package var id: UUID
         package var slots: [Slot]
         package var width: Double
+
+        package init(id: UUID, slots: [Slot], width: Double) {
+            self.id = id
+            self.slots = slots
+            self.width = width
+        }
     }
 
     package struct Slot: Codable, Equatable, Sendable {
@@ -55,6 +114,13 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         package var panes: [Pane]
         package var selected: UUID
         package var height: Double
+
+        package init(id: UUID, panes: [Pane], selected: UUID, height: Double) {
+            self.id = id
+            self.panes = panes
+            self.selected = selected
+            self.height = height
+        }
     }
 
     package struct Pane: Codable, Equatable, Sendable {

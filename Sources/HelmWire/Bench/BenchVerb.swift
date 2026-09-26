@@ -15,6 +15,15 @@ package enum BenchActor: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case kind, pane, handle }
 
+    /// The wire's name for who asked: `operator`, `agent` or `helm`.
+    package var kind: String {
+        switch self {
+        case .operatorGesture: "operator"
+        case .agent: "agent"
+        case .helm: "helm"
+        }
+    }
+
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .kind) {
@@ -33,8 +42,7 @@ package enum BenchActor: Codable, Equatable, Sendable {
     package func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .operatorGesture: try c.encode("operator", forKey: .kind)
-        case .helm: try c.encode("helm", forKey: .kind)
+        case .operatorGesture, .helm: try c.encode(kind, forKey: .kind)
         case let .agent(pane, handle):
             try c.encode("agent", forKey: .kind)
             try c.encodeIfPresent(pane, forKey: .pane)
@@ -75,6 +83,10 @@ package enum BenchVerb: Equatable, Sendable {
     /// A new pane showing `surface`, placed by benchd's rules; `workspace` nil means the active
     /// one.
     case paneOpen(workspace: String? = nil, surface: Surface)
+    /// `pane/open` into a named drawer, outright: the rules are not asked, and an agent's pane
+    /// badges the drawer instead of opening it. Its own case because benchd refuses a request
+    /// naming both a workspace and a drawer, so helm cannot build one.
+    case paneOpenInDrawer(String, surface: Surface)
     /// A terminal unless a surface is named.
     case paneSplit(workspace: String? = nil, direction: BenchSplit, surface: Surface? = nil)
     case paneClose(UUID)
@@ -86,6 +98,9 @@ package enum BenchVerb: Equatable, Sendable {
     case focusSlot(UUID)
     case focusStep(workspace: String? = nil, direction: BenchDirection)
     case layoutResize(BenchDivider, fraction: Double)
+    /// Show a drawer over the bench, or hide it if it is the one shown. `surface` is what a
+    /// drawer that does not exist yet starts with. Opening is the operator's focus.
+    case drawerToggle(name: String, surface: Surface? = nil)
 
     /// The wire name, which is also the request's `verb`.
     package var name: String {
@@ -97,7 +112,7 @@ package enum BenchVerb: Equatable, Sendable {
         case .workspaceReset: "workspace/reset"
         case .workspaceUnshelve: "workspace/unshelve"
         case .workspaceImport: "workspace/import"
-        case .paneOpen: "pane/open"
+        case .paneOpen, .paneOpenInDrawer: "pane/open"
         case .paneSplit: "pane/split"
         case .paneClose: "pane/close"
         case .paneShow: "pane/show"
@@ -107,6 +122,7 @@ package enum BenchVerb: Equatable, Sendable {
         case .focusSlot: "focus/slot"
         case .focusStep: "focus/step"
         case .layoutResize: "layout/resize"
+        case .drawerToggle: "drawer/toggle"
         }
     }
 }
@@ -131,11 +147,12 @@ package struct BenchRequest: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case id, verb, args, by, asked }
     private enum ArgKeys: String, CodingKey {
         case path, document, workspace, surface, direction, pane, to, name, agent, slot, divider,
-            fraction
+            fraction, drawer
     }
     private enum StepKeys: String, CodingKey { case step }
     private enum DividerKeys: String, CodingKey { case between, member, against }
 
+    // swiftlint:disable:next cyclomatic_complexity function_body_length - legacy (#418): 18 (limit 15), 61 lines (limit 60)
     package func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
@@ -156,6 +173,9 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             try a.encode(document, forKey: .document)
         case let .paneOpen(workspace, surface):
             try a.encodeIfPresent(workspace, forKey: .workspace)
+            try a.encode(surface, forKey: .surface)
+        case let .paneOpenInDrawer(drawer, surface):
+            try a.encode(drawer, forKey: .drawer)
             try a.encode(surface, forKey: .surface)
         case let .paneSplit(workspace, direction, surface):
             try a.encodeIfPresent(workspace, forKey: .workspace)
@@ -192,11 +212,15 @@ package struct BenchRequest: Codable, Equatable, Sendable {
                 try d.encode(against, forKey: .against)
             }
             try a.encode(fraction, forKey: .fraction)
+        case let .drawerToggle(name, surface):
+            try a.encode(name, forKey: .drawer)
+            try a.encodeIfPresent(surface, forKey: .surface)
         }
     }
 
     /// Decoding exists for the conformance tests, which read the daemon's own sample requests
     /// back into this type; helm itself only ever sends.
+    // swiftlint:disable:next cyclomatic_complexity function_body_length - legacy (#418): 21 (limit 15), 71 lines (limit 60)
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -219,9 +243,19 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case "workspace/import":
             verb = .workspaceImport(try a.decode(BenchDocument.self, forKey: .document))
         case "pane/open":
-            verb = .paneOpen(
-                workspace: try a.decodeIfPresent(String.self, forKey: .workspace),
-                surface: try a.decode(Surface.self, forKey: .surface))
+            let surface = try a.decode(Surface.self, forKey: .surface)
+            if let drawer = try a.decodeIfPresent(String.self, forKey: .drawer) {
+                guard try a.decodeIfPresent(String.self, forKey: .workspace) == nil else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .drawer, in: a,
+                        debugDescription: "pane/open names a workspace and a drawer")
+                }
+                verb = .paneOpenInDrawer(drawer, surface: surface)
+            } else {
+                verb = .paneOpen(
+                    workspace: try a.decodeIfPresent(String.self, forKey: .workspace),
+                    surface: surface)
+            }
         case "pane/split":
             verb = .paneSplit(
                 workspace: try a.decodeIfPresent(String.self, forKey: .workspace),
@@ -251,6 +285,10 @@ package struct BenchRequest: Codable, Equatable, Sendable {
                 ? .slots(member: member, against: against)
                 : .columns(member: member, against: against)
             verb = .layoutResize(divider, fraction: try a.decode(Double.self, forKey: .fraction))
+        case "drawer/toggle":
+            verb = .drawerToggle(
+                name: try a.decode(String.self, forKey: .drawer),
+                surface: try a.decodeIfPresent(Surface.self, forKey: .surface))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .verb, in: c, debugDescription: "not a layout verb: \(name)")
@@ -277,12 +315,29 @@ package struct LayoutReport: Codable, Equatable, Sendable {
         case focusedPaneBefore = "focused_pane_before"
         case focusedPaneAfter = "focused_pane_after"
     }
+
+    package init(
+        seq: UInt64, changed: Bool, paneCreated: UUID? = nil, pane: UUID? = nil,
+        focusedPaneBefore: UUID? = nil, focusedPaneAfter: UUID? = nil
+    ) {
+        self.seq = seq
+        self.changed = changed
+        self.paneCreated = paneCreated
+        self.pane = pane
+        self.focusedPaneBefore = focusedPaneBefore
+        self.focusedPaneAfter = focusedPaneAfter
+    }
 }
 
 /// `bench/get`'s answer, and the first line of `events --follow`.
 package struct DocumentAt: Codable, Equatable, Sendable {
     package var seq: UInt64
     package var document: BenchDocument
+
+    package init(seq: UInt64, document: BenchDocument) {
+        self.seq = seq
+        self.document = document
+    }
 }
 
 /// One line of `events --follow`: the event's identity, and the whole document when the event
@@ -292,9 +347,58 @@ package struct BenchFrame: Codable, Equatable, Sendable {
     package var event: Event
     package var document: BenchDocument?
 
+    package init(event: Event, document: BenchDocument?) {
+        self.event = event
+        self.document = document
+    }
+
     package struct Event: Codable, Equatable, Sendable {
         package var seq: UInt64
         package var at: String
         package var kind: String
+
+        package init(seq: UInt64, at: String, kind: String) {
+            self.seq = seq
+            self.at = at
+            self.kind = kind
+        }
+    }
+}
+
+// MARK: - The envelope
+
+/// Every answer's outcome (`bench-wire`'s `Status`). There is no "no daemon": that is the
+/// transport's failure, decided by the caller when the socket cannot be reached.
+package enum BenchStatus: String, Codable, Sendable {
+    case ok, refused, error
+}
+
+/// One answer line from benchd: `{id, status, reason?, data?}`, with `data` decoded as the
+/// payload the verb answers with — a `LayoutReport` for a layout verb, a `DocumentAt` for
+/// `bench/get` and for the first line of `events --follow`.
+package struct BenchResponse<Payload: Decodable & Sendable>: Decodable, Sendable {
+    package var id: String
+    package var status: BenchStatus
+    /// Why, for a refusal or an error. For humans and agents; never parsed.
+    package var reason: String?
+    package var data: Payload?
+}
+
+/// The line that turns a connection into `events --follow`: benchd answers with the document,
+/// then writes a `BenchFrame` per event for as long as the connection stays open.
+package struct BenchFollowRequest: Encodable, Sendable {
+    package var id: String
+
+    package init(id: String) { self.id = id }
+
+    private enum CodingKeys: String, CodingKey { case id, verb, args }
+    private enum ArgKeys: String, CodingKey { case follow }
+
+    package func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode("events", forKey: .verb)
+        var args = c.nestedContainer(keyedBy: ArgKeys.self, forKey: .args)
+        try args.encode(true, forKey: .follow)
     }
 }
