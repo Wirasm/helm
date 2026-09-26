@@ -116,7 +116,7 @@ final class TerminalManager: ObservableObject {
     /// bounds startup to what is drawn.
     ///
     /// `attaching` is the command for each pane that shows a benchd session
-    /// (`BenchDocument.attachCommands`): `bench attach <session>`, so the pane is the agent benchd
+    /// (`BenchDocument.Bench.attachCommands`): `bench attach <session>`, so the pane is the agent benchd
     /// runs. Every other pane gets a login shell.
     func adopt(terminals ids: [UUID], in path: WorkspacePath, attaching: [UUID: String] = [:]) {
         activeWorkspacePath = path
