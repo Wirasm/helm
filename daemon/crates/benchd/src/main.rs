@@ -654,10 +654,6 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
     Ok(0)
 }
 
-/// `<root>/claude-settings.json`, rewritten at every Claude spawn so it always names the
-/// `bench` beside this daemon: the hooks that report to benchd and the inbound rule that lets
-/// benchd start a turn in an idle session. The operator's own wiring names the same handler,
-/// and Claude runs an identical handler once, so a machine wired by hand is not called twice.
 /// `close <session>`: drain-then-die a session by its id. Naming the session is the explicit
 /// form: a pane still showing it stays, and shows it ended, exactly as when the agent exits by
 /// itself. Closing the pane (`--force`) is the route that takes both.
@@ -723,6 +719,10 @@ fn resize(core: &Arc<Mutex<Core>>, req: &Request) -> Response {
     }
 }
 
+/// `<root>/claude-settings.json`, rewritten at every Claude spawn so it always names the
+/// `bench` beside this daemon: the hooks that report to benchd and the inbound rule that lets
+/// benchd start a turn in an idle session. The operator's own wiring names the same handler,
+/// and Claude runs an identical handler once, so a machine wired by hand is not called twice.
 fn claude_settings(root: &std::path::Path) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot find benchd itself: {e}"))?;
     let bench = bench_wire::hook::sibling_bench(&exe);
