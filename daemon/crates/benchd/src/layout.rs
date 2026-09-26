@@ -140,6 +140,7 @@ pub fn document_at(core: &Core) -> DocumentAt {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 124 lines, limit 100")]
 fn apply(
     doc: &mut Document,
     rules: &Rules,

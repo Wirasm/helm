@@ -74,13 +74,14 @@ final class ReleaseResumeScriptTests: XCTestCase {
             ["-c", "source \"$1\"; shift; \(function) \"$@\"", "test", script.path] + arguments)
     }
 
-    /// A bundle whose executable is a copy of a system binary, so it can be run and seen by `ps`.
-    private func makeBundle(named name: String, executable: String = "/bin/sleep") throws -> URL {
+    /// A bundle whose executable is a copy of one of this suite's compiled stubs, so it can be run
+    /// and seen by `ps` as a process running from inside the bundle.
+    private func makeBundle(named name: String, executable: URL? = nil) throws -> URL {
         let bundle = scratch.appendingPathComponent(name)
         let macOS = bundle.appendingPathComponent("Contents/MacOS")
         try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
         try FileManager.default.copyItem(
-            at: URL(fileURLWithPath: executable), to: macOS.appendingPathComponent("Helm"))
+            at: try executable ?? compiled.sleeper, to: macOS.appendingPathComponent("Helm"))
         let plist: [String: Any] = ["CFBundleExecutable": "Helm"]
         let data = try PropertyListSerialization.data(
             fromPropertyList: plist, format: .xml, options: 0)
@@ -88,27 +89,79 @@ final class ReleaseResumeScriptTests: XCTestCase {
         return bundle
     }
 
-    /// A binary that forks one child and both sleep 30s, so a fake helm can have a descendant.
-    /// Compiled rather than copied: macOS kills a copy of `/bin/bash`, `/bin/sh` or
-    /// `/usr/bin/time` on launch (exit 137), while a copy of `/bin/sleep` runs.
-    private func forkingExecutable() throws -> URL {
-        let source = scratch.appendingPathComponent("forker.c")
-        let binary = scratch.appendingPathComponent("forker")
-        try Data(
-            "#include <unistd.h>\nint main(void) { fork(); sleep(30); return 0; }\n".utf8
-        ).write(to: source)
-        let compile = try bash([
-            "-c", "xcrun clang \"$1\" -o \"$2\"", "cc", source.path, binary.path,
-        ])
-        XCTAssertEqual(compile.status, 0, compile.stderr)
-        return binary
+    // MARK: - Compiled stubs
+
+    /// Every executable this suite launches is compiled here, never copied from `/bin`: AGENTS.md
+    /// forbids copying an Apple system binary in a test (#409, #426). Compiled once per class run,
+    /// removed with it.
+    private struct Stubs {
+        /// Sleeps 30s and exits: the fake helm, and a process running outside it.
+        let sleeper: URL
+        /// Forks one child and both sleep 30s, so a fake helm can have a descendant.
+        let forker: URL
+
+        static func compile(into directory: URL) throws -> Stubs {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+            func stub(_ name: String, _ body: String) throws -> URL {
+                let source = directory.appendingPathComponent("\(name).c")
+                let binary = directory.appendingPathComponent(name)
+                try Data("#include <unistd.h>\nint main(void) { \(body) }\n".utf8).write(to: source)
+                let clang = Process()
+                clang.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+                clang.arguments = ["clang", source.path, "-o", binary.path]
+                let err = Pipe()
+                clang.standardError = err
+                try clang.run()
+                let stderr = err.fileHandleForReading.readDataToEndOfFile()
+                clang.waitUntilExit()
+                guard clang.terminationStatus == 0 else {
+                    throw CompileFailed(stub: name, stderr: String(decoding: stderr, as: UTF8.self))
+                }
+                return binary
+            }
+            return Stubs(
+                sleeper: try stub("sleeper", "sleep(30); return 0;"),
+                forker: try stub("forker", "fork(); sleep(30); return 0;"))
+        }
+    }
+
+    private struct CompileFailed: Error, CustomStringConvertible {
+        let stub: String
+        let stderr: String
+        var description: String { "could not compile the \(stub) stub: \(stderr)" }
+    }
+
+    // XCTest runs a class's `setUp`, its tests and its `tearDown` serially on one thread, so
+    // nothing races on this.
+    // The directory is held apart from the result so a compile that fails halfway is still
+    // cleaned up.
+    nonisolated(unsafe) private static var stubDirectory: URL?
+    nonisolated(unsafe) private static var stubs: Result<Stubs, any Error>?
+
+    override class func setUp() {
+        super.setUp()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("release-resume-stubs-\(UUID().uuidString)")
+        stubDirectory = directory
+        stubs = Result { try Stubs.compile(into: directory) }
+    }
+
+    override class func tearDown() {
+        if let stubDirectory { try? FileManager.default.removeItem(at: stubDirectory) }
+        stubDirectory = nil
+        stubs = nil
+        super.tearDown()
+    }
+
+    private var compiled: Stubs {
+        get throws { try XCTUnwrap(Self.stubs).get() }
     }
 
     /// Runs an executable, bounded by its own sleep rather than by this suite remembering.
-    private func run(_ executable: URL, _ arguments: [String] = ["30"]) throws -> pid_t {
+    private func run(_ executable: URL) throws -> pid_t {
         let process = Process()
         process.executableURL = executable
-        process.arguments = arguments
         try process.run()
         spawned.append(process)
         return process.processIdentifier
@@ -166,7 +219,7 @@ final class ReleaseResumeScriptTests: XCTestCase {
     func testRefusesASessionThatIsNotInsideTheHelm() throws {
         let bundle = try makeBundle(named: "Target.app")
         _ = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
-        let elsewhere = try run(URL(fileURLWithPath: "/bin/sleep"))
+        let elsewhere = try run(try compiled.sleeper)
         let session = "11111111-2222-3333-4444-555555555555"
         let home = scratch.appendingPathComponent("home")
         let sessions = home.appendingPathComponent(".claude/sessions")
@@ -188,8 +241,8 @@ final class ReleaseResumeScriptTests: XCTestCase {
     /// `cwd`. A guard that refused every session, or compared the pids the wrong way round,
     /// fails here.
     func testASessionInsideTheHelmPassesTheGuard() throws {
-        let bundle = try makeBundle(named: "Target.app", executable: try forkingExecutable().path)
-        let helm = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"), [])
+        let bundle = try makeBundle(named: "Target.app", executable: try compiled.forker)
+        let helm = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
         var child = ""
         for _ in 0..<50 where child.isEmpty {
             child = try bash(["-c", "pgrep -P \(helm)"]).stdout
