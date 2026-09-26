@@ -593,8 +593,12 @@ final class SpoolModel: ObservableObject {
         // Waiting for them in sequence would spend the deadline twice.
         let resolved = await poll(
             until: claimDeadline,
-            for: { [mail] () -> (agent: pid_t?, who: BenchMailWho)? in
-                guard let who = mail.who(terminal) else { return nil }
+            for: { [mail] () async -> (agent: pid_t?, who: BenchMailWho)? in
+                // Off the main actor: this asks benchd every tick for up to the whole deadline,
+                // and a benchd that accepts but does not answer holds each ask for the socket's
+                // timeout. The UI must not stall for that.
+                guard let who = await Task.detached(operation: { mail.who(terminal) }).value
+                else { return nil }
                 let foreground = spawner.foregroundPid(of: terminal)
                 return (foreground == shell ? nil : foreground, who)
             })
@@ -612,7 +616,7 @@ final class SpoolModel: ObservableObject {
         }
         answer(
             request.id, .ready, terminalId: TerminalID(terminal),
-            pid: resolved.agent, sessionId: resolved.who.session,
+            pid: resolved.agent ?? resolved.who.pid, sessionId: resolved.who.session,
             handle: resolved.who.handle, runtime: resolved.who.harness)
     }
 
@@ -646,14 +650,14 @@ final class SpoolModel: ObservableObject {
     /// attempts instead of failing earlier — which is what both flaky process-spawning tests
     /// in this repo actually got wrong.
     private func poll<Value>(
-        until deadline: Duration, for probe: @MainActor () -> Value?
+        until deadline: Duration, for probe: @MainActor () async -> Value?
     ) async -> Value? {
         let expiry = ContinuousClock.now.advanced(by: deadline)
         while ContinuousClock.now < expiry {
-            if let value = probe() { return value }
+            if let value = await probe() { return value }
             try? await Task.sleep(for: Self.pollInterval)
             if Task.isCancelled { return nil }
         }
-        return probe()
+        return await probe()
     }
 }

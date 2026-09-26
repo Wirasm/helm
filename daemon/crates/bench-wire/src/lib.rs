@@ -333,6 +333,9 @@ pub struct MailWho {
     pub handle: String,
     pub harness: Harness,
     pub session: String,
+    /// The agent's process, as its last hook reported it. helm falls back to it when a spawn is
+    /// claimed before the pty's foreground has moved off the shell.
+    pub pid: u32,
 }
 
 // ---------------------------------------------------------------------------

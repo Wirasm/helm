@@ -60,7 +60,8 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
                 mail: BenchMailbox(
                     who: { pane in
                         bench.agents[pane].map {
-                            BenchMailWho(handle: $0, harness: "claude", session: "s-\($0.value)")
+                            BenchMailWho(
+                                handle: $0, harness: "claude", session: "s-\($0.value)", pid: 1)
                         }
                     },
                     send: { to, _, _, _ in bench.sent.append(to) })))

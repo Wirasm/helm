@@ -9,7 +9,7 @@ import XCTest
 /// `BuildStamp` decodes. Neither script can `import Helm` — one runs inside an Xcode build
 /// phase and the other from a Makefile, both outside any Swift target — so the format is
 /// spelled twice, in Swift and in shell. That is the same runtime-boundary carve-out AGENTS.md
-/// grants the spool scripts and the mailbox, and it comes with the same obligation: the
+/// grants the spool scripts, and it comes with the same obligation: the
 /// duplication must be **detectable** rather than trusted.
 ///
 /// So this runs the real scripts as subprocesses and decodes their output with the real types.

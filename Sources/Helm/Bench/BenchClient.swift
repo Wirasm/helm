@@ -104,7 +104,9 @@ final class BenchClient: ObservableObject {
     }
 
     /// One verb, one answer, at a socket path: for a caller that holds no client (the mail
-    /// seam, which runs off the main actor).
+    /// seam). Blocking and bounded by `requestTimeout`, like the instance form: a canvas note
+    /// calls it on the main actor as `DaemonSink` does, and the spool's repeated ask moves it
+    /// off.
     nonisolated static func request<Payload: Decodable & Sendable>(
         _ request: some Encodable, at socketPath: String, answering _: Payload.Type = Payload.self
     ) throws -> BenchResponse<Payload> {

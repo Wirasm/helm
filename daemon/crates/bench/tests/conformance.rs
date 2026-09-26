@@ -4172,6 +4172,50 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     );
 }
 
+/// A killed agent reports no `SessionEnd`, so its record stays: `mail/who` must not name it over
+/// the live agent in the same pane, whichever reported last.
+#[test]
+fn mail_who_skips_an_agent_whose_process_is_gone() {
+    let home = TestHome::claim("whodead");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (_, older) = terminal_process(h, "older");
+    let (newer_session, newer) = terminal_process(h, "newer");
+    let report = |session: &str, pid: u32| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "claude", "event": "SessionStart", "session": session,
+                "cwd": "/Users/op/Projects/helm", "pid": pid, "pane": HOOK_PANE}),
+        )["handle"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let live = report("0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2", older);
+    std::thread::sleep(Duration::from_millis(20));
+    let dead = report("ffffffff-1c4d-4e5f-8a6b-7c8d9e0f0000", newer);
+    let run = bench(h, &["mail", "who", "--pane", HOOK_PANE]);
+    assert_eq!(
+        json_of(&run)["handle"],
+        dead.as_str(),
+        "both alive: the later one"
+    );
+    assert_eq!(bench(h, &["close", &newer_session]).code, 0);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let run = bench(h, &["mail", "who", "--pane", HOOK_PANE]);
+        if json_of(&run)["handle"] == live.as_str() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "still naming the killed agent: {}",
+            run.stdout
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 fn mail_who_names_the_agent_in_a_pane_and_refuses_an_empty_one() {
     let home = TestHome::claim("who");
@@ -4205,5 +4249,6 @@ fn mail_who_names_the_agent_in_a_pane_and_refuses_an_empty_one() {
     let run = bench(h, &["mail", "who", "--pane", HOOK_PANE]);
     assert_eq!(json_of(&run)["handle"], second.as_str());
     assert_eq!(json_of(&run)["harness"], "claude");
+    assert_eq!(json_of(&run)["pid"], pid, "the process its hook reported");
     assert_eq!(bench(h, &["mail", "who", "--pane", "not-a-uuid"]).code, 3);
 }

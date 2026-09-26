@@ -128,7 +128,7 @@ final class BenchWireConformanceTests: XCTestCase {
             reply,
             BenchMailWho(
                 handle: Handle(validating: "helm-a1b2")!, harness: "claude",
-                session: "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2"))
+                session: "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2", pid: 4242))
     }
 
     /// A document written before drawers existed has none, and helm writes none back.

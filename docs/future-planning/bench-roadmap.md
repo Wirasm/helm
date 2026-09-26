@@ -264,10 +264,10 @@ collapses into taps.
 - Loop caps bench-side on agent↔agent chains.
 
 **Prove:** three-runtime mail matrix (each → each, idle and busy recipients) with wakes
-observed; the mailbox-conformance fixture set (`hooks/mailbox-conformance.mjs`) ported
-and green against benchd.
-**Unwire:** delivery/reap logic in `hooks/helm-mail.mjs` and the pi watcher (sensor
-halves stay); the Arm-a-watch instructions in the mail skills.
+observed. (The mailbox-conformance fixture set was not ported: with one mailroom there are no
+copies left to compare, and #358 deleted it.)
+**Unwire:** done in #358 — helm's hooks, its pi mail extension and both helm-mail skills are
+deleted rather than thinned; `bench hook` and `pi/extensions/bench` are the sensors.
 
 ## M3 — The wire front moves
 

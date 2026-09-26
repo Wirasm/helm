@@ -69,74 +69,41 @@ final class HandleTests: XCTestCase {
     }
 
     /// **The control that stops the rule overshooting.** Every candidate must survive: refusing
-    /// one would make helm unable to read a mailbox it created.
+    /// one would make helm unable to address an agent benchd named.
     ///
-    /// **These are real outputs, obtained by running the real code.** `slug`, `tail`,
-    /// `heldByAnother` and `deriveHandle` were lifted verbatim out of the writers by
-    /// brace-matching the file text and executed — not transcribed from reading them. The first
-    /// draft of this test did transcribe them, got `tail` wrong (it strips edge dashes; the draft
-    /// assumed it did not), and pinned `helm--678` here as a reachable handle. It is not
-    /// reachable — the real answer is `helm-678` — and `Handle`'s header now says so. Re-derive
-    /// rather than re-read if this list ever needs another entry.
-    ///
-    /// **And from *both* writers, which is why one entry below is new.** That first
-    /// re-measurement ran `hooks/helm-mail.mjs` only, while everything it was cited in support of
-    /// said "the writers". They were not the same function: where every candidate handle is held,
-    /// `hooks` returned `<where>-<full>` and `pi/extensions/helm-mail/index.ts` returned
-    /// `<where>-<full>-<process.pid>`. That shape is reachable and is a handle helm must be able
-    /// to read.
-    ///
-    /// **Since #262 both writers emit it**, because `hooks` returning `<where>-<full>` there was a
-    /// defect and not a dialect — it handed back the last rung of its own candidate list, which
-    /// `heldByAnother` had just called held, and the claim overwrote a live agent's mailbox. The
-    /// entry stays and its comment is the only thing that changes: it is no longer "pi's", it is
-    /// what an exhausted address space produces in either runtime.
-    func testEveryHandleTheWritersCanEmitIsStillAccepted() throws {
+    /// **These are real outputs of benchd's `derive_handle`, obtained by running it** (a
+    /// throwaway `#[test]` printing them, 2026-09-26), not transcribed from reading it: the
+    /// last corpus here was first transcribed and got `tail` wrong. Re-run it rather than
+    /// re-read it if this list needs another entry.
+    func testEveryHandleBenchdCanEmitIsStillAccepted() throws {
         let corpus = [
-            "helm-4831",  // the ordinary shape: <cwd basename>-<tail of session id>
-            "agentic-coding-course-c9db",  // a multi-word basename, slugged
-            "agent",  // slug's own fallback when a component reduces to nothing
-            // deriveHandle("/x/helm", "12345-678"): tail(full, 4) slices "-678" and strips the
-            // leading dash. The one entry where tail() itself does the stripping — and the case
-            // the draft got wrong, having assumed it did not.
-            "helm-678",
-            "agent-gent",  // deriveHandle("/x/---", "---") — both components hit slug's fallback
-            // deriveHandle("/x/a", "-b-"): slug("-b-") is already "b", so full.length is 1, no
-            // width in [4, 6, 8] is smaller, and tail() is never called at all. The dashes went
-            // to slug's own edge-strip. Traced by executing it — an earlier comment here credited
-            // tail, which is this file's own cautionary tale repeated one size smaller.
-            "a-b",
-            "helm-f9e4639d-1111-2222-3333-444455556666",  // the full-session-id candidate
-            // The exhaustion fallback — both writers append process.pid since #262.
-            "helm-12345-678-44347",
-            "0",  // a basename that is only digits
+            "helm-4831",  // /Users/op/Projects/helm, session …-dd8f-4831
+            "agentic-coding-cour-c9db",  // the place is cut to 19 bytes
+            "agent-1234",  // a cwd of "/" has no basename
+            "agent-s-2",  // cwd "/x/---", session "---": nothing survives slug, numbered fallback
+            "helm-7c8d9e0fa1b2",  // the 4-, 6- and 8-byte tails held: the 12-byte one
+            "a-very-long-project-7c8d9e0fa1b2",  // the longest shape: 19 + 1 + 12, exactly 32
+            "0-678",  // a basename that is only digits
         ]
         for candidate in corpus {
             XCTAssertEqual(
                 Handle(validating: candidate)?.value, candidate,
-                "\(candidate.debugDescription) is a handle deriveHandle can produce; refusing it "
-                    + "would make helm unable to read a mailbox it created")
+                "\(candidate.debugDescription) is a handle benchd can mint; refusing it would "
+                    + "make helm unable to address the agent it names")
         }
     }
 
-    /// **The margin, recorded so it reads as a choice rather than an oversight.** The writers can
-    /// only emit `[a-z0-9]+(-[a-z0-9]+)*` — no edge dash, no `--`, measured over 225,702 fuzzed
-    /// derivations of the real `hooks` `deriveHandle` and 238,202 of pi's, none outside it. This
-    /// rule is looser than that on purpose: it refuses characters and says nothing about where
-    /// dashes fall, so it depends on one property of the far side instead of three. `Handle`'s
-    /// header has the argument, and the reason it matters — that measurement was taken once and
-    /// no *test* runs the real writers against this rule, so the boundary is unwatched and the
-    /// cheaper dependency is the safer one.
-    ///
-    /// If a later change *does* constrain dash placement, this test is what should be deleted to
-    /// say so — deliberately, with the header updated in the same commit.
-    func testTheRuleIsLooserThanWhatTheWritersEmitAndThatIsDeliberate() throws {
-        for candidate in ["helm--678", "-helm", "helm-"] {
+    /// **benchd's `validate_handle`, clause for clause.** benchd is the one writer since #358,
+    /// and its rule lives in this repo (`bench_wire::validate_handle`), so helm refuses exactly
+    /// what benchd would: at most 32 bytes, a letter or digit first, dashes anywhere after. The
+    /// looser rule this replaced was chosen when two writers outside the repo had to be trusted.
+    func testTheRuleIsBenchdsValidateHandle() throws {
+        for accepted in ["helm-", "helm--678", String(repeating: "a", count: 32)] {
             XCTAssertNotNil(
-                Handle(validating: candidate),
-                "\(candidate.debugDescription) is accepted on purpose: no writer emits it, but "
-                    + "refusing it would couple this rule to how deriveHandle composes tail(), "
-                    + "not just to the characters slug() emits")
+                Handle(validating: accepted), "benchd accepts \(accepted.debugDescription)")
+        }
+        for refused in ["-helm", String(repeating: "a", count: 33)] {
+            XCTAssertNil(Handle(validating: refused), "benchd refuses \(refused.debugDescription)")
         }
     }
 

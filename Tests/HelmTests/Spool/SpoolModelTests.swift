@@ -109,7 +109,8 @@ final class SpoolModelTests: XCTestCase {
     /// the harness is up. Keyed by pane, because that is what `mail/who` is asked about.
     private func reports(_ handle: String, session: String, harness: String = "claude") {
         benchd.agents[spawner.terminal] = BenchMailWho(
-            handle: Handle(validating: handle)!, harness: harness, session: session)
+            handle: Handle(validating: handle)!, harness: harness, session: session,
+            pid: Self.hookPid)
     }
 
     /// The result file for an id spelled as a literal, which is how every test in this file names
@@ -179,7 +180,7 @@ final class SpoolModelTests: XCTestCase {
             let temporary = FakeSpawner()
             observed = temporary
             benchd.agents[temporary.terminal] = BenchMailWho(
-                handle: Handle(validating: "tmp-9999")!, harness: "claude", session: "s")
+                handle: Handle(validating: "tmp-9999")!, harness: "claude", session: "s", pid: 1)
             model.attach(spawner: temporary)
         }
         XCTAssertNotNil(observed, "the model must hold what it was attached to")
@@ -276,6 +277,24 @@ final class SpoolModelTests: XCTestCase {
         XCTAssertEqual(ready?.pid, FakeSpawner.agentPid)
         XCTAssertEqual(
             benchd.askedAbout.last, spawner.terminal, "benchd is asked about the spawned pane")
+    }
+
+    /// What benchd's hook reported as the agent's pid, deliberately not `FakeSpawner.agentPid`, so
+    /// a result can say which of the two it came from.
+    private static let hookPid: Int32 = 91777
+
+    /// The pty's foreground still reads as the shell when benchd already names the agent: the
+    /// claim raced the foreground. The result then carries the pid the agent's hook reported
+    /// rather than none.
+    func testAClaimThatBeatsTheForegroundCarriesTheHooksPid() async throws {
+        spawner.claimsOnSend = false
+        reports("helm-4831", session: "52256761-dd8f-4831")
+        let model = self.model()
+        try submit(request())
+        model.start()
+
+        let ready = await awaitResult(is: .ready)
+        XCTAssertEqual(ready?.pid, Self.hookPid)
     }
 
     func testTheAnswerIsImmediateAndThenBecomesAddressable() async throws {

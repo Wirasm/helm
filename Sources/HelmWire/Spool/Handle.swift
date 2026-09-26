@@ -13,14 +13,14 @@ import Foundation
 package struct Handle: Codable, Equatable, Hashable, Sendable {
     package let value: String
 
-    /// Trimmed, not empty, and only `[a-z0-9-]`: the alphabet benchd's `validate_handle`
-    /// allows. A handle outside it names no mailbox directory, so it is refused rather than
-    /// carried to a send that could only fail.
+    /// Trimmed, then benchd's `validate_handle` rule: at most 32 bytes of `[a-z0-9-]`, starting
+    /// with a letter or digit. A handle benchd would refuse is refused here rather than carried
+    /// to a send that could only fail.
     package init?(validating candidate: String) {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.allSatisfy(Self.addressableCharacters.contains) else {
-            return nil
-        }
+        guard let first = trimmed.first, first != "-", trimmed.utf8.count <= 32,
+            trimmed.allSatisfy(Self.addressableCharacters.contains)
+        else { return nil }
         self.value = trimmed
     }
 

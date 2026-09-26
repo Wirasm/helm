@@ -528,21 +528,35 @@ fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
     }
 }
 
-/// The mailbox of the agent in a helm pane: of the agents whose claim put them in that pane,
-/// the one whose hook reported last (#358). How helm addresses a pane without a mailroom of its
-/// own: a canvas note, and a spawn's answer.
+/// The mailbox of the agent in a helm pane: of the live agents whose claim put them in that
+/// pane, the one whose hook reported last (#358). How helm addresses a pane without a mailroom
+/// of its own: a canvas note, and a spawn's answer. Liveness is checked because a killed agent
+/// reports no `SessionEnd` and `reconcile` keeps its `seen` fresh while it has unread mail, so
+/// without it a dead agent could outrank the live one now in its pane. Checked after the lock is
+/// released, like every other process probe here.
 pub fn who(core: &Arc<Mutex<Core>>, pane: PaneId) -> Option<bench_wire::MailWho> {
-    let c = core.lock().unwrap();
-    c.agents
-        .iter()
-        .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
-        .filter(|(key, _)| pane_of(&c, key) == Some(pane))
-        .max_by_key(|(_, a)| a.seen)
-        .map(|(key, a)| bench_wire::MailWho {
-            handle: a.handle.clone(),
-            harness: key.harness,
-            session: key.id.clone(),
-        })
+    let mut candidates: Vec<(Instant, bench_wire::MailWho)> = {
+        let c = core.lock().unwrap();
+        c.agents
+            .iter()
+            .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
+            .filter(|(key, _)| pane_of(&c, key) == Some(pane))
+            .map(|(key, a)| {
+                let who = bench_wire::MailWho {
+                    handle: a.handle.clone(),
+                    harness: key.harness,
+                    session: key.id.clone(),
+                    pid: a.pid,
+                };
+                (a.seen, who)
+            })
+            .collect()
+    };
+    candidates.retain(|(_, who)| bench_sessions::process::alive(who.pid, None));
+    candidates
+        .into_iter()
+        .max_by_key(|(seen, _)| *seen)
+        .map(|(_, who)| who)
 }
 
 /// Agents in helm panes as their hooks report them, for the session list: the one source for

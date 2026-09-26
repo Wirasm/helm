@@ -35,11 +35,15 @@ package struct BenchMailWho: Decodable, Equatable, Sendable {
     /// The harness, as benchd spells it: `claude`, `codex` or `pi`.
     package var harness: String
     package var session: String
+    /// The agent's process as its last hook reported it: the spawn's fallback when the pty's
+    /// foreground has not moved off the shell yet.
+    package var pid: Int32
 
-    package init(handle: Handle, harness: String, session: String) {
+    package init(handle: Handle, harness: String, session: String, pid: Int32) {
         self.handle = handle
         self.harness = harness
         self.session = session
+        self.pid = pid
     }
 }
 
