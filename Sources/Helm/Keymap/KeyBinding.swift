@@ -68,11 +68,9 @@ struct KeyBinding: Equatable {
         case let .character(character):
             guard let only = character.first, character.count == 1 else { return nil }
             key = KeyEquivalent(only)
-        case .keyCode(123): key = .leftArrow
-        case .keyCode(124): key = .rightArrow
-        case .keyCode(125): key = .downArrow
-        case .keyCode(126): key = .upArrow
-        case .keyCode: return nil
+        case .keyCode:
+            guard let arrow = ArrowKey(trigger) else { return nil }
+            key = arrow.keyEquivalent
         }
         var flags: EventModifiers = []
         if modifiers.contains(.command) { flags.insert(.command) }

@@ -82,11 +82,13 @@ extension LocalAction {
 }
 
 extension FontSizeStep {
-    fileprivate static let names: [(String, FontSizeStep)] = [
-        ("increase", .increase), ("decrease", .decrease), ("reset", .reset),
-    ]
-
-    fileprivate var spelled: String { Self.names.first { $0.1 == self }!.0 }
+    fileprivate var spelled: String {
+        switch self {
+        case .increase: "increase"
+        case .decrease: "decrease"
+        case .reset: "reset"
+        }
+    }
 }
 
 /// An action's argument, as a row carries it: at most one of these is set, and which one is
@@ -172,7 +174,7 @@ struct KeymapArguments: Equatable {
     func step(_ action: String) throws(KeymapProblem) -> FontSizeStep {
         try only("step", action)
         guard let step else { throw missing("step", action) }
-        guard let value = FontSizeStep.names.first(where: { $0.0 == step })?.1 else {
+        guard let value = FontSizeStep.allCases.first(where: { $0.spelled == step }) else {
             throw KeymapProblem(
                 line: nil, reason: "'\(action)' step is increase, decrease or reset, not '\(step)'")
         }

@@ -51,10 +51,10 @@ enum KeyBindings {
     }
 
     /// ⌘⌥ + arrows, because ⌘⌥1–9 is already the workspace fallback.
-    private static let focusSteps: [KeyBinding] = arrows.map { keyCode, direction, name in
+    private static let focusSteps: [KeyBinding] = ArrowKey.allCases.map { arrow in
         KeyBinding(
-            .keyCode(keyCode), [.command, .option], .verb(.stepFocus(direction)), hint: "focus",
-            menu: "Focus \(name)")
+            arrow.trigger, [.command, .option], .verb(.stepFocus(arrow.direction)), hint: "focus",
+            menu: "Focus \(arrow.name.capitalized)")
     }
 
     /// ⌘⌥⇧ + arrows — the same four keys with shift, moving the **pane** rather than the
@@ -62,11 +62,11 @@ enum KeyBindings {
     /// side on the status bar because reading them together is what teaches the second one.
     /// `.anywhere`, like focus: the terminal holds the keyboard almost all the time, so a key
     /// that could not fire from inside a pane could not move that pane.
-    private static let paneMoves: [KeyBinding] = arrows.map { keyCode, direction, name in
+    private static let paneMoves: [KeyBinding] = ArrowKey.allCases.map { arrow in
         KeyBinding(
-            .keyCode(keyCode), [.command, .option, .shift], .verb(.moveFocused(direction)),
+            arrow.trigger, [.command, .option, .shift], .verb(.moveFocused(arrow.direction)),
             hint: "move",
-            menu: "Move Pane \(name)")
+            menu: "Move Pane \(arrow.name.capitalized)")
     }
 
     /// ⌘O and ⌘↑/⌘↓. The prompt jumps fire only inside a terminal, so ⌘↑/⌘↓ keeps its
@@ -76,11 +76,13 @@ enum KeyBindings {
             .character("o"), .command, .local(.openArtifactPanel), hint: "artifact",
             menu: "Open Artifact…"),
         KeyBinding(
-            .keyCode(126), .command, .local(.jumpToPrompt(offset: -1)), when: .terminalFocused,
+            ArrowKey.up.trigger, .command, .local(.jumpToPrompt(offset: -1)),
+            when: .terminalFocused,
             hint: "turn",
             menu: "Jump to Previous Prompt"),
         KeyBinding(
-            .keyCode(125), .command, .local(.jumpToPrompt(offset: 1)), when: .terminalFocused,
+            ArrowKey.down.trigger, .command, .local(.jumpToPrompt(offset: 1)),
+            when: .terminalFocused,
             hint: "turn",
             menu: "Jump to Next Prompt"),
     ]
@@ -101,10 +103,10 @@ enum KeyBindings {
         }
         + [
             KeyBinding(
-                .keyCode(123), .control, .verb(.cycleWorkspace(delta: -1)),
+                ArrowKey.left.trigger, .control, .verb(.cycleWorkspace(delta: -1)),
                 when: .awayFromTerminal, hint: "cycle"),
             KeyBinding(
-                .keyCode(124), .control, .verb(.cycleWorkspace(delta: 1)),
+                ArrowKey.right.trigger, .control, .verb(.cycleWorkspace(delta: 1)),
                 when: .awayFromTerminal, hint: "cycle"),
         ]
 
@@ -137,15 +139,6 @@ enum KeyBindings {
         KeyBinding(
             .character("0"), .command, .local(.adjustFontSize(.reset)),
             menu: "Reset Font Size"),
-    ]
-
-    /// The four arrows, shared by focus and move because they are the same geometry — two
-    /// copies of this would be two places to get ← and → the wrong way round.
-    private static let arrows: [(UInt16, BenchDirection, String)] = [
-        (123, .left, "Left"),
-        (124, .right, "Right"),
-        (126, .up, "Up"),
-        (125, .down, "Down"),
     ]
 
     /// The row a keystroke fires, if any.

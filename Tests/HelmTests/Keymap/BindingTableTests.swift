@@ -184,15 +184,9 @@ final class BindingTableTests: XCTestCase {
     /// would leave the second unreachable. Two `When`s overlap unless they are the two opposite
     /// halves — `.anywhere` overlaps both.
     func testNoTwoRowsClaimOneChordInOverlappingWhens() {
-        func overlap(_ a: KeyBinding.When, _ b: KeyBinding.When) -> Bool {
-            a == b || a == .anywhere || b == .anywhere
-        }
         let rows = KeyBindings.all
         for (index, row) in rows.enumerated() {
-            for other in rows[(index + 1)...]
-            where other.trigger == row.trigger && other.modifiers == row.modifiers
-                && overlap(other.when, row.when)
-            {
+            for other in rows[(index + 1)...] where other.collides(with: row) {
                 XCTFail("two rows claim \(row.trigger) \(row.modifiers); the second is unreachable")
             }
         }

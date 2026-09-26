@@ -291,9 +291,6 @@ struct KeyChord: Equatable {
     private static let modifierNames: [(String, NSEvent.ModifierFlags)] = [
         ("cmd", .command), ("ctrl", .control), ("alt", .option), ("shift", .shift),
     ]
-    private static let arrowNames: [(String, UInt16)] = [
-        ("left", 123), ("right", 124), ("down", 125), ("up", 126),
-    ]
 
     init(parsing text: String) throws(KeymapProblem) {
         let parts = text.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
@@ -320,7 +317,7 @@ struct KeyChord: Equatable {
         -> KeyBinding.Trigger
     {
         if key == "plus" { return .character("+") }
-        if let code = arrowNames.first(where: { $0.0 == key })?.1 { return .keyCode(code) }
+        if let arrow = ArrowKey.allCases.first(where: { $0.name == key }) { return arrow.trigger }
         if key.hasPrefix("keycode:") {
             guard let code = UInt16(key.dropFirst("keycode:".count)), code < 128 else {
                 throw KeymapProblem(
@@ -342,8 +339,7 @@ struct KeyChord: Equatable {
             switch trigger {
             case .character("+"): "plus"
             case let .character(character): character
-            case let .keyCode(code):
-                Self.arrowNames.first(where: { $0.1 == code })?.0 ?? "keycode:\(code)"
+            case let .keyCode(code): ArrowKey(trigger)?.name ?? "keycode:\(code)"
             }
         let names = Self.modifierNames.filter { modifiers.contains($0.1) }.map(\.0)
         return (names + [key]).joined(separator: "+")

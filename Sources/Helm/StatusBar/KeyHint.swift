@@ -122,14 +122,7 @@ enum KeyGlyph {
     static func trigger(_ trigger: KeyBinding.Trigger) -> String? {
         switch trigger {
         case let .character(character): character.uppercased()
-        case let .keyCode(code):
-            switch code {
-            case 123: "←"
-            case 124: "→"
-            case 125: "↓"
-            case 126: "↑"
-            default: nil
-            }
+        case .keyCode: ArrowKey(trigger)?.glyph
         }
     }
 }
