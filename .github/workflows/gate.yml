@@ -17,7 +17,7 @@ name: gate
 # the branch tip.
 on:
   pull_request:
-    branches: [development]
+    branches: [development, feat/ci-speed]
   push:
     branches: [development]
 
@@ -121,7 +121,7 @@ jobs:
         run: bash scripts/check.sh swift
 
       - name: save .build
-        if: github.event_name == 'push' && steps.swift.outcome == 'success'
+        if: (github.event_name == 'push' || github.head_ref == 'feat/ci-speed') && steps.swift.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: .build

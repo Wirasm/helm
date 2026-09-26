@@ -41,6 +41,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: daemon
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.head_ref == 'feat/ci-speed' }}
       - if: steps.changed.outputs.run == 'true'
         run: bash scripts/check.sh daemon
