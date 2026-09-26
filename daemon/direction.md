@@ -16,11 +16,9 @@ repo: one vertical at a time, old code unwired only when the new is proven.
 
 **Where it stands: M0 + M5a + mail + the shared browser + the bench document's daemon half.** The daemon owns the mailroom (`bench-mail`:
 files are the record, notices carry the path never the body, retire-never-delete,
-metadata-only listings) and the wake reactor (`mail/sent ⇒ agent/woken` by pasting into
-an idle pty the daemon owns — for Claude, idle by its own registry row, never a pty at a
-prompt (#415) — with the loop cap as a per-recipient token bucket in the
-courier — where helm #320 proved it must live). Proven end to end by `just mail-proof`:
-a number passed as mail around a real claude→codex→pi ring, +1 per hop.
+metadata-only listings) and delivery by the recipient's own state (#358, below): nothing is
+typed into a pty, and the loop cap is a per-recipient token bucket on the turns benchd starts —
+where helm #320 proved it must live.
 
 **Plus the shared browser (#350).** `browser/start|status|stop|setup`: the daemon starts
 one browser per root — Google Chrome where installed (the operator's ruling: it runs the
@@ -85,8 +83,16 @@ socket (the `hook` verb), and the reply carries the agent's unread mail as point
 Claude and codex put in front of the model as hook context: a busy agent gets its mail at the
 next tool call, with nothing typed into a pty. The first event of a session helm or benchd
 declared (`HELM_PANE`, `BENCH_SESSION`) and that runs on a terminal claims its address, recorded
-in `sessions/hosted.json` so it survives a restart. Next: idle agents are started through their
-own channel and the pty paste goes.
+in `sessions/hosted.json` so it survives a restart. An idle agent is started through its own
+channel instead: benchd posts the notice to a Claude session's inbox socket (which its hooks
+report), and a push that starts no turn in 10 s goes back to the inbox. A spawn hands its prompt
+over in argv as a pointer, so nothing waits for a TUI to draw. pi's channel is its `bench` extension
+(`pi/extensions/bench`), which reports through `bench hook pi`, watches the inbox benchd names
+and starts its own turn when benchd agrees. An agent the operator starts himself
+reports once its harness is wired to the one fixed command: `bench wiring` prints what to add
+to the three files and `bench wiring --check` says what is missing. codex's idle channel (a
+benchd-owned app-server) is next; until
+then its mail waits for its next prompt or tool call, and the ring proof returns with it.
 
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance

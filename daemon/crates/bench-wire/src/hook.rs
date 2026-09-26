@@ -33,6 +33,10 @@ pub struct HookArgs {
     /// `BENCH_SESSION` from the hook's environment: benchd spawned this process tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bench_session: Option<String>,
+    /// `CLAUDE_CODE_MESSAGING_SOCKET` from the hook's environment: the Claude session's own
+    /// inbox, which Claude exports to its hooks. Where benchd starts a turn when it is idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messaging_socket: Option<String>,
 }
 
 /// `hook`'s answer. Both fields are absent for a session that has no mailbox.
@@ -44,6 +48,15 @@ pub struct HookReply {
     /// rule the first time, then one pointer line per message. Never a message body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    /// pi only: the inbox directory its extension watches, so it can ask for its mail
+    /// (`wake`) the moment some arrives while it is idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbox: Option<String>,
+    /// pi only: the standing rule, which its extension adds to the system prompt of every run.
+    /// pi's `context` changes one request and not the history, so a rule told once there would
+    /// be gone by the next run (measured: an idle wake's turn never read its mail).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
 }
 
 /// What one event says about the agent.
@@ -91,11 +104,9 @@ pub fn transition(harness: Harness, event: &str, tool: Option<&str>) -> Option<T
         // pi's extension events (`docs/extensions.md`), sent by the pi sensor.
         Harness::Pi => match event {
             "session_start" | "agent_settled" => To(Activity::Idle),
-            "agent_start"
-            | "context"
-            | "tool_execution_start"
-            | "tool_execution_end"
-            | "ui_prompt_end" => To(Activity::Busy),
+            "agent_start" | "context" | "tool_execution_end" | "ui_prompt_end" => {
+                To(Activity::Busy)
+            }
             "ui_prompt_start" => waiting(QUESTION),
             "session_shutdown" => Ended,
             // The extension saw its inbox change while idle and asks for the mail.
@@ -120,6 +131,127 @@ pub fn carries_context(harness: Harness, event: &str, tool: Option<&str>) -> boo
         // `context` fires before every model call; `wake` is the extension asking.
         Harness::Pi => matches!(event, "context" | "wake"),
     }
+}
+
+/// Every pi event the `bench` extension reports (`pi/extensions/bench`), each with a meaning in
+/// [`transition`]. A test reads the extension's source and holds the two to each other.
+pub const PI_EVENTS: [&str; 9] = [
+    "session_start",
+    "agent_start",
+    "context",
+    "tool_execution_end",
+    "ui_prompt_start",
+    "ui_prompt_end",
+    "agent_settled",
+    "wake",
+    "session_shutdown",
+];
+
+/// Every Claude Code event `bench hook claude` is wired to. The same list goes into the
+/// settings benchd gives the Claude sessions it spawns and into the operator's one-time wiring.
+pub const CLAUDE_EVENTS: [&str; 8] = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionRequest",
+    "Stop",
+    "SessionEnd",
+];
+
+/// The Claude Code settings that wire `bench hook claude` (exec form, so no shell reads the
+/// path) into every event in [`CLAUDE_EVENTS`], and accept messages benchd posts to the
+/// session's inbox socket. Without `crossSessionInbound: "accept"` a session that bypasses
+/// permission prompts holds benchd's message behind an approval dialog in its pane (measured
+/// on 2.1.283; the session's own token does not change that).
+pub fn claude_settings(bench: &str) -> serde_json::Value {
+    let handler = serde_json::json!([{ "hooks": [{
+        "type": "command", "command": bench, "args": ["hook", "claude"], "timeout": 5,
+    }]}]);
+    let hooks: serde_json::Map<String, serde_json::Value> = CLAUDE_EVENTS
+        .iter()
+        .map(|event| ((*event).to_string(), handler.clone()))
+        .collect();
+    serde_json::json!({ "hooks": hooks, "crossSessionInbound": "accept" })
+}
+
+/// Every codex event `bench hook codex` is wired to (codex's hooks docs). Unlike Claude, codex
+/// has `Interrupt`, so an Esc needs no reconciler.
+pub const CODEX_EVENTS: [&str; 8] = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PermissionRequest",
+    "Stop",
+    "Interrupt",
+    "SessionEnd",
+];
+
+/// The `bench` a hook should run: the one beside `exe` (a `bench` or `benchd`), after
+/// resolving `exe` through any symlink. Both `bench wiring` and benchd's own settings for the
+/// Claude sessions it spawns ask this, so the two name the same file.
+pub fn sibling_bench(exe: &std::path::Path) -> std::path::PathBuf {
+    exe.canonicalize()
+        .unwrap_or_else(|_| exe.to_path_buf())
+        .with_file_name("bench")
+}
+
+/// codex's command line for the hook: a shell string, the path single-quoted.
+fn codex_command(bench: &str) -> String {
+    format!("'{}' hook codex", bench.replace('\'', "'\\''"))
+}
+
+/// `~/.codex/hooks.json`: `bench hook codex` on every event in [`CODEX_EVENTS`]. codex runs a
+/// hook as a shell string, so the path is quoted. It runs a hook only once its exact
+/// definition has been trusted in `/hooks`, which is why this never changes.
+pub fn codex_hooks(bench: &str) -> serde_json::Value {
+    let handler = serde_json::json!([{ "hooks": [{
+        "type": "command", "command": codex_command(bench), "timeout": 5,
+    }]}]);
+    let hooks: serde_json::Map<String, serde_json::Value> = CODEX_EVENTS
+        .iter()
+        .map(|event| ((*event).to_string(), handler.clone()))
+        .collect();
+    serde_json::json!({ "hooks": hooks })
+}
+
+/// The events of `settings` (Claude's settings or codex's hooks.json) that do not run `bench`
+/// on every occurrence. A handler counts when it runs this `bench` for this harness, whatever
+/// else it sets (a timeout, say), and only in a group with no matcher: a matcher scopes a hook
+/// to some tools, and the sensor has to see all of them.
+pub fn unwired(harness: Harness, settings: &serde_json::Value, bench: &str) -> Vec<String> {
+    let runs_bench = |h: &serde_json::Value| match harness {
+        Harness::Claude => {
+            h["command"] == bench && h["args"] == serde_json::json!(["hook", "claude"])
+        }
+        Harness::Codex => h["command"] == codex_command(bench).as_str(),
+        Harness::Pi => false,
+    };
+    let every = |group: &serde_json::Value| {
+        group["matcher"]
+            .as_str()
+            .is_none_or(|m| m.is_empty() || m == "*")
+    };
+    let events: &[&str] = match harness {
+        Harness::Claude => &CLAUDE_EVENTS,
+        Harness::Codex => &CODEX_EVENTS,
+        Harness::Pi => &[],
+    };
+    events
+        .iter()
+        .filter(|event| {
+            !settings["hooks"][**event].as_array().is_some_and(|groups| {
+                groups.iter().filter(|g| every(g)).any(|g| {
+                    g["hooks"]
+                        .as_array()
+                        .is_some_and(|hs| hs.iter().any(runs_bench))
+                })
+            })
+        })
+        .map(|e| (*e).to_string())
+        .collect()
 }
 
 /// Who gets a mailbox (#427, the rule moved here from both writers): a session a host
@@ -204,7 +336,8 @@ pub fn standing_rule(handle: &str) -> String {
     format!(
         "You are `{handle}` on the bench. Bench mail reaches you as a line \
          `You have mail from <sender>: <path>`. When you see one, read that file with your \
-         tools before your next step. Send with `bench mail send --to <handle> --body <text>`; \
+         tools before your next step. Send with \
+         `bench mail send --from {handle} --to <handle> --body <text>`; \
          `bench sessions --all` lists who you can mail."
     )
 }
@@ -297,6 +430,84 @@ mod tests {
         );
         assert!(carries_context(Harness::Pi, "context", None));
         assert!(!carries_context(Harness::Pi, "agent_settled", None));
+    }
+
+    #[test]
+    fn every_wired_claude_event_means_something() {
+        for event in CLAUDE_EVENTS {
+            assert!(
+                transition(Harness::Claude, event, None).is_some(),
+                "{event}"
+            );
+        }
+        let settings = claude_settings("/bin/bench");
+        assert_eq!(settings["crossSessionInbound"], "accept");
+        assert_eq!(
+            settings["hooks"].as_object().unwrap().len(),
+            CLAUDE_EVENTS.len()
+        );
+        assert_eq!(
+            settings["hooks"]["PostToolUse"][0]["hooks"][0]["args"],
+            serde_json::json!(["hook", "claude"])
+        );
+    }
+
+    /// The pi extension is TypeScript, so its event names are a second spelling across a
+    /// runtime boundary. Every name it reports (a string literal passed to `report` or `tell`)
+    /// must be one this table knows, and every pi event this table knows must be one it
+    /// reports.
+    #[test]
+    fn the_pi_extension_reports_exactly_the_events_this_table_knows() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../pi/extensions/bench/index.ts");
+        let source = std::fs::read_to_string(&path).expect("the pi extension is checked in");
+        let mut sent: Vec<&str> = Vec::new();
+        for call in ["report(\"", "tell(\""] {
+            for (at, _) in source.match_indices(call) {
+                let rest = &source[at + call.len()..];
+                sent.push(&rest[..rest.find('"').expect("a closed literal")]);
+            }
+        }
+        sent.sort_unstable();
+        sent.dedup();
+        let mut known = PI_EVENTS.to_vec();
+        known.sort_unstable();
+        assert_eq!(sent, known, "{}", path.display());
+        for event in PI_EVENTS {
+            assert!(transition(Harness::Pi, event, None).is_some(), "{event}");
+        }
+    }
+
+    #[test]
+    fn a_handler_counts_whatever_its_timeout_and_only_without_a_matcher() {
+        let bench = "/b/bench";
+        let mut settings = claude_settings(bench);
+        assert!(unwired(Harness::Claude, &settings, bench).is_empty());
+        settings["hooks"]["Stop"][0]["hooks"][0]["timeout"] = serde_json::json!(10);
+        settings["hooks"]["PreToolUse"][0]["matcher"] = serde_json::json!("Bash");
+        assert_eq!(unwired(Harness::Claude, &settings, bench), ["PreToolUse"]);
+        assert_eq!(
+            unwired(Harness::Claude, &settings, "/elsewhere/bench").len(),
+            CLAUDE_EVENTS.len(),
+            "another bench is not this one"
+        );
+        let codex = codex_hooks("/it's/bench");
+        assert_eq!(
+            codex["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "'/it'\\''s/bench' hook codex"
+        );
+        assert!(unwired(Harness::Codex, &codex, "/it's/bench").is_empty());
+    }
+
+    #[test]
+    fn every_wired_codex_event_means_something() {
+        for event in CODEX_EVENTS {
+            assert!(transition(Harness::Codex, event, None).is_some(), "{event}");
+        }
+        assert_eq!(
+            codex_hooks("/b/bench")["hooks"]["Interrupt"][0]["hooks"][0]["command"],
+            "'/b/bench' hook codex"
+        );
     }
 
     #[test]

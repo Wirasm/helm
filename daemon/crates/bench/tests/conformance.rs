@@ -953,7 +953,9 @@ fn a_session_row_says_where_to_mail_it_and_whether_a_send_will_wake_it() {
         live.rows[0].mail,
         Some(MailAddress {
             handle: "worker".into(),
-            wakeable: true,
+            // A pi session has no channel benchd can start a turn through yet: its mail
+            // waits for its next prompt or model call.
+            wakeable: false,
             unread: 0
         })
     );
@@ -965,9 +967,9 @@ fn a_session_row_says_where_to_mail_it_and_whether_a_send_will_wake_it() {
             unread: 0
         }
     );
-    // wakeable is what a send does: queued for the live session, not for the operator.
-    assert_eq!(send("worker"), "queued");
-    assert_eq!(send("operator"), "no-live-session");
+    // wakeable is what a send does: next-turn for both, as neither can be started.
+    assert_eq!(send("worker"), "next-turn");
+    assert_eq!(send("operator"), "next-turn");
     assert_eq!(list().operator.unread, 1);
 
     // The worker dies. Its finished row keeps the address, and the send agrees it will not
@@ -987,7 +989,7 @@ fn a_session_row_says_where_to_mail_it_and_whether_a_send_will_wake_it() {
             + "\n",
     )
     .unwrap();
-    assert_eq!(send("worker"), "no-live-session");
+    assert_eq!(send("worker"), "next-turn");
     let dead = list();
     assert_eq!(dead.rows.len(), 1, "{:?}", dead.rows);
     assert_eq!(dead.rows[0].id, runtime);
@@ -1035,7 +1037,7 @@ fn mail_to_a_handle_nobody_hosts_waits_in_the_record() {
     assert_eq!(send.code, 0, "stderr: {}", send.stderr);
     let sent: serde_json::Value = serde_json::from_str(&send.stdout).unwrap();
     assert_eq!(
-        sent["wake"], "no-live-session",
+        sent["wake"], "next-turn",
         "honest: nothing will wake a ghost"
     );
     let id = sent["id"].as_str().unwrap().to_string();
@@ -1166,240 +1168,6 @@ fn mail_read_refuses_an_id_that_is_a_path_and_reads_nothing() {
     let run = bench(h, &["mail", "read", "note", "--handle", "me"]);
     assert_eq!(run.code, 0, "stderr: {}", run.stderr);
     assert!(run.stdout.contains("by hand"));
-}
-
-#[test]
-fn a_send_to_a_live_session_wakes_it_with_a_path_never_the_body() {
-    let home = TestHome::claim("wake");
-    let daemon = DaemonGuard::start(&home.dir, None);
-    let spawn = bench(
-        &home.dir,
-        &[
-            "spawn",
-            "--agent",
-            "test-echo",
-            "--cwd",
-            "/tmp",
-            "--name",
-            "echo1",
-        ],
-    );
-    assert_eq!(spawn.code, 0, "stderr: {}", spawn.stderr);
-
-    let send = bench(
-        &home.dir,
-        &[
-            "mail",
-            "send",
-            "--to",
-            "echo1",
-            "--body",
-            "SECRET-BODY-99",
-            "--subject",
-            "ping",
-        ],
-    );
-    assert_eq!(send.code, 0, "stderr: {}", send.stderr);
-    let sent: serde_json::Value = serde_json::from_str(&send.stdout).unwrap();
-    assert_eq!(sent["wake"], "queued");
-    let id = sent["id"].as_str().unwrap().to_string();
-
-    // The reactor pastes the notice into the pty; cat echoes it into the ring, which an
-    // attach replays — the production wake path observed end to end.
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        let log = fs::read_to_string(home.dir.join(".bench/events.jsonl")).unwrap_or_default();
-        if log.contains("agent/woken") {
-            break;
-        }
-        assert!(Instant::now() < deadline, "the wake never happened: {log}");
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    let (resp, stream) = raw_request(
-        &daemon.socket,
-        "attach",
-        serde_json::json!({"session": "s1"}),
-    );
-    assert_eq!(resp["status"], "ok");
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
-    let mut seen = Vec::new();
-    let mut chunk = [0u8; 4096];
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        match (&stream).read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => seen.extend_from_slice(&chunk[..n]),
-            Err(_) => {}
-        }
-        if String::from_utf8_lossy(&seen).contains("You have mail") {
-            break;
-        }
-    }
-    let text = String::from_utf8_lossy(&seen);
-    assert!(
-        text.contains("You have mail from operator"),
-        "the notice names the sender: {text}"
-    );
-    assert!(
-        text.contains("/read/"),
-        "the notice carries the retired path: {text}"
-    );
-    assert!(
-        !text.contains("SECRET-BODY-99"),
-        "the notice must NEVER carry the body: {text}"
-    );
-
-    // Retired at delivery: the notice's path is where the file already lives.
-    let mailbox = home.dir.join(".bench/mail/echo1");
-    assert!(mailbox.join("read").join(format!("{id}.md")).exists());
-}
-
-/// #415: a paste into a Claude permission prompt answers the prompt — measured on 2.1.283,
-/// it approved the pending command and the notice never became a turn. So a Claude session
-/// is pasted into only when its own registry row says it can take a turn, and a held wake
-/// leaves the mail unread in the inbox. The fake `claude` is `cat`: quiet, so today's pty
-/// gate alone would paste, and an echo of anything pasted shows up in the ring.
-#[test]
-fn a_wake_never_pastes_into_a_claude_session_waiting_on_a_prompt() {
-    let home = TestHome::claim("prompt");
-    let h = &home.dir;
-    let daemon = DaemonGuard::start_with_fake(h, "claude");
-    let spawn = bench(
-        h,
-        &[
-            "spawn", "--agent", "claude", "--cwd", "/tmp", "--name", "c1",
-        ],
-    );
-    assert_eq!(spawn.code, 0, "stderr: {}", spawn.stderr);
-    let pid = json_of(&spawn)["pid"].as_u64().unwrap() as u32;
-    let started = bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
-    let registry = h.join(".claude/sessions");
-    fs::create_dir_all(&registry).unwrap();
-    let row = |status: serde_json::Value| {
-        let mut v = serde_json::json!({"pid": pid, "sessionId": "fake", "cwd": "/tmp",
-            "startedAt": started, "kind": "interactive"});
-        v.as_object_mut()
-            .unwrap()
-            .extend(status.as_object().unwrap().clone());
-        fs::write(registry.join(format!("{pid}.json")), v.to_string()).unwrap();
-    };
-    row(serde_json::json!({"status": "waiting", "waitingFor": "permission prompt"}));
-
-    let send = bench(h, &["mail", "send", "--to", "c1", "--body", "hello"]);
-    assert_eq!(send.code, 0, "stderr: {}", send.stderr);
-    let id = json_of(&send)["id"].as_str().unwrap().to_string();
-    let log = || fs::read_to_string(h.join(".bench/events.jsonl")).unwrap_or_default();
-
-    // Well past the 2 s quiet gate and many reactor ticks.
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !log().contains("wake/held") && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    std::thread::sleep(Duration::from_secs(3));
-    let (resp, stream) = raw_request(
-        &daemon.socket,
-        "attach",
-        serde_json::json!({"session": "s1"}),
-    );
-    assert_eq!(resp["status"], "ok");
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-    let mut seen = Vec::new();
-    let mut chunk = [0u8; 4096];
-    if let Ok(n) = (&stream).read(&mut chunk) {
-        seen.extend_from_slice(&chunk[..n]);
-    }
-    drop(stream);
-    assert!(
-        !String::from_utf8_lossy(&seen).contains("You have mail"),
-        "pasted into a session waiting on a permission prompt: {}",
-        String::from_utf8_lossy(&seen)
-    );
-    let events = log();
-    assert!(!events.contains("agent/woken"), "{events}");
-    assert!(
-        events.contains("wake/held") && events.contains("permission prompt"),
-        "a held wake says why: {events}"
-    );
-    let mailbox = h.join(".bench/mail/c1");
-    assert!(
-        mailbox.join("inbox").join(format!("{id}.md")).exists(),
-        "a held wake leaves the mail unread in the inbox"
-    );
-    assert!(!mailbox.join("read").join(format!("{id}.md")).exists());
-
-    // Positive control: the same fake is woken the moment its row says idle, so the hold
-    // above was the gate and not a session that cannot be pasted into.
-    row(serde_json::json!({"status": "idle"}));
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !log().contains("agent/woken") {
-        assert!(
-            Instant::now() < deadline,
-            "never woken once idle: {}",
-            log()
-        );
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    assert!(mailbox.join("read").join(format!("{id}.md")).exists());
-}
-
-#[test]
-fn the_wake_cap_starves_wakes_never_mail() {
-    let home = TestHome::claim("cap");
-    let _daemon = DaemonGuard::start(&home.dir, None);
-    let spawn = bench(
-        &home.dir,
-        &[
-            "spawn",
-            "--agent",
-            "test-echo",
-            "--cwd",
-            "/tmp",
-            "--name",
-            "echo2",
-        ],
-    );
-    assert_eq!(spawn.code, 0, "stderr: {}", spawn.stderr);
-    for i in 0..9 {
-        let send = bench(
-            &home.dir,
-            &[
-                "mail",
-                "send",
-                "--to",
-                "echo2",
-                "--body",
-                &format!("msg {i}"),
-            ],
-        );
-        assert_eq!(send.code, 0, "send {i} failed: {}", send.stderr);
-    }
-    // Six tokens of burst; the seventh-plus wake must be capped and say so.
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let (mut woken, mut capped);
-    loop {
-        let log = fs::read_to_string(home.dir.join(".bench/events.jsonl")).unwrap_or_default();
-        woken = log.matches("agent/woken").count();
-        capped = log.matches("wake/capped").count();
-        if capped >= 1 && woken >= 6 {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "cap never engaged: woken={woken} capped={capped}"
-        );
-        std::thread::sleep(Duration::from_millis(300));
-    }
-    assert!(
-        woken <= 6,
-        "the burst budget is six; {woken} wakes happened"
-    );
-    // The starved mail is safe in the inbox, unread — the cap brakes wakes, never mail.
-    let listing = bench(&home.dir, &["mail", "list", "--handle", "echo2"]);
-    assert!(
-        listing.stdout.contains("\"unread\": true"),
-        "capped mail waits unread: {}",
-        listing.stdout
-    );
 }
 
 #[test]
@@ -1540,7 +1308,7 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
         ["operator", "worker"],
         "the operator and the live session: {who}"
     );
-    assert!(who.contains("worker wakeable"), "{who}");
+    assert!(who.contains("worker not-wakeable"), "{who}");
     // The sequence is the story the skill tells: a send exists, the listing shows it
     // or its retirement, and the read snippet retired it.
     let listing = bench(&home.dir, &["mail", "list", "--handle", "operator"]);
@@ -3844,48 +3612,6 @@ fn a_hook_never_fails_its_agent() {
 }
 
 #[test]
-fn mail_a_hook_handed_out_is_never_pasted_as_well() {
-    // The pty paste still exists until the next PR. A benchd session whose hook took its mail
-    // must not also get the notice pasted: that would be the same message delivered twice.
-    let home = TestHome::claim("hookpaste");
-    let h = &home.dir;
-    let daemon = DaemonGuard::start(h, None);
-    let (session, pid) = terminal_process(h, "w");
-    let send = |body: &str| {
-        let run = bench(h, &["mail", "send", "--to", "w", "--body", body]);
-        assert_eq!(run.code, 0, "stderr: {}", run.stderr);
-        json_of(&run)["id"].as_str().unwrap().to_string()
-    };
-    // Sent and handed out inside the reactor's 2 s idle gate, so the paste has not happened.
-    let taken = send("first");
-    let reply = hook_verb(
-        &daemon.socket,
-        serde_json::json!({"harness": "claude", "event": "PostToolUse", "session": "rt",
-            "cwd": "/tmp", "pid": pid, "bench_session": session, "tool": "Bash"}),
-    );
-    assert!(
-        reply["context"]
-            .as_str()
-            .unwrap()
-            .contains(&format!("read/{taken}.md")),
-        "{reply}"
-    );
-    // The positive control: mail the hook never took is still pasted.
-    let pasted = send("second");
-    wait_until("the second mail is pasted", Duration::from_secs(20), || {
-        event_kinds(h)
-            .iter()
-            .any(|(k, d)| k == "agent/woken" && d["mail"] == pasted.as_str())
-    });
-    let woken: Vec<_> = event_kinds(h)
-        .into_iter()
-        .filter(|(k, _)| k == "agent/woken")
-        .map(|(_, d)| d["mail"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(woken, [pasted], "the handed-out mail was not pasted too");
-}
-
-#[test]
 fn a_shell_string_hook_reports_the_agent_not_the_shell() {
     // codex runs its hook command as a shell string. bash and macOS's sh exec a single
     // command; dash (Ubuntu's sh) forks it, so `bench hook`'s parent is the shell. `; true`
@@ -3920,4 +3646,528 @@ fn a_shell_string_hook_reports_the_agent_not_the_shell() {
         .collect();
     assert_eq!(claimed.len(), 1, "{claimed:?}");
     assert_eq!(claimed[0].1["pid"], std::process::id(), "{:?}", claimed[0]);
+}
+
+// ---------------------------------------------------------------------------
+// Delivery by state (#358): an idle agent is started through its own channel, never a pty
+// ---------------------------------------------------------------------------
+
+/// A stand-in for a Claude session's inbox socket: what benchd posts to it, line by line.
+struct FakeInbox {
+    path: PathBuf,
+    listener: std::os::unix::net::UnixListener,
+}
+
+impl FakeInbox {
+    fn bind(home: &Path) -> FakeInbox {
+        let path = home.join("inbox.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind fake inbox");
+        listener.set_nonblocking(true).unwrap();
+        FakeInbox { path, listener }
+    }
+
+    /// The next message posted within `wait`, as the JSON line benchd wrote.
+    fn next(&self, wait: Duration) -> Option<serde_json::Value> {
+        let end = Instant::now() + wait;
+        while Instant::now() < end {
+            if let Ok((mut stream, _)) = self.listener.accept() {
+                stream.set_nonblocking(false).unwrap();
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut text = String::new();
+                let _ = stream.read_to_string(&mut text);
+                return Some(serde_json::from_str(text.trim()).expect("one JSON line"));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        None
+    }
+}
+
+/// A Claude agent in a helm pane, claimed and reporting `inbox` as its socket.
+fn claude_in_a_pane(daemon: &DaemonGuard, pid: u32, session: &str, inbox: &Path) -> String {
+    let reply = claude_event(daemon, pid, session, inbox, "SessionStart", None);
+    reply["handle"].as_str().unwrap().to_string()
+}
+
+fn claude_event(
+    daemon: &DaemonGuard,
+    pid: u32,
+    session: &str,
+    inbox: &Path,
+    event: &str,
+    tool: Option<&str>,
+) -> serde_json::Value {
+    let mut args = serde_json::json!({"harness": "claude", "event": event, "session": session,
+        "cwd": "/Users/op/Projects/helm", "pid": pid, "pane": HOOK_PANE,
+        "messaging_socket": inbox.display().to_string()});
+    if let Some(t) = tool {
+        args["tool"] = serde_json::json!(t);
+    }
+    hook_verb(&daemon.socket, args)
+}
+
+fn inbox_count(h: &Path, handle: &str) -> usize {
+    fs::read_dir(h.join(".bench/mail").join(handle).join("inbox"))
+        .map(|d| d.count())
+        .unwrap_or(0)
+}
+
+#[test]
+fn an_idle_claude_is_started_through_its_socket_and_a_busy_one_is_not() {
+    let home = TestHome::claim("push");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (_, pid) = terminal_process(h, "holder");
+    let inbox = FakeInbox::bind(h);
+    let session = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
+    let handle = claude_in_a_pane(&daemon, pid, session, &inbox.path);
+    let send = |body: &str| {
+        let run = bench(h, &["mail", "send", "--to", &handle, "--body", body]);
+        assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+        json_of(&run)
+    };
+
+    // Busy: nothing is pushed; the next tool call is the channel.
+    claude_event(&daemon, pid, session, &inbox.path, "UserPromptSubmit", None);
+    assert_eq!(send("while busy")["wake"], "queued");
+    assert!(
+        inbox.next(Duration::from_secs(2)).is_none(),
+        "a busy agent gets no push"
+    );
+    // A permission prompt: still nothing.
+    claude_event(
+        &daemon,
+        pid,
+        session,
+        &inbox.path,
+        "PermissionRequest",
+        Some("Bash"),
+    );
+    assert!(
+        inbox.next(Duration::from_secs(2)).is_none(),
+        "a prompt is never answered"
+    );
+    assert_eq!(inbox_count(h, &handle), 1);
+
+    // Idle: one user message carrying the pointer, never the body.
+    claude_event(&daemon, pid, session, &inbox.path, "Stop", None);
+    let message = inbox
+        .next(Duration::from_secs(5))
+        .expect("pushed once idle");
+    assert_eq!(message["type"], "user");
+    assert_eq!(message["message"]["role"], "user");
+    let text = message["message"]["content"].as_str().unwrap();
+    let read = h.join(".bench/mail").join(&handle).join("read/m1.md");
+    // The rule was told on SessionStart; the push carries only the pointer.
+    assert_eq!(
+        text,
+        format!("You have mail from operator: {}", read.display())
+    );
+    assert!(!text.contains("while busy"), "never the body");
+    assert!(read.exists() && inbox_count(h, &handle) == 0);
+    // The turn it started arrives: no second push, and nothing reaches the pty at all.
+    claude_event(&daemon, pid, session, &inbox.path, "UserPromptSubmit", None);
+    claude_event(&daemon, pid, session, &inbox.path, "Stop", None);
+    assert!(inbox.next(Duration::from_secs(2)).is_none());
+    let delivered: Vec<_> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "mail/delivered")
+        .map(|(_, d)| d["channel"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(delivered, ["socket"]);
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": "s1"}),
+    );
+    assert_eq!(resp["status"], "ok");
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let mut seen = [0u8; 4096];
+    let n = (&stream).read(&mut seen).unwrap_or(0);
+    assert!(
+        !String::from_utf8_lossy(&seen[..n]).contains("You have mail"),
+        "nothing is ever typed into a pty"
+    );
+}
+
+#[test]
+fn a_push_that_starts_no_turn_goes_back_to_the_inbox_and_stops_pushing() {
+    // What a session without crossSessionInbound "accept" does: takes the message and holds
+    // it behind a dialog, so no UserPromptSubmit follows. Waits out the 10 s answer window.
+    let home = TestHome::claim("held");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (_, pid) = terminal_process(h, "holder");
+    let inbox = FakeInbox::bind(h);
+    let session = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
+    let handle = claude_in_a_pane(&daemon, pid, session, &inbox.path);
+    bench(h, &["mail", "send", "--to", &handle, "--body", "one"]);
+    assert!(inbox.next(Duration::from_secs(5)).is_some());
+    wait_until(
+        "the unanswered push is held",
+        Duration::from_secs(20),
+        || event_kinds(h).iter().any(|(k, _)| k == "mail/held"),
+    );
+    assert_eq!(inbox_count(h, &handle), 1, "back in the inbox, unread");
+    let second = bench(h, &["mail", "send", "--to", &handle, "--body", "two"]);
+    assert_eq!(
+        json_of(&second)["wake"],
+        "next-turn",
+        "no more pushes to it"
+    );
+    assert!(inbox.next(Duration::from_secs(2)).is_none());
+    // Its next tool call still delivers both.
+    let reply = claude_event(
+        &daemon,
+        pid,
+        session,
+        &inbox.path,
+        "PostToolUse",
+        Some("Bash"),
+    );
+    let context = reply["context"].as_str().unwrap();
+    assert_eq!(context.matches("You have mail").count(), 2, "{context}");
+    // A session that starts again may take pushes again.
+    claude_event(&daemon, pid, session, &inbox.path, "SessionStart", None);
+    let third = bench(h, &["mail", "send", "--to", &handle, "--body", "three"]);
+    assert_eq!(json_of(&third)["wake"], "queued");
+    assert!(inbox.next(Duration::from_secs(5)).is_some());
+}
+
+#[test]
+fn the_wake_cap_starves_pushes_never_mail() {
+    let home = TestHome::claim("cap");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (_, pid) = terminal_process(h, "holder");
+    let inbox = FakeInbox::bind(h);
+    let session = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
+    let handle = claude_in_a_pane(&daemon, pid, session, &inbox.path);
+    // Two agents replying to each other: every push starts a turn that ends idle again.
+    for i in 0..6 {
+        bench(
+            h,
+            &[
+                "mail",
+                "send",
+                "--to",
+                &handle,
+                "--body",
+                &format!("msg {i}"),
+            ],
+        );
+        assert!(
+            inbox.next(Duration::from_secs(5)).is_some(),
+            "push {i} within the burst"
+        );
+        claude_event(&daemon, pid, session, &inbox.path, "UserPromptSubmit", None);
+        claude_event(&daemon, pid, session, &inbox.path, "Stop", None);
+    }
+    bench(
+        h,
+        &["mail", "send", "--to", &handle, "--body", "the seventh"],
+    );
+    assert!(
+        inbox.next(Duration::from_secs(3)).is_none(),
+        "the burst budget is six"
+    );
+    wait_until("the cap is logged", Duration::from_secs(5), || {
+        event_kinds(h).iter().any(|(k, _)| k == "wake/capped")
+    });
+    assert_eq!(inbox_count(h, &handle), 1, "capped mail waits unread");
+}
+
+#[test]
+fn an_agent_that_went_idle_without_a_hook_is_found_by_its_registry_row() {
+    // Esc on a Claude prompt ends the turn and fires no hook. The registry row is what knows.
+    let home = TestHome::claim("reconcile");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (_, pid) = terminal_process(h, "holder");
+    let inbox = FakeInbox::bind(h);
+    let session = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
+    let handle = claude_in_a_pane(&daemon, pid, session, &inbox.path);
+    claude_event(
+        &daemon,
+        pid,
+        session,
+        &inbox.path,
+        "PermissionRequest",
+        Some("Bash"),
+    );
+    bench(h, &["mail", "send", "--to", &handle, "--body", "x"]);
+    let started = bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
+    let registry = h.join(".claude/sessions");
+    fs::create_dir_all(&registry).unwrap();
+    let row = |status: &str| {
+        let v = serde_json::json!({"pid": pid, "sessionId": session, "cwd": "/tmp",
+            "startedAt": started, "kind": "interactive", "status": status});
+        fs::write(registry.join(format!("{pid}.json")), v.to_string()).unwrap();
+    };
+    // Still on the prompt: a row saying `waiting` with no `waitingFor` is idle, so name one.
+    let v = serde_json::json!({"pid": pid, "sessionId": session, "cwd": "/tmp",
+        "startedAt": started, "kind": "interactive", "status": "waiting",
+        "waitingFor": "permission prompt"});
+    fs::write(registry.join(format!("{pid}.json")), v.to_string()).unwrap();
+    assert!(
+        inbox.next(Duration::from_secs(7)).is_none(),
+        "still waiting on the prompt"
+    );
+    row("idle");
+    let message = inbox
+        .next(Duration::from_secs(10))
+        .expect("pushed once the row says idle");
+    assert!(
+        message["message"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("You have mail")
+    );
+    assert!(
+        event_kinds(h)
+            .iter()
+            .any(|(k, d)| k == "agent/state" && d["event"] == "registry"),
+        "the registry's word is logged as what changed the state"
+    );
+}
+
+#[test]
+fn a_spawn_hands_the_prompt_over_in_argv_and_waits_for_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = TestHome::claim("argv");
+    let h = &home.dir;
+    // A `claude` that records its argv, then behaves like the others: quiet and live.
+    let bin = h.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let recorded = h.join("argv.txt");
+    fs::write(
+        bin.join("claude"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexec cat\n",
+            recorded.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = Command::new(benchd_bin());
+    cmd.env("PATH", format!("{}:{path}", bin.display()));
+    let daemon = DaemonGuard::start_with(h, None, cmd);
+    let prompt = h.join("brief.txt");
+    fs::write(&prompt, "SECRET-PLAN line one\nline two\n").unwrap();
+
+    let relative = bench(
+        h,
+        &[
+            "spawn",
+            "--agent",
+            "claude",
+            "--cwd",
+            "/tmp",
+            "--prompt-file",
+            "nowhere.txt",
+        ],
+    );
+    assert_eq!(
+        relative.code, 3,
+        "a file that is not there is refused: {}",
+        relative.stderr
+    );
+
+    let started = Instant::now();
+    let spawn = bench(
+        h,
+        &[
+            "spawn",
+            "--agent",
+            "claude",
+            "--cwd",
+            "/tmp",
+            "--prompt-file",
+            &prompt.display().to_string(),
+        ],
+    );
+    assert_eq!(spawn.code, 0, "stderr: {}", spawn.stderr);
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "nothing waits for a TUI: {:?}",
+        started.elapsed()
+    );
+    wait_until(
+        "the agent recorded its argv",
+        Duration::from_secs(5),
+        || recorded.exists(),
+    );
+    let argv = fs::read_to_string(&recorded).unwrap();
+    let args: Vec<&str> = argv.lines().collect();
+    assert_eq!(
+        args.last().copied(),
+        Some(format!("Read and act on the prompt in {}", prompt.display()).as_str()),
+        "{argv}"
+    );
+    let settings_at = args
+        .iter()
+        .position(|a| *a == "--settings")
+        .expect("--settings");
+    let settings: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(args[settings_at + 1]).unwrap()).unwrap();
+    assert_eq!(settings["crossSessionInbound"], "accept");
+    assert_eq!(
+        settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+        bench_bin().display().to_string(),
+        "the bench beside this daemon"
+    );
+    assert!(!argv.contains("SECRET-PLAN"), "a path, never the plan");
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": "s1"}),
+    );
+    assert_eq!(resp["status"], "ok");
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let mut seen = [0u8; 4096];
+    let n = (&stream).read(&mut seen).unwrap_or(0);
+    assert!(
+        !String::from_utf8_lossy(&seen[..n]).contains("SECRET-PLAN"),
+        "nothing is typed into the pty"
+    );
+}
+
+#[test]
+fn a_pi_agent_wakes_itself_only_when_idle_and_under_the_cap() {
+    // pi's extension watches the inbox benchd names and asks for its mail with `wake`; the
+    // reply is what it hands to sendUserMessage. benchd decides whether a turn may start.
+    let home = TestHome::claim("piwake");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (_, pid) = terminal_process(h, "holder");
+    let session = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
+    let event = |event: &str| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "pi", "event": event, "session": session,
+                "cwd": "/Users/op/Projects/helm", "pid": pid, "pane": HOOK_PANE}),
+        )
+    };
+    let start = event("session_start");
+    let handle = start["handle"].as_str().unwrap().to_string();
+    assert_eq!(
+        start["inbox"].as_str().unwrap(),
+        h.join(".bench/mail")
+            .join(&handle)
+            .join("inbox")
+            .display()
+            .to_string(),
+        "the extension is told what to watch"
+    );
+    assert!(
+        start["rule"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("You are `{handle}`")),
+        "and the rule for its system prompt: {start}"
+    );
+    let send = |body: &str| {
+        let run = bench(h, &["mail", "send", "--to", &handle, "--body", body]);
+        json_of(&run)["wake"].as_str().unwrap().to_string()
+    };
+    assert_eq!(send("while busy"), "queued", "a pi agent can be woken");
+
+    // Busy: a wake hands out nothing; the next model call (`context`) carries it instead.
+    event("agent_start");
+    assert!(event("wake")["context"].is_null());
+    let ctx = event("context");
+    assert_eq!(
+        ctx["context"].as_str().unwrap().lines().count(),
+        1,
+        "the pointer alone; the rule goes to the system prompt: {ctx}"
+    );
+
+    // Idle: a wake hands it out, as the pi channel, up to the burst of six.
+    for i in 0..7 {
+        event("agent_settled");
+        send(&format!("idle {i}"));
+        let reply = event("wake");
+        if i < 6 {
+            assert!(
+                reply["context"].as_str().unwrap().contains("You have mail"),
+                "wake {i}: {reply}"
+            );
+        } else {
+            assert!(
+                reply["context"].is_null(),
+                "the seventh wake is over the cap: {reply}"
+            );
+        }
+    }
+    let channels: Vec<String> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "mail/delivered")
+        .map(|(_, d)| d["channel"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        channels.iter().filter(|c| *c == "pi").count(),
+        6,
+        "{channels:?}"
+    );
+    assert_eq!(inbox_count(h, &handle), 1, "capped mail waits unread");
+}
+
+#[test]
+fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
+    let home = TestHome::claim("wiring");
+    let h = &home.dir;
+    let bench_path = bench_bin().canonicalize().unwrap().display().to_string();
+    let plan = bench(h, &["wiring"]);
+    assert_eq!(plan.code, 0, "stderr: {}", plan.stderr);
+    let plan = json_of(&plan);
+    assert_eq!(plan["bench"], bench_path.as_str());
+
+    let unwired = bench(h, &["wiring", "--check"]);
+    assert_eq!(unwired.code, 3, "nothing is wired yet: {}", unwired.stdout);
+    let report = json_of(&unwired);
+    assert_eq!(
+        report["claude"]["missing_events"].as_array().unwrap().len(),
+        8
+    );
+    assert_eq!(
+        report["codex"]["missing_events"].as_array().unwrap().len(),
+        8
+    );
+
+    // Wire exactly what the plan says, the way the operator would: merged into his files.
+    let write = |rel: &str, value: &serde_json::Value| {
+        let path = h.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, value.to_string()).unwrap();
+    };
+    let mut claude = serde_json::json!({"model": "opus", "hooks": {"Stop": [
+        {"hooks": [{"type": "command", "command": "~/.claude/hooks/notify-done.sh"}]}]}});
+    for (event, groups) in plan["claude"]["merge"]["hooks"].as_object().unwrap() {
+        let list = claude["hooks"][event]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        claude["hooks"][event] =
+            serde_json::json!([list, groups.as_array().unwrap().clone()].concat());
+    }
+    write(".claude/settings.json", &claude);
+    write(".codex/hooks.json", &plan["codex"]["merge"]);
+    fs::create_dir_all(h.join(".pi/agent/extensions/bench")).unwrap();
+    fs::write(h.join(".pi/agent/extensions/bench/index.ts"), "").unwrap();
+    let half = json_of(&bench(h, &["wiring", "--check"]));
+    assert_eq!(half["claude"]["missing_events"], serde_json::json!([]));
+    assert_eq!(
+        half["claude"]["cross_session_inbound_accept"], false,
+        "{half}"
+    );
+
+    claude["crossSessionInbound"] = serde_json::json!("accept");
+    write(".claude/settings.json", &claude);
+    let wired = bench(h, &["wiring", "--check"]);
+    assert_eq!(wired.code, 0, "all wired: {}", wired.stdout);
+    assert!(
+        !h.join(".bench").exists(),
+        "wiring needs no daemon and writes nothing"
+    );
 }

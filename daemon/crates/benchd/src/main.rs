@@ -34,11 +34,11 @@ mod sessions;
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
 use bench_session::{AgentKind, Notice, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id};
 use bench_wire::{
-    Activity, BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event,
-    KNOWN_VERBS, MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE,
-    READY_WAIT, Request, Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb,
-    browser_endpoint_path, browser_wanted_path, check_socket_path, events_path, resolve_root,
-    socket_path, validate_handle,
+    BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
+    MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, Request,
+    Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb, browser_endpoint_path,
+    browser_wanted_path, check_socket_path, events_path, resolve_root, socket_path,
+    validate_handle,
 };
 use bench_wire::{DOCUMENT_CHANGED, Frame};
 use serde_json::{Value, json};
@@ -128,29 +128,20 @@ struct RepairNote {
     dropped_bytes: usize,
 }
 
-/// Mail waiting to wake its recipient. The reactor drains this — mail/sent events in,
-/// pastes out — and the loop cap lives HERE, in the courier, because only the thing
-/// that causes a wake can count wakes (helm #320's measurement: a hook cannot).
-struct PendingWake {
-    handle: String,
-    mail_id: String,
-    from: String,
-    capped_logged: bool,
-    held_logged: bool,
-}
-
 /// A token bucket per recipient: burst of WAKE_BURST, refilling one per minute. A
-/// two-agent ping-pong self-throttles instead of burning until the money runs out.
+/// two-agent ping-pong self-throttles instead of burning until the money runs out. It caps
+/// only the turns benchd starts: mail a busy agent takes at its next tool call rides a turn
+/// already running and costs nothing. The cap lives here, in the one process that starts
+/// the turns it counts (helm #320: a hook cannot count them).
 struct WakeBucket {
     tokens: f64,
     last: Instant,
+    /// This run of refusals is already logged: one `wake/capped` per run, not per tick.
+    capped_logged: bool,
 }
 
 const WAKE_BURST: f64 = 6.0;
 const WAKE_REFILL_PER_SEC: f64 = 1.0 / 60.0;
-/// The idle gate: the pty must have been quiet this long before a paste. The crude
-/// form the mail spike proved; taps refine the judgement later, not the plumbing.
-const WAKE_IDLE_GATE: Duration = Duration::from_secs(2);
 
 /// Read the log with byte offsets. A clean log returns the next seq. An unreadable
 /// line refuses — unless it is the LAST non-empty line, which is an interrupted append:
@@ -253,7 +244,6 @@ struct Core {
     sessions: HashMap<String, Arc<Session>>,
     next_session: u64,
     next_mail: u64,
-    pending_wakes: Vec<PendingWake>,
     wake_tokens: HashMap<String, WakeBucket>,
     notices: mpsc::Sender<Notice>,
     /// Whose Playwright cache the default browser comes from.
@@ -308,14 +298,41 @@ const BROWSER_RESTART_WINDOW: Duration = Duration::from_secs(60);
 static BROWSER_LIFECYCLE: Mutex<()> = Mutex::new(());
 
 impl Core {
-    /// Handles held by a live session: the mail a send to one of these is woken for.
-    /// `mail/send` queues a wake by it, and `sessions/all` reports it as `wakeable`.
-    fn live_handles(&self) -> HashSet<String> {
-        self.sessions
+    /// Handles benchd can start a turn for when their agent is idle: `mail/send` answers
+    /// `"wake": "queued"` for these, and `sessions/all` reports them as `wakeable`.
+    fn pushable_handles(&self) -> HashSet<String> {
+        self.agents
             .values()
-            .filter(|s| s.is_live())
-            .map(|s| s.handle.clone())
+            .flatten()
+            .filter(|a| a.can_push())
+            .map(|a| a.handle.clone())
             .collect()
+    }
+
+    /// Take one wake token for `handle`, or log the first refusal of a run and say no.
+    fn take_wake_token(&mut self, handle: &str) -> bool {
+        let now = Instant::now();
+        let bucket = self
+            .wake_tokens
+            .entry(handle.to_string())
+            .or_insert(WakeBucket {
+                tokens: WAKE_BURST,
+                last: now,
+                capped_logged: false,
+            });
+        let refill = now.duration_since(bucket.last).as_secs_f64() * WAKE_REFILL_PER_SEC;
+        bucket.tokens = (bucket.tokens + refill).min(WAKE_BURST);
+        bucket.last = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            bucket.capped_logged = false;
+            return true;
+        }
+        if !bucket.capped_logged {
+            bucket.capped_logged = true;
+            let _ = self.append("wake/capped", json!({ "handle": handle }));
+        }
+        false
     }
 
     /// Every handle a new claim must not take: benchd's own sessions', and every address the
@@ -497,7 +514,6 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         sessions: HashMap::new(),
         next_session: 1,
         next_mail,
-        pending_wakes: Vec::new(),
         wake_tokens: HashMap::new(),
         notices: notice_tx,
         home,
@@ -591,10 +607,16 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         });
     }
 
-    // The wake reactor: mail/sent facts become pastes into idle recipient ptys.
+    // The delivery reactor: unread mail for an idle agent starts a turn through the agent's
+    // own channel (#358).
     {
         let core = Arc::clone(&core);
-        std::thread::spawn(move || wake_reactor(core));
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(400));
+                hook::deliver_to_idle(&core);
+            }
+        });
     }
 
     // A browser that was wanted when the last daemon went away comes back with this one.
@@ -626,180 +648,20 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
     Ok(0)
 }
 
-/// Answer `mail/sent` with `agent/woken` — the composition the mail spike proved, as a
-/// reactor over daemon state. Per pending wake: recipient must be a live session, its
-/// pty quiet past the idle gate, a Claude session's own registry row must say it can take
-/// a turn ([`claude_may_paste`]), and its token bucket must be willing; then the notice is
-/// pasted and submitted, and only then is the message retired to the path the notice named.
-/// A held or capped wake logs once and waits; a failed paste drops the wake. The mail stays
-/// unread in the inbox in all three cases.
-#[expect(clippy::too_many_lines, reason = "legacy (#418): 135 lines, limit 100")]
-fn wake_reactor(core: Arc<Mutex<Core>>) {
-    // Whose `~/.claude/sessions` holds the registry rows; fixed for the daemon's life.
-    let home = core.lock().unwrap().home.clone();
-    loop {
-        std::thread::sleep(Duration::from_millis(400));
-        // Snapshot under the lock; judge and paste outside it.
-        let candidates: Vec<(String, String, String, Arc<Session>)> = {
-            let c = core.lock().unwrap();
-            c.pending_wakes
-                .iter()
-                .filter_map(|p| {
-                    c.sessions
-                        .values()
-                        .find(|s| s.handle == p.handle && s.is_live())
-                        .map(|s| {
-                            (
-                                p.handle.clone(),
-                                p.mail_id.clone(),
-                                p.from.clone(),
-                                Arc::clone(s),
-                            )
-                        })
-                })
-                .collect()
-        };
-        // Drop pendings whose recipient session is gone for good.
-        {
-            let mut c = core.lock().unwrap();
-            let known: std::collections::HashSet<String> =
-                c.sessions.values().map(|s| s.handle.clone()).collect();
-            let mut dropped: Vec<(String, String)> = Vec::new();
-            c.pending_wakes.retain(|p| {
-                let has_session = known.contains(&p.handle);
-                if !has_session {
-                    dropped.push((p.handle.clone(), p.mail_id.clone()));
-                }
-                has_session
-            });
-            for (handle, mail_id) in dropped {
-                let _ = c.append(
-                    "wake/dropped",
-                    json!({ "handle": handle, "mail": mail_id, "why": "recipient session gone; mail stays in the mailbox" }),
-                );
-            }
-        }
-        for (handle, mail_id, from, session) in candidates {
-            if session.idle_for() < WAKE_IDLE_GATE {
-                continue;
-            }
-            // Its hook may have handed the mail out already (#358). Out of the inbox is
-            // delivered, and a second notice for it would be a second delivery.
-            let root = core.lock().unwrap().root.clone();
-            if !bench_mail::is_unread(&root, &handle, &mail_id) {
-                core.lock()
-                    .unwrap()
-                    .pending_wakes
-                    .retain(|p| p.mail_id != mail_id);
-                continue;
-            }
-            if session.agent == AgentKind::Claude {
-                let row = bench_sessions::claude::registry(&home, |pid, started| {
-                    pid == session.pid && bench_sessions::process::alive(pid, Some(started))
-                })
-                .0
-                .pop();
-                let activity = row.map(|r| r.activity);
-                if !claude_may_paste(activity.as_ref()) {
-                    let mut c = core.lock().unwrap();
-                    if let Some(p) = c
-                        .pending_wakes
-                        .iter_mut()
-                        .find(|p| p.mail_id == mail_id && !p.held_logged)
-                    {
-                        p.held_logged = true;
-                        let _ = c.append(
-                            "wake/held",
-                            json!({ "handle": handle, "mail": mail_id, "activity": activity }),
-                        );
-                    }
-                    continue;
-                }
-            }
-            // Token, event, and pending-list mutation under the lock; the paste outside.
-            let (go, root) = {
-                let mut c = core.lock().unwrap();
-                let now = Instant::now();
-                let bucket = c.wake_tokens.entry(handle.clone()).or_insert(WakeBucket {
-                    tokens: WAKE_BURST,
-                    last: now,
-                });
-                let refill = now.duration_since(bucket.last).as_secs_f64() * WAKE_REFILL_PER_SEC;
-                bucket.tokens = (bucket.tokens + refill).min(WAKE_BURST);
-                bucket.last = now;
-                if bucket.tokens < 1.0 {
-                    if let Some(p) = c
-                        .pending_wakes
-                        .iter_mut()
-                        .find(|p| p.mail_id == mail_id && !p.capped_logged)
-                    {
-                        p.capped_logged = true;
-                        let _ =
-                            c.append("wake/capped", json!({ "handle": handle, "mail": mail_id }));
-                    }
-                    (false, c.root.clone())
-                } else {
-                    bucket.tokens -= 1.0;
-                    (true, c.root.clone())
-                }
-            };
-            if !go {
-                continue;
-            }
-            let retired = match bench_mail::retired_path(&root, &handle, &mail_id) {
-                Ok(p) => p,
-                Err(why) => {
-                    let mut c = core.lock().unwrap();
-                    c.pending_wakes.retain(|p| p.mail_id != mail_id);
-                    let _ = c.append(
-                        "wake/dropped",
-                        json!({ "handle": handle, "mail": mail_id, "why": why }),
-                    );
-                    continue;
-                }
-            };
-            let notice = format!("You have mail from {from}: {}", retired.display());
-            // Retired only once the paste is written, so a paste that never happened leaves the
-            // mail unread. The move follows the Return by microseconds; the agent reads the
-            // path a model turn later.
-            let delivered = session.deliver_line(&notice);
-            let retire = delivered
-                .as_ref()
-                .map(|_| bench_mail::retire(&root, &handle, &mail_id));
-            let mut c = core.lock().unwrap();
-            c.pending_wakes.retain(|p| p.mail_id != mail_id);
-            match retire {
-                Ok(retired) => {
-                    let mut data =
-                        json!({ "session": session.id, "handle": handle, "mail": mail_id });
-                    // Woken, but the file was gone from both inbox and read/ (removed by hand).
-                    if let Err(why) = retired {
-                        data["retire_error"] = json!(why);
-                    }
-                    let _ = c.append("agent/woken", data);
-                }
-                Err(why) => {
-                    let _ = c.append(
-                        "wake/dropped",
-                        json!({ "handle": handle, "mail": mail_id,
-                                "why": format!("paste failed ({why}); mail stays unread in the inbox") }),
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// Whether a Claude session can take a pasted wake, by its own registry row (#415). A paste
-/// into a permission prompt or dialog answers it — measured on 2.1.283, it approved the
-/// pending command — and a prompt is quiet, so the pty gate cannot see one. Only `idle`, or
-/// `waiting` with nothing named, is a composer ready for a turn; everything else, and no
-/// row at all, holds the wake.
-fn claude_may_paste(activity: Option<&Activity>) -> bool {
-    matches!(
-        activity,
-        Some(Activity::Idle | Activity::Waiting { waiting_for: None })
-    )
+/// `<root>/claude-settings.json`, rewritten at every Claude spawn so it always names the
+/// `bench` beside this daemon: the hooks that report to benchd and the inbound rule that lets
+/// benchd start a turn in an idle session. The operator's own wiring names the same handler,
+/// and Claude runs an identical handler once, so a machine wired by hand is not called twice.
+fn claude_settings(root: &std::path::Path) -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("cannot find benchd itself: {e}"))?;
+    let bench = bench_wire::hook::sibling_bench(&exe);
+    let path = root.join("claude-settings.json");
+    let text = serde_json::to_string_pretty(&bench_wire::hook::claude_settings(
+        &bench.display().to_string(),
+    ))
+    .map_err(|e| e.to_string())?;
+    fs::write(&path, text + "\n").map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    Ok(path.display().to_string())
 }
 
 enum AfterResponse {
@@ -1057,20 +919,17 @@ fn dispatch(
                     AfterResponse::Done,
                 );
             }
-            let prompt = match parsed.prompt_file.as_deref() {
-                None => None,
-                Some(p) => match fs::read_to_string(p) {
-                    // The file must outlive the spawn (helm #93) — read it now, refuse
-                    // loudly if it is not there, never pass it through argv.
-                    Ok(text) => Some(text),
-                    Err(e) => {
-                        return (
-                            refused(format!("cannot read prompt_file {p:?}: {e}")),
-                            AfterResponse::Done,
-                        );
-                    }
-                },
-            };
+            // The file must outlive the spawn (helm #93): the agent reads it as its first act.
+            if let Some(p) = parsed.prompt_file.as_deref()
+                && !(p.starts_with('/') && PathBuf::from(p).is_file())
+            {
+                return (
+                    refused(format!(
+                        "prompt_file must be an absolute path to a file the agent can read, got {p:?}"
+                    )),
+                    AfterResponse::Done,
+                );
+            }
             let rows = parsed.rows.unwrap_or(40);
             let cols = parsed.cols.unwrap_or(140);
             let spec = SpawnSpec {
@@ -1080,6 +939,8 @@ fn dispatch(
                 effort: parsed.effort.clone(),
                 runtime_session: agent.mints_session_id().then(mint_session_id),
                 resume: false,
+                prompt_file: parsed.prompt_file.clone(),
+                settings: None,
             };
             let (id, handle, root, notices) = {
                 let mut c = core.lock().unwrap();
@@ -1107,6 +968,13 @@ fn dispatch(
                 c.next_session += 1;
                 (id, handle, c.root.clone(), c.notices.clone())
             };
+            let mut spec = spec;
+            if agent == AgentKind::Claude {
+                match claude_settings(&root) {
+                    Ok(path) => spec.settings = Some(path),
+                    Err(why) => return (errored(why), AfterResponse::Done),
+                }
+            }
             // The session learns its address and root, so `bench mail send` inside it
             // needs no flags and lands in the right mailroom.
             let extra_env = [
@@ -1157,18 +1025,6 @@ fn dispatch(
                     return (errored(why), AfterResponse::Done);
                 }
             }
-            // Ready wait and prompt delivery happen WITHOUT the core lock.
-            let mut ready = true;
-            let mut prompt_delivered = false;
-            if let Some(text) = prompt {
-                ready = session.wait_ready(READY_WAIT);
-                if ready {
-                    let one_line = text.replace('\n', " ");
-                    prompt_delivered = session.deliver_line(one_line.trim()).is_ok();
-                    let mut c = core.lock().unwrap();
-                    let _ = c.append("session/prompted", json!({ "session": session.id }));
-                }
-            }
             (
                 ok(json!({
                     "session": session.id,
@@ -1176,8 +1032,6 @@ fn dispatch(
                     "pid": session.pid,
                     "agent": agent.name(),
                     "runtime_session": session.runtime_session,
-                    "ready": ready,
-                    "prompt_delivered": prompt_delivered,
                 })),
                 AfterResponse::Done,
             )
@@ -1368,13 +1222,11 @@ fn dispatch(
                     return (errored(why), AfterResponse::Done);
                 }
             }
-            let ready = session.wait_ready(READY_WAIT);
             (
                 ok(json!({
                     "session": session.id,
                     "from": sid,
                     "pid": session.pid,
-                    "ready": ready,
                 })),
                 AfterResponse::Done,
             )
@@ -1422,20 +1274,13 @@ fn dispatch(
                 ) {
                     return (errored(why), AfterResponse::Done);
                 }
-                let live = c.live_handles().contains(&parsed.to);
-                if live {
-                    c.pending_wakes.push(PendingWake {
-                        handle: parsed.to.clone(),
-                        mail_id: id.clone(),
-                        from: parsed.from.clone(),
-                        capped_logged: false,
-                        held_logged: false,
-                    });
+                // Queued: benchd starts a turn for it once it is idle. Next turn: it waits
+                // for the recipient's next prompt or tool call, which is when its hook
+                // hands it out.
+                if c.pushable_handles().contains(&parsed.to) {
                     "queued"
                 } else {
-                    // Honest: the mail is delivered and waits; nothing will wake a
-                    // recipient this daemon does not host.
-                    "no-live-session"
+                    "next-turn"
                 }
             };
             (
@@ -1513,7 +1358,6 @@ fn dispatch(
                     "mail/read",
                     json!({ "handle": parsed.handle, "id": parsed.id }),
                 );
-                c.pending_wakes.retain(|p| p.mail_id != parsed.id);
             }
             (
                 ok(json!({
@@ -1838,29 +1682,4 @@ fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| "unknown".into())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_a_claude_composer_ready_for_a_turn_takes_a_paste() {
-        let waiting = |w: Option<&str>| Activity::Waiting {
-            waiting_for: w.map(String::from),
-        };
-        assert!(claude_may_paste(Some(&Activity::Idle)));
-        assert!(claude_may_paste(Some(&waiting(None))));
-        for held in [
-            waiting(Some("permission prompt")),
-            waiting(Some("dialog open")),
-            waiting(Some("input needed")),
-            Activity::Busy,
-            Activity::Shell,
-            Activity::Unknown,
-        ] {
-            assert!(!claude_may_paste(Some(&held)), "{held:?}");
-        }
-        assert!(!claude_may_paste(None), "no registry row holds the wake");
-    }
 }

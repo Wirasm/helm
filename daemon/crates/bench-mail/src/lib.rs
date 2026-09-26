@@ -53,6 +53,11 @@ fn inbox(root: &Path, handle: &str) -> PathBuf {
     mail_root(root).join(handle).join("inbox")
 }
 
+/// Where a handle's unread mail lands: what pi's extension watches.
+pub fn inbox_dir(root: &Path, handle: &str) -> PathBuf {
+    inbox(root, handle)
+}
+
 fn read_dir_of(root: &Path, handle: &str) -> PathBuf {
     mail_root(root).join(handle).join("read")
 }
@@ -107,6 +112,17 @@ pub fn retired_path(root: &Path, handle: &str, id: &str) -> Result<PathBuf, Stri
         ));
     }
     Ok(read_dir_of(root, handle).join(format!("{id}.md")))
+}
+
+/// Undo a hand-out that reached nobody: read → inbox, so the message is unread again and the
+/// next channel delivers it. Never replaces a file already in the inbox.
+pub fn unretire(root: &Path, handle: &str, id: &str) -> Result<(), String> {
+    let from_path = retired_path(root, handle, id)?;
+    let to_path = inbox(root, handle).join(format!("{id}.md"));
+    if to_path.exists() {
+        return Ok(());
+    }
+    fs::rename(&from_path, &to_path).map_err(|e| format!("cannot return {id} to the inbox: {e}"))
 }
 
 /// Whether a message still waits in its recipient's inbox.

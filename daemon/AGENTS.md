@@ -50,8 +50,9 @@ knows nor needs the Rust toolchain, in either direction.
 - `crates/benchd` — the daemon. Foreground, one unix socket, a thread per connection.
   `src/layout.rs` is the bench document's whole mutation path: the layout verbs, `bench.json`,
   and booting from it.
-- `crates/bench` — the CLI, the one agent-facing surface, and the attach client. `bench log`
-  is the one verb that never opens the socket: it reads a transcript file directly.
+- `crates/bench` — the CLI, the one agent-facing surface, and the attach client. Two verbs
+  never open the socket: `bench log` reads a transcript file directly, and `bench wiring` prints
+  (or `--check`s) the one-time hook wiring for the operator's own agents.
 - **benchd runs as a login agent** (`com.wirasm.benchd`, `scripts/benchd-agent.sh`, #407). To
   restart the live one, `launchctl kickstart -k gui/$(id -u)/com.wirasm.benchd`; starting a
   second benchd by hand beside it is refused at the socket and leaves launchd retrying. Tests and
