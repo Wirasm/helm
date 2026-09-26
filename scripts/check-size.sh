@@ -8,8 +8,8 @@
 #
 # SwiftLint prints file:line:col and the measured number but not the declaration's name,
 # so each finding is followed by the source line it points at. For every rule except
-# file_length that line is the declaration itself (or, for superfluous_disable_command,
-# the marker that is no longer needed).
+# file_length (which points at the file's last line) that line is the declaration itself,
+# including superfluous_disable_command, which points at the declaration its marker guards.
 #
 #   scripts/check-size.sh      non-zero exit on any finding (part of `make lint`)
 set -euo pipefail
