@@ -49,7 +49,7 @@ the layout verbs (`workspace/*`, `pane/*`, `focus/*`, `layout/resize`, `drawer/t
 record it boots from; and `events --follow`, one line per event with the whole document attached when it
 changed. The focus rule is the document's own: an agent's verb that would move the operator's
 focus is refused unless it says `asked`. helm is its client and keeps no bench of its own: every
-key, click and spool request is a verb, and helm draws the document it gets back. `just
+key and click is a verb, as is every agent's `bench` call, and helm draws the document it gets back. `just
 bench-proof` drives a whole session through the socket and across a restart.
 
 **Drawers are in the document (#356).** A drawer is a named holder of tabbed panes beside the

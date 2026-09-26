@@ -4,15 +4,8 @@ import QuartzCore
 
 /// helm drawing its own window into a bitmap.
 ///
-/// **`CaptureReport` and `TerminalContent` — the values this produces — live in `HelmWire`
-/// (#221), not here.** They cross into `SpoolResult.capture`, which `Helm`'s own `SpoolModel`
-/// writes and `WindowCaptureTests` decodes without linking AppKit; this file keeps the drawing
-/// itself, which needs `NSView`/`CALayer` and has no business in a library only `Helm` depends
-/// on. `tools/helm-capture.swift` still reads the result back as a raw dictionary — it cannot
-/// `import HelmWire` either, for the reasons `AGENTS.md`'s "Why the spool is a script, and must
-/// stay one" gives — and `SpoolWireConformanceTests` watches both its request and its result
-/// handling, the latter by writing a real `SpoolResult` for every `Status` and checking the
-/// script's exit code and stderr against it.
+/// It produces a `CaptureReport` (beside it in `Capture/`), which `HelmAsks` hands to benchd as
+/// helm's answer to `bench get screenshot`.
 ///
 /// **This is drawing, not screen capture, and that is the whole point of #174.** Screen
 /// Recording is a TCC grant: un-grantable from code, keyed on the code signature, and attached
@@ -48,7 +41,7 @@ enum WindowCapture {
     static func png(
         of view: NSView, terminals: [NSView], window title: String,
         appearance: Palette.Appearance, to url: URL
-    ) -> Result<CaptureReport, SpoolRefusal> {
+    ) -> Result<CaptureReport, CaptureRefusal> {
         // Laid out and drawn before it is asked for pixels: a window that has never been
         // displayed has a view tree with no frames, and the capture would be a correct
         // rendering of nothing.
@@ -58,13 +51,13 @@ enum WindowCapture {
         let bounds = view.bounds
         guard bounds.width >= 1, bounds.height >= 1 else {
             return .failure(
-                SpoolRefusal(
+                CaptureRefusal(
                     "the window's content view is \(Int(bounds.width))×\(Int(bounds.height)) "
                         + "points — there is nothing to draw"))
         }
         guard let rep = view.bitmapImageRepForCachingDisplay(in: bounds) else {
             return .failure(
-                SpoolRefusal("AppKit would not give helm a bitmap for a \(bounds) view"))
+                CaptureRefusal("AppKit would not give helm a bitmap for a \(bounds) view"))
         }
         view.cacheDisplay(in: bounds, to: rep)
 
@@ -80,13 +73,13 @@ enum WindowCapture {
             appearance: appearance)
 
         guard let data = rep.representation(using: .png, properties: [:]) else {
-            return .failure(SpoolRefusal("the bitmap could not be encoded as a PNG"))
+            return .failure(CaptureRefusal("the bitmap could not be encoded as a PNG"))
         }
         do {
             try data.write(to: url, options: [.atomic])
         } catch {
             return .failure(
-                SpoolRefusal(
+                CaptureRefusal(
                     "could not write the PNG to \(url.path): \(error.localizedDescription)")
             )
         }

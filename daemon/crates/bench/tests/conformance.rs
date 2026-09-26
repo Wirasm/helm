@@ -5352,3 +5352,83 @@ fn the_bench_panes_skills_snippets_execute_against_a_real_daemon() {
         "the tidy-up closed the canvas it opened"
     );
 }
+
+#[test]
+fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
+    // The canvas skill puts an artifact on the bench with `bench open` since push.sh retired
+    // (M3). Its snippets run here, in order, as an agent, the way bench-panes' do.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.claude/skills/helm-canvas/SKILL.md"),
+    )
+    .expect("helm-canvas SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(snippets.len(), 2, "open, then show and take away");
+
+    let home = TestHome::claim("canvas-skill");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    working_bench(&daemon.socket);
+    // The operator works in a terminal of his own, so the canvas slot is not his and `show`
+    // there moves nothing (showing a tab of *his* slot is refused, as the skill says).
+    ok_data(layout(
+        &daemon.socket,
+        "pane/split",
+        serde_json::json!({ "direction": "right" }),
+        operator(),
+        false,
+    ));
+    let held = focused(&daemon.socket);
+    let plan = artifact(&home.dir, "canvas-skill.md");
+    let mut pane = String::new();
+    for (i, snippet) in snippets.iter().enumerate() {
+        let out = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", snippet])
+            .current_dir(&home.dir)
+            .env_remove("BENCH_SUITE")
+            .env_remove("BENCH_HANDLE")
+            .env_remove("HELM_PANE")
+            .env("HOME", &home.dir)
+            .env("BENCH_DIR", home.dir.join(".bench"))
+            .env("BENCH", bench_bin())
+            .env("ARTIFACT", &plan)
+            .env("PANE", &pane)
+            .output()
+            .expect("run snippet");
+        assert!(
+            out.status.success(),
+            "SKILL.md snippet {} failed (exit {:?}):\n{}\n--- stderr:\n{}",
+            i + 1,
+            out.status.code(),
+            snippet,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if i == 0 {
+            pane = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            assert!(bench_doc::PaneId::parse(&pane).is_ok(), "{pane:?}");
+        }
+    }
+    assert_eq!(
+        focused(&daemon.socket),
+        held,
+        "no snippet took his keyboard"
+    );
+    assert_eq!(
+        bench(&home.dir, &["get", "pane", &pane]).code,
+        3,
+        "the canvas was closed"
+    );
+}

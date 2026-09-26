@@ -3,13 +3,12 @@ import Foundation
 /// A mailbox address on the bench: `helm-a1b2`, `operator`.
 ///
 /// benchd mints every handle (`bench_wire::hook::derive_handle`) and helm only ever reads one
-/// back — from benchd's `mail/who` answer, or from a spool result it wrote itself. So there is
+/// back, from benchd's `mail/who` answer. So there is
 /// no way to build one from a cwd and a session id here: a derived handle is silently wrong
 /// whenever benchd widened it to dodge a holder (#233, #262).
 ///
-/// Encodes as a bare string, exactly like `WorkspacePath`, and that shape must not change:
-/// `helm-spool.swift` prints the whole result blob and the agent that invoked it reads `handle`
-/// (`SpoolWireConformanceTests.testHelmSpoolPrintsHandleAndTerminalIdAsBareStringsOnceReady`).
+/// Encodes as a bare string, exactly like `WorkspacePath`, as the wire spells it
+/// (`daemon/fixtures/mail-verbs.json`).
 package struct Handle: Codable, Equatable, Hashable, Sendable {
     package let value: String
 

@@ -2,8 +2,7 @@ import Foundation
 import HelmWire
 import XCTest
 
-/// `Handle`'s own contract, isolated from the spool machinery that carries it — the file its
-/// sibling `TerminalIDTests` has had since `9863944` and this type never got.
+/// `Handle`'s own contract, isolated from the mail machinery that carries it.
 ///
 /// **The gap this closes is that `Handle(validating:)` had no test at all.** It appeared in six
 /// places across the suite and every one used it as a fixture builder — `Handle(validating: "…")!`
@@ -117,8 +116,7 @@ final class HandleTests: XCTestCase {
         XCTAssertEqual(try decode(#""  helm-4831 ""#), "helm-4831")
     }
 
-    /// The throw path. A handle on the wire — `SpoolResult.handle`, or benchd's `mail/who`
-    /// reply — that fails here was hand-edited or came from somewhere else, and is worth a decode
+    /// The throw path. A handle on the wire — benchd's `mail/who` reply — that fails here was hand-edited or came from somewhere else, and is worth a decode
     /// error rather than a field that silently addresses nobody.
     func testDecodingAnEmptyOrWhitespaceOnlyHandleThrowsRatherThanAddressingNobody() {
         for raw in [#""""#, #""   ""#, #""\t""#] {

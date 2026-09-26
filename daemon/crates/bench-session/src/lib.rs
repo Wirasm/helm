@@ -6,10 +6,10 @@
 //! event log — the daemon composes those. Everything an incident already paid for is
 //! carried as code:
 //!
-//! - **Postures are helm's `SpoolUnattendedPolicy`, plus the model/effort columns the
+//! - **Postures are the operator's unattended table (helm #179), plus the model/effort columns the
 //!   model-selection spike proved.** A posture removes a prompt; it never withholds
 //!   capability (helm #179).
-//! - **The agent allowlist is the security line** (helm `SpoolPolicy`): a spawn request
+//! - **The agent allowlist is the security line** (as helm's spool had it): a spawn request
 //!   arrives over a socket, and `sh` in a login shell is what an ungated spawn would be.
 //! - **Prompts travel by file, never argv** (helm #93) — and are pasted, then submitted
 //!   separately (helm's launch-line rule; bracketed-paste measurement).
@@ -146,7 +146,7 @@ pub fn prompt_pointer(path: &str) -> String {
 }
 
 /// The single spelling of how each runtime is started unattended. Postures verbatim
-/// from helm's `SpoolUnattendedPolicy`; model/effort flags verbatim from the
+/// from the operator's unattended table (helm #179); model/effort flags verbatim from the
 /// model-selection spike; resume flags from the session-state spike.
 pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
     let mut args: Vec<String> = Vec::new();

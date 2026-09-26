@@ -59,14 +59,9 @@ enum DefaultsDomain {
 
     /// What `HELM_DEFAULTS_SUITE` asked for, as a decision rather than a string.
     ///
-    /// **The decision itself lives in `HelmWire.DefaultsSuite` (#221), not here.**
-    /// `SpoolDirectory.resolve` — reached both by a running helm and by the standalone
-    /// `helm-spool`/`helm-close`/`helm-capture` CLIs — has to make this exact call to find the
-    /// isolated spool a suite implies, and a CLI outside this process cannot reach a type that
-    /// lives in `Helm`. Rather than restating the parsing rules a second time (the
-    /// `tools/*.swift` bug this whole library exists to end, one door over), this delegates.
-    /// `DefaultsSuite`'s header has the full reasoning for each rule below; nothing about the
-    /// decision changed, only where it is made.
+    /// **The decision itself lives in `HelmWire.DefaultsSuite`, not here**, so `BenchRoot` makes
+    /// the identical call when it resolves benchd's root under a suite. `DefaultsSuite`'s header
+    /// has the reasoning for each rule below.
     typealias Override = DefaultsSuite.Override
 
     /// Read `HELM_DEFAULTS_SUITE` and decide. Pure, so every rule is a test — see

@@ -136,8 +136,8 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      # All three skill gates: canvas, board and post-canvas (scripts/check.sh). The board
-      # and post-canvas gates need node, which this job already has by virtue of the runner
+      # The board and post-canvas skill gates (scripts/check.sh); the canvas skill's snippets
+      # run in the daemon gate, against a real benchd. Both need node, which this job already has by virtue of the runner
       # image. A gate that exists, is documented in AGENTS.md, and runs only when somebody
       # remembers is the drift this workflow exists to stop — #291 is the same lesson from the
       # other side.

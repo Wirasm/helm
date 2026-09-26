@@ -27,9 +27,8 @@ import HelmWire
 /// unknown one becomes a refusal the operator can read rather than a resume that fails in the
 /// pane.
 struct ResumableAgent: Codable, Equatable {
-    /// The program to run again — a bare name from `SpoolPolicy.allowedCommands`'s family,
-    /// and today always `claude`. Never a path: this is composed into a shell line, and the
-    /// gate on what helm will start is the same gate a spawn passes.
+    /// The program to run again — a bare agent name (`claude`, `codex`, `pi`), the same set
+    /// benchd will spawn. Never a path: this is composed into a shell line.
     let command: String
     /// The agent's own id for the conversation — `AgentSession.sessionId`, the value
     /// `--resume` takes and the one that names the transcript on disk.
@@ -82,7 +81,7 @@ enum AgentResume {
     /// **One line, deliberately.** It is single-quoted onto a command line that libghostty
     /// delivers as a bracketed paste, so an embedded newline would arrive as a continuation
     /// the shell is still waiting on. helm composes this text itself — no caller supplies it —
-    /// which is what makes an inline argument safe here where `SpoolLaunchLine` has to stage a
+    /// which is what makes an inline argument safe here where `LaunchLine` has to stage a
     /// caller's prompt in a file.
     static let notice =
         "helm restarted and resumed this session — anything you had running is gone. "
@@ -115,7 +114,7 @@ enum AgentResume {
     /// so they are at the pane and the shell's own error is in front of them.
     ///
     /// **It carries the same unattended posture a spawn does**, from
-    /// `SpoolUnattendedPolicy` rather than a second spelling of it. The stretch is worth
+    /// `UnattendedPosture` rather than a second spelling of it. The stretch is worth
     /// naming: that policy's header is written about the case where *nobody is at the pane*,
     /// and somebody just clicked Resume. The reason it still applies is the sentence
     /// underneath — those flags are the operator's own standing choice on this machine
@@ -129,14 +128,14 @@ enum AgentResume {
         -> String?
     {
         guard agent.command == claude else { return nil }
-        var parts = ["cd", SpoolLaunchLine.quoted(agent.cwd), "&&"]
-        parts.append(SpoolLaunchLine.quoted(agent.command))
+        var parts = ["cd", LaunchLine.quoted(agent.cwd), "&&"]
+        parts.append(LaunchLine.quoted(agent.command))
         parts.append(
-            contentsOf: SpoolUnattendedPolicy.arguments(for: agent.command, requested: [])
-                .map(SpoolLaunchLine.quoted))
+            contentsOf: UnattendedPosture.arguments(for: agent.command, requested: [])
+                .map(LaunchLine.quoted))
         parts.append("--resume")
-        parts.append(SpoolLaunchLine.quoted(agent.session))
-        if let notice, !notice.isEmpty { parts.append(SpoolLaunchLine.quoted(notice)) }
+        parts.append(LaunchLine.quoted(agent.session))
+        if let notice, !notice.isEmpty { parts.append(LaunchLine.quoted(notice)) }
         return parts.joined(separator: " ")
     }
 }
@@ -173,8 +172,7 @@ struct AgentResumeOffer: Equatable, Identifiable {
     /// The verdict on one restored pane, given only whether its transcript is still there.
     ///
     /// Pure, and the filesystem arrives as a closure, so every rule is reachable from
-    /// `swift test` on a machine that has never run Claude Code — the same shape
-    /// `SpoolPolicy.accept` takes `isDirectory` in.
+    /// `swift test` on a machine that has never run Claude Code.
     static func offer(
         _ agent: ResumableAgent, in pane: Pane.ID, transcriptExists: (ResumableAgent) -> Bool
     ) -> AgentResumeOffer {

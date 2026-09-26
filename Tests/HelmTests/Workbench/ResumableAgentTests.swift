@@ -137,7 +137,7 @@ final class ResumableAgentTests: XCTestCase {
         let line = try XCTUnwrap(AgentResume.line(resuming: agent()))
 
         XCTAssertTrue(
-            line.hasSuffix(SpoolLaunchLine.quoted(AgentResume.notice)),
+            line.hasSuffix(LaunchLine.quoted(AgentResume.notice)),
             "the notice is the last argument, so it is the first thing the agent reads")
         XCTAssertFalse(
             AgentResume.notice.contains("\n"),
@@ -145,14 +145,14 @@ final class ResumableAgentTests: XCTestCase {
                 + "shell is still waiting on")
     }
 
-    /// The posture is `SpoolUnattendedPolicy`'s, not a second spelling of it — a resumed agent
+    /// The posture is `UnattendedPosture`'s, not a second spelling of it — a resumed agent
     /// must be the agent that died, and that one was started with the operator's standing flags.
     func testTheResumeLineCarriesTheSamePostureASpawnDoes() throws {
         let line = try XCTUnwrap(AgentResume.line(resuming: agent(), notice: nil))
 
-        for argument in SpoolUnattendedPolicy.arguments(for: "claude", requested: []) {
+        for argument in UnattendedPosture.arguments(for: "claude", requested: []) {
             XCTAssertTrue(
-                line.contains(SpoolLaunchLine.quoted(argument)),
+                line.contains(LaunchLine.quoted(argument)),
                 "\(argument) is what a spawned claude gets, so it is what a resumed one gets")
         }
     }
@@ -192,7 +192,7 @@ final class ResumableAgentTests: XCTestCase {
             AgentResume.line(resuming: agent(cwd: hostile), notice: nil))
 
         XCTAssertTrue(
-            line.hasPrefix("cd " + SpoolLaunchLine.quoted(hostile) + " && "),
+            line.hasPrefix("cd " + LaunchLine.quoted(hostile) + " && "),
             "the cwd comes off disk, so it is quoted like everything else")
         XCTAssertFalse(line.contains("rm -rf / "), "nothing escapes the quoting")
     }

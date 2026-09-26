@@ -52,9 +52,9 @@ what kind a pane is.
 _Avoid_: pane type (in code), plugin, renderer
 
 **name**:
-What a pane is called on its slot's tab strip, and **who called it that**. helm *derives* one
-for a pane it opens for an agent; an agent *chooses* one through the spool, and may replace a
-derived one freely but not a chosen one unless the request says the operator asked. A pane with
+What a pane is called on its slot's tab strip, and **who called it that**. benchd *derives* one
+for a pane it opens for an agent it spawned; an agent *chooses* one with `bench name`, and may
+replace a derived one freely but not a chosen one unless it says `--rename`, the operator asked. A pane with
 no name falls back to what it can say about itself — a terminal to its shell's **title**, a
 canvas to the file or host it is showing. Persisted on the pane, so it survives a relaunch.
 _Avoid_: title (that word is the shell's, one level down — OSC 0/2 — and outranked by a name),
@@ -89,7 +89,7 @@ The pane type that shows the **shared browser** — the one Chrome benchd runs p
 (`bench browser start`), which agents drive with Playwright and the operator uses by hand. helm
 neither starts nor automates it: the pane reads benchd's `browser/endpoint.json`, draws the tab
 it follows over CDP, and forwards mouse, keys and the clipboard. One per bench, and it lives in
-the `browser` **drawer**: ⌘⇧B shows or hides it, and an agent's `helm-command openBrowser` or a
+the `browser` **drawer**: ⌘⇧B shows or hides it, and an agent's `bench open browser` or a
 ⌘-clicked http link (a new tab) badges the drawer without opening it. Not a canvas: a canvas
 renders a file in helm's own webview.
 _Avoid_: webview, canvas, embedded browser
@@ -238,19 +238,18 @@ _Avoid_: room, fleet
 
 ### How an agent reaches helm
 
-**spool**:
-A directory helm watches — `~/.helm/spool` — where a **request** to start an agent appears as
-a file. helm's one push channel, and the only one that works with the screen locked, headless
-or over ssh: everything else needs a display, a focused window and an Accessibility grant.
-Under `HELM_DEFAULTS_SUITE=<name>` it moves to `~/.helm/spool-<name>` with the rest of that
-instance's state.
-_Avoid_: queue, inbox (the mailbox is the inbox), API, control channel
+**bench verb**:
+What an agent drives the bench with: `bench open|split|show|focus|move|name|close|spawn|get`, a
+request to benchd over its socket, the same door the operator's keys go through (M3). It lands in
+the background unless it says `--asked`, the operator asked. It replaced the **spool**, a directory
+of request files helm watched, which retired with its six scripts.
+_Avoid_: spool, request file, helm API
 
 **bench snapshot**:
 A versioned, atomically replaced JSON report at `~/.helm/bench/snapshot.json` that lets an
 agent read mounted and parked workspaces, workbench arrangement, pane/session identity,
 visibility, focus and freshness without a display or request round trip. It is a projection,
-not persistence and never a control channel; the **spool** remains the push channel.
+not persistence and never a control channel; the **bench verbs** are how an agent acts.
 _Avoid_: bench API, layout database, restore file
 
 **canvas state latch**:
@@ -262,31 +261,12 @@ separate — that one is the operator's own notes, appended and never rewritten,
 is machine state and every earlier value is noise.
 _Avoid_: callback, event, message (nothing is delivered — the agent reads a file); telemetry
 
-**request**:
-One file in the spool, of one **kind**: a `spawn` (`{id, cwd, command, args, prompt}`), a
-`capture` (`{id, kind, path, window}`), a `close` (`{id, kind, terminal, force}`), a `command`
-(`{id, kind, command}`), a `select` (`{id, kind, pane}`) or a `name`
-(`{id, kind, pane, name, rename}`). Acted on
-**at most once** — claimed by rename into `claimed/`, which is a graveyard and never re-read,
-so a restart mid-spawn cannot double-open. Only the agents in `SpoolPolicy.allowedCommands` may
-be named, and only by a spawn. `SpoolRequest.kinds` is the list, and the refusal for a kind helm
-does not know is written from it.
-_Avoid_: job, task, command (the `command` is a field of it)
-
 **teardown**:
-Closing a pane through the spool — the inverse of a spawn, and it stops at the **pane**. helm
-refuses a pane with live work unless the request says `force`, and refuses the pane the
-operator is working in whatever the request says. Worktrees and branches are not teardown's:
+Closing a pane with `bench close` — the inverse of a spawn, and it stops at the **pane**. benchd
+refuses an agent's close of a terminal unless it says `--force`, and the pane the operator is
+working in unless it says `--asked`. Worktrees and branches are not teardown's:
 that is #141's rail, which confirms with the operator and never deletes unmerged work.
 _Avoid_: kill, destroy, cleanup (cleanup is the worktree rail's word)
-
-**result**:
-What helm writes back at `spool/results/<id>.json`, and the half that makes the spool a
-protocol rather than a shout. Carries the terminal id, the pid, the session id and the
-**handle** — so the caller's next move, addressing the agent it just started, needs no lookup
-of its own. Written twice on success: `started` at once, `ready` when benchd names the agent
-in the pane (its hook claimed an address). Every request gets one, refusals included.
-_Avoid_: response, ack, receipt
 
 ### Not levels in helm
 

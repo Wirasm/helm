@@ -20,82 +20,52 @@ there by writing a file and asking helm to show it.
 
 **It appears; it does not seize.** The artifact arrives as a tab the operator can reach. It does not
 take the keyboard and does not replace whatever they are currently reading. On a busy bench that
-means it can land **hidden**, which is what `helm-select.swift` is for — see *Showing it, and
-taking it away* below.
+means it can land **hidden** — see *Showing it, and taking it away* below.
 
 ## Opening one
 
 ```bash
-~/.claude/skills/helm-canvas/push.sh /absolute/path/to/artifact.md
+BENCH="${BENCH:-bench}"
+OUT=$("$BENCH" open "$ARTIFACT") || exit
+PANE=$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["pane"])')
+echo "$PANE"
 ```
 
-- The path must be **absolute**, and the file must exist.
-- Only **`.md` `.markdown` `.mdown` `.html` `.htm`** are renderable.
+- `$ARTIFACT` is the file you wrote. It must exist, and only **`.md` `.markdown` `.mdown` `.html` `.htm`** are renderable. A
+  relative path is your cwd's.
 - Artifacts go in this project's `~/.prp/<key>/` store, **never in the repo**.
-- **Read the exit code.** Every refusal has its own — `2` wrong number of arguments, `3` not
-  absolute, `4` no such file, `5` an extension helm has no renderer for, `6` no terminal it could
-  reach at all *or the write to it failed*, `7` the path contains control characters, `8` a terminal
-  is reachable but helm does not own it. Each says on stderr what to do about it. **Zero means the
-  bytes reached the pty helm is parsing**, not merely that the script ran.
+- It lands in **your** workspace — the one your pane is in — whichever one the operator is looking
+  at, and re-opening a file that is already on the bench reuses its pane and re-reads it.
+- **Read the exit code**: `0` it is on the bench (the answer names its `pane`), `2` no benchd, `3`
+  refused and stderr says why (no such file, a type helm cannot render), `4` benchd failed.
+- It works from anywhere: a tool call, a script, an agent `bench spawn` started, a shell outside
+  helm. There is no terminal to find and no escape sequence to write; the verb goes to benchd,
+  which helm follows. (The old `push.sh` wrote one, and it was silent from every place helm could
+  not read — #124, #184, #282. It is gone.)
+- A mark the operator makes on the canvas is mailed to you (the `bench-mail` skill reads it).
 
-**`8` is the one to expect if you are not in a helm pane, and it is not a failure to work
-around.** The push is an escape sequence, so it only means anything to the terminal helm reads;
-a Ghostty, Terminal, tmux or ssh shell swallows it and shows the operator nothing on the bench.
-`push.sh` used to write it anyway and exit `0` (helm #282) — it now refuses, names the terminal it
-found, and emits no bytes at all. **There is no paneless route to the canvas today**: the spool
-(`helm-spool`, `helm-close`, `helm-capture`, `helm-command`) has no `canvas` kind. So when you get
-`8`, hand the operator the absolute path and say what it is; they open it with ⌘O.
-
-`$HELM_PANE` is *not* the check, and do not use it as one yourself: it is inherited by everything a
-pane's agent spawns, so inside a nested pty it still names the pane while the bytes go somewhere
-helm cannot see.
-
-**Do not hand-roll the `printf` yourself.** The push is an escape sequence, and an escape sequence
-only does anything if it reaches the terminal helm is parsing — which your tool call's stdout is
-not. Your harness captures it, and you have no controlling terminal at all: measured from a Claude
-Code tool call, `tty` is `??`, the session is `0`, and `/dev/tty` will not open. A bare `printf`
-comes back to you as text, the operator sees nothing, and nothing anywhere reports an error
-(helm #184). `push.sh` exists to find a pty helm is actually parsing, and to refuse out loud when
-there is none.
-
-It works the same from a shell the operator typed into inside a pane, from a `Makefile`, or from a
-script. It works from a nested pty too — a `script(1)` or a subshell inside a pane — because the
-walk goes *past* a terminal helm does not own to the pane's own.
-
-**An OSC 8 hyperlink is not a second way in, and inside Claude Code there is no hyperlink at
-all.** Measured on a live agent (helm #124): a `printf` emitting a real OSC 8 sequence reaches the
-grid as plain styled text, because the TUI re-renders everything it prints. Even where a link does
-survive, Claude Code's TUI captures the mouse (`?1000h ?1002h ?1003h`) and eats the ⌘-click before
-helm sees it. `pi` and `codex` set no mouse tracking, so a link printed in one of *their* panes is
-clickable — but do not build on that either: `push.sh` needs no click, no mouse and nobody at the
-pane.
+The `bench-panes` skill has the rest of the verbs.
 
 ## Showing it, and taking it away
 
-`push.sh` hands back no id, so both of these start by reading the pane's `id` out of the
-`"kind": "canvas"` record in `~/.helm/bench/snapshot.json` — matched on the `canvas.source` path
-you pushed.
-
 ```bash
-swift <helm>/tools/helm-select.swift <pane-uuid>   # bring it forward
-swift <helm>/tools/helm-close.swift  <pane-uuid>   # take it off the bench
+BENCH="${BENCH:-bench}"
+"$BENCH" get pane "$PANE"      # where it is, and whether the operator can see it
+"$BENCH" show "$PANE"          # make it the tab its slot is showing
+"$BENCH" close "$PANE"         # take it off the bench
 ```
 
-`<helm>` is helm's own checkout — these are single-file scripts, so they need no build and no cwd
-inside it, but they are not on your `PATH` and this skill cannot know where the checkout is. Ask
-the operator once if you do not.
-
-- **`helm-select` makes it the pane its slot is showing** and leaves the keyboard exactly where
-  it was. Read `select.isVisible` in the result — that is the operator actually being able to see
-  it, read back off the bench rather than assumed. Send it after a **re-push** too: the artifact
-  refreshes in place, and this is how you learn the refresh reached a screen.
+- **`bench show` makes it the pane its slot is showing** and leaves the keyboard exactly where it
+  was. `bench get pane` says whether it is `visible`, read back off the bench. Use it after a
+  **re-open** too: the artifact refreshes in place, and this is how you learn the refresh reached a
+  screen.
 - **It refuses a pane in the slot the operator is working in**, whether that pane holds their
   keyboard or is merely a tab behind the one that does — showing either would move where their
-  next keystroke lands. There is no override, and the refusal (exit 3) says so. Leave it as a tab
-  they can reach; that is what pushing without seizing buys.
-- **`helm-close` takes it off the bench and destroys nothing** — the artifact file and its
-  `.notes.md` sidecar outlive the tab, and a re-push re-opens the same source. A canvas never
-  needs `--force`. Use it rather than accumulating a tab per revision.
+  next keystroke lands. Only `--asked`, meaning the operator asked you, lifts that. Otherwise leave
+  it as a tab they can reach; that is what showing without seizing buys.
+- **`bench close` takes it off the bench and destroys nothing** — the artifact file and its
+  `.notes.md` sidecar outlive the tab, and a re-open shows the same source. A canvas never needs
+  `--force`. Use it rather than accumulating a tab per revision.
 
 ## The two renderers
 
@@ -287,7 +257,7 @@ Four things follow, and they are the whole of what you need to know:
   which version wins. You are never refused and never told; write your artifact as you always did.
 - **Never write into `notes/`.** It is his directory — a matter of ownership, not of what helm
   permits. Your artifacts go to `plans/`, `research/`, `reviews/`, `canvas/` — wherever your own
-  skill says — and reach the bench through `push.sh`.
+  skill says — and reach the bench through `bench open`.
 - **He hands you the path; you read the file.** That is the interface, for his notes and for an
   artifact of yours he has changed.
 
@@ -302,7 +272,7 @@ the options that work.
 **Sibling `fetch` reports a real status** — 200 for bytes, 404 for a sibling that is not there, 403
 for one the boundary refuses — so `res.ok` and `res.status` mean what they mean (helm #201).
 
-**Editing ONLY a sibling changes nothing on screen until you push again.** helm watches the
+**Editing ONLY a sibling changes nothing on screen until you open it again.** helm watches the
 **artifact**, not its siblings, so rewriting `app.js` fires no reload by itself.
 
 **Pushing the same path again is what refreshes it** (helm #261). The pane re-renders where it
@@ -310,7 +280,7 @@ already is — no tab switch, no focus move, nothing pulled forward — and the 
 sibling with it, pictures included. Rewriting the artifact works too and always did, but you no
 longer have to touch a file you did not change.
 
-It costs the page's **scroll position**, so push again when something changed rather than on a
+It costs the page's **scroll position**, so open it again when something changed rather than on a
 timer.
 
 **The sibling you `fetch` or `import` is the current one, so never write a cache-buster.** Nothing
@@ -336,7 +306,7 @@ Two gaps in that, stated because a stale picture nobody mentions is the whole of
   halves risks corrupting it — helm refuses instead, and says so in `log show` (*"canvas left N
   image(s) unstamped"*). Name siblings by path in a `srcset` and this never arises.
 - **CSS `background-image` is not covered at all.** It is not an element, and nothing reports it.
-  If a picture has to refresh when you re-push, put it in an `<img>`.
+  If a picture has to refresh when you re-open, put it in an `<img>`.
 
 A live page is a different question again — all of this is about what a *reload* fetches, not about
 pushing data into a page that is already open. See **A page that holds state**, above: a page that

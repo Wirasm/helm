@@ -37,8 +37,8 @@ enum BenchRestoreChoice: Equatable {
 /// **One field rather than a nil `bench` paired with a non-nil `restoreOffer`.** That pairing
 /// was the first draft, and it was an invariant carried by a comment restated in three files —
 /// `WorkbenchModel` explaining which nil is which, `WorkbenchView` branching on the offer to
-/// tell an unanswered mount from an empty helm, `WorkbenchSpoolCommander` doing the same to
-/// pick a refusal. Six writers inside one file had to set both by hand, together, because the
+/// tell an unanswered mount from an empty helm, and the spool's commander doing the same to pick
+/// a refusal. Six writers inside one file had to set both by hand, together, because the
 /// author remembered to; nothing stopped a seventh setting one. `AGENTS.md`'s rule is exact and
 /// says to apply it *before* the defect is reachable: **prefer a newtype the day the comment
 /// gets written, not the day it is disbelieved.**
@@ -75,9 +75,8 @@ enum MountState: Equatable {
 /// in a view."* The question stays helm's while restored terminals come back as empty shells
 /// (plan D4 of #354); `BenchDrawing` asks it, and the answer goes to benchd as a verb.
 ///
-/// A spool spawn never waits behind it: #179's rule is exact — *a question nobody will be there
-/// to answer must be answered in advance, and answered so the agent can work* — so a spawn
-/// answers it by restoring (`WorkbenchModel.mountWithoutAsking`).
+/// An agent's spawn never waits behind it: `bench spawn` runs the agent in benchd, and a pane
+/// showing its running session is never asked about (`Pane.Content.init(_:)`).
 enum BenchMountPolicy {
     /// nil when there is nothing to decide.
     ///

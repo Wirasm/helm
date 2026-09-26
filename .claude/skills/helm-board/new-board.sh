@@ -5,9 +5,9 @@
 #
 # Copies the vendored `@quickdrawjs/core`, `board.js` and `board-core.js` next to the artifact,
 # writes the artifact itself from `board.html`, and creates an empty `<name>.document.json` for
-# the agent's own shapes. Then edit that JSON and `push.sh` the `.html`.
+# the agent's own shapes. Then edit that JSON and `bench open` the `.html`.
 #
-# **Every refusal has its own exit code**, on push.sh's rule — a caller has to be able to act on
+# **Every refusal has its own exit code** — a caller has to be able to act on
 # one, and "it printed something" is not a result:
 #   2  wrong number of arguments / an option this does not know
 #   3  the path is not absolute
@@ -62,7 +62,7 @@ case "$target" in
     *) die 3 "the path must be absolute, and ~ is not expanded by every caller: $target" ;;
 esac
 
-# The same guard push.sh carries, for the same reason: only NUL and / are illegal in a Unix
+# Only NUL and / are illegal in a Unix
 # path, so a filename can carry an ESC — and this one is echoed back to the operator.
 printf '%s' "$target" | LC_ALL=C grep -q '[[:cntrl:]]' &&
     die 7 "the path contains control characters"
@@ -121,5 +121,5 @@ fi
 printf 'board    %s\n' "$target"
 printf 'document %s\n' "$document"
 printf 'library  %s/quickdraw (@quickdrawjs/core 0.2.0, vendored)\n' "$dir"
-printf '\nWrite your shapes into the document, then push the board:\n'
-printf '  ~/.claude/skills/helm-canvas/push.sh %s\n' "$target"
+printf '\nWrite your shapes into the document, then put the board on the bench:\n'
+printf '  bench open %s\n' "$target"

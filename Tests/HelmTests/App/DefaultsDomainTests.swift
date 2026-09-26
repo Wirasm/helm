@@ -124,7 +124,7 @@ final class DefaultsDomainTests: XCTestCase {
     }
 
     /// **Polarity**, pinned rather than eyeballed. `AGENTS.md` has `winshot --list` and
-    /// `helm-capture --window` telling two helms apart by this title, so backwards is not a
+    /// `bench get screenshot --window` telling two helms apart by this title, so backwards is not a
     /// cosmetic bug — it is a safety mechanism pointing at the wrong instance.
     func testOnlyANonCanonicalDomainReadsAsIsolated() {
         XCTAssertFalse(DefaultsDomain.isIsolated(domain: DefaultsDomain.canonical))
@@ -148,11 +148,9 @@ final class DefaultsDomainTests: XCTestCase {
     /// makes the same argument for the test target's own suites.
     func testNoSourceFileReachesForStandardDefaultsOutsideTheResolver() throws {
         // The resolver is where `.standard` legitimately survives: it is what `.none`
-        // resolves to. `DefaultsSuite.swift`
-        // (#221) is exempt for the same reason one door over: `SpoolDirectory.resolve` needs
-        // the identical `UserDefaults(suiteName:)` probe `DefaultsDomain.override` makes, to
-        // tell a real suite name from one `UserDefaults` will refuse — and `DefaultsDomain`
-        // now delegates to it rather than restating the check. Neither file ever touches
+        // resolves to. `DefaultsSuite.swift` is exempt for the same reason one door over: it
+        // makes the `UserDefaults(suiteName:)` probe `DefaultsDomain.override` delegates to, to
+        // tell a real suite name from one `UserDefaults` will refuse. Neither file ever touches
         // `.standard`, which is the actual thing this guard is about.
         let exempt: Set<String> = ["DefaultsDomain.swift", "DefaultsSuite.swift"]
 

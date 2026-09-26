@@ -216,43 +216,6 @@ final class WorkbenchModelTests: XCTestCase {
             rig.model.bench?.canvasPanes.map(\.content), [.canvas(.file("/tmp/offered.md"))])
     }
 
-    /// A push fires from terminal OUTPUT, so it can arrive from a session in a workspace the
-    /// operator left hours ago. The verb names the pushing session's workspace, and that is the
-    /// only thing standing between a background build and whatever bench happens to be open.
-    func testAPushNamesThePushingSessionsWorkspaceAndIsAnAgents() throws {
-        let rig = try mounted()
-        let session = try XCTUnwrap(rig.terminals.sessions.first)
-
-        session.terminalDidRequestDesktopNotification(
-            title: CanvasPush.marker, body: "/tmp/push.md")
-
-        let sent = try XCTUnwrap(rig.server.verbs.last)
-        XCTAssertEqual((sent["args"] as? [String: Any])?["workspace"] as? String, workspace.value)
-        XCTAssertEqual((sent["by"] as? [String: Any])?["kind"] as? String, "agent")
-        XCTAssertEqual(
-            rig.model.bench?.canvasPanes.map(\.content), [.canvas(.file("/tmp/push.md"))],
-            "a push from the workspace on screen reaches its bench")
-    }
-
-    /// The negative half: a route that ignored the workspace would pass the test above for
-    /// free. Only a push from a session in a workspace that is NOT on screen catches it.
-    func testAPushFromABackgroundWorkspaceDoesNotLandOnTheOpenBench() throws {
-        let rig = try mounted()
-        rig.model.send(.workspaceOpen(path: other.value), by: .operatorGesture)
-        let parked = try XCTUnwrap(rig.terminals.sessions(for: workspace).first)
-
-        parked.terminalDidRequestDesktopNotification(
-            title: CanvasPush.marker, body: "/tmp/push.md")
-
-        XCTAssertEqual(rig.model.workspacePath, other)
-        XCTAssertEqual(
-            rig.model.bench?.canvasPanes.count, 0,
-            "a push from a workspace nobody is looking at must not seize the open bench")
-        let pushed = rig.model.document?.workspace(at: workspace)?.bench.columns
-            .flatMap(\.slots).flatMap(\.panes).map(\.surface)
-        XCTAssertEqual(pushed?.last, .canvas(path: "/tmp/push.md"), "…it lands on its own")
-    }
-
     // MARK: - Closing
 
     func testClosingATerminalPaneAlsoClosesItsShell() throws {

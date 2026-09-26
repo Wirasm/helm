@@ -20,12 +20,10 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-// helm-canvas sits beside this skill in helm's repo, and beside it again in
-// ~/.claude/skills when both are linked there. Node resolves the main module's
-// symlinks, so either install finds the same push.sh.
-const PUSH = path.join(path.dirname(fileURLToPath(import.meta.url)), "../helm-canvas/push.sh");
+// The bench CLI puts the page on the bench (`bench open`); $BENCH names it when it is
+// not on PATH.
+const BENCH = process.env.BENCH || "bench";
 
 // Every file store.py writes that this page reads.
 const REQUIRED = ["video.mp4", "manifest.json", "script.json", "copy.json", "qc.json"];
@@ -263,10 +261,9 @@ fs.writeFileSync(artifact, renderPage({ manifest, script, copy, qc, sheets: shee
 console.log(artifact);
 
 if (!noPush) {
-  if (!fs.existsSync(PUSH)) die(`helm-canvas push.sh not found at ${PUSH}`);
   try {
-    execFileSync(PUSH, [artifact], { stdio: "inherit" });
+    execFileSync(BENCH, ["open", artifact], { stdio: ["ignore", "ignore", "inherit"] });
   } catch (err) {
-    die(`push failed (exit ${err.status}) — see stderr above`);
+    die(`bench open failed (${err.status ?? err.code}) — see stderr above`);
   }
 }

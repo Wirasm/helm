@@ -2,6 +2,8 @@ import Foundation
 import HelmWire
 import XCTest
 
+@testable import Helm
+
 /// helm's copy of benchd's wire types against the daemon's own samples in `daemon/fixtures/`.
 /// The daemon gate pins those same files byte for byte against the Rust types, so a field renamed
 /// on either side turns one gate or the other red. This is the #352/#353 pattern

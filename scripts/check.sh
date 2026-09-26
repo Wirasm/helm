@@ -47,7 +47,7 @@ needs() {
     }
     case "$part" in
         # RenderableFile.swift: the bench CLI checks its extension list against it (bench open).
-        daemon) grep -qE '^(daemon/|\.github/workflows/daemon\.yml|\.claude/skills/bench-|Sources/Helm/Shared/RenderableFile\.swift)' <<<"$paths" ;;
+        daemon) grep -qE '^(daemon/|\.github/workflows/daemon\.yml|\.claude/skills/bench-|\.claude/skills/helm-canvas/|Sources/Helm/Shared/RenderableFile\.swift)' <<<"$paths" ;;
         pi) grep -qE '^pi/' <<<"$paths" ;;
         swift)
             # Runs when nothing changed at all, too: an empty diff proves nothing.
@@ -82,7 +82,7 @@ swift_ignores() {
 skip_reason() {
     case "$1" in
         swift) echo "only docs/, pi/, daemon/ (not fixtures) or markdown outside Sources/, Tests/ and skills changed" ;;
-        daemon) echo "no changes under daemon/, daemon.yml, .claude/skills/bench-* or RenderableFile.swift" ;;
+        daemon) echo "no changes under daemon/, daemon.yml, .claude/skills/bench-*, helm-canvas or RenderableFile.swift" ;;
         pi) echo "no changes under pi/" ;;
     esac
 }
@@ -120,7 +120,6 @@ part_swift() {
 
 part_skills() {
     for tool in node zsh python3 git; do require "$tool" skills || return 1; done
-    bash .claude/skills/helm-canvas/test.sh || return 1
     bash .claude/skills/helm-board/test.sh || return 1
     bash .claude/skills/post-canvas/test.sh
 }

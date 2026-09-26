@@ -80,12 +80,21 @@ final class FakeBenchd: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// A frame to every follower: the event, and the document when there is one.
-    func push(_ at: DocumentAt, kind: String = "bench/changed") {
+    /// A frame to every follower: the event, and the document when there is one. `data` is the
+    /// event's own data, as benchd logs it (a `bench/changed` names the verb, who sent it and the
+    /// pane it resolved to).
+    func push(_ at: DocumentAt, kind: String = "bench/changed", data: [String: Any]? = nil) {
         let frame = BenchFrame(
             event: .init(seq: at.seq, at: "2026-09-26T00:00:00Z", kind: kind), document: at.document
         )
         var line = try! JSONEncoder().encode(frame)
+        if let data, var object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+            var event = object["event"] as? [String: Any]
+        {
+            event["data"] = data
+            object["event"] = event
+            line = try! JSONSerialization.data(withJSONObject: object)
+        }
         line.append(0x0A)
         lock.lock()
         defer { lock.unlock() }

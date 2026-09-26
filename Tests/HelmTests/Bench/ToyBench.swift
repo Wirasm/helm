@@ -333,7 +333,13 @@ extension FakeBenchd {
                     ]
                 }
                 let next = DocumentAt(seq: current.seq + 1, document: toy.document)
-                push(next)
+                var change: [String: Any] = [
+                    "verb": raw["verb"] ?? "", "by": raw["by"] ?? ["kind": "agent"],
+                ]
+                if let pane = answer.pane ?? answer.created {
+                    change["pane"] = pane.uuidString.lowercased()
+                }
+                push(next, data: change)
                 var report: [String: Any] = ["seq": next.seq, "changed": true]
                 if let created = answer.created {
                     report["pane_created"] = created.uuidString.lowercased()
