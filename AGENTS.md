@@ -49,6 +49,8 @@ you delete it, so the markers only shrink.
 binary pinned by commit and checksum, plus the Swift wrapper helm owns). A fresh worktree
 downloads the binary on its first build and needs nothing else. Moving to a newer Ghostty is
 `scripts/bump-ghostty.sh`, which needs zig; `docs/VENDORED.md` ("Ghostty") has the procedure.
+A `.build` from before that move fails with `missing required module 'libghostty'`: the old
+wrapper's `GhosttyKit.swiftmodule` shadows the official one. `rm -rf .build` once.
 
 **To run one suite alone, set `INJECTION_NOGENERICS=1`:**
 

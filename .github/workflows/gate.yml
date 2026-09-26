@@ -103,8 +103,11 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .build
-          key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Packages/GhosttyTerminal/Package.swift') }}
-          restore-keys: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-
+          # `ghostty2-`: a .build from the libghostty-spm era holds a Swift module named
+          # GhosttyKit that shadows the official binary's clang module of the same name, and the
+          # prefix restore would hand it back. Bump it again if a module is ever renamed or dropped.
+          key: swiftpm-ghostty2-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Packages/GhosttyTerminal/Package.swift') }}
+          restore-keys: swiftpm-ghostty2-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-
 
       # Build, test, xcodegen. Runs even when lint failed, so one push shows both.
       #
@@ -126,7 +129,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .build
-          key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Packages/GhosttyTerminal/Package.swift') }}
+          key: swiftpm-ghostty2-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Packages/GhosttyTerminal/Package.swift') }}
 
   skills:
     name: skill gates
