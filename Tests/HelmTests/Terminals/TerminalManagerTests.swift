@@ -31,7 +31,7 @@ final class TerminalManagerTests: XCTestCase {
     }
 
     /// A pane showing a benchd session (M3) runs `bench attach` in its pty, and only that pane:
-    /// the command is the document's (`attachCommands`), keyed by pane, never a guess.
+    /// the command is the bench's (`BenchDocument.Bench.attachCommands`), keyed by pane, never a guess.
     func testAPaneShowingASessionRunsBenchAttachAndOnlyThatPane() throws {
         let manager = TerminalManager()
         let agent = UUID()
