@@ -171,8 +171,8 @@ against the real CLI.
 >
 > Tracking issue: **#362**; each step below has its own.
 >
-> 1. **M4** (#354) — the bench document, the verb seam and the surface model move to benchd.
->    The foundation: helm becomes a client of one document, and every later verb is
+> 1. **M4** (#354), **landed 2026-09-26** — the bench document, the verb seam and the surface
+>    model are benchd's, and helm is a client of that one document: every later verb is
 >    "mutate the document".
 > 2. **M2 finish** (#358) — one mailroom: unwire helm's mail hooks and the pi watcher down to
 >    sensors, so `bench mail` reaches every agent, the ones in helm panes included. Moved
