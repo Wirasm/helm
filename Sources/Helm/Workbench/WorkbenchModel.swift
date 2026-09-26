@@ -19,6 +19,7 @@ import SwiftUI
 /// *"act on the focused pane"* and focus is the bench's now. `AGENTS.md`'s rule is exact: a
 /// subscription that has to work while its view is closed belongs on the model.
 @MainActor
+// swiftlint:disable:next type_body_length - legacy (#418): 450 lines, limit 350
 final class WorkbenchModel: ObservableObject {
     /// Nothing open, a question waiting on the operator, or a bench — as one value, so no
     /// combination of the two can be constructed that `MountState` does not name. Its header
@@ -140,6 +141,11 @@ final class WorkbenchModel: ObservableObject {
     /// own `~/.prp`.
     private let artifactRoot: URL
 
+    /// A workspace folder → the repository root its notes are keyed by. `WorkspaceStore`'s
+    /// `git` run in production, which has a deadline; injected so a test can hold the answer
+    /// back or make it time out without a real git that hangs.
+    private let resolveRepository: @Sendable (String) async throws -> String
+
     /// Workspaces whose mount question has already been answered in this process. A switch
     /// away and back re-mounts, and re-asking then would make the question chrome rather than
     /// a decision — `BenchMountPolicy.mount` takes this as `answered`.
@@ -167,6 +173,9 @@ final class WorkbenchModel: ObservableObject {
         agents: AgentObserver = .live(),
         launcher: TerminalLaunching? = nil,
         artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot,
+        resolveRepository: @escaping @Sendable (String) async throws -> String = {
+            try await WorkspaceStore.repositoryRoot(for: $0)
+        },
         makeBrowser: @escaping @MainActor () -> BrowserPaneModel = { BrowserPaneModel() }
     ) {
         self.terminals = terminals
@@ -174,6 +183,7 @@ final class WorkbenchModel: ObservableObject {
         self.agents = agents
         self.launcher = launcher ?? TerminalLineLauncher(terminals: terminals)
         self.artifactRoot = artifactRoot
+        self.resolveRepository = resolveRepository
         // Registered here rather than by the manager because both need the bench: the canvas
         // kind the mark route, the browser kind a factory the caller chose. Re-registering
         // replaces, so a second model on one manager rewires them to itself.
@@ -674,17 +684,32 @@ final class WorkbenchModel: ObservableObject {
     /// - Parameter date: what day the filename says. Injected so the collision rule is testable
     ///   without waiting for midnight. *Where* the note goes is `artifactRoot`'s, which is one
     ///   value per model rather than a per-call argument — see its own note above.
+    ///
+    /// **Async because the store is keyed by a `git` answer** (#390). It used to run git on the
+    /// main thread with no deadline, so a hung git froze the whole window. The wait is now
+    /// `Subprocess`'s, holds no thread, and ends in a sentence after ten seconds. Everything
+    /// after it is synchronous on the main actor, as before.
     @discardableResult
-    func newNote(on date: Date = Date()) -> Pane.ID? {
+    func newNote(on date: Date = Date()) async -> Pane.ID? {
         // A bench is what a pane goes into, and a workspace is what names the store. Both are nil
         // together in practice; the message names the one the operator can act on.
         guard let path = workspacePath, bench != nil else {
             announceNoteFailure(OperatorNote.Failure.noWorkspace.sentence)
             return nil
         }
+        let repository: String
+        do {
+            repository = try await resolveRepository(path.value)
+        } catch {
+            announceNoteFailure(OperatorNote.Failure.repositoryUnresolved(path.value).sentence)
+            return nil
+        }
+        // The operator switched workspace while git ran. Nothing has been written yet, and a note
+        // for the old project opened on the new one's bench would be in the wrong place.
+        guard workspacePath == path, bench != nil else { return nil }
         do {
             let note = try OperatorNote.create(
-                inWorkspaceAt: path.value, under: artifactRoot, on: date)
+                inRepository: repository, under: artifactRoot, on: date)
             guard
                 let id = send(
                     .paneOpen(surface: .canvas(path: note.url.path)), by: .operatorGesture),
