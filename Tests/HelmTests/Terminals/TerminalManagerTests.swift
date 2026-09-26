@@ -1,6 +1,7 @@
 import XCTest
 
 @testable import Helm
+import HelmWire
 
 /// Session **ownership** — a shell per terminal pane benchd's document names, grouped by
 /// workspace, torn down by pane. Every session creates its surface from the manager's one shared
@@ -27,6 +28,49 @@ final class TerminalManagerTests: XCTestCase {
             "a terminal pane's id is its session's id, in the document's order")
         XCTAssertEqual(manager.activeWorkspacePath, firstWorkspace)
         XCTAssertTrue(manager.sessions(for: secondWorkspace).isEmpty)
+    }
+
+    /// A pane showing a benchd session (M3) runs `bench attach` in its pty, and only that pane:
+    /// the command is the document's (`attachCommands`), keyed by pane, never a guess.
+    func testAPaneShowingASessionRunsBenchAttachAndOnlyThatPane() throws {
+        let manager = TerminalManager()
+        let agent = UUID()
+        let shell = UUID()
+        let document = BenchDocument(
+            workspaces: [
+                .init(
+                    path: firstWorkspace.value,
+                    bench: ToyBench.bench([
+                        .init(id: agent, surface: .terminal(agent: nil, session: "s3")),
+                        .init(id: shell, surface: .terminal(agent: nil)),
+                    ]))
+            ], active: firstWorkspace.value)
+        let attaching = document.attachCommands(bench: "/opt/it's/bench")
+        XCTAssertEqual(attaching, [agent: #"'/opt/it'\''s/bench' 'attach' 's3'"#])
+
+        manager.adopt(
+            terminals: [agent, shell], in: firstWorkspace, attaching: attaching)
+
+        let sessions = manager.sessions(for: firstWorkspace)
+        XCTAssertEqual(
+            sessions.first { $0.id == agent }?.hostView.configuration.command,
+            attaching[agent])
+        XCTAssertNil(
+            try XCTUnwrap(sessions.first { $0.id == shell }).hostView.configuration.command,
+            "every other terminal is the login shell")
+    }
+
+    func testTheBenchIsAskedForOnlyWhenAPaneShowsASession() {
+        let plain = BenchDocument(
+            workspaces: [
+                .init(
+                    path: firstWorkspace.value,
+                    bench: ToyBench.bench([.init(id: UUID(), surface: .terminal(agent: nil))]))
+            ], active: firstWorkspace.value)
+        var asked = false
+        let none = plain.attachCommands(bench: { asked = true; return "bench" }())
+        XCTAssertTrue(none.isEmpty)
+        XCTAssertFalse(asked, "no round trip to benchd for a bench of plain terminals")
     }
 
     func testAdoptingAgainStartsOnlyWhatHasNoSessionYet() {

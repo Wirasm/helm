@@ -175,7 +175,10 @@ package struct BenchDocument: Codable, Equatable, Sendable {
 /// daemon owns the pane, so helm renders a placeholder for it and keeps it (plan AC6). Dropping
 /// it would make helm's picture of the bench disagree with benchd's.
 package enum Surface: Codable, Equatable, Sendable {
-    case terminal(agent: BenchDocument.Agent?)
+    /// A terminal. `session` names the benchd session it shows (`term:<session>`, M3): helm runs
+    /// `bench attach <session>` in it rather than a login shell. benchd clears it when it
+    /// restarts, because no session outlives its daemon.
+    case terminal(agent: BenchDocument.Agent?, session: String? = nil)
     /// A canvas over a file, the only canvas source there is since #376.
     case canvas(path: String)
     case browser
@@ -183,7 +186,7 @@ package enum Surface: Codable, Equatable, Sendable {
     case sessions
     case unsupported(kind: String)
 
-    private enum CodingKeys: String, CodingKey { case kind, agent, source }
+    private enum CodingKeys: String, CodingKey { case kind, agent, session, source }
     private enum SourceKeys: String, CodingKey { case kind, path }
 
     package init(from decoder: any Decoder) throws {
@@ -191,7 +194,9 @@ package enum Surface: Codable, Equatable, Sendable {
         let kind = try c.decode(String.self, forKey: .kind)
         switch kind {
         case "terminal":
-            self = .terminal(agent: try c.decodeIfPresent(BenchDocument.Agent.self, forKey: .agent))
+            self = .terminal(
+                agent: try c.decodeIfPresent(BenchDocument.Agent.self, forKey: .agent),
+                session: try c.decodeIfPresent(String.self, forKey: .session))
         case "canvas":
             let source = try c.nestedContainer(keyedBy: SourceKeys.self, forKey: .source)
             let sourceKind = try source.decode(String.self, forKey: .kind)
@@ -212,9 +217,10 @@ package enum Surface: Codable, Equatable, Sendable {
     package func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .terminal(agent):
+        case let .terminal(agent, session):
             try c.encode("terminal", forKey: .kind)
             try c.encodeIfPresent(agent, forKey: .agent)
+            try c.encodeIfPresent(session, forKey: .session)
         case let .canvas(path):
             try c.encode("canvas", forKey: .kind)
             var source = c.nestedContainer(keyedBy: SourceKeys.self, forKey: .source)

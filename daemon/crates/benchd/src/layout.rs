@@ -74,7 +74,7 @@ pub fn answer(core: &mut Core, req: &Request) -> (Response, Option<Arc<Session>>
     if matches!(verb, LayoutVerb::PaneOpen(_)) {
         refresh_rules(core);
     }
-    let by = req.by.clone().unwrap_or_else(Actor::agent);
+    let by = placed(core, req.by.clone().unwrap_or_else(Actor::agent));
     let verb = match admit(core, verb, &by) {
         Ok(v) => v,
         Err(why) => return (reply(Status::Refused, Some(why), None), None),
@@ -295,6 +295,31 @@ fn admit(core: &Core, verb: LayoutVerb, by: &Actor) -> Result<LayoutVerb, String
             surface,
         }),
         other => Ok(other),
+    }
+}
+
+/// An agent's `by`, with the pane it runs in filled in when benchd knows it and the agent did
+/// not say: an agent benchd spawned has no `HELM_PANE`, but the pane showing its session is where
+/// it runs. The logged record then names it, which is how helm remembers who opened a canvas.
+pub fn placed(core: &Core, by: Actor) -> Actor {
+    let Actor::Agent {
+        pane: None,
+        handle: Some(handle),
+    } = &by
+    else {
+        return by;
+    };
+    let shown = core
+        .sessions
+        .values()
+        .find(|s| &s.handle == handle && s.is_live())
+        .and_then(|s| core.bench.document.pane_showing_session(&s.id));
+    match shown {
+        Some(pane) => Actor::Agent {
+            pane: Some(pane.to_string()),
+            handle: Some(handle.clone()),
+        },
+        None => by,
     }
 }
 

@@ -73,8 +73,13 @@ struct RootView: View {
             // moving the benches it used to save into an empty one once (`BenchImport`).
             workbench.followDocuments(
                 BenchImport.follower(workspaces: model, workbench: workbench))
-            // benchd's follower hears how a `just` run ended.
-            workbench.client.onEvent = { [justRuns] in justRuns.receive($0) }
+            // benchd's follower hears how a `just` run ended, and what benchd asks helm to do
+            // (`bench get screenshot`, M3): helm draws its own window and answers.
+            let asks = HelmAsks.answering(through: workbench.client, capturer: AppWindowCapturer())
+            workbench.client.onEvent = { [justRuns] in
+                justRuns.receive($0)
+                asks.receive($0)
+            }
             let actions = LocalActions(
                 workbench: workbench, workspaces: model, rail: archonRail,
                 terminals: terminalManager, just: justRuns)

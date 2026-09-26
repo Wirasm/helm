@@ -274,7 +274,7 @@ fn closing_the_active_workspace_activates_the_first_that_remains() {
     assert_eq!(
         doc.active(),
         Some(&path("/work/a")),
-        "helm's RootView.closeWorkspace rule"
+        "closing the active workspace activates the first that remains"
     );
 
     doc.close_workspace(&path("/work/a"), Focus::Take).unwrap();

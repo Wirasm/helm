@@ -153,8 +153,7 @@ fn readable_path(workspace: &Value) -> Result<String, String> {
 }
 
 /// `active` must name a workspace that survived; otherwise the first one is shown — the rule
-/// helm applies when the workspace on screen goes away (`RootView.closeWorkspace`), and the one
-/// `Document::close_workspace` already follows.
+/// `Document::close_workspace` follows when the workspace on screen goes away.
 fn repair_active(value: &mut Value, kept: &[String], notes: &mut Vec<String>) {
     let Some(fields) = value.as_object_mut() else {
         return;

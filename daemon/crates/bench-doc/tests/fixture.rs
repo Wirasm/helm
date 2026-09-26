@@ -58,6 +58,10 @@ fn the_fixture_holds_one_of_everything() {
         has(&|s| matches!(s, Surface::Terminal { agent: Some(_), .. })),
         "a recorded agent"
     );
+    assert!(
+        has(&|s| s.session().is_some()),
+        "a terminal showing a benchd session (M3)"
+    );
     assert!(has(&|s| matches!(s, Surface::Browser)), "the browser");
     let canvas = |want: fn(&CanvasSource) -> bool| {
         has(&|s| matches!(s, Surface::Canvas { source } if want(source)))

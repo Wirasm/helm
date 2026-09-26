@@ -205,8 +205,9 @@ impl Document {
         })
     }
 
-    /// Close a folder. Closing the active one activates the first that remains, as helm does
-    /// (`RootView.closeWorkspace`); closing the last leaves nothing open.
+    /// Close a folder. Closing the active one activates the first that remains; closing the
+    /// last leaves nothing open. benchd is the only place this rule lives: helm draws whatever
+    /// the document says is active.
     pub fn close_workspace(&mut self, path: &StandardPath, focus: Focus) -> Result<(), Refusal> {
         self.commit(focus, |doc| {
             let index = doc.index_of(path)?;

@@ -813,6 +813,26 @@ mod tests {
         assert_eq!(serde_json::to_value(&reply).unwrap(), value["who_reply"]);
     }
 
+    /// `fixtures/helm-ask.json` holds what benchd asks helm and what helm answers (M3); helm's
+    /// `BenchWireConformanceTests` decodes the ask and encodes the answer against the same file.
+    #[test]
+    fn the_helm_ask_fixture_is_what_the_daemon_asks_and_reads() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helm-ask.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let asked: HelmAsked = serde_json::from_value(value["asked"].clone()).unwrap();
+        assert!(matches!(asked.request, HelmAsk::Capture { .. }));
+        assert_eq!(serde_json::to_value(&asked).unwrap(), value["asked"]);
+        let answer: Request = serde_json::from_value(value["answer"].clone()).unwrap();
+        assert_eq!(Verb::parse(&answer.verb), Some(Verb::HelmAnswer));
+        assert_eq!(answer.by, Some(Actor::Helm));
+        let args: HelmAnswer = serde_json::from_value(answer.args.clone()).unwrap();
+        assert_eq!(args.status, Status::Error);
+        assert_eq!(serde_json::to_value(&args).unwrap(), answer.args);
+        let status: Request = serde_json::from_value(value["status"].clone()).unwrap();
+        assert_eq!(Verb::parse(&status.verb), Some(Verb::Status));
+    }
+
     #[test]
     fn every_known_verb_parses_and_nothing_else_does() {
         for v in KNOWN_VERBS {

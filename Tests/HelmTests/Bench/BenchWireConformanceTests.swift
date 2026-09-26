@@ -43,7 +43,10 @@ final class BenchWireConformanceTests: XCTestCase {
             .flatMap(\.panes).map(\.surface)
         XCTAssertTrue(surfaces.contains(.browser))
         XCTAssertTrue(surfaces.contains { if case .canvas = $0 { true } else { false } })
-        XCTAssertTrue(surfaces.contains { if case .terminal(.some) = $0 { true } else { false } })
+        XCTAssertTrue(surfaces.contains { if case .terminal(.some, _) = $0 { true } else { false } })
+        XCTAssertTrue(
+            surfaces.contains { if case .terminal(_, .some) = $0 { true } else { false } },
+            "a terminal showing a benchd session (M3)")
         XCTAssertFalse(
             surfaces.contains { if case .unsupported = $0 { true } else { false } },
             "every kind in the daemon's own sample is one helm knows")
@@ -99,6 +102,11 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertFalse(at.document.workspaces.isEmpty)
 
         let frame = try JSONDecoder().decode(BenchFrame.self, from: fixture("bench-frame.json"))
+        // What helm reads of who changed the document (M3: a canvas's origin).
+        let change = try JSONDecoder().decode(
+            BenchEventFrame<BenchChange>.self, from: fixture("bench-frame.json")
+        ).event.data
+        XCTAssertFalse(change.verb.isEmpty)
         XCTAssertEqual(frame.event.kind, "bench/changed")
         XCTAssertNotNil(frame.document)
     }
@@ -196,6 +204,27 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertEqual(frame.event.kind, "just/finished")
         XCTAssertEqual(frame.event.data.run, started.run)
         XCTAssertTrue(frame.event.data.failed)
+    }
+
+    /// What benchd asks helm and what helm answers (M3): the ask decodes, and helm's answer and
+    /// its `status` request are byte for byte the daemon's sample.
+    func testTheHelmAskDecodesAndTheAnswerMatchesTheDaemonsSample() throws {
+        let data = try fixture("helm-ask.json")
+        let samples = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        func sample(_ key: String) throws -> NSObject {
+            try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples[key])))
+        }
+        let asked = try JSONDecoder().decode(
+            HelmAsked.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["asked"])))
+        XCTAssertEqual(
+            asked, HelmAsked(ask: "a1", request: .capture(path: "/tmp/bench-capture.png", window: "helm — m3")))
+        let answer = HelmAnswerRequest<CaptureReport>(
+            id: "helm-answer-1", ask: "a1", status: .error,
+            reason: "no window titled like \"helm — m3\" is open", data: nil)
+        XCTAssertEqual(try normalized(JSONEncoder().encode(answer)), try sample("answer"))
+        XCTAssertEqual(
+            try normalized(JSONEncoder().encode(BenchStatusRequest(id: "helm-status-1"))),
+            try sample("status"))
     }
 
     /// A document written before drawers existed has none, and helm writes none back.

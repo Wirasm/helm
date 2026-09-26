@@ -34,6 +34,10 @@ final class WorkbenchSpoolCommander: SpoolCommanding {
     }
 
     func run(_ command: HelmCommandName) -> Result<CommandReport, SpoolRefusal> {
+        // While #85's question is open the bench is benchd's but not yet the operator's: a verb
+        // would reach benchd and change the bench he is being asked about. Refused here, as the
+        // local bench refused it by having none.
+        if workbench.restoreOffer != nil, command != .toggleRail { return .failure(noBench) }
         let before = workbench.bench?.focusedPane?.id
 
         let verb: BenchVerb

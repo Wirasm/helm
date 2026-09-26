@@ -237,6 +237,22 @@ final class BenchMountTests: XCTestCase {
         XCTAssertTrue(refusal.reason.contains("no workspace open"))
     }
 
+    /// A spool command while #85's question is open would reach benchd and change the bench the
+    /// operator is being asked about (#453). It is refused naming the question, and nothing is
+    /// sent.
+    func testABenchCommandDuringTheQuestionIsRefusedAndSendsNothing() throws {
+        let rig = try showing(stored(terminals: 3))
+        XCTAssertNotNil(rig.model.restoreOffer)
+        let commander = WorkbenchSpoolCommander(workbench: rig.model, rail: ArchonRailModel())
+
+        guard case let .failure(refusal) = commander.run(.newTerminal) else {
+            return XCTFail("the question is open")
+        }
+
+        XCTAssertTrue(refusal.reason.contains("whether to restore"), refusal.reason)
+        XCTAssertTrue(rig.server.verbs.isEmpty, "nothing reached benchd")
+    }
+
     // MARK: - A request from outside
 
     /// **The one place helm answers the operator's own question for them**, named rather than a

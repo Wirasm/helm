@@ -54,7 +54,7 @@ extension BenchDocument.Bench {
 extension Pane.Content {
     init(_ surface: Surface) {
         switch surface {
-        case let .terminal(agent): self = .terminal(agent: agent.map(ResumableAgent.init))
+        case let .terminal(agent, _): self = .terminal(agent: agent.map(ResumableAgent.init))
         case let .canvas(path): self = .canvas(.file(path))
         case .browser: self = .browser
         case .sessions: self = .sessions
@@ -103,6 +103,14 @@ extension BenchDocument {
     /// The drawer a pane is in, if it is in one.
     func drawer(holding pane: UUID) -> Drawer? {
         drawers.first { $0.panes.contains { $0.id == pane } }
+    }
+
+    /// What a pane shows, wherever it lives: a workspace's live bench or a drawer.
+    func surface(of pane: UUID) -> Surface? {
+        let panes =
+            workspaces.flatMap { $0.bench.columns.flatMap(\.slots).flatMap(\.panes) }
+            + drawers.flatMap(\.panes)
+        return panes.first { $0.id == pane }?.surface
     }
 
     func workspace(at path: WorkspacePath) -> Workspace? {
