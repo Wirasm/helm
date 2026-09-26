@@ -134,6 +134,29 @@ final class WorkbenchClientModeTests: XCTestCase {
             "the closed pane's session went")
     }
 
+    /// A pane moved into a drawer (#356) is still in the document, so its live object stays:
+    /// only a pane in no workspace and no drawer has been closed.
+    func testAPaneMovedIntoADrawerKeepsItsSession() throws {
+        let first = UUID()
+        let second = UUID()
+        let rig = try rig(
+            BenchFixture.document(
+                path,
+                BenchFixture.bench([BenchFixture.terminal(first), BenchFixture.terminal(second)]),
+                seq: 1))
+        XCTAssertTrue(Eventually.holds { rig.terminals.sessions.count == 2 })
+
+        var moved = BenchFixture.document(
+            path, BenchFixture.bench([BenchFixture.terminal(first)]), seq: 2)
+        moved.document.drawers = [
+            .init(name: "scratch", panes: [BenchFixture.terminal(second)], selected: second)
+        ]
+        rig.server.push(moved)
+
+        XCTAssertTrue(Eventually.holds { rig.model.bench?.panes.count == 1 })
+        XCTAssertEqual(Set(rig.terminals.sessions.map(\.id)), [first, second])
+    }
+
     /// A terminal an agent opens in a workspace that is not on screen starts at once, so a spawn
     /// there has a shell to type into — and the operator's view stays where it was.
     func testATerminalThatArrivesInABackgroundWorkspaceStartsThere() throws {

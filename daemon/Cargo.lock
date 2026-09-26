@@ -6,6 +6,7 @@ version = 4
 name = "bench"
 version = "0.0.1"
 dependencies = [
+ "bench-doc",
  "bench-sessions",
  "bench-wire",
  "serde_json",

@@ -90,6 +90,10 @@ close session:
 resume session:
     {{BENCH}} resume {{session}}
 
+# #356 — show a drawer over the bench, or hide it. The operator's focus: an agent is refused.
+drawer name surface="":
+    {{BENCH}} drawer toggle {{name}} {{ if surface != "" { "--surface " + surface } else { "" } }}
+
 # ---- the scoreboard ---------------------------------------------------------
 
 # Probe every wanted verb against a throwaway daemon: ✓ answered / ✗ not yet.
@@ -107,7 +111,7 @@ spec:
                 bench/get workspace/open workspace/close workspace/activate workspace/reset \
                 workspace/unshelve workspace/import pane/open pane/split pane/close pane/show \
                 pane/move pane/name pane/record focus/slot focus/step \
-                layout/resize; do
+                layout/resize drawer/toggle; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then
             # probed last for real; listed here so the row exists

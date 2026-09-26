@@ -43,6 +43,19 @@ impl Surface {
         })
     }
 
+    /// Whether a pane showing `self` is already a view of `wanted`, so opening `wanted` again
+    /// should bring that pane forward rather than add a second. A canvas matches by source,
+    /// **by value** — why ⌘-clicking the same link twice selects the canvas you have. The
+    /// browser matches any browser pane: there is one browser. A terminal never matches:
+    /// every one is its own.
+    pub fn already_shows(&self, wanted: &Surface) -> bool {
+        match (wanted, self) {
+            (Surface::Canvas { source: a }, Surface::Canvas { source: b }) => a == b,
+            (Surface::Browser, Surface::Browser) => true,
+            _ => false,
+        }
+    }
+
     /// The class placement rules are written against.
     pub fn class(&self) -> SurfaceClass {
         match self {

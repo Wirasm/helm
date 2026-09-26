@@ -87,14 +87,15 @@ extension BenchDocument.Agent {
 }
 
 extension BenchDocument {
-    /// Every pane id in every workspace, live bench and shelf: what helm may keep a live object
-    /// for. A pane in none of them has been closed.
+    /// Every pane id in the document — each workspace's bench and shelf, and every drawer (#356):
+    /// what helm may keep a live object for. A pane in none of them has been closed; a pane moved
+    /// into a drawer has not, and keeps its object.
     var paneIDs: Set<UUID> {
-        Set(
-            workspaces.flatMap { workspace in
-                ([workspace.bench] + (workspace.shelved.map { [$0] } ?? []))
-                    .flatMap(\.columns).flatMap(\.slots).flatMap(\.panes).map(\.id)
-            })
+        let benches = workspaces.flatMap { workspace in
+            ([workspace.bench] + (workspace.shelved.map { [$0] } ?? []))
+                .flatMap(\.columns).flatMap(\.slots).flatMap(\.panes).map(\.id)
+        }
+        return Set(benches + drawers.flatMap(\.panes).map(\.id))
     }
 
     func workspace(at path: WorkspacePath) -> Workspace? {

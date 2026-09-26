@@ -1313,6 +1313,9 @@ final class LocalSink: VerbSink {
         switch verb {
         case let .paneOpen(workspace, surface):
             return open(surface, in: workspace, takesFocus: takesFocus)
+        case .paneOpenInDrawer, .drawerToggle:
+            // Drawers live in benchd's document; the local bench has none (#356).
+            return nil
         case let .paneSplit(workspace, direction, surface):
             // A split holds a terminal; helm has no split for any other kind yet.
             guard isMounted(workspace), surface == nil || isTerminal(surface) else { return nil }
