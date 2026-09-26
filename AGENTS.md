@@ -160,6 +160,14 @@ reinstating #96's contract (seven tests then also fail on the first-responder as
 not a verdict on the diff — and the evidence to bring is the CoreVideo/ghostty pair, the
 control run, or both.
 
+**A run that stops mid-test, exit 1 and no result line, is a crash inside ghostty, not the display
+pair.** Its log line is `sentry: crash report written to disk path=…` (same predicate), and the
+report in `~/.local/state/ghostty/crash/` is a Sentry envelope holding a minidump rather than an
+`.ips`: read the stack out of it before guessing. #462 was one that looked like the display pair
+because the displays happened to be asleep: `ghostty_init` keeps the process's `environ` by
+pointer, and a test's `unsetenv` left it reading a NULL. The wrapper now moves the process onto a
+copy right after `ghostty_init`, so `setenv`/`unsetenv` are safe again.
+
 **The `lint` and `swift` parts need only the Swift toolchain and xcodegen. Keep it that way.**
 They are what a fresh worktree has to pass, and every dependency added to them is a dependency
 every contributor now needs. The other parts need node or cargo, which is why they are separate

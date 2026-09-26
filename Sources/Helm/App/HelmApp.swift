@@ -24,7 +24,9 @@ struct HelmApp: App {
         // and helm has been handing it to every agent it hosts; the pane's own identity is
         // `HELM_PANE`, set per-surface in `TerminalSession.init`. Here rather than in the
         // Terminals slice's own setup because `unsetenv` is process-wide by nature — every
-        // child helm spawns is covered, not only the ptys.
+        // child helm spawns is covered, not only the ptys. Before the first terminal controller
+        // too: ghostty builds a pane's environment from what it saw at `ghostty_init`, so a
+        // later `unsetenv` would never reach a pty.
         PaneEnvironment.removeStaleIdentity()
 
         // One line on stderr when this is not the operator's helm, because from inside the
