@@ -7,3 +7,6 @@ description = "The pty core: daemon-owned sessions hosting full interactive agen
 [dependencies]
 libc = "0.2"
 rustix = { version = "1.1.5", features = ["fs", "process", "pty", "termios"] }
+
+[lints]
+workspace = true

@@ -71,6 +71,11 @@ struct Cli {
     root: PathBuf,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "legacy (#418): 250 lines, limit 100; cognitive complexity 26, limit 25"
+)]
 fn run() -> i32 {
     let mut argv = std::env::args().skip(1).peekable();
     let mut suite_flag: Option<String> = None;

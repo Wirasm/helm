@@ -2922,6 +2922,11 @@ fn mangle(cwd: &Path) -> String {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "legacy (#418): 167 lines, limit 100; cognitive complexity 31, limit 25"
+)]
 fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
     use bench_wire::{Harness, Host, OpenAction, SessionList, SessionState};
     let home = TestHome::claim("sessions");

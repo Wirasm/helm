@@ -403,6 +403,7 @@ fn spawn_flusher(log: &File, unflushed: Arc<AtomicBool>) -> Result<(), String> {
     Ok(())
 }
 
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 150 lines, limit 100")]
 fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, StartError> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true).mode(0o700);
@@ -587,6 +588,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
 /// pasted and submitted, and only then is the message retired to the path the notice named.
 /// A held or capped wake logs once and waits; a failed paste drops the wake. The mail stays
 /// unread in the inbox in all three cases.
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 135 lines, limit 100")]
 fn wake_reactor(core: Arc<Mutex<Core>>) {
     // Whose `~/.claude/sessions` holds the registry rows; fixed for the daemon's life.
     let home = core.lock().unwrap().home.clone();
@@ -762,6 +764,7 @@ enum AfterResponse {
     Follow(mpsc::Receiver<Arc<str>>),
 }
 
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 115 lines, limit 100")]
 fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
     // Bounded in time as well as bytes (R2): this connection gets DAEMON_IO_TIMEOUT to
     // deliver its line; an attach upgrade lifts the bound after the response.
@@ -893,6 +896,11 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "legacy (#418): 588 lines, limit 100; cognitive complexity 29, limit 25"
+)]
 fn dispatch(
     core: &Arc<Mutex<Core>>,
     req: &Request,
