@@ -24,7 +24,7 @@ use crate::bench::{Bench, Pane};
 use crate::document::Document;
 use crate::drawer::DrawerName;
 use crate::ids::{PaneId, StandardPath};
-use crate::surface::{PaneName, Surface};
+use crate::surface::{PaneName, ResumableAgent, Surface};
 use serde_json::Value;
 
 /// A document read tolerantly, and what it cost.
@@ -268,9 +268,19 @@ fn repair(mut pane: Value, notes: &mut Vec<String>) -> Option<Value> {
         && serde_json::from_value::<Surface>(surface.clone()).is_err()
         && surface.get("kind").and_then(Value::as_str) == Some("terminal")
         && let Some(record) = surface.as_object_mut()
-        && record.remove("agent").is_some()
     {
-        notes.push(format!("pane {id}: an unreadable agent record was dropped"));
+        // A terminal's two optional fields each cost only themselves.
+        if record
+            .get("agent")
+            .is_some_and(|a| serde_json::from_value::<ResumableAgent>(a.clone()).is_err())
+        {
+            record.remove("agent");
+            notes.push(format!("pane {id}: an unreadable agent record was dropped"));
+        }
+        if record.get("session").is_some_and(|s| !s.is_string()) {
+            record.remove("session");
+            notes.push(format!("pane {id}: an unreadable session was dropped"));
+        }
     }
 
     match serde_json::from_value::<Pane>(pane.clone()) {

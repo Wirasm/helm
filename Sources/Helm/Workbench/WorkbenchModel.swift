@@ -752,7 +752,8 @@ extension WorkbenchModel {
             answered.insert(active)
             terminals.adopt(
                 terminals: bench.terminalPaneIDs, in: active,
-                attaching: document.attachCommands(bench: client.benchBinary))
+                attaching: document.workspace(at: active)?.bench
+                    .attachCommands(bench: client.benchBinary) ?? [:])
             if offered.insert(active).inserted { resumeOffers = offers(in: bench) }
         } else if drawing.workspace == nil {
             terminals.deactivate()

@@ -16,15 +16,14 @@ enum SessionAttach {
     }
 }
 
-extension BenchDocument {
-    /// The command for every terminal pane that shows a benchd session — each workspace's bench
-    /// and every drawer. `bench` is benchd's own binary (`BenchClient.benchBinary`), asked for
-    /// only when some pane shows a session, since asking is a round trip to benchd.
+extension BenchDocument.Bench {
+    /// The command for every terminal pane on this bench that shows a benchd session. Asked of
+    /// the bench being drawn only — its terminals are the ones helm starts — and `bench` (benchd's
+    /// own binary, `BenchClient.benchBinary`) is asked for only when a pane here shows a session,
+    /// since asking is a round trip to benchd.
     func attachCommands(bench: @autoclosure () -> String) -> [UUID: String] {
-        let panes =
-            workspaces.flatMap { $0.bench.columns.flatMap(\.slots).flatMap(\.panes) }
-            + drawers.flatMap(\.panes)
-        let sessions = panes.compactMap { pane -> (UUID, String)? in
+        let sessions = columns.flatMap(\.slots).flatMap(\.panes).compactMap {
+            pane -> (UUID, String)? in
             guard case let .terminal(_, session?) = pane.surface else { return nil }
             return (pane.id, session)
         }
