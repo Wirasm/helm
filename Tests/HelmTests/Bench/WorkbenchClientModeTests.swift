@@ -280,6 +280,23 @@ final class WorkbenchClientModeTests: XCTestCase {
         XCTAssertEqual(args["fraction"] as? Double, 0.7)
     }
 
+    /// A "fresh" benchd refuses leaves the question open rather than mounting the bench the
+    /// operator declined.
+    func testARefusedResetLeavesTheRestoreQuestionOpen() throws {
+        let panes = (0..<3).map { _ in BenchFixture.terminal() }
+        let rig = try rig(
+            BenchFixture.document(path, BenchFixture.bench(panes), seq: 1), restoring: false)
+        rig.server.answer = { request in
+            ["id": request["id"] ?? "", "status": "refused", "reason": "not now"]
+        }
+
+        rig.model.answer(.fresh)
+
+        XCTAssertNotNil(rig.model.restoreOffer, "the choice did not happen, so it is still asked")
+        XCTAssertNil(rig.model.bench)
+        XCTAssertTrue(rig.terminals.sessions.isEmpty)
+    }
+
     /// While benchd is down a verb fails where the operator can see it, and nothing moves.
     func testAVerbWithBenchdGoneFailsVisiblyAndChangesNothing() throws {
         let rig = try rig(

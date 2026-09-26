@@ -483,8 +483,11 @@ final class WorkbenchModel: ObservableObject {
         // identical record written every two seconds is a write per tick for the life of the
         // process — the same reasoning `canvas(_:didPointAt:)` gives for asking whether the
         // source actually moved.
-        // Sent as `pane/record` by helm itself: an observation, never anyone's gesture.
-        for (pane, agent) in live {
+        // Sent as `pane/record` by helm itself: an observation, never anyone's gesture. Not
+        // while benchd is unreachable: each would wait out the request timeout on the main
+        // thread, and a record not sent now is sent on the next tick.
+        let reachable = if case .disconnected = mode.client?.state { false } else { true }
+        for (pane, agent) in live where reachable {
             guard case let .terminal(recorded) = bench.pane(pane)?.content,
                 recorded != agent
             else { continue }
@@ -1019,6 +1022,11 @@ final class WorkbenchModel: ObservableObject {
     ///
     /// **#85's question stays helm's** (D4): a bench worth asking about is not drawn until the
     /// operator answers, and the answer goes back to benchd as a verb.
+    ///
+    /// **Re-entered, by design.** A verb sent from inside `documentFollower` (the import) waits
+    /// for the document it made, and that calls this again before the outer call returns. Each
+    /// call draws the document it was handed, and nothing after `documentFollower` reads local
+    /// state, so the inner call's newer document is what stays drawn. Keep it that way.
     func apply(_ at: DocumentAt) {
         let document = at.document
         lastApplied = at
@@ -1077,18 +1085,29 @@ final class WorkbenchModel: ObservableObject {
     /// #85's answer in daemon mode. Restoring draws what benchd already holds, bringing the shelf
     /// back first when the offer was the shelf. Fresh asks benchd to shelve the bench and start
     /// one shell — unless the offer was the shelf, which fresh leaves where it is.
+    ///
+    /// **A verb that did not happen leaves the question open.** Marked answered before the verb,
+    /// because the document it makes arrives inside the send and must not be asked about again;
+    /// unmarked if no newer document came back, so the operator's choice is never silently
+    /// replaced by the bench he declined.
     private func answerFromDaemon(
         _ choice: BenchRestoreChoice, offer: BenchRestoreOffer, path: WorkspacePath
     ) {
         answered.insert(path)
         let offeredTheShelf = shelvedBench == offer.bench
-        switch choice {
-        case .restore where offeredTheShelf:
-            send(.workspaceUnshelve(path: path.value), by: .operatorGesture)
-        case .fresh where !offeredTheShelf:
-            send(.workspaceReset(path: path.value), by: .operatorGesture)
-        case .restore, .fresh:
-            break
+        let verb: BenchVerb? =
+            switch choice {
+            case .restore where offeredTheShelf: .workspaceUnshelve(path: path.value)
+            case .fresh where !offeredTheShelf: .workspaceReset(path: path.value)
+            case .restore, .fresh: nil
+            }
+        if let verb {
+            let before = lastApplied?.seq
+            send(verb, by: .operatorGesture)
+            guard lastApplied?.seq != before else {
+                answered.remove(path)
+                return
+            }
         }
         if let lastApplied { apply(lastApplied) }
     }
@@ -1097,7 +1116,12 @@ final class WorkbenchModel: ObservableObject {
     /// mode the drag is drawn here as it moves and benchd hears once, on release: a round trip
     /// per mouse event would be a hundred events in the log for one gesture.
     func resize(_ divider: BenchDivider, to fraction: Double, released: Bool) {
-        guard mode.client != nil, !released else {
+        guard mode.client != nil else {
+            // The release repeats the last step's fraction, and locally that step already landed.
+            if !released { send(.layoutResize(divider, fraction: fraction), by: .operatorGesture) }
+            return
+        }
+        guard !released else {
             send(.layoutResize(divider, fraction: fraction), by: .operatorGesture)
             return
         }
