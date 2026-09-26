@@ -43,19 +43,17 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
     let hands_out = hook::carries_context(args.harness, &args.event, tool);
 
     // Under the lock: who this is, and what it is doing now. No mailbox is read here.
-    let (handle, rule, root) = {
+    let (handle, rule) = {
         let mut c = core.lock().unwrap();
-        if transition.is_none() {
-            let first = c
-                .unknown_hook_events
-                .insert((args.harness.name(), args.event.clone()));
-            if first {
-                c.append(
-                    "hook/unknown-event",
-                    json!({ "harness": args.harness.name(), "event": args.event }),
-                )
-                .map_err(Refusal::Failed)?;
-            }
+        if transition.is_none()
+            && c.unknown_hook_events
+                .insert((args.harness.name(), args.event.clone()))
+        {
+            c.append(
+                "hook/unknown-event",
+                json!({ "harness": args.harness.name(), "event": args.event }),
+            )
+            .map_err(Refusal::Failed)?;
         }
         if transition == Some(Transition::Ended) {
             if let Some(Some(agent)) = c.agents.remove(&key) {
@@ -100,7 +98,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             )
             .map_err(Refusal::Failed)?;
         }
-        (handle, rule, c.root.clone())
+        (handle, rule)
     };
 
     if !hands_out {
@@ -110,7 +108,18 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
         }));
     }
 
-    // Outside the lock: the mailbox. A rename per message decides who hands it out.
+    hand_out(core, handle, rule, &args.event)
+}
+
+/// Outside the lock: the mailbox. A rename per message decides who hands it out. The reply's
+/// context is the standing rule when it is owed, then one pointer per message.
+fn hand_out(
+    core: &Arc<Mutex<Core>>,
+    handle: String,
+    rule: bool,
+    event: &str,
+) -> Result<Value, Refusal> {
+    let root = core.lock().unwrap().root.clone();
     let taken = bench_mail::take_unread(&root, &handle);
     if !taken.is_empty() {
         let mut c = core.lock().unwrap();
@@ -119,7 +128,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             .retain(|p| !(p.handle == handle && ids.contains(&p.mail_id.as_str())));
         c.append(
             "mail/delivered",
-            json!({ "handle": handle, "mail": ids, "channel": "hook", "event": args.event }),
+            json!({ "handle": handle, "mail": ids, "channel": "hook", "event": event }),
         )
         .map_err(Refusal::Failed)?;
     }

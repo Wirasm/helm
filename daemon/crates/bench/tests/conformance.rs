@@ -3682,8 +3682,14 @@ fn a_hook_hands_out_mail_as_context_once_and_never_while_a_prompt_is_open() {
         )
     );
 
-    // What was logged: one hand-out per call that handed something out, and a state change
-    // only when the activity changed.
+    assert_the_hook_log(h);
+    drop(daemon);
+}
+
+/// What `a_hook_hands_out_mail_as_context_once_and_never_while_a_prompt_is_open` logged: one
+/// hand-out per call that handed something out, and a state change only when the activity
+/// changed.
+fn assert_the_hook_log(h: &Path) {
     let kinds = event_kinds(h);
     let delivered: Vec<_> = kinds
         .iter()
@@ -3713,7 +3719,6 @@ fn a_hook_hands_out_mail_as_context_once_and_never_while_a_prompt_is_open() {
         ],
         "transitions only: three PostToolUse/PreToolUse calls while busy log nothing"
     );
-    drop(daemon);
 }
 
 #[test]

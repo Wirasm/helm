@@ -78,11 +78,7 @@ struct Cli {
     root: PathBuf,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    reason = "legacy (#418): 250 lines, limit 100; cognitive complexity 26, limit 25"
-)]
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 250 lines, limit 100")]
 fn run() -> i32 {
     // `hook` is wired into an agent's own hooks and has its own contract (exit 0, always),
     // so it leaves before the verb parser, whose refusals exit 3.

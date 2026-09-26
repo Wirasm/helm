@@ -706,7 +706,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            35,
+            36,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
