@@ -14,3 +14,6 @@ bench-sessions = { path = "../bench-sessions" }
 serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
+
+[lints]
+workspace = true
