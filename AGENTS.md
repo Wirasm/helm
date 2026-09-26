@@ -1128,7 +1128,7 @@ the daemon gate's conformance suite.
 - **`bench-mail`** — sending and reading mail through benchd's mailroom, finding who can be mailed,
   and wiring an agent the operator starts himself (`bench wiring`). The only mail skill since #358.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
-  start`, drive it with `playwright-cli attach`, and put it in front of him with `openBrowser`.
+  start`, drive it with `playwright-cli attach`, and badge his browser drawer with `openBrowser`.
 - **`bench-sessions`** — who is working in a workspace (`bench sessions --all`), and what any of
   them did (`bench log <id>`, #421), read from the transcript without mailing the agent.
 

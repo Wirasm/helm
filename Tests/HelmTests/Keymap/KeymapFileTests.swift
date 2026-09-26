@@ -96,10 +96,10 @@ final class KeymapFileTests: XCTestCase {
             """
             [[bind]]
             key = "cmd+alt+b"
-            action = "open-browser"
+            action = "new-note"
             """
         ).overlay(on: KeyBindings.all)
-        XCTAssertEqual(match("b", [.command, .option], in: table), .verb(.openBrowser))
+        XCTAssertEqual(match("b", [.command, .option], in: table), .local(.newNote))
         XCTAssertEqual(table.count, KeyBindings.all.count + 1)
     }
 

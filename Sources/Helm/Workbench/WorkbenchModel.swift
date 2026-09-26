@@ -588,7 +588,7 @@ final class WorkbenchModel: ObservableObject {
     /// Resolve-or-create, at the edge. The model is kept by pane id so a tab switch or a
     /// re-render gets the same webview back rather than reloading the page.
     func canvas(for pane: Pane) -> CanvasModel {
-        guard let model = surfaces.resolve(pane, in: workspacePath) as? CanvasModel else {
+        guard let model = surfaces.resolve(pane, in: home(of: pane.id)) as? CanvasModel else {
             preconditionFailure("canvas(for:) asked about a pane that is not a canvas: \(pane)")
         }
         return model
@@ -630,7 +630,8 @@ final class WorkbenchModel: ObservableObject {
     }
 
     func browser(for pane: Pane) -> BrowserPaneModel {
-        guard let model = surfaces.resolve(pane, in: workspacePath) as? BrowserPaneModel else {
+        guard let model = surfaces.resolve(pane, in: home(of: pane.id)) as? BrowserPaneModel
+        else {
             preconditionFailure("browser(for:) asked about a pane that is not a browser: \(pane)")
         }
         return model
@@ -1137,14 +1138,13 @@ extension WorkbenchModel: VerbSink {
         return pane
     }
 
-    /// A ⌘-clicked http address (#376): the browser pane is opened as the operator's `pane/open`,
-    /// and the address becomes a new tab of the shared browser it shows. Neither takes the
-    /// keyboard from the terminal clicked in.
+    /// A ⌘-clicked http address (#376): the address becomes a new tab of the shared browser, in
+    /// the background. helm opens the browser pane itself rather than as the operator's gesture,
+    /// so it lands where the placement rules send it without taking the keyboard from the
+    /// terminal clicked in: in daemon mode the browser drawer, which it badges (#356).
     func openLink(_ link: URL) {
-        guard let id = send(.paneOpen(surface: .browser), by: .operatorGesture),
-            let pane = bench?.pane(id)
-        else { return }
-        browser(for: pane).open(link)
+        guard let id = send(.paneOpen(surface: .browser), by: .helm) else { return }
+        browser(for: Pane(id: id, content: .browser)).open(link)
     }
 }
 

@@ -87,10 +87,10 @@ _Avoid_: artifact pane, webview, browser, draw-on pane
 The pane type that shows the **shared browser** — the one Chrome benchd runs per bench root
 (`bench browser start`), which agents drive with Playwright and the operator uses by hand. helm
 neither starts nor automates it: the pane reads benchd's `browser/endpoint.json`, draws the tab
-it follows over CDP, and forwards mouse, keys and the clipboard. One per bench; it appears
-without taking the keyboard (⌘⇧B, or an agent's `helm-command openBrowser`). A ⌘-clicked http
-link in a terminal opens here too, as a new tab, and the keyboard stays in the terminal. Not a
-canvas: a canvas renders a file in helm's own webview.
+it follows over CDP, and forwards mouse, keys and the clipboard. One per bench, and it lives in
+the `browser` **drawer**: ⌘⇧B shows or hides it, and an agent's `helm-command openBrowser` or a
+⌘-clicked http link (a new tab) badges the drawer without opening it. Not a canvas: a canvas
+renders a file in helm's own webview.
 _Avoid_: webview, canvas, embedded browser
 
 **drawer**:

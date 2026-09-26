@@ -329,7 +329,9 @@ menu = "Toggle Archon Rail"
 
 [[bind]]
 key = "cmd+shift+b"
-action = "open-browser"
+action = "drawer"
+name = "browser"
+surface = "browser"
 hint = "browser"
 menu = "Shared Browser"
 

@@ -101,7 +101,6 @@ enum VerbTemplate: Equatable {
     case showTab(index: Int)
     case stepFocus(BenchDirection)
     case moveFocused(BenchDirection)
-    case openBrowser
     case activateWorkspace(index: Int)
     case cycleWorkspace(delta: Int)
     /// Show a drawer over the bench, or hide it (#356). `surface` is what an empty drawer
@@ -127,7 +126,6 @@ enum VerbTemplate: Equatable {
         case let .stepFocus(direction): return .focusStep(direction: direction)
         case let .moveFocused(direction):
             return bench?.focusedPane.map { .paneMove($0.id, direction) }
-        case .openBrowser: return .paneOpen(surface: .browser)
         case let .activateWorkspace(index):
             guard workspaces.indices.contains(index) else { return nil }
             return .workspaceActivate(path: workspaces[index].value)
