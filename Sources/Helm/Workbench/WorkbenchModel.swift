@@ -1073,7 +1073,14 @@ final class WorkbenchModel: ObservableObject {
                     terminals: arrived, in: WorkspacePath(workspace.path), active: false)
             }
         }
-        knownPanes = alive
+        // Only panes in a workspace count as seen. A terminal in a drawer (#356) has no workspace
+        // to start in and helm draws no drawers yet; when it is moved onto a bench it arrives
+        // there, and starts.
+        knownPanes = Set(
+            document.workspaces.flatMap { workspace in
+                ([workspace.bench] + (workspace.shelved.map { [$0] } ?? []))
+                    .flatMap(\.columns).flatMap(\.slots).flatMap(\.panes).map(\.id)
+            })
 
         guard let active = document.active.map(WorkspacePath.init),
             let workspace = document.workspace(at: active),

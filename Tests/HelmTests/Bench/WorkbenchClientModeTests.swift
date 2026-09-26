@@ -157,6 +157,35 @@ final class WorkbenchClientModeTests: XCTestCase {
         XCTAssertEqual(Set(rig.terminals.sessions.map(\.id)), [first, second])
     }
 
+    /// A terminal opened straight into a drawer has no workspace to start in; moved onto a
+    /// background bench later, it arrives there and starts.
+    func testATerminalMovedFromADrawerOntoABackgroundBenchStarts() throws {
+        let first = UUID()
+        let drawn = UUID()
+        let other = "/tmp/helm-client-mode-other"
+        let rig = try rig(
+            BenchFixture.document(path, BenchFixture.bench([BenchFixture.terminal(first)]), seq: 1))
+        var inDrawer = BenchFixture.document(
+            path, BenchFixture.bench([BenchFixture.terminal(first)]), seq: 2,
+            others: [.init(path: other, bench: BenchFixture.bench([BenchFixture.terminal()]))])
+        inDrawer.document.drawers = [
+            .init(name: "scratch", panes: [BenchFixture.terminal(drawn)], selected: drawn)
+        ]
+        rig.server.push(inDrawer)
+        XCTAssertTrue(Eventually.holds { rig.model.document?.drawers.count == 1 })
+
+        rig.server.push(
+            BenchFixture.document(
+                path, BenchFixture.bench([BenchFixture.terminal(first)]), seq: 3,
+                others: [
+                    .init(path: other, bench: BenchFixture.bench([BenchFixture.terminal(drawn)]))
+                ]))
+
+        XCTAssertTrue(Eventually.holds { rig.terminals.sessions.contains { $0.id == drawn } })
+        XCTAssertEqual(
+            rig.terminals.sessions.first { $0.id == drawn }?.workspacePath, WorkspacePath(other))
+    }
+
     /// A terminal an agent opens in a workspace that is not on screen starts at once, so a spawn
     /// there has a shell to type into — and the operator's view stays where it was.
     func testATerminalThatArrivesInABackgroundWorkspaceStartsThere() throws {
