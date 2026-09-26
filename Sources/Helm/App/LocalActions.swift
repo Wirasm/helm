@@ -52,7 +52,7 @@ final class LocalActions: ActionPerformer {
         case .toggleRail:
             rail.toggleVisibility()
         case .newNote:
-            workbench.newNote()
+            Task { await workbench.newNote() }
         }
     }
 }

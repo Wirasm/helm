@@ -2,11 +2,12 @@ import Foundation
 
 /// Where a bench keeps its state: `bench_wire::resolve_root` plus the suite rule of
 /// `SuiteName::validate` (`daemon/crates/bench-wire/src/lib.rs`), spelled again because Swift
-/// cannot call Rust.
+/// cannot call Rust. `daemon/fixtures/bench-root.json` is the table both copies are
+/// checked against (`BenchWireConformanceTests` here, `bench-wire`'s own tests there).
 ///
 /// In order:
 ///
-/// 1. `BENCH_DIR` names the root outright.
+/// 1. `BENCH_DIR` names the root outright. Empty is unset, in `bench` too (#395).
 /// 2. `BENCH_SUITE` → `~/.bench-<suite>`.
 /// 3. `HELM_DEFAULTS_SUITE` → `~/.bench-<suite>`. An isolated helm gets its own bench, which
 ///    is what `bench` run with `BENCH_SUITE=<suite>` uses (#378).
