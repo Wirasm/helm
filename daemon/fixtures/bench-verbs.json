@@ -471,5 +471,18 @@
     "by": {
       "kind": "operator"
     }
+  },
+  {
+    "id": "v-25",
+    "verb": "drawer/toggle",
+    "args": {
+      "drawer": "sessions",
+      "surface": {
+        "kind": "sessions"
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
   }
 ]

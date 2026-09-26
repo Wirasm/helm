@@ -179,6 +179,8 @@ package enum Surface: Codable, Equatable, Sendable {
     /// A canvas over a file, the only canvas source there is since #376.
     case canvas(path: String)
     case browser
+    /// The active workspace's agent sessions (#384).
+    case sessions
     case unsupported(kind: String)
 
     private enum CodingKeys: String, CodingKey { case kind, agent, source }
@@ -200,6 +202,8 @@ package enum Surface: Codable, Equatable, Sendable {
             self = .canvas(path: try source.decode(String.self, forKey: .path))
         case "browser":
             self = .browser
+        case "sessions":
+            self = .sessions
         default:
             self = .unsupported(kind: kind)
         }
@@ -218,6 +222,8 @@ package enum Surface: Codable, Equatable, Sendable {
             try source.encode(path, forKey: .path)
         case .browser:
             try c.encode("browser", forKey: .kind)
+        case .sessions:
+            try c.encode("sessions", forKey: .kind)
         case let .unsupported(kind):
             // Never sent: helm only ever asks benchd for kinds it has. Encoded as its name so a
             // round trip of a document helm did not understand is still honest about it.

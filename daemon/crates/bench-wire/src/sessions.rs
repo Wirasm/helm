@@ -316,8 +316,9 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
 
-    /// `fixtures/session-rows.json` pins the reply helm's drawer will decode: every state,
-    /// activity, host and open action, plus both records, written back byte for byte.
+    /// `fixtures/session-rows.json` pins the reply helm's drawer decodes — every state,
+    /// activity, host and open action — the two requests it sends, and both records, written
+    /// back byte for byte.
     #[test]
     fn the_session_rows_fixture_covers_every_variant_and_round_trips() {
         let path =
@@ -328,6 +329,10 @@ mod tests {
         let hosted: HostedRecord = serde_json::from_value(value["hosted"].clone()).unwrap();
         let dismissed: DismissedRecord =
             serde_json::from_value(value["dismissed"].clone()).unwrap();
+        // The two requests helm's drawer sends: `sessions/all`'s and `sessions/dismiss`'s args.
+        let all_args: SessionsArgs = serde_json::from_value(value["all_args"].clone()).unwrap();
+        let dismiss_args: SessionKey =
+            serde_json::from_value(value["dismiss_args"].clone()).unwrap();
 
         let kinds = |f: &dyn Fn(&SessionRow) -> Value| -> Vec<String> {
             let mut k: Vec<String> = list
@@ -394,9 +399,10 @@ mod tests {
         );
         assert_eq!(list.operator.handle, crate::OPERATOR_HANDLE);
 
-        let written = serde_json::to_string_pretty(
-            &json!({ "list": list, "hosted": hosted, "dismissed": dismissed }),
-        )
+        let written = serde_json::to_string_pretty(&json!({
+            "list": list, "hosted": hosted, "dismissed": dismissed,
+            "all_args": all_args, "dismiss_args": dismiss_args,
+        }))
         .unwrap()
             + "\n";
         assert_eq!(

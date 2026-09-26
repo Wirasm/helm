@@ -541,7 +541,7 @@ final class TerminalSession: ObservableObject, Identifiable {
 
 /// Direction of a per-terminal font zoom (⌘+ / ⌘- / ⌘0). The notification
 /// carries the raw value, mirroring how ⌘1–⌘9 carry the tab index.
-enum FontSizeStep: Int {
+enum FontSizeStep: Int, CaseIterable {
     case decrease = -1
     case reset = 0
     case increase = 1

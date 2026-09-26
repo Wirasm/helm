@@ -35,6 +35,9 @@ pub enum Surface {
     /// A view onto the one shared browser benchd supervises (#350). No payload: there is one
     /// browser per bench root, and which tab it shows is live state, not arrangement.
     Browser,
+    /// The list of agent sessions in the active workspace (#384), from `sessions/all`. No
+    /// payload: which workspace it lists is where the operator is, not arrangement.
+    Sessions,
 }
 
 impl Surface {
@@ -71,7 +74,7 @@ impl Surface {
     pub fn already_shows(&self, wanted: &Surface) -> bool {
         match (wanted, self) {
             (Surface::Canvas { source: a }, Surface::Canvas { source: b }) => a == b,
-            (Surface::Browser, Surface::Browser) => true,
+            (Surface::Browser, Surface::Browser) | (Surface::Sessions, Surface::Sessions) => true,
             (
                 Surface::Terminal {
                     session: Some(a), ..
@@ -90,6 +93,7 @@ impl Surface {
             Surface::Terminal { .. } => SurfaceClass::Terminal,
             Surface::Canvas { .. } => SurfaceClass::Canvas,
             Surface::Browser => SurfaceClass::Browser,
+            Surface::Sessions => SurfaceClass::Sessions,
         }
     }
 }
@@ -114,6 +118,7 @@ pub enum SurfaceClass {
     Terminal,
     Canvas,
     Browser,
+    Sessions,
 }
 
 /// The agent a terminal pane held (helm `ResumableAgent`), recorded so a restart can offer
@@ -215,6 +220,7 @@ mod tests {
                 json!({"kind": "canvas", "source": {"kind": "file", "path": "/tmp/plan.md"}}),
             ),
             (Surface::Browser, json!({"kind": "browser"})),
+            (Surface::Sessions, json!({"kind": "sessions"})),
         ] {
             assert_eq!(serde_json::to_value(&surface).unwrap(), encoded);
             assert_eq!(serde_json::from_value::<Surface>(encoded).unwrap(), surface);

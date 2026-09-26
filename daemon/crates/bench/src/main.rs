@@ -97,7 +97,7 @@ fn usage() -> &'static str {
      \x20     drawer toggle <name>                show a drawer over the bench, or hide it: the\n\
      \x20           [--surface <s>]               operator's focus, so refused from an agent. <s>\n\
      \x20                                         is what a new drawer starts with: browser,\n\
-     \x20                                         terminal or file:<path>\n\
+     \x20                                         sessions, terminal or file:<path>\n\
      env:   BENCH_SUITE (flag wins) · BENCH_DIR (root override, wins over suite)\n\
      exit:  0 ok · 2 no daemon · 3 refused · 4 daemon failed"
 }
@@ -478,6 +478,7 @@ fn kind_name(kind: bench_sessions::transcript::Kind) -> &'static str {
 fn parse_surface(raw: &str) -> Result<Surface, String> {
     match raw {
         "browser" => Ok(Surface::Browser),
+        "sessions" => Ok(Surface::Sessions),
         "terminal" => Ok(Surface::terminal()),
         _ => match raw.strip_prefix("file:") {
             Some(path) => {
@@ -485,7 +486,7 @@ fn parse_surface(raw: &str) -> Result<Surface, String> {
                 Surface::file(&cwd.join(path).display().to_string())
             }
             None => Err(format!(
-                "--surface is browser, terminal or file:<path>, not {raw:?}"
+                "--surface is browser, sessions, terminal or file:<path>, not {raw:?}"
             )),
         },
     }

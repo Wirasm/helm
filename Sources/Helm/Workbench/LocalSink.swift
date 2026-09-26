@@ -134,7 +134,8 @@ final class LocalSink: VerbSink {
             // goes on, and even the operator's ⌘⇧B leaves the keyboard where it was.
             guard isMounted(workspace) else { return nil }
             return workbench.offerBrowser(key)
-        case .unsupported:
+        case .sessions, .unsupported:
+            // The sessions list lives in a drawer, and the local bench has none (#356).
             return nil
         }
     }

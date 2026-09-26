@@ -131,6 +131,51 @@ final class BenchWireConformanceTests: XCTestCase {
                 session: "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2", pid: 4242))
     }
 
+    /// The sessions drawer's two requests are written as benchd reads them, and every row of
+    /// its reply decodes — every state and every open action (#384).
+    func testTheSessionsRequestsMatchTheDaemonsSampleAndEveryRowDecodes() throws {
+        let data = try fixture("session-rows.json")
+        let samples = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        func args(_ request: BenchSessionsRequest) throws -> NSObject {
+            let written = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request))
+            return try normalized(
+                JSONSerialization.data(
+                    withJSONObject: XCTUnwrap((written as? [String: Any])?["args"])))
+        }
+        func sample(_ key: String) throws -> NSObject {
+            try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples[key])))
+        }
+        XCTAssertEqual(
+            try args(.all(id: "x", workspace: "/Users/op/Projects/helm/.worktrees/drawer")),
+            try sample("all_args"))
+        XCTAssertEqual(
+            try args(
+                .dismiss(
+                    id: "x", harness: "claude", session: "7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918")),
+            try sample("dismiss_args"))
+
+        let list = try JSONDecoder().decode(
+            BenchSessionList.self,
+            from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["list"])))
+        let raw = try XCTUnwrap((samples["list"] as? [String: Any])?["rows"] as? [Any])
+        XCTAssertEqual(list.rows.count, raw.count)
+        XCTAssertFalse(list.unreadable.isEmpty)
+        let opens = Set(
+            list.rows.map { row -> String in
+                switch row.open {
+                case .focusPane: "focus_pane"
+                case .benchAttach: "bench_attach"
+                case .claudeAttach: "claude_attach"
+                case .resume: "resume"
+                case .transcript: "transcript"
+                }
+            })
+        XCTAssertEqual(
+            opens, ["focus_pane", "bench_attach", "claude_attach", "resume", "transcript"])
+        XCTAssertTrue(list.rows.contains { $0.parent != nil }, "a subagent row")
+        XCTAssertTrue(list.rows.contains { if case .finished = $0.state { true } else { false } })
+    }
+
     /// A document written before drawers existed has none, and helm writes none back.
     func testADocumentWithoutDrawersReadsAndWritesWithout() throws {
         let data = Data(#"{"workspaces":[],"active":null}"#.utf8)

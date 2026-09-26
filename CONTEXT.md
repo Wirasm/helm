@@ -87,10 +87,10 @@ _Avoid_: artifact pane, webview, browser, draw-on pane
 The pane type that shows the **shared browser** — the one Chrome benchd runs per bench root
 (`bench browser start`), which agents drive with Playwright and the operator uses by hand. helm
 neither starts nor automates it: the pane reads benchd's `browser/endpoint.json`, draws the tab
-it follows over CDP, and forwards mouse, keys and the clipboard. One per bench; it appears
-without taking the keyboard (⌘⇧B, or an agent's `helm-command openBrowser`). A ⌘-clicked http
-link in a terminal opens here too, as a new tab, and the keyboard stays in the terminal. Not a
-canvas: a canvas renders a file in helm's own webview.
+it follows over CDP, and forwards mouse, keys and the clipboard. One per bench, and it lives in
+the `browser` **drawer**: ⌘⇧B shows or hides it, and an agent's `helm-command openBrowser` or a
+⌘-clicked http link (a new tab) badges the drawer without opening it. Not a canvas: a canvas
+renders a file in helm's own webview.
 _Avoid_: webview, canvas, embedded browser
 
 **drawer**:
@@ -99,8 +99,16 @@ the whole bench document, beside the workspaces rather than inside one, and at m
 time. Opening or closing one never re-lays-out the bench under it. It holds panes, so anything a
 pane can show can live in one, and it exists only while it holds at least one. Which drawer is open
 is the operator's focus: an agent never opens one without *asked*; its pane lands in the drawer
-and **badges** it. Lives in benchd's document; helm does not draw drawers yet.
+and **badges** it. Lives in benchd's document; helm draws the open one over the bench
+(`Sources/Helm/Drawers/`), where and how wide from `[drawer.<name>]` in the keymap file.
 _Avoid_: panel, sidebar, rail (the rail is helm's own and is not a drawer), scratchpad, overlay
+
+**sessions drawer**:
+The drawer on the left (⌘⇧S) listing every agent session in the active workspace, as benchd's
+`sessions/all` answers it (#384): running first, then newest. A row opens with the one action
+benchd computed for it — show its pane, attach, resume or read its transcript — and a finished
+row can be dismissed. helm adds no rule of its own about which sessions belong.
+_Avoid_: agent list, sidebar, session browser
 
 **badge**:
 A drawer's mark that something arrived in it the operator has not seen: an agent put a pane
@@ -182,10 +190,17 @@ anything SwiftUI can reach. Two weights of one material, never two materials.
 _Avoid_: blur, vibrancy, frosted (as a noun), calling the chrome's weight "the" glass
 
 **hint**:
-One line the status bar draws saying a key and what it does. Rendered from the key table
-(`KeyBindings.all`), whose rows carry the word as well as the key, so neither is written down
+One line the status bar draws saying a key and what it does. Rendered from the key table in
+force (`Keymap.table`), whose rows carry the word as well as the key, so neither is written down
 twice; which rows get one is a choice, what they are bound to is not.
 _Avoid_: tooltip, help, cheatsheet
+
+**keymap file**:
+`<bench root>/rules/keymap.toml`, the operator's keys. Its rows overlay helm's built-in table
+(`KeyBindings.all`): a row replaces the built-in keys with its chord, `unbind` removes one, and a
+file that does not parse changes nothing. helm reads it; nothing writes it. It sits beside benchd's
+`placement.toml`, which benchd reads and helm does not.
+_Avoid_: keybindings.json, config, shortcuts file
 
 ### What agents produce
 

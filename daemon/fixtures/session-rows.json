@@ -1,4 +1,11 @@
 {
+  "all_args": {
+    "workspace": "/Users/op/Projects/helm/.worktrees/drawer"
+  },
+  "dismiss_args": {
+    "harness": "claude",
+    "id": "7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918"
+  },
   "dismissed": {
     "dismissed": [
       {

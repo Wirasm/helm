@@ -141,7 +141,24 @@ mod tests {
         file.rules().place(&bench, &Surface::Browser, Caller::Agent)
     }
 
-    const TO_DRAWER: &str = "[[place]]\nsurface = \"browser\"\ntry = [{ drawer = \"browser\" }]\n";
+    /// The operator's file sends the browser to a drawer the built-in table does not name, so
+    /// which table is in force is visible in where the browser goes.
+    const TO_DRAWER: &str =
+        "[[place]]\nsurface = \"browser\"\ntry = [{ drawer = \"elsewhere\" }]\n";
+
+    fn drawer(name: &str) -> Destination {
+        Destination::Drawer(bench_doc::DrawerName::new(name).unwrap())
+    }
+
+    /// Where the operator's file sends the browser.
+    fn operators() -> Destination {
+        drawer("elsewhere")
+    }
+
+    /// Where the built-in table sends it.
+    fn built_in() -> Destination {
+        drawer("browser")
+    }
 
     #[test]
     fn a_bad_version_keeps_the_last_good_table_and_is_reported_once() {
@@ -153,7 +170,7 @@ mod tests {
         fs::write(&path, TO_DRAWER).unwrap();
         let (kind, _) = file.refresh().expect("a new file is news");
         assert_eq!(kind, RULES_LOADED);
-        assert!(matches!(browser_goes(&file), Destination::Drawer(_)));
+        assert!(browser_goes(&file) == operators());
         assert_eq!(file.refresh(), None, "the same version is not read again");
 
         fs::write(&path, "[[place]\nnot toml at all\n").unwrap();
@@ -161,7 +178,7 @@ mod tests {
         assert_eq!(kind, RULES_REJECTED);
         assert!(data["why"].as_str().unwrap().contains("line"), "{data}");
         assert!(
-            matches!(browser_goes(&file), Destination::Drawer(_)),
+            browser_goes(&file) == operators(),
             "the last good table is still in force"
         );
         assert_eq!(file.status()["state"], "rejected");
@@ -178,7 +195,7 @@ mod tests {
             (RULES_LOADED, Some("default"))
         );
         assert_eq!(file.state, RulesState::Default);
-        assert!(matches!(browser_goes(&file), Destination::Bench(_)));
+        assert_eq!(browser_goes(&file), built_in());
     }
 
     #[test]
@@ -187,13 +204,13 @@ mod tests {
         let path = scratch("unreadable");
         fs::write(&path, TO_DRAWER).unwrap();
         let (mut file, _) = RulesFile::boot(path.clone());
-        assert!(matches!(browser_goes(&file), Destination::Drawer(_)));
+        assert!(browser_goes(&file) == operators());
 
         // Half a save — the file truncated before the new text lands — holds no rules.
         fs::write(&path, "").unwrap();
         assert_eq!(file.refresh().map(|(kind, _)| kind), Some(RULES_REJECTED));
         assert!(
-            matches!(browser_goes(&file), Destination::Drawer(_)),
+            browser_goes(&file) == operators(),
             "an empty file is not an empty table"
         );
 
@@ -203,7 +220,7 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(kind, RULES_REJECTED, "{data}");
         assert!(
-            matches!(browser_goes(&file), Destination::Drawer(_)),
+            browser_goes(&file) == operators(),
             "a file that cannot be read keeps the last good table"
         );
     }
@@ -214,7 +231,7 @@ mod tests {
         fs::write(&path, TO_DRAWER).unwrap();
         let (mut file, _) = RulesFile::boot(path.clone());
         let stamp = fs::metadata(&path).unwrap().modified().unwrap();
-        let other = TO_DRAWER.replace("browser\" }", "sidebar\" }");
+        let other = TO_DRAWER.replace("elsewhere\" }", "somewhere\" }");
         assert_eq!(other.len(), TO_DRAWER.len());
         fs::write(&path, &other).unwrap();
         fs::File::options()
@@ -227,10 +244,7 @@ mod tests {
             file.refresh().is_some(),
             "same length, same mtime, new text"
         );
-        assert_eq!(
-            browser_goes(&file),
-            Destination::Drawer(bench_doc::DrawerName::new("sidebar").unwrap())
-        );
+        assert_eq!(browser_goes(&file), drawer("somewhere"));
     }
 
     #[test]
