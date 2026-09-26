@@ -33,6 +33,10 @@ pub struct HookArgs {
     /// `BENCH_SESSION` from the hook's environment: benchd spawned this process tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bench_session: Option<String>,
+    /// `CLAUDE_CODE_MESSAGING_SOCKET` from the hook's environment: the Claude session's own
+    /// inbox, which Claude exports to its hooks. Where benchd starts a turn when it is idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messaging_socket: Option<String>,
 }
 
 /// `hook`'s answer. Both fields are absent for a session that has no mailbox.
@@ -120,6 +124,35 @@ pub fn carries_context(harness: Harness, event: &str, tool: Option<&str>) -> boo
         // `context` fires before every model call; `wake` is the extension asking.
         Harness::Pi => matches!(event, "context" | "wake"),
     }
+}
+
+/// Every Claude Code event `bench hook claude` is wired to. The same list goes into the
+/// settings benchd gives the Claude sessions it spawns and into the operator's one-time wiring.
+pub const CLAUDE_EVENTS: [&str; 8] = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionRequest",
+    "Stop",
+    "SessionEnd",
+];
+
+/// The Claude Code settings that wire `bench hook claude` (exec form, so no shell reads the
+/// path) into every event in [`CLAUDE_EVENTS`], and accept messages benchd posts to the
+/// session's inbox socket. Without `crossSessionInbound: "accept"` a session that bypasses
+/// permission prompts holds benchd's message behind an approval dialog in its pane (measured
+/// on 2.1.283; the session's own token does not change that).
+pub fn claude_settings(bench: &str) -> serde_json::Value {
+    let handler = serde_json::json!([{ "hooks": [{
+        "type": "command", "command": bench, "args": ["hook", "claude"], "timeout": 5,
+    }]}]);
+    let hooks: serde_json::Map<String, serde_json::Value> = CLAUDE_EVENTS
+        .iter()
+        .map(|event| ((*event).to_string(), handler.clone()))
+        .collect();
+    serde_json::json!({ "hooks": hooks, "crossSessionInbound": "accept" })
 }
 
 /// Who gets a mailbox (#427, the rule moved here from both writers): a session a host
@@ -297,6 +330,26 @@ mod tests {
         );
         assert!(carries_context(Harness::Pi, "context", None));
         assert!(!carries_context(Harness::Pi, "agent_settled", None));
+    }
+
+    #[test]
+    fn every_wired_claude_event_means_something() {
+        for event in CLAUDE_EVENTS {
+            assert!(
+                transition(Harness::Claude, event, None).is_some(),
+                "{event}"
+            );
+        }
+        let settings = claude_settings("/bin/bench");
+        assert_eq!(settings["crossSessionInbound"], "accept");
+        assert_eq!(
+            settings["hooks"].as_object().unwrap().len(),
+            CLAUDE_EVENTS.len()
+        );
+        assert_eq!(
+            settings["hooks"]["PostToolUse"][0]["hooks"][0]["args"],
+            serde_json::json!(["hook", "claude"])
+        );
     }
 
     #[test]

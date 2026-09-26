@@ -70,6 +70,17 @@ pub(crate) fn spawn(
 ) -> std::io::Result<(File, Child)> {
     let (master, slave) = open(rows, cols)?;
     let mut cmd = Command::new(program);
+    // Identity benchd's own launcher may carry: a Claude session's inbox and token, its
+    // marker, and helm's pane. A session benchd spawns reports as itself (#358), never as
+    // whatever started the daemon.
+    for inherited in [
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDECODE",
+        "HELM_PANE",
+    ] {
+        cmd.env_remove(inherited);
+    }
     cmd.args(args)
         .current_dir(cwd)
         .env("TERM", "xterm-256color")

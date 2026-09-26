@@ -100,6 +100,19 @@ pub struct SpawnSpec {
     /// minting runtimes, and on resume naming what to re-enter.
     pub runtime_session: Option<String>,
     pub resume: bool,
+    /// The first prompt's file. argv carries a sentence naming it, never its text: the
+    /// agent reads it as its first act, so nothing waits for a TUI to be ready and nothing is
+    /// typed into the pty (#358), and `ps` shows a path rather than a plan (helm #93). The
+    /// file must outlive the spawn. Ignored on resume.
+    pub prompt_file: Option<String>,
+    /// Claude's `--settings` file: the hooks that report to benchd, and the inbound rule that
+    /// lets benchd start a turn in an idle session (#358).
+    pub settings: Option<String>,
+}
+
+/// The sentence a first prompt becomes in argv.
+pub fn prompt_pointer(path: &str) -> String {
+    format!("Read and act on the prompt in {path}")
 }
 
 /// The single spelling of how each runtime is started unattended. Postures verbatim
@@ -110,6 +123,9 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
     let program = match spec.agent {
         AgentKind::Claude => {
             args.push("--dangerously-skip-permissions".into());
+            if let Some(settings) = &spec.settings {
+                args.extend(["--settings".into(), settings.clone()]);
+            }
             if let Some(m) = &spec.model {
                 args.extend(["--model".into(), m.clone()]);
             }
@@ -177,9 +193,13 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             if spec.resume {
                 return Err("the test agent has no sessions to resume".into());
             }
-            "/bin/cat"
+            // `cat` would read a pointer as a file to print; it takes no prompt.
+            return Ok(("/bin/cat".to_string(), args));
         }
     };
+    if let Some(path) = spec.prompt_file.as_deref().filter(|_| !spec.resume) {
+        args.push(prompt_pointer(path));
+    }
     Ok((program.to_string(), args))
 }
 
@@ -220,82 +240,6 @@ pub fn mint_session_id() -> String {
     )
 }
 
-/// claude's footer under `--dangerously-skip-permissions`: once it is drawn, the TUI
-/// accepts a paste.
-const CLAUDE_READY_MARKER: &str = "bypass permissions";
-
-/// Whether `marker` is on screen in raw pty output. Whitespace is dropped from both
-/// sides as well as escape sequences: a renderer that places each word with a cursor
-/// move (claude's inline renderer does, measured on 2.1.282) draws the phrase without
-/// ever writing it contiguously.
-fn shows_marker(bytes: &[u8], marker: &str) -> bool {
-    let drawn: Vec<u8> = drawn(bytes)
-        .0
-        .into_iter()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
-    let wanted: Vec<u8> = marker
-        .bytes()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
-    drawn.windows(wanted.len()).any(|w| w == wanted.as_slice())
-}
-
-/// The bytes of raw pty output that are drawn: everything except escape sequences. A
-/// cursor move, a mode switch or an OSC's payload (a window title, a hyperlink target)
-/// puts nothing on screen. Also returns where an escape that `bytes` ends inside begins
-/// (`bytes.len()` when none does), so a caller reading chunk by chunk can carry it over.
-fn drawn(bytes: &[u8]) -> (Vec<u8>, usize) {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != 0x1b {
-            out.push(bytes[i]);
-            i += 1;
-            continue;
-        }
-        let start = i;
-        i += 1;
-        let finished = match bytes.get(i) {
-            None => false,
-            // CSI: parameters, then one final byte in @..~.
-            Some(b'[') => {
-                i += 1;
-                while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
-                    i += 1;
-                }
-                i < bytes.len()
-            }
-            // OSC: up to BEL or ST (ESC \).
-            Some(b']') => loop {
-                i += 1;
-                match bytes.get(i) {
-                    None => break false,
-                    Some(0x07) => break true,
-                    Some(0x1b) if bytes.get(i + 1) == Some(&b'\\') => {
-                        i += 1;
-                        break true;
-                    }
-                    Some(_) => {}
-                }
-            },
-            // Anything else: intermediates in 0x20..=0x2f, then one final byte
-            // (`ESC ( B` selects a charset).
-            Some(_) => {
-                while i < bytes.len() && (0x20..=0x2f).contains(&bytes[i]) {
-                    i += 1;
-                }
-                i < bytes.len()
-            }
-        };
-        if !finished {
-            return (out, start);
-        }
-        i += 1;
-    }
-    (out, bytes.len())
-}
-
 // ---------------------------------------------------------------------------
 // The live session
 // ---------------------------------------------------------------------------
@@ -311,38 +255,18 @@ pub enum Notice {
 struct Ring {
     bytes: VecDeque<u8>,
     total: u64,
-    last_change: Instant,
-    /// An escape the last read ended inside, so the next read can finish it.
-    unfinished: Vec<u8>,
 }
 
-/// An unterminated escape longer than this is not held for the next read. A `cat` of
-/// binary output can open an OSC that never closes.
-const UNFINISHED_ESCAPE_CAP: usize = 4096;
-
 impl Ring {
-    fn new(last_change: Instant) -> Ring {
+    fn new() -> Ring {
         Ring {
             bytes: VecDeque::with_capacity(8192),
             total: 0,
-            last_change,
-            unfinished: Vec::new(),
         }
     }
 
     fn push(&mut self, chunk: &[u8]) {
         self.total += chunk.len() as u64;
-        // Quiet means nothing new drawn. A TUI that re-parks its cursor on a timer is
-        // still idle (pi does, every ~2s).
-        let mut scan = std::mem::take(&mut self.unfinished);
-        scan.extend_from_slice(chunk);
-        let (drawn, unfinished) = drawn(&scan);
-        if !drawn.is_empty() {
-            self.last_change = Instant::now();
-        }
-        if scan.len() - unfinished <= UNFINISHED_ESCAPE_CAP {
-            self.unfinished = scan.split_off(unfinished);
-        }
         for &b in chunk {
             if self.bytes.len() == RING_CAPACITY {
                 self.bytes.pop_front();
@@ -412,7 +336,7 @@ impl Session {
             spawned_at: Instant::now(),
             master: Mutex::new(master),
             child: Arc::new(Mutex::new(child)),
-            ring: Arc::new(Mutex::new(Ring::new(Instant::now()))),
+            ring: Arc::new(Mutex::new(Ring::new())),
             attached: Arc::new(Mutex::new(None)),
             attach_gen: AtomicU64::new(0),
             exited: Arc::new(AtomicBool::new(false)),
@@ -474,66 +398,11 @@ impl Session {
         self.ring.lock().unwrap().total
     }
 
-    /// How long the pty has been quiet — the crude idle gate the mail spike proved
-    /// sufficient for wake delivery. The taps milestone replaces judgement, not
-    /// plumbing.
-    pub fn idle_for(&self) -> Duration {
-        self.ring.lock().unwrap().last_change.elapsed()
-    }
-
-    /// Paste, then submit separately — the launch-line rule, spelled once.
-    pub fn deliver_line(&self, line: &str) -> Result<(), String> {
-        let mut w = self.master.lock().unwrap();
-        w.write_all(line.as_bytes())
-            .map_err(|e| format!("paste: {e}"))?;
-        w.flush().ok();
-        drop(w);
-        std::thread::sleep(Duration::from_millis(300));
-        let mut w = self.master.lock().unwrap();
-        w.write_all(b"\r").map_err(|e| format!("submit: {e}"))?;
-        w.flush().ok();
-        Ok(())
-    }
-
     pub fn write_input(&self, bytes: &[u8]) -> Result<(), String> {
         let mut w = self.master.lock().unwrap();
         w.write_all(bytes).map_err(|e| format!("input: {e}"))?;
         w.flush().ok();
         Ok(())
-    }
-
-    /// Wait until the TUI is ready for its first paste. claude has a content marker
-    /// (the yolo footer — settle heuristics alone raced history redraws, measured);
-    /// the others settle on quiet output. The test agent is ready by construction.
-    pub fn wait_ready(&self, cap: Duration) -> bool {
-        if self.agent == AgentKind::TestEcho {
-            return true;
-        }
-        let start = Instant::now();
-        loop {
-            {
-                let ring = self.ring.lock().unwrap();
-                match self.agent {
-                    AgentKind::Claude => {
-                        let bytes: Vec<u8> = ring.bytes.iter().copied().collect();
-                        if shows_marker(&bytes, CLAUDE_READY_MARKER) {
-                            drop(ring);
-                            std::thread::sleep(Duration::from_secs(1));
-                            return true;
-                        }
-                    }
-                    _ => {
-                        if ring.total > 500 && ring.last_change.elapsed() > Duration::from_secs(2) {
-                            return true;
-                        }
-                    }
-                }
-            }
-            if start.elapsed() > cap {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
     }
 
     /// Attach: resize to the viewer, replay the ring, then hand live output to this
@@ -611,7 +480,42 @@ mod tests {
             effort: None,
             runtime_session: None,
             resume: false,
+            prompt_file: None,
+            settings: None,
         }
+    }
+
+    #[test]
+    fn the_first_prompt_is_a_pointer_at_the_end_of_argv_and_never_on_resume() {
+        for agent in [AgentKind::Claude, AgentKind::Codex, AgentKind::Pi] {
+            let mut s = spec(agent);
+            s.prompt_file = Some("/tmp/p.txt".into());
+            s.runtime_session = Some("id-1".into());
+            let (_, a) = argv(&s).unwrap();
+            assert_eq!(
+                a.last().unwrap(),
+                "Read and act on the prompt in /tmp/p.txt"
+            );
+            if agent != AgentKind::Codex {
+                s.resume = true;
+                let (_, a) = argv(&s).unwrap();
+                assert!(!a.iter().any(|x| x.contains("/tmp/p.txt")), "{a:?}");
+            }
+        }
+        let mut s = spec(AgentKind::TestEcho);
+        s.prompt_file = Some("/tmp/p.txt".into());
+        assert_eq!(argv(&s).unwrap(), ("/bin/cat".to_string(), vec![]));
+        let mut s = spec(AgentKind::Claude);
+        s.settings = Some("/r/claude-settings.json".into());
+        let (_, a) = argv(&s).unwrap();
+        assert_eq!(
+            a,
+            [
+                "--dangerously-skip-permissions",
+                "--settings",
+                "/r/claude-settings.json"
+            ]
+        );
     }
 
     #[test]
@@ -730,63 +634,8 @@ mod tests {
     }
 
     #[test]
-    fn claudes_ready_marker_is_found_when_words_are_placed_by_cursor_moves() {
-        // claude 2.1.282's inline renderer, measured: the words sit at columns, not
-        // behind spaces. This is what `wait_ready` saw while `mail-proof` timed out.
-        let inline = b"\xe2\x8f\xb5\xe2\x8f\xb5\x1b[6Gbypass\x1b[13Gpermissions\x1b[25Gon";
-        assert!(shows_marker(inline, CLAUDE_READY_MARKER));
-        // The fullscreen renderer writes the plain phrase, with colour around it.
-        assert!(shows_marker(
-            b"\x1b[38;2;1;2;3mbypass permissions on\x1b[39m",
-            CLAUDE_READY_MARKER
-        ));
-        // A title OSC carrying the words is not the footer being drawn, and a screen
-        // without the footer is not ready.
-        assert!(!shows_marker(
-            b"\x1b]0;bypass permissions\x07claude starting",
-            CLAUDE_READY_MARKER
-        ));
-        assert!(!shows_marker(
-            b"bypass mode, no permissions",
-            CLAUDE_READY_MARKER
-        ));
-        assert!(shows_marker(
-            b"bypass\x1b(B permissions",
-            CLAUDE_READY_MARKER
-        ));
-    }
-
-    #[test]
-    fn output_that_draws_nothing_does_not_end_the_quiet() {
-        // pi, measured: `ESC[1G ESC[?25l` (cursor to column 1, hide it) every ~2s while
-        // idle. Counted as a change, it held every non-claude agent short of the 2s
-        // quiet that wait_ready and the wake gate both need.
-        let quiet_since = Instant::now() - Duration::from_secs(5);
-        let mut ring = Ring::new(quiet_since);
-        ring.push(b"\x1b[1G\x1b[?25l");
-        assert_eq!(
-            ring.last_change, quiet_since,
-            "a cursor move is not a change"
-        );
-        assert_eq!(ring.total, 10, "every byte still counts toward the total");
-        // A charset switch has an intermediate byte before its final one.
-        ring.push(b"\x1b(B");
-        // One pty read can end inside a sequence. Its tail arrives in the next read.
-        ring.push(b"\x1b[1G\x1b");
-        ring.push(b"[?2");
-        ring.push(b"5l\x1b]0;title");
-        ring.push(b"\x07");
-        assert_eq!(
-            ring.last_change, quiet_since,
-            "escapes split across reads, or with intermediates, draw nothing"
-        );
-        ring.push(b"\x1b[2Kthinking");
-        assert!(ring.last_change > quiet_since, "drawn text is a change");
-    }
-
-    #[test]
     fn the_ring_caps_and_reports_totals() {
-        let mut ring = Ring::new(Instant::now());
+        let mut ring = Ring::new();
         ring.push(&vec![b'x'; RING_CAPACITY + 100]);
         assert_eq!(ring.bytes.len(), RING_CAPACITY);
         assert_eq!(ring.total, (RING_CAPACITY + 100) as u64);

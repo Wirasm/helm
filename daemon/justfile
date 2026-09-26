@@ -201,56 +201,6 @@ live-smoke:
     rm -rf "$SMOKE"
     echo "live-smoke: clean"
 
-# The mail proof, real agents end to end: claude, codex and pi in daemon ptys, a number
-# passed as MAIL around the ring through the production mailroom and wake reactor —
-# each hop +1, so echoes cannot fake it. Costs three small agent turns.
-mail-proof:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    DIR="{{justfile_directory()}}"
-    SMOKE=$(mktemp -d "${TMPDIR:-/tmp}/bmp.XXXX")
-    export BENCH_DIR="$SMOKE/r"
-    cargo build -q --workspace
-    BENCH="$DIR/target/debug/bench"
-    (timeout 600 "$DIR/target/debug/benchd" &)
-    sleep 1
-    ring=(post-claude post-codex post-pi)
-    agents=(claude codex pi)
-    for i in 0 1 2; do
-        next=${ring[$(( (i + 1) % 3 ))]}
-        cat > "$SMOKE/brief-$i.txt" <<BRIEF
-    You are ${ring[$i]}, a mailbox participant. Protocol, follow exactly: when a message 'You have mail from X: <path>' arrives, run: cat <path>. The last line is an integer N. Compute N+1. Then run: $BENCH mail send --to $next --body "<N+1>" (with the actual number). Then wait silently for more mail. Never send otherwise. Say READY now and wait.
-    BRIEF
-        tr '\n' ' ' < "$SMOKE/brief-$i.txt" > "$SMOKE/brief-$i.line"
-        "$BENCH" spawn --agent "${agents[$i]}" --cwd "$DIR" --name "${ring[$i]}" --prompt-file "$SMOKE/brief-$i.line" >/dev/null
-    done
-    sleep 5
-    "$BENCH" mail send --to post-claude --from operator --subject ring --body "100" >/dev/null
-    echo "mail-proof: seeded 100 -> post-claude; waiting for 103 to come back around..."
-    deadline=$(( $(date +%s) + 300 ))
-    while true; do
-        if [ "$(date +%s)" -gt "$deadline" ]; then
-            echo "mail-proof: TIMEOUT — events tail:"; "$BENCH" events | tail -c 2000; exit 1
-        fi
-        listing=$("$BENCH" mail list --handle post-claude 2>/dev/null || true)
-        id=$(printf '%s' "$listing" | python3 -c "import json,sys; d=json.load(sys.stdin); m=[x for x in d['mail'] if x['from']=='post-pi']; print(m[0]['id'] if m else '')" 2>/dev/null || true)
-        if [ -n "$id" ]; then
-            body=$("$BENCH" mail read "$id" --handle post-claude | python3 -c "import json,sys; print(json.load(sys.stdin)['body'].strip().splitlines()[-1])")
-            if [ "$body" = "103" ]; then
-                echo "mail-proof: 103 arrived from post-pi — full ring through the real mailroom"
-                break
-            else
-                echo "mail-proof: FAILED — final body was $body, expected 103"; exit 1
-            fi
-        fi
-        sleep 2
-    done
-    "$BENCH" events | python3 -c "import json,sys; d=json.load(sys.stdin); ks=[e['kind'] for e in d['events']]; print('mail-proof events:', ' '.join(k for k in ks if k.startswith(('mail/','agent/woken','wake/'))))"
-    for h in post-claude post-codex post-pi; do :; done
-    "$BENCH" stop >/dev/null
-    rm -rf "$SMOKE"
-    echo "mail-proof: clean"
-
 # The shared-browser proof, real browser end to end (#350): the daemon starts Chrome for
 # Testing, an agent's own tool attaches over CDP and acts, and the browser carries a
 # normal user agent. Needs Playwright's Chromium and playwright-cli; spends no tokens.
