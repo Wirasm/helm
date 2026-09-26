@@ -183,13 +183,14 @@ final class WorkspaceStoreTests: XCTestCase {
     /// fake `git` that sleeps well past the deadline has to come back as `timedOut`, at the
     /// deadline, rather than blocking until it exits and then answering "no repo here".
     ///
-    /// Direction: the assertion needs the deadline to fire *before* the fake exits. The fake
-    /// sleeps 30s against a 1s deadline, so a watchdog would have to overshoot by 29s to lose.
+    /// Direction: the assertion needs the deadline to fire *before* the fake exits, so it is the
+    /// risky kind AGENTS.md names. The margins are its 50×: the fake sleeps 60s against a 1s
+    /// deadline, and the call may take up to 50s before the elapsed check calls it blocking.
     func testAGitThatDoesNotAnswerTimesOutInsteadOfBlocking() async throws {
         let bin = tempRoot.appendingPathComponent("bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let git = bin.appendingPathComponent("git")
-        try "#!/bin/sh\nexec /bin/sleep 30\n".write(to: git, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nexec /bin/sleep 60\n".write(to: git, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: git.path)
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "\(bin.path):/usr/bin:/bin"
@@ -203,7 +204,7 @@ final class WorkspaceStoreTests: XCTestCase {
             XCTAssertEqual(failure, .timedOut)
         }
         XCTAssertLessThan(
-            ContinuousClock.now - started, .seconds(20),
+            ContinuousClock.now - started, .seconds(50),
             "the call returned at the deadline, not when the fake git exited")
     }
 
