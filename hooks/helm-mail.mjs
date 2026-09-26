@@ -29,6 +29,7 @@
 // never write stdout except as deliberate delivery. A hook that cannot do its job must never
 // stop the operator's prompt from running.
 
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -40,6 +41,12 @@ const OWNER_FILE = "owner.json";
 const OFF_ENV = "HELM_MAIL_OFF";
 const ROOT_ENV = "HELM_MAIL_DIR";
 const HANDLE_ENV = "HELM_MAIL_HANDLE";
+
+/** What helm declares into a pane's shell — `PaneEnvironment.paneVariable`. See `claimsAMailbox`. */
+const PANE_ENV = "HELM_PANE";
+
+/** What benchd declares into a session it spawns (`daemon/crates/benchd`). See `claimsAMailbox`. */
+const BENCH_SESSION_ENV = "BENCH_SESSION";
 
 /**
  * helm's own isolation switch, honoured here so an isolated instance's agents claim somewhere
@@ -155,6 +162,59 @@ function pidAlive(pid) {
 	} catch (error) {
 		return error?.code === "EPERM";
 	}
+}
+
+/**
+ * The controlling terminal of `pid` as `ps` names it (`ttys002`), or `""` for none. `ps` prints
+ * `??` for a process with no controlling terminal, and anything that fails — no such pid, no
+ * `ps` — is no terminal too, because a mailbox claimed on a guess is the leak #417 closes.
+ */
+function controllingTerminal(pid) {
+	try {
+		const tty = execFileSync("/bin/ps", ["-o", "tty=", "-p", String(pid)], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 2000,
+		}).trim();
+		return tty === "??" ? "" : tty;
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * WHO GETS A MAILBOX AT ALL — #417. The session a helm pane (or a benchd session) is hosting,
+ * and nobody else.
+ *
+ * The Claude Code hook is wired globally, so before this every Claude session on the machine
+ * claimed one: 12,497 mailboxes on the operator's machine, 9,704 of them from sessions in temp
+ * directories — Archon's test suites, whose SDK sessions each fired `SessionStart`. Nothing
+ * addresses those, nothing removes them, and helm read every one of them every two seconds.
+ *
+ * **`HELM_PANE` alone is not the answer, and that was measured rather than assumed.** helm
+ * declares it into a pane's shell, and everything that pane's agent spawns inherits it: an
+ * agent's Bash tool, `bun test`, Archon, and the SDK sessions Archon starts. What does not
+ * survive that chain is the TERMINAL. Claude Code runs its Bash tool and its hooks in a fresh
+ * session with no controlling terminal (`ps` says `??`), and pi's bash tool spawns `detached`,
+ * which is the same thing — so anything started from a tool call has none, while the pane's own
+ * agent holds the pane's pty (measured 2026-09-26: the agent on `ttys002`, its Bash tool's shell
+ * and a `SessionStart` hook both on `??`). So the rule is: **declared by a host, and
+ * attached to a terminal.** `BENCH_SESSION` is the host declaration benchd makes, into a pty of
+ * its own, so the same test holds there.
+ *
+ * `HELM_MAIL_DIR` opts in outright: naming a mailroom is a deliberate act, and it is what every
+ * test that claims does. The residual, stated: something started by hand from a pane's own
+ * shell keeps that pane's terminal and so still claims. That is a person typing a command in
+ * helm, which is the case the mailbox is for.
+ *
+ * Pure, with the terminal lookup passed in as a thunk, so a session no host declared never
+ * spawns `ps` at all — and so `hooks/mailbox-conformance.mjs` can run both copies over one
+ * matrix.
+ */
+function claimsAMailbox(env, terminal) {
+	if ((env[ROOT_ENV] ?? "").trim()) return true;
+	const declared = [PANE_ENV, BENCH_SESSION_ENV].some((name) => (env[name] ?? "").trim() !== "");
+	return declared && terminal() !== "";
 }
 
 function readJson(file) {
@@ -651,6 +711,15 @@ if (process.env[OFF_ENV]) process.exit(0);
 const sessionId = input.session_id || process.env.CLAUDE_CODE_SESSION_ID || "";
 const cwd = input.cwd || process.cwd();
 if (!sessionId) process.exit(0);
+
+// Both verbs, not only `claim`: a session with no mailbox has nothing to deliver, and `deliver`
+// would otherwise scan every mailbox on every prompt of every Claude session on the machine to
+// find that out. The terminal asked about is the SESSION's — the registry's pid for it, else this
+// hook's parent, which is the Claude process itself (measured: the hook runs detached, so its
+// own terminal says nothing).
+if (!claimsAMailbox(process.env, () => controllingTerminal(sessionPid(sessionId) ?? process.ppid))) {
+	process.exit(0);
+}
 
 const root = mailRoot();
 
