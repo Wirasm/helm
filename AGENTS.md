@@ -396,6 +396,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   copied system binary on launch, and on 2026-09-25 that was the last event before `syspolicyd`
   (Gatekeeper) hung. That is a correlation, not a proof. The hang cascaded: `tccd`, then
   WindowServer, which the watchdog killed 58 times overnight until a forced reboot.
+  Tests never execute a binary from inside a `.app` they assembled, and any directory with a
+  `Contents/Info.plist` counts as a bundle whatever its name, so seal it with
+  `codesign -s - --force` before running from it or the operator gets a "damaged" dialog (#439).
 - **If a freshly compiled binary won't start, or `git`/`grep` hang for no reason, stop launching
   processes and tell the operator.** A macOS security daemon is stuck, only a reboot clears it,
   and every new launch queues behind it. That night, agents saw exactly this at 00:42 and kept
