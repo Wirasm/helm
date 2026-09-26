@@ -8,7 +8,7 @@ import SwiftUI
 ///
 /// **benchd runs it, not helm**, so it is logged like every other change, dies with the daemon
 /// rather than with the window, and an agent's `bench just` is the same verb. helm only sends
-/// the verb and listens for `just/finished` on the follower (daemon mode); nothing here
+/// the verb and listens for `just/finished` on the follower; nothing here
 /// executes a process.
 ///
 /// **Only his own runs are tracked.** An agent's recipe failing is the agent's to report; the

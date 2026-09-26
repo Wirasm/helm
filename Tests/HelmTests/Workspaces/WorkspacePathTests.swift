@@ -10,7 +10,7 @@ import XCTest
 /// **Not `StandardizedPath`'s discipline, on purpose, past the shared `Codable` shape.**
 /// `StandardizedPath` runs through `URL.standardizedFileURL`, which collapses `.`/`..` and
 /// does not expand `~`. A `WorkspacePath` built the same way would silently re-normalize
-/// every persisted `Workspace`, `BenchSnapshot` and `WorkspaceContext` path on the next
+/// every saved `Workspace`, `BenchSnapshot` and benchd document path on the next
 /// launch — `~/Projects/foo` staying a literal `~` directory, and a path built by any code
 /// that legitimately carries a `.` or `..` segment jumping to a different string. This suite
 /// pins the actual, narrower contract: `FilesystemPath.normalized`'s tilde-expand-plus-trailing-
@@ -97,7 +97,7 @@ final class WorkspacePathTests: XCTestCase {
     }
 
     /// The acceptance criterion #223 names: the wire shape must stay a bare string, not gain
-    /// a wrapper object, so `BenchSnapshot` and `WorkspaceContext` stay byte-identical.
+    /// a wrapper object, so `BenchSnapshot` and the saved list the import reads stay byte-identical.
     func testItRoundTripsAsAPlainString() throws {
         let encoded = try JSONEncoder().encode(WorkspacePath("/tmp/plan"))
 

@@ -67,7 +67,7 @@ struct Workbench: Codable, Equatable {
     }
 
     /// Every terminal pane's id, in bench order — which is exactly what
-    /// `TerminalManager.activate(restoring:)` wants, because a terminal pane's id **is**
+    /// `TerminalManager.adopt(terminals:in:)` wants, because a terminal pane's id **is**
     /// its session id.
     var terminalPaneIDs: [Pane.ID] {
         panes.compactMap { if case .terminal = $0.content { $0.id } else { nil } }
