@@ -187,7 +187,7 @@ final class CanvasModel: ObservableObject {
     /// makes the flush points the load-bearing part rather than the number.
     ///
     /// Every exit helm can see calls `saveDraft()`: switching to Read, closing the pane, pointing
-    /// the canvas at another file, closing the last workspace (`WorkbenchModel.deactivate`), and
+    /// the canvas at another file, its pane or workspace leaving benchd's document, and
     /// **quitting** — `WorkbenchModel` subscribes to `NSApplication.willTerminateNotification`
     /// for exactly this reason, because ⌘Q is the ordinary way to leave and reached none of the
     /// others. What remains is `kill -9`, which nothing can cover — **and an unresolved conflict,

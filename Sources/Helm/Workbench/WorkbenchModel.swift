@@ -264,18 +264,12 @@ final class WorkbenchModel: ObservableObject {
                         agent, in: pane, transcriptExists: agents.transcriptExists)
                 )
             },
-            // **`uniquingKeysWith:`, and first-in-bench-order.** A bench is decoded from
-            // `UserDefaults` and nothing on the way in dedupes pane ids — `normalize()` says so
-            // in its own words: *"unreachable through any mutation — but a decoded bench is not
-            // built by a mutation, so this is not an assertion."* `uniqueKeysWithValues:` traps
-            // on a duplicate, which here is a crash **at mount**, on every relaunch, that the
-            // operator can only escape by hand-editing defaults. `AgentRegistry.rows(in:)` makes
-            // exactly this argument on this same branch and is the reason to make it here too.
-            //
-            // First rather than last, because `Workbench.address(of:)` is a `firstIndex(where:)`
-            // — so the first is the pane `record`, `resume` and `dismissResume` will all act on,
-            // and an offer about the other one would answer a question about a pane nothing
-            // touches.
+            // **`uniquingKeysWith:`, and first-in-bench-order.** A bench arrives decoded from a
+            // document, and nothing helm can check dedupes pane ids on the way in.
+            // `uniqueKeysWithValues:` traps on a duplicate, which here is a crash at the first
+            // showing of a workspace, on every launch. `AgentRegistry.rows(in:)` makes exactly
+            // this argument and is the reason to make it here too. First rather than last,
+            // because `Workbench.pane(_:)` finds the first, so that is the pane an offer is about.
             uniquingKeysWith: { first, _ in first })
     }
 
