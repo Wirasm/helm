@@ -88,7 +88,10 @@ channel instead: benchd posts the notice to a Claude session's inbox socket (whi
 report), and a push that starts no turn in 10 s goes back to the inbox. A spawn hands its prompt
 over in argv as a pointer, so nothing waits for a TUI to draw. pi's channel is its `bench` extension
 (`pi/extensions/bench`), which reports through `bench hook pi`, watches the inbox benchd names
-and starts its own turn when benchd agrees. codex's (a benchd-owned app-server) is next; until
+and starts its own turn when benchd agrees. An agent the operator starts himself
+reports once its harness is wired to the one fixed command: `bench wiring` prints what to add
+to the three files and `bench wiring --check` says what is missing. codex's idle channel (a
+benchd-owned app-server) is next; until
 then its mail waits for its next prompt or tool call, and the ring proof returns with it.
 
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one

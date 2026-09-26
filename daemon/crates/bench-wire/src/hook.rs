@@ -176,6 +176,33 @@ pub fn claude_settings(bench: &str) -> serde_json::Value {
     serde_json::json!({ "hooks": hooks, "crossSessionInbound": "accept" })
 }
 
+/// Every codex event `bench hook codex` is wired to (codex's hooks docs). Unlike Claude, codex
+/// has `Interrupt`, so an Esc needs no reconciler.
+pub const CODEX_EVENTS: [&str; 8] = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PermissionRequest",
+    "Stop",
+    "Interrupt",
+    "SessionEnd",
+];
+
+/// `~/.codex/hooks.json`: `bench hook codex` on every event in [`CODEX_EVENTS`]. codex runs a
+/// hook as a shell string, so the path is quoted. It runs a hook only once its exact
+/// definition has been trusted in `/hooks`, which is why this never changes.
+pub fn codex_hooks(bench: &str) -> serde_json::Value {
+    let handler = serde_json::json!([{ "hooks": [{
+        "type": "command", "command": format!("'{bench}' hook codex"), "timeout": 5,
+    }]}]);
+    let hooks: serde_json::Map<String, serde_json::Value> = CODEX_EVENTS
+        .iter()
+        .map(|event| ((*event).to_string(), handler.clone()))
+        .collect();
+    serde_json::json!({ "hooks": hooks })
+}
+
 /// Who gets a mailbox (#427, the rule moved here from both writers): a session a host
 /// declared — helm's `HELM_PANE` or benchd's `BENCH_SESSION` — **and** that runs on a
 /// terminal.
@@ -258,7 +285,8 @@ pub fn standing_rule(handle: &str) -> String {
     format!(
         "You are `{handle}` on the bench. Bench mail reaches you as a line \
          `You have mail from <sender>: <path>`. When you see one, read that file with your \
-         tools before your next step. Send with `bench mail send --to <handle> --body <text>`; \
+         tools before your next step. Send with \
+         `bench mail send --from {handle} --to <handle> --body <text>`; \
          `bench sessions --all` lists who you can mail."
     )
 }
@@ -397,6 +425,17 @@ mod tests {
         for event in PI_EVENTS {
             assert!(transition(Harness::Pi, event, None).is_some(), "{event}");
         }
+    }
+
+    #[test]
+    fn every_wired_codex_event_means_something() {
+        for event in CODEX_EVENTS {
+            assert!(transition(Harness::Codex, event, None).is_some(), "{event}");
+        }
+        assert_eq!(
+            codex_hooks("/b/bench")["hooks"]["Interrupt"][0]["hooks"][0]["command"],
+            "'/b/bench' hook codex"
+        );
     }
 
     #[test]

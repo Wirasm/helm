@@ -32,6 +32,7 @@ fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let code = match raw.first().map(String::as_str) {
         Some("hook") => hook(raw.get(1).map(String::as_str)),
+        Some("wiring") => wiring(raw.get(1).map(String::as_str)),
         _ => run(),
     };
     process::exit(code);
@@ -62,6 +63,8 @@ fn usage() -> &'static str {
      \x20               [--body-file <p>] [--subject <s>] [--from <h>]\n\
      \x20     mail list [--handle <h>]            metadata only, unread first\n\
      \x20     mail read <id> [--handle <h>]       body + retirement (inbox -> read)\n\
+     \x20     wiring [--check]                    what to add once so agents you start report to
+     \x20                                         benchd; --check says what is missing (exit 3)
      \x20     hook <claude|codex|pi>              the sensor, wired into an agent's own hooks: reads\n\
      \x20                                         the hook payload on stdin, reports it, prints the\n\
      \x20                                         agent's mail as hook context; always exits 0\n\
@@ -503,6 +506,100 @@ fn parse_surface(raw: &str) -> Result<Surface, String> {
                 "--surface is browser, terminal or file:<path>, not {raw:?}"
             )),
         },
+    }
+}
+
+/// `bench wiring`: what to add, once per machine, so an agent the operator starts himself
+/// reports to benchd — the settings and hooks files, and pi's extension. The command is always
+/// this `bench`, by absolute path, so the wiring never changes and codex trusts it once.
+/// benchd gives the sessions it spawns the same wiring on its own.
+///
+/// `bench wiring --check` reads the files and says what is missing: exit 0 when all of it is
+/// there, 3 when something is not. It never writes them.
+fn wiring(mode: Option<&str>) -> i32 {
+    let bench = match std::env::current_exe().and_then(|p| p.canonicalize()) {
+        Ok(p) => p.display().to_string(),
+        Err(e) => return fail(&format!("cannot find this bench: {e}")),
+    };
+    let Ok(home) = std::env::var("HOME").map(PathBuf::from) else {
+        return refuse("HOME is not set; bench cannot find the files to wire");
+    };
+    let claude_file = home.join(".claude/settings.json");
+    let codex_file = home.join(".codex/hooks.json");
+    let pi_link = home.join(".pi/agent/extensions/bench");
+    match mode {
+        None => {
+            let plan = json!({
+                "bench": bench,
+                "claude": {
+                    "file": claude_file,
+                    "merge": bench_wire::hook::claude_settings(&bench),
+                },
+                "codex": {
+                    "file": codex_file,
+                    "merge": bench_wire::hook::codex_hooks(&bench),
+                    "then": "open codex once and trust the hook in /hooks",
+                },
+                "pi": {
+                    "link": pi_link,
+                    "to": "<helm checkout>/pi/extensions/bench",
+                },
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&plan).unwrap_or_default()
+            );
+            0
+        }
+        Some("--check") => {
+            let read = |path: &PathBuf| -> Value {
+                std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok())
+                    .unwrap_or(Value::Null)
+            };
+            let wired = |file: &Value, events: &[&str], want: &Value| -> Vec<String> {
+                events
+                    .iter()
+                    .filter(|event| {
+                        !file["hooks"][**event].as_array().is_some_and(|groups| {
+                            groups
+                                .iter()
+                                .any(|g| g["hooks"].as_array().is_some_and(|hs| hs.contains(want)))
+                        })
+                    })
+                    .map(|e| (*e).to_string())
+                    .collect()
+            };
+            let claude = read(&claude_file);
+            let codex = read(&codex_file);
+            let claude_want =
+                &bench_wire::hook::claude_settings(&bench)["hooks"]["Stop"][0]["hooks"][0];
+            let codex_want = &bench_wire::hook::codex_hooks(&bench)["hooks"]["Stop"][0]["hooks"][0];
+            let claude_missing = wired(&claude, &bench_wire::hook::CLAUDE_EVENTS, claude_want);
+            let codex_missing = wired(&codex, &bench_wire::hook::CODEX_EVENTS, codex_want);
+            let inbound = claude["crossSessionInbound"] == "accept";
+            let pi = pi_link.join("index.ts").is_file();
+            let report = json!({
+                "bench": bench,
+                "claude": { "file": claude_file, "missing_events": claude_missing,
+                            "cross_session_inbound_accept": inbound },
+                "codex": { "file": codex_file, "missing_events": codex_missing },
+                "pi": { "link": pi_link, "installed": pi },
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
+            if claude_missing.is_empty() && codex_missing.is_empty() && inbound && pi {
+                0
+            } else {
+                Status::Refused.exit_code()
+            }
+        }
+        Some(other) => refuse(&format!(
+            "bench wiring takes no argument or --check, not {other:?}"
+        )),
     }
 }
 
