@@ -44,43 +44,89 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The path gate below diffs against the base branch, which needs its history.
+          fetch-depth: 0
 
       # Printed before anything can fail, because the first red run cost an evening to diagnose
-      # and one line would have answered it.
+      # and one line would have answered it. Its hash keys the .build cache, because a build
+      # from another compiler is not one this compiler can reuse.
       - name: toolchain
+        id: toolchain
         run: |
           swift --version
           xcodebuild -version
+          echo "hash=$(swift --version 2>&1 | shasum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
-      # The patched libghostty is gitignored, so a fresh checkout has nothing to link
-      # against. First and not optional — the same sentence AGENTS.md opens with.
-      - name: patch libghostty
-        run: bash scripts/patch-libghostty.sh
-
-      - name: build
-        run: swift build
-
-      # TerminalKeyboardTests and WorkbenchFocusRoutingTests need a real ghostty surface,
-      # and a surface needs an ACTIVE display (#253). A CI runner has none, so those two
-      # would fail here for a reason that is not the diff. Excluded rather than tolerated:
-      # a gate whose red is sometimes meaningless is a gate nobody reads.
-      #
-      # INJECTION_NOGENERICS=1 is not optional with --skip. Anything that makes SwiftPM
-      # enumerate goes through `swiftpm-xctest-helper`, which dies with `signalled(10)`
-      # when InjectionNext rebinds symbols under it — AGENTS.md documents this for
-      # `--filter` and it is the same path. Measured: without it, `--skip` dies the same
-      # way; with it, 1041 tests, 0 failures.
-      - name: test
-        run: INJECTION_NOGENERICS=1 swift test --skip TerminalKeyboardTests --skip WorkbenchFocusRoutingTests
-
-      # `make lint` is formatting plus the size and complexity limits (scripts/check-size.sh).
-      - name: format
-        run: make lint
-
-      - name: xcodegen
+      # A PR that changes only paths no Swift build or test reads (docs/, pi/, daemon/ except
+      # its fixtures, markdown outside Sources/, Tests/ and skills) skips every step below, and
+      # the job still reports success: it is a required check, and a required check that never
+      # reports blocks the merge forever. The rule is `swift_ignores` in scripts/check.sh; any
+      # path it does not name runs the job. A push to development always runs. Lint skips on
+      # the same answer: every path it reads is one that runs this gate.
+      - name: does this change need the Swift gate?
+        id: needs
         run: |
-          brew install xcodegen
-          xcodegen generate
+          if [ "${{ github.event_name }}" != pull_request ] \
+              || bash scripts/check.sh --needs swift "origin/${{ github.base_ref }}"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "only paths the Swift gate cannot read changed; skipping (scripts/check.sh swift_ignores)"
+          fi
+
+      # The pinned SwiftLint binary (tools/lint), about 25s to download otherwise.
+      - name: cache SwiftLint
+        if: steps.needs.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: tools/lint/.build
+          key: swiftlint-${{ runner.os }}-${{ hashFiles('tools/lint/Package.swift') }}
+
+      # Lint first: format and size findings arrive before the build and tests instead of after
+      # them. `scripts/check.sh` defines every part, so this job and `just check` run the
+      # same commands.
+      - name: lint
+        if: steps.needs.outputs.run == 'true'
+        run: bash scripts/check.sh lint
+
+      - name: install xcodegen
+        if: (success() || failure()) && steps.needs.outputs.run == 'true'
+        run: brew install xcodegen
+
+      # Dependencies resolved, the GhosttyKit binary downloaded and the dependencies compiled,
+      # as of the last push to development. PRs only restore: a cache saved per PR would churn
+      # the repository's 10 GB limit for something only that PR's reruns could read. helm's
+      # own sources recompile anyway, because checkout gives every file a new mtime.
+      - name: restore .build
+        if: (success() || failure()) && steps.needs.outputs.run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .build
+          key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'scripts/patch-libghostty.sh', 'Patches/**') }}
+          restore-keys: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-
+
+      # Patch, build, test, xcodegen. Runs even when lint failed, so one push shows both.
+      #
+      # HELM_CHECK_HEADLESS=1 skips TerminalKeyboardTests and WorkbenchFocusRoutingTests:
+      # they need a real ghostty surface, and a surface needs an ACTIVE display (#253). A CI
+      # runner has none, so those two would fail here for a reason that is not the diff.
+      # Excluded rather than tolerated: a gate whose red is sometimes meaningless is a gate
+      # nobody reads. scripts/check.sh is the one place the skip is spelled, together with
+      # the INJECTION_NOGENERICS=1 that `--skip` needs (AGENTS.md).
+      - name: build · test · xcodegen
+        id: swift
+        if: (success() || failure()) && steps.needs.outputs.run == 'true'
+        env:
+          HELM_CHECK_HEADLESS: '1'
+        run: bash scripts/check.sh swift
+
+      - name: save .build
+        if: github.event_name == 'push' && steps.swift.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: .build
+          key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'scripts/patch-libghostty.sh', 'Patches/**') }}
 
   # Separate job because it needs node and the Swift gate must not: a Swift contributor
   # should never need a JS toolchain to go green, which is why AGENTS.md keeps these apart.
@@ -114,19 +160,16 @@ jobs:
           # and the pin was wrong.
           node-version: '22.18'
       - name: hooks gate
-        run: bash hooks/test.sh
+        run: bash scripts/check.sh hooks
 
   skills:
     name: skill gates
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - name: mail skills
-        run: bash .claude/skills/helm-mail-cc/test.sh
-      - name: canvas skill
-        run: bash .claude/skills/helm-canvas/test.sh
-      # Needs node, which this job already has by virtue of the runner image. A gate that
-      # exists, is documented in AGENTS.md, and runs only when somebody remembers is the
-      # drift this workflow exists to stop — #291 is the same lesson from the other side.
-      - name: board skill
-        run: bash .claude/skills/helm-board/test.sh
+      # All three skill gates: mail, canvas and board (scripts/check.sh). The board gate needs
+      # node, which this job already has by virtue of the runner image. A gate that exists, is
+      # documented in AGENTS.md, and runs only when somebody remembers is the drift this
+      # workflow exists to stop — #291 is the same lesson from the other side.
+      - name: skill gates
+        run: bash scripts/check.sh skills
