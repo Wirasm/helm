@@ -15,7 +15,7 @@ use crate::sessions::{self, Refusal};
 use crate::{Core, now_rfc3339};
 use bench_doc::PaneId;
 use bench_wire::hook::{self, Transition};
-use bench_wire::{Activity, HookArgs, HookReply, HostedSession, HostedVia, SessionKey};
+use bench_wire::{Activity, Harness, HookArgs, HookReply, HostedSession, HostedVia, SessionKey};
 use serde_json::{Value, json};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
@@ -33,6 +33,9 @@ pub struct Agent {
     pub told: bool,
     /// Claude's inbox socket, as its hooks last reported it.
     pub socket: Option<PathBuf>,
+    /// pi: its extension watches its own inbox and starts its own turn (`wake`), so benchd
+    /// never pushes to it but can promise a send will wake it.
+    pub wakes_itself: bool,
     pub push: Push,
     /// When its hook last reported.
     pub seen: Instant,
@@ -49,8 +52,9 @@ pub enum Push {
 }
 
 impl Agent {
-    fn new(handle: String) -> Agent {
+    fn new(handle: String, harness: Harness) -> Agent {
         Agent {
+            wakes_itself: harness == Harness::Pi,
             handle,
             activity: None,
             told: false,
@@ -62,7 +66,7 @@ impl Agent {
 
     /// benchd can start a turn for it: a channel it reported, not known to hold pushes.
     pub fn can_push(&self) -> bool {
-        self.socket.is_some() && !matches!(self.push, Push::Held)
+        (self.socket.is_some() || self.wakes_itself) && !matches!(self.push, Push::Held)
     }
 
     /// Take in one event. Returns the activity when it changed.
@@ -109,7 +113,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
     let hands_out = hook::carries_context(args.harness, &args.event, tool);
 
     // Under the lock: who this is, and what it is doing now. No mailbox is read here.
-    let (handle, rule) = {
+    let (handle, rule, idle, root) = {
         let mut c = core.lock().unwrap();
         if transition.is_none()
             && c.unknown_hook_events
@@ -134,7 +138,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
         if !c.agents.contains_key(&key) {
             let agent = address(&mut c, &args, &key)
                 .map_err(Refusal::Failed)?
-                .map(Agent::new);
+                .map(|handle| Agent::new(handle, args.harness));
             c.agents.insert(key.clone(), agent);
         }
         let Some(Some(agent)) = c.agents.get_mut(&key) else {
@@ -142,7 +146,10 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
         };
         let changed = agent.observe(&args, transition);
         let handle = agent.handle.clone();
-        let rule = hands_out && !agent.told;
+        let idle = agent.activity == Some(Activity::Idle);
+        // The rule is owed once per session, decided here under the lock so two hooks firing
+        // at once cannot both tell it. pi keeps it in its system prompt instead (`rule` below).
+        let rule = hands_out && !agent.told && args.harness != Harness::Pi;
         if rule {
             agent.told = true;
         }
@@ -153,51 +160,71 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             )
             .map_err(Refusal::Failed)?;
         }
-        (handle, rule)
+        (handle, rule, idle, c.root.clone())
     };
-
-    if !hands_out {
-        return Ok(json!(HookReply {
+    // pi's extension asks for its mail when it sees its inbox change while it is idle, and
+    // hands it to `sendUserMessage`, which starts a turn: benchd's wake cap decides.
+    let wake = args.harness == Harness::Pi && args.event == "wake";
+    let hands_out = hands_out
+        && (!wake
+            || idle
+                && bench_mail::unread(&root, &handle) > 0
+                && core.lock().unwrap().take_wake_token(&handle));
+    // When pi starts it learns what to watch, and the rule for its system prompt (see
+    // `HookReply.rule`).
+    let starting = args.harness == Harness::Pi && args.event == "session_start";
+    let inbox = starting.then(|| bench_mail::inbox_dir(&root, &handle).display().to_string());
+    let pi_rule = starting.then(|| hook::standing_rule(&handle));
+    let mut reply = if hands_out {
+        let channel = if wake { "pi" } else { "hook" };
+        hand_out(core, &handle, rule, &args.event, channel)?
+    } else {
+        HookReply {
             handle: Some(handle),
-            context: None,
-        }));
-    }
-
-    hand_out(core, handle, rule, &args.event)
+            ..HookReply::default()
+        }
+    };
+    reply.inbox = inbox;
+    reply.rule = pi_rule;
+    Ok(json!(reply))
 }
 
 /// Outside the lock: the mailbox. A rename per message decides who hands it out. The reply's
 /// context is the standing rule when it is owed, then one pointer per message.
 fn hand_out(
     core: &Arc<Mutex<Core>>,
-    handle: String,
+    handle: &str,
     rule: bool,
     event: &str,
-) -> Result<Value, Refusal> {
+    channel: &str,
+) -> Result<HookReply, Refusal> {
     let root = core.lock().unwrap().root.clone();
-    let taken = bench_mail::take_unread(&root, &handle);
+    let taken = bench_mail::take_unread(&root, handle);
     if !taken.is_empty() {
-        let mut c = core.lock().unwrap();
         let ids: Vec<&str> = taken.iter().map(|t| t.id.as_str()).collect();
-        c.append(
-            "mail/delivered",
-            json!({ "handle": handle, "mail": ids, "channel": "hook", "event": event }),
-        )
-        .map_err(Refusal::Failed)?;
+        core.lock()
+            .unwrap()
+            .append(
+                "mail/delivered",
+                json!({ "handle": handle, "mail": ids, "channel": channel, "event": event }),
+            )
+            .map_err(Refusal::Failed)?;
     }
     let mut lines: Vec<String> = Vec::new();
     if rule {
-        lines.push(hook::standing_rule(&handle));
+        lines.push(hook::standing_rule(handle));
     }
     lines.extend(
         taken
             .iter()
             .map(|t| hook::notice(&t.from, &t.path.display().to_string())),
     );
-    Ok(json!(HookReply {
-        handle: Some(handle),
+    Ok(HookReply {
+        handle: Some(handle.to_string()),
         context: (!lines.is_empty()).then(|| lines.join("\n")),
-    }))
+        inbox: None,
+        rule: None,
+    })
 }
 
 /// The handle of a session reporting for the first time in this daemon's life, or `None`
@@ -454,7 +481,7 @@ fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
             .iter()
             .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
             .filter(|(key, a)| {
-                key.harness == bench_wire::Harness::Claude
+                key.harness == Harness::Claude
                     && a.can_push()
                     && matches!(a.push, Push::Ready)
                     && a.activity.as_ref().is_some_and(|x| *x != Activity::Idle)
