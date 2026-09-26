@@ -57,6 +57,7 @@ extension Pane.Content {
         case let .terminal(agent): self = .terminal(agent: agent.map(ResumableAgent.init))
         case let .canvas(path): self = .canvas(.file(path))
         case .browser: self = .browser
+        case .sessions: self = .sessions
         case let .unsupported(kind): self = .unsupported(kind)
         }
     }
@@ -69,6 +70,7 @@ extension Surface {
         case let .terminal(agent): self = .terminal(agent: agent.map(BenchDocument.Agent.init))
         case let .canvas(source): self = .canvas(path: source.fileURL.path)
         case .browser: self = .browser
+        case .sessions: self = .sessions
         case .unsupported: return nil
         }
     }

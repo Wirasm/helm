@@ -1130,7 +1130,8 @@ the daemon gate's conformance suite.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
   start`, drive it with `playwright-cli attach`, and badge his browser drawer with `openBrowser`.
 - **`bench-sessions`** — who is working in a workspace (`bench sessions --all`), and what any of
-  them did (`bench log <id>`, #421), read from the transcript without mailing the agent.
+  them did (`bench log <id>`, #421), read from the transcript without mailing the agent. The
+  operator sees the same list in the `sessions` drawer (⌘⇧S, `Sources/Helm/Sessions/`).
 
 ### The two helm-local subagents
 

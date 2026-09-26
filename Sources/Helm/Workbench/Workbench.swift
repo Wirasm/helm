@@ -913,6 +913,8 @@ struct Pane: Codable, Equatable, Identifiable {
         /// A view onto the shared browser benchd runs (#350). No payload: there is one
         /// browser per bench root, and which tab it shows is live state, not arrangement.
         case browser
+        /// The active workspace's agent sessions (#384), in the `sessions` drawer.
+        case sessions
         /// A kind benchd's document holds and this build does not know, named. Kept rather than
         /// dropped: the daemon owns the pane, so helm shows a placeholder where it is. Only a
         /// daemon's document makes one; nothing helm saves ever holds one.
@@ -966,13 +968,14 @@ extension Pane.Content {
     /// The discriminator: which kind of pane this is, without its payload. It is the stored
     /// `kind` string, and it is what `SurfaceRegistry` looks a kind up by — the one switch over
     /// pane kinds that the rest of the app is spared.
-    enum Kind: String, Codable, Hashable { case terminal, canvas, browser, unsupported }
+    enum Kind: String, Codable, Hashable { case terminal, canvas, browser, sessions, unsupported }
 
     var kind: Kind {
         switch self {
         case .terminal: .terminal
         case .canvas: .canvas
         case .browser: .browser
+        case .sessions: .sessions
         case .unsupported: .unsupported
         }
     }
@@ -1005,6 +1008,7 @@ extension Pane.Content: Codable {
                     ?? nil)
         case .canvas: self = .canvas(try container.decode(CanvasSource.self, forKey: .source))
         case .browser: self = .browser
+        case .sessions: self = .sessions
         // Only a daemon's document makes one, and helm saves nothing in daemon mode; written and
         // read with its name all the same, so a placeholder that ever is saved comes back whole.
         case .unsupported:
@@ -1030,6 +1034,8 @@ extension Pane.Content: Codable {
             try container.encode(source, forKey: .source)
         case .browser:
             try container.encode(Kind.browser, forKey: .kind)
+        case .sessions:
+            try container.encode(Kind.sessions, forKey: .kind)
         case let .unsupported(named):
             try container.encode(Kind.unsupported, forKey: .kind)
             try container.encode(named, forKey: .named)

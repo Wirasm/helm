@@ -90,6 +90,8 @@ extension Surface {
     fileprivate init?(keymapSpelling text: String) {
         if text == "browser" {
             self = .browser
+        } else if text == "sessions" {
+            self = .sessions
         } else if text.hasPrefix("file:"), text.count > "file:".count {
             self = .canvas(
                 path: (String(text.dropFirst("file:".count)) as NSString)
@@ -104,6 +106,7 @@ extension Surface {
     fileprivate var keymapSpelling: String {
         switch self {
         case .browser: "browser"
+        case .sessions: "sessions"
         case let .canvas(path): "file:" + path
         case .terminal: "terminal"
         case let .unsupported(kind): kind
@@ -173,7 +176,7 @@ struct KeymapArguments: Equatable {
 
     func none(_ action: String) throws(KeymapProblem) { try only([], action) }
 
-    /// A drawer's name, and the surface it starts with if it is empty: `browser`, or
+    /// A drawer's name, and the surface it starts with if it is empty: `browser`, `sessions`, or
     /// `file:<path>` for a canvas.
     func drawer(_ action: String) throws(KeymapProblem) -> (name: String, surface: Surface?) {
         try only(["name", "surface"], action)
@@ -186,7 +189,8 @@ struct KeymapArguments: Equatable {
         guard let parsed = Surface(keymapSpelling: surface) else {
             throw KeymapProblem(
                 line: nil,
-                reason: "'\(action)' surface is browser or file:<path>, not '\(surface)'")
+                reason:
+                    "'\(action)' surface is browser, sessions or file:<path>, not '\(surface)'")
         }
         return (name, parsed)
     }

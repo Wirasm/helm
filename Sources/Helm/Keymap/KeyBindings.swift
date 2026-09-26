@@ -123,6 +123,11 @@ enum KeyBindings {
             .character("b"), [.command, .shift],
             .verb(.toggleDrawer(name: "browser", surface: .browser)), hint: "browser",
             menu: "Shared Browser"),
+        // ⌘⇧S — every agent session in the workspace, in a drawer on the left (#384).
+        KeyBinding(
+            .character("s"), [.command, .shift],
+            .verb(.toggleDrawer(name: "sessions", surface: .sessions)), hint: "sessions",
+            menu: "Sessions"),
     ]
 
     /// No hint (`KeyHint`'s header says why), but every one keeps a menu item or a key.
