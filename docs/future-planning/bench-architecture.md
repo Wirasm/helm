@@ -189,7 +189,9 @@ Decision:
 5. **Terminals**: benchd owns every pty and runs a VT engine per session (`libghostty-vt`,
    prebuilt and pinned to helm's Ghostty commit); helm keeps Ghostty's
    renderer through the attach relay. No custom painter.
-6. **Cross-machine means files**: the record syncs as a folder over Tailscale. No socket
-   exposure and no peering protocol until files prove not to be enough.
+6. **Cross-machine means the socket** (reversed 2026-09-26; was "cross-machine means
+   files"): helm on another machine reaches benchd only through its socket, which benchd
+   binds on its tailnet address beside the Unix one. One helm follows one benchd; no
+   peering. Roadmap M5c (#459).
 7. **Not a browser driver**: the bench supervises one shared browser and shows it; agents drive
    it with their own Playwright.

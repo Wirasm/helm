@@ -229,6 +229,6 @@ Landed: M0 skeleton, M5a daemon ptys, mail, the shared browser (#350), and M4 (t
 document in benchd, and helm as its only client: #354). Next, in order (tracking issue #362):
 M2 finish, one mailroom (helm's mail hooks become sensors) →
 M3 `bench` as the whole agent surface → drawers, keymap and rules → M1 attention → M5b every pane a benchd session
-→ M6 sync the record over Tailscale → M7 the agents' own machine. Each milestone: new event
+→ M5c helm reaches benchd over the tailnet → M7 the agents' own machine. Each milestone: new event
 kinds, new verbs, same spine. The roadmap is the sequence; the operator names the milestone
 that starts.

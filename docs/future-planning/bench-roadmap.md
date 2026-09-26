@@ -11,20 +11,19 @@ proves each step, and what gets unwired when.
 mail, the event log — and the SwiftUI app becomes a window that renders daemon state and
 turns keys into verbs. The operator and the agents go through the same door, `bench
 <verb>`, and an agent's verb lands in the background unless the operator asked for it.
-Later, a second machine (the forge) runs the same daemon so agents get their own
-always-on box; the two share the record as a synced folder. Migration is strangler-style
+Later, a second machine (the forge) runs benchd and the agents on their own always-on box,
+and helm on the Mac is a window onto it over the tailnet (M5c). Migration is strangler-style
 inside this repo: one vertical at a time, old code unwired only when the new is proven.
 **The target shape — seven primitives, the focus rule, drawers and rules, who owns what,
 and the terminal stack — is `bench-architecture.md`, approved 2026-09-25. Read it before
 this file.**
 
 **Everything is built and proven on one machine — the operator's Mac — first.** The
-second machine is not added until M0–M6 are done and living well in daily use; do not
-stand up a forge, a VM, or a remote peer "to test peering" before then. The design is
-machine-count invariant on purpose (topology is config), so nothing in M0–M6 needs a
-second machine to be built correctly — M6 (Sync) makes the Mac's record a synced
-folder and proves show-requests as files; it does not add a machine — and `BENCH_SUITE`
-gives every isolation the early milestones need without one.
+second machine is not added until M0–M5c are done and living well in daily use; do not
+stand up a forge or a VM before then. The design is machine-count invariant on purpose
+(topology is config), so nothing before M7 needs a second machine to be built correctly —
+M5c builds the remote bench against a `BENCH_SUITE` benchd reached over TCP on the same
+Mac — and `BENCH_SUITE` gives every isolation the early milestones need without one.
 
 ## Invariants — violating any of these is wrong even if it works
 
@@ -51,14 +50,24 @@ Each is argued in the audit doc; this is the checklist form.
    prompts effectively never fire. `blocked` is defined by bench signals
    (ended-on-a-question, stalled, idle-with-mail, errored, limited). Approvals exist
    only as voluntary agent-posted decision items.
-5. **Cross-machine means files.** The record syncs as a folder over Tailscale. An agent
-   on another machine shows the operator something by writing the artifact and a
-   request file into the synced folder; the local benchd applies it in the background.
-   Verbs stay host-local.
-6. **No socket exposure and no peering until files prove not to be enough.** The
-   daemon socket is never put on the network and benchd ⇄ benchd peering is not built
-   while the synced folder does the job. The tailnet is the transport for the sync; no
-   logins or tokens are added anywhere.
+5. **Cross-machine means the socket.** The record lives on the machine that runs
+   benchd. helm on another machine reaches it only through benchd's socket — verbs, the
+   follower, attach streams, and (M5c) files, screenshots and the browser — and reads,
+   writes or dials nothing on benchd's machine any other way. An agent on the forge shows
+   the operator something with an ordinary `bench open`.
+6. **benchd listens on its tailnet address; no peering.** benchd may bind TCP on its
+   tailnet address beside its Unix socket. The tailnet is the trust boundary: no logins
+   or tokens are added anywhere. One helm follows one benchd, and benchd ⇄ benchd
+   peering is not built.
+
+   *Invariants 5 and 6 were reversed on 2026-09-26.* They read "cross-machine means
+   files" (a synced record folder, show-requests as request files, verbs host-local) and
+   "no socket exposure". The spike (`spike-remote-bench-tunnel.md` in
+   `~/.prp/helm-3ec376fc/spikes/`, summarised on #459) ran today's helm and `bench`
+   against a benchd reachable only through a forwarded socket: every verb, the follower,
+   mail and a live `bench attach` worked, at 0.2 ms added per verb on loopback. What broke
+   was only what helm reaches around the socket, each with a verb-sized fix. With verbs
+   crossing the link, a request-file path would be a second door.
 7. **Files are the record.** Mail, tasks, events, artifacts persist as files a plain
    `ls`/`cat` can read; sockets are transport, never the only copy.
 8. **Agents own the bench's evolution.** They build it in this repo, test against an
@@ -191,8 +200,10 @@ against the real CLI.
 >    Ghostty surface; a VT engine in benchd (`libghostty-vt`, settled by spike 2026-09-25,
 >    prebuilt and pinned to helm's Ghostty) gives `get screen` / `send` / `watch`. No custom
 >    painter.
-> 7. **M6** (#360) — sync: the record root as a synced folder, show-requests as files.
-> 8. **M7** (#361) — the second machine, same entry condition as before.
+> 7. **M5c** (#459) — the remote bench: helm reaches a benchd on another machine through
+>    its socket alone. Built and tested on one Mac.
+> 8. **M6** (#360) — retired by M5c (2026-09-26); nothing to build.
+> 9. **M7** (#361) — the second machine, same entry condition as before.
 >
 > The earlier order (2026-08-18: M5a → M2 mail → M1 attention) is done as far as it
 > went; attention moved later again because where it lives is now a drawer.
@@ -448,50 +459,80 @@ it matches what is on screen.
 restore-offer machinery (`awaitingRestore`/`resumable` — mostly dissolved), and the OSC
 push path in `CanvasPush` (replaced by `bench open`). libghostty stays as the renderer.
 
-## M6 — Sync (still one machine)
+## M5c — The remote bench
 
-Issue: #360. **Rewritten 2026-09-25**: cross-machine means files (invariants 5 and 6). This replaces
-the earlier "Reach" plan, which put the daemon socket on the tailnet.
+Issue: #459. **Added 2026-09-26**, with invariants 5 and 6 reversed. Evidence: the
+spike summarised on #459 (verdict CONDITIONAL).
 
-**Goal:** the record root is a folder that syncs over Tailscale, and showing something
-across machines is a file, not a connection.
+**Goal:** helm is a window onto a benchd on another machine. Terminal panes stream bytes
+through `bench attach`; everything else helm needs from benchd's machine goes through
+benchd's socket. A local bench keeps working at every step: a local address is the Unix
+socket, and `file/read` on the same machine is still a read.
 
-- The record root (mail, artifacts, notes, state, config) as a synced folder over the
-  tailnet.
-- **Show-requests as files**: an agent on another machine writes the artifact and a
-  request file into the synced folder; the local benchd picks it up and applies it in
-  the background, exactly as a local agent verb without `--asked` would land.
-- No socket exposure, no remote attach, no peering protocol. Phone and laptop reach come
-  later, if wanted, and only once files have proved not to be enough.
+**After M5b**, because until then a plain terminal pane is a Mac shell in a workspace
+path that exists only on the forge. Built and tested on one Mac against a `BENCH_SUITE`
+benchd over TCP; no second machine needed.
 
-**Prove:** a request file written into the synced folder from another device lands as a
-background tab on the Mac without moving focus.
-**Unwire:** nothing.
+1. **Name a benchd by address.** `BENCH_URL` (`unix:<path>` or `tcp://host:port`) in
+   `bench-wire`, the CLI and helm; `benchd --listen tcp://<tailnet addr>:<port>` beside
+   its Unix socket. helm stops deriving the socket path from the bench root.
+2. **Attach that survives.** `bench attach` reattaches while the session lives, with ring
+   replay; helm runs its own `bench`, not benchd's `status.bench` path, and checks
+   `status.version`.
+3. **Files through benchd.** `file/read`, `file/write`, `file/append` and a `file/changed`
+   event. Canvases, drafts, notes sidecars, state latches, the failed-run log and
+   transcripts move onto them.
+4. **Screenshots as bytes** in `helm/answer`; `bench` writes `--out` on its own side.
+5. **The browser through the socket**: the endpoint from `browser/status`, CDP relayed by
+   benchd as a stream. No second port crosses the link.
+6. **helm-local things stay local**: the keymap moves to a helm-local path; `BenchImport`
+   is skipped for a remote bench.
+7. **Workspaces by remote path**, with no `~` expansion against the Mac's HOME. The rail
+   and `⌘⇧N` notes are hidden for a remote bench at first.
+8. **Presence from benchd**: dots and the resume offer from benchd's session state;
+   `pane/record` replaces benchd reading helm's `snapshot.json`.
+
+**Transport:** benchd's TCP listener on the tailnet address. `ssh -L` of the Unix socket
+with plain OpenSSH works today with no code change and is the bridge until step 1 lands.
+Tailscale SSH cannot forward Unix sockets (tailscale/tailscale#6232).
+
+**Prove:** a markdown and an HTML canvas that exist only under the remote root render,
+live-update, take a note that reaches the agent by mail, and autosave; kill the link for
+30 s and every attached pane resumes without a keypress.
+**Unwire:** helm's direct reads of the bench root (canvas files, `endpoint.json`,
+`<root>/benchd.sock`) and benchd's read of `snapshot.json`.
+
+## M6 — Retired
+
+Issue: #360. **Retired 2026-09-26 by M5c.** M6 was a synced record folder and
+show-requests as files. With verbs crossing the link, an agent on the forge shows the
+operator something with `bench open`, and the record stays on the forge, so neither is
+needed. A read-only mirror of the forge's record for when the link is down is an option,
+not a plan.
 
 ## M7 — The forge
 
 Issue: #361.
 
-**Goal:** the agents' own machine, sharing the record with the Mac through M6's synced
-folder.
+**Goal:** the agents' own machine: benchd on the forge, and helm's `BENCH_URL` pointed at
+it.
 
-**Entry condition: M0–M6 complete and proven in daily use on the Mac.** This milestone
+**Entry condition: M0–M5c complete and proven in daily use on the Mac.** This milestone
 starts when the second machine is actually purchased and wanted — not before, and never
 as a way to test earlier milestones.
 
 - Linux support proven for `benchd` + `bench` + taps (should be near-free; verify).
-- The same benchd on the agents' box, sharing the record through M6's synced folder:
-  mail and show-requests cross machines as files. No benchd ⇄ benchd peering and no
-  cross-host verbs (invariants 5 and 6); add a protocol only if files prove not to be
-  enough.
+- benchd on the forge, listening on its tailnet address; helm on the Mac follows it.
 - Per-host policy files: operator refusals on the Mac; wide posture and wider allowlist
   on the forge.
 - Setup on the forge: the shared agent GitHub account and shared keys (decision 4);
-  backup cron for `~/.bench` and the artifact stores (the one messiness exception).
+  backup cron for the forge's `~/.bench` and the artifact stores (the one messiness
+  exception).
 - Phone push for attention items (ntfy or similar on the tailnet).
 
-**Prove:** sleep the Mac for an hour mid-fleet; wake it; nothing on the forge noticed.
-An artifact shown from the forge lands on the Mac bench once the folder syncs.
+**Prove:** sleep the Mac for an hour mid-fleet; wake it; nothing on the forge noticed and
+every pane reattaches. An artifact an agent on the forge opens with `bench open` lands on
+the Mac bench in the background.
 **Unwire:** nothing — this milestone only adds a machine.
 
 ## Alongside the milestones — the shared browser (#350)
