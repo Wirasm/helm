@@ -74,7 +74,7 @@ struct RootView: View {
             if workbench.mode.client != nil {
                 // benchd holds the workspaces and their benches; helm follows the document and
                 // saves none of it.
-                workbench.documentFollower = { [model, workbench] document in
+                workbench.followDocuments { [model, workbench] document in
                     model.follow(document)
                     BenchImport.runOnce(into: document, from: model, through: workbench)
                 }

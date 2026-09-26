@@ -166,8 +166,16 @@ final class WorkbenchModel: ObservableObject {
     private var verbFailureTask: Task<Void, Never>?
 
     /// Handed each document once the bench is drawn from it, so whoever holds the workspace list
-    /// (`RootView`) can follow the document's workspaces too.
-    var documentFollower: ((BenchDocument) -> Void)?
+    /// (`RootView`) can follow the document's workspaces too. Set through `followDocuments`.
+    private var documentFollower: ((BenchDocument) -> Void)?
+
+    /// Follow every document from now on — starting with the one already drawn, if benchd
+    /// answered before the caller was ready. The first document usually wins that race: the
+    /// client connects when this model is made, and `RootView` wires its follower in `.task`.
+    func followDocuments(_ follower: @escaping (BenchDocument) -> Void) {
+        documentFollower = follower
+        if let document { follower(document) }
+    }
 
     /// Every pane id in the last document, so a terminal that appears in a later one can be
     /// started wherever it is. nil before the first.

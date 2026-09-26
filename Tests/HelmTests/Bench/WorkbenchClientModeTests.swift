@@ -79,6 +79,17 @@ final class WorkbenchClientModeTests: XCTestCase {
             rig.model.document?.workspaces.count, 1, "nothing was drawn that benchd did not send")
     }
 
+    /// A follower wired after benchd first answered still gets that document: `RootView` wires
+    /// its follower in `.task`, which the client's first document usually beats.
+    func testAFollowerSetLateGetsTheDocumentAlreadyDrawn() throws {
+        let rig = try rig(BenchFixture.document(path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+        var followed: [BenchDocument] = []
+
+        rig.model.followDocuments { followed.append($0) }
+
+        XCTAssertEqual(followed.map(\.workspaces.count), [1])
+    }
+
     /// A frame is what moves the bench: its active workspace's bench is drawn, and what is on
     /// screen follows it.
     func testAFrameDrivesTheBenchAndWhatIsVisible() throws {
