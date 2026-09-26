@@ -83,8 +83,10 @@ socket (the `hook` verb), and the reply carries the agent's unread mail as point
 Claude and codex put in front of the model as hook context: a busy agent gets its mail at the
 next tool call, with nothing typed into a pty. The first event of a session helm or benchd
 declared (`HELM_PANE`, `BENCH_SESSION`) and that runs on a terminal claims its address, recorded
-in `sessions/hosted.json` so it survives a restart. An idle agent is started through its own
-channel instead: benchd posts the notice to a Claude session's inbox socket (which its hooks
+in `sessions/hosted.json` so it survives a restart. A session resumed in another pane keeps its
+handle, and its record moves to the pane it reports from under the same rule (`mail/moved`). An
+idle agent is started through its own channel instead: benchd posts the notice to a Claude
+session's inbox socket (which its hooks
 report), and a push that starts no turn in 10 s goes back to the inbox. A spawn hands its prompt
 over in argv as a pointer, so nothing waits for a TUI to draw. pi's channel is its `bench` extension
 (`pi/extensions/bench`), which reports through `bench hook pi`, watches the inbox benchd names

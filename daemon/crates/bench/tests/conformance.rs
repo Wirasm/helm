@@ -4252,3 +4252,73 @@ fn mail_who_names_the_agent_in_a_pane_and_refuses_an_empty_one() {
     assert_eq!(json_of(&run)["pid"], pid, "the process its hook reported");
     assert_eq!(bench(h, &["mail", "who", "--pane", "not-a-uuid"]).code, 3);
 }
+
+/// A session resumed in another pane (`claude --resume`) keeps its handle, and its record moves
+/// with it: `mail/who` answers the pane it is in now and not the one it left. Reached both with
+/// the daemon holding the session (its old process was killed, so no `SessionEnd`) and after a
+/// restart, where the record is all the daemon has.
+#[test]
+fn a_resumed_session_moves_to_the_pane_it_reports_from_and_keeps_its_handle() {
+    const NEW_PANE: &str = "D16CB9FE-B845-4763-96E7-13F3EA9FFB48";
+    let home = TestHome::claim("whomoved");
+    let h = &home.dir;
+    let root = h.join(".bench");
+    let daemon = DaemonGuard::start(h, None);
+    let (_, old) = terminal_process(h, "old");
+    let (_, new) = terminal_process(h, "new");
+    let detached = Detached::start();
+    let session = "19281c67-097c-4aec-ae6d-8eab6a7b7915";
+    let report = |socket: &Path, pid: u32, pane: &str| {
+        hook_verb(
+            socket,
+            serde_json::json!({"harness": "claude", "event": "SessionStart", "session": session,
+                "cwd": "/Users/op/Projects/helm", "pid": pid, "pane": pane}),
+        )["handle"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let who = |pane: &str| bench(h, &["mail", "who", "--pane", pane]);
+    let recorded_pane = || {
+        hosted_record(&root)["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == session)
+            .expect("the session is recorded")["via"]["pane"]
+            .as_str()
+            .unwrap()
+            .to_uppercase()
+    };
+
+    let handle = report(&daemon.socket, old, HOOK_PANE);
+    assert_eq!(json_of(&who(HOOK_PANE))["handle"], handle.as_str());
+
+    // Resumed in a new pane while the daemon still holds the session.
+    assert_eq!(report(&daemon.socket, new, NEW_PANE), handle, "same handle");
+    let run = who(NEW_PANE);
+    assert_eq!(run.code, 0, "the new pane answers: {}", run.stderr);
+    assert_eq!(json_of(&run)["handle"], handle.as_str());
+    assert_eq!(json_of(&run)["pid"], new);
+    assert_eq!(who(HOOK_PANE).code, 3, "the old pane names nobody");
+    assert_eq!(recorded_pane(), NEW_PANE);
+    let moves: Vec<_> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "mail/moved")
+        .collect();
+    assert_eq!(moves.len(), 1, "{moves:?}");
+
+    // A declared pane with no terminal is a child that inherited HELM_PANE: nothing moves.
+    report(&daemon.socket, detached.0.id(), HOOK_PANE);
+    assert_eq!(recorded_pane(), NEW_PANE, "an inherited pane moves nothing");
+
+    // After a restart the record is all benchd has, and it moves the same way.
+    drop(daemon);
+    let daemon = DaemonGuard::start(h, None);
+    // The daemon's own test sessions went with it; the resumed agent is a fresh process.
+    let (_, again) = terminal_process(h, "again");
+    assert_eq!(report(&daemon.socket, again, HOOK_PANE), handle);
+    assert_eq!(recorded_pane(), HOOK_PANE);
+    assert_eq!(json_of(&who(HOOK_PANE))["handle"], handle.as_str());
+    assert_eq!(who(NEW_PANE).code, 3);
+}
