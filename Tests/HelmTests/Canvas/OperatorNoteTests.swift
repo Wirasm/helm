@@ -74,7 +74,7 @@ final class OperatorNoteTests: XCTestCase {
         _ = try store(key: "a-project-abcd1234", registering: resolved(workspace.path))
 
         let note = try OperatorNote.create(
-            inWorkspaceAt: workspace.path, under: root, on: day("2026-08-07"))
+            inRepository: resolved(workspace.path), under: root, on: day("2026-08-07"))
 
         XCTAssertEqual(
             note.url.path,
@@ -90,7 +90,7 @@ final class OperatorNoteTests: XCTestCase {
     /// this pins from the outside.
     func testTheNoteHelmMakesIsOneItWillLetHimWriteIn() throws {
         let note = try OperatorNote.create(
-            inWorkspaceAt: workspace.path, under: root, on: day("2026-08-07"))
+            inRepository: resolved(workspace.path), under: root, on: day("2026-08-07"))
 
         XCTAssertNotNil(EditableFile(note.url))
     }
@@ -100,7 +100,7 @@ final class OperatorNoteTests: XCTestCase {
     /// could not be found again through ⌘O — the one surface that would otherwise show it.
     func testAProjectWithNoStoreYetIsRegisteredSoTheBrowserCanFindTheNote() throws {
         let note = try OperatorNote.create(
-            inWorkspaceAt: workspace.path, under: root, on: day("2026-08-07"))
+            inRepository: resolved(workspace.path), under: root, on: day("2026-08-07"))
 
         let stores = ArtifactStoreDiscovery.discoverStores(under: root)
         let store = try XCTUnwrap(stores.first, "helm registered nothing, so ⌘O lists nothing")
@@ -128,7 +128,7 @@ final class OperatorNoteTests: XCTestCase {
         let original = #"{"path": "/somewhere/else", "name": "as prp wrote it"}"#
         try original.write(to: registration, atomically: true, encoding: .utf8)
 
-        _ = try OperatorNote.create(inWorkspaceAt: workspace.path, under: root)
+        _ = try OperatorNote.create(inRepository: resolved(workspace.path), under: root)
 
         XCTAssertEqual(
             try String(contentsOf: registration, encoding: .utf8), original,
@@ -137,9 +137,9 @@ final class OperatorNoteTests: XCTestCase {
 
     func testTwoNotesInOneDayAreTwoFiles() throws {
         let first = try OperatorNote.create(
-            inWorkspaceAt: workspace.path, under: root, on: day("2026-08-07"))
+            inRepository: resolved(workspace.path), under: root, on: day("2026-08-07"))
         let second = try OperatorNote.create(
-            inWorkspaceAt: workspace.path, under: root, on: day("2026-08-07"))
+            inRepository: resolved(workspace.path), under: root, on: day("2026-08-07"))
 
         XCTAssertNotEqual(first, second)
         XCTAssertEqual(second.url.lastPathComponent, "2026-08-07-note-2.md")
@@ -152,7 +152,7 @@ final class OperatorNoteTests: XCTestCase {
         let unwritable = URL(fileURLWithPath: "/System/helm-should-not-write-here")
 
         XCTAssertThrowsError(
-            try OperatorNote.create(inWorkspaceAt: workspace.path, under: unwritable)
+            try OperatorNote.create(inRepository: resolved(workspace.path), under: unwritable)
         ) { error in
             guard case OperatorNote.Failure.couldNotWrite(let reason) = error else {
                 return XCTFail("expected a couldNotWrite failure, got \(error)")
@@ -176,9 +176,9 @@ final class OperatorNoteTests: XCTestCase {
     /// `pwd -P` semantics, which is what `WorkspaceStore.repositoryRoot` returns for a folder
     /// that is not a repository — on macOS `/var/folders/…` resolves to `/private/var/folders/…`,
     /// and comparing against the unresolved path would fail for a reason that has nothing to do
-    /// with this feature.
+    /// with this feature. `create` takes a root already resolved, so every call here passes one.
     private func resolved(_ path: String) -> String {
-        WorkspaceStore.repositoryRoot(for: path)
+        WorkspaceStore.resolved(path)
     }
 
     private func day(_ text: String) -> Date {
