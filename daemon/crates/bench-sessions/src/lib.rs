@@ -138,6 +138,7 @@ pub fn open_action(
                 resume: true,
                 prompt_file: None,
                 settings: None,
+                extra_args: Vec::new(),
             })?;
             Ok(OpenAction::Resume {
                 argv: std::iter::once(program).chain(args).collect(),

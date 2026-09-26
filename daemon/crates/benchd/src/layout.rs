@@ -17,6 +17,7 @@ use crate::Core;
 use bench_doc::{
     Caller, Destination, Document, Focus, Pane, PaneId, Placement, Rules, Surface, Target,
 };
+use bench_session::Session;
 use bench_wire::{
     Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider, DocumentAt,
     DocumentChange, DocumentRecord, LayoutReport, LayoutVerb, MoveTo, OpenInto, PaneOpen, Request,
@@ -26,6 +27,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::Arc;
 
 /// The document as the daemon holds it, and the seq of the event that last changed it.
 pub struct BenchState {
@@ -36,14 +38,16 @@ pub struct BenchState {
 
 /// What a verb did, beyond the document it left behind.
 #[derive(Default)]
-struct Outcome {
+pub struct Outcome {
     /// A pane that did not exist before the verb.
-    created: Option<PaneId>,
+    pub created: Option<PaneId>,
     /// The pane a `pane/open` resolved to — the new one, or the one already showing it.
-    pane: Option<PaneId>,
+    pub pane: Option<PaneId>,
 }
 
-pub fn answer(core: &mut Core, req: &Request) -> Response {
+/// A layout verb's answer, and the benchd session it ended, if any: a closed pane that showed a
+/// session takes the session with it, drained by the caller once the core lock is released.
+pub fn answer(core: &mut Core, req: &Request) -> (Response, Option<Arc<Session>>) {
     let reply = |status: Status, reason: Option<String>, data: Option<Value>| Response {
         id: req.id.clone(),
         status,
@@ -54,15 +58,15 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
     {
         Ok(v) => v,
         Err(e) => {
-            return reply(
-                Status::Refused,
-                Some(format!("{} args: {e}", req.verb)),
-                None,
-            );
+            let why = format!("{} args: {e}", req.verb);
+            return (reply(Status::Refused, Some(why), None), None);
         }
     };
     if verb == LayoutVerb::Get {
-        return reply(Status::Ok, None, Some(json!(document_at(core))));
+        return (
+            reply(Status::Ok, None, Some(json!(document_at(core)))),
+            None,
+        );
     }
 
     // `pane/open` is the one verb that places by the rules, so it reads the rules file first:
@@ -71,57 +75,250 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
         refresh_rules(core);
     }
     let by = req.by.clone().unwrap_or_else(Actor::agent);
+    let verb = match admit(core, verb, &by) {
+        Ok(v) => v,
+        Err(why) => return (reply(Status::Refused, Some(why), None), None),
+    };
     let focus = Actor::focus(&by, req.asked);
     let mut next = core.bench.document.clone();
-    let before = next.focused_pane();
     let outcome = match apply(&mut next, core.placement.rules(), &verb, focus, by.caller()) {
         Ok(o) => o,
-        Err(refusal) => return reply(Status::Refused, Some(refusal.to_string()), None),
+        Err(refusal) => {
+            return (
+                reply(Status::Refused, Some(refusal.to_string()), None),
+                None,
+            );
+        }
     };
-    let mut report = LayoutReport {
-        seq: core.bench.seq,
-        changed: next != core.bench.document,
-        pane_created: outcome.created,
-        pane: outcome.pane,
-        focused_pane_before: before,
-        focused_pane_after: next.focused_pane(),
+    // A pane that showed a session takes the session with it.
+    let closing = match &verb {
+        LayoutVerb::PaneClose { pane, .. } => core
+            .bench
+            .document
+            .pane(*pane)
+            .and_then(|p| p.surface.session())
+            .map(str::to_string),
+        _ => None,
     };
-    if !report.changed {
-        return reply(Status::Ok, None, Some(json!(report)));
-    }
-
-    // The seq is the event's own, known only once it is written; everything else in the
-    // logged record is the report the caller gets.
-    report.seq = core.next_seq;
-    let change = DocumentChange {
+    let change = Change {
         verb: req.verb.clone(),
         args: req.args.clone(),
         by,
         asked: req.asked,
+        next,
+        created: outcome.created,
+        pane: outcome.pane,
+    };
+    let committed = commit(core, change);
+    let ended = match (&committed, closing) {
+        (Committed::Changed(report) | Committed::Unsaved(report, _), Some(session)) => {
+            end_session(core, &session, report.seq)
+        }
+        _ => None,
+    };
+    let response = match committed {
+        Committed::Unchanged(report) | Committed::Changed(report) => {
+            reply(Status::Ok, None, Some(json!(report)))
+        }
+        Committed::Unsaved(report, why) => reply(Status::Error, Some(why), Some(json!(report))),
+        Committed::Failed(why) => reply(Status::Error, Some(why), None),
+    };
+    (response, ended)
+}
+
+/// A change to the document, applied to a copy and not yet the document.
+pub struct Change {
+    pub verb: String,
+    pub args: Value,
+    pub by: Actor,
+    pub asked: bool,
+    pub next: Document,
+    pub created: Option<PaneId>,
+    pub pane: Option<PaneId>,
+}
+
+pub enum Committed {
+    /// The copy equals the document: nothing logged.
+    Unchanged(LayoutReport),
+    /// Logged as `bench/changed`, handed to every follower, and saved.
+    Changed(LayoutReport),
+    /// Logged and applied, but `bench.json` could not be written — reported, not undone: the
+    /// log says what happened, and the next change that lands writes the whole document again.
+    Unsaved(LayoutReport, String),
+    /// Nothing changed: the event could not be logged.
+    Failed(String),
+}
+
+/// Make a prepared change the document: the one path every change takes, so each is logged
+/// once, with who asked, before anyone is told about it.
+pub fn commit(core: &mut Core, change: Change) -> Committed {
+    let mut report = LayoutReport {
+        seq: core.bench.seq,
+        changed: change.next != core.bench.document,
+        pane_created: change.created,
+        pane: change.pane,
+        focused_pane_before: core.bench.document.focused_pane(),
+        focused_pane_after: change.next.focused_pane(),
+    };
+    if !report.changed {
+        return Committed::Unchanged(report);
+    }
+    // The seq is the event's own, known only once it is written; everything else in the
+    // logged record is the report the caller gets.
+    report.seq = core.next_seq;
+    let record = DocumentChange {
+        verb: change.verb,
+        args: change.args,
+        by: change.by,
+        asked: change.asked,
         report: report.clone(),
     };
-    let event = match core.append_event(DOCUMENT_CHANGED, json!(change), Some(&next)) {
+    let event = match core.append_event(DOCUMENT_CHANGED, json!(record), Some(&change.next)) {
         Ok(e) => e,
-        Err(why) => return reply(Status::Error, Some(why), None),
+        Err(why) => return Committed::Failed(why),
     };
     debug_assert_eq!(event.seq, report.seq);
-    // The change is now a fact: logged, and every follower has it. `bench.json` failing to
-    // land is reported, not undone — the log says what happened, and the next change that
-    // does land writes the whole document again.
-    core.bench.document = next;
+    core.bench.document = change.next;
     core.bench.seq = event.seq;
     if let Err(why) = save(&core.root, &core.bench) {
         let _ = core.append("bench/unsaved", json!({ "seq": event.seq, "why": why }));
-        return reply(
-            Status::Error,
-            Some(format!(
-                "applied and logged as seq {}, but bench.json could not be written: {why}",
-                event.seq
-            )),
-            Some(json!(report)),
+        let why = format!(
+            "applied and logged as seq {}, but bench.json could not be written: {why}",
+            event.seq
         );
+        return Committed::Unsaved(report, why);
     }
-    reply(Status::Ok, None, Some(json!(report)))
+    Committed::Changed(report)
+}
+
+/// Take a session out of the registry because the pane showing it closed, and log it. The
+/// caller drains it outside the lock, the way `close` does.
+fn end_session(core: &mut Core, session: &str, seq: u64) -> Option<Arc<Session>> {
+    let live = core.sessions.remove(session)?;
+    let _ = core.append(
+        "session/closed",
+        json!({ "session": session, "with_pane_closed_at": seq }),
+    );
+    Some(live)
+}
+
+/// The rules an agent's verb answers to beyond the focus guard, which the document enforces
+/// itself. Each is helm's spool rule carried to the verb boundary, applied where benchd can see
+/// the fact it needs; the refusal names the rule and the way through it.
+///
+/// - **Close (#176).** An agent's close ends what runs in a terminal, so it says `force`. A
+///   pane showing a live benchd session names the session; a terminal helm hosts is refused
+///   because benchd cannot see whether anything runs in it until its pty is benchd's (M5b).
+/// - **Name (#313).** An agent replaces a name somebody chose only with `rename`.
+/// - **The caller's workspace (#226).** An agent's `pane/open`/`pane/split` that names no
+///   workspace goes to the workspace it is working in, as `push.sh` routed by its pane.
+/// - **A terminal naming a session** must name a live one of this daemon's.
+///
+/// The operator is never refused here: his gestures are the operator's own (helm keeps its own
+/// confirmations), and helm acting on its own observation (`Actor::Helm`) never closes or names.
+fn admit(core: &Core, verb: LayoutVerb, by: &Actor) -> Result<LayoutVerb, String> {
+    let named = match &verb {
+        LayoutVerb::PaneOpen(PaneOpen { surface, .. }) => Some(surface),
+        LayoutVerb::PaneSplit { surface, .. } | LayoutVerb::DrawerToggle { surface, .. } => {
+            surface.as_ref()
+        }
+        _ => None,
+    };
+    if let Some(session) = named.and_then(Surface::session)
+        && !core.sessions.get(session).is_some_and(|s| s.is_live())
+    {
+        return Err(format!(
+            "no live session {session:?} — `bench sessions` lists them, and `bench spawn` starts one in a pane"
+        ));
+    }
+    let Actor::Agent { pane, handle } = by else {
+        return Ok(verb);
+    };
+    let doc = &core.bench.document;
+    match verb {
+        LayoutVerb::PaneClose { pane: id, force } => {
+            let refusal = match doc.pane(id).map(|p| &p.surface) {
+                _ if force => None,
+                Some(Surface::Terminal {
+                    session: Some(s), ..
+                }) if core.sessions.get(s).is_some_and(|s| s.is_live()) => Some(format!(
+                    "pane {id} shows session {s}, which is still running — closing the pane ends it; pass --force if that is what you mean"
+                )),
+                // Its session has ended: nothing runs there to lose.
+                Some(Surface::Terminal {
+                    session: Some(_), ..
+                }) => None,
+                Some(Surface::Terminal { session: None, .. }) => Some(format!(
+                    "pane {id} is a terminal helm hosts, and benchd cannot see whether anything is running in it (until M5b) — pass --force to close it anyway"
+                )),
+                _ => None,
+            };
+            match refusal {
+                Some(why) => Err(why),
+                None => Ok(LayoutVerb::PaneClose { pane: id, force }),
+            }
+        }
+        LayoutVerb::PaneName {
+            pane: id,
+            name,
+            rename,
+        } => {
+            if let Some(current) = doc.pane(id).map(|p| &p.name)
+                && !current.agent_may_replace(rename)
+            {
+                return Err(format!(
+                    "pane {id} is called {:?} by somebody's choice — pass --rename only when the operator asked for a new name",
+                    current.text().unwrap_or_default()
+                ));
+            }
+            Ok(LayoutVerb::PaneName {
+                pane: id,
+                name,
+                rename,
+            })
+        }
+        LayoutVerb::PaneOpen(PaneOpen {
+            into: OpenInto::Active,
+            surface,
+        }) => Ok(LayoutVerb::PaneOpen(PaneOpen {
+            into: callers_workspace(core, pane.as_deref(), handle.as_deref())
+                .map_or(OpenInto::Active, OpenInto::Workspace),
+            surface,
+        })),
+        LayoutVerb::PaneSplit {
+            workspace: None,
+            direction,
+            surface,
+        } => Ok(LayoutVerb::PaneSplit {
+            workspace: callers_workspace(core, pane.as_deref(), handle.as_deref()),
+            direction,
+            surface,
+        }),
+        other => Ok(other),
+    }
+}
+
+/// The workspace an agent is working in: the one holding its pane (`HELM_PANE`), else the one
+/// holding the pane that shows its benchd session (found by its handle). `None` when neither is
+/// on a bench, and the verb falls back to the active workspace.
+pub fn callers_workspace(
+    core: &Core,
+    pane: Option<&str>,
+    handle: Option<&str>,
+) -> Option<bench_doc::StandardPath> {
+    let doc = &core.bench.document;
+    let in_pane = |id: PaneId| doc.workspace_of(id).map(|w| w.path.clone());
+    if let Some(found) = pane
+        .and_then(|p| PaneId::parse(p.trim()).ok())
+        .and_then(in_pane)
+    {
+        return Some(found);
+    }
+    let session = core
+        .sessions
+        .values()
+        .find(|s| Some(s.handle.as_str()) == handle)?;
+    doc.pane_showing_session(&session.id).and_then(in_pane)
 }
 
 /// Look at the placement rules file, logging what changed. A log failure here is not the
@@ -141,7 +338,7 @@ pub fn document_at(core: &Core) -> DocumentAt {
 }
 
 #[expect(clippy::too_many_lines, reason = "legacy (#418): 124 lines, limit 100")]
-fn apply(
+pub fn apply(
     doc: &mut Document,
     rules: &Rules,
     verb: &LayoutVerb,
@@ -227,7 +424,9 @@ fn apply(
             bench.split(*direction, pane, focus)?;
             Ok(created(id))
         }),
-        LayoutVerb::PaneClose { pane } => doc.close_pane(*pane, focus).map(|()| Outcome::default()),
+        LayoutVerb::PaneClose { pane, .. } => {
+            doc.close_pane(*pane, focus).map(|()| Outcome::default())
+        }
         LayoutVerb::PaneShow { pane } => doc.show_pane(*pane, focus).map(|()| Outcome::default()),
         LayoutVerb::PaneMove {
             pane,
@@ -237,7 +436,7 @@ fn apply(
                 b.move_pane(*pane, *direction, focus)
             })
             .map(|_| Outcome::default()),
-        LayoutVerb::PaneName { pane, name } => doc
+        LayoutVerb::PaneName { pane, name, .. } => doc
             .name_pane(*pane, name.clone(), focus)
             .map(|_| Outcome::default()),
         LayoutVerb::PaneRecord { pane, agent } => doc
@@ -354,6 +553,18 @@ pub fn load(
             return (empty(), events);
         }
     };
+    let mut state = state;
+    // No session outlives the daemon that ran it, and ids restart with each daemon, so a pane
+    // still naming one would attach to somebody else's agent. The pane stays, with its `agent`
+    // record for the resume offer; the file is rewritten so a reader never sees the stale name.
+    let ended = state.document.end_sessions();
+    if !ended.is_empty() {
+        let saved = save(root, &state).err();
+        events.push((
+            "bench/sessions-ended",
+            json!({ "panes": ended, "why": "their daemon stopped", "unsaved": saved }),
+        ));
+    }
     if let Some(logged) = last_logged_change
         && logged > state.seq
     {

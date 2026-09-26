@@ -216,6 +216,15 @@ impl Bench {
         self.columns.iter().flat_map(|c| c.slots.iter())
     }
 
+    /// Every pane, for the document's own sweeps (`Document::end_sessions`). Not public: a
+    /// change to a pane goes through an operation that keeps the bench's rules.
+    pub(crate) fn panes_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
+        self.columns
+            .iter_mut()
+            .flat_map(|c| c.slots.iter_mut())
+            .flat_map(|s| s.panes.iter_mut())
+    }
+
     /// The pane the operator's next command acts on: the focused slot's selected pane.
     pub fn focused_pane(&self) -> Option<&Pane> {
         let slot = self.slot(self.focused_slot)?;
@@ -618,7 +627,7 @@ impl Bench {
     ) -> Result<(), Refusal> {
         let a = self.address_of(pane).ok_or(Refusal::UnknownPane(pane))?;
         match &mut self.columns[a.column].slots[a.slot].panes[a.pane].surface {
-            Surface::Terminal { agent: held } => {
+            Surface::Terminal { agent: held, .. } => {
                 *held = agent;
                 Ok(())
             }

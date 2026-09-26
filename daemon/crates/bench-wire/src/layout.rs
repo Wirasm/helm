@@ -97,14 +97,27 @@ pub enum LayoutVerb {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         surface: Option<Surface>,
     },
+    /// `force`: an agent's close of a terminal ends what runs in it, so it says it means to
+    /// (helm #176's rule, at benchd). The operator's own close never needs it.
     #[serde(rename = "pane/close")]
-    PaneClose { pane: PaneId },
+    PaneClose {
+        pane: PaneId,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force: bool,
+    },
     #[serde(rename = "pane/show")]
     PaneShow { pane: PaneId },
     #[serde(rename = "pane/move")]
     PaneMove { pane: PaneId, to: MoveTo },
+    /// `rename`: the caller says the operator asked to replace a name somebody chose (helm
+    /// #313). An agent without it may name an unnamed pane or replace a derived label only.
     #[serde(rename = "pane/name")]
-    PaneName { pane: PaneId, name: PaneName },
+    PaneName {
+        pane: PaneId,
+        name: PaneName,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        rename: bool,
+    },
     /// Which agent is in a terminal pane — or, with `agent: null`, that none is.
     #[serde(rename = "pane/record")]
     PaneRecord {

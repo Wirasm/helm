@@ -98,6 +98,19 @@ then its mail waits for its next prompt or tool call, and the ring proof returns
 keeps no mailroom of its own since: it asks benchd who is in a pane (`mail/who`) and sends a
 canvas note through `mail/send`.
 
+**And the wire front (M3, #355): `bench` is the agent's whole surface.** The CLI speaks the
+pane verbs — `open`, `split`, `show`, `focus`, `move`, `name`, `close <pane>`, `get pane` — as
+the socket's own layout verbs, carrying who asked (`HELM_PANE`, `BENCH_HANDLE`) and `asked` only
+from `--asked`. benchd adds the rules the spool kept at the verb boundary: an agent's close of a
+terminal needs `force` (a live session's name is in the refusal; a helm-hosted terminal is opaque
+until M5b), a chosen name needs `rename`, and an agent's pane opens in its own workspace. `spawn`
+now puts the agent in a pane: the document's terminal surface names the session
+(`term:<session>`), and helm shows it by running `bench attach` in that pane, which follows the
+pane's size (`resize`) and ends when the session does. No session outlives its daemon, so boot
+clears every pane's `session` (`bench/sessions-ended`). What only helm can do — drawing its window
+— benchd asks for: `helm/ask` logs `helm/asked` to the followers, helm answers with `helm/answer`,
+and the caller waits at most `HELM_ASK_WAIT`. The `bench-panes` skill is the agent's guide.
+
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance
 gate that runs the real binaries. M5a is the pty core: `spawn` puts a real interactive

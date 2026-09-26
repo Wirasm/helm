@@ -571,6 +571,9 @@ fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
 /// without it a dead agent could outrank the live one now in its pane. Checked after the lock is
 /// released, like every other process probe here.
 pub fn who(core: &Arc<Mutex<Core>>, pane: PaneId) -> Option<bench_wire::MailWho> {
+    if let Some(who) = session_in(&core.lock().unwrap(), pane) {
+        return Some(who);
+    }
     let mut candidates: Vec<(Instant, bench_wire::MailWho)> = {
         let c = core.lock().unwrap();
         c.agents
@@ -593,6 +596,23 @@ pub fn who(core: &Arc<Mutex<Core>>, pane: PaneId) -> Option<bench_wire::MailWho>
         .into_iter()
         .max_by_key(|(seen, _)| *seen)
         .map(|(_, who)| who)
+}
+
+/// The agent in a pane that shows one of benchd's own sessions (M3): benchd spawned it, so it
+/// knows the address without waiting for a hook. `session` is the runtime's own id where the
+/// runtime takes one from the bench (claude, pi), else benchd's session id (codex).
+fn session_in(core: &Core, pane: PaneId) -> Option<bench_wire::MailWho> {
+    let id = core.bench.document.pane(pane)?.surface.session()?;
+    let session = core.sessions.get(id).filter(|s| s.is_live())?;
+    Some(bench_wire::MailWho {
+        handle: session.handle.clone(),
+        harness: bench_wire::Harness::parse(session.agent.name())?,
+        session: session
+            .runtime_session
+            .clone()
+            .unwrap_or_else(|| session.id.clone()),
+        pid: session.pid,
+    })
 }
 
 /// Agents in helm panes as their hooks report them, for the session list: the one source for

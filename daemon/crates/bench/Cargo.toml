@@ -11,6 +11,8 @@ bench-wire = { path = "../bench-wire" }
 # `bench log` reads transcripts with the session list's own harness readers.
 bench-sessions = { path = "../bench-sessions" }
 serde_json.workspace = true
+# The attach client reads its terminal's size to keep the session's pty matching it.
+rustix = { version = "1.1.5", features = ["termios"] }
 
 [lints]
 workspace = true

@@ -51,11 +51,11 @@ fn the_fixture_holds_one_of_everything() {
         "a shelved bench"
     );
     assert!(
-        has(&|s| matches!(s, Surface::Terminal { agent: None })),
+        has(&|s| matches!(s, Surface::Terminal { agent: None, .. })),
         "a plain terminal"
     );
     assert!(
-        has(&|s| matches!(s, Surface::Terminal { agent: Some(_) })),
+        has(&|s| matches!(s, Surface::Terminal { agent: Some(_), .. })),
         "a recorded agent"
     );
     assert!(has(&|s| matches!(s, Surface::Browser)), "the browser");
