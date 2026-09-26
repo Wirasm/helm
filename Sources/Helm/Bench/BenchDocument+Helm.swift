@@ -54,7 +54,11 @@ extension BenchDocument.Bench {
 extension Pane.Content {
     init(_ surface: Surface) {
         switch surface {
-        case let .terminal(agent, _): self = .terminal(agent: agent.map(ResumableAgent.init))
+        // A pane showing a benchd session holds that agent, running: there is nothing to resume
+        // and nothing for #85 to ask about. Its record matters only once the session is gone,
+        // and benchd clears `session` then (a restart), which is when the offer appears.
+        case let .terminal(agent, session):
+            self = .terminal(agent: session == nil ? agent.map(ResumableAgent.init) : nil)
         case let .canvas(path): self = .canvas(.file(path))
         case .browser: self = .browser
         case .sessions: self = .sessions
