@@ -56,6 +56,10 @@ final class BenchdAgentScriptTests: XCTestCase {
             kickstart) echo $(( $(cat \(state)/pid) + 1 )) > \(state)/pid ;;
             esac
             """,
+            // The scripts bound every step with `timeout`, which macOS does not ship (CI has none;
+            // a workstation usually has coreutils'). Nothing here depends on a real deadline, and
+            // a hang is the fake launchctl exiting 124 itself, so this one drops the duration.
+            "timeout": #"shift; exec "$@""#,
             "cargo": #"echo "cargo $*" >> \#(state)/calls"#,
             "bench": """
             echo "bench $*" >> \(state)/calls
@@ -89,8 +93,7 @@ final class BenchdAgentScriptTests: XCTestCase {
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = arguments
         var env = ProcessInfo.processInfo.environment
-        // The fakes first; the rest of PATH after them, because the scripts need `timeout`,
-        // which macOS does not ship in /usr/bin.
+        // The fakes first, then the caller's PATH for everything else the scripts run.
         env["PATH"] = "\(bin.path):\(env["PATH"] ?? "/usr/bin:/bin")"
         env["HOME"] = scratch.path
         env.removeValue(forKey: "BENCH_SUITE")
