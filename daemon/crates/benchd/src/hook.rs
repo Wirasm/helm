@@ -42,6 +42,9 @@ pub struct Agent {
     /// The agent's process, as its last hook reported it: how the session list tells a live
     /// agent from one that was killed (a killed session reports no `SessionEnd`).
     pub pid: u32,
+    /// The helm pane it runs in now, as its last report from a terminal said: what `mail/who`
+    /// answers. `None` outside helm, and in a benchd session. See [`locate`].
+    pub pane: Option<PaneId>,
 }
 
 /// Where benchd stands with starting turns for an agent.
@@ -55,10 +58,11 @@ pub enum Push {
 }
 
 impl Agent {
-    fn new(handle: String, harness: Harness, pid: u32) -> Agent {
+    fn new(handle: String, harness: Harness, pid: u32, pane: Option<PaneId>) -> Agent {
         Agent {
             wakes_itself: harness == Harness::Pi,
             pid,
+            pane,
             handle,
             activity: None,
             told: false,
@@ -140,13 +144,13 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             }
             return Ok(json!(HookReply::default()));
         }
-        follow(&mut c, &args, &key).map_err(Refusal::Failed)?;
         if !c.agents.contains_key(&key) {
             let agent = address(&mut c, &args, &key)
                 .map_err(Refusal::Failed)?
-                .map(|handle| Agent::new(handle, args.harness, args.pid));
+                .map(|handle| Agent::new(handle, args.harness, args.pid, recorded_pane(&c, &key)));
             c.agents.insert(key.clone(), agent);
         }
+        locate(&mut c, &args, &key).map_err(Refusal::Failed)?;
         let Some(Some(agent)) = c.agents.get_mut(&key) else {
             return Ok(json!(HookReply::default()));
         };
@@ -233,39 +237,59 @@ fn hand_out(
     })
 }
 
-/// A claimed session reporting from a pane other than the one its record names was resumed
-/// there (`claude --resume` in a new pane): the record moves to that pane and keeps the
-/// handle, so `mail/who` answers the pane the session is in now. The move passes the same rule
-/// as a claim, so a detached child that inherited another `HELM_PANE` moves nothing. Runs on
-/// every event, because a session this daemon already holds never reaches [`address`]; the
-/// terminal is probed only when the pane differs.
-fn follow(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<(), String> {
+/// Where a claimed session runs now, from a report on a terminal: the pane it declares, or no
+/// pane when it declares none (resumed outside helm, `claude --resume` in another terminal
+/// app) or declares a benchd session. A report with no terminal says nothing about where the
+/// session is: a detached child inherits `HELM_PANE` (#417), so it moves and drops nothing.
+/// Runs on every event, because a session resumed while this daemon holds it never reaches
+/// [`address`]; the terminal is probed only when the answer would change.
+///
+/// A change is logged as `mail/moved`, `to` null when it left helm. The record keeps the last
+/// pane it was in (the handle never changes), which seeds [`Agent::pane`] after a restart.
+fn locate(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<(), String> {
+    let Some(Some(agent)) = c.agents.get(key) else {
+        return Ok(());
+    };
     let declared_bench = args
         .bench_session
         .as_deref()
         .is_some_and(|s| !s.trim().is_empty());
-    let Some(pane) = args
-        .pane
-        .as_deref()
-        .and_then(|p| PaneId::parse(p.trim()).ok())
-    else {
-        return Ok(());
+    let now = if declared_bench {
+        None
+    } else {
+        args.pane
+            .as_deref()
+            .and_then(|p| PaneId::parse(p.trim()).ok())
     };
-    let Some(entry) = c.session_records.hosted.iter().find(|h| h.key() == *key) else {
-        return Ok(());
-    };
-    let recorded = match entry.via {
-        HostedVia::Pane { pane, .. } => Some(pane),
-        HostedVia::Bench { .. } => None,
-    };
-    if declared_bench
-        || entry.handle().is_none()
-        || recorded == Some(pane)
-        || !hook::claims_a_mailbox(true, bench_sessions::process::has_terminal(args.pid))
-    {
+    if now == agent.pane || !bench_sessions::process::has_terminal(args.pid) {
         return Ok(());
     }
-    sessions::record_move(c, key, pane, args.pid)
+    let (from, handle) = (agent.pane, agent.handle.clone());
+    c.append(
+        "mail/moved",
+        json!({ "handle": handle, "pid": args.pid, "session": key.id, "harness": key.harness.name(), "from": from, "to": now }),
+    )?;
+    if let Some(Some(agent)) = c.agents.get_mut(key) {
+        agent.pane = now;
+    }
+    match now {
+        Some(pane) if recorded_pane(c, key) != Some(pane) => sessions::record_move(c, key, pane),
+        _ => Ok(()),
+    }
+}
+
+/// The pane the record last saw a session in.
+fn recorded_pane(c: &Core, key: &SessionKey) -> Option<PaneId> {
+    match c
+        .session_records
+        .hosted
+        .iter()
+        .find(|h| h.key() == *key)?
+        .via
+    {
+        HostedVia::Pane { pane, .. } => Some(pane),
+        HostedVia::Bench { .. } => None,
+    }
 }
 
 /// The handle of a session reporting for the first time in this daemon's life, or `None`
@@ -579,7 +603,7 @@ pub fn who(core: &Arc<Mutex<Core>>, pane: PaneId) -> Option<bench_wire::MailWho>
         c.agents
             .iter()
             .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
-            .filter(|(key, _)| pane_of(&c, key) == Some(pane))
+            .filter(|(_, a)| a.pane == Some(pane))
             .map(|(key, a)| {
                 let who = bench_wire::MailWho {
                     handle: a.handle.clone(),
@@ -615,9 +639,10 @@ fn session_in(core: &Core, pane: PaneId) -> Option<bench_wire::MailWho> {
     })
 }
 
-/// Agents in helm panes as their hooks report them, for the session list: the one source for
-/// a pi or codex pane agent, whose harness publishes no registry.
-pub fn in_panes(core: &Core) -> Vec<bench_sessions::HookedAgent> {
+/// Agents helm hosted as their hooks report them, for the session list: the one source for
+/// a pi or codex pane agent, whose harness publishes no registry. One that has left helm is
+/// here too, with no pane, so the list neither places it in a pane nor calls it finished.
+pub fn hooked(core: &Core) -> Vec<bench_sessions::HookedAgent> {
     core.agents
         .iter()
         .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
@@ -627,31 +652,15 @@ pub fn in_panes(core: &Core) -> Vec<bench_sessions::HookedAgent> {
                 .hosted
                 .iter()
                 .find(|h| h.key() == *key)?;
-            let HostedVia::Pane { pane, .. } = entry.via else {
-                return None;
-            };
             Some(bench_sessions::HookedAgent {
                 harness: key.harness,
                 session: key.id.clone(),
                 cwd: entry.cwd.clone(),
-                pane,
+                pane: a.pane,
                 pid: a.pid,
                 activity: a.activity.clone().unwrap_or(Activity::Unknown),
                 handle: a.handle.clone(),
             })
         })
         .collect()
-}
-
-fn pane_of(core: &Core, key: &SessionKey) -> Option<PaneId> {
-    match core
-        .session_records
-        .hosted
-        .iter()
-        .find(|h| h.key() == *key)?
-        .via
-    {
-        HostedVia::Pane { pane, .. } => Some(pane),
-        HostedVia::Bench { .. } => None,
-    }
 }

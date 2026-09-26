@@ -4339,6 +4339,75 @@ fn a_resumed_session_moves_to_the_pane_it_reports_from_and_keeps_its_handle() {
     assert_eq!(who(NEW_PANE).code, 3);
 }
 
+/// A session claimed in a pane and resumed outside helm (`claude --resume` in another terminal
+/// app: no `HELM_PANE`, on a terminal) leaves the pane: `mail/who` names nobody there, and the
+/// session keeps its handle, so mail sent to it is still handed out. A report with no terminal
+/// is a child that inherited the environment (#417) and changes nothing. Resumed in a pane
+/// again, it answers there.
+#[test]
+fn a_session_resumed_outside_helm_leaves_its_pane_and_keeps_its_mail() {
+    let home = TestHome::claim("wholeft");
+    let h = &home.dir;
+    let root = h.join(".bench");
+    let daemon = DaemonGuard::start(h, None);
+    let (_, in_pane) = terminal_process(h, "in-pane");
+    let (_, outside) = terminal_process(h, "outside");
+    let detached = Detached::start();
+    let session = "5d1f0c2e-7a3b-4c8d-9e0f-1a2b3c4d5e6f";
+    let report = |pid: u32, pane: Option<&str>, event: &str| {
+        let mut args = serde_json::json!({"harness": "claude", "event": event, "tool": "Bash",
+            "session": session, "cwd": "/Users/op/Projects/helm", "pid": pid});
+        if let Some(pane) = pane {
+            args["pane"] = pane.into();
+        }
+        hook_verb(&daemon.socket, args)
+    };
+    let who = || bench(h, &["mail", "who", "--pane", HOOK_PANE]);
+
+    let handle = report(in_pane, Some(HOOK_PANE), "SessionStart")["handle"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(json_of(&who())["handle"], handle.as_str());
+
+    // No terminal, no declaration: nothing is known about where it is, so nothing changes.
+    report(detached.0.id(), None, "SessionStart");
+    assert_eq!(who().code, 0, "a report with no terminal drops nothing");
+
+    // Resumed in another terminal app.
+    let reply = report(outside, None, "SessionStart");
+    assert_eq!(reply["handle"], handle.as_str(), "same handle");
+    let run = who();
+    assert_eq!(run.code, 3, "the old pane names nobody: {}", run.stdout);
+    let left: Vec<_> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, d)| k == "mail/moved" && d["to"].is_null())
+        .collect();
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!(
+        hosted_record(&root)["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == session && s["via"]["handle"] == handle.as_str()),
+        "the record keeps its handle"
+    );
+
+    // Mail to its handle still reaches it.
+    let sent = bench(
+        h,
+        &["mail", "send", "--to", &handle, "--body", "still yours"],
+    );
+    assert_eq!(sent.code, 0, "{}", sent.stderr);
+    let reply = report(outside, None, "PostToolUse");
+    let context = reply["context"].as_str().unwrap_or_default();
+    assert_eq!(context.matches("You have mail").count(), 1, "{reply}");
+
+    // Resumed in a pane again: that pane answers.
+    report(in_pane, Some(HOOK_PANE), "SessionStart");
+    assert_eq!(json_of(&who())["handle"], handle.as_str());
+}
+
 // ---------------------------------------------------------------------------
 // M3: the bench is the agent's whole surface — the CLI's pane verbs, spawn into a pane,
 // attach that follows its viewer, and asking helm for what only helm can do
