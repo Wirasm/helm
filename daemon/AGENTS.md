@@ -40,13 +40,16 @@ knows nor needs the Rust toolchain, in either direction.
   never a guess. Each row also carries `mail`: the benchd mailbox of a session benchd spawned
   (handle, `wakeable`, `unread`), `null` for everyone else — the list is the mail directory
   too (#396); benchd counts the inboxes and passes them in. `fixtures/session-rows.json`
-  pins the reply helm's drawer will decode. Tests
+  pins the reply helm's drawer will decode. `transcript` reads one Claude or pi transcript as
+  a log for `bench log` (#421), under the same rule: an unknown record is a named, skipped
+  line. Tests
   build fixture trees under a temp HOME; none reads the operator's `~/.claude`, `~/.pi` or
   `~/.helm`.
 - `crates/benchd` — the daemon. Foreground, one unix socket, a thread per connection.
   `src/layout.rs` is the bench document's whole mutation path: the layout verbs, `bench.json`,
   and booting from it.
-- `crates/bench` — the CLI, the one agent-facing surface, and the attach client.
+- `crates/bench` — the CLI, the one agent-facing surface, and the attach client. `bench log`
+  is the one verb that never opens the socket: it reads a transcript file directly.
 - There is deliberately **no root `Cargo.toml`** in the repo: `cargo` at the repo root
   fails loudly instead of half-working.
 

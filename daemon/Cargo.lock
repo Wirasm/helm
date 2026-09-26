@@ -52,6 +52,7 @@ dependencies = [
  "memchr",
  "serde",
  "serde_json",
+ "time",
 ]
 
 [[package]]

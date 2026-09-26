@@ -10,5 +10,7 @@ bench-doc = { path = "../bench-doc" }
 bench-session = { path = "../bench-session" }
 serde.workspace = true
 serde_json.workspace = true
+# RFC 3339 timestamps in transcripts, for `bench log --since`.
+time = { workspace = true, features = ["parsing"] }
 libc = "0.2"
 memchr = "2"
