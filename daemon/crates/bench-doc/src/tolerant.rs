@@ -11,6 +11,7 @@
 //! - a pane that cannot be read is **skipped**, and `normalize()` repairs what referred to it —
 //!   a `selected` that named it, a slot or column it leaves empty;
 //! - a malformed `agent` costs the pane its resume record, not the pane;
+//! - a malformed `session` costs the pane the session it named, not the pane;
 //! - a malformed `name` costs the pane its name, not the pane;
 //! - a bench left with no panes cannot be repaired: the workspace gets today's one-terminal
 //!   frame, and a shelved bench in that state is dropped;
