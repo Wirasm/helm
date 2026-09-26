@@ -135,8 +135,9 @@ enum PaneEnvironment {
     /// `env_vars` hook is a `put` into ghostty's config map (`Surface.zig`), so it can set a
     /// variable to empty but never unset one — and `CLAUDE_CODE_SESSION_ID=` present-but-empty
     /// is still a second answer to "which session am I?". ghostty builds each surface's child
-    /// environment from `environ` at surface init, so `unsetenv` here means the child is
-    /// spawned without them at all. Process-wide by nature, which also covers the subprocesses
+    /// environment from the `environ` it saw at `ghostty_init`, so `unsetenv` here, before the
+    /// first terminal controller, means the child is spawned without them at all; a later call
+    /// would never reach a pty. Process-wide by nature, which also covers the subprocesses
     /// helm runs itself — `ArchonCLI` inherits `ProcessInfo.processInfo.environment`.
     ///
     /// **Neither obvious way of checking this from outside works, and both look like a

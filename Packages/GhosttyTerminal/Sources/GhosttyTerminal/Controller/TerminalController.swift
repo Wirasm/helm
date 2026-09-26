@@ -5,6 +5,7 @@
 //  Created by Lakr233 on 2026/3/16.
 //
 
+import Darwin.crt_externs
 import Foundation
 import GhosttyKit
 
@@ -322,6 +323,33 @@ public final class TerminalController {
         guard !runtimeInitialized else { return }
         runtimeInitialized = true
         ghostty_init(0, nil)
+        detachProcessEnvironment()
+    }
+
+    /// `ghostty_init` keeps `environ` by reference: a pointer and a length
+    /// (`global.syncEnviron`), which ghostty reads again on every config
+    /// load and child spawn. libc owns that array. `unsetenv` shifts it in
+    /// place, `setenv` can move it and free the old one, and either leaves
+    /// ghostty reading a NULL or freed memory: a crash inside
+    /// `ghostty_config_finalize` at the next controller.
+    ///
+    /// So the process moves to a copy, and ghostty keeps the array it took.
+    /// libc only ever edits the array `environ` points at, so after this the
+    /// process can set and unset variables freely while ghostty's view stays
+    /// intact. ghostty's view is frozen at this moment: a change made later
+    /// never reaches a pane's child, which was already true.
+    ///
+    /// The copy owns its strings (`strdup`) because libc frees a string it
+    /// allocated when that variable is replaced or removed, and ghostty's
+    /// array still points at the originals. The copy is never freed.
+    private static func detachProcessEnvironment() {
+        guard let environment = _NSGetEnviron(), let current = environment.pointee else { return }
+        var count = 0
+        while current[count] != nil { count += 1 }
+        let copy = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: count + 1)
+        for index in 0 ..< count { copy[index] = strdup(current[index]!) }
+        copy[count] = nil
+        environment.pointee = copy
     }
 
     deinit {
