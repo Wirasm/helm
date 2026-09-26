@@ -201,12 +201,22 @@ final class ReleaseResumeScriptTests: XCTestCase {
                 .utf8
         ).write(to: stub)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+        // The script bounds the call with GNU `timeout`, which it requires on the operator's
+        // machine (`check`) and a CI runner lacks. The shim drops the bound and runs the rest.
+        let timeout = bin.appendingPathComponent("timeout")
+        try Data("#!/bin/sh\nshift\nexec \"$@\"\n".utf8).write(to: timeout)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: timeout.path)
 
-        let result = try bash([
-            "-c",
-            "source \"$1\"; bench_suite=trial remote_control=1; resume_in_bench \"$2\" 4b1c /tmp/w /tmp/n.md abc123",
-            "test", script.path, bin.path,
-        ])
+        let result = try bash(
+            [
+                "-c",
+                "source \"$1\"; bench_suite=trial remote_control=1; resume_in_bench \"$2\" 4b1c /tmp/w /tmp/n.md abc123",
+                "test", script.path, bin.path,
+            ],
+            environment: [
+                "PATH": bin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            ])
         XCTAssertEqual(result.status, 0, result.stderr)
 
         let asked = try String(contentsOf: record, encoding: .utf8)
