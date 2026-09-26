@@ -20,7 +20,7 @@ import Foundation
 /// refused here too, rather than mapped to some other name that helm and `bench` would then
 /// disagree about.
 ///
-/// Lives in HelmWire beside `SpoolDirectory` and `MailboxDirectory`, and reads the helm suite
+/// Lives in HelmWire beside `SpoolDirectory`, and reads the helm suite
 /// through the same `DefaultsSuite.override`, so "is this helm isolated?" has one answer.
 package enum BenchRoot {
     package static let directoryVariable = "BENCH_DIR"

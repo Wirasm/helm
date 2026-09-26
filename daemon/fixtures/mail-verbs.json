@@ -1,0 +1,25 @@
+{
+  "send": {
+    "id": "helm-2",
+    "verb": "mail/send",
+    "args": {
+      "to": "helm-a1b2",
+      "from": "operator",
+      "subject": "note on plan.md",
+      "body": "> the quoted line\n\nthe operator's note"
+    }
+  },
+  "who": {
+    "id": "helm-1",
+    "verb": "mail/who",
+    "args": {
+      "pane": "0e8e8cc6-159b-45d8-bc02-485120975998"
+    }
+  },
+  "who_reply": {
+    "handle": "helm-a1b2",
+    "harness": "claude",
+    "session": "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2",
+    "pid": 4242
+  }
+}

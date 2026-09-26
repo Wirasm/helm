@@ -1,8 +1,8 @@
-//! helm's bench snapshot (`~/.helm/bench/snapshot.json`), read for one thing: which agent is
-//! in which terminal pane. It is the pid → pane route until every pane is a benchd session
-//! (M5b). Matching is by exact pid (`owner.pid`, `foregroundPid`); `HELM_PANE` in a process's
-//! environment is deliberately not used, because every process an agent spawns inherits it
-//! (an Archon `claude -p` started from a pane would claim the pane).
+//! helm's bench snapshot (`~/.helm/bench/snapshot.json`), read for one thing: which Claude
+//! agent is in which terminal pane, by the pane's foreground pid. Agents whose hooks report to
+//! benchd are known without it (`HookedAgent`); this covers a Claude session whose harness is not
+//! wired. `HELM_PANE` in a process's environment is deliberately not used, because every process
+//! an agent spawns inherits it (an Archon `claude -p` started from a pane would claim the pane).
 
 use bench_doc::PaneId;
 use bench_wire::{Harness, Unreadable};
@@ -18,18 +18,8 @@ pub const SOURCE: &str = "helm-snapshot";
 pub struct PaneAgent {
     pub pane: PaneId,
     pub foreground_pid: Option<u32>,
-    /// The agent that claimed a mailbox from this pane (helm's `owner`).
-    pub owner: Option<Owner>,
     /// The agent helm recorded so a restart can offer to resume it.
     pub resumable: Option<Resumable>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Owner {
-    pub harness: Harness,
-    pub pid: u32,
-    pub session: Option<String>,
-    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,24 +80,6 @@ pub fn read(helm_bench_dir: &Path) -> (Vec<PaneAgent>, Vec<Unreadable>) {
         let harness = |raw: &str| {
             Harness::parse(raw).ok_or_else(|| format!("pane {id}: unknown agent {raw:?}"))
         };
-        let owner = match terminal.owner {
-            None => None,
-            Some(o) => match o.runtime.as_deref().map(harness) {
-                // An owner with no runtime is a mailbox claim nothing names; it hosts nothing
-                // this list can open.
-                None => None,
-                Some(Ok(h)) => Some(Owner {
-                    harness: h,
-                    pid: o.pid,
-                    session: o.session_id,
-                    cwd: o.cwd,
-                }),
-                Some(Err(why)) => {
-                    problems.push(unreadable(why));
-                    continue;
-                }
-            },
-        };
         let resumable = match terminal.resumable {
             None => None,
             Some(r) => match harness(&r.command) {
@@ -125,7 +97,6 @@ pub fn read(helm_bench_dir: &Path) -> (Vec<PaneAgent>, Vec<Unreadable>) {
         panes.push(PaneAgent {
             pane: id,
             foreground_pid: terminal.foreground_pid,
-            owner,
             resumable,
         });
     }
@@ -167,17 +138,7 @@ struct PaneRecord {
 #[serde(rename_all = "camelCase")]
 struct TerminalRecord {
     foreground_pid: Option<u32>,
-    owner: Option<OwnerRecord>,
     resumable: Option<ResumableRecord>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OwnerRecord {
-    runtime: Option<String>,
-    pid: u32,
-    session_id: Option<String>,
-    cwd: Option<String>,
 }
 
 #[derive(Deserialize)]

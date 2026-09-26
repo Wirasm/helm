@@ -49,10 +49,9 @@ enum PaneEnvironment {
     /// each surface's child environment from `environ`, so a hosted agent can read it today —
     /// which is why `staleIdentityKeys` deliberately leaves it alone ("helm telling the child
     /// the truth"). But that is inheritance, and inheritance is what `COLORTERM` was: correct by
-    /// coincidence, one refactor away from ending, and silent when it does. Since #285 the
-    /// mailbox's two writers resolve their root from this variable — an agent that cannot see it
-    /// claims in the **operator's** `~/.helm/mail` instead of the instance's own, which is the
-    /// exact leak #285 exists to close, restored with nothing to see.
+    /// coincidence, one refactor away from ending, and silent when it does. The spool scripts an
+    /// agent runs resolve the instance's spool from this variable (#285), so an agent that could
+    /// not see it would drive the **operator's** helm instead of the one it is in.
     ///
     /// **The decided name, never the raw value.** `DefaultsSuite.override` is what helm itself
     /// obeyed at launch, so a child can never be told a suite helm refused — and under no suite

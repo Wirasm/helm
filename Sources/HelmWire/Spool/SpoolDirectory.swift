@@ -29,12 +29,12 @@ import Foundation
 /// this exact function by hand, carrying a comment pointing back here for the reasoning.
 package struct SpoolDirectory: Equatable {
     /// Points helm's spool somewhere else outright. For tests, and for a caller that wants to
-    /// address one specific instance. Mirrors `HELM_MAIL_DIR`, which the mail hooks honour.
+    /// address one specific instance.
     package static let directoryVariable = "HELM_SPOOL_DIR"
 
     /// Switches the watcher off without switching helm off. The negative control for every
     /// claim this slice makes: with this set, a request must produce no terminal and no
-    /// result. Mirrors `HELM_MAIL_OFF`.
+    /// result.
     package static let offVariable = "HELM_SPOOL_OFF"
 
     package let root: URL

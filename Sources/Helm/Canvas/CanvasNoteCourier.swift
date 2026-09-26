@@ -1,49 +1,18 @@
-import Darwin
 import Foundation
 import HelmWire
 
-/// The edge of `CanvasNoteRoute`: it asks the live process tree who is in a pane, and writes the
-/// message. Everything it *decides* is in `CanvasNoteRoute`, which is pure.
+/// The edge of `CanvasNoteRoute`: it asks benchd who is in a pane, and sends the message there.
+/// Everything it *decides* is in `CanvasNoteRoute`, which is pure.
 ///
-/// A value with injectable seams rather than a protocol, following `BenchSnapshotModel` — which
-/// takes its `mailboxRoot` and its `foregroundPid` the same way, for the same reason: a test gets
-/// a mailbox it owns and a pid it chose, and production takes the defaults.
+/// helm keeps no mailroom (#358). The agent in a pane has an address once its harness reports
+/// to benchd, and `mail/who` names it; a test hands in a `BenchMailbox` that answers as it likes.
 @MainActor
 struct CanvasNoteCourier {
-    var mailboxRoot: URL = MailboxDirectory.resolve()
-    var foregroundPid: (TerminalSession) -> pid_t? = { $0.hostView.foregroundPid }
-    var ancestors: (pid_t) -> [pid_t] = { AgentLocator.ancestors(of: $0) }
-    /// The registry `AddressBook` resolves a session through. Injectable for the same reason
-    /// `mailboxRoot` is: a test gets a registry it owns rather than reading the operator's live
-    /// one. `SpoolModel` and `BenchSnapshotModel` take it exactly this way.
-    var registryRoot: URL = AgentRegistry.defaultRoot
-    var now: () -> Date = Date.init
+    var mail: BenchMailbox = .live()
 
-    /// Who is reachable in this terminal, if anyone.
-    ///
-    /// **`AddressBook`, not a fourth join on pid.** #247 folded the two joins that existed —
-    /// `SpoolModel`'s and `BenchSnapshot.TerminalRecord`'s — into that one type, precisely so
-    /// "which agent is in this pane" is answered in one place. This is the third caller and it
-    /// asks the same way: a registry-backed owner is matched by its **session**, and only an
-    /// owner with no session id falls back to its recorded pid.
-    ///
-    /// **The shell pid is derived rather than remembered, and it is derivable exactly here.**
-    /// `SpoolModel` knows it because it watched the pane's first foreground process appear; a pane
-    /// helm merely hosts has no such record. But `AgentLocator.ancestors(of:)` stops at helm's own
-    /// pid — everything in a surface is below helm — so the **last** ancestor of the foreground
-    /// process is the pane's login shell, and an empty chain means the foreground process *is*
-    /// that shell. That is what makes the second of `owner`'s two rules reachable from here, and
-    /// it is not a rare case: while the agent is running a tool call the pty's foreground process
-    /// is that tool, and the agent is a descendant of the same shell.
-    func owner(of session: TerminalSession?) -> MailboxOwner? {
-        guard let session, let foreground = foregroundPid(session) else { return nil }
-        let book = AddressBook(
-            owners: MailboxDirectory.owners(in: mailboxRoot),
-            sessionFor: AgentRegistry.sessionLookup(in: registryRoot))
-        return book.owner(
-            foregroundPid: foreground,
-            shellPid: ancestors(foreground).last ?? foreground,
-            ancestors: ancestors)
+    /// Who is reachable in this pane, if anyone: the agent whose hook last reported from it.
+    func handle(in pane: Pane.ID) -> Handle? {
+        mail.who(pane)?.handle
     }
 
     /// Deliver a mark along the route already decided for it.
@@ -60,15 +29,11 @@ struct CanvasNoteCourier {
     /// intent as walking to the pane and typing it, which nothing has ever gated.
     ///
     /// So no special channel and no "quiet" flag: the message lands in the mailbox like any other,
-    /// and whether it wakes anyone is the recipient's own arrangement — pi's extension watches and
-    /// calls `sendUserMessage`, a Claude Code session that armed a watch is woken by the
-    /// notification, and one that has not reads it pre-turn from the hook. **The wake cap of 3 is
-    /// the backstop and is not weakened**: it lives in both runtimes, it counts consecutive wakes,
-    /// and an operator marking four things in a row is exactly the burst it was written for.
+    /// and benchd delivers it by the agent's state — at its next tool call if it is busy, or by
+    /// starting a turn if it is idle. **benchd's wake cap is the backstop and is not weakened**:
+    /// an operator marking seven things in a row is exactly the burst it was written for.
     ///
-    /// **A `.clipboard` route writes nothing at all** — not an empty file, not a message to a
-    /// handle helm made up. `Mailbox.deliver` refuses a mailbox that does not exist for the same
-    /// reason.
+    /// **A `.clipboard` route sends nothing at all** — not a message to a handle helm made up.
     func send(
         _ annotation: CanvasAnnotation, on canvas: URL, along route: CanvasNoteRoute
     ) -> CanvasNoteDelivery {
@@ -76,12 +41,10 @@ struct CanvasNoteCourier {
         case let .clipboard(fallback):
             return .notSent(fallback)
         case let .mailbox(handle):
-            let message = MailMessage(
-                from: Self.sender, to: handle,
-                subject: Self.subject(for: canvas), body: Self.body(annotation, on: canvas),
-                at: now())
             do {
-                try Mailbox.deliver(message, to: handle, in: mailboxRoot)
+                try mail.send(
+                    handle, Self.sender, Self.subject(for: canvas),
+                    Self.body(annotation, on: canvas))
                 return .sent(handle)
             } catch {
                 // Never swallowed: a note the operator believes reached an agent and did not is
@@ -101,16 +64,10 @@ struct CanvasNoteCourier {
     /// against: the `from` carried the truth while the sentence the reader trusts at a glance
     /// contradicted it.
     ///
-    /// **Since #257 the notice reads this field and says the inverse for it** — the operator's own
-    /// words, carrying their authority — in both mailbox runtimes, and `operator` is a reserved
-    /// handle so no agent can *be* this sender. It is still not authentication: `from` is a field
-    /// any writer sets, so the notice's line is a legibility hint. `hooks/helm-mail.mjs` and
-    /// `pi/extensions/helm-mail/index.ts` hold the readers; `hooks/mailbox-conformance.mjs`
-    /// extracts the literal below and fails if the three copies ever drift apart.
-    ///
-    /// It is not a handle and there is no directory of this name: helm is not an agent and has no
-    /// mailbox. `MailMessage.from` is a plain `String` precisely so this cannot pretend otherwise,
-    /// and the body says where to answer instead.
+    /// `operator` is a reserved handle on the bench, so no agent can *be* this sender, and the
+    /// notice names it (`You have mail from operator: …`). It is still not authentication: `from`
+    /// is a field any sender sets. The operator's mailbox exists in benchd, but helm does not
+    /// read it for him, so the body says where to answer instead.
     nonisolated static let sender = "operator"
 
     /// One line, because that is all a recipient's notice shows of it.

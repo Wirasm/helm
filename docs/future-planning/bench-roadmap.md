@@ -211,8 +211,8 @@ end to end with zero risk to existing helm.
   - Claude Code: hook scripts for `Notification`, `Stop` (with transcript-tail
     classification: done vs ended-on-a-question), `PreToolUse` (working). Wired by hand
     into `~/.claude/settings.json` like the existing mail hooks.
-  - pi: extend `pi/extensions/helm-mail` (or a sibling extension) to forward state
-    events.
+  - pi: `pi/extensions/bench` already forwards every state event through `bench hook pi`
+    (#358).
   - codex: `notify` config handler + an output-classification fallback in benchd
     (herdr-style) for panes with no better signal.
 - Verbs: `bench attn post|list|ack`, `bench watch <handle>` (blocks until a named
@@ -238,6 +238,15 @@ bucket in the courier. The Claude Code socket poke this section first planned wa
 nobody is watching), and pasting into a pty benchd owns needs no per-runtime transport.
 What is left is **M2 finish**: the unwire list at the end of this section.
 
+**M2 finish, 2026-09-26 (#441–#445): mostly done.** Each agent reports itself through
+`bench hook <harness>` and gets its mail as hook context at its next tool call; an idle Claude
+session is started through its inbox socket (the #320 route after all, with
+`crossSessionInbound: "accept"` set once by the operator), and pi starts its own turn from its
+`bench` extension. The paste is deleted: benchd never types into a pty. helm keeps no mailroom:
+`hooks/`, `pi/extensions/helm-mail`, the conformance harness and the helm-mail skills are gone,
+and helm asks benchd who is in a pane (`mail/who`). **Left:** codex's idle channel (a
+benchd-owned app-server) and the three-runtime ring proof, which need codex's limit back.
+
 **Goal:** one owner for registry, liveness, and delivery; the flaky N-pairwise stitching
 collapses into taps.
 
@@ -255,10 +264,10 @@ collapses into taps.
 - Loop caps bench-side on agent↔agent chains.
 
 **Prove:** three-runtime mail matrix (each → each, idle and busy recipients) with wakes
-observed; the mailbox-conformance fixture set (`hooks/mailbox-conformance.mjs`) ported
-and green against benchd.
-**Unwire:** delivery/reap logic in `hooks/helm-mail.mjs` and the pi watcher (sensor
-halves stay); the Arm-a-watch instructions in the mail skills.
+observed. (The mailbox-conformance fixture set was not ported: with one mailroom there are no
+copies left to compare, and #358 deleted it.)
+**Unwire:** done in #358 — helm's hooks, its pi mail extension and both helm-mail skills are
+deleted rather than thinned; `bench hook` and `pi/extensions/bench` are the sensors.
 
 ## M3 — The wire front moves
 

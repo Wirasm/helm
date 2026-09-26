@@ -49,7 +49,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
     let workspace = StandardPath::new(&args.workspace)
         .map_err(|why| Refusal::Refused(format!("workspace: {why}")))?;
 
-    let (home, root, pushable, bench, hosted, dismissed) = {
+    let (home, root, pushable, bench, hosted, dismissed, hooked) = {
         let c = core.lock().unwrap();
         let bench: Vec<BenchSession> = c
             .sessions
@@ -74,6 +74,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
             bench,
             c.session_records.hosted.clone(),
             c.session_records.dismissed.clone(),
+            crate::hook::in_panes(&c),
         )
     };
     // Read during the build, outside the core mutex, like the harness files. `wakeable` is
@@ -94,6 +95,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
                 workspace: &workspace,
                 bench: &bench,
                 hosted: &hosted,
+                hooked: &hooked,
                 dismissed: &dismissed,
                 mailbox: &mailbox,
                 now_ms: now_ms(),

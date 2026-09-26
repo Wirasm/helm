@@ -81,7 +81,7 @@ case "$base" in
 esac
 # Mirrors `RenderableFile.isRenderable` in Sources/Helm/Shared/RenderableFile.swift, which
 # is what helm itself checks. Keep the two lists in step by hand — the same convention
-# AGENTS.md documents for hooks/helm-mail.mjs and its pi twin. Drift here can only refuse
+# AGENTS.md documents for the spool scripts. Drift here can only refuse
 # something helm would have rendered, never the reverse, which is why the duplicate is
 # worth having: the alternative is emitting and learning about it from a banner.
 case "$ext" in

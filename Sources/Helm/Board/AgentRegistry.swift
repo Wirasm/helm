@@ -135,68 +135,12 @@ enum AgentRegistry {
         }
     }
 
-    /// The `sessionFor:` `AddressBook` asks for: which Claude session is running in a pid.
+    /// The registry keyed by pid, for the callers that need a pane's agent: `AgentObserver`,
+    /// which wants `cwd` (#63), and `BenchSnapshotModel`, which publishes its status (#283).
     ///
-    /// **One read of the registry, then a pure closure over it.** Both callers ask about
-    /// several pids for one answer — `BenchSnapshotModel` about every terminal pane it is
-    /// projecting, `SpoolModel` about one pane per poll attempt — and re-listing the directory
-    /// per pid would turn a two-second snapshot into a directory scan per pane.
-    ///
-    /// The consequence is that the answer is **as fresh as the call**, which is why `SpoolModel`
-    /// builds a new lookup on every poll attempt: the row it is waiting for is written by an
-    /// agent that has not started yet, and a lookup captured before the poll would never see it.
-    ///
-    /// `nil` for a pid with no row — silence, which `AddressBook` is careful never to read as
-    /// an answer. `AgentLocator` is deliberately not involved: this is the registry's own
-    /// "which session is in THIS process", one row per pid, and the wrapper case is handled by
-    /// `AddressBook`'s ancestry branch rather than by widening this question.
-    ///
-    /// # It runs pid → session, and that is why it needs no liveness check
-    ///
-    /// Worth stating, because the JS half of #247 asks the same registry the **opposite** way
-    /// and does need one. `sessionPid(sessionId)` in `hooks/helm-mail.mjs` scans *by session id*
-    /// and hands back a pid it discovered from file contents — a number that can name a dead
-    /// process, hence its `pidAlive(row.pid)` filter. This runs the other direction: the caller
-    /// supplies the pid, which is a pane's live foreground process read off the pty, and
-    /// `$0.pid == pid` means any row that matches carries that same live number. A liveness
-    /// guard here would be asking whether a pid we just watched running is running. The JS
-    /// analogue of *this* direction is `ownerGone`'s `<pid>.json` read, which is likewise
-    /// unguarded, for the same reason.
-    ///
-    /// The residual is a row Claude Code left behind for a pid the OS then recycled. **Measured
-    /// 2026-08-06: it cleans up after itself** — a real agent spawned through the spool at pid
-    /// 37255 had its row removed the moment the process exited. So this needs a crash or a
-    /// `SIGKILL` to arise, it is symmetric with what both JS reapers already live with, and it
-    /// is not new exposure: the pre-#247 join reached the very same wrong mailbox by the very
-    /// same pid, with no registry involved at all.
-    static func sessionLookup(in root: URL = defaultRoot) -> (pid_t) -> String? {
-        sessionLookup(over: rows(in: root))
-    }
-
-    /// The same closure over rows a caller already read.
-    ///
-    /// **It exists so that reading the registry once and reading it twice cannot disagree
-    /// (#283).** `BenchSnapshotModel` needs the whole row per pane now — the agent's own
-    /// `status`/`waitingFor` go into `snapshot.json` — as well as this pid→session lookup, and
-    /// calling `sessionLookup(in:)` beside `rows(in:)` would list the same directory twice per
-    /// publish and let one publish's `owner` join disagree with the same publish's `agent`
-    /// record. That is the duplicate-pid defect `rows(in:)` closes, one level up, and the answer is
-    /// the same: the rule is a function over rows the caller holds.
-    static func sessionLookup(over rows: [pid_t: AgentSession]) -> (pid_t) -> String? {
-        { pid in rows[pid]?.sessionId }
-    }
-
-    /// The same read, keyed by pid, for the caller that needs the whole row rather than the
-    /// session id — `AgentObserver`, which also wants `cwd` (#63).
-    ///
-    /// **It exists so there is exactly one rule for a duplicate pid.** This was two functions:
-    /// `sessionLookup` did `rows.first { $0.pid == pid }` and a second dictionary elsewhere did
-    /// `uniquingKeysWith: { _, last in last }` — the same directory read twice, both authors
-    /// reasoning in prose about the identical degenerate case and reaching **opposite**
-    /// conclusions. Nothing detected the disagreement, and its cost was `snapshot.json`
-    /// attributing one session to a pane while the pane's own persisted record named another.
-    /// Caught in review before it shipped, and the shape of the defect is `AGENTS.md`'s own:
-    /// one rule, two spellings, nothing to notice when they diverge.
+    /// **It exists so there is exactly one rule for a duplicate pid**: two readers that built
+    /// their own dictionaries once reached opposite answers for it, and `snapshot.json` named a
+    /// different session from the one the pane's own record held.
     ///
     /// **The rule is last-wins, and it is arbitrary on purpose.** Claude Code names the file
     /// after the pid, so two rows for one pid means two files claiming the same process — they

@@ -3,7 +3,7 @@
 //! through `Inputs::alive`; the real check is `process::alive`, tested beside it.
 
 use bench_doc::{PaneId, StandardPath};
-use bench_sessions::{BenchSession, Built, Cache, Inputs, build};
+use bench_sessions::{BenchSession, Built, Cache, HookedAgent, Inputs, build};
 use bench_wire::{
     Activity, Dismissal, Harness, Host, HostedSession, HostedVia, MailAddress, OpenAction,
     SessionRow, SessionState,
@@ -33,6 +33,7 @@ struct Fixture {
     panes: Vec<Value>,
     bench: Vec<BenchSession>,
     hosted: Vec<HostedSession>,
+    hooked: Vec<HookedAgent>,
     dismissed: Vec<Dismissal>,
     /// handle → messages in its inbox.
     unread: HashMap<String, usize>,
@@ -75,6 +76,7 @@ impl Fixture {
             panes: Vec::new(),
             bench: Vec::new(),
             hosted: Vec::new(),
+            hooked: Vec::new(),
             dismissed: Vec::new(),
             unread: HashMap::new(),
         };
@@ -220,6 +222,7 @@ impl Fixture {
                 workspace: &ws,
                 bench: &self.bench,
                 hosted: &self.hosted,
+                hooked: &self.hooked,
                 dismissed: &self.dismissed,
                 mailbox: &mailbox,
                 now_ms: now_ms(),
@@ -252,9 +255,9 @@ fn activity(r: &SessionRow) -> &Activity {
     }
 }
 
-fn pane_owner(pid: u32, session: &str, cwd: &str) -> Value {
-    json!({"isLive": true, "foregroundPid": pid,
-        "owner": {"runtime": "claude", "pid": pid, "sessionId": session, "cwd": cwd, "handle": "h-1"}})
+/// A live terminal pane with `pid` in its foreground: all the session list reads of one.
+fn pane_running(pid: u32) -> Value {
+    json!({"isLive": true, "foregroundPid": pid})
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +268,7 @@ fn a_pane_agent_is_listed_to_focus_and_a_live_agent_outside_helm_is_not_listed_a
     let ws = Fixture::s(f.ws());
     f.claude(100, "in-pane", &ws, json!({"status": "idle"}));
     f.claude(200, "in-zed", &ws, json!({"status": "busy"}));
-    f.pane(PANE, pane_owner(100, "in-pane", &ws));
+    f.pane(PANE, pane_running(100));
     // Its transcript exists, so only the missing record keeps it out of the finished rows.
     f.transcript(&ws, "in-zed");
 
@@ -358,7 +361,7 @@ fn a_subagent_runs_while_its_tail_is_open_and_is_hidden_once_its_turn_ended() {
     let mut f = Fixture::new();
     let ws = Fixture::s(f.ws());
     let parent_start = f.claude(100, "parent", &ws, json!({"status": "busy"}));
-    f.pane(PANE, pane_owner(100, "parent", &ws));
+    f.pane(PANE, pane_running(100));
     let old = now_ms() - 30_000; // after the parent started, and quiet for 30 s
     let tool = f.subagent(
         &ws,
@@ -416,7 +419,7 @@ fn a_subagent_last_written_before_its_parent_process_started_died_with_an_earlie
     let mut f = Fixture::new();
     let ws = Fixture::s(f.ws());
     let parent_start = f.claude(100, "parent", &ws, json!({}));
-    f.pane(PANE, pane_owner(100, "parent", &ws));
+    f.pane(PANE, pane_running(100));
     let orphan = f.subagent(
         &ws,
         "parent",
@@ -437,7 +440,7 @@ fn a_subagent_whose_turn_ended_with_tasks_outstanding_is_waiting_on_them() {
     let mut f = Fixture::new();
     let ws = Fixture::s(f.ws());
     f.claude(100, "parent", &ws, json!({}));
-    f.pane(PANE, pane_owner(100, "parent", &ws));
+    f.pane(PANE, pane_running(100));
     // Key order is Claude's, not serde_json's (which sorts): the launched agent's id comes
     // after the status, and the line's own `agentId` names the writer.
     let launched = |id: &str| -> String {
@@ -509,7 +512,7 @@ fn a_warm_build_scans_only_what_was_appended() {
     let mut f = Fixture::new();
     let ws = Fixture::s(f.ws());
     f.claude(100, "parent", &ws, json!({}));
-    f.pane(PANE, pane_owner(100, "parent", &ws));
+    f.pane(PANE, pane_running(100));
     let padding = "x".repeat(4096);
     let mut records: Vec<Value> = (0..512)
         .map(|i| json!({"type": "user", "n": i, "pad": padding}))
@@ -656,7 +659,7 @@ fn finished_rows_come_only_from_the_record_and_a_dismissal_hides_one_until_it_fi
 
     // Live again: running, never also finished.
     f.claude(100, "hosted-claude", &ws, json!({}));
-    f.pane(PANE, pane_owner(100, "hosted-claude", &ws));
+    f.pane(PANE, pane_running(100));
     let built = f.build();
     assert_eq!(ids(&built), ["hosted-claude", "pi-1"]);
     assert!(row(&built, "hosted-claude").unwrap().state.is_running());
@@ -754,7 +757,7 @@ fn a_bench_session_carries_its_mail_address_and_a_pane_agent_carries_the_one_its
         .push(bench_session("s1", "pi-live", &ws, "worker", true));
     f.unread.insert("worker".into(), 2);
     f.claude(100, "in-pane", &ws, json!({}));
-    f.pane(PANE, pane_owner(100, "in-pane", &ws));
+    f.pane(PANE, pane_running(100));
     f.unread.insert("operator".into(), 3);
     let built = f.build();
     assert_eq!(
@@ -856,9 +859,9 @@ fn a_shape_no_reader_knows_skips_the_row_and_says_which_file() {
     let mut f = Fixture::new();
     let ws = Fixture::s(f.ws());
     f.claude(100, "pondering", &ws, json!({"status": "pondering"}));
-    f.pane(PANE, pane_owner(100, "pondering", &ws));
+    f.pane(PANE, pane_running(100));
     f.claude(101, "parent", &ws, json!({}));
-    f.pane(PANE2, pane_owner(101, "parent", &ws));
+    f.pane(PANE2, pane_running(101));
     f.subagent(
         &ws,
         "parent",
@@ -915,7 +918,7 @@ fn a_snapshot_version_this_build_does_not_read_is_reported_and_places_no_one() {
     let mut f = Fixture::new();
     let ws = Fixture::s(f.ws());
     f.claude(100, "in-pane", &ws, json!({}));
-    f.pane(PANE, pane_owner(100, "in-pane", &ws));
+    f.pane(PANE, pane_running(100));
     let mut cache = Cache::default();
     let built = f.build_with(&mut cache, &f.ws());
     assert_eq!(ids(&built), ["in-pane"]);
@@ -929,6 +932,7 @@ fn a_snapshot_version_this_build_does_not_read_is_reported_and_places_no_one() {
             workspace: &ws_path,
             bench: &[],
             hosted: &[],
+            hooked: &[],
             dismissed: &[],
             mailbox: &|h: &str| MailAddress {
                 handle: h.into(),
@@ -944,4 +948,36 @@ fn a_snapshot_version_this_build_does_not_read_is_reported_and_places_no_one() {
     assert!(built.list.rows.is_empty());
     assert_eq!(built.list.unreadable.len(), 1);
     assert!(built.list.unreadable[0].why.contains("version 2"));
+}
+
+#[test]
+fn an_agent_whose_hooks_report_is_listed_in_its_pane_once_and_only_while_it_lives() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    let pane = PaneId::parse(PANE2).unwrap();
+    let hooked = |harness, session: &str, pid| HookedAgent {
+        harness,
+        session: session.into(),
+        cwd: ws.clone(),
+        pane,
+        pid,
+        activity: Activity::Idle,
+        handle: format!("ws-{session}"),
+    };
+    // A pi agent: no registry, no snapshot record; its hooks are the only source.
+    f.live.insert(300, now_ms());
+    f.hooked.push(hooked(Harness::Pi, "pi-1", 300));
+    // A Claude agent the snapshot already places by its foreground pid: listed once.
+    f.claude(100, "in-pane", &ws, json!({"status": "busy"}));
+    f.pane(PANE, pane_running(100));
+    f.hooked.push(hooked(Harness::Claude, "in-pane", 100));
+    let built = f.build();
+    let pi = row(&built, "pi-1").expect("the pi agent is listed");
+    assert_eq!(pi.host, Host::Pane { pane });
+    assert_eq!(*activity(pi), Activity::Idle, "as its hooks last said");
+    assert_eq!(pi.mail, address("ws-pi-1", false, 0));
+    assert_eq!(ids(&built), ["in-pane", "pi-1"], "the Claude agent once");
+    // Its process gone (killed: no SessionEnd), it is no longer a running row.
+    f.live.remove(&300);
+    assert!(row(&f.build(), "pi-1").is_none());
 }

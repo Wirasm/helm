@@ -2,7 +2,7 @@
 # The gate, defined once (#418). `just check` runs it; CI runs one part per job, so the two
 # cannot drift apart the way AGENTS.md's one-liner and gate.yml's steps did.
 #
-#   scripts/check.sh                   every part: lint, hooks and skills always; swift,
+#   scripts/check.sh                   every part: lint and skills always; swift,
 #                                      daemon and pi when their paths changed (see `needs`).
 #                                      Ends with a summary.
 #   scripts/check.sh <part>...         only those parts, whatever changed
@@ -10,7 +10,7 @@
 #                                      exit 0 if <part> must run for `base...HEAD`
 #                                      (default base origin/development), 1 if not. CI uses it.
 #
-# Parts: lint swift hooks skills daemon pi. Within a part the first failure stops it; across
+# Parts: lint swift skills daemon pi. Within a part the first failure stops it; across
 # parts the run continues, so one red part does not hide another.
 #
 # HELM_CHECK_HEADLESS=1 is the one difference in the commands CI runs: no runner has an active
@@ -22,7 +22,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-ALL_PARTS="lint swift hooks skills daemon pi"
+ALL_PARTS="lint swift skills daemon pi"
 
 # ---- path rules: the only place that says which change needs which part ----
 
@@ -39,7 +39,7 @@ changed_paths() {
 needs() {
     local part=$1 base=$2 paths
     case "$part" in
-        lint | hooks | skills) return 0 ;;
+        lint | skills) return 0 ;;
     esac
     paths=$(changed_paths "$base") || {
         echo "check: cannot diff against $base; running $part" >&2
@@ -119,14 +119,8 @@ part_swift() {
     xcodegen generate
 }
 
-part_hooks() {
-    require node hooks || return 1
-    bash hooks/test.sh
-}
-
 part_skills() {
     for tool in node zsh python3 git; do require "$tool" skills || return 1; done
-    bash .claude/skills/helm-mail-cc/test.sh || return 1
     bash .claude/skills/helm-canvas/test.sh || return 1
     bash .claude/skills/helm-board/test.sh || return 1
     bash .claude/skills/post-canvas/test.sh

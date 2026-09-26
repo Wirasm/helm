@@ -57,6 +57,20 @@ pub struct BenchSession {
     pub handle: String,
 }
 
+/// An agent in a helm pane as its own hooks report it to benchd (#358): the source for pi and
+/// codex, which publish no registry, and for any agent the snapshot's foreground pid misses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookedAgent {
+    pub harness: Harness,
+    pub session: String,
+    pub cwd: String,
+    pub pane: bench_doc::PaneId,
+    /// Its process as the last hook reported it; alive is running.
+    pub pid: u32,
+    pub activity: Activity,
+    pub handle: String,
+}
+
 /// Everything a build reads besides the harness files.
 pub struct Inputs<'a> {
     /// Whose `~/.claude` and `~/.pi`.
@@ -66,6 +80,8 @@ pub struct Inputs<'a> {
     pub workspace: &'a StandardPath,
     pub bench: &'a [BenchSession],
     pub hosted: &'a [HostedSession],
+    /// Agents in helm panes whose hooks report to benchd.
+    pub hooked: &'a [HookedAgent],
     pub dismissed: &'a [Dismissal],
     /// A handle's mail address: its unread count, and whether benchd holds a live session
     /// with it. benchd answers from its mailroom and the same rule `mail/send` uses to queue a
@@ -272,27 +288,14 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     };
     for p in &panes {
         let host = Host::Pane { pane: p.pane };
-        let claude_here = [p.owner.as_ref().map(|o| o.pid), p.foreground_pid]
-            .into_iter()
-            .flatten()
-            .find_map(|pid| by_pid.get(&pid).copied());
+        let claude_here = p.foreground_pid.and_then(|pid| by_pid.get(&pid).copied());
         if let Some(r) = claude_here {
             record(Harness::Claude, &r.session, &r.cwd, p.pane);
             hosted_claude.push(r);
-            // The owner's cwd follows the agent into a worktree it moved to; the registry
-            // keeps where it started.
-            let cwd = p
-                .owner
-                .as_ref()
-                .and_then(|o| o.cwd.clone())
-                .unwrap_or_else(|| r.cwd.clone());
-            let scope = if ws.root_of(&cwd).is_some() {
-                &cwd
-            } else {
-                &r.cwd
-            };
+            live.insert(key(Harness::Claude, &r.session));
+            let cwd = r.cwd.clone();
             out.push(
-                scope,
+                &cwd,
                 Draft {
                     harness: Harness::Claude,
                     id: r.session.clone(),
@@ -307,36 +310,44 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                     updated_at_ms: r.status_updated_ms.unwrap_or(r.started_ms),
                 },
             );
-        } else if let Some(o) = &p.owner
-            && o.harness != Harness::Claude
-            && let (Some(id), Some(cwd)) = (&o.session, &o.cwd)
-        {
-            // pi and codex publish no registry: the pane's own owner record is the source,
-            // and its pid being alive is the liveness.
-            record(o.harness, id, cwd, p.pane);
-            if alive(o.pid, None) {
-                live.insert(key(o.harness, id));
-                out.push(
-                    cwd,
-                    Draft {
-                        harness: o.harness,
-                        id: id.clone(),
-                        parent: None,
-                        name: None,
-                        cwd: cwd.clone(),
-                        state: SessionState::Running {
-                            activity: Activity::Unknown,
-                        },
-                        host,
-                        mail: mail_of(o.harness, id),
-                        updated_at_ms: inputs.now_ms,
-                    },
-                );
-            }
         }
         if let Some(r) = &p.resumable {
             record(r.harness, &r.session, &r.cwd, p.pane);
         }
+    }
+
+    // 2b. Agents in helm panes that benchd knows from their own hooks, not already listed.
+    for h in inputs.hooked {
+        let listed = out
+            .rows
+            .iter()
+            .any(|r| r.harness == h.harness && r.id == h.session);
+        if listed || !alive(h.pid, None) {
+            continue;
+        }
+        live.insert(key(h.harness, &h.session));
+        let registered = (h.harness == Harness::Claude)
+            .then(|| registry.iter().find(|r| r.session == h.session))
+            .flatten();
+        if let Some(r) = registered {
+            hosted_claude.push(r);
+        }
+        out.push(
+            &h.cwd,
+            Draft {
+                harness: h.harness,
+                id: h.session.clone(),
+                parent: None,
+                name: registered.and_then(|r| r.name.clone()),
+                cwd: h.cwd.clone(),
+                state: SessionState::Running {
+                    activity: h.activity.clone(),
+                },
+                host: Host::Pane { pane: h.pane },
+                mail: Some((inputs.mailbox)(&h.handle)),
+                updated_at_ms: inputs.now_ms,
+            },
+        );
     }
 
     // 3. --bg jobs.

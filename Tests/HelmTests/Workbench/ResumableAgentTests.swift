@@ -501,8 +501,7 @@ final class ResumableAgentTests: XCTestCase {
 
         let snapshot = BenchSnapshot.project(
             writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,
-            workbench: model, terminals: terminals,
-            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
+            workbench: model, terminals: terminals
         ) { _ in nil }
 
         let record = try XCTUnwrap(snapshot.workspaces.first { $0.path == parked.path })
@@ -530,8 +529,7 @@ final class ResumableAgentTests: XCTestCase {
         model.activate(workspacePath: workspace.path, restoring: bench)
         return BenchSnapshot.project(
             writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,
-            workbench: model, terminals: terminals,
-            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
+            workbench: model, terminals: terminals
         ) { _ in nil }
     }
 

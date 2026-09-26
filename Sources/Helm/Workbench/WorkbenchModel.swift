@@ -111,10 +111,8 @@ final class WorkbenchModel: ObservableObject {
     /// is what a test that never wires it gets.
     weak var parked: ParkedBenches?
 
-    /// How a mark leaves helm. Injected for the same reason `BenchSnapshotModel` injects its
-    /// mailbox root and its `foregroundPid`: the routing is then reachable from `swift test`
-    /// against a mailbox the test owns, with no live agent and nothing written near the
-    /// operator's own `~/.helm/mail`.
+    /// How a mark leaves helm: as mail through benchd. Injected so the routing is reachable from
+    /// `swift test` with a benchd the test answers for, and nothing sent to the operator's own.
     private let notes: CanvasNoteCourier
 
     /// How helm learns which agent is in a pane, and whether its transcript is still there
@@ -511,12 +509,10 @@ final class WorkbenchModel: ObservableObject {
 
     /// Which agent is running in each terminal pane **right now**, per Claude Code's own
     /// registry. Absent from the dictionary means the registry says nothing about that pane —
-    /// never "there is no agent", which is the distinction `AddressBook` is careful about one
-    /// join over.
+    /// never "there is no agent".
     private func liveAgents(in bench: Workbench) -> [Pane.ID: ResumableAgent] {
         // Re-read per call rather than captured: the row helm is waiting for is written by an
-        // agent that has not started yet, so a lookup taken earlier could never see it —
-        // `AgentRegistry.sessionLookup`'s header has the same note for the same reason.
+        // agent that has not started yet, so a lookup taken earlier could never see it.
         let rows = agents.sessionsNow()
         var found: [Pane.ID: ResumableAgent] = [:]
         for id in bench.terminalPaneIDs {
@@ -627,7 +623,8 @@ final class WorkbenchModel: ObservableObject {
         let route = CanvasNoteRoute.route(origin: origins[pane]?.origin) { origin in
             // A closed pane resolves to no session, which is `.originGone` — the agent that
             // pushed this canvas is not there any more, and the operator is told so.
-            notes.owner(of: terminals.sessions.first { $0.id == origin.terminal })
+            terminals.sessions.contains { $0.id == origin.terminal }
+                ? notes.handle(in: origin.terminal) : nil
         }
         return notes.send(annotation, on: canvas, along: route)
     }

@@ -3,25 +3,18 @@ import XCTest
 
 @testable import Helm
 
-/// The write half: what actually lands in a mailbox, and what happens when it cannot.
+/// The send half: what a mark hands benchd, and what happens when benchd cannot take it.
 ///
-/// helm has only ever *read* the mailbox, so this is the first Swift writer of a format whose two
-/// readers are JavaScript in other processes (`hooks/helm-mail.mjs`, `pi/extensions/helm-mail/`).
-/// Nothing in `swift test` can run either of them — so what is asserted here is every rule those
-/// readers apply, taken from their source and named against it.
+/// helm keeps no mailroom (#358), so the message format, its file mode and the retired-box rule
+/// are benchd's and tested there. What is left here is what helm decides: who it is sent to,
+/// what it says, and that a send which fails is never reported as sent.
 @MainActor
 final class CanvasNoteCourierTests: XCTestCase {
-    private var root: URL!
     private let handle = Handle(validating: "sild-611a")!
     private let canvas = URL(fileURLWithPath: "/work/artifacts/plan.md")
 
     /// **Decoded through `CanvasAnnotation.decode`, not assembled beside it** (#326) — see
-    /// `CanvasAnnotationFixture`.
-    ///
-    /// A throwing method rather than the computed property it was, because the gate can refuse and
-    /// a property has nowhere to report that. Not a stored property filled in `setUpWithError`
-    /// either: that override is nonisolated on a `@MainActor` class, so assigning to one there
-    /// warns — which is what the four existing `root` warnings in this file are.
+    /// `CanvasAnnotationFixture`. A throwing method because the gate can refuse.
     private func annotation(
         file: StaticString = #filePath, line: UInt = #line
     ) throws -> CanvasAnnotation {
@@ -30,62 +23,38 @@ final class CanvasNoteCourierTests: XCTestCase {
             comment: "this shouldn't talk to that", file: file, line: line)
     }
 
-    override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("helm-courier-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(
-            at: root.appendingPathComponent(handle.value), withIntermediateDirectories: true)
+    /// Every send the courier makes, in order.
+    private final class Sends: @unchecked Sendable {
+        var calls: [(to: Handle, from: String, subject: String, body: String)] = []
     }
 
-    override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: root)
-        root = nil
-    }
-
-    private var box: URL { root.appendingPathComponent(handle.value) }
-
-    private func names() throws -> [String] {
-        try FileManager.default.contentsOfDirectory(atPath: box.path).sorted()
+    private func mailbox(
+        recording sends: Sends, refusing reason: String? = nil
+    ) -> BenchMailbox {
+        BenchMailbox(
+            who: { _ in nil },
+            send: { to, from, subject, body in
+                if let reason { throw BenchMailbox.Refused(description: reason) }
+                sends.calls.append((to, from, subject, body))
+            })
     }
 
     // MARK: - The message
 
-    func testASentNoteLandsAsOneMessageNamedByItsOwnID() throws {
-        let courier = CanvasNoteCourier(mailboxRoot: root, now: { Date(timeIntervalSince1970: 42) })
+    func testASentNoteGoesToThePanesAgentFromTheOperator() throws {
+        let sends = Sends()
+        let courier = CanvasNoteCourier(mail: mailbox(recording: sends))
+        let annotation = try annotation()
 
-        let delivery = try courier.send(annotation(), on: canvas, along: .mailbox(handle))
+        let delivery = courier.send(annotation, on: canvas, along: .mailbox(handle))
 
         XCTAssertEqual(delivery, .sent(handle))
-        let written = try names()
-        XCTAssertEqual(written.count, 1, "\(written)")
-        let name = try XCTUnwrap(written.first)
-        XCTAssertTrue(
-            name.hasSuffix(".json") && !name.hasPrefix("."),
-            "both readers filter on exactly these two rules (hooks/helm-mail.mjs:118) — \(name)")
-        XCTAssertTrue(name.hasPrefix("42000-"), "the id opens with the epoch millis it was sent at")
-
-        let message = try XCTUnwrap(
-            try JSONSerialization.jsonObject(
-                with: Data(contentsOf: box.appendingPathComponent(name))) as? [String: Any])
-        XCTAssertEqual(message["id"] as? String, String(name.dropLast(".json".count)))
-        XCTAssertEqual(message["sentAt"] as? Int, 42000)
-        XCTAssertEqual(message["to"] as? String, handle.value)
-        XCTAssertEqual(
-            Set((message as [String: Any]).keys),
-            ["id", "from", "to", "subject", "body", "sentAt"],
-            "the shape both runtimes read, and nothing extra they would ignore")
-    }
-
-    /// **`sentAt` is derived from `id`, so they cannot disagree.** The documented way to send is
-    /// `'sentAt': int(id.split('-')[0])` — one number in two fields, with nothing to notice when a
-    /// caller passes a different clock to each.
-    func testTheTimestampAndTheIdAreTheSameNumber() {
-        let message = MailMessage(
-            from: "operator", to: handle, subject: "s", body: "b",
-            at: Date(timeIntervalSince1970: 1_786_000_000.5))
-
-        XCTAssertEqual(message.sentAt, 1_786_000_000_500)
-        XCTAssertEqual(message.id.split(separator: "-").first.map(String.init), "1786000000500")
+        XCTAssertEqual(sends.calls.count, 1, "one mark is one message")
+        let call = try XCTUnwrap(sends.calls.first)
+        XCTAssertEqual(call.to, handle)
+        XCTAssertEqual(call.from, "operator")
+        XCTAssertEqual(call.subject, CanvasNoteCourier.subject(for: canvas))
+        XCTAssertEqual(call.body, CanvasNoteCourier.body(annotation, on: canvas))
     }
 
     /// The anchor is the acceptance criterion — an agent handed *"this shouldn't talk to that"*
@@ -109,7 +78,7 @@ final class CanvasNoteCourierTests: XCTestCase {
     }
 
     /// The subject is all a recipient's notice shows of a message
-    /// (`hooks/helm-mail.mjs`'s `notice`), so it has to name the artifact on one line.
+    /// (benchd's pointer line), so it has to name the artifact on one line.
     func testTheSubjectNamesTheCanvasOnOneLine() {
         let subject = CanvasNoteCourier.subject(for: canvas)
 
@@ -119,8 +88,9 @@ final class CanvasNoteCourierTests: XCTestCase {
 
     // MARK: - What must not happen
 
-    func testAnUnroutedNoteWritesNothingAtAll() throws {
-        let courier = CanvasNoteCourier(mailboxRoot: root)
+    func testAnUnroutedNoteSendsNothingAtAll() throws {
+        let sends = Sends()
+        let courier = CanvasNoteCourier(mail: mailbox(recording: sends))
         let annotation = try annotation()
 
         for fallback in [CanvasNoteRoute.Fallback.noOrigin, .originGone] {
@@ -128,121 +98,23 @@ final class CanvasNoteCourierTests: XCTestCase {
                 courier.send(annotation, on: canvas, along: .clipboard(fallback)),
                 .notSent(fallback))
         }
-        XCTAssertEqual(try names(), [], "not an empty file, and not a directory helm invented")
+        XCTAssertEqual(sends.calls.count, 0, "not a message to a handle helm made up")
     }
 
-    /// **A mailbox helm invented is silence with a receipt.** A directory under the mail root *is*
-    /// an address; one with no owner has nobody watching it, and a message put there is never read
-    /// and never bounces (`MailboxDirectory.owners(in:)` on retirement says the same thing about
-    /// the retired case). So a missing box is refused and the operator is told.
-    func testAMailboxThatIsNotThereIsRefusedRatherThanCreated() throws {
-        let courier = CanvasNoteCourier(mailboxRoot: root)
-        let gone = Handle(validating: "reaped-0000")!
+    /// **A send benchd refuses is `.failed`, carrying benchd's reason.** The operator believes a
+    /// `.sent` note reached the agent, so a refusal read as success is the failure this path
+    /// exists to remove — and the reason is what tells them whether the agent is gone or benchd is.
+    func testARefusedSendIsAFailureThatSaysWhy() throws {
+        let sends = Sends()
+        let courier = CanvasNoteCourier(
+            mail: mailbox(recording: sends, refusing: "no mailbox at sild-611a"))
 
-        let delivery = try courier.send(annotation(), on: canvas, along: .mailbox(gone))
+        let delivery = try courier.send(annotation(), on: canvas, along: .mailbox(handle))
 
         guard case let .failed(named, why) = delivery else {
             return XCTFail("expected a failure, got \(delivery)")
         }
-        XCTAssertEqual(named, gone)
-        XCTAssertTrue(why.contains("no mailbox"), why)
-        XCTAssertFalse(
-            FileManager.default.fileExists(atPath: root.appendingPathComponent(gone.value).path),
-            "and the refusal must not leave a directory behind that a sender would then pick")
-    }
-
-    /// **A message is `0600`, because both other writers make it so** — `writeAtomic` in
-    /// `hooks/helm-mail.mjs:99` and `pi/extensions/helm-mail/index.ts:284`, and `index.ts:484`
-    /// sends every message through it. It is a real part of the shared on-disk shape rather than a
-    /// detail of the owner record: the body of a canvas note is whatever the operator typed about
-    /// their own work, and a third writer that quietly widened it to the umask would leave the
-    /// same directory holding files with two different postures depending on who sent them.
-    ///
-    /// `Data.write(options: .atomic)` does **not** carry a mode — it creates the file with the
-    /// process umask — so this has to be asked for, which is why it is asserted rather than
-    /// assumed.
-    func testAMessageIsWrittenPrivateLikeEveryOtherWritersIs() throws {
-        _ = try CanvasNoteCourier(mailboxRoot: root).send(
-            annotation(), on: canvas, along: .mailbox(handle))
-
-        let name = try XCTUnwrap(try names().first { $0.hasSuffix(".json") })
-        let attributes = try FileManager.default.attributesOfItem(
-            atPath: box.appendingPathComponent(name).path)
-        XCTAssertEqual(
-            (attributes[.posixPermissions] as? NSNumber)?.int16Value, 0o600,
-            "both JS writers set mode 0o600 on a message; a third that does not is a posture "
-                + "that depends on which agent sent it")
-    }
-
-    /// **A retired mailbox is refused, and refused DIFFERENTLY from one that never existed.**
-    /// Since #236 a gone agent's directory stays on disk forever with its `read/` archive, so
-    /// "does the directory exist" cannot tell live from gone — and a message put in a retired box
-    /// is never read and never bounces. `pi/extensions/helm-mail/index.ts:465-473` refuses exactly
-    /// this, in exactly these two ways, and its comment says why: *"a sender holding a handle from
-    /// an earlier message learns the agent is gone, instead of writing into a live-looking
-    /// directory and waiting forever for a reply."* Swift is a sender now and must say the same.
-    ///
-    /// The route cannot normally hand one over — `MailboxDirectory.owners(in:)` drops retired rows
-    /// before `CanvasNoteRoute` ever sees them — but `Mailbox.deliver` is written as the general
-    /// way to send, and the next caller will not have that filter in front of it.
-    func testARetiredMailboxIsRefusedAndSaysSomethingDifferentFromAMissingOne() throws {
-        try """
-        {"handle":"\(handle.value)","runtime":"claude","pid":40501,
-         "sessionId":"e6f1c2d8-0000-4000-8000-0000000611a4","cwd":"/work",
-         "claimedAt":1785831967319,"retiredAt":1786040000000}
-        """
-        .write(to: box.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
-
-        let delivery = try CanvasNoteCourier(mailboxRoot: root)
-            .send(annotation(), on: canvas, along: .mailbox(handle))
-
-        guard case let .failed(named, why) = delivery else {
-            return XCTFail("a retired mailbox must refuse, got \(delivery)")
-        }
         XCTAssertEqual(named, handle)
-        XCTAssertTrue(why.contains("retired"), why)
-        XCTAssertNotEqual(
-            why, Mailbox.Failure.noSuchMailbox(handle.value).localizedDescription,
-            "gone and never-existed are different facts to the operator, and to the next sender")
-        XCTAssertEqual(
-            try names(), ["owner.json"], "and nothing was written into the archive")
-    }
-
-    /// The control for the rule above: an owner record that is **not** retired still receives.
-    /// Without it, "refuse a retired mailbox" is satisfied by refusing every mailbox.
-    func testALiveOwnerRecordBesideTheMailboxDoesNotStopADelivery() throws {
-        try """
-        {"handle":"\(handle.value)","runtime":"claude","pid":40501,
-         "sessionId":"e6f1c2d8-0000-4000-8000-0000000611a4","cwd":"/work",
-         "claimedAt":1785831967319}
-        """
-        .write(to: box.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
-
-        XCTAssertEqual(
-            try CanvasNoteCourier(mailboxRoot: root)
-                .send(annotation(), on: canvas, along: .mailbox(handle)),
-            .sent(handle))
-        XCTAssertEqual(try names().filter { $0 != "owner.json" }.count, 1)
-    }
-
-    /// **A mailbox with no `owner.json` at all still receives**, which is pi's behaviour to the
-    /// letter (`readJson` yields undefined, the `owner?.retiredAt` check is falsy, the send goes
-    /// through). Refusing here instead would be a *stricter* Swift than the sibling implementation
-    /// — one rule with two spellings, which is the defect being avoided rather than a safer one.
-    func testAMailboxWithNoOwnerRecordIsNotTreatedAsRetired() throws {
-        XCTAssertEqual(
-            try CanvasNoteCourier(mailboxRoot: root)
-                .send(annotation(), on: canvas, along: .mailbox(handle)),
-            .sent(handle))
-    }
-
-    /// The staged name is invisible to a reader by both of its rules, and nothing is left behind.
-    func testNothingIsLeftStagedAfterADelivery() throws {
-        _ = try CanvasNoteCourier(mailboxRoot: root).send(
-            annotation(), on: canvas, along: .mailbox(handle))
-
-        XCTAssertEqual(
-            try names().filter { $0.hasPrefix(".tmp-") }, [],
-            "a temp file left in someone's mailbox is litter nothing ever cleans up")
+        XCTAssertTrue(why.contains("no mailbox at sild-611a"), why)
     }
 }

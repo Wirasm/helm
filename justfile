@@ -6,7 +6,7 @@ set positional-arguments
 default:
     @just --list
 
-# The whole gate, or only the named parts (lint swift hooks skills daemon pi). Same as
+# The whole gate, or only the named parts (lint swift skills daemon pi). Same as
 # `bash scripts/check.sh`, which is the form that needs no `just`; CI runs the same parts.
 check *parts:
     @bash scripts/check.sh "$@"

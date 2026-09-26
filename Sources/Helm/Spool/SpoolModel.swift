@@ -132,18 +132,16 @@ final class SpoolModel: ObservableObject {
     static let pollInterval: Duration = .milliseconds(200)
 
     private let directory: SpoolDirectory
-    private let mailRoot: URL
-    /// Claude Code's session registry, which is how a pid becomes a session id and a session id
-    /// becomes a mailbox (#247). Injectable for the same reason `mailRoot` is: a test that reads
-    /// the operator's live `~/.claude/sessions` is testing the machine, not the rule.
-    private let registryRoot: URL
+    /// benchd, which answers who is in a pane once the agent there reports through its hook
+    /// (#358). Injectable so a test says what benchd would answer.
+    private let mail: BenchMailbox
     private let isOff: Bool
     /// How long a freshly created terminal has to produce a login shell. Generous, because a
     /// deadline that can expire before the child is scheduled is the exact flake shape #157
     /// and PR #155 both had.
     private let shellDeadline: Duration
-    /// How long the agent has to claim a mailbox. Longer still: this covers a whole agent
-    /// start-up plus its `SessionStart` hook.
+    /// How long the agent has to report to benchd and so have an address. Longer still: this
+    /// covers a whole agent start-up plus its first hook.
     private let claimDeadline: Duration
 
     /// Held **strongly**, and that is deliberate. It was `weak` first, and the whole feature
@@ -183,15 +181,13 @@ final class SpoolModel: ObservableObject {
 
     init(
         directory: SpoolDirectory = .resolve(),
-        mailRoot: URL = MailboxDirectory.resolve(),
-        registryRoot: URL = AgentRegistry.defaultRoot,
+        mail: BenchMailbox = .live(),
         isOff: Bool = SpoolDirectory.isOff(),
         shellDeadline: Duration = .seconds(20),
         claimDeadline: Duration = .seconds(90)
     ) {
         self.directory = directory
-        self.mailRoot = mailRoot
-        self.registryRoot = registryRoot
+        self.mail = mail
         self.isOff = isOff
         self.shellDeadline = shellDeadline
         self.claimDeadline = claimDeadline
@@ -541,7 +537,6 @@ final class SpoolModel: ObservableObject {
     }
 
     /// Start the agent, then say what was started and how to reach it.
-    // swiftlint:disable:next function_body_length - legacy (#418): 62 lines, limit 60
     private func act(on request: AcceptedSpawnRequest) async {
         guard let spawner else {
             answer(request.id, .failed, reason: "helm has no workbench to open a terminal in")
@@ -593,34 +588,19 @@ final class SpoolModel: ObservableObject {
         answer(request.id, .started, terminalId: TerminalID(terminal))
 
         // **One wait with one budget, for two observables.** The pty's foreground pid moving
-        // off the login shell is the pty saying the line actually ran; the mailbox appearing
-        // is the agent saying it can be addressed. Waiting for them in sequence would spend
-        // the deadline twice and make the worst case a caller sees twice as long as the number
-        // this file names.
-        // One cache for the whole wait: the poll asks five times a second for up to
-        // `claimDeadline`, and re-reading every `owner.json` each time is #417's cost at 5 Hz.
-        let mailboxOwners = MailboxOwnerCache()
+        // off the login shell is the pty saying the line actually ran; benchd naming an agent in
+        // this pane is the agent saying it can be addressed (its first hook claimed a mailbox).
+        // Waiting for them in sequence would spend the deadline twice.
         let resolved = await poll(
             until: claimDeadline,
-            for: { [mailRoot, registryRoot] () -> (agent: pid_t?, owner: MailboxOwner)? in
-                let foreground = spawner.foregroundPid(of: terminal)
-                // **Both halves are re-read on every attempt, and that is the point.** The
-                // mailbox is written by the agent's `SessionStart` hook and its registry row by
-                // the agent itself, so both appear *during* this poll — a book built once
-                // before the loop would be waiting for something it could never see. The cache
-                // re-reads exactly the mailboxes that changed, so a claim is still seen.
-                let book = AddressBook(
-                    owners: mailboxOwners.owners(in: mailRoot),
-                    sessionFor: AgentRegistry.sessionLookup(in: registryRoot))
-                guard
-                    let owner = book.owner(
-                        foregroundPid: foreground, shellPid: shell,
-                        // `AddressBook` defaults neither closure (#221): it lives in `HelmWire`,
-                        // which depends on nothing in `Helm`, and `AgentLocator`/`AgentRegistry`
-                        // are `Helm`-only. This is the call site that used to lean on a default.
-                        ancestors: { AgentLocator.ancestors(of: $0) })
+            for: { [mail] () async -> (agent: pid_t?, who: BenchMailWho)? in
+                // Off the main actor: this asks benchd every tick for up to the whole deadline,
+                // and a benchd that accepts but does not answer holds each ask for the socket's
+                // timeout. The UI must not stall for that.
+                guard let who = await Task.detached(operation: { mail.who(terminal) }).value
                 else { return nil }
-                return (foreground == shell ? nil : foreground, owner)
+                let foreground = spawner.foregroundPid(of: terminal)
+                return (foreground == shell ? nil : foreground, who)
             })
 
         guard let resolved else {
@@ -628,18 +608,16 @@ final class SpoolModel: ObservableObject {
                 request.id, .unclaimed, terminalId: TerminalID(terminal),
                 pid: spawner.foregroundPid(of: terminal),
                 reason:
-                    "the terminal is alive but no mailbox appeared under \(mailRoot.path) within "
-                    + "\(claimDeadline), so this agent cannot be addressed. Either it is not "
-                    + "running the helm-mail hook/extension, or the command never started — "
-                    + "look at the pane.")
+                    "the terminal is alive but no agent in it reported to benchd within "
+                    + "\(claimDeadline), so it cannot be addressed. Either its harness is not "
+                    + "wired to `bench hook` (`bench wiring --check`), benchd is not running, or "
+                    + "the command never started — look at the pane.")
             return
         }
         answer(
             request.id, .ready, terminalId: TerminalID(terminal),
-            pid: resolved.agent ?? resolved.owner.pid, sessionId: resolved.owner.sessionId,
-            // The blessed path: a `Handle` read out of the owner record `MailboxDirectory`
-            // just resolved, never built from `cwd`/session id by hand. See `Handle`.
-            handle: Handle(readingFrom: resolved.owner), runtime: resolved.owner.runtime)
+            pid: resolved.agent ?? resolved.who.pid, sessionId: resolved.who.session,
+            handle: resolved.who.handle, runtime: resolved.who.harness)
     }
 
     /// Every success path funnels here, and the id it takes is a `RequestID` — so all 21 call
@@ -672,14 +650,14 @@ final class SpoolModel: ObservableObject {
     /// attempts instead of failing earlier — which is what both flaky process-spawning tests
     /// in this repo actually got wrong.
     private func poll<Value>(
-        until deadline: Duration, for probe: @MainActor () -> Value?
+        until deadline: Duration, for probe: @MainActor () async -> Value?
     ) async -> Value? {
         let expiry = ContinuousClock.now.advanced(by: deadline)
         while ContinuousClock.now < expiry {
-            if let value = probe() { return value }
+            if let value = await probe() { return value }
             try? await Task.sleep(for: Self.pollInterval)
             if Task.isCancelled { return nil }
         }
-        return probe()
+        return await probe()
     }
 }

@@ -260,8 +260,8 @@ _Avoid_: kill, destroy, cleanup (cleanup is the worktree rail's word)
 What helm writes back at `spool/results/<id>.json`, and the half that makes the spool a
 protocol rather than a shout. Carries the terminal id, the pid, the session id and the
 **handle** — so the caller's next move, addressing the agent it just started, needs no lookup
-of its own. Written twice on success: `started` at once, `ready` when the agent claims a
-mailbox. Every request gets one, refusals included.
+of its own. Written twice on success: `started` at once, `ready` when benchd names the agent
+in the pane (its hook claimed an address). Every request gets one, refusals included.
 _Avoid_: response, ack, receipt
 
 ### Not levels in helm

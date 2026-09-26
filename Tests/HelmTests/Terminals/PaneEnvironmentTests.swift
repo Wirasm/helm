@@ -61,10 +61,10 @@ final class PaneEnvironmentTests: XCTestCase {
 
     // MARK: - Which instance the child belongs to (#285)
 
-    /// **The half of #285 that is helm's.** The mailbox is claimed by a Claude Code hook and a pi
-    /// extension, neither of which helm runs and neither of which can ask it anything — so the
-    /// only way an isolated instance's agents can claim somewhere the operator's agents never see
-    /// is for helm to say which instance they are in. Declared rather than inherited, for the
+    /// **The half of #285 that is helm's.** The spool scripts an agent runs, and `bench` through
+    /// `BENCH_SUITE`, are processes helm does not run and that cannot ask it anything — so the
+    /// only way an isolated instance's agents reach its state rather than the operator's is for
+    /// helm to say which instance they are in. Declared rather than inherited, for the
     /// reason `terminalDeclaration` gives about `COLORTERM`.
     func testAnIsolatedInstanceTellsItsChildrenWhichInstanceTheyAreIn() {
         let environment = PaneEnvironment.forPane(
@@ -148,7 +148,7 @@ final class PaneEnvironmentTests: XCTestCase {
 
     /// **A child is never told a suite helm itself refused.** `DefaultsDomain.resolve` stops the
     /// launch on one, so publishing the raw value would be helm handing an agent a name it would
-    /// not run under — and the writers would then claim in a mailroom no helm reads.
+    /// not run under — and the agent's scripts would then write where no helm reads.
     func testASuiteHelmWouldRefuseIsNeverDeclaredToAChild() {
         for refused in ["   ", "com.wirasm.helm", "helm", "/Users/nobody/somewhere"] {
             XCTAssertNil(

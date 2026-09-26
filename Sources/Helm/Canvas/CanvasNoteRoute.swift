@@ -19,9 +19,9 @@ import HelmWire
 ///
 /// **Resolved late, never at push time.** What is recorded is which pane, not which pid or which
 /// handle: a handle read when the push arrived would be stale the moment that agent restarted in
-/// the same pane, and stale silently — mail to a retired mailbox is never read and never bounces
-/// (`MailboxDirectory.owners(in:)`). Asking the pane who is in it *now*, at the moment the
-/// operator marks something, is the only answer that cannot be quietly wrong.
+/// the same pane, and stale silently — mail to an old session's mailbox is never read and never
+/// bounces. Asking benchd who is in the pane *now* (`mail/who`), at the moment the operator marks
+/// something, is the only answer that cannot be quietly wrong.
 ///
 /// **Which is also why it is not persisted.** A restored terminal pane is a fresh empty shell —
 /// *attach never own*, `Pane.Content`'s encoder says so in as many words — so after a relaunch the
@@ -38,8 +38,7 @@ struct CanvasOrigin: Equatable, Hashable {
 ///
 /// **Pure, and the whole decision.** #205's acceptance asks for a test over the routing decision
 /// rather than over a note posted by hand, and this is the shape that makes one possible: the
-/// owner lookup is a closure, so the rule is a test that spawns no process and touches no
-/// mailbox. `AgentLocator` splits itself the same way and for the same reason.
+/// lookup is a closure, so the rule is a test that asks no daemon. `AgentLocator` splits itself the same way and for the same reason.
 enum CanvasNoteRoute: Equatable {
     /// The agent that pushed this canvas, still reachable.
     case mailbox(Handle)
@@ -52,22 +51,20 @@ enum CanvasNoteRoute: Equatable {
         /// No agent pushed this canvas: the operator opened it themselves, or a restart dropped
         /// the origin that named one.
         case noOrigin
-        /// An agent pushed it, and there is no mailbox for that pane any more — the pane was
-        /// closed, the session ended, or the agent never claimed one.
+        /// An agent pushed it, and benchd knows no mailbox in that pane — the pane was closed, the
+        /// session ended, or its harness does not report to benchd.
         case originGone
     }
 
-    /// **`origin == nil` and `owner == nil` are different answers, and the operator is told
+    /// **`origin == nil` and `handle == nil` are different answers, and the operator is told
     /// which.** They read identically from the outside — no mail either way — and collapsing them
     /// would leave "why did nothing send?" unanswerable at exactly the moment it matters.
     static func route(
-        origin: CanvasOrigin?, owner: (CanvasOrigin) -> MailboxOwner?
+        origin: CanvasOrigin?, handle: (CanvasOrigin) -> Handle?
     ) -> CanvasNoteRoute {
         guard let origin else { return .clipboard(.noOrigin) }
-        guard let owner = owner(origin) else { return .clipboard(.originGone) }
-        // The blessed path: a `Handle` read off the owner record, never assembled from a cwd and
-        // a session id. `Handle`'s own header has the twenty-line version of why.
-        return .mailbox(Handle(readingFrom: owner))
+        guard let handle = handle(origin) else { return .clipboard(.originGone) }
+        return .mailbox(handle)
     }
 }
 

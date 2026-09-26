@@ -75,8 +75,8 @@ final class CanvasModel: ObservableObject {
     /// written, which needs a known prior value and can only get one by writing first. It is not
     /// hypothetical either: before #303 every run of `CanvasMarkReachesAgentTests` replaced the
     /// operator's clipboard, because `annotate` copies and that suite drives `annotate` for real.
-    /// So the sink is injected exactly as `CanvasNoteCourier` injects its `mailboxRoot` and `now`,
-    /// for the reason stated there — a test gets one it owns, production takes the default.
+    /// So the sink is injected exactly as `CanvasNoteCourier` injects its `mail`: a test gets one
+    /// it owns, production takes the default.
     ///
     /// **What it pins is the seam, not the policy.** `CanvasNoteDelivery.copiesToClipboard` is the
     /// rule and is tested as a pure function; this is what lets a test show that `annotate` actually

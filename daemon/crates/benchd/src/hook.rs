@@ -39,6 +39,9 @@ pub struct Agent {
     pub push: Push,
     /// When its hook last reported.
     pub seen: Instant,
+    /// The agent's process, as its last hook reported it: how the session list tells a live
+    /// agent from one that was killed (a killed session reports no `SessionEnd`).
+    pub pid: u32,
 }
 
 /// Where benchd stands with starting turns for an agent.
@@ -52,9 +55,10 @@ pub enum Push {
 }
 
 impl Agent {
-    fn new(handle: String, harness: Harness) -> Agent {
+    fn new(handle: String, harness: Harness, pid: u32) -> Agent {
         Agent {
             wakes_itself: harness == Harness::Pi,
+            pid,
             handle,
             activity: None,
             told: false,
@@ -72,6 +76,7 @@ impl Agent {
     /// Take in one event. Returns the activity when it changed.
     fn observe(&mut self, args: &HookArgs, transition: Option<Transition>) -> Option<Activity> {
         self.seen = Instant::now();
+        self.pid = args.pid;
         if let Some(socket) = &args.messaging_socket {
             self.socket = Some(PathBuf::from(socket));
         }
@@ -138,7 +143,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
         if !c.agents.contains_key(&key) {
             let agent = address(&mut c, &args, &key)
                 .map_err(Refusal::Failed)?
-                .map(|handle| Agent::new(handle, args.harness));
+                .map(|handle| Agent::new(handle, args.harness, args.pid));
             c.agents.insert(key.clone(), agent);
         }
         let Some(Some(agent)) = c.agents.get_mut(&key) else {
@@ -520,5 +525,77 @@ fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
                 json!({ "harness": key.harness.name(), "session": key.id, "handle": handle, "activity": Activity::Idle, "event": "registry" }),
             );
         }
+    }
+}
+
+/// The mailbox of the agent in a helm pane: of the live agents whose claim put them in that
+/// pane, the one whose hook reported last (#358). How helm addresses a pane without a mailroom
+/// of its own: a canvas note, and a spawn's answer. Liveness is checked because a killed agent
+/// reports no `SessionEnd` and `reconcile` keeps its `seen` fresh while it has unread mail, so
+/// without it a dead agent could outrank the live one now in its pane. Checked after the lock is
+/// released, like every other process probe here.
+pub fn who(core: &Arc<Mutex<Core>>, pane: PaneId) -> Option<bench_wire::MailWho> {
+    let mut candidates: Vec<(Instant, bench_wire::MailWho)> = {
+        let c = core.lock().unwrap();
+        c.agents
+            .iter()
+            .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
+            .filter(|(key, _)| pane_of(&c, key) == Some(pane))
+            .map(|(key, a)| {
+                let who = bench_wire::MailWho {
+                    handle: a.handle.clone(),
+                    harness: key.harness,
+                    session: key.id.clone(),
+                    pid: a.pid,
+                };
+                (a.seen, who)
+            })
+            .collect()
+    };
+    candidates.retain(|(_, who)| bench_sessions::process::alive(who.pid, None));
+    candidates
+        .into_iter()
+        .max_by_key(|(seen, _)| *seen)
+        .map(|(_, who)| who)
+}
+
+/// Agents in helm panes as their hooks report them, for the session list: the one source for
+/// a pi or codex pane agent, whose harness publishes no registry.
+pub fn in_panes(core: &Core) -> Vec<bench_sessions::HookedAgent> {
+    core.agents
+        .iter()
+        .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
+        .filter_map(|(key, a)| {
+            let entry = core
+                .session_records
+                .hosted
+                .iter()
+                .find(|h| h.key() == *key)?;
+            let HostedVia::Pane { pane, .. } = entry.via else {
+                return None;
+            };
+            Some(bench_sessions::HookedAgent {
+                harness: key.harness,
+                session: key.id.clone(),
+                cwd: entry.cwd.clone(),
+                pane,
+                pid: a.pid,
+                activity: a.activity.clone().unwrap_or(Activity::Unknown),
+                handle: a.handle.clone(),
+            })
+        })
+        .collect()
+}
+
+fn pane_of(core: &Core, key: &SessionKey) -> Option<PaneId> {
+    match core
+        .session_records
+        .hosted
+        .iter()
+        .find(|h| h.key() == *key)?
+        .via
+    {
+        HostedVia::Pane { pane, .. } => Some(pane),
+        HostedVia::Bench { .. } => None,
     }
 }
