@@ -11,6 +11,7 @@ import XCTest
 /// current node's output preview" became "the subline is the current node's stage". What is
 /// gone entirely is the liveness state, the `abandon` verb and the run pane — see the commit
 /// message. `approve`/`reject` came back with #150 and are exercised below.
+// swiftlint:disable:next type_body_length - legacy (#418): 521 lines, limit 350
 final class ArchonRailModelTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/project")
 
