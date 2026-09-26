@@ -32,10 +32,11 @@ mod sessions;
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
 use bench_session::{AgentKind, Notice, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id};
 use bench_wire::{
-    BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
-    MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, READY_WAIT,
-    Request, Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb, browser_endpoint_path,
-    check_socket_path, events_path, resolve_root, socket_path, validate_handle,
+    Activity, BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event,
+    KNOWN_VERBS, MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE,
+    READY_WAIT, Request, Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb,
+    browser_endpoint_path, check_socket_path, events_path, resolve_root, socket_path,
+    validate_handle,
 };
 use bench_wire::{DOCUMENT_CHANGED, Frame};
 use serde_json::{Value, json};
@@ -133,6 +134,7 @@ struct PendingWake {
     mail_id: String,
     from: String,
     capped_logged: bool,
+    held_logged: bool,
 }
 
 /// A token bucket per recipient: burst of WAKE_BURST, refilling one per minute. A
@@ -571,11 +573,14 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
 
 /// Answer `mail/sent` with `agent/woken` — the composition the mail spike proved, as a
 /// reactor over daemon state. Per pending wake: recipient must be a live session, its
-/// pty quiet past the idle gate, and its token bucket willing; then the message is
-/// retired (the notice carries the path it will KEEP), the notice is pasted and
-/// submitted, and the wake is logged. A capped wake logs once and waits for refill —
-/// the mail itself sits safely in the mailbox either way.
+/// pty quiet past the idle gate, a Claude session's own registry row must say it can take
+/// a turn ([`claude_may_paste`]), and its token bucket must be willing; then the notice is
+/// pasted and submitted, and only then is the message retired to the path the notice named.
+/// A held or capped wake logs once and waits; a failed paste drops the wake. The mail stays
+/// unread in the inbox in all three cases.
 fn wake_reactor(core: Arc<Mutex<Core>>) {
+    // Whose `~/.claude/sessions` holds the registry rows; fixed for the daemon's life.
+    let home = core.lock().unwrap().home.clone();
     loop {
         std::thread::sleep(Duration::from_millis(400));
         // Snapshot under the lock; judge and paste outside it.
@@ -622,6 +627,29 @@ fn wake_reactor(core: Arc<Mutex<Core>>) {
             if session.idle_for() < WAKE_IDLE_GATE {
                 continue;
             }
+            if session.agent == AgentKind::Claude {
+                let row = bench_sessions::claude::registry(&home, |pid, started| {
+                    pid == session.pid && bench_sessions::process::alive(pid, Some(started))
+                })
+                .0
+                .pop();
+                let activity = row.map(|r| r.activity);
+                if !claude_may_paste(activity.as_ref()) {
+                    let mut c = core.lock().unwrap();
+                    if let Some(p) = c
+                        .pending_wakes
+                        .iter_mut()
+                        .find(|p| p.mail_id == mail_id && !p.held_logged)
+                    {
+                        p.held_logged = true;
+                        let _ = c.append(
+                            "wake/held",
+                            json!({ "handle": handle, "mail": mail_id, "activity": activity }),
+                        );
+                    }
+                    continue;
+                }
+            }
             // Token, event, and pending-list mutation under the lock; the paste outside.
             let (go, root) = {
                 let mut c = core.lock().unwrap();
@@ -652,7 +680,7 @@ fn wake_reactor(core: Arc<Mutex<Core>>) {
             if !go {
                 continue;
             }
-            let retired = match bench_mail::retire(&root, &handle, &mail_id) {
+            let retired = match bench_mail::retired_path(&root, &handle, &mail_id) {
                 Ok(p) => p,
                 Err(why) => {
                     let mut c = core.lock().unwrap();
@@ -665,22 +693,47 @@ fn wake_reactor(core: Arc<Mutex<Core>>) {
                 }
             };
             let notice = format!("You have mail from {from}: {}", retired.display());
-            let delivered = session.deliver_line(&notice).is_ok();
+            // Retired only once the paste is written, so a paste that never happened leaves the
+            // mail unread. The move follows the Return by microseconds; the agent reads the
+            // path a model turn later.
+            let delivered = session.deliver_line(&notice);
+            let retire = delivered
+                .as_ref()
+                .map(|_| bench_mail::retire(&root, &handle, &mail_id));
             let mut c = core.lock().unwrap();
             c.pending_wakes.retain(|p| p.mail_id != mail_id);
-            if delivered {
-                let _ = c.append(
-                    "agent/woken",
-                    json!({ "session": session.id, "handle": handle, "mail": mail_id }),
-                );
-            } else {
-                let _ = c.append(
-                    "wake/dropped",
-                    json!({ "handle": handle, "mail": mail_id, "why": "paste failed" }),
-                );
+            match retire {
+                Ok(retired) => {
+                    let mut data =
+                        json!({ "session": session.id, "handle": handle, "mail": mail_id });
+                    // Woken, but the file was gone from both inbox and read/ (removed by hand).
+                    if let Err(why) = retired {
+                        data["retire_error"] = json!(why);
+                    }
+                    let _ = c.append("agent/woken", data);
+                }
+                Err(why) => {
+                    let _ = c.append(
+                        "wake/dropped",
+                        json!({ "handle": handle, "mail": mail_id,
+                                "why": format!("paste failed ({why}); mail stays unread in the inbox") }),
+                    );
+                }
             }
         }
     }
+}
+
+/// Whether a Claude session can take a pasted wake, by its own registry row (#415). A paste
+/// into a permission prompt or dialog answers it — measured on 2.1.283, it approved the
+/// pending command — and a prompt is quiet, so the pty gate cannot see one. Only `idle`, or
+/// `waiting` with nothing named, is a composer ready for a turn; everything else, and no
+/// row at all, holds the wake.
+fn claude_may_paste(activity: Option<&Activity>) -> bool {
+    matches!(
+        activity,
+        Some(Activity::Idle | Activity::Waiting { waiting_for: None })
+    )
 }
 
 enum AfterResponse {
@@ -1296,6 +1349,7 @@ fn dispatch(
                         mail_id: id.clone(),
                         from: parsed.from.clone(),
                         capped_logged: false,
+                        held_logged: false,
                     });
                     "queued"
                 } else {
@@ -1680,4 +1734,29 @@ fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| "unknown".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_claude_composer_ready_for_a_turn_takes_a_paste() {
+        let waiting = |w: Option<&str>| Activity::Waiting {
+            waiting_for: w.map(String::from),
+        };
+        assert!(claude_may_paste(Some(&Activity::Idle)));
+        assert!(claude_may_paste(Some(&waiting(None))));
+        for held in [
+            waiting(Some("permission prompt")),
+            waiting(Some("dialog open")),
+            waiting(Some("input needed")),
+            Activity::Busy,
+            Activity::Shell,
+            Activity::Unknown,
+        ] {
+            assert!(!claude_may_paste(Some(&held)), "{held:?}");
+        }
+        assert!(!claude_may_paste(None), "no registry row holds the wake");
+    }
 }
