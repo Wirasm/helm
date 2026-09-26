@@ -19,4 +19,5 @@ notice-carries-path-never-body observed through the relay; retirement at deliver
 retire-never-delete; metadata-only listings; the cap starving wakes but never mail;
 `operator` addressable-never-claimable; duplicate and path-shaped handles refused.
 
-Rerun anytime: `just mail-proof` (three small agent turns).
+`just mail-proof` and its paste are gone (#358). The ring's successor is `just mail-ring`, which
+delivers through each harness's own channel and reports per-hop latency.
