@@ -351,6 +351,18 @@ package struct CaptureReport: Codable, Equatable {
     /// The window that was drawn, by title. With `HELM_DEFAULTS_SUITE` set that reads
     /// `helm — <suite>`, which is how a caller tells its own instance from the operator's.
     package let window: String
+    /// Whether any part of that window was visible on a display when it was drawn — AppKit's
+    /// `occlusionState` containing `.visible`, read per capture (#408).
+    ///
+    /// **`false` means the web content in the PNG may not be real.** A locked screen or a
+    /// window fully covered by another leaves helm's window occluded, and WebKit suspends an
+    /// occluded page's web process and marks its layers volatile within seconds. `cacheDisplay`
+    /// then draws what a suspended `WKWebView` holds, which is nothing: a canvas that is loaded
+    /// and fine comes out as a blank page, with the header above it drawn normally. Terminals
+    /// are unaffected — their layers are in-process — which is why this is about the window and
+    /// not a per-pane count. helm does not try to force WebKit to paint; the suspension is WebKit
+    /// working as designed, and the report saying so is the fix.
+    package let windowVisible: Bool
     package let terminalContent: TerminalContent
     /// How many terminal panes were on the bench in this window. `terminalContent` is `.absent`
     /// exactly when this is zero.
@@ -361,13 +373,15 @@ package struct CaptureReport: Codable, Equatable {
 
     package init(
         path: String, pixelWidth: Int, pixelHeight: Int, scale: Double, window: String,
-        terminalContent: TerminalContent, terminalSurfaces: Int, terminalSurfacesExcluded: Int
+        windowVisible: Bool, terminalContent: TerminalContent, terminalSurfaces: Int,
+        terminalSurfacesExcluded: Int
     ) {
         self.path = path
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.scale = scale
         self.window = window
+        self.windowVisible = windowVisible
         self.terminalContent = terminalContent
         self.terminalSurfaces = terminalSurfaces
         self.terminalSurfacesExcluded = terminalSurfacesExcluded

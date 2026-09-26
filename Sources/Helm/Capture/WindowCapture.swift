@@ -93,9 +93,18 @@ enum WindowCapture {
         return .success(
             CaptureReport(
                 path: url.path, pixelWidth: rep.pixelsWide, pixelHeight: rep.pixelsHigh,
-                scale: scale, window: title,
+                scale: scale, window: title, windowVisible: isVisible(view),
                 terminalContent: content(of: present.count, missing: missing.count),
                 terminalSurfaces: present.count, terminalSurfacesExcluded: missing.count))
+    }
+
+    /// Whether the window `view` is in was on a display as it was drawn (#408).
+    ///
+    /// A view in no window is not visible, and saying so is the truthful answer: nothing in it
+    /// was ever composited, so a web view in it was never asked to paint.
+    @MainActor
+    static func isVisible(_ view: NSView) -> Bool {
+        view.window?.occlusionState.contains(.visible) ?? false
     }
 
     static func content(of surfaces: Int, missing: Int) -> TerminalContent {
