@@ -3,7 +3,8 @@
 # To change them, copy this file to <bench root>/rules/placement.toml (~/.bench/rules/ by
 # default) and edit it there. That file replaces this table whole; benchd rereads it on the next
 # `pane/open` and says so in its event log (`rules/loaded`, or `rules/rejected` naming the line,
-# in which case the last good table stays in force). `bench status` shows which is in use.
+# in which case the last good table stays in force). A file with no rows is refused too: delete
+# it to go back to this table. `bench status` shows which is in use.
 #
 # One [[place]] row per rule. The first row whose `surface` and `by` match decides, and its
 # `try` strategies are tried in order until one resolves. With no row matching, or none of its

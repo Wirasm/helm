@@ -348,6 +348,14 @@ fn a_file_that_cannot_be_read_is_refused_whole_naming_the_line() {
 }
 
 #[test]
+fn a_file_with_no_rules_is_refused_not_read_as_an_empty_table() {
+    for text in ["", "  \n# only a comment\n", "place = []\n"] {
+        let why = Rules::parse(text).expect_err(text);
+        assert!(why.contains("delete the file"), "{why}");
+    }
+}
+
+#[test]
 fn a_drawer_strategy_sends_the_pane_to_that_drawer() {
     let bench = Bench::terminal(PaneId::mint());
     let rules = Rules::parse(

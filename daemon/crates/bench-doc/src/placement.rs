@@ -107,6 +107,13 @@ impl Rules {
     /// caller ever holds half a table.
     pub fn parse(text: &str) -> Result<Rules, String> {
         let file: RulesFile = toml::from_str(text).map_err(|e| e.to_string().trim().to_string())?;
+        // An empty table would send every pane to a new column. It is far more often a file
+        // caught half-saved, or created before its first save, than a table anyone meant.
+        if file.place.is_empty() {
+            return Err(
+                "the file has no [[place]] rows; to use the built-in table, delete the file".into(),
+            );
+        }
         Ok(Rules {
             rules: file
                 .place

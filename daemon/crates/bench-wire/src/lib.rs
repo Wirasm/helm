@@ -22,7 +22,6 @@ pub use layout::{
     Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider, DocumentAt,
     DocumentChange, DocumentRecord, Frame, LAYOUT_VERBS, LayoutReport, LayoutVerb, MoveTo,
     OpenInto, PaneOpen, RULES_LOADED, RULES_REJECTED, document_path, placement_rules_path,
-    rules_dir,
 };
 
 mod sessions;

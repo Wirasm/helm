@@ -65,9 +65,11 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
         return reply(Status::Ok, None, Some(json!(document_at(core))));
     }
 
-    // The rules file is looked at before every change, so an edit to it applies to the next
-    // verb without a restart; the event says what was adopted or refused.
-    refresh_rules(core);
+    // `pane/open` is the one verb that places by the rules, so it reads the rules file first:
+    // an edit applies to the next open without a restart.
+    if matches!(verb, LayoutVerb::PaneOpen(_)) {
+        refresh_rules(core);
+    }
     let by = req.by.clone().unwrap_or_else(Actor::agent);
     let focus = Actor::focus(&by, req.asked);
     let mut next = core.bench.document.clone();

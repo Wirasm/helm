@@ -1,25 +1,24 @@
 //! The operator's placement rules file, `<root>/rules/placement.toml` (#356).
 //!
-//! He writes it; benchd only reads it. There is no watcher: the file is looked at (one `stat`)
-//! before every layout verb and every `status`, and reread only when it changed. Placement is
-//! rare and a stat is cheap, so a thread and a dependency would buy nothing.
+//! He writes it; benchd only reads it. There is no watcher: the file is read before every
+//! `pane/open` (the one verb that places by the rules) and every `status`, and adopted only when
+//! its text changed. It is a few hundred bytes and placement is rare, so comparing the text is
+//! cheaper to trust than an mtime, and a thread and a dependency would buy nothing.
 //!
 //! The rule for a file that cannot be read is `bench-browser`'s — a config the operator wrote
 //! and the daemon ignored is a silent fallback, so it never is one — adapted to a table that
 //! cannot simply refuse: placement has to keep working. So a bad file changes nothing, the table
 //! in force before it stays in force, and the rejection is logged once per version of the file
-//! and reported by `status` until a good version replaces it. Rules are never half-applied.
+//! and reported by `status` until a good version replaces it. That covers a file that cannot be
+//! read at all (a permission, say) and one with no rules in it: only a file that is *gone* means
+//! the built-in table. Rules are never half-applied.
 
 use bench_doc::Rules;
 use bench_wire::{RULES_LOADED, RULES_REJECTED};
 use serde_json::{Value, json};
 use std::fs;
+use std::io::ErrorKind;
 use std::path::PathBuf;
-use std::time::SystemTime;
-
-/// A version of the file: enough to tell "changed" from "the same file again". The length is
-/// there for two saves inside one mtime tick.
-type Version = (SystemTime, u64);
 
 /// What `status` says about the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,13 +31,21 @@ pub enum RulesState {
     Rejected { why: String },
 }
 
+/// What the file held when last looked at, so an unchanged file is not adopted or rejected
+/// again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Seen {
+    Absent,
+    Text(String),
+    Unreadable(String),
+}
+
 pub struct RulesFile {
     path: PathBuf,
     /// The table in force.
     rules: Rules,
     state: RulesState,
-    /// The version last looked at; `None` while there is no file.
-    seen: Option<Version>,
+    seen: Seen,
 }
 
 impl RulesFile {
@@ -50,7 +57,7 @@ impl RulesFile {
             path,
             rules: Rules::defaults(),
             state: RulesState::Default,
-            seen: None,
+            seen: Seen::Absent,
         };
         let event = file.refresh();
         (file, event)
@@ -73,24 +80,27 @@ impl RulesFile {
     }
 
     /// Look at the file, and adopt it if it changed. Answers the event to log, if anything
-    /// changed: the file appeared, changed, or went away.
+    /// changed: the file appeared, changed, went away, or stopped being readable.
     pub fn refresh(&mut self) -> Option<(&'static str, Value)> {
-        let version = fs::metadata(&self.path)
-            .ok()
-            .map(|m| (m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()));
-        if version == self.seen {
+        let now = match fs::read_to_string(&self.path) {
+            Ok(text) => Seen::Text(text),
+            Err(e) if e.kind() == ErrorKind::NotFound => Seen::Absent,
+            Err(e) => Seen::Unreadable(e.to_string()),
+        };
+        if now == self.seen {
             return None;
         }
-        self.seen = version;
-        if version.is_none() {
-            self.rules = Rules::defaults();
-            self.state = RulesState::Default;
-            return Some(self.loaded_event("default"));
-        }
-        let read = fs::read_to_string(&self.path)
-            .map_err(|e| format!("cannot read it: {e}"))
-            .and_then(|text| Rules::parse(&text));
-        match read {
+        self.seen = now.clone();
+        let parsed = match now {
+            Seen::Absent => {
+                self.rules = Rules::defaults();
+                self.state = RulesState::Default;
+                return Some(self.loaded_event("default"));
+            }
+            Seen::Unreadable(e) => Err(format!("cannot read it: {e}")),
+            Seen::Text(text) => Rules::parse(&text),
+        };
+        match parsed {
             Ok(rules) => {
                 self.rules = rules;
                 self.state = RulesState::Loaded;
@@ -169,6 +179,58 @@ mod tests {
         );
         assert_eq!(file.state, RulesState::Default);
         assert!(matches!(browser_goes(&file), Destination::Bench(_)));
+    }
+
+    #[test]
+    fn only_a_missing_file_means_the_built_in_table() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch("unreadable");
+        fs::write(&path, TO_DRAWER).unwrap();
+        let (mut file, _) = RulesFile::boot(path.clone());
+        assert!(matches!(browser_goes(&file), Destination::Drawer(_)));
+
+        // Half a save — the file truncated before the new text lands — holds no rules.
+        fs::write(&path, "").unwrap();
+        assert_eq!(file.refresh().map(|(kind, _)| kind), Some(RULES_REJECTED));
+        assert!(
+            matches!(browser_goes(&file), Destination::Drawer(_)),
+            "an empty file is not an empty table"
+        );
+
+        fs::write(&path, TO_DRAWER).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let (kind, data) = file.refresh().expect("an unreadable file is news");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(kind, RULES_REJECTED, "{data}");
+        assert!(
+            matches!(browser_goes(&file), Destination::Drawer(_)),
+            "a file that cannot be read keeps the last good table"
+        );
+    }
+
+    #[test]
+    fn a_change_is_seen_by_its_text_not_its_timestamp() {
+        let path = scratch("same-length");
+        fs::write(&path, TO_DRAWER).unwrap();
+        let (mut file, _) = RulesFile::boot(path.clone());
+        let stamp = fs::metadata(&path).unwrap().modified().unwrap();
+        let other = TO_DRAWER.replace("browser\" }", "sidebar\" }");
+        assert_eq!(other.len(), TO_DRAWER.len());
+        fs::write(&path, &other).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        assert!(
+            file.refresh().is_some(),
+            "same length, same mtime, new text"
+        );
+        assert_eq!(
+            browser_goes(&file),
+            Destination::Drawer(bench_doc::DrawerName::new("sidebar").unwrap())
+        );
     }
 
     #[test]

@@ -315,14 +315,10 @@ pub fn document_path(root: &Path) -> PathBuf {
     root.join("bench.json")
 }
 
-/// `<root>/rules`: the operator's rules files (#356). He writes them; benchd and helm only read.
-pub fn rules_dir(root: &Path) -> PathBuf {
-    root.join("rules")
-}
-
-/// `<root>/rules/placement.toml`: where new panes go. Absent means the built-in table.
+/// `<root>/rules/placement.toml`: where new panes go (#356). The operator writes it; benchd
+/// only reads it. Absent means the built-in table.
 pub fn placement_rules_path(root: &Path) -> PathBuf {
-    rules_dir(root).join("placement.toml")
+    root.join("rules").join("placement.toml")
 }
 
 /// A rules file was read and is now in force — or, with `source: "default"`, is absent and the

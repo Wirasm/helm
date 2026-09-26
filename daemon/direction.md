@@ -53,12 +53,14 @@ from here, so an older benchd quarantines it rather than dropping drawers on its
 
 **Placement is the operator's file (#356).** Where a new pane goes is a table, and the table is
 TOML: the built-in one is `crates/bench-doc/rules/placement.default.toml`, embedded at build
-time, and `<root>/rules/placement.toml` replaces it whole. benchd looks at the file (one `stat`)
-before each layout verb and each `status`, and rereads it only when it changed, so an edit
-applies to the next verb with no restart and no watcher. A strategy can send a pane to a drawer
-(`{ drawer = "browser" }`). A file that cannot be read changes nothing: the last good table stays
-in force, `rules/rejected` names the file, the line and why once per version, and `bench status`
-reports `rejected` until a good version replaces it. benchd never writes a rules file.
+time, and `<root>/rules/placement.toml` replaces it whole. benchd reads the file before each
+`pane/open` and each `status` and adopts it only when its text changed, so an edit applies to
+the next open with no restart and no watcher. A strategy can send a pane to a drawer
+(`{ drawer = "browser" }`). A file that cannot be read, or holds no rules, changes nothing: the
+last good table stays in force, `rules/rejected` names the file and why (with the line, for a
+parse error) once per version, and `bench status` reports `rejected` until a good version
+replaces it. Only a file that is gone means the built-in table. benchd never writes a rules
+file.
 
 **And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
 every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's
