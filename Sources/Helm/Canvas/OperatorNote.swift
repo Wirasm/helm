@@ -51,6 +51,9 @@ extension OperatorNote {
         case couldNotWrite(String)
         /// Unreachable, and checked anyway — see `create`.
         case notARecognisableNote(String)
+        /// git did not say which repository the workspace belongs to — almost always because
+        /// it missed its deadline — so there is no store to put the note in (#390).
+        case repositoryUnresolved(String)
 
         var sentence: String {
             switch self {
@@ -60,6 +63,8 @@ extension OperatorNote {
                 "Could not start a note: \(reason)"
             case let .notARecognisableNote(path):
                 "helm wrote \(path) but will not let you edit it. This is a bug."
+            case let .repositoryUnresolved(workspace):
+                "Could not start a note: git did not say which repository \(workspace) is in."
             }
         }
     }
@@ -104,11 +109,17 @@ extension OperatorNote {
         return "\(day)-note-\(index).md"
     }
 
-    /// Start a note for the workspace at `workspace`, and hand back the file it made.
+    /// Start a note for the repository at `repository`, and hand back the file it made.
     ///
-    /// The whole of the disk work, in one place: resolve the repository root, resolve the store,
-    /// make `notes/`, register the store if helm is the first thing to touch it, pick a free name,
-    /// and create the file **empty**.
+    /// The whole of the disk work, in one place: resolve the store, make `notes/`, register the
+    /// store if helm is the first thing to touch it, pick a free name, and create the file
+    /// **empty**.
+    ///
+    /// `repository` is `WorkspaceStore.repositoryRoot`'s answer, which the caller awaits first:
+    /// prp keys a store by the repository's MAIN checkout, so every worktree of one project
+    /// writes its notes beside that project's plans rather than into a store per branch. That
+    /// answer takes a `git` run, and this does not, so it can stay synchronous on the main actor
+    /// where two quick ⌘⇧N presses cannot interleave between listing `notes/` and writing.
     ///
     /// **Empty rather than seeded with a heading.** A template is helm typing for the operator,
     /// and the first line of a note is the one line he definitely has in mind already.
@@ -117,13 +128,10 @@ extension OperatorNote {
     /// be told about in words, and `Failure.sentence` is those words. A ⌘⇧N that silently does
     /// nothing is the shape of failure this repository has paid for more than once.
     static func create(
-        inWorkspaceAt workspace: String,
+        inRepository repository: String,
         under artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot,
         on date: Date = Date()
     ) throws -> OperatorNote {
-        // prp keys a store by the repository's MAIN checkout, so every worktree of one project
-        // writes its notes beside that project's plans rather than into a store per branch.
-        let repository = WorkspaceStore.repositoryRoot(for: workspace)
         let stores = ArtifactStoreDiscovery.discoverStores(under: artifactRoot)
         let store = artifactRoot.appendingPathComponent(
             key(forRepositoryRoot: repository, in: stores))
