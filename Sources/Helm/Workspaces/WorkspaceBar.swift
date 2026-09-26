@@ -15,6 +15,7 @@ struct WorkspaceBar: View {
     /// The board's marks, owned by the Board slice and observed the way `RootView` observes
     /// `TerminalManager`. The bar renders a dot; it does not learn what a registry is.
     @ObservedObject private var board = BoardModel.shared
+    @ObservedObject private var keymap = Keymap.shared
     let select: (Workspace) -> Void
     let close: (Workspace) -> Void
 
@@ -38,7 +39,7 @@ struct WorkspaceBar: View {
             // status bar said ⇧⌘O — macOS prints modifiers ⌃⌥⇧⌘, so the bar was right
             // and one window disagreed with itself about one key (#149).
             .help(
-                KeyGlyph.binding(for: .local(.openWorkspacePanel))
+                KeyGlyph.binding(for: .local(.openWorkspacePanel), in: keymap.table)
                     .map { "Open workspace (\($0))" }
                     ?? "Open workspace")
             Spacer(minLength: 8)

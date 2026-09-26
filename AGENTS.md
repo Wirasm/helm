@@ -927,9 +927,14 @@ above and are the easiest to be surprised by:
 **Every change to the bench is a `BenchVerb` sent through one door** (#354).
 `WorkbenchModel.send(_:by:asked:)` is the `VerbSink` every caller uses — a key, a click, a
 drag, a ⌘-clicked link, `push.sh`, the spool — and it says who asked, which is what decides
-focus. Keys are rows of one table, `KeyBindings.all` (`Sources/Helm/Keymap/`), read by the key
-monitor, the menu and the status bar's hints; a row's action is data, a `VerbTemplate` resolved
-against the bench when the key fires or a `LocalAction` that never reaches the document.
+focus. Keys are rows of one table, read by the key monitor, the menu and the status bar's hints;
+a row's action is data, a `VerbTemplate` resolved against the bench when the key fires or a
+`LocalAction` that never reaches the document. The table in force is `Keymap.table`
+(`Sources/Helm/Keymap/`): the built-in `KeyBindings.all` overlaid by the operator's
+`<bench root>/rules/keymap.toml`, reread every second. helm reads that file and nothing writes
+it; a file that does not parse keeps the last good table and puts the line and reason on the
+status bar. `docs/keymap.default.toml` is the built-in table in that format, and
+`KeymapFileTests` fails until it is regenerated after a built-in key changes.
 `LocalActions` in `App/` carries both out. There is no NotificationCenter command bus: do not
 add one. `WorkbenchModel`'s mutation methods each take a `LocalBenchKey`, which only
 `LocalSink` can make, so a direct call from anywhere else does not compile — send the verb. Two sinks take it: `LocalSink` applies it to helm's own
@@ -947,6 +952,14 @@ keyboard. `BenchSnapshotModel` still reports parked workspaces from defaults (D2
 mode only the active workspace's part of `snapshot.json` is current. To try it without touching
 the operator's bench, run your own benchd on a suite and point an isolated helm at it:
 `BENCH_SUITE=<name> benchd` and `HELM_BENCH=daemon HELM_DEFAULTS_SUITE=<name> swift run helm`.
+
+**Drawers are drawn over the bench, never in it** (#356, `Sources/Helm/Drawers/`). `DrawerHost`
+is an overlay on the bench and the rail, so the layout under an open drawer is untouched; while
+one is open its selected pane holds the keyboard and the bench's focused pane does not. A drawer
+pane's live object belongs to no workspace, so it survives the drawer being hidden and a workspace
+closing. The status bar has one capsule per drawer, dotted while badged. **An agent puts things
+in a drawer and never opens one**: `pane/open` into a drawer badges it, and `drawer/toggle`
+without *asked* is refused. The keymap's `drawer` action and the capsule are the operator's.
 
 **Put a command handler where its lifetime is right, not where it looks tidy.** A subscription
 that has to work while its view is closed belongs on the model, which outlives the
@@ -1115,9 +1128,10 @@ the daemon gate's conformance suite.
 - **`bench-mail`** — sending and reading mail through benchd's mailroom, finding who can be mailed,
   and wiring an agent the operator starts himself (`bench wiring`). The only mail skill since #358.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
-  start`, drive it with `playwright-cli attach`, and put it in front of him with `openBrowser`.
+  start`, drive it with `playwright-cli attach`, and badge his browser drawer with `openBrowser`.
 - **`bench-sessions`** — who is working in a workspace (`bench sessions --all`), and what any of
-  them did (`bench log <id>`, #421), read from the transcript without mailing the agent.
+  them did (`bench log <id>`, #421), read from the transcript without mailing the agent. The
+  operator sees the same list in the `sessions` drawer (⌘⇧S, `Sources/Helm/Sessions/`).
 
 ### The two helm-local subagents
 

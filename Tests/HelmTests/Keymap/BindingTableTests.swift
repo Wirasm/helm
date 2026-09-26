@@ -1,5 +1,6 @@
 import AppKit
 import HelmWire
+import SwiftUI
 import XCTest
 
 @testable import Helm
@@ -15,7 +16,7 @@ final class BindingTableTests: XCTestCase {
     ) -> KeyBinding.Action? {
         KeyBindings.match(
             characters: characters, keyCode: keyCode, modifiers: modifiers,
-            terminalFocused: terminalFocused)?.action
+            terminalFocused: terminalFocused, in: KeyBindings.all)?.action
     }
 
     // MARK: - Focus rules (the reason the map cannot be a dictionary)
@@ -118,8 +119,16 @@ final class BindingTableTests: XCTestCase {
         }
     }
 
-    func testShiftCommandBOpensTheSharedBrowser() {
-        XCTAssertEqual(match("B", [.command, .shift]), .verb(.openBrowser))
+    func testShiftCommandBTogglesTheBrowserDrawer() {
+        XCTAssertEqual(
+            match("B", [.command, .shift]),
+            .verb(.toggleDrawer(name: "browser", surface: .browser)))
+    }
+
+    func testShiftCommandSTogglesTheSessionsDrawer() {
+        XCTAssertEqual(
+            match("S", [.command, .shift]),
+            .verb(.toggleDrawer(name: "sessions", surface: .sessions)))
     }
 
     func testUnboundCombinationsPassThrough() {
@@ -160,23 +169,32 @@ final class BindingTableTests: XCTestCase {
                     characters, keyCode: keyCode, row.modifiers,
                     terminalFocused: row.when == .terminalFocused),
                 row.action,
-                "menu item \(row.menu!.title) does not fire its own keystroke's action")
+                "menu item \(row.menu!) does not fire its own keystroke's action")
         }
+    }
+
+    /// A menu item prints its row's own chord, derived rather than spelled a second time, so
+    /// the menu cannot name a key that the row does not bind.
+    func testTheMenuPrintsEachRowsOwnChord() throws {
+        func shortcut(_ title: String) throws -> KeyboardShortcut? {
+            try XCTUnwrap(KeyBindings.all.first { $0.menu == title }, title).menuShortcut
+        }
+        XCTAssertEqual(
+            try shortcut("Increase Font Size"), KeyboardShortcut("+", modifiers: .command))
+        XCTAssertEqual(
+            try shortcut("Focus Left"),
+            KeyboardShortcut(.leftArrow, modifiers: [.command, .option]))
+        XCTAssertEqual(
+            try shortcut("Shared Browser"), KeyboardShortcut("b", modifiers: [.command, .shift]))
     }
 
     /// `match` returns the FIRST row that fits, so two rows that could both match one keystroke
     /// would leave the second unreachable. Two `When`s overlap unless they are the two opposite
     /// halves — `.anywhere` overlaps both.
     func testNoTwoRowsClaimOneChordInOverlappingWhens() {
-        func overlap(_ a: KeyBinding.When, _ b: KeyBinding.When) -> Bool {
-            a == b || a == .anywhere || b == .anywhere
-        }
         let rows = KeyBindings.all
         for (index, row) in rows.enumerated() {
-            for other in rows[(index + 1)...]
-            where other.trigger == row.trigger && other.modifiers == row.modifiers
-                && overlap(other.when, row.when)
-            {
+            for other in rows[(index + 1)...] where other.collides(with: row) {
                 XCTFail("two rows claim \(row.trigger) \(row.modifiers); the second is unreachable")
             }
         }
@@ -209,7 +227,9 @@ final class BindingTableTests: XCTestCase {
         XCTAssertEqual(resolve(.showTab(index: 0)), .paneShow(first))
         XCTAssertEqual(resolve(.stepFocus(.left)), .focusStep(direction: .left))
         XCTAssertEqual(resolve(.moveFocused(.up)), .paneMove(second, .up))
-        XCTAssertEqual(resolve(.openBrowser), .paneOpen(surface: .browser))
+        XCTAssertEqual(
+            resolve(.toggleDrawer(name: "browser", surface: .browser)),
+            .drawerToggle(name: "browser", surface: .browser))
         XCTAssertEqual(resolve(.activateWorkspace(index: 2)), .workspaceActivate(path: "/w/c"))
     }
 

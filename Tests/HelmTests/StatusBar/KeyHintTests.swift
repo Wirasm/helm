@@ -11,7 +11,9 @@ import XCTest
 /// the real map does not happen to contain.
 final class KeyHintTests: XCTestCase {
     private func keys(_ label: String, terminalFocused: Bool) -> String? {
-        KeyHints.visible(terminalFocused: terminalFocused).first { $0.label == label }?.keys
+        KeyHints.visible(terminalFocused: terminalFocused, in: KeyBindings.all).first {
+            $0.label == label
+        }?.keys
     }
 
     // MARK: - Focus
@@ -88,19 +90,20 @@ final class KeyHintTests: XCTestCase {
     /// this file may type a glyph now; it asks here, and gets the bar's answer by
     /// construction.
     func testABindingRendersTheSameGlyphsTheBarShows() {
-        XCTAssertEqual(KeyGlyph.binding(for: .local(.openWorkspacePanel)), "⇧⌘O")
         XCTAssertEqual(
-            KeyGlyph.binding(for: .local(.openWorkspacePanel)),
+            KeyGlyph.binding(for: .local(.openWorkspacePanel), in: KeyBindings.all), "⇧⌘O")
+        XCTAssertEqual(
+            KeyGlyph.binding(for: .local(.openWorkspacePanel), in: KeyBindings.all),
             keys("folder", terminalFocused: true),
             "the empty bench and the status bar must not be able to disagree")
-        XCTAssertEqual(KeyGlyph.binding(for: .verb(.newTerminal)), "⌘N")
-        XCTAssertEqual(KeyGlyph.binding(for: .local(.toggleRail)), "⇧⌘R")
+        XCTAssertEqual(KeyGlyph.binding(for: .verb(.newTerminal), in: KeyBindings.all), "⌘N")
+        XCTAssertEqual(KeyGlyph.binding(for: .local(.toggleRail), in: KeyBindings.all), "⇧⌘R")
     }
 
     /// An action nothing binds gets nil rather than a plausible-looking string, so a caller
     /// can decline to advertise a key instead of naming one that does not fire.
     func testAnUnboundActionHasNoGlyphs() {
-        XCTAssertNil(KeyGlyph.binding(for: .verb(.showTab(index: 20))))
+        XCTAssertNil(KeyGlyph.binding(for: .verb(.showTab(index: 20)), in: KeyBindings.all))
     }
 
     // MARK: - Drift
@@ -137,7 +140,8 @@ final class KeyHintTests: XCTestCase {
     /// (⌘↑ and ⌘↓ are one "turn"), so this asks it of what the bar draws.
     func testVisibleLabelsAreUnique() {
         for focused in [true, false] {
-            let labels = KeyHints.visible(terminalFocused: focused).map(\.label)
+            let labels = KeyHints.visible(terminalFocused: focused, in: KeyBindings.all).map(
+                \.label)
             XCTAssertEqual(Set(labels).count, labels.count, "duplicate hint label in \(labels)")
         }
     }
@@ -146,10 +150,10 @@ final class KeyHintTests: XCTestCase {
     /// operator needs on day one and nothing else in the window hints at.
     func testHintsReadInTheTablesOrder() {
         XCTAssertEqual(
-            KeyHints.visible(terminalFocused: true).map(\.label),
+            KeyHints.visible(terminalFocused: true, in: KeyBindings.all).map(\.label),
             [
                 "new", "note", "split", "split down", "close", "pane", "focus", "move",
-                "artifact", "turn", "workspace", "folder", "archon", "browser",
+                "artifact", "turn", "workspace", "folder", "archon", "browser", "sessions",
             ])
     }
 
@@ -157,7 +161,7 @@ final class KeyHintTests: XCTestCase {
     /// render as a floating word with no key, which reads as a bug rather than as a hint.
     func testEveryVisibleHintIsComplete() {
         for focused in [true, false] {
-            for hint in KeyHints.visible(terminalFocused: focused) {
+            for hint in KeyHints.visible(terminalFocused: focused, in: KeyBindings.all) {
                 XCTAssertFalse(hint.keys.isEmpty, hint.label)
                 XCTAssertFalse(hint.label.isEmpty, hint.keys)
             }

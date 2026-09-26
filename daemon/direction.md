@@ -68,7 +68,7 @@ the next open with no restart and no watcher. A strategy can send a pane to a dr
 last good table stays in force, `rules/rejected` names the file and why (with the line, for a
 parse error) once per version, and `bench status` reports `rejected` until a good version
 replaces it. Only a file that is gone means the built-in table. benchd never writes a rules
-file.
+file. `rules/keymap.toml` beside it is helm's alone: benchd never reads a key.
 
 **And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
 every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's

@@ -226,6 +226,7 @@ final class WorkbenchModel: ObservableObject {
             CanvasPaneKind { [weak self] model, pane in self?.wireMarks(model, in: pane) })
         terminals.surfaces.register(BrowserPaneKind(make: makeBrowser))
         terminals.surfaces.register(UnsupportedPaneKind())
+        terminals.surfaces.register(SessionsPaneKind(workbench: self, terminals: terminals))
         // The same rewiring for the manager's sessions: a ⌘-clicked link and a `push.sh` are
         // verbs, and this is the bench they are sent to.
         terminals.bench = self
@@ -563,18 +564,18 @@ final class WorkbenchModel: ObservableObject {
     /// A pane's body and its tab, from its kind — the one route every kind is drawn by, so
     /// nothing in the bench's views asks what kind a pane is.
     func surfaceView(of pane: Pane, in slot: SurfaceSlot) -> AnyView? {
-        surfaces.view(of: pane, in: slot, workspace: workspacePath)
+        surfaces.view(of: pane, in: slot, workspace: home(of: pane.id))
     }
 
     func surfaceTab(of pane: Pane, in slot: SurfaceSlot) -> AnyView? {
-        surfaces.tab(of: pane, in: slot, workspace: workspacePath)
+        surfaces.tab(of: pane, in: slot, workspace: home(of: pane.id))
     }
 
     /// What a surface needs to know about where it is drawn, answered by the bench.
     func surfaceSlot(for pane: Pane, in slot: Slot) -> SurfaceSlot {
         SurfaceSlot(
             pane: pane,
-            holdsKeyboard: bench?.focusedPane?.id == pane.id,
+            holdsKeyboard: openDrawer == nil && bench?.focusedPane?.id == pane.id,
             isSelected: pane.id == slot.selected,
             canClose: bench?.canClose(pane.id) ?? false,
             select: { [weak self] in self?.send(.paneShow(pane.id), by: .operatorGesture) },
@@ -588,7 +589,7 @@ final class WorkbenchModel: ObservableObject {
     /// Resolve-or-create, at the edge. The model is kept by pane id so a tab switch or a
     /// re-render gets the same webview back rather than reloading the page.
     func canvas(for pane: Pane) -> CanvasModel {
-        guard let model = surfaces.resolve(pane, in: workspacePath) as? CanvasModel else {
+        guard let model = surfaces.resolve(pane, in: home(of: pane.id)) as? CanvasModel else {
             preconditionFailure("canvas(for:) asked about a pane that is not a canvas: \(pane)")
         }
         return model
@@ -630,7 +631,8 @@ final class WorkbenchModel: ObservableObject {
     }
 
     func browser(for pane: Pane) -> BrowserPaneModel {
-        guard let model = surfaces.resolve(pane, in: workspacePath) as? BrowserPaneModel else {
+        guard let model = surfaces.resolve(pane, in: home(of: pane.id)) as? BrowserPaneModel
+        else {
             preconditionFailure("browser(for:) asked about a pane that is not a browser: \(pane)")
         }
         return model
@@ -1137,14 +1139,13 @@ extension WorkbenchModel: VerbSink {
         return pane
     }
 
-    /// A ⌘-clicked http address (#376): the browser pane is opened as the operator's `pane/open`,
-    /// and the address becomes a new tab of the shared browser it shows. Neither takes the
-    /// keyboard from the terminal clicked in.
+    /// A ⌘-clicked http address (#376): the address becomes a new tab of the shared browser, in
+    /// the background. helm opens the browser pane itself rather than as the operator's gesture,
+    /// so it lands where the placement rules send it without taking the keyboard from the
+    /// terminal clicked in: in daemon mode the browser drawer, which it badges (#356).
     func openLink(_ link: URL) {
-        guard let id = send(.paneOpen(surface: .browser), by: .operatorGesture),
-            let pane = bench?.pane(id)
-        else { return }
-        browser(for: pane).open(link)
+        guard let id = send(.paneOpen(surface: .browser), by: .helm) else { return }
+        browser(for: Pane(id: id, content: .browser)).open(link)
     }
 }
 

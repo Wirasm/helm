@@ -436,13 +436,13 @@ final class MovePaneKeystrokeTests: XCTestCase {
             XCTAssertEqual(
                 KeyBindings.match(
                     characters: nil, keyCode: keyCode, modifiers: [.command, .option, .shift],
-                    terminalFocused: true)?.action,
+                    terminalFocused: true, in: KeyBindings.all)?.action,
                 .verb(.moveFocused(direction)),
                 "⇧⌥⌘ keyCode \(keyCode)")
             XCTAssertEqual(
                 KeyBindings.match(
                     characters: nil, keyCode: keyCode, modifiers: [.command, .option],
-                    terminalFocused: true)?.action,
+                    terminalFocused: true, in: KeyBindings.all)?.action,
                 .verb(.stepFocus(direction)),
                 "…and without shift it is still focus movement, keyCode \(keyCode)")
         }
@@ -460,7 +460,7 @@ final class MovePaneKeystrokeTests: XCTestCase {
 
         for (row, direction) in rows {
             let menu = try XCTUnwrap(row.menu, "a move row not in the menu cannot be clicked")
-            XCTAssertEqual(menu.title, "Move Pane \(direction.rawValue.capitalized)")
+            XCTAssertEqual(menu, "Move Pane \(direction.rawValue.capitalized)")
         }
     }
 
