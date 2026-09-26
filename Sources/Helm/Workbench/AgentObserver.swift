@@ -3,7 +3,7 @@ import Foundation
 /// How helm learns which agent is in a pane, and whether that agent's conversation is still
 /// on disk (#63).
 ///
-/// **One value rather than three parameters**, for `AddressBook`'s reason: the three lookups
+/// **One value rather than three parameters**: the three lookups
 /// ride together from `WorkbenchModel`'s initializer down to the tick that uses them, and
 /// parallel parameters kept in step by habit is a shape this repo has been bitten by. It is
 /// also what makes every rule above it reachable from `swift test` — a fixture registry, a
@@ -21,8 +21,7 @@ struct AgentObserver {
     ///
     /// A closure returning a fresh dictionary rather than a stored one: an agent's row appears
     /// while helm is running — that is the event this whole watch exists to notice — so an
-    /// answer captured earlier could never see it. `AgentRegistry.sessionLookup`'s header
-    /// makes the same point about the same file.
+    /// answer captured earlier could never see it.
     let sessionsNow: () -> [pid_t: AgentSession]
 
     /// The pty's foreground process for a terminal. Injected because a test has no ghostty
@@ -44,12 +43,8 @@ struct AgentObserver {
         transcriptRoot: URL = TranscriptLocator.defaultRoot
     ) -> AgentObserver {
         AgentObserver(
-            // `AgentRegistry.rows`, never a dictionary built here. It is the registry's own
-            // pid→row step, and building a second one is how this shipped a first draft where
-            // `sessionLookup` kept the *first* row for a duplicate pid and this kept the
-            // *last* — one rule, two spellings, and `snapshot.json` able to name a different
-            // session from the one the pane's own record held. That function's header has the
-            // measurement.
+            // `AgentRegistry.rows`, never a dictionary built here: one rule for a duplicate pid.
+            // That function's header has why.
             sessionsNow: { AgentRegistry.rows(in: registryRoot) },
             foregroundPid: { $0.hostView.foregroundPid },
             transcriptExists: { Self.transcriptExists($0, root: transcriptRoot) })

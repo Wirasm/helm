@@ -3,7 +3,7 @@
 //! This crate exists so that `benchd` and `bench` can never disagree about what travels
 //! on the socket or where a suite's state lives. helm spent real incidents on the other
 //! arrangement — three copies of the mailbox rule in three languages, held together by a
-//! conformance harness (`hooks/mailbox-conformance.mjs`). Rust on both ends of this socket
+//! conformance harness (deleted with helm's mailroom in #358). Rust on both ends of this socket
 //! means the single spelling is finally free; anything that later reads these types from
 //! Swift gets a generated or conformance-pinned copy, never a hand-written one
 //! (bench-roadmap.md, invariant 9).
@@ -572,7 +572,7 @@ pub struct Event {
 /// Resolve the record root. One rule, spelled once, used by both binaries:
 ///
 /// 1. `BENCH_DIR` names the root outright and wins over everything — it is what a test
-///    claims into instead of the operator's estate (helm's `HELM_MAIL_DIR` rule). An empty
+///    claims into instead of the operator's estate (what `HELM_MAIL_DIR` was to helm's mail). An empty
 ///    value is unset, as helm's `BenchRoot` reads it (#395): taken literally it would make
 ///    the cwd the root, so helm's pane and `bench` in it would use different benches.
 /// 2. else `<home>/.bench-<suite>` when a suite is set,

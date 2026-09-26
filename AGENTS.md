@@ -27,8 +27,7 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | --- | --- | --- |
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `bash scripts/patch-libghostty.sh && swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
-| `hooks` | `hooks/test.sh` | node |
-| `skills` | the mail, canvas, board and post-canvas skill gates | node, zsh, python3, git |
+| `skills` | the canvas, board and post-canvas skill gates | node, zsh, python3, git |
 | `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml` or a `bench-*` skill changed | cargo |
 | `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
 
@@ -168,13 +167,14 @@ every contributor now needs. The other parts need node or cargo, which is why th
 parts and separate CI jobs.
 
 **CI runs the same parts, with two differences.** Its jobs are `build · test · format` (`lint`
-then `swift`), `mailbox hooks · conformance` (`hooks`), `skill gates` (`skills`) and
+then `swift`), `skill gates` (`skills`) and
 `fmt · clippy · build · test` (`daemon`). The first and last report success without running when
 nothing they cover changed, using the `swift` and `daemon` `--needs` rules (the Swift job skips
-its `lint` step on the `swift` answer too). `hooks` and `skills` run on every PR, whatever it touched, and so does `just check`:
+its `lint` step on the `swift` answer too). `skills` runs on every PR, whatever it touched, and so does `just check`:
 *"a gate that exists, is documented in `AGENTS.md`, and runs only when somebody remembers is the
 drift this workflow exists to stop."* There is no `pi` job: it needs an `npm install` in `pi/`,
-so only `just check` runs it.
+so only `just check` runs it. A fifth job, `mailbox hooks · conformance`, is an empty stub kept
+only because it is a required status check; it goes when the check does.
 
 - **Narrower on the Swift job**, by exactly the two suites this section spends forty lines
   teaching you to diagnose. CI sets `HELM_CHECK_HEADLESS=1`, which makes the `swift` part run
@@ -202,7 +202,7 @@ bash daemon/test.sh
 ```
 
 `daemon/` is the bench daemon (`benchd`) — a self-contained Rust cargo workspace, the
-same carve-out as `pi/` and `hooks/`: its gate needs only the Rust toolchain, its CI job
+same carve-out as `pi/`: its gate needs only the Rust toolchain, its CI job
 runs only when `daemon/**` or a `.claude/skills/bench-*` skill changed (the gate executes those
 skills' snippets), and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
@@ -210,12 +210,6 @@ skills' snippets), and the Swift gate never learns about it. Read
 M0 (skeleton), M5a (daemon-owned ptys), mail, the shared browser (#350) and the daemon half
 of the bench document (M4, #354) are the parts that exist. helm renders from that document
 when launched with `HELM_BENCH=daemon`, and from its own saved state otherwise.
-
-**`hooks/`'s gate (the `hooks` part), alone:**
-
-```
-bash hooks/test.sh
-```
 
 **If you touched `.archon/workflows/helm/`, run its gate:**
 
@@ -261,48 +255,6 @@ stored runs in a temp `ARCHON_HOME` shaped like the pack's `store.py` output, ru
 against them with `--no-push` only, and executes the `SKILL.md` snippet under zsh with `PRP_HOME`
 redirected. Needs node, git and zsh.
 
-**The mail skills' gate (part of `skills`), alone:**
-
-```
-bash .claude/skills/helm-mail-cc/test.sh
-```
-
-It covers both `helm-mail-cc/` and `helm-mail-pi/`, because the send and the mailbox listing are
-documented identically in each. It **extracts** the snippets from `SKILL.md` and runs them rather
-than restating them — a test that retypes a documented snippet is a second copy that drifts, and
-would keep passing while the doc said something else. It runs them under **zsh** specifically: #237
-is a documented loop that was correct in bash and fatal in zsh, which is the shell Claude Code's own
-Bash tool runs, and no gate read a skill file at all until this one. Needs bash, zsh and python3,
-which is why it is not in the Swift gate.
-
-**Since #285 it also executes the root those snippets resolve**, and that is a fifth copy of the
-mailbox's directory rule rather than a fourth. Every snippet in both skills opens with a three-line
-preamble that resolves `$ROOT`, because a documented literal is not merely stale inside an isolated
-instance — it is an agent in a throwaway helm **listing and sending into the operator's own
-mailroom**, successfully and silently, which is the cross-talk the code fix closes. Prose asking the
-reader to substitute the suite themselves was the first attempt and is not a mechanism.
-
-**The line of that preamble that matters is the one it is tempting to drop.** The first cut was a
-single `${HELM_DEFAULTS_SUITE:+-$HELM_DEFAULTS_SUITE}`, which honours **every** value — and the
-three the real writers refuse are exactly the reachable ones: `com.wirasm.helm` is the canonical
-domain, which `DefaultsSuite.override` maps to `.none` so **helm launches perfectly normally under
-it**, it is the literal this file tells you to `defaults read`, and `claude-session-start` fires for
-every Claude Code session on the machine rather than only those in a helm pane; `helm` is the legacy
-domain and the obvious guess at a suite name; a `/` makes a path. All three sent the reader to an
-empty `~/.helm/mail-<name>` while the real hook had claimed their mailbox in the shared root — sends
-that succeed into a directory nobody reads, and a box that never receives. **The escape hatch the
-first version wrote for itself — *"simpler only in the cases helm refuses to launch under"* — was
-false for the case that needed it most.** So the preamble carries the same four textual guards the
-writers do, and the gate runs the doc's own expression against all six fixtures. The one rule it
-does not copy is the whitespace trim, which cannot bite what helm publishes: `PaneEnvironment`
-declares the *decided* name.
-
-The gate also requires both skills to state one preamble and **every snippet to repeat all of it** —
-a block that kept `ROOT=` and dropped the `case` line is the leak, sitting in a file whose stated
-preamble is still correct — and it runs every other snippet with both variables taken **out** of the
-environment, because this gate is very often run by an agent hosted in an isolated helm, which
-exports the second one.
-
 `push.sh` is how an agent puts an artifact on the bench, and it is the third mechanism to hold
 that job — the first two shipped broken. Both were verified from a shell the operator typed into,
 where they worked, and both were silent from an agent's tool call, where they did not: a ⌘-click
@@ -344,90 +296,30 @@ never handed a renderable path, which the next case added beside the extension l
 - Check it the way it was checked: diff the canvas panes in `~/.helm/bench/snapshot.json` around a
   run, and expect zero new ones even while a *broken* `push.sh` is the thing under test.
 
-`hooks/` is the **Claude Code** half of the mailbox — `claude-session-start` claims a mailbox so
-a session can be addressed, `claude-user-prompt-submit` delivers waiting mail by writing the notice
-to **stdout**, which Claude Code feeds to the model as context for the turn about to run. Delivery
-is deliberately **before** a turn rather than after one: an agent that learns its mail on `Stop` has
-already carried out the instruction it should have read the mail first. pi does the same thing
-through its `context` event.
+**helm keeps no mailroom (#358). Mail is benchd's**, and helm is one of its clients. Until #358
+helm had its own: `hooks/helm-mail.mjs` for Claude Code, `pi/extensions/helm-mail` for pi, one
+convention written twice, a conformance harness to keep the copies honest, and helm reading
+`~/.helm/mail` every two seconds to learn who was in which pane. All of that is deleted, and
+`~/.helm/mail` is left on disk as history, read by nothing.
 
-**Only a hosted session claims a mailbox (#417), and "hosted" is two facts, not one.** The hook is
-wired globally, so before #417 every Claude session on the machine claimed — 12,497 mailboxes on
-the operator's, most of them Archon's SDK sessions in temp directories, and helm read every one
-every two seconds. Both writers now claim (and the hook delivers) only when a host **declared** the
-session — `HELM_PANE` from helm, `BENCH_SESSION` from benchd — **and** it is on a terminal.
-`HELM_PANE` alone is not enough, measured: it is inherited by everything a pane's agent spawns,
-Archon's sessions included, but tool calls run detached (Claude Code's Bash tool and hooks, pi's
-bash tool), so a session started from one has no controlling terminal. `HELM_MAIL_DIR` opts in
-outright, which is why the gates still claim. `claimsAMailbox` is the rule, written in both files
-and run over one matrix by `hooks/mailbox-conformance.mjs`.
-
-**A retired mailbox is moved after seven days, never deleted (#417).** Retiring stopped deleting in
-#236, and left every retired mailbox in the root for good — 12,248 on the operator's machine, which
-helm read every two seconds. `archiveRetired` now moves one retired over seven days to
-`<root>/.retired/` after every reap, in both writers (every reader already skips a dot-directory),
-and `node hooks/helm-mail.mjs archive </dev/null` does the same by hand. The conformance harness
-runs both copies on one root. It sits outside `reap` so the two reapers are still compared like for
-like. helm's side of the same ticket is `MailboxOwnerCache`: a publish re-reads only the mailboxes
-whose directory changed.
-
-**An idle agent is woken, and the two runtimes get there differently.** pi's extension is a live
-event loop inside the session, so it watches its own mailbox and calls `sendUserMessage` — a turn
-starts from nothing. Claude Code has no equivalent helm can call, so the notice instead **tells
-the agent to arm its own watch**; being notified is the wake.
-
-**Only pi caps that, and the asymmetry is a consequence rather than an oversight.**
-`WAKE_CAP = 3` in `pi/extensions/helm-mail/index.ts` is kild's cap, back for kild's reason:
-`sendUserMessage` *starts a turn*, so two agents replying to each other would burn until the money
-ran out. `hooks/helm-mail.mjs` has no cap and says so in a block of its own — delivering on
-`UserPromptSubmit` rides a prompt the operator just typed and spends nothing, so there is no
-runaway to cap and no `.wakes` file to keep beside the mailbox. **Do not "fix" the asymmetry by
-adding a cap to the hook**; read that block first.
-
-**And the port could not work even if that reason changed — #320 measured it, so this is the
-stronger half.** pi's cap is correct only because pi's waker and pi's counter are the **same
-process**: an in-process `waking` flag (`index.ts:762`, set at `:883`, read at `:985`) is what
-stops a run pi *itself* started from clearing the counter that limits it. For Claude Code they
-would be two processes — helm pokes, a hook counts — and there is no flag to carry between them,
-because the `UserPromptSubmit` payload is **shape-identical** for a socket wake and for the
-operator typing: same seven keys, no `origin`, no sender, and `prompt` is the raw body. So a naive
-port **resets on every wake and can never trip** — present, counting, counting nothing, which is
-worse than the absence it was added to fix. The distinction does exist, but not anywhere a cap can
-reach it: one layer in, in transcript JSONL that Anthropic documents as internal and
-version-dependent, and in the agent's **own context** as prose. Legible is not countable.
-
-**#320 and #322 are closed, and the wake that got built is not the socket.** Claude Code 2.1.224+
-ships per-session sockets, and a message delivered to an idle session's socket arrives as a new user
-turn — measured at **0.12s** — so *"Claude Code has no equivalent helm can call"* above means
-*helm does not do this*, not that the runtime cannot. #320's verdict was CONDITIONAL on helm's own
-posture: under `--dangerously-skip-permissions`, which `SpoolUnattendedPolicy` gives every spawned
-`claude`, the poke is accepted, returns cleanly, and is **held** behind a modal in a pane nobody is
-watching — #179 arriving through a new door. So the build went the other way: **benchd pastes the
-notice into an idle pty it owns**, the same for claude, codex and pi, with the loop cap in its
-courier (#342, `daemon/`). #322's single `bench mail` verb shipped in the same PR. In helm itself
-nothing changed: the arm-a-watch notice is still the working mechanism for a pane helm hosts.
-
-Both hooks are wired by hand into `~/.claude/settings.json` and
-never write themselves there; `hooks/helm-mail.mjs` is the convention, and it is a **deliberate
-duplicate** of `pi/extensions/helm-mail/index.ts` — there is no shared module because pi loads a
-`.ts` extension and a hook is a standalone script, so any change to the address scheme, the notice,
-the on-disk shape or **which mailroom it all happens in** (#285) has to be made in both — and
-`hooks/mailbox-conformance.mjs` is what makes that detectable rather than trusted. Needs node,
-which is why it is not in the Swift gate.
-
-**Two variables, and they are the spool's two by design** (`hooks/helm-mail.mjs:40-41`, which
-`SpoolDirectory` points at by name from the other side). `HELM_MAIL_DIR` names a mailroom outright
-and wins over everything, which is what a test claims into instead of the operator's; `HELM_MAIL_OFF`
-switches claiming and delivery off without switching the agent off, and it is **the negative control
-for any claim about the mailbox** — with it set, a send must produce no notice. Resolution is those
-two and then the suite: `HELM_MAIL_DIR`, else `~/.helm/mail-<suite>`, else the shared root.
-
-**Which agent is in a pane is one question with one answer, `AddressBook`
-(`Sources/HelmWire/Spool/MailboxDirectory.swift`, #247).** Three callers ask it — `SpoolModel`,
-`BenchSnapshot.TerminalRecord` and `CanvasNoteCourier` — and before #247 the first two each joined
-on the pid by hand. **A registry-backed owner is matched only by its session; everyone else by its
-recorded pid**, which is what makes a recycled pid harmless and an agent resumed into a new process
-still resolvable. Do not add a fourth join.
+- **An agent reports itself through `bench hook <claude|codex|pi>`**, one fixed command in its
+  own hooks (pi: `pi/extensions/bench`). The reply carries its unread mail as pointer lines, so a
+  busy agent reads mail at its next tool call; an idle one is started through its own channel.
+  `daemon/direction.md` has the whole design and `bench wiring --check` says whether a harness is
+  wired. A session claims an address only when helm or benchd declared it (`HELM_PANE`,
+  `BENCH_SESSION`) **and** it runs on a terminal: `HELM_PANE` is inherited by everything a pane's
+  agent spawns, but tool calls run detached, so the terminal is what tells the pane's own agent
+  from its children (#417).
+- **Which agent is in a pane is one question with one answer: benchd's `mail/who` verb**
+  (`BenchMailbox` in `Sources/Helm/Mail/`, the wire types in `Sources/HelmWire/Bench/BenchMail.swift`,
+  both shapes pinned by `daemon/fixtures/mail-verbs.json`). `SpoolModel` asks it for a spawn's
+  handle and `CanvasNoteCourier` for where a mark goes. Do not add a second join: helm has no
+  record of its own to join against any more.
+- **With no benchd, nothing is addressable, and each caller says so** rather than guessing: a
+  spawn answers `unclaimed` naming `bench wiring --check`, and a canvas note goes to the
+  clipboard with the reason on the pane.
+- **`HELM_MAIL_DIR`, `HELM_MAIL_OFF` and `HELM_MAIL_HANDLE` mean nothing now.** Isolation is
+  benchd's: `BENCH_DIR` or `BENCH_SUITE` points a test at its own daemon and record root.
 
 Only when `pi/` changed. It needs node, and `tsc` from an `npm install` in `pi/`, which is
 why it is not part of the Swift gate: `swift test` cannot run TypeScript and should not
@@ -540,9 +432,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   `results/<id>.json`. **No display, no focused window, no Accessibility grant, no keystrokes**
   — so it works with the screen locked, headless and over ssh. The result carries the new agent's `terminalId`, `pid`,
   `sessionId` and **`handle`**, so the next move — sending it mail — needs no lookup: helm
-  created the terminal, so it knows the pid, and it *reads* the handle out of
-  `~/.helm/mail/*/owner.json` rather than deriving it (a derivation is silently wrong whenever
-  `deriveHandle` widened or `HELM_MAIL_HANDLE` was pinned). Exit codes say what happened —
+  created the terminal, and it asks benchd (`mail/who`) for the handle the agent's own hook
+  claimed rather than deriving one (a derivation is silently wrong whenever a live holder forced a
+  longer suffix). An agent whose harness is not wired to `bench hook` is started but
+  unaddressable, exit 5. Exit codes say what happened —
   3 refused, 4 failed, 5 started-but-unaddressable, 6 abandoned by a restart. Only the agents
   in `SpoolPolicy.allowedCommands` may be named: a request is a file, so `sh` in a login shell
   is what an ungated spool would actually be. `HELM_SPOOL_OFF=1` turns the watcher off, which
@@ -609,7 +502,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
 
   **So the spool's wire format and its directory-resolution rules are both duplicated between
   `tools/*.swift` and `HelmWire`, and that duplication is honest** — the same carve-out as
-  `pi/` and `hooks/`, for the same reason: a runtime boundary makes sharing impossible. What is
+  `pi/`, for the same reason: a runtime boundary makes sharing impossible. What is
   *not* optional is that it be **detectable**, which is what `SpoolWireConformanceTests`
   (`Tests/HelmTests/Spool/`) is for: it runs each real script as a subprocess and checks both
   directions — the request it writes, decoded with the real type, and its exit code and stderr
@@ -864,12 +757,12 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   - **A mark the operator makes is mailed to the agent that pushed the canvas**
     (`CanvasNoteRoute.swift`, `CanvasNoteCourier.swift`, #205). This is the one channel where
     something arrives without you asking, and it arrives as **mail** — so it reaches you the way
-    all mail does, and the wake rules above are its wake rules. The route resolves **late**: helm
-    records which *pane* pushed the canvas (`CanvasOrigin`), never a pid or a handle, and asks that
-    pane who is in it at the moment the mark is made — a handle read at push time is stale the
-    moment that agent restarts, and stale silently, because mail to a retired mailbox is never read
-    and never bounces. Not persisted, for the same reason: a restored terminal pane is a fresh
-    empty shell, so an origin surviving a relaunch could only name somebody else. **With no route
+    all mail does: through benchd. The route resolves **late**: helm records which *pane* pushed the
+    canvas (`CanvasOrigin`), never a pid or a handle, and asks benchd (`mail/who`) who is in that
+    pane at the moment the mark is made — a handle read at push time is stale the moment that agent
+    restarts, and mail to it is never read. Not persisted, for the same reason: a restored
+    terminal pane is a fresh empty shell, so an origin surviving a relaunch could only name
+    somebody else. **With no route
     the note goes to the clipboard and the pane says which of the two failures it was** — nobody
     pushed this canvas, or the agent that did is gone. A silent no-op is the worst outcome here,
     because the operator believes the note was sent.
@@ -927,7 +820,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     honest limit, and it lands on the iteration path where `swift run helm` is what anyone is
     actually using.
   - The format is written by shell and read by Swift, so it is a duplicate across a runtime
-    boundary — the same carve-out as the spool scripts and the mailbox, and the same
+    boundary — the same carve-out as the spool scripts, and the same
     obligation. `BuildStampScriptTests` runs both scripts as real subprocesses and decodes what
     they write with the real types, so a renamed key or field fails a test instead of shipping
     a helm that can never see an update.
@@ -975,15 +868,13 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   window is titled `helm — <name>`, which is what `winshot --list` and `helm-capture --window` see
   when two helms are running. The window frame is not autosaved under it: that is AppKit's write
   rather than helm's, and the only one a suite cannot catch by itself.
-  - **"No reachable path" is a promise about five directories, not one, and the fourth was a
-    lie until #285.** The suite moves the defaults, the spool (`~/.helm/spool-<name>`), the bench
-    snapshot (`~/.helm/bench-<name>`) — and now the **mailbox**, `~/.helm/mail-<name>`. It did not
-    move mail, so a capability test launched under `HELM_DEFAULTS_SUITE=drivetest` spawned an
-    agent that claimed `helm-31b1` in the operator's live `~/.helm/mail` beside his real ones:
-    addressable by them, listed to them, widening handles against them (#262) and sweeping their
-    mailboxes with the reaper on every session start (#236). Isolation is the whole reason those
-    tests are safe to run on a live machine, so the promise was fixed rather than narrowed.
-  - **The browser pane's bench root is the fifth, and it leaked the same way until #378.**
+  - **"No reachable path" is a promise about four directories, not one.** The suite moves the
+    defaults, the spool (`~/.helm/spool-<name>`), the bench snapshot (`~/.helm/bench-<name>`) and
+    benchd's root (next bullet). A fifth, the mailbox, leaked until #285: a capability test under
+    `HELM_DEFAULTS_SUITE=drivetest` spawned an agent that claimed an address in the operator's live
+    `~/.helm/mail`. helm has no mailroom since #358; mail lives under benchd's root, so the bullet
+    below now covers it.
+  - **benchd's root is the fourth, and it leaked the same way until #378.**
     `BenchRoot` (`Sources/HelmWire/Bench/`) read only `BENCH_DIR` and `BENCH_SUITE`, so an
     isolated helm opened the operator's `~/.bench` browser and forwarded its clicks and keys into
     his signed-in Chrome. Now, with no `BENCH_*` set, the suite resolves `~/.bench-<name>`, the root
@@ -993,23 +884,6 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     also exports `BENCH_SUITE=<name>` unless helm's own environment already sets `BENCH_SUITE`
     or `BENCH_DIR`, so `bench` in a pane resolves the same root, or refuses the same name.
     `PaneEnvironmentTests` pins the two resolutions together.
-  - **It could not be fixed in helm alone, and that shape recurs.** helm only *reads* the mailbox;
-    it is **claimed** by `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts`, two
-    processes helm does not run and cannot import from. So helm **declares** the suite into every
-    pty child (`PaneEnvironment.suiteDeclaration` — the decided name, never a raw value helm would
-    itself refuse) and both writers resolve it with the same three rules `SpoolDirectory.resolve`
-    follows: `HELM_MAIL_DIR` first, then the suite, then the shared root. That is one rule in three
-    languages, which is the mailbox's standing carve-out and its standing obligation —
-    `hooks/mailbox-conformance.mjs` now extracts `MailboxDirectory.resolve` and
-    `DefaultsSuite.override` from the Swift and runs all three copies against one fixture set, so a
-    divergence is a red gate rather than a helm that cannot see the agents it is hosting.
-    **The writers' copy is deliberately narrower in one clause**: `UserDefaults(suiteName:) != nil`
-    is a framework call JavaScript cannot make, and for a name refused on that ground alone helm
-    refuses to *launch*, so no running helm can disagree. The harness asserts that clause is still
-    the only one.
-  - **The negative control, and it is what a claim here has to bring.** `hooks/test.sh` and
-    `pi/tests/helm-mail.mjs` each claim under a suite with `HOME` redirected and then assert the
-    shared `~/.helm/mail` **was never created** — not that it holds a different mailbox.
 - Conventional commits, written as a human — no AI attribution.
 
 ## Architecture — how to think about where code goes
@@ -1099,11 +973,9 @@ typed once in `HelmWire` and spelled out once more in `tools/helm-spool.swift`/`
 `helm-capture.swift`/`helm-command.swift`/`helm-select.swift`/`helm-name.swift`, on purpose. A
 duplicate is honest
 only when a runtime boundary makes
-sharing impossible, and two wire formats now earn that carve-out: the mailbox's, written twice
-— in Swift (`hooks/`) and TypeScript/JavaScript (`pi/`), both separate processes `HelmWire`
-cannot reach — and the spool's own, written twice — once in `HelmWire`, once by hand across the
-six scripts, for the reasons just given. Neither is left to drift unnoticed by nothing at all
-— `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) runs each spool script as a real
+sharing impossible, and the spool's wire format earns that carve-out: written twice, once in
+`HelmWire` and once by hand across the six scripts, for the reasons just given. It is not left to
+drift unnoticed — `SpoolWireConformanceTests` (`Tests/HelmTests/Spool/`) runs each spool script as a real
 subprocess and checks both directions of the spool format (the request it writes and, against
 every `SpoolResult.Status`, its exit code and stderr) plus each script's hand-copied id pattern
 against `RequestID.pattern` (#260) plus the `HELM_DEFAULTS_SUITE` branch of
@@ -1139,9 +1011,7 @@ reading a comment, none by a red test**, which is the reusable part: the rule fi
 defect is still hypothetical, and by the time a gate can see it the newtype is a migration.
 
 **A stored raw field behind a validating constructor is not a violation — it is the shape.**
-`MailboxOwner.handle` stays a `String` precisely because `Handle(readingFrom:)` needs a raw field to
-read *from*; wrapping it at the decode site would make the blessed path indistinguishable from any
-other and therefore pointless. `CloseRequest.terminal` and `SpawnRequest.cwd` stay `String` because
+`CloseRequest.terminal` and `SpawnRequest.cwd` stay `String` because
 a request is decoded permissively in shape and judged strictly afterwards — that is what makes a
 malformed uuid a `refused` result naming the reason rather than unreadable JSON under the wrong id.
 Each of those argues itself in its own header; do not "fix" them.
@@ -1226,12 +1096,12 @@ cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
 ### The helm-local skills
 
-`.claude/skills/` holds sixteen; **seven are vendored** from `mattpocock/skills` and pinned in
+`.claude/skills/` holds fourteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
-not a change. The other nine are hand-written. The first six below are helm's, the surface an agent
-hosted in helm actually uses. The last three, `bench-mail`, `bench-browser` and `bench-sessions`, are
-benchd's, and their snippets run in the daemon gate's conformance suite. Five gates cover the six, all listed in *Working here* above — the two mail
-skills share one, because the send and the mailbox listing are documented identically in each.
+not a change. The other seven are hand-written. The first four below are helm's, the surface an
+agent hosted in helm actually uses, and each has a gate listed in *Working here* above. The last
+three, `bench-mail`, `bench-browser` and `bench-sessions`, are benchd's, and their snippets run in
+the daemon gate's conformance suite.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
   artifact gets onto the bench. Read it before writing one; it deliberately says nothing about
@@ -1241,11 +1111,10 @@ skills share one, because the send and the mailbox listing are documented identi
 - **`post-canvas`** — a video stored by the archon-video pack, rendered as a post preview canvas:
   the video beside the copy that would ship with it. It pushes through `helm-canvas`'s `push.sh`,
   so the two are installed side by side.
-- **`helm-mail-cc`** and **`helm-mail-pi`** — sending and reading mail from each runtime. One gate
-  covers both, and it **executes the snippets out of `SKILL.md`** rather than restating them.
 - **`pi-extensions`** — how to build one without taking the pi CLI down, how to read the installed
   pi rather than guess at its API, and how to test one without spending a model call.
-- **`bench-mail`** — sending and reading mail through benchd's mailroom, and finding who can be mailed.
+- **`bench-mail`** — sending and reading mail through benchd's mailroom, finding who can be mailed,
+  and wiring an agent the operator starts himself (`bench wiring`). The only mail skill since #358.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
   start`, drive it with `playwright-cli attach`, and put it in front of him with `openBrowser`.
 - **`bench-sessions`** — who is working in a workspace (`bench sessions --all`), and what any of

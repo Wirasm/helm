@@ -72,12 +72,11 @@ make_tempdir() { mktemp -d "${TMPDIR:-/tmp}/$TEMP_PREFIX$1.XXXXXX"; }
 
 # ── the sandbox ──────────────────────────────────────────────────────────────────────────
 # A harness that starts a real pi loads real extensions, and an extension may write OUTSIDE
-# its own directory. helm-mail claims a mailbox under `~/.helm/mail` on session_start, so a
-# gate run used to put a live, addressable mailbox in the operator's real root, beside the
-# agents they actually talk to (#133). Measured on 0.83.0: BOTH real-pi harnesses claim one —
-# rpc's is removed by the extension's own session_shutdown, pty's pi is killed and its mailbox
-# is the one seen surviving. Self-healing is not the same as hermetic, and the window in which
-# a throwaway mailbox is addressable is the whole hazard.
+# its own directory. The bench extension reports to benchd on session_start, and benchd claims
+# an address for a session helm declared (`HELM_PANE`) on a terminal — which is exactly what a
+# gate run inside a helm pane is. The old helm-mail extension did the same in `~/.helm/mail`
+# and put live, addressable mailboxes beside the operator's agents (#133). Self-healing is not
+# the same as hermetic.
 #
 # The roots are pointed elsewhere ONCE, before any harness runs, rather than per harness. A
 # harness added later then inherits the sandbox instead of having to remember it, which is
@@ -85,51 +84,40 @@ make_tempdir() { mktemp -d "${TMPDIR:-/tmp}/$TEMP_PREFIX$1.XXXXXX"; }
 #
 # NOT by sandboxing HOME, which is the general form and was tried first: pi keeps its own
 # tooling under `~/.pi/agent/bin`, so a fake HOME makes the first TUI run DOWNLOAD `fd` before
-# it renders — measured, and it broke the banner assertion while it did. That trades a leaked
-# mailbox for a network dependency in a gate whose whole point is being free and offline.
-# Naming the roots is narrower and keeps the run hermetic where it matters. Add the next root
-# to the list below.
+# it renders — measured, and it broke the banner assertion while it did. Naming the roots is
+# narrower and keeps the run hermetic where it matters. Add the next root to the list below.
 SANDBOX=
 
-# The operator's REAL roots, read from the inherited environment BEFORE it is overwritten —
-# `HELM_MAIL_DIR` may already point somewhere that is not `~/.helm`, and that is the directory
-# the guard has to protect.
-#
-# `HELM_DEFAULTS_SUITE` (#285) moves the mail root too, and deliberately does NOT get a second
-# spelling here: `sandbox()` exports `HELM_MAIL_DIR`, which beats a suite in both writers, so
-# nothing this gate runs can resolve a suite's mailroom in the first place.
-REAL_MAIL_ROOT=${HELM_MAIL_DIR:-"${HOME:-/nonexistent}/.helm/mail"}
+# The operator's REAL bench root, read from the inherited environment BEFORE it is overwritten:
+# `BENCH_DIR` wins, then `BENCH_SUITE`, then `~/.bench` — `bench`'s own rule.
+if [ -n "${BENCH_DIR:-}" ]; then
+	REAL_BENCH_ROOT=$BENCH_DIR
+elif [ -n "${BENCH_SUITE:-}" ]; then
+	REAL_BENCH_ROOT="${HOME:-/nonexistent}/.bench-$BENCH_SUITE"
+else
+	REAL_BENCH_ROOT="${HOME:-/nonexistent}/.bench"
+fi
 
 sandbox() {
 	SANDBOX=$(make_tempdir sandbox) || return 1
-	export HELM_MAIL_DIR="$SANDBOX/mail"
 	# No pi extension writes the spool today; helm's tools do, and the next extension might.
-	# One line now against a whole second incident of #133.
 	export HELM_SPOOL_DIR="$SANDBOX/spool"
 	# The bench extension reports to benchd through `bench hook pi`, which resolves the root
-	# from these. Pointed at the sandbox, it finds no daemon and says nothing; left alone, a
-	# gate run inside a helm pane would claim an address in the operator's live benchd.
+	# from these. Pointed at the sandbox, it finds no daemon and says nothing.
 	export BENCH_DIR="$SANDBOX/bench"
 	unset BENCH_SUITE BENCH_SESSION
-	# A pinned handle would name the mailbox something other than the harness's temp dir, and
-	# the sweep below identifies the gate's own mailboxes by exactly that name. Unset it so a
-	# developer who pinned a handle for their own session cannot blind the guard.
-	unset HELM_MAIL_HANDLE
 }
 
-# The guard the sandbox is worth nothing without.
-#
-# It sweeps for the TEMP_PREFIX rather than diffing the directory, and that is deliberate: the
-# operator's other agents claim and release mailboxes in this directory while the gate runs, so
-# a before/after diff would fail on their work. Every mailbox the gate can create is named for
-# the temp dir its harness ran in — helm-mail derives a handle from the cwd's basename — so the
-# prefix names ours exactly and nobody else's.
+# The guard the sandbox is worth nothing without: no session the gate ran (every harness runs
+# in a temp directory named with TEMP_PREFIX) may appear in the operator's real record of what
+# benchd hosted. A before/after diff would be the wrong shape: his own agents are recorded
+# there while the gate runs.
 assert_real_state_untouched() {
-	[ -d "$REAL_MAIL_ROOT" ] || return 0
-	local stray
-	stray=$(ls "$REAL_MAIL_ROOT" 2>/dev/null | grep "^$TEMP_PREFIX" | tr '\n' ' ')
-	[ -z "$stray" ] ||
-		bad "sandbox: this run left mailboxes in the operator's real root $REAL_MAIL_ROOT: $stray"
+	local record="$REAL_BENCH_ROOT/sessions/hosted.json"
+	[ -f "$record" ] || return 0
+	grep -q "$TEMP_PREFIX" "$record" &&
+		bad "sandbox: this run left a session in the operator's real bench record $record"
+	return 0
 }
 
 # Every extension directory's name. The name is load-bearing: it is also the unit test's
@@ -256,15 +244,6 @@ rpc_one() {
 	grep -q "$name v" "$cwd/out.jsonl" ||
 		bad "rpc: $name — the notify frame did not carry the report"
 
-	# The sandbox proved rather than assumed, and this is the only place it CAN be proved
-	# deterministically: an extension that claims and then tidies up leaves nothing to find
-	# afterwards, which is what made #133 hard to see. A report frame is untruncated JSON and
-	# names the root the extension resolved, so a fallback to the operator's real directory
-	# shows up here on the run that caused it, loudly, instead of as a mailbox someone finds
-	# days later. A harness that forgets the sandbox fails on this line.
-	grep -qF "$REAL_MAIL_ROOT" "$cwd/out.jsonl" &&
-		bad "rpc: $name — reported the operator's real mail root $REAL_MAIL_ROOT; the sandbox is not in effect"
-
 	# Whether the command is registered decides whether it is SAFE to invoke it, so this is
 	# control flow and not just an assertion: bad() records a failure but does not return,
 	# and a `/name` prompt that is not a registered command is forwarded to the model.
@@ -382,12 +361,12 @@ harness_pty() {
 	rm -rf "$cwd"
 }
 
-# No sandbox, no run. Refusing costs a developer one confusing minute; carrying on would put a
-# throwaway mailbox in a directory seven live agents address each other through, which is the
-# defect rather than an inconvenience. This is before the dispatch so it covers every harness,
+# No sandbox, no run. Refusing costs a developer one confusing minute; carrying on would claim a
+# throwaway address in the operator's live benchd, which is the defect rather than an
+# inconvenience. This is before the dispatch so it covers every harness,
 # including `typecheck` and `unit`, which do not need it today.
 if ! sandbox; then
-	bad "sandbox: could not make a temp directory under ${TMPDIR:-/tmp}; refusing to run against the operator's real ~/.helm"
+	bad "sandbox: could not make a temp directory under ${TMPDIR:-/tmp}; refusing to run against the operator's real bench"
 	say "# $FAILURES check(s) failed"
 	exit 1
 fi

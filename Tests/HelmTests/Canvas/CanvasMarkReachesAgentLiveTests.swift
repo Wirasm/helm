@@ -9,7 +9,7 @@ import XCTest
 /// `helm-canvas://` origin, real `CanvasSchemeHandler`, real `CanvasFileCoordinator`, the real
 /// annotation script injected by WebKit at `.atDocumentEnd` into the real named content world,
 /// real WebKit layout and a real `document.getSelection()`. Out the far end: `CanvasModel`,
-/// `CanvasAnnotation.decode`, the sidecar, and a message in a mailbox on disk.
+/// `CanvasAnnotation.decode`, the sidecar, and the send that would reach benchd.
 ///
 /// **What this reaches that JavaScriptCore cannot**, which is the whole reason it exists —
 /// `CanvasScriptRuntime`'s own header names these three as out of its reach:
@@ -54,12 +54,16 @@ import XCTest
 /// and an event tap; that stays a manual check.
 @MainActor
 final class CanvasMarkReachesAgentLiveTests: XCTestCase {
-    private var mailRoot: URL!
     private var artifacts: URL!
     private var canvas: URL!
 
     private let handle = Handle(validating: "sild-611a")!
-    private let agentPid: pid_t = 40501
+
+    /// Every send that reached the mailbox seam — benchd's side of it is benchd's to test.
+    private final class Sends: @unchecked Sendable {
+        var calls: [(to: Handle, from: String, subject: String, body: String)] = []
+    }
+    private var sends = Sends()
 
     /// An agent-authored artifact: every anchor in it is an id its author can grep for, which is
     /// the asymmetry #33 rests the whole anchor design on. Its script reports each section's real
@@ -106,29 +110,16 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
 
     override func setUpWithError() throws {
         let fm = FileManager.default
-        let mail = fm.temporaryDirectory.appendingPathComponent("helm-live-mail-\(UUID())")
         let artifactDir = fm.temporaryDirectory.appendingPathComponent("helm-live-canvas-\(UUID())")
-        try fm.createDirectory(
-            at: mail.appendingPathComponent("sild-611a"), withIntermediateDirectories: true)
-        try """
-        {"handle":"sild-611a","runtime":"claude","pid":40501,
-         "sessionId":"e6f1c2d8-0000-4000-8000-0000000611a4","cwd":"/work",
-         "claimedAt":1785831967319}
-        """
-        .write(
-            to: mail.appendingPathComponent("sild-611a/owner.json"),
-            atomically: true, encoding: .utf8)
         try fm.createDirectory(at: artifactDir, withIntermediateDirectories: true)
         let artifact = artifactDir.appendingPathComponent("report.html")
         try Self.artifactHTML.write(to: artifact, atomically: true, encoding: .utf8)
 
-        mailRoot = mail
         artifacts = artifactDir
         canvas = artifact
     }
 
     override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: mailRoot)
         try? FileManager.default.removeItem(at: artifacts)
     }
 
@@ -137,16 +128,17 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
     /// A text selection the operator made on a live page, marked and commented, arriving in the
     /// mailbox of the agent that pushed the canvas — anchor and all.
     func testAHighlightOnALivePageReachesTheAgentsMailbox() async throws {
-        let page = try await Page(canvas: canvas, mailRoot: mailRoot, route: .mailbox(handle))
+        let page = try await Page(canvas: canvas, mail: mail, route: .mailbox(handle))
 
         try await page.markSelection(of: "bridge")
         page.model.annotate(comment: "this is the seam #210 is about")
 
-        let message = try delivered()
-        XCTAssertEqual(message["to"] as? String, handle.value)
-        XCTAssertEqual(message["from"] as? String, CanvasNoteCourier.sender)
-        XCTAssertEqual(message["subject"] as? String, "canvas note on report.html")
-        let body = try XCTUnwrap(message["body"] as? String)
+        XCTAssertEqual(sends.calls.count, 1, "exactly one message")
+        let message = try XCTUnwrap(sends.calls.first)
+        XCTAssertEqual(message.to, handle)
+        XCTAssertEqual(message.from, CanvasNoteCourier.sender)
+        XCTAssertEqual(message.subject, "canvas note on report.html")
+        let body = message.body
         XCTAssertTrue(body.contains("`#bridge`"), "the anchor the agent can grep for — \(body)")
         XCTAssertTrue(body.contains("This shouldn't talk to that"), "…and what it covered")
         XCTAssertTrue(body.contains("this is the seam #210 is about"))
@@ -176,7 +168,7 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
     /// right is the operator's call and no test's: a `WKWebView` here renders offscreen and
     /// nothing in this file looks at a pixel.
     func testALiveTextMarkStaysPaintedAfterTheSelectionItCameFromIsGone() async throws {
-        let page = try await Page(canvas: canvas, mailRoot: mailRoot, route: .mailbox(handle))
+        let page = try await Page(canvas: canvas, mail: mail, route: .mailbox(handle))
 
         try await page.markSelection(of: "bridge")
 
@@ -204,15 +196,12 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
     /// **This one passes with the routing removed as well** — it asserts an absence — so it is a
     /// control against overshoot, not evidence for the feature. Named as one, per `AGENTS.md`.
     func testALivePageWithNoOriginSendsNothingAndSaysSo() async throws {
-        let page = try await Page(canvas: canvas, mailRoot: mailRoot, route: .clipboard(.noOrigin))
+        let page = try await Page(canvas: canvas, mail: mail, route: .clipboard(.noOrigin))
 
         try await page.markSelection(of: "summary")
         page.model.annotate(comment: "nobody pushed this")
 
-        XCTAssertEqual(
-            try FileManager.default.contentsOfDirectory(
-                atPath: mailRoot.appendingPathComponent(handle.value).path),
-            ["owner.json"], "an unrouted note must not write into a mailbox at all")
+        XCTAssertEqual(sends.calls.count, 0, "an unrouted note must not be sent at all")
         XCTAssertEqual(
             page.model.notesNotice,
             "Written to report.notes.md and copied — no agent pushed this canvas, "
@@ -221,13 +210,10 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
 
     // MARK: -
 
-    private func delivered() throws -> [String: Any] {
-        let box = mailRoot.appendingPathComponent(handle.value)
-        let names = try FileManager.default.contentsOfDirectory(atPath: box.path)
-            .filter { $0.hasSuffix(".json") && $0 != "owner.json" && !$0.hasPrefix(".") }
-        XCTAssertEqual(names.count, 1, "exactly one message, named \(names)")
-        let data = try Data(contentsOf: box.appendingPathComponent(try XCTUnwrap(names.first)))
-        return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    /// benchd, as this test answers for it: a recorder.
+    private var mail: BenchMailbox {
+        let sends = self.sends
+        return BenchMailbox(who: { _ in nil }, send: { sends.calls.append(($0, $1, $2, $3)) })
     }
 
     // MARK: - The harness
@@ -265,11 +251,11 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
         private var rects: [String: CGRect] = [:]
         private var marks: AnyCancellable?
 
-        init(canvas: URL, mailRoot: URL, route: CanvasNoteRoute) async throws {
+        init(canvas: URL, mail: BenchMailbox, route: CanvasNoteRoute) async throws {
             let path = StandardizedPath(canvas)
             let model = CanvasModel(source: .file(canvas))
             self.model = model
-            let courier = CanvasNoteCourier(mailboxRoot: mailRoot)
+            let courier = CanvasNoteCourier(mail: mail)
             model.onAnnotation = { annotation, canvas in
                 courier.send(annotation, on: canvas, along: route)
             }

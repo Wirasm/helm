@@ -6,7 +6,7 @@ import XCTest
 /// The bench's half of #205: a push records **which agent** put the canvas there, and a mark made
 /// on that canvas later reaches that agent and nobody else.
 ///
-/// `CanvasNoteRouteTests` pins the decision and `CanvasNoteCourierTests` the write. Neither can
+/// `CanvasNoteRouteTests` pins the decision and `CanvasNoteCourierTests` the send. Neither can
 /// see the thing that was actually missing — that the identity survives the hop from
 /// `TerminalSession` to a pane on a bench — because that hop is `WorkbenchModel`'s, and nothing
 /// but a real push through the real command reaches it.
@@ -17,14 +17,16 @@ import XCTest
 /// with both suites green.
 @MainActor
 final class WorkbenchCanvasOriginTests: XCTestCase {
-    private var mailRoot: URL!
-    private var registryRoot: URL!
     private var artifacts: URL!
     private var canvas: URL!
 
-    /// Which pid each pane's pty reports as its foreground process. Filled in after the sessions
-    /// exist; the courier's `foregroundPid` seam reads it, so no pty and no live agent are needed.
-    private var pids: [UUID: pid_t] = [:]
+    /// benchd, as this test answers for it: which agent reported from each pane, and every send
+    /// that reached it. A class so the `@Sendable` mailbox closures can share it with the test.
+    private final class Bench: @unchecked Sendable {
+        var agents: [UUID: Handle] = [:]
+        var sent: [Handle] = []
+    }
+    private var bench = Bench()
 
     /// What `annotate` put on the clipboard, into this suite's own list rather than the operator's
     /// pasteboard — `mark(_:on:)` takes the sink over, and `CanvasModel.copyToClipboard`'s header
@@ -34,72 +36,34 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/helm-canvas-origin")
     private let handle = Handle(validating: "sild-611a")!
     private let otherHandle = Handle(validating: "other-9c2f")!
-    private let agentPid: pid_t = 40501
-    private let otherPid: pid_t = 40502
 
     override func setUpWithError() throws {
         let fm = FileManager.default
-        mailRoot = fm.temporaryDirectory.appendingPathComponent("helm-origin-mail-\(UUID())")
-        registryRoot = fm.temporaryDirectory.appendingPathComponent("helm-origin-reg-\(UUID())")
         artifacts = fm.temporaryDirectory.appendingPathComponent("helm-origin-canvas-\(UUID())")
-        try Self.claim(handle, pid: agentPid, under: mailRoot, registry: registryRoot)
-        try Self.claim(otherHandle, pid: otherPid, under: mailRoot, registry: registryRoot)
         try fm.createDirectory(at: artifacts, withIntermediateDirectories: true)
         canvas = artifacts.appendingPathComponent("report.md")
         try "# Report\n\nWhy this exists\n".write(to: canvas, atomically: true, encoding: .utf8)
     }
 
     override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: mailRoot)
-        try? FileManager.default.removeItem(at: registryRoot)
         try? FileManager.default.removeItem(at: artifacts)
-        pids = [:]
     }
 
-    /// `nonisolated static` because `setUpWithError` is not on the main actor even in a
-    /// `@MainActor` test case, and reaching an instance from it is a data race the compiler
-    /// refuses.
-    private nonisolated static func claim(
-        _ handle: Handle, pid: pid_t, under root: URL, registry: URL
-    ) throws {
-        let box = root.appendingPathComponent(handle.value)
-        try FileManager.default.createDirectory(at: box, withIntermediateDirectories: true)
-        try """
-        {"handle":"\(handle.value)","runtime":"claude","pid":\(pid),
-         "sessionId":"e6f1c2d8-0000-4000-8000-0000000\(pid)","cwd":"/work",
-         "claimedAt":1785831967319}
-        """
-        .write(to: box.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
-
-        // And the registry row that makes it resolvable. Since #247 an owner carrying a
-        // `sessionId` is matched by its SESSION, never by its recorded pid — so a mailbox with
-        // no row here is an agent helm cannot place, which is the point of that change and not
-        // something a fixture gets to skip.
-        try FileManager.default.createDirectory(
-            at: registry, withIntermediateDirectories: true)
-        try """
-        {"pid":\(pid),"sessionId":"e6f1c2d8-0000-4000-8000-0000000\(pid)","cwd":"/work"}
-        """
-        .write(
-            to: registry.appendingPathComponent("\(pid).json"),
-            atomically: true, encoding: .utf8)
-    }
-
-    /// A bench whose canvas notes go to `mailRoot`, and whose panes report the pids this test
-    /// chose. `foregroundPid` is the seam `BenchSnapshotModel` already takes for this reason;
-    /// `ancestors` is stubbed empty, which makes every pane its own login shell — the direct-hit
-    /// branch of `AddressBook.owner(foregroundPid:shellPid:ancestors:)`, and the only one a test can
-    /// state without a process
-    /// tree to walk.
+    /// A bench whose canvas notes go to this test's benchd. `who` answers for a pane only when
+    /// the test says an agent reported from it — the one fact the route now asks benchd.
     private func mounted() -> (WorkbenchModel, TerminalManager) {
         let manager = TerminalManager()
+        let bench = self.bench
         let model = WorkbenchModel(
             terminals: manager,
             notes: CanvasNoteCourier(
-                mailboxRoot: mailRoot,
-                foregroundPid: { [weak self] session in self?.pids[session.id] },
-                ancestors: { _ in [] },
-                registryRoot: registryRoot))
+                mail: BenchMailbox(
+                    who: { pane in
+                        bench.agents[pane].map {
+                            BenchMailWho(handle: $0, harness: "claude", session: "s-\($0.value)")
+                        }
+                    },
+                    send: { to, _, _, _ in bench.sent.append(to) })))
         model.activate(workspacePath: workspace)
         return (model, manager)
     }
@@ -132,10 +96,8 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         model.annotate(comment: comment)
     }
 
-    private func messages(in handle: Handle) throws -> [String] {
-        try FileManager.default
-            .contentsOfDirectory(atPath: mailRoot.appendingPathComponent(handle.value).path)
-            .filter { $0.hasSuffix(".json") && $0 != "owner.json" && !$0.hasPrefix(".") }
+    private func messages(in handle: Handle) -> [Handle] {
+        bench.sent.filter { $0 == handle }
     }
 
     private func pushedCanvas(of model: WorkbenchModel) throws -> CanvasModel {
@@ -150,13 +112,13 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     func testAMarkOnAPushedCanvasReachesTheAgentThatPushedIt() async throws {
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        pids[terminal.id] = agentPid
+        bench.agents[terminal.id] = handle
 
         push(from: terminal)
         try mark("this shouldn't talk to that", on: try pushedCanvas(of: model))
 
-        XCTAssertEqual(try messages(in: handle).count, 1)
-        XCTAssertEqual(try messages(in: otherHandle), [])
+        XCTAssertEqual(messages(in: handle).count, 1)
+        XCTAssertEqual(messages(in: otherHandle), [])
     }
 
     /// #349: the canvas is pushed while its workspace is **parked**, and the mark is made after the
@@ -167,7 +129,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     {
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        pids[terminal.id] = agentPid
+        bench.agents[terminal.id] = handle
         let workspaces = WorkspaceModel(defaults: try isolatedDefaults("origin-parked"))
         model.parked = workspaces
 
@@ -187,7 +149,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
             restoring: workspaces.contexts[workspace.value]?.workbench)
         try mark("pushed while parked", on: try pushedCanvas(of: model))
 
-        XCTAssertEqual(try messages(in: handle).count, 1)
+        XCTAssertEqual(messages(in: handle).count, 1)
         XCTAssertEqual(copied, [], "a routed mark is mailed, not left on the clipboard")
     }
 
@@ -199,15 +161,15 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         let (model, manager) = mounted()
         let pusher = try XCTUnwrap(manager.sessions(for: workspace).first)
         let bystander = try XCTUnwrap(model.newTerminal())
-        pids[pusher.id] = agentPid
-        pids[bystander.id] = otherPid
+        bench.agents[pusher.id] = handle
+        bench.agents[bystander.id] = otherHandle
 
         push(from: pusher)
         try mark("route this to the pusher", on: try pushedCanvas(of: model))
 
-        XCTAssertEqual(try messages(in: handle).count, 1)
+        XCTAssertEqual(messages(in: handle).count, 1)
         XCTAssertEqual(
-            try messages(in: otherHandle), [],
+            messages(in: otherHandle), [],
             "an agent that happens to be running is not an agent that asked to hear")
     }
 
@@ -215,13 +177,13 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     /// says so rather than doing nothing silently.
     func testACanvasTheOperatorOpenedHasNoOriginAndSendsNothing() throws {
         let (model, manager) = mounted()
-        pids[try XCTUnwrap(manager.sessions(for: workspace).first).id] = agentPid
+        bench.agents[try XCTUnwrap(manager.sessions(for: workspace).first).id] = handle
 
         let opened = try XCTUnwrap(model.open(.file(canvas)))
         let pane = try XCTUnwrap(model.bench?.pane(opened))
         try mark("nobody pushed this", on: model.canvas(for: pane))
 
-        XCTAssertEqual(try messages(in: handle), [])
+        XCTAssertEqual(messages(in: handle), [])
         XCTAssertEqual(
             model.canvas(for: pane).notesNotice,
             "Written to report.notes.md and copied — no agent pushed this canvas, "
@@ -234,19 +196,19 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(copied.first).contains("nobody pushed this"))
     }
 
-    /// The origin agent is gone — the pane was closed, the session ended, or it never claimed a
-    /// mailbox. Same fallback, a different sentence, because they are different answers to "why
+    /// The origin agent is gone — the pane was closed, the session ended, or it never reported
+    /// to benchd. Same fallback, a different sentence, because they are different answers to "why
     /// did nothing send?".
     func testAnOriginWhoseMailboxIsGoneFallsBackAndSaysWhich() async throws {
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        pids[terminal.id] = 999_999
+        // No agent reports from the pane any more: benchd's `who` has nothing to say for it.
 
         push(from: terminal)
         let pane = try XCTUnwrap(model.bench?.canvasPanes.first)
         try mark("the pusher has gone", on: model.canvas(for: pane))
 
-        XCTAssertEqual(try messages(in: handle), [])
+        XCTAssertEqual(messages(in: handle), [])
         XCTAssertEqual(
             model.canvas(for: pane).notesNotice,
             "Written to report.notes.md and copied — the agent that pushed this canvas is gone, "
@@ -261,8 +223,8 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         let (model, manager) = mounted()
         let first = try XCTUnwrap(manager.sessions(for: workspace).first)
         let second = try XCTUnwrap(model.newTerminal())
-        pids[first.id] = agentPid
-        pids[second.id] = otherPid
+        bench.agents[first.id] = handle
+        bench.agents[second.id] = otherHandle
 
         push(from: first)
         push(from: second)
@@ -270,8 +232,8 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         XCTAssertEqual(model.bench?.canvasPanes.count, 1, "the second push found the pane open")
         try mark("the second agent owns this now", on: try pushedCanvas(of: model))
 
-        XCTAssertEqual(try messages(in: otherHandle).count, 1)
-        XCTAssertEqual(try messages(in: handle), [])
+        XCTAssertEqual(messages(in: otherHandle).count, 1)
+        XCTAssertEqual(messages(in: handle), [])
     }
 
     /// Closing the canvas drops the origin with it — the next canvas to land on a recycled pane
@@ -279,7 +241,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     func testClosingACanvasForgetsWhoPushedIt() async throws {
         let (model, manager) = mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
-        pids[terminal.id] = agentPid
+        bench.agents[terminal.id] = handle
 
         push(from: terminal)
         let pane = try XCTUnwrap(model.bench?.canvasPanes.first)
@@ -289,6 +251,6 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
         let reopened = try XCTUnwrap(model.bench?.pane(opened))
         try mark("opened by hand this time", on: model.canvas(for: reopened))
 
-        XCTAssertEqual(try messages(in: handle), [])
+        XCTAssertEqual(messages(in: handle), [])
     }
 }

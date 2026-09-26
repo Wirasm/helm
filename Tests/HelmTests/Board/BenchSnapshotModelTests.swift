@@ -24,7 +24,6 @@ final class BenchSnapshotModelTests: XCTestCase {
         refreshInterval: Duration = .seconds(60),
         now: @escaping () -> Date = Date.init,
         foregroundPid: @escaping (TerminalSession) -> pid_t? = { _ in nil },
-        mailboxOwners: MailboxOwnerCache = MailboxOwnerCache(),
         writer: BenchSnapshotModel.Writer? = nil
     ) -> (BenchSnapshotModel, WorkspaceModel, WorkbenchModel, TerminalManager) {
         let terminals = TerminalManager()
@@ -34,11 +33,9 @@ final class BenchSnapshotModelTests: XCTestCase {
         workbench.activate(workspacePath: WorkspacePath("/tmp/bench-snapshot-model"))
         let model = BenchSnapshotModel(
             directory: BenchSnapshotDirectory(root: root),
-            mailboxRoot: root.appendingPathComponent("mail"),
             // Never the operator's real `~/.claude/sessions`: a test that reads it measures the
             // machine it runs on, and #247 made this model read a registry at all.
             registryRoot: root.appendingPathComponent("sessions"),
-            mailboxOwners: mailboxOwners,
             refreshInterval: refreshInterval,
             now: now,
             foregroundPid: foregroundPid,
@@ -162,109 +159,6 @@ final class BenchSnapshotModelTests: XCTestCase {
         workbench.deactivate()
         for _ in 0..<8 { await Task.yield() }
         XCTAssertFalse(writes.last?.workspaces.contains { $0.path == second.path } ?? true)
-        model.stop()
-    }
-
-    func testRefreshPicksUpMailboxOwnerAndMalformedRowsDoNotBlockIt() throws {
-        let mail = root.appendingPathComponent("mail")
-        try FileManager.default.createDirectory(
-            at: mail.appendingPathComponent("bad"), withIntermediateDirectories: true)
-        try "not json".write(
-            to: mail.appendingPathComponent("bad/owner.json"),
-            atomically: true,
-            encoding: .utf8)
-        var writes: [BenchSnapshot] = []
-        let (model, workspaces, workbench, terminals) = fixture(
-            foregroundPid: { _ in 4242 },
-            writer: {
-                writes.append($0)
-                return true
-            })
-        model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
-
-        let good = mail.appendingPathComponent("good")
-        try FileManager.default.createDirectory(at: good, withIntermediateDirectories: true)
-        try #"{"handle":"owner-4242","runtime":"codex","pid":4242,"sessionId":"s","cwd":"/tmp"}"#
-            .write(to: good.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
-
-        model.refresh()
-
-        XCTAssertEqual(writes.count, 2)
-        let pane = writes.last?.workspaces[0].columns[0].slots[0].panes[0]
-        XCTAssertEqual(pane?.terminal?.owner?.handle.value, "owner-4242")
-        model.stop()
-    }
-
-    /// **#417, through the real model: a publish does not re-read a mailroom that did not
-    /// change.** 12,497 mailboxes, every one opened on the main thread every two seconds, held
-    /// the operator's helm at a full core. `MailboxDirectoryTests` pins the cache; this pins
-    /// that the model publishes through one, and fails both ways — a model that bypasses the
-    /// cache opens nothing through it on the first publish, and one that rebuilds it per publish
-    /// opens everything again on every refresh.
-    func testRepeatedPublishesDoNotReReadAnUnchangedMailroom() throws {
-        let mail = root.appendingPathComponent("mail")
-        for i in 0..<1_000 {
-            let dir = mail.appendingPathComponent("project-\(i)")
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let record =
-                #"{"handle":"project-\#(i)","runtime":"claude","pid":\#(100_000 + i),"#
-                + #""sessionId":"s-\#(i)","cwd":"/tmp","retiredAt":1786040000000}"#
-            let owner = dir.appendingPathComponent("owner.json")
-            try record.write(to: owner, atomically: true, encoding: .utf8)
-        }
-        var opened = 0
-        let (model, workspaces, workbench, terminals) = fixture(
-            foregroundPid: { _ in 4242 },
-            mailboxOwners: MailboxOwnerCache(read: { url in
-                opened += 1
-                return try? Data(contentsOf: url)
-            }),
-            writer: { _ in true })
-
-        model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
-        XCTAssertEqual(opened, 1_000, "the first publish reads every mailbox once")
-        for _ in 0..<5 { model.refresh() }
-        XCTAssertEqual(opened, 1_000, "five more publishes of an unchanged mailroom open nothing")
-        model.stop()
-    }
-
-    /// **The wiring, not the rule.** `AddressBook` is where "ask the session, not the pid" is
-    /// decided and `MailboxDirectoryTests` is where it is pinned — but a model that built its
-    /// book with `sessionFor: { _ in nil }` would satisfy every one of those tests and still
-    /// publish the wrong agent, because nothing else proves this model reads a registry at all.
-    ///
-    /// So: a live Claude agent whose `owner.json` still names the pid it started under, and a
-    /// registry row saying where that session actually is now. Only reading the registry joins
-    /// them.
-    func testTheSnapshotResolvesAPaneThroughTheSessionRegistryAndNotItsRecordedPid() throws {
-        let mail = root.appendingPathComponent("mail/helm-4831")
-        try FileManager.default.createDirectory(at: mail, withIntermediateDirectories: true)
-        let record =
-            #"{"handle":"helm-4831","runtime":"claude","pid":13104,"#
-            + #""sessionId":"s-4831","cwd":"/tmp"}"#
-        try record.write(
-            to: mail.appendingPathComponent("owner.json"), atomically: true, encoding: .utf8)
-
-        let sessions = root.appendingPathComponent("sessions")
-        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
-        try #"{"pid":74011,"sessionId":"s-4831","cwd":"/tmp","status":"busy"}"#
-            .write(
-                to: sessions.appendingPathComponent("74011.json"), atomically: true,
-                encoding: .utf8)
-
-        var writes: [BenchSnapshot] = []
-        let (model, workspaces, workbench, terminals) = fixture(
-            foregroundPid: { _ in 74011 },
-            writer: {
-                writes.append($0)
-                return true
-            })
-        model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
-
-        let pane = writes.last?.workspaces[0].columns[0].slots[0].panes[0]
-        XCTAssertEqual(
-            pane?.terminal?.owner?.handle.value, "helm-4831",
-            "the pane runs session s-4831 at pid 74011; owner.json still says 13104")
         model.stop()
     }
 

@@ -103,6 +103,34 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertNotNil(frame.document)
     }
 
+    /// The two mail verbs helm sends benchd (#358), and the answer to `who` — the canvas note's
+    /// route and a spawn's handle both hang off these.
+    func testTheMailRequestsMatchTheDaemonsSampleAndTheWhoReplyDecodes() throws {
+        let data = try fixture("mail-verbs.json")
+        let samples = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        func sample(_ key: String) throws -> NSObject {
+            try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples[key])))
+        }
+
+        let who = BenchMailRequest.who(
+            id: "helm-1", pane: UUID(uuidString: "0e8e8cc6-159b-45d8-bc02-485120975998")!)
+        XCTAssertEqual(try normalized(JSONEncoder().encode(who)), try sample("who"))
+
+        let send = BenchMailRequest.send(
+            id: "helm-2", to: Handle(validating: "helm-a1b2")!, from: "operator",
+            subject: "note on plan.md", body: "> the quoted line\n\nthe operator's note")
+        XCTAssertEqual(try normalized(JSONEncoder().encode(send)), try sample("send"))
+
+        let reply = try JSONDecoder().decode(
+            BenchMailWho.self,
+            from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["who_reply"])))
+        XCTAssertEqual(
+            reply,
+            BenchMailWho(
+                handle: Handle(validating: "helm-a1b2")!, harness: "claude",
+                session: "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2"))
+    }
+
     /// A document written before drawers existed has none, and helm writes none back.
     func testADocumentWithoutDrawersReadsAndWritesWithout() throws {
         let data = Data(#"{"workspaces":[],"active":null}"#.utf8)

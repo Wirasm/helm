@@ -20,8 +20,7 @@ import HelmWire
 /// **What helm can see, and therefore what may be here.** `AgentRegistry` — Claude Code's own
 /// `~/.claude/sessions/<pid>.json` — is the one runtime that publishes a pid→session mapping,
 /// which is what lets helm say *this pane held that conversation*. pi keys its sessions by
-/// cwd-slug and publishes no pid→session mapping at all (`MailboxDirectory.isRegistryBacked`
-/// records the same boundary for the mailbox join), and codex publishes nothing helm reads. So
+/// cwd-slug and publishes no pid→session mapping at all, and codex publishes nothing helm reads. So
 /// today only `claude` is ever written here. `command` is stored anyway rather than assumed,
 /// for `AGENTS.md`'s discriminator rule: a second runtime should be a *value* this decoder
 /// already carries, not a migration of every bench on disk — and `AgentResume` is where an

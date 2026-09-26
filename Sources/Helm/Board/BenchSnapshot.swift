@@ -34,12 +34,10 @@ struct BenchSnapshot: Codable, Equatable {
         workspaces: WorkspaceModel,
         workbench: WorkbenchModel,
         terminals: TerminalManager,
-        addressBook: AddressBook,
         foregroundPid: (TerminalSession) -> pid_t? = { $0.hostView.foregroundPid },
         // **Defaulted here and nowhere below, and the asymmetry is the guard.** Omitting it means
-        // *the registry said nothing*, which is a real and safe answer — the same thing
-        // `sessionFor: { _ in nil }` means to the book beside it — and it is what a test that is
-        // not about agents wants to say. The five nested initializers this is handed down through
+        // *the registry said nothing*, which is a real and safe answer, and it is what a test
+        // that is not about agents wants to say. The five nested initializers this is handed down through
         // take it with **no default**, exactly as `foregroundPid` does, so a level that forgets to
         // forward it fails to compile rather than quietly reporting every pane under it as having
         // no agent — which is #283's own failure, an agent that has stopped reading as one that
@@ -72,7 +70,6 @@ struct BenchSnapshot: Codable, Equatable {
                     // *record* still shows, because that is on the bench and outlives a mount.
                     resumeOffers: mounted ? workbench.resumeOffers : [:],
                     sessions: terminals.sessions(for: workspace.path),
-                    addressBook: addressBook,
                     foregroundPid: foregroundPid,
                     agents: agents)
             })
@@ -109,7 +106,6 @@ struct BenchSnapshot: Codable, Equatable {
             offer: BenchRestoreOffer? = nil,
             resumeOffers: [Pane.ID: AgentResumeOffer] = [:],
             sessions: [TerminalSession],
-            addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?,
             agents: [pid_t: AgentSession]
         ) {
@@ -130,7 +126,6 @@ struct BenchSnapshot: Codable, Equatable {
                     focusedSlot: focusedSlot,
                     live: live,
                     resumeOffers: resumeOffers,
-                    addressBook: addressBook,
                     foregroundPid: foregroundPid,
                     agents: agents)
             }
@@ -169,7 +164,6 @@ struct BenchSnapshot: Codable, Equatable {
             focusedSlot: Slot.ID?,
             live: [UUID: TerminalSession],
             resumeOffers: [Pane.ID: AgentResumeOffer],
-            addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?,
             agents: [pid_t: AgentSession]
         ) {
@@ -182,7 +176,6 @@ struct BenchSnapshot: Codable, Equatable {
                     focused: slot.id == focusedSlot,
                     live: live,
                     resumeOffers: resumeOffers,
-                    addressBook: addressBook,
                     foregroundPid: foregroundPid,
                     agents: agents)
             }
@@ -202,7 +195,6 @@ struct BenchSnapshot: Codable, Equatable {
             focused: Bool,
             live: [UUID: TerminalSession],
             resumeOffers: [Pane.ID: AgentResumeOffer],
-            addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?,
             agents: [pid_t: AgentSession]
         ) {
@@ -217,7 +209,6 @@ struct BenchSnapshot: Codable, Equatable {
                     focused: focused && pane.id == slot.selected,
                     live: live[pane.id],
                     offer: resumeOffers[pane.id],
-                    addressBook: addressBook,
                     foregroundPid: foregroundPid,
                     agents: agents)
             }
@@ -250,7 +241,6 @@ struct BenchSnapshot: Codable, Equatable {
             focused: Bool,
             live: TerminalSession?,
             offer: AgentResumeOffer? = nil,
-            addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?,
             agents: [pid_t: AgentSession]
         ) {
@@ -266,7 +256,6 @@ struct BenchSnapshot: Codable, Equatable {
                     session: live,
                     resumable: resumable,
                     offer: offer,
-                    addressBook: addressBook,
                     foregroundPid: foregroundPid,
                     agents: agents)
                 canvas = nil
@@ -336,13 +325,12 @@ struct BenchSnapshot: Codable, Equatable {
         let failure: String?
         let title: String?
         let foregroundPid: pid_t?
-        let owner: OwnerRecord?
         /// What #63 recorded about this pane, and whether helm is asking about it right now.
         ///
         /// **The per-pane half of `awaitingRestore`**, and it is here for the reason that field
         /// is one level up: without it, a pane showing *"claude was running here — resume it?"*
         /// and a pane that never held an agent are byte-for-byte identical here — same
-        /// `isLive: true`, same `status: "running"`, `owner: nil` in both. That is not
+        /// `isLive: true`, same `status: "running"`. That is not
         /// hypothetical: proving #63 across a real restart, the snapshot could say the mount
         /// question was open and then had nothing at all to say about the offer that followed
         /// it, so the only way to see the offer was a screenshot.
@@ -360,7 +348,6 @@ struct BenchSnapshot: Codable, Equatable {
             session: TerminalSession?,
             resumable: ResumableAgent? = nil,
             offer: AgentResumeOffer? = nil,
-            addressBook: AddressBook,
             foregroundPid: (TerminalSession) -> pid_t?,
             agents: [pid_t: AgentSession]
         ) {
@@ -372,7 +359,6 @@ struct BenchSnapshot: Codable, Equatable {
                 failure = nil
                 title = nil
                 self.foregroundPid = nil
-                owner = nil
                 agent = nil
                 return
             }
@@ -393,20 +379,9 @@ struct BenchSnapshot: Codable, Equatable {
             title = session.displayTitle
             let pid = foregroundPid(session)
             self.foregroundPid = pid
-            // **The second join, and it goes through the same rule as the first (#247).** This
-            // was `owners.first(where: { $0.pid == pid })` — a pid match with no liveness and no
-            // identity behind it, so the first pid macOS recycled onto a live pane would put a
-            // different agent's handle and session id into `snapshot.json`, the file agents
-            // outside the process are told to trust. Two joins, one rule, spelled once in
-            // `AddressBook`.
-            owner = pid.flatMap { addressBook.owner(forPid: $0) }.map(OwnerRecord.init)
-            // **The same pid, joined the direct way, and deliberately not through
-            // `AddressBook`.** That value answers *which mailbox belongs to this process*, and
-            // it earns its indirection because a recorded pid is neither identity nor liveness
-            // (#247). This asks the registry about the pid helm is watching **right now**, which
-            // is the direction `AgentRegistry.sessionLookup`'s own header says needs no liveness
-            // check: the caller supplies a live foreground pid, so a row that matches carries
-            // that same live number.
+            // The registry about the pid helm is watching right now: the caller supplies a live
+            // foreground pid, so a row that matches carries that same live number. Which agent
+            // is in the pane and its mailbox are benchd's to answer (`bench mail who`, #358).
             agent = pid.flatMap { agents[$0] }.flatMap(AgentRecord.init)
         }
     }
@@ -500,32 +475,6 @@ struct BenchSnapshot: Codable, Equatable {
             status = session.status?.rawValue
             waitingFor = session.waitingFor
             statusUpdatedAt = session.statusUpdatedAt
-        }
-    }
-
-    struct OwnerRecord: Codable, Equatable {
-        /// A `Handle`, and read off the owner rather than copied out of it (#233). This was a
-        /// second, untyped spelling of the concept `Handle` exists to carry, one file over from
-        /// it and with no runtime boundary to make the duplicate honest — this file already
-        /// imports `HelmWire`, and `init` below already has a `MailboxOwner` in hand, which is
-        /// exactly `Handle(readingFrom:)`'s signature.
-        ///
-        /// The same wire obligation as `WorkspaceRecord.path` above comes with it: agents
-        /// outside the process read this field, so `Handle` has to keep encoding it as the bare
-        /// string it always was — a single-value container, proven by `BenchSnapshotTests
-        /// .testOwnerRecordHandleEncodesAsABareStringUnchangedByHandle` rather than assumed.
-        let handle: Handle
-        let runtime: String?
-        let pid: pid_t
-        let sessionId: String?
-        let cwd: String?
-
-        init(_ owner: MailboxOwner) {
-            handle = Handle(readingFrom: owner)
-            runtime = owner.runtime
-            pid = owner.pid
-            sessionId = owner.sessionId
-            cwd = owner.cwd
         }
     }
 

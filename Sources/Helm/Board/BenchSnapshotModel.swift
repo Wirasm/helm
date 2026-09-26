@@ -9,14 +9,9 @@ final class BenchSnapshotModel: ObservableObject {
     typealias Writer = (BenchSnapshot) -> Bool
 
     private let directory: BenchSnapshotDirectory
-    private let mailboxRoot: URL
-    /// Read every publish, but only the mailboxes that changed since the last one (#417). Before
-    /// this, every publish opened every `owner.json` on the main thread, and 12,497 of them
-    /// held the operator's helm at a full core.
-    private let mailboxOwners: MailboxOwnerCache
-    /// Claude Code's session registry — how a pane's foreground pid becomes a session id, and
-    /// the session id a mailbox (#247). Injectable for the reason `mailboxRoot` is: a test that
-    /// reads the operator's live `~/.claude/sessions` measures the machine, not the rule.
+    /// Claude Code's session registry: what the agent in a pane says it is doing (#283).
+    /// Injectable because a test that reads the operator's live `~/.claude/sessions` measures
+    /// the machine, not the rule.
     private let registryRoot: URL
     private let now: () -> Date
     private let writer: Writer
@@ -35,18 +30,14 @@ final class BenchSnapshotModel: ObservableObject {
 
     init(
         directory: BenchSnapshotDirectory = .resolve(),
-        mailboxRoot: URL = MailboxDirectory.resolve(),
         registryRoot: URL = AgentRegistry.defaultRoot,
-        mailboxOwners: MailboxOwnerCache = MailboxOwnerCache(),
         refreshInterval: Duration = .seconds(2),
         now: @escaping () -> Date = Date.init,
         foregroundPid: @escaping (TerminalSession) -> pid_t? = { $0.hostView.foregroundPid },
         writer: Writer? = nil
     ) {
         self.directory = directory
-        self.mailboxRoot = mailboxRoot
         self.registryRoot = registryRoot
-        self.mailboxOwners = mailboxOwners
         self.refreshInterval = refreshInterval
         self.now = now
         self.foregroundPid = foregroundPid
@@ -129,24 +120,12 @@ final class BenchSnapshotModel: ObservableObject {
 
     private func publish() {
         guard isStarted, let workspaces, let workbench, let terminals else { return }
-        // **One read of the registry per publish, spent twice.** It answers two questions about
-        // the same pane — which session is in this pid, which is how the mailbox join works
-        // (#247), and what that agent says it is doing (#283) — and listing the directory once
-        // per question would let one publish's `owner` disagree with the same publish's `agent`.
-        // `AgentRegistry.sessionLookup(over:)` exists for exactly this.
         let registry = AgentRegistry.rows(in: registryRoot)
         let snapshot = BenchSnapshot.project(
             writtenAt: now(),
             workspaces: workspaces,
             workbench: workbench,
             terminals: terminals,
-            // Read once per publish and handed down as one value. Both halves are re-asked every
-            // time — an agent's mailbox and its registry row both appear while helm is running,
-            // and this file is republished every two seconds precisely to notice that. The
-            // mailbox half re-reads only the mailboxes whose directory changed (#417).
-            addressBook: AddressBook(
-                owners: mailboxOwners.owners(in: mailboxRoot),
-                sessionFor: AgentRegistry.sessionLookup(over: registry)),
             foregroundPid: foregroundPid,
             agents: registry)
 

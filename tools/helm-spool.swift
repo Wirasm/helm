@@ -21,8 +21,8 @@
 //
 // The `handle` in the result is the thing worth waiting for: it is the spawned agent's mailbox
 // address, so the caller's next move — "now tell it something" — needs no lookup of its own.
-// helm reads it out of `~/.helm/mail/*/owner.json`; it is never derived from cwd and session id
-// (see MailboxDirectory for why a derivation is silently wrong).
+// helm asks benchd who is in the new pane (`mail/who`); it is never derived from cwd and session
+// id, because benchd widens a handle that is already taken.
 //
 // helm adds the agent's unattended posture to `--arg` for you — `--dangerously-skip-permissions`
 // for claude, `-p yolo` for codex, `--approve` for pi — because a prompt in a pane nobody is

@@ -12,9 +12,9 @@ import XCTest
 /// `validating:` was pinned by nothing, and their agreement by nothing at all. That is what let
 /// the two spellings disagree once already (`9863944`'s own message).
 ///
-/// So the point of this file is the rule, not the type: `MailboxOwner.init(from:)` and
-/// `Handle.init(from:)` both *call* `validating:` now rather than restating it, and
-/// `testEveryRouteRefusesTheSameMalformedHandle` is what would notice if one stopped.
+/// So the point of this file is the rule, not the type: `Handle.init(from:)` *calls*
+/// `validating:` rather than restating it, and `testEveryRouteRefusesTheSameMalformedHandle` is
+/// what would notice if it stopped. (`MailboxOwner`, the third route, left with helm's mailroom.)
 final class HandleTests: XCTestCase {
 
     // MARK: - validating:
@@ -65,7 +65,7 @@ final class HandleTests: XCTestCase {
         XCTAssertNotEqual(
             Handle(validating: "Alice")?.value, "alice",
             "refused, never normalised — silently answering with a different agent's address is "
-                + "the failure MailboxDirectory's header forbids for derivation")
+                + "the failure a derived address would be")
     }
 
     /// **The control that stops the rule overshooting.** Every candidate must survive: refusing
@@ -160,11 +160,9 @@ final class HandleTests: XCTestCase {
         XCTAssertEqual(try decode(#""  helm-4831 ""#), "helm-4831")
     }
 
-    /// The throw path. `SpoolResult.handle` and `BenchSnapshot.OwnerRecord.handle` are only ever
-    /// written by helm from a validated `Handle`, so a value that fails here means the file was
-    /// hand-edited or came from somewhere else — worth a decode error rather than a field that
-    /// silently addresses nobody. Both call sites take it as a soft `nil` behind `try?`; see
-    /// `Handle.init(from:)`'s header for why that is safe at each.
+    /// The throw path. A handle on the wire — `SpoolResult.handle`, or benchd's `mail/who`
+    /// reply — that fails here was hand-edited or came from somewhere else, and is worth a decode
+    /// error rather than a field that silently addresses nobody.
     func testDecodingAnEmptyOrWhitespaceOnlyHandleThrowsRatherThanAddressingNobody() {
         for raw in [#""""#, #""   ""#, #""\t""#] {
             XCTAssertThrowsError(try JSONDecoder().decode(Handle.self, from: Data(raw.utf8))) {
@@ -186,12 +184,10 @@ final class HandleTests: XCTestCase {
 
     // MARK: - the routes agree
 
-    /// **The test the copied rule never had.** Before #233 the trim-and-reject lived twice —
-    /// once in `validating:`, once hand-written inside `MailboxOwner.init(from:)` — with a
-    /// comment between them asking them to match. Nothing failed if they stopped. Now all three
-    /// routes call one rule, and this is what notices if a fourth spelling appears: the same
-    /// malformed input, refused through the caller-named route, the `owner.json` route and the
-    /// `Handle` decode route alike.
+    /// **The test the copied rule never had.** Before #233 the trim-and-reject lived twice, with
+    /// a comment between the copies asking them to match. Now every route calls one rule, and
+    /// this is what notices if a second spelling appears: the same malformed input, refused
+    /// through the caller-named route and the `Handle` decode route alike.
     /// The candidates are spelled as they appear *inside* a JSON string — `\t`, not a literal
     /// tab — because interpolating a raw control character produces malformed JSON, and then
     /// every decode below would throw for parsing reasons and prove nothing about the rule.
@@ -206,12 +202,6 @@ final class HandleTests: XCTestCase {
                 Handle(validating: unescaped),
                 "the caller-named route must refuse \(unescaped.debugDescription)")
 
-            let owner = Data(
-                #"{"handle":"\#(escaped)","runtime":"claude","pid":4242,"cwd":"/tmp"}"#.utf8)
-            XCTAssertThrowsError(
-                try JSONDecoder().decode(MailboxOwner.self, from: owner),
-                "the owner.json route must refuse \(unescaped.debugDescription)")
-
             XCTAssertThrowsError(
                 try JSONDecoder().decode(Handle.self, from: Data("\"\(escaped)\"".utf8)),
                 "the Handle decode route must refuse \(unescaped.debugDescription)")
@@ -224,18 +214,12 @@ final class HandleTests: XCTestCase {
     /// nobody because they are *blank*, these because they are outside the alphabet the writers
     /// emit. If decode ever stopped calling `validating:`, the third assertion here is what
     /// notices — and that is the route whose stricter behaviour is the actual cost of #239, since
-    /// it is the one that reads files off disk.
+    /// it is the one that reads another process's answer.
     func testEveryRouteRefusesTheSameUnaddressableHandle() throws {
         for candidate in ["Alice", "my agent", "owner_1234", "helm_4831", "héllo", "UPPER"] {
             XCTAssertNil(
                 Handle(validating: candidate),
                 "the caller-named route must refuse \(candidate.debugDescription)")
-
-            let owner = Data(
-                #"{"handle":"\#(candidate)","runtime":"claude","pid":4242,"cwd":"/tmp"}"#.utf8)
-            XCTAssertThrowsError(
-                try JSONDecoder().decode(MailboxOwner.self, from: owner),
-                "the owner.json route must refuse \(candidate.debugDescription)")
 
             XCTAssertThrowsError(
                 try JSONDecoder().decode(Handle.self, from: Data("\"\(candidate)\"".utf8)),
@@ -246,13 +230,6 @@ final class HandleTests: XCTestCase {
     /// The agreement in the other direction: what one route accepts, the others accept, with the
     /// same trimming applied. A rule that only ever refuses is satisfied by refusing everything.
     func testEveryRouteAcceptsTheSameWellFormedHandleAndTrimsItIdentically() throws {
-        let owner = try JSONDecoder().decode(
-            MailboxOwner.self,
-            from: Data(
-                #"{"handle":"  helm-4831 ","runtime":"claude","pid":4242,"cwd":"/tmp"}"#.utf8))
-
-        XCTAssertEqual(owner.handle, "helm-4831")
-        XCTAssertEqual(Handle(readingFrom: owner).value, "helm-4831")
         XCTAssertEqual(Handle(validating: "  helm-4831 ")?.value, "helm-4831")
         XCTAssertEqual(
             try JSONDecoder().decode(Handle.self, from: Data(#""  helm-4831 ""#.utf8)).value,

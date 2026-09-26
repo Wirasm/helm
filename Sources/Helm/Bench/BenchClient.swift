@@ -100,7 +100,15 @@ final class BenchClient: ObservableObject {
         _ request: some Encodable, answering _: Payload.Type = Payload.self
     ) throws -> BenchResponse<Payload> {
         if let refused { throw BenchSocket.Failure(description: refused) }
-        let socket = try BenchSocket(path: socketPath, timeout: Self.requestTimeout)
+        return try Self.request(request, at: socketPath)
+    }
+
+    /// One verb, one answer, at a socket path: for a caller that holds no client (the mail
+    /// seam, which runs off the main actor).
+    nonisolated static func request<Payload: Decodable & Sendable>(
+        _ request: some Encodable, at socketPath: String, answering _: Payload.Type = Payload.self
+    ) throws -> BenchResponse<Payload> {
+        let socket = try BenchSocket(path: socketPath, timeout: requestTimeout)
         defer { socket.close() }
         try socket.writeLine(JSONEncoder().encode(request))
         guard let line = try socket.readLine() else {

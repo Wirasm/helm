@@ -72,7 +72,7 @@ file.
 
 **And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
 every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's
-snapshot), benchd's own sessions, Claude Code `--bg` jobs, running subagents, and finished
+snapshot, or by the pane their own hooks report), benchd's own sessions, Claude Code `--bg` jobs, running subagents, and finished
 sessions — the last only from `sessions/hosted.json`, benchd's record of what it and helm
 hosted, because no harness file says where a session ran. `bench sessions dismiss` hides a
 finished row. helm's drawer is the next step.
@@ -92,7 +92,9 @@ and starts its own turn when benchd agrees. An agent the operator starts himself
 reports once its harness is wired to the one fixed command: `bench wiring` prints what to add
 to the three files and `bench wiring --check` says what is missing. codex's idle channel (a
 benchd-owned app-server) is next; until
-then its mail waits for its next prompt or tool call, and the ring proof returns with it.
+then its mail waits for its next prompt or tool call, and the ring proof returns with it. helm
+keeps no mailroom of its own since: it asks benchd who is in a pane (`mail/who`) and sends a
+canvas note through `mail/send`.
 
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance

@@ -24,9 +24,9 @@ package struct SpoolResult: Codable, Equatable {
     /// The life of one request, as the caller sees it.
     ///
     /// **`started` and `ready` are two writes to one file, and that is the design decision
-    /// #54 asks to be made explicitly.** A mailbox is claimed by the agent's own
-    /// `SessionStart` hook *after* the session comes up, so at the moment helm has a terminal
-    /// there is no `owner.json` yet and no handle to report. The issue lists three answers:
+    /// #54 asks to be made explicitly.** A mailbox is claimed by the agent's first hook to
+    /// benchd *after* the session comes up, so at the moment helm has a terminal there is no
+    /// handle to report yet. The issue lists three answers:
     /// wait for the claim before writing anything; write twice; or make the caller resolve it.
     ///
     /// This is the second, for one reason that outranks the others: **a refusal and a slow
@@ -39,14 +39,14 @@ package struct SpoolResult: Codable, Equatable {
     /// which is what a small CLI is for.
     ///
     /// The third answer — the caller resolves the handle — is the one this type exists to
-    /// avoid: it puts the `~/.helm/mail` scan back into every caller, and a caller that gets
-    /// it wrong gets it silently wrong (see `MailboxDirectory`).
+    /// avoid: helm already asked benchd who is in the pane, and a caller that derived a handle
+    /// itself would get it silently wrong whenever benchd widened one (see `Handle`).
     /// `CaseIterable` so `SpoolWireConformanceTests` can iterate every case rather than a
     /// sample: a new case added here without a matching switch arm in that test's exhaustive
     /// `expectation(for:)` is a compile error there, not a gap nobody notices.
     package enum Status: String, Codable, CaseIterable {
         /// A terminal exists in helm and the launch line has been written into its pty. No
-        /// handle yet — the agent has not claimed a mailbox.
+        /// handle yet — the agent has not reported to benchd.
         case started
         /// The agent claimed a mailbox. `pid`, `sessionId`, `handle` and `runtime` are real,
         /// and the caller can address it now.
@@ -138,7 +138,7 @@ package struct SpoolResult: Codable, Equatable {
     /// when the pane was idle, the program that was running when `force` was used. That is the
     /// honest answer to *"what did I just destroy"*, and it costs no new field.
     package var pid: Int32?
-    /// The agent's own id for its session, read out of `owner.json` — never guessed at.
+    /// The agent's own id for its session, as benchd has it — never guessed at.
     package var sessionId: String?
     /// The mailbox address, so the caller's next move ("now tell it something") needs no
     /// lookup of its own. **Read, never derived** — see `Handle`, whose own constructors are

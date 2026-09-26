@@ -14,7 +14,6 @@ final class RootViewBenchSnapshotTests: XCTestCase {
         var writes = 0
         let snapshot = BenchSnapshotModel(
             directory: BenchSnapshotDirectory(root: root),
-            mailboxRoot: root.appendingPathComponent("mail"),
             refreshInterval: .milliseconds(5),
             writer: { _ in
                 writes += 1

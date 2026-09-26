@@ -5,7 +5,7 @@ import XCTest
 
 /// **The join, driven end to end with a real message.** A gesture on the page, the shipped
 /// `canvas-annotation.js` running in JavaScriptCore, the message it actually posts, the gate that
-/// admits it, the model, the decoder, the sidecar, and a file appearing in a real mailbox on disk.
+/// admits it, the model, the decoder, the sidecar, and the send that reaches benchd.
 ///
 /// **Every step here is one somebody already tested in isolation, and that is the point.** #216
 /// shipped for months with both sides green: `CanvasPageSelection.init?` admitted a body only if
@@ -15,15 +15,19 @@ import XCTest
 /// they come out of the script, whatever the script says they are.
 ///
 /// `CanvasNoteRouteTests` holds the routing decision on its own, and `CanvasNoteCourierTests` the
-/// mailbox write on its own. This is the one that fails when they stop meeting.
+/// send on its own. This is the one that fails when they stop meeting.
 @MainActor
 final class CanvasMarkReachesAgentTests: XCTestCase {
-    private var mailRoot: URL!
     private var artifacts: URL!
     private var canvas: URL!
 
     private let handle = Handle(validating: "sild-611a")!
-    private let agentPid: pid_t = 40501
+
+    /// Every send that reached the mailbox seam — benchd's side of it is benchd's to test.
+    private final class Sends: @unchecked Sendable {
+        var calls: [(to: Handle, from: String, subject: String, body: String)] = []
+    }
+    private var sends = Sends()
 
     /// What `annotate` put on the clipboard, for the suite's own clipboard rather than the
     /// operator's — `CanvasModel.copyToClipboard`'s header has why that distinction is not
@@ -32,36 +36,26 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
 
     override func setUpWithError() throws {
         let fm = FileManager.default
-        mailRoot = fm.temporaryDirectory.appendingPathComponent("helm-mark-mail-\(UUID())")
         artifacts = fm.temporaryDirectory.appendingPathComponent("helm-mark-canvas-\(UUID())")
-        try fm.createDirectory(
-            at: mailRoot.appendingPathComponent(handle.value), withIntermediateDirectories: true)
-        try """
-        {"handle":"\(handle.value)","runtime":"claude","pid":\(agentPid),
-         "sessionId":"e6f1c2d8-0000-4000-8000-0000000611a4","cwd":"/work",
-         "claimedAt":1785831967319}
-        """
-        .write(
-            to: mailRoot.appendingPathComponent("\(handle.value)/owner.json"),
-            atomically: true, encoding: .utf8)
-
         try fm.createDirectory(at: artifacts, withIntermediateDirectories: true)
         canvas = artifacts.appendingPathComponent("plan.md")
         try "# The Plan\n\nWhy this exists\n".write(to: canvas, atomically: true, encoding: .utf8)
     }
 
     override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: mailRoot)
         try? FileManager.default.removeItem(at: artifacts)
     }
 
     // MARK: - Driving the whole path
 
     /// A canvas wired the way `WorkbenchModel` wires one, minus the bench: the courier is real,
-    /// the mailbox is real, and only the route is stated rather than resolved from a live pty.
+    /// benchd is a recorder, and only the route is stated rather than resolved from a live pty.
     private func openCanvas(routedTo route: CanvasNoteRoute) -> CanvasModel {
         let model = CanvasModel(source: .file(canvas))
-        let courier = CanvasNoteCourier(mailboxRoot: mailRoot)
+        let sends = self.sends
+        let courier = CanvasNoteCourier(
+            mail: BenchMailbox(
+                who: { _ in nil }, send: { sends.calls.append(($0, $1, $2, $3)) }))
         model.onAnnotation = { annotation, canvas in
             courier.send(annotation, on: canvas, along: route)
         }
@@ -96,20 +90,9 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
         XCTAssertTrue(page.drainExceptions().isEmpty)
     }
 
-    private func delivered() throws -> [String: Any] {
-        let box = mailRoot.appendingPathComponent(handle.value)
-        let names = try FileManager.default.contentsOfDirectory(atPath: box.path)
-            // The two rules both mailbox readers apply — `hooks/helm-mail.mjs:118`.
-            .filter { $0.hasSuffix(".json") && $0 != "owner.json" && !$0.hasPrefix(".") }
-        XCTAssertEqual(names.count, 1, "exactly one message, named \(names)")
-        let name = try XCTUnwrap(names.first)
-        let data = try Data(contentsOf: box.appendingPathComponent(name))
-        let message = try XCTUnwrap(
-            try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(
-            "\(try XCTUnwrap(message["id"] as? String)).json", name,
-            "the filename is the id, which is how a reader names the file back")
-        return message
+    private func delivered() throws -> (to: Handle, from: String, subject: String, body: String) {
+        XCTAssertEqual(sends.calls.count, 1, "exactly one message")
+        return try XCTUnwrap(sends.calls.first)
     }
 
     // MARK: - A selection
@@ -122,11 +105,11 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
             highlight, saying: "this shouldn't talk to that", on: model)
 
         let message = try delivered()
-        XCTAssertEqual(message["to"] as? String, handle.value)
-        XCTAssertEqual(message["from"] as? String, CanvasNoteCourier.sender)
-        XCTAssertEqual(message["subject"] as? String, "canvas note on plan.md")
+        XCTAssertEqual(message.to, handle)
+        XCTAssertEqual(message.from, CanvasNoteCourier.sender)
+        XCTAssertEqual(message.subject, "canvas note on plan.md")
 
-        let body = try XCTUnwrap(message["body"] as? String)
+        let body = message.body
         XCTAssertTrue(
             body.contains("`#intro`"),
             "#205: an agent that receives the prose with no anchor cannot act on it — \(body)")
@@ -154,7 +137,7 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
         }
     }
 
-    /// A canvas with no origin sends nothing at all — not an empty file, not a message to a
+    /// A canvas with no origin sends nothing at all — not a message to a
     /// handle helm invented — **and says so**, because a silent no-op here is the worst outcome:
     /// the operator believes the note was sent.
     func testACanvasWithNoOriginSendsNothingAndTheNoticeSaysSo() throws {
@@ -163,10 +146,7 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
         try mark(
             highlight, saying: "nobody to tell", on: model)
 
-        XCTAssertEqual(
-            try FileManager.default.contentsOfDirectory(
-                atPath: mailRoot.appendingPathComponent(handle.value).path),
-            ["owner.json"], "an unrouted note must not write into a mailbox at all")
+        XCTAssertEqual(sends.calls.count, 0, "an unrouted note must not be sent at all")
         XCTAssertEqual(
             model.notesNotice,
             "Written to plan.notes.md and copied — no agent pushed this canvas, so paste it to one")
@@ -195,7 +175,7 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
         try mark(highlight, saying: "the agent has this", on: model)
 
         XCTAssertFalse(
-            try XCTUnwrap(try delivered()["body"] as? String).isEmpty,
+            try delivered().body.isEmpty,
             "the premise: this note really was delivered")
         XCTAssertEqual(
             copied, [], "a delivered note must not also replace what the operator had copied")

@@ -128,46 +128,22 @@ jobs:
           path: .build
           key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'scripts/patch-libghostty.sh', 'Patches/**') }}
 
-  # Separate job because it needs node and the Swift gate must not: a Swift contributor
-  # should never need a JS toolchain to go green, which is why AGENTS.md keeps these apart.
-  #
-  # It runs on EVERY pull request, not only when `hooks/` changes — this comment claimed the
-  # opposite for as long as it existed, and there has never been a `paths:` filter or an `if:`
-  # anywhere in this file to make it true. Leave it that way: the mailbox is written twice
-  # across a runtime boundary on purpose (`AGENTS.md`), so the thing that breaks it is a change
-  # to the Swift it is a copy OF — `mailbox-conformance.mjs` extracts `MailboxDirectory.resolve`
-  # and `DefaultsSuite.override` from `Sources/` and runs all three copies against one fixture
-  # set. A `paths: hooks/**` filter would skip exactly the PR that breaks it.
+  # helm's mail hooks and their conformance harness are gone (#358): mail is benchd's, and its
+  # gate is the daemon job. This job stays only because its name is a required status check on
+  # `development`; it passes by construction. Delete it together with that check.
   hooks:
     name: mailbox hooks · conformance
-    runs-on: macos-26
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          # The conformance harness imports pi's .ts directly, which needs type stripping —
-          # and the floor for that is 22.18, not 22.6. 22.6 is where `--experimental-strip-types`
-          # was ADDED; the harness passes no flags, so what it needs is the version where
-          # stripping is on by DEFAULT. Pinning the flag's version pinned a node that refuses.
-          #
-          # Measured, by downloading both and running them rather than reading a changelog:
-          #   v22.6.0  → process.features.typescript === undefined
-          #   v22.18.0 → process.features.typescript === "strip"
-          # And measured in CI first — run 31128899140 is this job red on a branch that touched
-          # no JavaScript at all, saying `node v22.6.0 cannot strip TypeScript`. That refusal is
-          # `requireTypeStripping()` working exactly as designed: it fails rather than skipping,
-          # because a skip is the silent zero the harness exists to forbid. The gate was right
-          # and the pin was wrong.
-          node-version: '22.18'
-      - name: hooks gate
-        run: bash scripts/check.sh hooks
+      - name: nothing left to check
+        run: echo "helm keeps no mailroom since #358; benchd's mail is checked by the daemon job"
 
   skills:
     name: skill gates
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      # All four skill gates: mail, canvas, board and post-canvas (scripts/check.sh). The board
+      # All three skill gates: canvas, board and post-canvas (scripts/check.sh). The board
       # and post-canvas gates need node, which this job already has by virtue of the runner
       # image. A gate that exists, is documented in AGENTS.md, and runs only when somebody
       # remembers is the drift this workflow exists to stop — #291 is the same lesson from the

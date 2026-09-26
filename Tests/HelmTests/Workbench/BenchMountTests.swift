@@ -260,8 +260,7 @@ final class BenchMountTests: XCTestCase {
 
         let snapshot = BenchSnapshot.project(
             writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,
-            workbench: model, terminals: terminals,
-            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
+            workbench: model, terminals: terminals
         ) { _ in nil }
 
         let record = try XCTUnwrap(snapshot.workspaces.first)
@@ -285,8 +284,7 @@ final class BenchMountTests: XCTestCase {
 
         let snapshot = BenchSnapshot.project(
             writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,
-            workbench: model, terminals: terminals,
-            addressBook: AddressBook(owners: [], sessionFor: { _ in nil })
+            workbench: model, terminals: terminals
         ) { _ in nil }
 
         XCTAssertNil(snapshot.workspaces.first?.awaitingRestore)

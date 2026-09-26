@@ -4,21 +4,15 @@ import XCTest
 @testable import Helm
 
 /// The routing decision on its own — #205's acceptance asks for a test over *the decision*,
-/// "not by posting a note by hand", which is what the owner lookup being a closure buys.
+/// "not by posting a note by hand", which is what the handle lookup being a closure buys.
 ///
 /// The join it sits inside is `CanvasMarkReachesAgentTests`: a real gesture, the real script, a
-/// real mailbox on disk. Both are needed, and #216 is why — a rule and a pipeline were each
+/// send recorded at the mailbox seam. Both are needed, and #216 is why — a rule and a pipeline were each
 /// tested there too, and the thing that shipped broken for months was the seam between them.
 final class CanvasNoteRouteTests: XCTestCase {
     private let terminal = CanvasOrigin(terminal: UUID())
 
-    /// `Handle(validating:)!` is the spelling `MailboxOwner`'s own header names for a caller that
-    /// wants a specific handle rather than one read off disk.
-    private func owner(handle: String, pid: pid_t = 4321) -> MailboxOwner {
-        MailboxOwner(
-            handle: Handle(validating: handle)!, runtime: "claude", pid: pid,
-            sessionId: "e6f1c2d8-0000-4000-8000-0000000611a4", cwd: "/work")
-    }
+    private func handle(_ value: String) -> Handle { Handle(validating: value)! }
 
     // MARK: - The three answers
 
@@ -27,7 +21,7 @@ final class CanvasNoteRouteTests: XCTestCase {
 
         let route = CanvasNoteRoute.route(origin: terminal) { origin in
             asked.append(origin)
-            return owner(handle: "sild-611a")
+            return handle("sild-611a")
         }
 
         XCTAssertEqual(route, .mailbox(Handle(validating: "sild-611a")!))
@@ -50,7 +44,7 @@ final class CanvasNoteRouteTests: XCTestCase {
         XCTAssertFalse(asked, "with no origin there is nothing to look up")
     }
 
-    /// The pane was closed, the session ended, or the agent never claimed a mailbox.
+    /// The pane was closed, the session ended, or no agent in it reported to benchd.
     func testAnOriginWithNoMailboxLeftFallsBackToTheClipboard() {
         XCTAssertEqual(
             CanvasNoteRoute.route(origin: terminal) { _ in nil }, .clipboard(.originGone))
@@ -77,13 +71,12 @@ final class CanvasNoteRouteTests: XCTestCase {
 
     // MARK: - The handle
 
-    /// **Read off the owner record, never rebuilt from its parts.** `deriveHandle` widens the
-    /// session-id suffix 4 → 6 → 8 → full when a live process already holds the shorter form, and
-    /// `HELM_MAIL_HANDLE` short-circuits it entirely — so a handle computed from `cwd` and
-    /// `sessionId` is silently wrong exactly when it collides, which is the case nobody tests.
-    /// This fixture is one that no derivation would produce.
-    func testTheHandleIsWhateverTheOwnerRecordSaysItIs() {
-        let pinned = owner(handle: "pinned-by-hand")
+    /// **Taken as benchd answered it, never rebuilt from its parts.** A handle computed from
+    /// `cwd` and a session id is silently wrong exactly when the owner of the address space chose
+    /// differently, which is the case nobody tests. This fixture is one no derivation would
+    /// produce.
+    func testTheHandleIsWhateverTheLookupAnswered() {
+        let pinned = handle("pinned-by-hand")
 
         XCTAssertEqual(
             CanvasNoteRoute.route(origin: terminal) { _ in pinned },

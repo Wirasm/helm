@@ -131,8 +131,8 @@ an extension command invoked over RPC as a `/`-prefixed prompt is handled locall
 harness works, and how to add one: `references/testing.md`.
 
 `rpc` and `pty` run a real pi, which loads a real extension, which writes real files — so the gate
-sandboxes every root helm's conventions honour **once, before any harness starts**, and then
-proves the operator's real `~/.helm/mail` was untouched. **A new root override goes in that one
+sandboxes every root the extensions honour **once, before any harness starts**, and then
+proves the operator's real bench record holds none of the gate's sessions. **A new root override goes in that one
 block, never in a harness**, and if the sandbox cannot be made the gate refuses rather than
 running against the real directory.
 
