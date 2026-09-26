@@ -438,7 +438,8 @@ final class SpoolWireConformanceTests: XCTestCase {
                 id: id, status: .captured,
                 capture: CaptureReport(
                     path: "/tmp/conformance-result-capture.png", pixelWidth: 800,
-                    pixelHeight: 600, scale: 2, window: "helm", terminalContent: .included,
+                    pixelHeight: 600, scale: 2, window: "helm", windowVisible: true,
+                    terminalContent: .included,
                     terminalSurfaces: 1, terminalSurfacesExcluded: 0))
         case .closed:
             return SpoolResult(id: id, status: .closed, terminalId: TerminalID(terminal), pid: 4242)
@@ -558,6 +559,31 @@ final class SpoolWireConformanceTests: XCTestCase {
                 stderr.contains(expectation.stderrContains),
                 "helm-capture.swift on status \(status.rawValue): expected stderr to contain "
                     + "\"\(expectation.stderrContains)\", got \"\(stderr)\"")
+        }
+    }
+
+    /// The field is only worth adding if the script says it out loud (#408): a caller who reads
+    /// stderr and not the JSON must still learn that a blank canvas in the PNG is not a bug. And
+    /// the warning must stay off a visible window's capture, or it is noise nobody reads — the
+    /// `true` half is the control that fails if the script warns unconditionally.
+    func testHelmCaptureWarnsExactlyWhenTheWindowWasNotVisible() throws {
+        for visible in [true, false] {
+            let id = "capture-visible-\(visible)"
+            SpoolDirectory(root: spoolDir).write(
+                SpoolResult(
+                    id: RequestID(validating: id)!, status: .captured,
+                    capture: CaptureReport(
+                        path: "/tmp/conformance-visible.png", pixelWidth: 800, pixelHeight: 600,
+                        scale: 2, window: "helm", windowVisible: visible,
+                        terminalContent: .absent, terminalSurfaces: 0,
+                        terminalSurfacesExcluded: 0)))
+
+            let (exitCode, stderr) = try runAndCapture("helm-capture.swift", ["--id", id])
+
+            XCTAssertEqual(exitCode, 0, "a capture of an occluded window is still a capture")
+            XCTAssertEqual(
+                stderr.contains("window is not visible"), !visible,
+                "windowVisible: \(visible) — stderr was \"\(stderr)\"")
         }
     }
 

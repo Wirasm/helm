@@ -428,6 +428,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   (`AppTerminalView+Lifecycle.swift:176`), and **that one does draw**. Measured, both ways: the
   first build asked "is it a `CAMetalLayer`?" and reported `absent` about a capture full of
   legible terminal text. So read the field rather than either assumption.
+  - **`windowVisible: false` means a blank canvas in the PNG is not a bug (#408).** With the
+    screen locked or the window covered, WebKit suspends an occluded page and the capture draws
+    it as an empty rectangle under a normal header. The script warns on stderr when it is false.
+    It works locked, as above; it just cannot show web content that way.
   - **With two helms running, pass `--window <substring of the title>`.** An isolated instance
     is titled `helm — <suite>`. Ambiguity is refused and the refusal lists the titles, so a
     capture never quietly hands back a picture of the operator's session.
