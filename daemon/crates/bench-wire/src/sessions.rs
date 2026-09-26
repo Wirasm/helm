@@ -70,9 +70,10 @@ pub struct SessionRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MailAddress {
     pub handle: String,
-    /// benchd holds a live session with this handle, so a send answers `"wake": "queued"`
-    /// and the wake reactor pastes the notice (subject to its cap). False: the mail waits in
-    /// the inbox and nothing nudges the recipient.
+    /// benchd can start a turn for this agent when it is idle: its hooks reported a channel
+    /// (a Claude session's inbox socket) and it has not held a push. A send answers
+    /// `"wake": "queued"`. False: the mail waits for the agent's next prompt or tool call, and
+    /// a send answers `"wake": "next-turn"`.
     pub wakeable: bool,
     /// Messages in the inbox: delivered and neither read nor retired by a wake.
     pub unread: usize,

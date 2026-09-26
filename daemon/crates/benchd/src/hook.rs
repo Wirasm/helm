@@ -28,17 +28,24 @@ pub struct Agent {
     pub handle: String,
     /// `None` until an event says what it is doing.
     pub activity: Option<Activity>,
-    /// It has been given the standing rule. Once per session in this daemon's life, on the
-    /// first reply that reaches the model.
+    /// It has been given the standing rule. Once per session in this daemon's life, by the
+    /// first reply or push that reached it.
     pub told: bool,
     /// Claude's inbox socket, as its hooks last reported it.
     pub socket: Option<PathBuf>,
-    /// A push waiting for the turn it should start: when, and the messages it carried.
-    pub poked: Option<(Instant, Vec<String>)>,
-    /// A push started no turn: nothing more is pushed until the session starts again.
-    pub held: bool,
+    pub push: Push,
     /// When its hook last reported.
     pub seen: Instant,
+}
+
+/// Where benchd stands with starting turns for an agent.
+pub enum Push {
+    /// It may be started when idle.
+    Ready,
+    /// A push is waiting for the turn it should start: when, and the messages it carried.
+    Sent { at: Instant, ids: Vec<String> },
+    /// A push started no turn. Nothing more is pushed until the session starts again.
+    Held,
 }
 
 impl Agent {
@@ -48,15 +55,14 @@ impl Agent {
             activity: None,
             told: false,
             socket: None,
-            poked: None,
-            held: false,
+            push: Push::Ready,
             seen: Instant::now(),
         }
     }
 
     /// benchd can start a turn for it: a channel it reported, not known to hold pushes.
     pub fn can_push(&self) -> bool {
-        self.socket.is_some() && !self.held
+        self.socket.is_some() && !matches!(self.push, Push::Held)
     }
 
     /// Take in one event. Returns the activity when it changed.
@@ -66,13 +72,13 @@ impl Agent {
             self.socket = Some(PathBuf::from(socket));
         }
         match args.event.as_str() {
-            // A turn started: whatever a push was waiting for has happened.
-            "UserPromptSubmit" => self.poked = None,
-            // A session that starts again may take pushes again.
-            "SessionStart" => {
-                self.poked = None;
-                self.held = false;
+            // A turn started. The payload cannot say whether the push started it or the
+            // operator did; either way the session is taking turns, so the push was not held.
+            "UserPromptSubmit" if matches!(self.push, Push::Sent { .. }) => {
+                self.push = Push::Ready;
             }
+            // A session that starts again may take pushes again.
+            "SessionStart" => self.push = Push::Ready,
             _ => {}
         }
         let Some(Transition::To(now)) = transition else {
@@ -291,7 +297,9 @@ const PUSH_ANSWER_WAIT: Duration = Duration::from_secs(10);
 const RECONCILE_AFTER: Duration = Duration::from_secs(5);
 
 /// One pass of the delivery reactor: settle pushes that started no turn, notice idle agents
-/// the hooks could not report, then start a turn for every idle agent with unread mail.
+/// the hooks could not report, then start a turn for every idle agent with unread mail. The
+/// core mutex is held only to read and change agents and to log; every mailbox is read and
+/// every file moved outside it.
 pub fn deliver_to_idle(core: &Arc<Mutex<Core>>) {
     let (root, home) = {
         let c = core.lock().unwrap();
@@ -304,14 +312,10 @@ pub fn deliver_to_idle(core: &Arc<Mutex<Core>>) {
         c.agents
             .iter()
             .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
-            .filter(|(_, a)| a.poked.is_none() && a.activity == Some(Activity::Idle))
-            .filter_map(|(key, a)| {
-                Some((
-                    key.clone(),
-                    a.handle.clone(),
-                    a.socket.clone().filter(|_| !a.held)?,
-                ))
+            .filter(|(_, a)| {
+                a.can_push() && matches!(a.push, Push::Ready) && a.activity == Some(Activity::Idle)
             })
+            .filter_map(|(key, a)| Some((key.clone(), a.handle.clone(), a.socket.clone()?)))
             .collect()
     };
     for (key, handle, socket) in idle {
@@ -323,22 +327,16 @@ pub fn deliver_to_idle(core: &Arc<Mutex<Core>>) {
     }
 }
 
-/// Hand the unread mail to the session's inbox socket as one user message. A failed write
-/// puts every message back in the inbox and stops pushing to that session.
+/// Hand the unread mail to the session's inbox socket as one user message, the standing rule
+/// first if it is still owed.
 fn push(core: &Arc<Mutex<Core>>, root: &Path, key: &SessionKey, handle: &str, socket: &Path) {
     let taken = bench_mail::take_unread(root, handle);
     if taken.is_empty() {
         return;
     }
-    let rule = {
-        let mut c = core.lock().unwrap();
-        match c.agents.get_mut(key) {
-            Some(Some(agent)) => !std::mem::replace(&mut agent.told, true),
-            _ => false,
-        }
-    };
+    let owed = matches!(core.lock().unwrap().agents.get(key), Some(Some(a)) if !a.told);
     let mut lines: Vec<String> = Vec::new();
-    if rule {
+    if owed {
         lines.push(hook::standing_rule(handle));
     }
     lines.extend(
@@ -347,30 +345,54 @@ fn push(core: &Arc<Mutex<Core>>, root: &Path, key: &SessionKey, handle: &str, so
             .map(|t| hook::notice(&t.from, &t.path.display().to_string())),
     );
     let ids: Vec<String> = taken.iter().map(|t| t.id.clone()).collect();
-    let sent = poke(socket, &lines.join("\n"));
-    let mut c = core.lock().unwrap();
-    let Some(Some(agent)) = c.agents.get_mut(key) else {
-        return;
-    };
-    match sent {
+    match poke(socket, &lines.join("\n")) {
         Ok(()) => {
-            agent.poked = Some((Instant::now(), ids.clone()));
+            let mut c = core.lock().unwrap();
+            if let Some(Some(agent)) = c.agents.get_mut(key) {
+                agent.told = true;
+                agent.push = Push::Sent {
+                    at: Instant::now(),
+                    ids: ids.clone(),
+                };
+            }
             let _ = c.append(
                 "mail/delivered",
                 json!({ "handle": handle, "mail": ids, "channel": "socket" }),
             );
         }
-        Err(why) => {
-            agent.held = true;
-            for id in &ids {
-                let _ = bench_mail::unretire(root, handle, id);
-            }
-            let _ = c.append(
-                "mail/held",
-                json!({ "handle": handle, "mail": ids, "why": format!("the session's inbox socket refused it: {why}") }),
-            );
-        }
+        Err(why) => hold(
+            core,
+            root,
+            key,
+            handle,
+            &ids,
+            &format!("the session's inbox socket refused it: {why}"),
+        ),
     }
+}
+
+/// A push that reached no model: its messages go back to the inbox, unread, the session gets
+/// no more pushes until it starts again, and the log says why. Its next prompt or tool call
+/// delivers them instead.
+fn hold(
+    core: &Arc<Mutex<Core>>,
+    root: &Path,
+    key: &SessionKey,
+    handle: &str,
+    ids: &[String],
+    why: &str,
+) {
+    for id in ids {
+        let _ = bench_mail::unretire(root, handle, id);
+    }
+    let mut c = core.lock().unwrap();
+    if let Some(Some(agent)) = c.agents.get_mut(key) {
+        agent.push = Push::Held;
+    }
+    let _ = c.append(
+        "mail/held",
+        json!({ "handle": handle, "mail": ids, "why": why }),
+    );
 }
 
 /// One user message into a Claude session's inbox socket — the wire shape measured on
@@ -393,28 +415,32 @@ fn poke(socket: &Path, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// A push that started no turn in [`PUSH_ANSWER_WAIT`] was held by the session: its messages
-/// go back to the inbox, unread, and the session gets no more pushes until it starts again.
-/// Its next prompt or tool call delivers them instead.
+/// A push that started no turn in [`PUSH_ANSWER_WAIT`] was held by the session.
 fn settle_unanswered(core: &Arc<Mutex<Core>>, root: &Path) {
-    let mut c = core.lock().unwrap();
-    let mut held: Vec<(String, Vec<String>)> = Vec::new();
-    for agent in c.agents.values_mut().flatten() {
-        if let Some((at, ids)) = &agent.poked
-            && at.elapsed() > PUSH_ANSWER_WAIT
-        {
-            held.push((agent.handle.clone(), ids.clone()));
-            agent.poked = None;
-            agent.held = true;
-        }
-    }
-    for (handle, ids) in held {
-        for id in &ids {
-            let _ = bench_mail::unretire(root, &handle, id);
-        }
-        let _ = c.append(
-            "mail/held",
-            json!({ "handle": handle, "mail": ids, "why": "the push started no turn: the session held it (is crossSessionInbound \"accept\"?); it waits for the next prompt or tool call" }),
+    let overdue: Vec<(SessionKey, String, Vec<String>)> = {
+        let c = core.lock().unwrap();
+        c.agents
+            .iter()
+            .filter_map(|(key, agent)| match agent {
+                Some(Agent {
+                    handle,
+                    push: Push::Sent { at, ids },
+                    ..
+                }) if at.elapsed() > PUSH_ANSWER_WAIT => {
+                    Some((key.clone(), handle.clone(), ids.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    for (key, handle, ids) in overdue {
+        hold(
+            core,
+            root,
+            &key,
+            &handle,
+            &ids,
+            "the push started no turn: the session held it (is crossSessionInbound \"accept\"?); it waits for the next prompt or tool call",
         );
     }
 }
@@ -422,7 +448,7 @@ fn settle_unanswered(core: &Arc<Mutex<Core>>, root: &Path) {
 /// Claude agents the hooks last saw busy or waiting, quiet for [`RECONCILE_AFTER`], with mail
 /// waiting: their registry row says whether they went idle without a hook saying so.
 fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
-    let stale: Vec<(SessionKey, String)> = {
+    let quiet: Vec<(SessionKey, String)> = {
         let c = core.lock().unwrap();
         c.agents
             .iter()
@@ -430,14 +456,17 @@ fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
             .filter(|(key, a)| {
                 key.harness == bench_wire::Harness::Claude
                     && a.can_push()
-                    && a.poked.is_none()
+                    && matches!(a.push, Push::Ready)
                     && a.activity.as_ref().is_some_and(|x| *x != Activity::Idle)
                     && a.seen.elapsed() > RECONCILE_AFTER
             })
             .map(|(key, a)| (key.clone(), a.handle.clone()))
-            .filter(|(_, handle)| bench_mail::unread(root, handle) > 0)
             .collect()
     };
+    let stale: Vec<(SessionKey, String)> = quiet
+        .into_iter()
+        .filter(|(_, handle)| bench_mail::unread(root, handle) > 0)
+        .collect();
     if stale.is_empty() {
         return;
     }
