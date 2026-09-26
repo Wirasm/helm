@@ -27,8 +27,8 @@ struct RefusalThrottle {
 /// one more is the same shape. It is not the same shape. helm never sees OSC *sequences* —
 /// it sees ghostty's *parsed actions*, and `ghostty_action_tag_e` is a closed enum with no
 /// unknown/raw case. A sequence ghostty does not recognise dies inside the compiled Zig
-/// core: no action, no callback, no delegate. Patching cannot reach it either, because
-/// helm's patch applies to the Swift wrapper while the parser is a prebuilt binary.
+/// core: no action, no callback, no delegate. helm's own code cannot reach it either: helm
+/// owns the Swift wrapper, while the parser is compiled into the GhosttyKit binary.
 ///
 /// So the available channels are exactly the ones ghostty already exposes, and of those
 /// only the desktop notification both **fires on output** (rather than on a click, which is
@@ -39,7 +39,8 @@ struct RefusalThrottle {
 /// notification* today, and a canvas tab is not a bigger deal than a banner.
 ///
 /// **The wire format, read from ghostty's own parser** at the pinned commit
-/// (`vendor/libghostty-spm/Ghostty.ref`, `src/terminal/osc/parsers/rxvt_extension.zig`) —
+/// (`ghosttyCommit` in `Packages/GhosttyTerminal/Package.swift`,
+/// `src/terminal/osc/parsers/rxvt_extension.zig`) —
 /// not inferred, because the parser is compiled into the binary and `swift test` cannot
 /// reach a real surface:
 ///

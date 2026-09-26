@@ -24,16 +24,13 @@ import SwiftUI
 /// and hands the same instance to every session. Setting `view.controller`
 /// then makes the view's coordinator create a surface on the SHARED app.
 ///
-/// This only became safe with the vendored wrapper's wakeup patch
-/// (Patches/libghostty-spm-multi-surface-wakeup.patch, docs/VENDORED.md).
-/// Upstream 1.3.1 held `onWakeup` / `shouldProcessWakeup` as single slots that
-/// each coordinator claimed on (re)build and nil'd on teardown, so a second
-/// surface stole app wakeups from the first and closing any tab stalled every
-/// survivor — both defects reproduced in the fork's test suite before the fix.
-/// The patch turns those slots into a registry keyed on callback-bridge
-/// identity: each coordinator subscribes on build, drops only its own entry on
-/// teardown, and `handleWakeup` ticks the app once and fans out. Do NOT revert
-/// to one controller per session without also reverting that pin.
+/// This is safe because the wrapper's wakeups fan out (`TerminalController.addWakeupObserver`).
+/// Its 1.3.1 held `onWakeup` / `shouldProcessWakeup` as single slots that each
+/// coordinator claimed on (re)build and nil'd on teardown, so a second surface stole app
+/// wakeups from the first and closing any tab stalled every survivor; helm patched that
+/// until the wrapper grew the registry. Each coordinator now subscribes on build, drops
+/// only its own entry on teardown, and `handleWakeup` ticks the app once and fans out.
+/// `WakeupFanOutTests` pins it.
 ///
 /// One side effect worth knowing: `ghostty_app_tick` is app-wide, so any
 /// single attached surface now drives the runtime for every surface on it,
@@ -132,16 +129,15 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// tests can assert every session holds the same instance.
     let controller: TerminalController
 
-    /// `backend` is `.exec` — libghostty's real-pty backend — everywhere but the keyboard
-    /// tests. Those need the bytes a keystroke produces to be *readable*, and an exec
-    /// surface writes them into a pty file descriptor nothing in-process can see, where an
-    /// in-memory one hands them to a closure. It is the vendor's own seam
-    /// (`TerminalSessionBackend`), not one invented here, and it is the only way to assert
-    /// what #96 is about: that a synthesised keystroke actually reaches the shell.
+    /// `command` is `nil` — the operator's login shell — everywhere but the keyboard tests.
+    /// Those need the bytes a keystroke produces to be *readable*, so each of their surfaces
+    /// runs a recorder that copies its pty's input to a file (`Pty` in the tests). That is
+    /// the only way to assert what #96 is about: that a synthesised keystroke actually
+    /// reaches the program in the pane.
     init(
         id: UUID = UUID(), ordinal: Int, workspacePath: WorkspacePath,
         controller: TerminalController,
-        backend: TerminalSessionBackend = .exec
+        command: String? = nil
     ) {
         self.id = id
         self.ordinal = ordinal
@@ -150,16 +146,16 @@ final class TerminalSession: ObservableObject, Identifiable {
 
         let view = FocusClaimingTerminalView(frame: .zero)
         view.controller = controller
-        // .exec runs the user's passwd shell ($SHELL) as a login shell — `command` is
-        // deliberately left unset, which is exactly the default-terminal behavior we want.
+        // With no `command`, ghostty runs the user's passwd shell ($SHELL) as a login shell,
+        // which is exactly the default-terminal behavior we want.
         //
         // The env carries this pane's own id (#94). It is set here, before the surface is
         // created on first attach, so the uuid is baked into the child at spawn and survives
         // everything that does not respawn it — a move between containers included.
         view.configuration = TerminalSurfaceOptions(
-            backend: backend,
             workingDirectory: workspacePath.value,
-            envVars: PaneEnvironment.forPane(id)
+            envVars: PaneEnvironment.forPane(id),
+            command: command
         )
         hostView = view
 
@@ -218,7 +214,7 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// - `scrollback-limit`: **not taste but arithmetic, and helm is the only
     ///   thing in the stack that can do it.** ghostty's own doc calls this "the
     ///   size of the scrollback buffer in bytes … **per terminal surface, not
-    ///   for the entire application**" (`Config.zig` at the pinned 35e1a01), so
+    ///   for the entire application**" (`Config.zig`), so
     ///   the number is spent once per pane the operator has *visited* and a
     ///   Ghostty config — written for one window — has no way to know how many
     ///   that is. helm does. That is why this is an override the operator's own
@@ -314,25 +310,22 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// **The lie was one layer down, and #297 went and fixed it there.** ghostty's default is
     /// `copy-on-select = true`, which means *the selection clipboard* — X11's middle-click
     /// buffer, which macOS does not have. Ghostty asks the host whether it has one, and the
-    /// vendored AppKit wrapper used to answer yes and then ignore the parameter naming which
-    /// clipboard to write, putting every selection on `NSPasteboard.general`. Ghostty.app
-    /// answers no, which is why `copy-on-select = true` was a harmless no-op in a real macOS
-    /// ghostty window and a clipboard eater in this one.
+    /// AppKit wrapper used to answer yes and then ignore the parameter naming which
+    /// clipboard to write, putting every selection on `NSPasteboard.general`.
     ///
-    /// `Patches/libghostty-spm-clipboard-destination.patch` now answers no as well, and the
-    /// callbacks honour the destination rather than discarding it — so this config line is no
-    /// longer the only thing standing between a selection and the operator's clipboard, and a
-    /// program in a pane can no longer take it with `OSC 52` either. **It stays a default
-    /// anyway**, for the reason below rather than for safety: `copy-on-select = false` is the
-    /// behaviour helm wants out of the box, and an operator who wants otherwise says so.
+    /// The wrapper now honours the destination (`TerminalClipboardWrite`): a write aimed at
+    /// the selection clipboard is dropped, so this config line is no longer the only thing
+    /// standing between a selection and the operator's clipboard, and a program in a pane
+    /// can no longer take it with `OSC 52` either. **It stays a default anyway**, for the
+    /// reason below rather than for safety: `copy-on-select = false` is the behaviour helm
+    /// wants out of the box, and an operator who wants otherwise says so.
     ///
     /// **A default rather than a session override, deliberately.** An operator who wants
     /// selections on the clipboard writes `copy-on-select = clipboard` — ghostty's own
     /// spelling for the system clipboard, which routes through the standard channel and is
     /// correct here — and their config layers over this one (`GhosttyConfig.swift` tier 2).
-    /// Since the patch, plain `copy-on-select = true` reaches the same place: with no
-    /// selection clipboard claimed, ghostty falls back to the standard one, exactly as it
-    /// does in Ghostty.app. Forcing either in `sessionOverrides` would take a real preference
+    /// Plain `copy-on-select = true` writes the selection clipboard, which helm drops, so it
+    /// behaves like `false`. Forcing either in `sessionOverrides` would take a real preference
     /// away. ⌘C is untouched either way: `copy_to_clipboard` always names the standard
     /// clipboard.
     static let defaultConfiguration = TerminalConfiguration { builder in
@@ -620,7 +613,7 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     /// but http/https/file/mailto is dropped silently.
     ///
     /// **That sentence is only true because the action callback reports this action as
-    /// handled**, which it did not until `Patches/libghostty-spm-open-url-handled.patch`.
+    /// handled**, which the wrapper did not do before its 1.5.2.
     /// ghostty reads an unhandled `open_url` as its own to perform and falls back to
     /// `internal_os.open` (`Surface.zig:4415`), so every URL dropped below was opened by
     /// ghostty anyway — the allowlist decided nothing, and the fallback also leaked a

@@ -152,9 +152,9 @@ Research (2026-09-25, primary sources):
   exist, Windows ConPTY, is dead weight here. Use `rustix` `openpty` with our own spawn. This
   can land before the VT spike.
 - **No upstream Ghostty backend without a pty yet.** Ghostty 1.4 targets scripting and a true
-  tmux control mode; #14277 is tmux-specific. Keep the relay. helm vendors libghostty-spm
-  1.3.1, which embeds Ghostty at `35e1a016` (`vendor/libghostty-spm/Ghostty.ref`), not
-  Ghostty's own 1.3.1 tag. That tag has no terminal C API.
+  tmux control mode; #14277 is tmux-specific. Keep the relay. helm builds official
+  Ghostty at a pinned `main` commit (`Packages/GhosttyTerminal/Package.swift`, since
+  2026-09-26), not Ghostty's own 1.3.1 tag. That tag has no terminal C API.
 
 Decision:
 

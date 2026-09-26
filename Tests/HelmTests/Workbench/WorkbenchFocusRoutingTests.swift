@@ -226,16 +226,16 @@ private final class Bench {
     private let ptys = Registry()
     private let workspacePath = NSTemporaryDirectory() + "focus-routing/"
 
-    /// The backend closure is handed to `TerminalManager` during this object's own `init`, so
+    /// The command closure is handed to `TerminalManager` during this object's own `init`, so
     /// it cannot capture `self`. One `Pty` per session, in creation order.
     @MainActor
     final class Registry {
         private(set) var all: [Pty] = []
 
-        func next() -> TerminalSessionBackend {
+        func next() -> String? {
             let pty = Pty()
             all.append(pty)
-            return .inMemory(pty.session)
+            return pty.command
         }
     }
 
@@ -244,7 +244,7 @@ private final class Bench {
         NSApp.setActivationPolicy(.accessory)
 
         let registry = ptys
-        terminals = TerminalManager(backend: { registry.next() })
+        terminals = TerminalManager(command: { registry.next() })
         workbench = WorkbenchModel(terminals: terminals)
 
         let ids = (0..<count).map { _ in UUID() }
@@ -359,21 +359,20 @@ private final class Bench {
     func pty(of pane: Pane.ID) throws -> Pty {
         let session = try XCTUnwrap(
             terminals.sessions.first { $0.id == pane }, "no session for pane \(pane)")
-        let backend: InMemoryTerminalSession? =
-            if case let .inMemory(memory) = session.hostView.configuration.backend {
-                memory
-            } else {
-                nil
-            }
-        let memory = try XCTUnwrap(backend, "session \(pane) is not on an in-memory backend")
         let pty = try XCTUnwrap(
-            ptys.all.first { $0.session === memory }, "no pty registered for \(pane)")
+            ptys.all.first { $0.command == session.hostView.configuration.command },
+            "no pty registered for \(pane)")
         // The surface is the precondition for the one test here that types. Without this, a
         // ghostty that refused to build a surface reads as "the click did not route" — the
         // #192 ambiguity, one suite over.
         let budget: TimeInterval = 5
-        guard Eventually.holds(within: budget, { memory.hasSurface }) else {
+        guard Eventually.holds(within: budget, { session.status == .running }) else {
             throw MissingTerminalSurface(pane: pane, waited: budget)
+        }
+        // The surface is up; the recorder in it must also be in raw mode before anything is
+        // typed at it, or the keystroke waits in the line discipline for a newline.
+        guard Eventually.holds(within: budget, { pty.isReady }) else {
+            throw RecorderNeverStarted(pane: pane, pty: pty, waited: budget)
         }
         return pty
     }
