@@ -32,6 +32,11 @@ final class BenchClient: ObservableObject {
     /// (re)connect is the whole state and is always delivered; after that only a newer seq is.
     var onDocument: ((DocumentAt) -> Void)?
 
+    /// Each frame that carries no document — an event that changed no arrangement, such as a
+    /// just run finishing (#356) — as the line benchd wrote, on the main actor. Whoever reads a
+    /// kind decodes its data itself.
+    var onEvent: ((Data) -> Void)?
+
     private let latest = LatestDocument()
     private var follower: BenchFollower?
     private var delivered: UInt64?
@@ -92,6 +97,8 @@ final class BenchClient: ObservableObject {
             onDocument?(at)
         case .disconnected(let why):
             state = .disconnected(why)
+        case .event(let line):
+            onEvent?(line)
         }
     }
 
@@ -164,6 +171,8 @@ final class BenchFollower: @unchecked Sendable {
         case connected(DocumentAt)
         case frame(DocumentAt)
         case disconnected(String)
+        /// A frame with no document, as its line.
+        case event(Data)
     }
 
     /// The waits between reconnects: short enough that a benchd restart is a blink, capped so a
@@ -251,7 +260,10 @@ final class BenchFollower: @unchecked Sendable {
             emit(.connected(at))
             while let line = try socket.readLine() {
                 let frame = try decoder.decode(BenchFrame.self, from: line)
-                guard let document = frame.document else { continue }
+                guard let document = frame.document else {
+                    emit(.event(line))
+                    continue
+                }
                 let at = DocumentAt(seq: frame.event.seq, document: document)
                 latest.store(at, replacing: false)
                 emit(.frame(at))

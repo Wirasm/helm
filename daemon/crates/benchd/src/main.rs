@@ -27,7 +27,9 @@
 //! wait, a prompt delivery, or an attach pump.
 
 mod ask;
+mod codex;
 mod hook;
+mod just;
 mod layout;
 mod rules;
 mod sessions;
@@ -656,6 +658,40 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
 /// `bench` beside this daemon: the hooks that report to benchd and the inbound rule that lets
 /// benchd start a turn in an idle session. The operator's own wiring names the same handler,
 /// and Claude runs an identical handler once, so a machine wired by hand is not called twice.
+/// `close <session>`: drain-then-die a session by its id. Naming the session is the explicit
+/// form: a pane still showing it stays, and shows it ended, exactly as when the agent exits by
+/// itself. Closing the pane (`--force`) is the route that takes both.
+fn close_session(core: &Arc<Mutex<Core>>, req: &Request) -> Response {
+    let reply = |status: Status, reason: Option<String>, data: Option<Value>| Response {
+        id: req.id.clone(),
+        status,
+        reason,
+        data,
+    };
+    let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
+        Ok(a) => a,
+        Err(e) => return reply(Status::Refused, Some(format!("close args: {e}")), None),
+    };
+    let sid = parsed.session.as_str();
+    let session = {
+        let mut c = core.lock().unwrap();
+        let Some(session) = c.sessions.remove(sid) else {
+            let why = format!("no session {sid:?} — `bench sessions` lists them");
+            return reply(Status::Refused, Some(why), None);
+        };
+        if let Err(why) = c.append("session/closed", json!({ "session": sid })) {
+            return reply(Status::Error, Some(why), None);
+        }
+        session
+    };
+    let was_live = session.close(Duration::from_secs(2));
+    reply(
+        Status::Ok,
+        None,
+        Some(json!({ "session": sid, "was_live": was_live })),
+    )
+}
+
 /// `resize`: an attached viewer's terminal changed size, so the session's pty follows. Not
 /// logged: a pane dragged across the screen resizes many times a second, and the size is
 /// the viewer's, not a fact about the bench.
@@ -1035,37 +1071,7 @@ fn dispatch(
             )
         }
 
-        Some(Verb::Close) => {
-            let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
-                Ok(a) => a,
-                Err(e) => return (refused(format!("close args: {e}")), AfterResponse::Done),
-            };
-            let sid = parsed.session.as_str();
-            let session = {
-                let mut c = core.lock().unwrap();
-                // Naming the session is the explicit form: a pane still showing it stays, and
-                // shows it ended, exactly as when the agent exits by itself. Closing the pane
-                // (`--force`) is the route that takes both.
-                c.sessions.remove(sid)
-            };
-            let Some(session) = session else {
-                return (
-                    refused(format!("no session {sid:?} — `bench sessions` lists them")),
-                    AfterResponse::Done,
-                );
-            };
-            {
-                let mut c = core.lock().unwrap();
-                if let Err(why) = c.append("session/closed", json!({ "session": sid })) {
-                    return (errored(why), AfterResponse::Done);
-                }
-            }
-            let was_live = session.close(Duration::from_secs(2));
-            (
-                ok(json!({ "session": sid, "was_live": was_live })),
-                AfterResponse::Done,
-            )
-        }
+        Some(Verb::Close) => (close_session(core, req), AfterResponse::Done),
 
         Some(Verb::Resume) => {
             let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
@@ -1297,6 +1303,12 @@ fn dispatch(
                 AfterResponse::Done,
             )
         }
+
+        Some(Verb::JustRun) => match just::run(core, req) {
+            Ok(started) => (ok(json!(started)), AfterResponse::Done),
+            Err(just::NotStarted::Refused(why)) => (refused(why), AfterResponse::Done),
+            Err(just::NotStarted::Failed(why)) => (errored(why), AfterResponse::Done),
+        },
 
         Some(Verb::BrowserStart) => {
             core.lock().unwrap().browser_restarts.clear();

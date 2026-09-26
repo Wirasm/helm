@@ -70,6 +70,17 @@ parse error) once per version, and `bench status` reports `rejected` until a goo
 replaces it. Only a file that is gone means the built-in table. benchd never writes a rules
 file. `rules/keymap.toml` beside it is helm's alone: benchd never reads a key.
 
+**The just layer is one verb, `just/run` (#356).** A recipe from `<root>/rules/justfile` is a
+composition of `bench` verbs, and benchd runs it rather than helm, so it is logged and dies with
+the daemon: `just --justfile <root>/rules/justfile --working-directory <cwd> <recipe>`, with
+`BENCH_DIR` (and `BENCH_SUITE`) pointing every `bench` inside it back here. The operator's run
+works at the active workspace and gets `BENCH_ASKED=1`, which makes the CLI send `asked`; an
+agent's (`bench just`) works where it was asked from and gets nothing, so its verbs are judged
+as the agent's. `just/started` is logged before the answer, which does not wait; a reaper logs
+`just/finished` with the exit code; output goes to `<root>/just/<run>.log`. The child is on the
+browser's pipe leash. A name outside `[A-Za-z0-9_-]`, a missing justfile or a missing `just`
+(looked for on `PATH`, then Homebrew's two prefixes) is refused by name.
+
 **And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
 every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's
 snapshot, or by the pane their own hooks report), benchd's own sessions, Claude Code `--bg` jobs, running subagents, and finished
@@ -93,9 +104,12 @@ over in argv as a pointer, so nothing waits for a TUI to draw. pi's channel is i
 (`pi/extensions/bench`), which reports through `bench hook pi`, watches the inbox benchd names
 and starts its own turn when benchd agrees. An agent the operator starts himself
 reports once its harness is wired to the one fixed command: `bench wiring` prints what to add
-to the three files and `bench wiring --check` says what is missing. codex's idle channel (a
-benchd-owned app-server) is next; until
-then its mail waits for its next prompt or tool call, and the ring proof returns with it. helm
+to the three files and `bench wiring --check` says what is missing. A codex benchd spawns runs
+its TUI against an app-server of its own (`codex --remote`, one per session, leashed to the TUI),
+which is where its hooks run and where benchd starts a turn (`turn/start`) when it is idle; a
+codex the operator starts himself embeds its app-server, so its mail waits for its next prompt
+or tool call. `just mail-ring` is the proof: claude, codex and pi pass a number around through
+benchd, idle and busy, with per-hop latency from the log. helm
 keeps no mailroom of its own since: it asks benchd who is in a pane (`mail/who`) and sends a
 canvas note through `mail/send`.
 

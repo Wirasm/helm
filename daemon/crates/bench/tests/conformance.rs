@@ -3806,6 +3806,258 @@ fn an_idle_claude_is_started_through_its_socket_and_a_busy_one_is_not() {
     );
 }
 
+/// A stand-in for the app-server a benchd-spawned codex runs its TUI against, speaking what
+/// codex 0.157.0 speaks on `--listen unix://`: WebSocket, one JSON-RPC message per text frame.
+/// Answers `initialize`, then `turn/start` with the next of `answers` (`true` starts a turn,
+/// `false` refuses), and hands each `turn/start`'s params to the test. `thread/read` answers
+/// the thread's status from `status`, which the test sets.
+struct FakeAppServer {
+    started: std::sync::mpsc::Receiver<serde_json::Value>,
+    status: std::sync::Arc<std::sync::Mutex<&'static str>>,
+}
+
+impl FakeAppServer {
+    fn bind(socket: &Path, answers: Vec<bool>) -> FakeAppServer {
+        fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(socket).expect("bind fake app-server");
+        let (tx, started) = std::sync::mpsc::channel();
+        let status = std::sync::Arc::new(std::sync::Mutex::new("active"));
+        let thread_status = std::sync::Arc::clone(&status);
+        std::thread::spawn(move || {
+            let mut answers = answers.into_iter();
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") && stream.read_exact(&mut byte).is_ok() {
+                    head.push(byte[0]);
+                }
+                let _ = stream.write_all(b"HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: websocket\r\n\r\n");
+                while let Some(message) = read_client_frame(&mut stream) {
+                    let id = message["id"].clone();
+                    match message["method"].as_str() {
+                        Some("initialize") => server_frame(
+                            &mut stream,
+                            &serde_json::json!({"id": id, "result": {"userAgent": "fake"}}),
+                        ),
+                        Some("thread/read") => {
+                            let now = *thread_status.lock().unwrap();
+                            let status = if now == "active" {
+                                serde_json::json!({"type": "active", "activeFlags": []})
+                            } else {
+                                serde_json::json!({"type": now})
+                            };
+                            let thread = serde_json::json!({"id": message["params"]["threadId"], "status": status});
+                            server_frame(
+                                &mut stream,
+                                &serde_json::json!({"id": id, "result": {"thread": thread}}),
+                            );
+                        }
+                        Some("turn/start") => {
+                            // A notification first, as the real one sends them unasked.
+                            server_frame(
+                                &mut stream,
+                                &serde_json::json!({"method": "thread/status/changed", "params": {"threadId": message["params"]["threadId"], "status": {"type": "active", "activeFlags": []}}}),
+                            );
+                            let answer = if answers.next().unwrap_or(true) {
+                                // Long enough for a 16-bit length, as real answers are.
+                                serde_json::json!({"id": id, "result": {"turn": {"id": "t1", "status": "inProgress", "items": [], "note": "x".repeat(300)}}})
+                            } else {
+                                serde_json::json!({"id": id, "error": {"code": -32600, "message": "thread is busy"}})
+                            };
+                            server_frame(&mut stream, &answer);
+                            let _ = tx.send(message["params"].clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+        FakeAppServer { started, status }
+    }
+}
+
+fn read_client_frame(stream: &mut UnixStream) -> Option<serde_json::Value> {
+    let mut head = [0u8; 2];
+    stream.read_exact(&mut head).ok()?;
+    assert!(head[1] & 0x80 != 0, "a client frame must be masked");
+    let len = match head[1] & 0x7f {
+        126 => {
+            let mut n = [0u8; 2];
+            stream.read_exact(&mut n).ok()?;
+            u64::from(u16::from_be_bytes(n))
+        }
+        127 => {
+            let mut n = [0u8; 8];
+            stream.read_exact(&mut n).ok()?;
+            u64::from_be_bytes(n)
+        }
+        n => u64::from(n),
+    };
+    let mut mask = [0u8; 4];
+    stream.read_exact(&mut mask).ok()?;
+    let mut payload = vec![0u8; len as usize];
+    stream.read_exact(&mut payload).ok()?;
+    payload
+        .iter_mut()
+        .enumerate()
+        .for_each(|(i, b)| *b ^= mask[i % 4]);
+    serde_json::from_slice(&payload).ok()
+}
+
+fn server_frame(stream: &mut UnixStream, message: &serde_json::Value) {
+    let payload = message.to_string().into_bytes();
+    let mut frame = vec![0x81u8];
+    if payload.len() < 126 {
+        frame.push(payload.len() as u8);
+    } else {
+        frame.push(126);
+        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    }
+    frame.extend_from_slice(&payload);
+    let _ = stream.write_all(&frame);
+}
+
+#[test]
+fn an_idle_codex_benchd_spawned_is_started_through_its_app_server_and_a_busy_one_is_not() {
+    let home = TestHome::claim("cxpush");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (session, pid) = terminal_process(h, "cx");
+    let server = FakeAppServer::bind(
+        &h.join(".bench/codex").join(format!("{session}.sock")),
+        vec![true, false],
+    );
+    let thread = "01a0dde2-1128-7572-8528-e0979f7e706f";
+    let event = |name: &str| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "codex", "event": name, "session": thread,
+                "cwd": "/tmp", "pid": pid, "bench_session": session}),
+        )
+    };
+    let send = |body: &str| json_of(&bench(h, &["mail", "send", "--to", "cx", "--body", body]));
+    assert_eq!(
+        event("SessionStart")["handle"],
+        "cx",
+        "joins its benchd session"
+    );
+
+    // Busy: nothing is started; the next tool call is the channel.
+    event("UserPromptSubmit");
+    assert_eq!(send("while busy")["wake"], "queued");
+    assert!(server.started.recv_timeout(Duration::from_secs(2)).is_err());
+    // A permission prompt: still nothing.
+    event("PermissionRequest");
+    assert!(server.started.recv_timeout(Duration::from_secs(2)).is_err());
+
+    // Idle: one turn on its own thread, carrying the pointer and never the body.
+    event("Stop");
+    let params = server
+        .started
+        .recv_timeout(Duration::from_secs(5))
+        .expect("a turn is started once idle");
+    assert_eq!(params["threadId"], thread);
+    let read = h.join(".bench/mail/cx/read/m1.md");
+    assert_eq!(
+        params["input"],
+        serde_json::json!([{"type": "text", "text": format!("You have mail from operator: {}", read.display())}])
+    );
+    assert!(read.exists() && inbox_count(h, "cx") == 0);
+    // It is busy with that turn: no second push before any hook says so.
+    send("during the turn");
+    assert!(server.started.recv_timeout(Duration::from_secs(2)).is_err());
+
+    // A refused turn: the mail goes back, unread, and the session is not pushed again.
+    event("Stop");
+    server
+        .started
+        .recv_timeout(Duration::from_secs(5))
+        .expect("tried once idle again");
+    wait_until("the refused push is held", Duration::from_secs(5), || {
+        event_kinds(h).iter().any(|(k, _)| k == "mail/held")
+    });
+    assert_eq!(inbox_count(h, "cx"), 1, "back in the inbox, unread");
+    assert_eq!(send("after the refusal")["wake"], "next-turn");
+
+    let log = event_kinds(h);
+    let delivered: Vec<_> = log
+        .iter()
+        .filter(|(k, _)| k == "mail/delivered")
+        .map(|(_, d)| d["channel"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(delivered, ["codex"]);
+    assert!(
+        log.iter().any(|(k, d)| k == "agent/state"
+            && d["event"] == "turn/start"
+            && d["activity"]["kind"] == "busy"),
+        "the started turn is logged as the agent going busy"
+    );
+}
+
+#[test]
+fn a_codex_turn_that_failed_is_found_idle_by_its_thread_status() {
+    // A turn refused by a usage limit fires no Stop (measured on codex 0.157.0): the hooks last
+    // said busy, and only the app-server knows the thread went idle.
+    let home = TestHome::claim("cxstale");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (session, pid) = terminal_process(h, "cx");
+    let server = FakeAppServer::bind(
+        &h.join(".bench/codex").join(format!("{session}.sock")),
+        vec![true],
+    );
+    let thread = "01a0dded-514e-7681-9834-ce30a42cf6c5";
+    for event in ["SessionStart", "UserPromptSubmit"] {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "codex", "event": event, "session": thread,
+                "cwd": "/tmp", "pid": pid, "bench_session": session}),
+        );
+    }
+    bench(h, &["mail", "send", "--to", "cx", "--body", "one"]);
+    // Still running by the server's word: held, however quiet the hooks are.
+    assert!(server.started.recv_timeout(Duration::from_secs(7)).is_err());
+    // What a usage-limit refusal leaves behind (measured): no turn is running.
+    *server.status.lock().unwrap() = "systemError";
+    let params = server
+        .started
+        .recv_timeout(Duration::from_secs(8))
+        .expect("pushed once the server says idle");
+    assert_eq!(params["threadId"], thread);
+    assert!(
+        event_kinds(h)
+            .iter()
+            .any(|(k, d)| k == "agent/state" && d["event"] == "thread/read"),
+        "the log says which record found it idle"
+    );
+}
+
+#[test]
+fn a_codex_spawn_clears_a_socket_an_earlier_daemons_session_left_behind() {
+    // Session ids restart at s1 with the daemon, and a codex app-server that died uncleanly
+    // leaves its socket, which the next app-server on that path refuses to bind ("File
+    // exists", measured on 0.157.0).
+    let home = TestHome::claim("cxstalesock");
+    let h = &home.dir;
+    let stale = h.join(".bench/codex/s1.sock");
+    fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("/nonexistent/codex-daemon/gone", &stale).unwrap();
+    let _daemon = DaemonGuard::start_with_fake(h, "codex");
+    let run = bench(
+        h,
+        &["spawn", "--agent", "codex", "--cwd", "/tmp", "--name", "cx"],
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    assert_eq!(json_of(&run)["session"], "s1");
+    assert!(
+        fs::symlink_metadata(&stale).is_err(),
+        "the stale socket is gone before the app-server binds"
+    );
+}
+
 #[test]
 fn a_push_that_starts_no_turn_goes_back_to_the_inbox_and_stops_pushing() {
     // What a session without crossSessionInbound "accept" does: takes the message and holds
@@ -4337,6 +4589,141 @@ fn a_resumed_session_moves_to_the_pane_it_reports_from_and_keeps_its_handle() {
     assert_eq!(recorded_pane(), HOOK_PANE);
     assert_eq!(json_of(&who(HOOK_PANE))["handle"], handle.as_str());
     assert_eq!(who(NEW_PANE).code, 3);
+}
+
+// ---------------------------------------------------------------------------
+// The just layer (#356)
+// ---------------------------------------------------------------------------
+
+/// `just` where benchd looks for it, or `None`. A runner without it skips the just tests
+/// with a named reason, except in CI, which installs it: the proof has to run somewhere.
+fn just_available() -> bool {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let found = std::env::split_paths(&path)
+        .chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from))
+        .any(|dir| dir.join("just").is_file());
+    if !found {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI must install just: the just layer's proof runs there"
+        );
+        eprintln!("skipped: `just` is not installed (PATH, /opt/homebrew/bin, /usr/local/bin)");
+    }
+    found
+}
+
+/// Polls the event log for `kind` about `run`, within a generous deadline: the run is its own
+/// process, so a slow machine only makes this wait longer.
+fn await_event(root: &Path, kind: &str, run: &str) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if let Some(event) = log_of(root)
+            .into_iter()
+            .find(|e| e["kind"] == kind && e["data"]["run"] == run)
+        {
+            return event;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("no {kind} for {run} within 30s: {:?}", log_of(root));
+}
+
+/// #356: a recipe from `<root>/rules/justfile` runs at the active workspace, its `bench`
+/// verbs reach this daemon, and it is logged as `just/started` (before the answer) and
+/// `just/finished`. Run by the operator its verbs are his and may open a drawer; run by an
+/// agent (`bench just`) the same verb is refused and the run fails. A missing justfile and a
+/// name that is not a recipe are refused.
+#[test]
+fn a_recipe_runs_as_whoever_asked_and_is_logged() {
+    if !just_available() {
+        return;
+    }
+    let home = TestHome::claim("just");
+    let root = home.dir.join(".bench");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": home.dir.display().to_string() }),
+        operator(),
+        false,
+    ));
+
+    let missing = bench(&home.dir, &["just", "open"]);
+    assert_eq!(missing.code, 3, "{}", missing.stderr);
+    assert!(
+        missing.stderr.contains("rules/justfile"),
+        "{}",
+        missing.stderr
+    );
+
+    fs::create_dir_all(root.join("rules")).unwrap();
+    fs::write(
+        root.join("rules").join("justfile"),
+        format!(
+            "open:\n    pwd\n    {} drawer toggle x --surface sessions\n",
+            bench_bin().display()
+        ),
+    )
+    .unwrap();
+    let not_a_recipe = layout(
+        &daemon.socket,
+        "just/run",
+        serde_json::json!({ "recipe": "--justfile" }),
+        operator(),
+        false,
+    );
+    assert_eq!(not_a_recipe["status"], "refused", "{not_a_recipe}");
+
+    let started = ok_data(layout(
+        &daemon.socket,
+        "just/run",
+        serde_json::json!({ "recipe": "open" }),
+        operator(),
+        false,
+    ));
+    let run = started["run"].as_str().unwrap().to_string();
+    let logged = log_of(&root);
+    let begun = logged
+        .iter()
+        .find(|e| e["kind"] == "just/started" && e["data"]["run"] == run.as_str())
+        .unwrap_or_else(|| panic!("just/started is logged before the answer: {logged:?}"));
+    assert_eq!(begun["data"]["by"], "operator");
+    let finished = await_event(&root, "just/finished", &run);
+    assert_eq!(finished["data"]["exit"], 0, "{finished}");
+    let output = fs::read_to_string(started["log"].as_str().unwrap()).unwrap();
+    let workspace = fs::canonicalize(&home.dir).unwrap();
+    assert!(
+        output.contains(&workspace.display().to_string())
+            || output.contains(&home.dir.display().to_string()),
+        "it ran at the active workspace: {output}"
+    );
+    let document = ok_data(layout(
+        &daemon.socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ))["document"]
+        .clone();
+    assert_eq!(
+        document["open_drawer"], "x",
+        "the operator's recipe opened the drawer"
+    );
+
+    let by_agent = bench(&home.dir, &["just", "open"]);
+    assert_eq!(by_agent.code, 0, "{}", by_agent.stderr);
+    let agent_run = json_of(&by_agent)["run"].as_str().unwrap().to_string();
+    let finished = await_event(&root, "just/finished", &agent_run);
+    assert_ne!(
+        finished["data"]["exit"], 0,
+        "an agent's recipe cannot move the operator's focus: {finished}"
+    );
+    let output = fs::read_to_string(finished["data"]["log"].as_str().unwrap()).unwrap();
+    assert!(
+        output.contains("--asked"),
+        "the refusal is in its log: {output}"
+    );
 }
 
 /// A session claimed in a pane and resumed outside helm (`claude --resume` in another terminal

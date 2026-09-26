@@ -21,6 +21,8 @@ struct StatusBarView: View {
     @ObservedObject var model: WorkspaceModel
     /// For benchd's badge and the drawer capsules, both drawn from benchd's document.
     let workbench: WorkbenchModel
+    /// The operator's just runs that failed or did not start.
+    let justRuns: JustRuns
     /// Already polled on the workspace bar's behalf; observing it here costs nothing new.
     @ObservedObject private var board = BoardModel.shared
     /// A `@StateObject` because the subscription's lifetime should be this bar's, not a
@@ -77,6 +79,9 @@ struct StatusBarView: View {
             presence: board.presence
         )
         HStack(spacing: 6) {
+            JustCapsules(runs: justRuns) { log in
+                workbench.send(.paneOpen(surface: .canvas(path: log)), by: .operatorGesture)
+            }
             DrawerCapsules(model: workbench)
             if let client = workbench.mode.client {
                 BenchStatusBadge(client: client, workbench: workbench)

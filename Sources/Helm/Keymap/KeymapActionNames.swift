@@ -11,11 +11,14 @@ extension KeyBinding.Action {
         switch self {
         case let .verb(template): template.spelled
         case let .local(action): action.spelled
+        case let .just(recipe): ("just", .init(recipe: recipe))
         }
     }
 
     init(name: String, arguments: KeymapArguments) throws(KeymapProblem) {
-        if let template = try VerbTemplate(name: name, arguments: arguments) {
+        if name == "just" {
+            self = .just(recipe: try arguments.recipe(name))
+        } else if let template = try VerbTemplate(name: name, arguments: arguments) {
             self = .verb(template)
         } else if let action = try LocalAction(name: name, arguments: arguments) {
             self = .local(action)
@@ -135,9 +138,13 @@ struct KeymapArguments: Equatable {
     /// A drawer's name, and what it starts with when it holds nothing yet (`drawer`).
     var name: String?
     var surface: String?
+    /// A recipe in `<bench root>/rules/justfile` (`just`). benchd judges the name.
+    var recipe: String?
 
     static let none = KeymapArguments()
-    static let fields = ["direction", "index", "delta", "step", "offset", "name", "surface"]
+    static let fields = [
+        "direction", "index", "delta", "step", "offset", "name", "surface", "recipe",
+    ]
 
     /// The row's argument line, empty for none.
     var rendered: [String] {
@@ -145,14 +152,14 @@ struct KeymapArguments: Equatable {
             direction.map { "direction = \"\($0)\"" }, index.map { "index = \($0)" },
             delta.map { "delta = \($0)" }, step.map { "step = \"\($0)\"" },
             offset.map { "offset = \($0)" }, name.map { "name = \"\($0)\"" },
-            surface.map { "surface = \"\($0)\"" },
+            surface.map { "surface = \"\($0)\"" }, recipe.map { "recipe = \"\($0)\"" },
         ].compactMap(\.self)
     }
 
     private var present: [String] {
         let set = [
             direction != nil, index != nil, delta != nil, step != nil, offset != nil,
-            name != nil, surface != nil,
+            name != nil, surface != nil, recipe != nil,
         ]
         return zip(Self.fields, set).filter(\.1).map(\.0)
     }
@@ -175,6 +182,12 @@ struct KeymapArguments: Equatable {
     }
 
     func none(_ action: String) throws(KeymapProblem) { try only([], action) }
+
+    func recipe(_ action: String) throws(KeymapProblem) -> String {
+        try only("recipe", action)
+        guard let recipe, !recipe.isEmpty else { throw missing("recipe", action) }
+        return recipe
+    }
 
     /// A drawer's name, and the surface it starts with if it is empty: `browser`, `sessions`, or
     /// `file:<path>` for a canvas.

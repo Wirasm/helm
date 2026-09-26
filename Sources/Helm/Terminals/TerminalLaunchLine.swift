@@ -4,9 +4,9 @@ import Foundation
 ///
 /// **Two steps, because one does not work — and this is the second caller of that
 /// measurement, which is why it is a type rather than a method on each.** libghostty wraps
-/// *every* `sendText` in bracketed-paste markers whenever the shell has enabled mode 2004
-/// (the vendored wrapper says so in `UITerminalView+PublicSticky.swift`, and fish, zsh and
-/// bash all enable it). So a line ending in `\r` arrives as a **paste**: the shell puts it on
+/// *every* text paste in bracketed-paste markers whenever the shell has enabled mode 2004
+/// (the wrapper says so on `AppTerminalView.paste(text:)`, and fish, zsh and bash all
+/// enable it). So a line ending in `\r` arrives as a **paste**: the shell puts it on
 /// the command line, including the newline, and waits. From outside that is indistinguishable
 /// from nothing having happened, which is exactly how it presented the first time — a
 /// terminal opened, a shell running, and no agent ever.
@@ -23,7 +23,7 @@ import Foundation
 @MainActor
 enum TerminalLaunchLine {
     static func send(_ line: String, to session: TerminalSession) {
-        session.hostView.sendText(line)
+        session.hostView.paste(text: line)
         if !session.hostView.performBindingAction("text:\\n") {
             NSLog(
                 "helm: could not submit a launch line — the pane holds it unrun. ghostty "

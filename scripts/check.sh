@@ -102,8 +102,6 @@ part_lint() {
 
 part_swift() {
     require xcodegen swift || return 1
-    echo "--> patch libghostty"
-    bash scripts/patch-libghostty.sh || return 1
     echo "--> build"
     swift build --disable-keychain || return 1
     echo "--> test"

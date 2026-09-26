@@ -140,6 +140,7 @@ pub fn open_action(
                 prompt_file: None,
                 settings: None,
                 extra_args: Vec::new(),
+                codex_server: None,
             })?;
             Ok(OpenAction::Resume {
                 argv: std::iter::once(program).chain(args).collect(),

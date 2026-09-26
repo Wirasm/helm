@@ -27,6 +27,12 @@ pub use layout::{
 pub mod hook;
 pub use hook::{HookArgs, HookReply};
 
+mod just;
+pub use just::{
+    JUST_FINISHED, JUST_STARTED, JustFinished, JustRunArgs, JustStarted, is_recipe_name,
+    just_logs_dir, justfile_path,
+};
+
 mod sessions;
 pub use sessions::{
     Activity, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
@@ -160,6 +166,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "browser/status",
     "browser/stop",
     "browser/setup",
+    "just/run",
     // The layout verbs (M4) — `LAYOUT_VERBS`, spelled again here so this one list stays the
     // whole surface; `every_layout_verb_is_known_and_routes_to_layout` keeps the two in step.
     "bench/get",
@@ -211,6 +218,8 @@ pub enum Verb {
     BrowserStatus,
     BrowserStop,
     BrowserSetup,
+    /// Run a recipe from the operator's bench justfile (#356).
+    JustRun,
     /// Every verb in `LAYOUT_VERBS`; `LayoutVerb` decodes which one and its arguments.
     Layout,
     /// An attached viewer's terminal changed size (`SessionArgs` with `rows`/`cols`).
@@ -247,6 +256,7 @@ impl Verb {
             "resize" => Some(Verb::Resize),
             "helm/ask" => Some(Verb::HelmAsk),
             "helm/answer" => Some(Verb::HelmAnswer),
+            "just/run" => Some(Verb::JustRun),
             layout if LAYOUT_VERBS.contains(&layout) => Some(Verb::Layout),
             _ => None,
         }
@@ -542,6 +552,14 @@ pub fn browser_profile_dir(root: &Path) -> PathBuf {
     browser_dir(root).join("profile")
 }
 
+/// The app-server a benchd-spawned codex session runs its TUI against (#358): one per session,
+/// so the hooks it runs carry that session's own `BENCH_SESSION`, and benchd can start a turn
+/// on the session's thread when it is idle. codex puts the real socket in a short directory of
+/// its own and leaves a symlink here.
+pub fn codex_server_socket(root: &Path, session: &str) -> PathBuf {
+    root.join("codex").join(format!("{session}.sock"))
+}
+
 // ---------------------------------------------------------------------------
 // The envelope
 // ---------------------------------------------------------------------------
@@ -802,7 +820,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            40,
+            41,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

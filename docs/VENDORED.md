@@ -2,8 +2,8 @@
 
 Helm ships its runtime dependencies in the bundle and never fetches anything
 at runtime. Every vendored asset is pinned here — exact version, source URL,
-and sha256 — so a bump is always a deliberate, recorded act (same discipline
-as the libghostty pin in docs/SPIKE.md).
+and sha256 — so a bump is always a deliberate, recorded act (the same discipline
+as the Ghostty pin below).
 
 All assets are wired in BOTH manifests — `Package.swift` (`resources:` on the
 Helm target) and `project.yml` (the `buildPhase: resources` entries) — keep
@@ -79,268 +79,87 @@ To bump: re-download the tarball, `diff -r` against this directory, regenerate `
 (`cd .claude/skills/helm-board && shasum -a 256 quickdraw/*`), and open a board to confirm it
 still renders and still takes a stroke.
 
-## ghostty shell-integration — `Sources/Helm/Resources/ghostty/shell-integration/`
+## Ghostty — `Packages/GhosttyTerminal/`
 
-Ghostty's shell-integration script tree (bash, elvish, fish, nushell, zsh),
-bundled so OSC 133 prompt marks (⌘↑/⌘↓ jump-to-prompt), command-finished
-events, and OSC 7 pwd reports work with nothing else installed.
-`GhosttyResources` (GhosttyConfig.swift) points `GHOSTTY_RESOURCES_DIR` at the
-bundled `ghostty/` dir first; an installed Ghostty.app's copy is only the
-fallback. Bundled as a directory in both manifests (SPM
-`.copy("Resources/ghostty")`; xcodegen `type: folder`) so the hierarchy — and
-zsh's hidden `.zshenv` — survives into the app bundle.
+helm's terminal is official Ghostty, built by us, plus the Swift wrapper that hosts it in an
+`NSView`. No third party's binary and no patches.
 
-- **Version**: ghostty commit `35e1a0160c4f6797e1bb1ef8e7a2b8c6b114ab58`
-  (2026-07-10, during the 1.3.2 dev cycle; no release tag). This is the EXACT
-  source commit the pinned embed was built from: libghostty-spm 1.3.1's
-  GhosttyKit.xcframework carries the version string
-  `1.3.2-HEAD-+35e1a0160` (verify: `strings .build/artifacts/libghostty-spm/
-  libghostty/GhosttyKit.xcframework/macos-arm64_x86_64/libghostty.a | grep
-  1.3.2`), so scripts and binary cannot skew.
-- **Source**: `src/shell-integration/` from
-  <https://github.com/ghostty-org/ghostty/archive/35e1a0160c4f6797e1bb1ef8e7a2b8c6b114ab58.tar.gz>
-  (source tarball sha256
-  `057c6c2a8851bef9d80a6c628124fbcfeb12876fc72c31c67a9c1ecde56f999e`), copied
-  verbatim — no edits.
-- **License**: MIT (Ghostty, © Mitchell Hashimoto); `bash-preexec.sh` is MIT
-  (© Ryan Caloras), vendored by ghostty upstream.
-- **File sha256** (`cd Sources/Helm/Resources/ghostty && find
-  shell-integration -type f | sort | xargs shasum -a 256`):
+**The pin is two lines** at the top of `Packages/GhosttyTerminal/Package.swift`:
+`ghosttyCommit` (a full `ghostty-org/ghostty` sha) and `ghosttyKitChecksum`. Nothing else
+records the commit; everything below follows from it.
 
-```text
-24d8b80577fa0e630e89a6b0284205323df568559ea85b4168074714832996e4  shell-integration/bash/bash-preexec.sh
-9c250c90d00f11c02a4245e940e5330e7e5d1eabae46d70c53b141b46b4921f0  shell-integration/bash/ghostty.bash
-9fb49e9e885e45fcfbb0c41827ee68e65fc397f84b2ff2c72b1221f20070e7fe  shell-integration/elvish/lib/ghostty-integration.elv
-d78d03a5f602cd95eb15f7310ce42c96c560bc28dec37a792576535eefac8bf3  shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish
-b5bf0a6f4b25d21e06160056d3a201845570b31fb2b9ce117736c6d914d94bb4  shell-integration/nushell/vendor/autoload/ghostty.nu
-329f4ba5090269248e764caa8d9527687e4f5d6d9104745e690c051269500c50  shell-integration/README.md
-a9885383cd13cd9f0297b1d13a7bade2526f7f91c0a097f255e9a39a508fcba4  shell-integration/zsh/.zshenv
-1a2bcb867f06667d5d743221aea42b1d322f3ae402e1a62ba941cba3c5d17f19  shell-integration/zsh/ghostty-integration
-```
+Three things must come from that one commit, and `scripts/bump-ghostty.sh` moves the first two
+together:
 
-To bump: this tree moves ONLY together with the libghostty-spm pin. When the
-pin changes, read the new xcframework's embedded version string for the build
-commit, re-fetch `src/shell-integration/` at that commit, and update the
-commit + hashes here.
+1. **GhosttyKit.xcframework** — Ghostty's own
+   `zig build -Doptimize=ReleaseFast -Demit-xcframework=true -Dxcframework-target=universal`
+   (the build Ghostty.app itself links; macOS arm64 + x86_64), unpatched. Published as the only
+   asset of the release `ghostty-<first 12 of the commit>` on Wirasm/helm, a prerelease that is
+   not a helm release, and consumed as `binaryTarget(url:checksum:)`. The gate downloads it and
+   needs no zig.
+2. **Shell integration** — `Sources/Helm/Resources/ghostty/shell-integration/`, Ghostty's
+   `src/shell-integration/` copied verbatim. `GhosttyResources` (GhosttyConfig.swift) points
+   `GHOSTTY_RESOURCES_DIR` at it, so the scripts must be the ones the binary was built with.
+   Bundled as a directory in both manifests (SPM `.copy("Resources/ghostty")`; xcodegen
+   `type: folder`) so zsh's hidden `.zshenv` survives into the app bundle. git holds the
+   bytes; there is no second hash list to keep.
+3. **benchd's libghostty-vt** — not in the tree yet (M5b, `docs/future-planning/bench-roadmap.md`).
+   helm and benchd must parse terminal bytes identically, so when it lands it is built from the
+   same checkout `bump-ghostty.sh` makes (`zig build -Demit-lib-vt` in
+   `.build/ghostty/<commit12>`), and this section is where that coupling stays written down.
 
-## libghostty-spm 1.3.1 + helm patch — `vendor/libghostty-spm` (LOCAL, TEMPORARY)
+**The wrapper** (`Packages/GhosttyTerminal/Sources/GhosttyTerminal`, about 7.1k lines) is the
+macOS slice of [Lakr233/libghostty-spm](https://github.com/Lakr233/libghostty-spm)'s
+`GhosttyTerminal` target at tag `1.6.20260922` (`b7f888e`), MIT (© Lakr233; `LICENSE` beside
+it). helm owns it now. What was taken out: UIKit; the in-memory session and the host-managed IO
+backend it needs (a Ghostty patch of Lakr233's, not official Ghostty); the SwiftUI view layer
+(`TerminalViewState`, the representables, `TerminalSurfaceView`), since helm hosts
+`AppTerminalView` in its own `GhosttyHostView`; the snapshot helper; and the resources lookup
+(`GhosttyRuntimeResources`), which helm's `GhosttyResources` replaces. Its one other dependency
+is `MSDisplayLink`, exact `2.2.0`. It is outside `make lint` on purpose: its text stays close to
+upstream's so a fix there can still be diffed in by hand.
 
-Not a vendored file and no longer a plain SPM pin: helm currently builds against
-a LOCAL checkout of libghostty-spm at tag `1.3.1` with one patch applied. Both
-manifests point at `vendor/libghostty-spm` (gitignored); `scripts/patch-libghostty.sh`
-clones and patches it.
+**Why not Lakr233's package, as before.** Its `GhosttyKit.xcframework` is Ghostty with 17 of
+its own patches applied (`Patches/ghostty/` there), several of which change behaviour: resize
+and prompt-redraw frame holds, a scroll fix, the host-managed backend. The operator's ruling
+(2026-09-26): official Ghostty, and if we need to own something, we own it. Rendering is
+therefore Ghostty.app's, including across a drag-resize.
 
-- **Base**: <https://github.com/Lakr233/libghostty-spm.git>, tag `1.3.1`,
-  revision `b0930320739324886590e865d571eb5dd7073912` — the same exact pin
-  docs/SPIKE.md records. The patch does not touch the binary target, so the
-  `GhosttyKit.xcframework.zip` URL and checksum are upstream's, unchanged.
+**What helm used to patch, and where each fix lives now.** Until 2026-09-26 helm built against
+libghostty-spm `1.3.1` with three patches of its own. All three are in the wrapper as taken:
 
-  **The script fetches that SHA explicitly, and has to.** A clone carries only what
-  its branches reach, and upstream has since moved past the branch that held
-  `b093032` — so a fresh clone does not contain the pinned commit at all. The
-  checkout after it died with `fatal: unable to read tree (b093032…)` on every new
-  worktree while an older `vendor/`, cloned before the prune, kept verifying fine.
-  The object is still served, it is just no longer advertised by any ref, so
-  `git fetch origin <sha>` is what keeps a pin-by-SHA actually reachable. Found by
-  running the script in a fresh worktree, where it had been failing silently: the
-  invocation was piped into `tail`, and a pipeline reports the *last* command's
-  status, so `set -e` inside the script could not surface it. AGENTS.md documents
-  that shape for `log show`; it bites here identically.
-- **Patches**, applied in this order by `scripts/patch-libghostty.sh` (both are `git
-  format-patch` output; applied with `git am`):
-  1. `Patches/libghostty-spm-multi-surface-wakeup.patch` — the multi-surface wakeup fix.
-  2. `Patches/libghostty-spm-clipboard-destination.patch` — the clipboard-destination fix (#297).
-  3. `Patches/libghostty-spm-open-url-handled.patch` — report a handled `open_url` as handled.
+- **Multi-surface wakeups.** 1.3.1 held `onWakeup` as one slot, so a second surface on the
+  shared `TerminalController` stole the first's wakeups and closing any pane stalled the rest.
+  Now `addWakeupObserver` / `removeWakeupObserver`; `Tests/GhosttyTerminalTests/WakeupFanOutTests`.
+- **The clipboard a write names (#297).** Every write landed on `NSPasteboard.general`, so
+  `OSC 52` at the selection target replaced the operator's clipboard. Now
+  `TerminalClipboardWrite`: only the standard clipboard is written, selection and primary
+  (ghostty's raw `2`) are dropped, never redirected; `Tests/GhosttyTerminalTests/ClipboardWriteTests`.
+  Reads are not guarded, and cannot usefully be: ghostty resolves an `OSC 52` read to the
+  standard clipboard before any callback runs (`Surface.zig`), so every read arrives as
+  `.standard`. A protected paste or `OSC 52` read goes to the wrapper's confirmation hook,
+  and helm answers yes (`TerminalSession+Clipboard.swift`), as the old wrapper did: helm has
+  no prompt to ask with, so an `OSC 52` read is still not guarded.
+- **A handled `open_url` reported as handled.** Otherwise ghostty also runs its own
+  `/usr/bin/open`, whose stderr reader spins forever (ghostty-org/ghostty#13480): measured at
+  seven threads and 586 CPU-hours on a helm up nine days. The callback claims `open_url` when
+  the surface delegate conforms to `TerminalSurfaceOpenURLDelegate`;
+  `TerminalOpenURLOwnershipTests` pins helm's conformance.
 
-  **Their diffstats are deliberately not restated here.** `git format-patch` already writes one
-  into each patch file, so a copy in this document is a second spelling of a number nothing
-  checks — and it drifted on its first outing: the clipboard entry said `+161/−3` against an
-  actual `+171/−2`, wrong from the moment the patch was amended, and caught by a reviewer
-  running the command rather than by any gate. Ask the patch instead:
-  `git apply --stat Patches/<name>.patch | tail -1`.
-- **License**: MIT (libghostty-spm, © Lakr233).
-
-**Each patch carries its own marker.** The script verifies an existing `vendor/` by
-grepping for a symbol each patch introduces — one per patch, not one for the set. That is
-not tidiness: a `vendor/` left over from before patch 2 still contains patch 1's marker, so
-a single check reports `OK ... patch applied` and exit 0 while helm builds against a tree
-that eats the operator's clipboard. Measured both ways on 2026-08-10 against exactly that
-tree — the old script said OK, the current one names the missing patch and exits 1.
-
-**Adding a third patch is one row**: drop the file in `Patches/` and add its
-`<file>|<marker>|<marker file>` row to the `patches` array. Nothing else in the script knows
-how many there are — and you cannot forget the row, because the script also checks the
-reverse direction and refuses a `.patch` in `Patches/` that no row names. `Patches/` and that
-array are one enumeration, not two kept in step by whoever remembers.
-
-## Patch 1 — multi-surface wakeup
-
-**What it fixes.** `TerminalController.onWakeup` / `.shouldProcessWakeup` were
-single-valued closures. A `TerminalSurfaceCoordinator` claimed both on
-`rebuildIfReady` and nil'd both on `tearDownSurface`, so a controller could only
-ever drive ONE surface: a second surface stole the first's wakeups, and closing
-any surface stopped ticking for every survivor. Both defects were reproduced
-against the unpatched tag before the fix was written. The patch replaces the two
-slots with a registry keyed on `TerminalCallbackBridge` identity — the same key
-`retain`/`remove`/`retainedBridgeCount` already use — so each coordinator
-subscribes on build, drops only its own entry on teardown, and `handleWakeup`
-ticks the app once (`ghostty_app_tick` is app-wide) and fans out to every
-subscriber that wants the frame. Behaviour with zero or one surface is unchanged.
-
-**Why helm needs it.** One `TerminalController` is one `ghostty_app_t`. Without
-the patch every terminal tab carried a full libghostty runtime; with it, helm
-runs one runtime with N surfaces the way Ghostty.app does. `TerminalManager`'s
-header documents the ownership model that depends on this.
-
-## Patch 2 — the clipboard a request names (#297)
-
-**What it fixes.** `writeClipboard` bound its `clipboard: ghostty_clipboard_e` argument to
-`_`, so every write — whichever clipboard it named — landed on `NSPasteboard.general`. A
-program running in a pane could therefore replace the operator's system clipboard with
-`OSC 52` at the *selection* target, silently. Reproduced live before the fix; fixed and
-re-measured after, with `OSC 52 ;c;` still working as the negative control:
-
-```
-before                                        after
-;c;  -> WROTE the pasteboard                  ;c;  -> WROTE the pasteboard
-;s;  -> WROTE the pasteboard                  ;s;  -> pasteboard UNTOUCHED
-;p;  -> WROTE the pasteboard                  ;p;  -> pasteboard UNTOUCHED
-```
-
-The patch resolves the argument once, through a new public
-`TerminalClipboardDestination`, and writes only for `.standard` — Apple platforms have
-exactly one pasteboard, `selection` and `primary` are X11 buffers with nothing to map them
-onto, so a write aimed at one is **refused rather than redirected**. It also stops the
-runtime config claiming a selection clipboard, which is what Ghostty.app answers.
-
-**Three things worth knowing before touching it, each of which cost a measurement:**
-
-- **`supports_selection_clipboard = false` does not close the OSC 52 route** and was never
-  going to. ghostty reads that flag in exactly two places — the copy-on-select target
-  (`Surface.zig:2381`) and the middle-click paste source (`:4035`), both mouse routes.
-  `Surface.clipboardWrite` calls straight through to `setClipboard` without asking. Hence
-  the resolution in the callback; the flag is there because it is the truth, not because
-  it is the fix.
-- **`unknown` is reachable, not defensive.** `ghostty.h` declares two constants while
-  ghostty's own `apprt.Clipboard` has three (`standard = 0`, `selection = 1`,
-  `primary = 2`) and passes `@intFromEnum` across the boundary — so `OSC 52 ;p;` arrives as
-  a raw `2` naming no C constant, and reached the pasteboard before this.
-- **The read direction is not fixed here and cannot be.** The symmetric guard is the
-  obvious thing to add and it is a trap. ghostty calls
-  `startClipboardRequest(.standard, .{ .osc_52_read = clipboard })` (`Surface.zig:1049`),
-  carrying the requested kind only to pick the reply's `c`/`s`/`p` byte — so every read
-  arrives at the callback as `.standard` whatever the program asked for. Measured by
-  inverting the guard: refusing `.standard` stopped `;c;?`, `;s;?` and `;p;?` alike. The
-  one caller that passes a real choice is middle-click paste, and it consults
-  `supportsClipboard(.selection)` first, so with the flag above it resolves to `.standard`
-  too — meaning a guard there could only ever silently break a paste the operator asked for.
-
-**Known limits, stated rather than hidden.** `writeClipboard` still does not read
-`confirm`; it is `true` only under `clipboard-write = ask` (never ghostty's default), and
-both honest answers — prompt, or refuse — are a policy for the embedding app rather than
-for a wrapper. Separately, `confirmReadClipboard` answers `confirmed: true` with no prompt
-at all, which makes ghostty's `clipboard-read = ask` **default** behave as `allow`: a
-program in a pane can still read the operator's clipboard with `OSC 52 ;c;?`, measured
-before and after this patch. Both are out of #297's scope — the second needs a prompt helm
-owns — and are tracked separately.
-
-**Why helm needs it.** helm hosts agents in its panes and the clipboard is the operator's.
-`Sources/Helm/Terminals/TerminalSession.swift` carries the mouse half of the same story
-(#299), and `Tests/HelmTests/Terminals/TerminalClipboardDestinationTests.swift` executes
-this decision from helm's own gate — a marker grep proves a patch was applied and says
-nothing about what it decides.
-
-## Patch 3 — report a handled `open_url` as handled
-
-**What it fixes.** `TerminalCallbacks.action` returned `false` for every action, and ghostty
-reads `false` as *the apprt did not handle this*. For `open_url` its default is
-`internal_os.open` (`Surface.zig:4415`, the only call site), so a ⌘-click on a link in a pane
-opened twice: once through helm's delegate, and once through a `/usr/bin/open` ghostty spawned
-itself.
-
-**The second open never stopped running.** Ghostty reads that child's stderr on a detached
-thread whose loop breaks only on `EndOfStream`; after `/usr/bin/open` exits the reader returns
-zero-length slices instead, so the thread never leaves the loop, never reaches `exe.wait()`,
-and logs `open stderr=` at roughly 9k lines a second forever. Upstream ghostty knows
-(ghostty-org/ghostty#13480) and the fix there is closed unmerged, so this is not something a
-newer XCFramework fixes.
-
-Measured on the operator's helm, up nine days, 2026-09-02:
-
-```
-7 spinning threads, ~57% of a core each        398% process CPU
-7 unreaped `/usr/bin/open` children            586 CPU-hours burnt
-93% of each thread's samples in os_log         logd 43%, analyticsd 49%
-```
-
-`sample` put every one of those threads in `zig_os_log_with_type` with **zero** I/O syscalls,
-hitting `__FIREHOSE_CLIENT_THROTTLED_DUE_TO_HEAVY_LOGGING__`. Their seven TIDs matched the
-seven zombies one-for-one, and the four oldest zombies matched the four threads with the
-largest accumulated CPU. It never recovers: only a restart clears it, and each ⌘-click adds
-another.
-
-**It also made `TerminalURLPolicy` advisory.** helm drops any scheme outside its allowlist,
-and `TerminalSession` calls that allowlist "the whole security story" — but dropping it
-returned `false` like everything else, so ghostty opened the dropped URL anyway.
-
-The patch claims ownership for `open_url`, and only when a delegate actually took it. The
-answer is needed synchronously, so the main-thread case is split out; both `open_url` emitters
-run on the main thread, and an action arriving off it keeps the old async dispatch and the old
-`false`. No other action's return value changes — no other fallback was measured, and claiming
-one would suppress it blind.
-
-**Why helm needs it.** helm hosts long-lived agents in its panes and cannot restart to shed a
-leak without killing them.
-
-**This one is a backport, which is why it is written to disappear.** Upstream fixed it
-identically in 1.5.2; the code here is byte-identical to upstream's, so a repin to ≥1.5.2
-retires this patch on its own rather than needing a rebase.
-**What is not proved by any gate**: that a ⌘-click no longer leaks. That needs a display and
-an Accessibility grant, so it is the operator's check — ⌘-click a link, then look for a new
-~57% thread in `ps -M -p <pid>` and a new zombie child. Neither should appear.
-`Tests/HelmTests/Terminals/TerminalOpenURLOwnershipTests.swift` pins the conformance the
-condition depends on — drop `TerminalSurfaceOpenURLDelegate` from `TerminalSession` and
-nothing fails to compile, the callback just reports `false` again and the leak returns with no
-diagnostic anywhere.
-
-## Where the pin lives, and how it retires
-
-**Where the pin lives now.** A local path dependency is not recorded in
-`Package.resolved` — SPM dropped the libghostty-spm entry when the manifests
-stopped naming a URL. The exact revision therefore lives HERE and in
-`scripts/patch-libghostty.sh` (`base_tag=1.3.1`), and nowhere else. Retiring the
-local pin puts it back into `Package.resolved` where the rest of the deps are.
-
-**RETIREMENT CONDITION** — this local pin is temporary. In order of preference:
-
-1. Upstream merges the patches → drop `vendor/`, `Patches/` and
-   `scripts/patch-libghostty.sh`, and return BOTH manifests to
-   `exact: "<new tag>"`.
-2. Upstream declines or goes quiet → push `helm/patches` to a fork
-   and pin both manifests to the fork URL + an exact `revision:` (never a
-   branch). Record the fork URL and PR link here.
-
-They retire independently: upstream taking one and not the other leaves `Patches/` holding
-whichever is left, and the script's array is already per-patch.
-
-**Patch 3 is already retired upstream, and that is an argument for repinning rather than a
-reason to do it today.** libghostty-spm 1.5.2 carries the same fix, so a repin drops that
-patch outright. It also moves the ghostty XCFramework several versions, which is a change with
-its own blast radius and its own gate run — worth doing deliberately, not as a side effect of
-a leak fix.
-
-Until one of those happens the branch does not build from a clean clone without
-running `scripts/patch-libghostty.sh` first. Verify the patches with:
+**To bump** (Ghostty released, or main has something we want):
 
 ```sh
-scripts/patch-libghostty.sh
-(cd vendor/libghostty-spm && swift test --filter TerminalLifecycle)
-(cd vendor/libghostty-spm && swift test --filter TerminalClipboardDestination)
+scripts/bump-ghostty.sh            # ghostty main now; or pass a full commit sha
+just check                         # the full gate, displays awake (AGENTS.md)
 ```
 
-Four tests in `TerminalThemeConfigurationTests` fail in that suite both with and
-without the patches — a pre-existing upstream/environment failure at tag 1.3.1,
-not something they introduced.
+The script needs zig at the commit's `minimum_zig_version` (0.16.0 as of `6301810`), Xcode's
+Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`) and `gh`. It builds, publishes
+the release, rewrites the two pin lines and refreshes the shell integration.
+`--no-publish` builds and repins without the release, for a dry run. A changed `ghostty.h` shows
+up as a compile error in the wrapper; fix it there. Then look at a live isolated helm (text,
+colours, keys, clipboard, a ⌘-click, several panes redrawing) before opening the PR, because no
+gate draws a frame.
 
 ## InjectionNext 2.0.1 + Inject 1.6.0 — hot reload (SPM, DEBUG only)
 

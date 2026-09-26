@@ -11,15 +11,17 @@ final class LocalActions: ActionPerformer {
     private let workspaces: WorkspaceModel
     private let rail: ArchonRailModel
     private let terminals: TerminalManager
+    private let just: JustRuns
 
     init(
         workbench: WorkbenchModel, workspaces: WorkspaceModel, rail: ArchonRailModel,
-        terminals: TerminalManager
+        terminals: TerminalManager, just: JustRuns = JustRuns()
     ) {
         self.workbench = workbench
         self.workspaces = workspaces
         self.rail = rail
         self.terminals = terminals
+        self.just = just
     }
 
     func perform(_ action: KeyBinding.Action) {
@@ -34,6 +36,8 @@ final class LocalActions: ActionPerformer {
             workbench.send(verb, by: .operatorGesture)
         case let .local(local):
             perform(local)
+        case let .just(recipe):
+            just.run(recipe)
         }
     }
 

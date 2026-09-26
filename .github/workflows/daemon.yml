@@ -30,5 +30,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # The just layer's conformance test runs a real `just` (#356), and fails in CI without it.
+      - if: steps.changed.outputs.run == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
       - if: steps.changed.outputs.run == 'true'
         run: bash scripts/check.sh daemon

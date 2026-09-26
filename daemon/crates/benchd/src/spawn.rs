@@ -138,6 +138,9 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
     if plan.agent == AgentKind::Claude {
         spec.settings = Some(claude_settings(&root).map_err(|why| (Status::Error, why))?);
     }
+    if plan.agent == AgentKind::Codex {
+        spec.codex_server = Some(codex_server_socket(&root, id)?);
+    }
     let extra_env = [
         ("BENCH_SESSION".to_string(), id.to_string()),
         ("BENCH_HANDLE".to_string(), handle.to_string()),
@@ -228,6 +231,7 @@ fn judge(req: &Request) -> Result<Plan, String> {
             prompt_file: args.prompt_file,
             settings: None,
             extra_args: args.args,
+            codex_server: None,
         },
         workspace,
         rows: args.rows.unwrap_or(40),
@@ -335,4 +339,23 @@ fn place(
     };
     doc.name_pane(pane, derived_name(plan), focus)?;
     Ok(pane)
+}
+
+/// The socket codex's own app-server listens on for this session (#454), so benchd can start
+/// an idle codex's turn. Session ids restart at s1 with the daemon, so a server that died
+/// uncleanly under an earlier daemon can have left this socket (codex then refuses to bind:
+/// "File exists"). No live session holds this id, so what is there is stale.
+fn codex_server_socket(root: &std::path::Path, id: &str) -> Outcome<String> {
+    let socket = bench_wire::codex_server_socket(root, id);
+    if let Some(dir) = socket.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| {
+            (
+                Status::Error,
+                format!("cannot create {}: {e}", dir.display()),
+            )
+        })?;
+    }
+    let _ = std::fs::remove_file(&socket);
+    let _ = std::fs::remove_file(socket.with_extension("sock.log"));
+    Ok(socket.display().to_string())
 }

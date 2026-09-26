@@ -3,8 +3,8 @@ import PackageDescription
 
 // SwiftLint, pinned by version and checksum, for the size and complexity limits in
 // `.swiftlint.yml` (#418). It is its own package rather than a dependency of helm's
-// manifest so linting never resolves helm's graph, which needs the gitignored
-// `vendor/libghostty-spm`. The same reason keeps the spool tools out of SPM (AGENTS.md).
+// manifest so linting never resolves helm's graph, which downloads the GhosttyKit binary.
+// The same reason keeps the spool tools out of SPM (AGENTS.md).
 //
 // Run it through `scripts/check-size.sh`, never directly: that script passes
 // `--disable-keychain` (without it SwiftPM can stall for minutes on a keychain lookup)

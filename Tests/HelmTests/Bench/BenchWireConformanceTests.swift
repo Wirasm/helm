@@ -176,6 +176,28 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertTrue(list.rows.contains { if case .finished = $0.state { true } else { false } })
     }
 
+    /// The operator's `just/run`, its answer and the `just/finished` frame, as benchd reads and
+    /// writes them (#356).
+    func testTheJustRequestMatchesTheDaemonsSampleAndItsAnswersDecode() throws {
+        let data = try fixture("just-verbs.json")
+        let samples = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let request = BenchJustRequest(id: "helm-1", recipe: "day", args: ["--quiet"])
+        XCTAssertEqual(
+            try normalized(JSONEncoder().encode(request)),
+            try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples["run"]))))
+
+        let started = try JSONDecoder().decode(
+            BenchJustStarted.self,
+            from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["started"])))
+        XCTAssertEqual(started.run, "run-41")
+        let frame = try JSONDecoder().decode(
+            BenchEventFrame<BenchJustFinished>.self,
+            from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["finished"])))
+        XCTAssertEqual(frame.event.kind, "just/finished")
+        XCTAssertEqual(frame.event.data.run, started.run)
+        XCTAssertTrue(frame.event.data.failed)
+    }
+
     /// A document written before drawers existed has none, and helm writes none back.
     func testADocumentWithoutDrawersReadsAndWritesWithout() throws {
         let data = Data(#"{"workspaces":[],"active":null}"#.utf8)

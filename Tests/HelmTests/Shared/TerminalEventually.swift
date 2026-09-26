@@ -99,14 +99,17 @@ struct MissingTerminalSurface: Error, CustomStringConvertible {
     }
 }
 
-extension InMemoryTerminalSession {
-    /// Whether ghostty has built this session's surface yet.
-    ///
-    /// `readViewportText()` is the observable: it returns `nil` with no surface attached and a
-    /// string (empty, for a fresh grid) once there is one. Asked rather than assumed, because
-    /// surface creation is asynchronous *and* fallible — the wrapper retries it on every
-    /// layout pass and gives up silently when ghostty refuses.
-    var hasSurface: Bool { readViewportText() != nil }
+/// The surface came up but the recorder in it never reported raw mode. Not a focus bug and
+/// not a surface failure: the test's own program did not start, so no keystroke assertion
+/// below it means anything.
+struct RecorderNeverStarted: Error, CustomStringConvertible {
+    let pane: UUID
+    let pty: Pty
+    let waited: TimeInterval
+
+    var description: String {
+        "the recorder in pane \(pane) did not start within \(waited)s (command: \(pty.command))"
+    }
 }
 
 extension Pty {

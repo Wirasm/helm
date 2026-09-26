@@ -58,6 +58,8 @@ struct KeyBinding: Equatable {
     enum Action: Equatable {
         case verb(VerbTemplate)
         case local(LocalAction)
+        /// A recipe from the operator's bench justfile, run by benchd as him (#356).
+        case just(recipe: String)
     }
 
     /// The chord as a menu prints it. nil for a key code the menu has no equivalent for, which
