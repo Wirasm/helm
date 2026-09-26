@@ -34,7 +34,9 @@ pub struct Agent {
     pub told: bool,
     /// How a turn is started for it when it is idle; `None` until it has one.
     pub channel: Option<Channel>,
-    pub push: Push,
+    /// Its channel refused a push ([`hold`]): nothing more is pushed until the session starts
+    /// again.
+    pub held: bool,
     /// When its hook last reported.
     pub seen: Instant,
     /// The agent's process, as its last hook reported it: how the session list tells a live
@@ -59,16 +61,6 @@ pub enum Channel {
     PiItself,
 }
 
-/// Where benchd stands with starting turns for an agent.
-pub enum Push {
-    /// It may be started when idle.
-    Ready,
-    /// A push is waiting for the turn it should start: when, and the messages it carried.
-    Sent { at: Instant, ids: Vec<String> },
-    /// A push started no turn. Nothing more is pushed until the session starts again.
-    Held,
-}
-
 impl Agent {
     fn new(handle: String, channel: Option<Channel>, pid: u32, pane: Option<PaneId>) -> Agent {
         Agent {
@@ -78,14 +70,14 @@ impl Agent {
             handle,
             activity: None,
             told: false,
-            push: Push::Ready,
+            held: false,
             seen: Instant::now(),
         }
     }
 
     /// benchd can start a turn for it: a channel it reported, not known to hold pushes.
     pub fn can_push(&self) -> bool {
-        self.channel.is_some() && !matches!(self.push, Push::Held)
+        self.channel.is_some() && !self.held
     }
 
     /// Take in one event. Returns the activity when it changed.
@@ -95,15 +87,9 @@ impl Agent {
         if let Some(socket) = &args.messaging_socket {
             self.channel = Some(Channel::ClaudeSocket(PathBuf::from(socket)));
         }
-        match args.event.as_str() {
-            // A turn started. The payload cannot say whether the push started it or the
-            // operator did; either way the session is taking turns, so the push was not held.
-            "UserPromptSubmit" if matches!(self.push, Push::Sent { .. }) => {
-                self.push = Push::Ready;
-            }
-            // A session that starts again may take pushes again.
-            "SessionStart" => self.push = Push::Ready,
-            _ => {}
+        // A session that starts again may take pushes again.
+        if args.event == "SessionStart" {
+            self.held = false;
         }
         let Some(Transition::To(now)) = transition else {
             return None;
@@ -403,11 +389,6 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
     Ok(Some(handle))
 }
 
-/// How long a pushed notice has to start a turn. Measured on Claude 2.1.283: an accepted
-/// message starts one in 0.1 s. One that has not in this long was held: a session without
-/// `crossSessionInbound: "accept"` puts it behind an approval dialog in its pane.
-const PUSH_ANSWER_WAIT: Duration = Duration::from_secs(10);
-
 /// An agent that says it is busy or waiting, with mail waiting, is checked against its
 /// harness's own record once it has been this quiet ([`reconcile`]).
 const RECONCILE_AFTER: Duration = Duration::from_secs(5);
@@ -421,16 +402,13 @@ pub fn deliver_to_idle(core: &Arc<Mutex<Core>>) {
         let c = core.lock().unwrap();
         (c.root.clone(), c.home.clone())
     };
-    settle_unanswered(core, &root);
     reconcile(core, &root, &home);
     let idle: Vec<(SessionKey, String, Channel)> = {
         let c = core.lock().unwrap();
         c.agents
             .iter()
             .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
-            .filter(|(_, a)| {
-                a.can_push() && matches!(a.push, Push::Ready) && a.activity == Some(Activity::Idle)
-            })
+            .filter(|(_, a)| a.can_push() && a.activity == Some(Activity::Idle))
             .filter_map(|(key, a)| match &a.channel {
                 Some(Channel::PiItself) | None => None,
                 Some(channel) => Some((key.clone(), a.handle.clone(), channel.clone())),
@@ -479,21 +457,15 @@ fn push(core: &Arc<Mutex<Core>>, root: &Path, key: &SessionKey, handle: &str, ch
     let mut started = false;
     if let Some(Some(agent)) = c.agents.get_mut(key) {
         agent.told = true;
-        match channel {
-            // Claude accepts the message before it knows whether it will start a turn: the
-            // session's next `UserPromptSubmit` says it did (`settle_unanswered`).
-            Channel::ClaudeSocket(_) => {
-                agent.push = Push::Sent {
-                    at: Instant::now(),
-                    ids: ids.clone(),
-                };
-            }
-            // codex answered with the turn it started, so the agent is busy now, before any
-            // hook says so, and is not pushed to again on the next tick.
-            _ => {
-                agent.activity = Some(Activity::Busy);
-                started = true;
-            }
+        // codex answered with the turn it started, so the agent is busy now, before any hook
+        // says so, and is not pushed to again on the next tick. Claude's socket takes the
+        // message without saying whether a turn started; its `UserPromptSubmit` says so, in
+        // 0.1 s (measured on 2.1.283), because `bench wiring` sets `crossSessionInbound:
+        // "accept"`. A session without that setting holds the message behind an approval
+        // dialog in its pane instead, and `bench wiring --check` names the missing setting.
+        if matches!(channel, Channel::CodexServer(_)) {
+            agent.activity = Some(Activity::Busy);
+            started = true;
         }
     }
     let _ = c.append(
@@ -524,7 +496,7 @@ fn hold(
     }
     let mut c = core.lock().unwrap();
     if let Some(Some(agent)) = c.agents.get_mut(key) {
-        agent.push = Push::Held;
+        agent.held = true;
     }
     let _ = c.append(
         "mail/held",
@@ -552,36 +524,6 @@ fn poke(socket: &Path, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// A push that started no turn in [`PUSH_ANSWER_WAIT`] was held by the session.
-fn settle_unanswered(core: &Arc<Mutex<Core>>, root: &Path) {
-    let overdue: Vec<(SessionKey, String, Vec<String>)> = {
-        let c = core.lock().unwrap();
-        c.agents
-            .iter()
-            .filter_map(|(key, agent)| match agent {
-                Some(Agent {
-                    handle,
-                    push: Push::Sent { at, ids },
-                    ..
-                }) if at.elapsed() > PUSH_ANSWER_WAIT => {
-                    Some((key.clone(), handle.clone(), ids.clone()))
-                }
-                _ => None,
-            })
-            .collect()
-    };
-    for (key, handle, ids) in overdue {
-        hold(
-            core,
-            root,
-            &key,
-            &handle,
-            &ids,
-            "the push started no turn: the session held it (is crossSessionInbound \"accept\"?); it waits for the next prompt or tool call",
-        );
-    }
-}
-
 /// Agents the hooks last saw busy or waiting, quiet for [`RECONCILE_AFTER`], with mail
 /// waiting: the harness's own record says whether they went idle without a hook saying so.
 /// Claude's registry row, for Esc on a prompt (sensor research, run B). A served codex's thread
@@ -598,7 +540,6 @@ fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
                     a.channel,
                     Some(Channel::ClaudeSocket(_) | Channel::CodexServer(_))
                 ) && a.can_push()
-                    && matches!(a.push, Push::Ready)
                     && a.activity.as_ref().is_some_and(|x| *x != Activity::Idle)
                     && a.seen.elapsed() > RECONCILE_AFTER
             })

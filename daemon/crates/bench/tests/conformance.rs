@@ -4055,50 +4055,6 @@ fn a_codex_spawn_clears_a_socket_an_earlier_daemons_session_left_behind() {
 }
 
 #[test]
-fn a_push_that_starts_no_turn_goes_back_to_the_inbox_and_stops_pushing() {
-    // What a session without crossSessionInbound "accept" does: takes the message and holds
-    // it behind a dialog, so no UserPromptSubmit follows. Waits out the 10 s answer window.
-    let home = TestHome::claim("held");
-    let h = &home.dir;
-    let daemon = DaemonGuard::start(h, None);
-    let (_, pid) = terminal_process(h, "holder");
-    let inbox = FakeInbox::bind(h);
-    let session = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
-    let handle = claude_in_a_pane(&daemon, pid, session, &inbox.path);
-    bench(h, &["mail", "send", "--to", &handle, "--body", "one"]);
-    assert!(inbox.next(Duration::from_secs(5)).is_some());
-    wait_until(
-        "the unanswered push is held",
-        Duration::from_secs(20),
-        || event_kinds(h).iter().any(|(k, _)| k == "mail/held"),
-    );
-    assert_eq!(inbox_count(h, &handle), 1, "back in the inbox, unread");
-    let second = bench(h, &["mail", "send", "--to", &handle, "--body", "two"]);
-    assert_eq!(
-        json_of(&second)["wake"],
-        "next-turn",
-        "no more pushes to it"
-    );
-    assert!(inbox.next(Duration::from_secs(2)).is_none());
-    // Its next tool call still delivers both.
-    let reply = claude_event(
-        &daemon,
-        pid,
-        session,
-        &inbox.path,
-        "PostToolUse",
-        Some("Bash"),
-    );
-    let context = reply["context"].as_str().unwrap();
-    assert_eq!(context.matches("You have mail").count(), 2, "{context}");
-    // A session that starts again may take pushes again.
-    claude_event(&daemon, pid, session, &inbox.path, "SessionStart", None);
-    let third = bench(h, &["mail", "send", "--to", &handle, "--body", "three"]);
-    assert_eq!(json_of(&third)["wake"], "queued");
-    assert!(inbox.next(Duration::from_secs(5)).is_some());
-}
-
-#[test]
 fn the_wake_cap_starves_pushes_never_mail() {
     let home = TestHome::claim("cap");
     let h = &home.dir;

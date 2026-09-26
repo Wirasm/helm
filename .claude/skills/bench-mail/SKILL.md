@@ -123,8 +123,8 @@ $BENCH wiring
 
 - **Claude Code:** merge `claude.merge` into `~/.claude/settings.json`: one handler on each
   event, plus `crossSessionInbound: "accept"` so benchd can start a turn in an idle session.
-  Without that setting, a push is held behind a dialog in the pane and the mail waits for the
-  next prompt.
+  Without that setting, a push sits behind an approval dialog in the pane until someone
+  answers it; `bench wiring --check` reports the setting missing.
 - **codex:** merge `codex.merge` into `~/.codex/hooks.json`, then trust the hook once in
   codex's `/hooks`. The command never changes, so it is trusted once.
 - **pi:** link `pi/extensions/bench` from a helm checkout into `~/.pi/agent/extensions/`.
