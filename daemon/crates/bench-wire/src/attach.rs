@@ -20,18 +20,18 @@ const SIZE: u8 = 1;
 pub const MAX_FRAME: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Frame {
+pub enum AttachFrame {
     /// Bytes for the session's pty, exactly as the viewer's terminal produced them.
     Input(Vec<u8>),
     /// The viewer's terminal is now this size. A size of zero is not a size.
     Size { rows: u16, cols: u16 },
 }
 
-impl Frame {
+impl AttachFrame {
     pub fn encode(&self) -> Vec<u8> {
         let (kind, payload) = match self {
-            Frame::Input(bytes) => (INPUT, bytes.clone()),
-            Frame::Size { rows, cols } => {
+            AttachFrame::Input(bytes) => (INPUT, bytes.clone()),
+            AttachFrame::Size { rows, cols } => {
                 let mut p = rows.to_be_bytes().to_vec();
                 p.extend_from_slice(&cols.to_be_bytes());
                 (SIZE, p)
@@ -46,7 +46,7 @@ impl Frame {
 
     /// The next frame, `None` at a clean end of stream (between frames). A stream that ends
     /// inside a frame, names an unknown kind, or claims more than [`MAX_FRAME`] is an error.
-    pub fn read(from: &mut impl Read) -> io::Result<Option<Frame>> {
+    pub fn read(from: &mut impl Read) -> io::Result<Option<AttachFrame>> {
         let mut head = [0u8; 5];
         if from.read(&mut head[..1])? == 0 {
             return Ok(None);
@@ -69,13 +69,13 @@ impl Frame {
         let mut payload = vec![0u8; len];
         from.read_exact(&mut payload)?;
         match (head[0], payload.as_slice()) {
-            (INPUT, _) => Ok(Some(Frame::Input(payload))),
+            (INPUT, _) => Ok(Some(AttachFrame::Input(payload))),
             (SIZE, &[r0, r1, c0, c1]) => {
                 let (rows, cols) = (u16::from_be_bytes([r0, r1]), u16::from_be_bytes([c0, c1]));
                 if rows == 0 || cols == 0 {
                     return Err(malformed(format!("a size of {rows}x{cols}")));
                 }
-                Ok(Some(Frame::Size { rows, cols }))
+                Ok(Some(AttachFrame::Size { rows, cols }))
             }
             _ => Err(malformed(format!("a size frame of {len} bytes, not 4"))),
         }
@@ -93,28 +93,28 @@ mod tests {
     #[test]
     fn frames_round_trip_back_to_back() {
         let sent = [
-            Frame::Input(b"ls\r".to_vec()),
-            Frame::Size { rows: 33, cols: 77 },
-            Frame::Input(vec![0x1c, 0x1b, b'[', b'A']),
-            Frame::Input(Vec::new()),
+            AttachFrame::Input(b"ls\r".to_vec()),
+            AttachFrame::Size { rows: 33, cols: 77 },
+            AttachFrame::Input(vec![0x1c, 0x1b, b'[', b'A']),
+            AttachFrame::Input(Vec::new()),
         ];
-        let wire: Vec<u8> = sent.iter().flat_map(Frame::encode).collect();
+        let wire: Vec<u8> = sent.iter().flat_map(AttachFrame::encode).collect();
         let mut r = wire.as_slice();
         for want in &sent {
-            assert_eq!(Frame::read(&mut r).unwrap().as_ref(), Some(want));
+            assert_eq!(AttachFrame::read(&mut r).unwrap().as_ref(), Some(want));
         }
-        assert_eq!(Frame::read(&mut r).unwrap(), None, "a clean end");
+        assert_eq!(AttachFrame::read(&mut r).unwrap(), None, "a clean end");
     }
 
     #[test]
     fn a_malformed_stream_is_an_error_not_a_guess() {
-        let refused = |bytes: &[u8]| Frame::read(&mut &bytes[..]).unwrap_err().to_string();
+        let refused = |bytes: &[u8]| AttachFrame::read(&mut &bytes[..]).unwrap_err().to_string();
         assert!(refused(&[7, 0, 0, 0, 0]).contains("kind 7"));
         assert!(refused(&[0, 0, 1, 0, 1]).contains("over"));
         assert!(refused(&[1, 0, 0, 0, 2, 0, 1]).contains("not 4"));
         assert!(refused(&[1, 0, 0, 0, 4, 0, 0, 0, 80]).contains("0x80"));
         // Ends inside a frame.
-        assert!(Frame::read(&mut &[0u8, 0, 0, 0, 3, b'a'][..]).is_err());
+        assert!(AttachFrame::read(&mut &[0u8, 0, 0, 0, 3, b'a'][..]).is_err());
         // Unframed keys are refused on the first byte, before a length is waited for.
         assert!(refused(b"l").contains("kind 108"));
     }

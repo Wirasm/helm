@@ -835,11 +835,13 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
             // The viewer's frames: keys for the pty, and its size, in the order it sent them.
             // A malformed frame ends the attachment like a closed one.
             let mut input = BufReader::new(raw);
-            while let Ok(Some(frame)) = attach::Frame::read(&mut input) {
+            while let Ok(Some(frame)) = attach::AttachFrame::read(&mut input) {
                 let written = match frame {
-                    attach::Frame::Input(bytes) => session.write_input(&bytes),
+                    attach::AttachFrame::Input(bytes) => session.write_input(&bytes),
                     // A size the pty refuses keeps the last one; the next frame tries again.
-                    attach::Frame::Size { rows, cols } => session.resize(rows, cols).or(Ok(())),
+                    attach::AttachFrame::Size { rows, cols } => {
+                        session.resize(rows, cols).or(Ok(()))
+                    }
                 };
                 if written.is_err() {
                     break;

@@ -841,7 +841,7 @@ mod tests {
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
-        // Resize rides the attach stream (`attach::Frame::Size`) since #359.
+        // Resize rides the attach stream (`attach::AttachFrame::Size`) since #359.
         assert!(Verb::parse("resize").is_none());
     }
 

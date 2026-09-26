@@ -14,7 +14,7 @@
 //! size sent is the one the terminal has when it is sent (#359's resize note).
 
 use crate::{Cli, EXIT_NO_DAEMON, fail, open, read_response_line};
-use bench_wire::attach::Frame;
+use bench_wire::attach::AttachFrame;
 use bench_wire::{Response, Status};
 use rustix::termios::tcgetwinsize;
 use std::io::{IsTerminal, Read, Write};
@@ -118,7 +118,7 @@ fn relay_down(mut sock: UnixStream, done: mpsc::Sender<Ended>) {
     });
 }
 
-fn send(up: &Mutex<UnixStream>, frame: &Frame) -> std::io::Result<()> {
+fn send(up: &Mutex<UnixStream>, frame: &AttachFrame) -> std::io::Result<()> {
     let sock = up.lock().unwrap();
     (&*sock).write_all(&frame.encode())
 }
@@ -136,7 +136,7 @@ fn relay_up(up: Arc<Mutex<UnixStream>>, detach_key: bool, done: mpsc::Sender<End
             };
             let detach_at = chunk[..n].iter().position(|&b| detach_key && b == 0x1c);
             let keys = &chunk[..detach_at.unwrap_or(n)];
-            if !keys.is_empty() && send(&up, &Frame::Input(keys.to_vec())).is_err() {
+            if !keys.is_empty() && send(&up, &AttachFrame::Input(keys.to_vec())).is_err() {
                 break;
             }
             if detach_at.is_some() {
@@ -267,7 +267,7 @@ fn follow_size(up: Arc<Mutex<UnixStream>>, changes: libc::c_int, mut sent: (u16,
                 sent = now;
                 let _ = send(
                     &up,
-                    &Frame::Size {
+                    &AttachFrame::Size {
                         rows: now.0,
                         cols: now.1,
                     },

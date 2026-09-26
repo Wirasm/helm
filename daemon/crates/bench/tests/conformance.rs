@@ -21,7 +21,7 @@ use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use bench_wire::attach::Frame;
+use bench_wire::attach::AttachFrame;
 
 fn bench_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_bench"))
@@ -796,7 +796,7 @@ fn a_session_relays_bytes_faithfully_including_an_osc_sequence() {
     for seq in sequences {
         let payload = format!("before {seq} after\n");
         (&stream)
-            .write_all(&Frame::Input(payload.into_bytes()).encode())
+            .write_all(&AttachFrame::Input(payload.into_bytes()).encode())
             .unwrap();
     }
     let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
@@ -5350,7 +5350,7 @@ fn an_attached_viewer_resizes_the_session_and_ends_when_it_does() {
     }
     // The size rides the attach stream, in order with the keys (#359).
     (&stream)
-        .write_all(&Frame::Size { rows: 33, cols: 77 }.encode())
+        .write_all(&AttachFrame::Size { rows: 33, cols: 77 }.encode())
         .unwrap();
     let seen = read_until(&stream, Duration::from_secs(5), |seen| {
         String::from_utf8_lossy(seen).contains("33 77")
