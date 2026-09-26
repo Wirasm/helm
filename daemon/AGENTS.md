@@ -24,9 +24,10 @@ knows nor needs the Rust toolchain, in either direction.
 - `crates/bench-doc` — the bench document: workspaces → columns → slots → panes, typed
   surfaces, placement as data, and the focus rule. Pure — no IO, no sockets. Ported from helm's
   `Workbench`; its Swift tests are mirrored in `crates/bench-doc/tests/` under their own names.
-  `fixtures/bench-document.json`, `bench-verbs.json` and `bench-frame.json` are pinned by the
-  Rust tests byte for byte; helm's Swift decoder will read the same files once M4's client
-  lands (PR 3 of #354) — until then only the Rust gate reads them.
+  `fixtures/bench-document.json`, `bench-verbs.json`, `bench-frame.json` and `bench-report.json`
+  are pinned by the Rust tests byte for byte, and `bench-report.json` also key for key against a
+  live daemon's answers. helm's Swift reads the same four files in `BenchWireConformanceTests`,
+  so a change to any of these shapes has to land on both sides of the socket.
 - `crates/bench-session` — the pty core: agent allowlist, postures/model/effort/resume
   argv (one spelling, unit-tested), the ring, the attach relay, drain-then-die close.
 - `crates/bench-browser` — the shared browser: find, configure and launch one Chromium
