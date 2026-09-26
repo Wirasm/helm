@@ -27,7 +27,14 @@ use std::process;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn main() {
-    process::exit(run());
+    // `hook` is wired into an agent's own hooks and has its own contract (exit 0, always),
+    // so it never reaches the verb parser, whose refusals exit 3.
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let code = match raw.first().map(String::as_str) {
+        Some("hook") => hook(raw.get(1).map(String::as_str)),
+        _ => run(),
+    };
+    process::exit(code);
 }
 
 fn usage() -> &'static str {
@@ -78,14 +85,12 @@ struct Cli {
     root: PathBuf,
 }
 
-#[expect(clippy::too_many_lines, reason = "legacy (#418): 250 lines, limit 100")]
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "legacy (#418): 250 lines, limit 100; cognitive complexity 27, limit 25"
+)]
 fn run() -> i32 {
-    // `hook` is wired into an agent's own hooks and has its own contract (exit 0, always),
-    // so it leaves before the verb parser, whose refusals exit 3.
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    if raw.first().map(String::as_str) == Some("hook") {
-        return hook(raw.get(1).map(String::as_str));
-    }
     let mut argv = std::env::args().skip(1).peekable();
     let mut suite_flag: Option<String> = None;
     let mut verb: Option<String> = None;

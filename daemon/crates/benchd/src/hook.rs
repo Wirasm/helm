@@ -27,8 +27,9 @@ pub struct Agent {
 }
 
 pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
-    let args: HookArgs = serde_json::from_value(args.clone())
+    let mut args: HookArgs = serde_json::from_value(args.clone())
         .map_err(|e| Refusal::Refused(format!("hook args: {e}")))?;
+    args.pid = bench_sessions::process::hook_caller(args.pid);
     if args.session.trim().is_empty() {
         return Err(Refusal::Refused(
             "hook: a session id is required — the harness's own session id".into(),

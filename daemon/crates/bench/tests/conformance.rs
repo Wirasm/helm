@@ -3818,8 +3818,10 @@ fn mail_a_hook_handed_out_is_never_pasted_as_well() {
 
 #[test]
 fn a_shell_string_hook_reports_the_agent_not_the_shell() {
-    // codex runs its hook command as a shell string. The shell execs a single simple command,
-    // so `bench hook`'s parent is still the agent (here, this test process).
+    // codex runs its hook command as a shell string. bash and macOS's sh exec a single
+    // command; dash (Ubuntu's sh) forks it, so `bench hook`'s parent is the shell. `; true`
+    // makes every shell fork, so this proves the daemon sees through the shell to the agent
+    // (here, this test process) on either system.
     let home = TestHome::claim("hookshell");
     let h = &home.dir;
     let _daemon = DaemonGuard::start(h, None);
@@ -3827,7 +3829,7 @@ fn a_shell_string_hook_reports_the_agent_not_the_shell() {
     let payload = serde_json::json!({"session_id": "thread-sh", "hook_event_name": "SessionStart", "cwd": "/tmp"});
     let mut child = Command::new("/bin/sh")
         .arg("-c")
-        .arg(format!("{} hook codex", bench_bin().display()))
+        .arg(format!("{} hook codex; true", bench_bin().display()))
         .env_remove("BENCH_DIR")
         .env_remove("BENCH_SUITE")
         .env("HOME", h)

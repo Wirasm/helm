@@ -61,6 +61,59 @@ fn bsdinfo(pid: u32) -> Option<libc::proc_bsdinfo> {
     }
 }
 
+/// The agent a hook process reports for, given the hook's parent. A harness that runs its
+/// hook command as a shell string starts `sh -c "bench hook …"`, and whether that shell
+/// execs the command or forks it is the shell's choice: bash and zsh, and macOS's `/bin/sh`,
+/// exec; dash, Ubuntu's `/bin/sh`, forks (measured in CI). When the parent is a shell, the
+/// agent is the shell's parent.
+pub fn hook_caller(parent: u32) -> u32 {
+    const SHELLS: [&str; 4] = ["sh", "dash", "bash", "zsh"];
+    match name(parent) {
+        Some(n) if SHELLS.contains(&n.as_str()) => parent_of(parent).unwrap_or(parent),
+        _ => parent,
+    }
+}
+
+/// A process's short name, as `ps -o comm` shows it, without a leading `-` (a login shell).
+#[cfg(target_os = "macos")]
+fn name(pid: u32) -> Option<String> {
+    let info = bsdinfo(pid)?;
+    let raw: Vec<u8> = info
+        .pbi_comm
+        .iter()
+        .take_while(|c| **c != 0)
+        .map(|c| *c as u8)
+        .collect();
+    Some(
+        String::from_utf8_lossy(&raw)
+            .trim_start_matches('-')
+            .to_string(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn name(pid: u32) -> Option<String> {
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    Some(comm.trim().trim_start_matches('-').to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn parent_of(pid: u32) -> Option<u32> {
+    bsdinfo(pid).map(|info| info.pbi_ppid).filter(|p| *p > 0)
+}
+
+/// Linux: field 4 of `/proc/<pid>/stat`, the first after the state.
+#[cfg(target_os = "linux")]
+fn parent_of(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat[stat.rfind(')')? + 1..]
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+        .filter(|p| *p > 0)
+}
+
 /// When `pid` started, in seconds since the epoch; `None` when there is no such process.
 #[cfg(target_os = "macos")]
 pub fn started_at_secs(pid: u32) -> Option<u64> {
@@ -108,6 +161,26 @@ mod tests {
         );
         assert!(!alive(0, None));
         assert!(!alive(u32::MAX, None));
+    }
+
+    /// A shell that forks the command it was given (`sleep 30; true` makes it fork on every
+    /// shell) is seen through to its own parent: here, this test process.
+    #[test]
+    fn a_hook_run_by_a_shell_reports_the_shells_parent() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30; true"])
+            .spawn()
+            .expect("spawn sh");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let seen = hook_caller(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(seen, std::process::id());
+        assert_eq!(
+            hook_caller(std::process::id()),
+            std::process::id(),
+            "not a shell"
+        );
     }
 
     /// A child moved into its own session has no controlling terminal, whatever the test
