@@ -391,6 +391,15 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   diagnosis — #291 is one — but it is also the easiest wrong one to reach for, and twice today it
   was true for a reason another agent had caused and could have found in one `ps`. Load has an
   owner; name it.
+- **Never copy an Apple system binary (`/bin`, `/usr/bin`, `/System`) to use as a fake app or
+  executable in a test.** Use a shell script or a compiled stub of your own. The kernel kills a
+  copied system binary on launch, and on 2026-09-25 that was the last event before `syspolicyd`
+  (Gatekeeper) hung. That is a correlation, not a proof. The hang cascaded: `tccd`, then
+  WindowServer, which the watchdog killed 58 times overnight until a forced reboot.
+- **If a freshly compiled binary won't start, or `git`/`grep` hang for no reason, stop launching
+  processes and tell the operator.** A macOS security daemon is stuck, only a reboot clears it,
+  and every new launch queues behind it. That night, agents saw exactly this at 00:42 and kept
+  probing. An ad-hoc script that opened a window then likely tipped WindowServer over.
 - **Never delete a test to make the gate green.** If its subject genuinely no longer
   exists, say which and why in the commit.
 - **Watch a test fail before you trust it passing.** Take the fix out, run it, name which
