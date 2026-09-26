@@ -484,6 +484,14 @@ pub fn browser_profile_dir(root: &Path) -> PathBuf {
     browser_dir(root).join("profile")
 }
 
+/// The app-server a benchd-spawned codex session runs its TUI against (#358): one per session,
+/// so the hooks it runs carry that session's own `BENCH_SESSION`, and benchd can start a turn
+/// on the session's thread when it is idle. codex puts the real socket in a short directory of
+/// its own and leaves a symlink here.
+pub fn codex_server_socket(root: &Path, session: &str) -> PathBuf {
+    root.join("codex").join(format!("{session}.sock"))
+}
+
 // ---------------------------------------------------------------------------
 // The envelope
 // ---------------------------------------------------------------------------

@@ -3790,6 +3790,258 @@ fn an_idle_claude_is_started_through_its_socket_and_a_busy_one_is_not() {
     );
 }
 
+/// A stand-in for the app-server a benchd-spawned codex runs its TUI against, speaking what
+/// codex 0.157.0 speaks on `--listen unix://`: WebSocket, one JSON-RPC message per text frame.
+/// Answers `initialize`, then `turn/start` with the next of `answers` (`true` starts a turn,
+/// `false` refuses), and hands each `turn/start`'s params to the test. `thread/read` answers
+/// the thread's status from `status`, which the test sets.
+struct FakeAppServer {
+    started: std::sync::mpsc::Receiver<serde_json::Value>,
+    status: std::sync::Arc<std::sync::Mutex<&'static str>>,
+}
+
+impl FakeAppServer {
+    fn bind(socket: &Path, answers: Vec<bool>) -> FakeAppServer {
+        fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(socket).expect("bind fake app-server");
+        let (tx, started) = std::sync::mpsc::channel();
+        let status = std::sync::Arc::new(std::sync::Mutex::new("active"));
+        let thread_status = std::sync::Arc::clone(&status);
+        std::thread::spawn(move || {
+            let mut answers = answers.into_iter();
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") && stream.read_exact(&mut byte).is_ok() {
+                    head.push(byte[0]);
+                }
+                let _ = stream.write_all(b"HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: websocket\r\n\r\n");
+                while let Some(message) = read_client_frame(&mut stream) {
+                    let id = message["id"].clone();
+                    match message["method"].as_str() {
+                        Some("initialize") => server_frame(
+                            &mut stream,
+                            &serde_json::json!({"id": id, "result": {"userAgent": "fake"}}),
+                        ),
+                        Some("thread/read") => {
+                            let now = *thread_status.lock().unwrap();
+                            let status = if now == "active" {
+                                serde_json::json!({"type": "active", "activeFlags": []})
+                            } else {
+                                serde_json::json!({"type": now})
+                            };
+                            let thread = serde_json::json!({"id": message["params"]["threadId"], "status": status});
+                            server_frame(
+                                &mut stream,
+                                &serde_json::json!({"id": id, "result": {"thread": thread}}),
+                            );
+                        }
+                        Some("turn/start") => {
+                            // A notification first, as the real one sends them unasked.
+                            server_frame(
+                                &mut stream,
+                                &serde_json::json!({"method": "thread/status/changed", "params": {"threadId": message["params"]["threadId"], "status": {"type": "active", "activeFlags": []}}}),
+                            );
+                            let answer = if answers.next().unwrap_or(true) {
+                                // Long enough for a 16-bit length, as real answers are.
+                                serde_json::json!({"id": id, "result": {"turn": {"id": "t1", "status": "inProgress", "items": [], "note": "x".repeat(300)}}})
+                            } else {
+                                serde_json::json!({"id": id, "error": {"code": -32600, "message": "thread is busy"}})
+                            };
+                            server_frame(&mut stream, &answer);
+                            let _ = tx.send(message["params"].clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+        FakeAppServer { started, status }
+    }
+}
+
+fn read_client_frame(stream: &mut UnixStream) -> Option<serde_json::Value> {
+    let mut head = [0u8; 2];
+    stream.read_exact(&mut head).ok()?;
+    assert!(head[1] & 0x80 != 0, "a client frame must be masked");
+    let len = match head[1] & 0x7f {
+        126 => {
+            let mut n = [0u8; 2];
+            stream.read_exact(&mut n).ok()?;
+            u64::from(u16::from_be_bytes(n))
+        }
+        127 => {
+            let mut n = [0u8; 8];
+            stream.read_exact(&mut n).ok()?;
+            u64::from_be_bytes(n)
+        }
+        n => u64::from(n),
+    };
+    let mut mask = [0u8; 4];
+    stream.read_exact(&mut mask).ok()?;
+    let mut payload = vec![0u8; len as usize];
+    stream.read_exact(&mut payload).ok()?;
+    payload
+        .iter_mut()
+        .enumerate()
+        .for_each(|(i, b)| *b ^= mask[i % 4]);
+    serde_json::from_slice(&payload).ok()
+}
+
+fn server_frame(stream: &mut UnixStream, message: &serde_json::Value) {
+    let payload = message.to_string().into_bytes();
+    let mut frame = vec![0x81u8];
+    if payload.len() < 126 {
+        frame.push(payload.len() as u8);
+    } else {
+        frame.push(126);
+        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    }
+    frame.extend_from_slice(&payload);
+    let _ = stream.write_all(&frame);
+}
+
+#[test]
+fn an_idle_codex_benchd_spawned_is_started_through_its_app_server_and_a_busy_one_is_not() {
+    let home = TestHome::claim("cxpush");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (session, pid) = terminal_process(h, "cx");
+    let server = FakeAppServer::bind(
+        &h.join(".bench/codex").join(format!("{session}.sock")),
+        vec![true, false],
+    );
+    let thread = "01a0dde2-1128-7572-8528-e0979f7e706f";
+    let event = |name: &str| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "codex", "event": name, "session": thread,
+                "cwd": "/tmp", "pid": pid, "bench_session": session}),
+        )
+    };
+    let send = |body: &str| json_of(&bench(h, &["mail", "send", "--to", "cx", "--body", body]));
+    assert_eq!(
+        event("SessionStart")["handle"],
+        "cx",
+        "joins its benchd session"
+    );
+
+    // Busy: nothing is started; the next tool call is the channel.
+    event("UserPromptSubmit");
+    assert_eq!(send("while busy")["wake"], "queued");
+    assert!(server.started.recv_timeout(Duration::from_secs(2)).is_err());
+    // A permission prompt: still nothing.
+    event("PermissionRequest");
+    assert!(server.started.recv_timeout(Duration::from_secs(2)).is_err());
+
+    // Idle: one turn on its own thread, carrying the pointer and never the body.
+    event("Stop");
+    let params = server
+        .started
+        .recv_timeout(Duration::from_secs(5))
+        .expect("a turn is started once idle");
+    assert_eq!(params["threadId"], thread);
+    let read = h.join(".bench/mail/cx/read/m1.md");
+    assert_eq!(
+        params["input"],
+        serde_json::json!([{"type": "text", "text": format!("You have mail from operator: {}", read.display())}])
+    );
+    assert!(read.exists() && inbox_count(h, "cx") == 0);
+    // It is busy with that turn: no second push before any hook says so.
+    send("during the turn");
+    assert!(server.started.recv_timeout(Duration::from_secs(2)).is_err());
+
+    // A refused turn: the mail goes back, unread, and the session is not pushed again.
+    event("Stop");
+    server
+        .started
+        .recv_timeout(Duration::from_secs(5))
+        .expect("tried once idle again");
+    wait_until("the refused push is held", Duration::from_secs(5), || {
+        event_kinds(h).iter().any(|(k, _)| k == "mail/held")
+    });
+    assert_eq!(inbox_count(h, "cx"), 1, "back in the inbox, unread");
+    assert_eq!(send("after the refusal")["wake"], "next-turn");
+
+    let log = event_kinds(h);
+    let delivered: Vec<_> = log
+        .iter()
+        .filter(|(k, _)| k == "mail/delivered")
+        .map(|(_, d)| d["channel"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(delivered, ["codex"]);
+    assert!(
+        log.iter().any(|(k, d)| k == "agent/state"
+            && d["event"] == "turn/start"
+            && d["activity"]["kind"] == "busy"),
+        "the started turn is logged as the agent going busy"
+    );
+}
+
+#[test]
+fn a_codex_turn_that_failed_is_found_idle_by_its_thread_status() {
+    // A turn refused by a usage limit fires no Stop (measured on codex 0.157.0): the hooks last
+    // said busy, and only the app-server knows the thread went idle.
+    let home = TestHome::claim("cxstale");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (session, pid) = terminal_process(h, "cx");
+    let server = FakeAppServer::bind(
+        &h.join(".bench/codex").join(format!("{session}.sock")),
+        vec![true],
+    );
+    let thread = "01a0dded-514e-7681-9834-ce30a42cf6c5";
+    for event in ["SessionStart", "UserPromptSubmit"] {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "codex", "event": event, "session": thread,
+                "cwd": "/tmp", "pid": pid, "bench_session": session}),
+        );
+    }
+    bench(h, &["mail", "send", "--to", "cx", "--body", "one"]);
+    // Still running by the server's word: held, however quiet the hooks are.
+    assert!(server.started.recv_timeout(Duration::from_secs(7)).is_err());
+    // What a usage-limit refusal leaves behind (measured): no turn is running.
+    *server.status.lock().unwrap() = "systemError";
+    let params = server
+        .started
+        .recv_timeout(Duration::from_secs(8))
+        .expect("pushed once the server says idle");
+    assert_eq!(params["threadId"], thread);
+    assert!(
+        event_kinds(h)
+            .iter()
+            .any(|(k, d)| k == "agent/state" && d["event"] == "thread/read"),
+        "the log says which record found it idle"
+    );
+}
+
+#[test]
+fn a_codex_spawn_clears_a_socket_an_earlier_daemons_session_left_behind() {
+    // Session ids restart at s1 with the daemon, and a codex app-server that died uncleanly
+    // leaves its socket, which the next app-server on that path refuses to bind ("File
+    // exists", measured on 0.157.0).
+    let home = TestHome::claim("cxstalesock");
+    let h = &home.dir;
+    let stale = h.join(".bench/codex/s1.sock");
+    fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("/nonexistent/codex-daemon/gone", &stale).unwrap();
+    let _daemon = DaemonGuard::start_with_fake(h, "codex");
+    let run = bench(
+        h,
+        &["spawn", "--agent", "codex", "--cwd", "/tmp", "--name", "cx"],
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    assert_eq!(json_of(&run)["session"], "s1");
+    assert!(
+        fs::symlink_metadata(&stale).is_err(),
+        "the stale socket is gone before the app-server binds"
+    );
+}
+
 #[test]
 fn a_push_that_starts_no_turn_goes_back_to_the_inbox_and_stops_pushing() {
     // What a session without crossSessionInbound "accept" does: takes the message and holds
@@ -4456,4 +4708,73 @@ fn a_recipe_runs_as_whoever_asked_and_is_logged() {
         output.contains("--asked"),
         "the refusal is in its log: {output}"
     );
+}
+
+/// A session claimed in a pane and resumed outside helm (`claude --resume` in another terminal
+/// app: no `HELM_PANE`, on a terminal) leaves the pane: `mail/who` names nobody there, and the
+/// session keeps its handle, so mail sent to it is still handed out. A report with no terminal
+/// is a child that inherited the environment (#417) and changes nothing. Resumed in a pane
+/// again, it answers there.
+#[test]
+fn a_session_resumed_outside_helm_leaves_its_pane_and_keeps_its_mail() {
+    let home = TestHome::claim("wholeft");
+    let h = &home.dir;
+    let root = h.join(".bench");
+    let daemon = DaemonGuard::start(h, None);
+    let (_, in_pane) = terminal_process(h, "in-pane");
+    let (_, outside) = terminal_process(h, "outside");
+    let detached = Detached::start();
+    let session = "5d1f0c2e-7a3b-4c8d-9e0f-1a2b3c4d5e6f";
+    let report = |pid: u32, pane: Option<&str>, event: &str| {
+        let mut args = serde_json::json!({"harness": "claude", "event": event, "tool": "Bash",
+            "session": session, "cwd": "/Users/op/Projects/helm", "pid": pid});
+        if let Some(pane) = pane {
+            args["pane"] = pane.into();
+        }
+        hook_verb(&daemon.socket, args)
+    };
+    let who = || bench(h, &["mail", "who", "--pane", HOOK_PANE]);
+
+    let handle = report(in_pane, Some(HOOK_PANE), "SessionStart")["handle"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(json_of(&who())["handle"], handle.as_str());
+
+    // No terminal, no declaration: nothing is known about where it is, so nothing changes.
+    report(detached.0.id(), None, "SessionStart");
+    assert_eq!(who().code, 0, "a report with no terminal drops nothing");
+
+    // Resumed in another terminal app.
+    let reply = report(outside, None, "SessionStart");
+    assert_eq!(reply["handle"], handle.as_str(), "same handle");
+    let run = who();
+    assert_eq!(run.code, 3, "the old pane names nobody: {}", run.stdout);
+    let left: Vec<_> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, d)| k == "mail/moved" && d["to"].is_null())
+        .collect();
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!(
+        hosted_record(&root)["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == session && s["via"]["handle"] == handle.as_str()),
+        "the record keeps its handle"
+    );
+
+    // Mail to its handle still reaches it.
+    let sent = bench(
+        h,
+        &["mail", "send", "--to", &handle, "--body", "still yours"],
+    );
+    assert_eq!(sent.code, 0, "{}", sent.stderr);
+    let reply = report(outside, None, "PostToolUse");
+    let context = reply["context"].as_str().unwrap_or_default();
+    assert_eq!(context.matches("You have mail").count(), 1, "{reply}");
+
+    // Resumed in a pane again: that pane answers.
+    report(in_pane, Some(HOOK_PANE), "SessionStart");
+    assert_eq!(json_of(&who())["handle"], handle.as_str());
 }

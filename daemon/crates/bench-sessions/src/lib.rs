@@ -57,14 +57,15 @@ pub struct BenchSession {
     pub handle: String,
 }
 
-/// An agent in a helm pane as its own hooks report it to benchd (#358): the source for pi and
+/// An agent helm hosted as its own hooks report it to benchd (#358): the source for pi and
 /// codex, which publish no registry, and for any agent the snapshot's foreground pid misses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookedAgent {
     pub harness: Harness,
     pub session: String,
     pub cwd: String,
-    pub pane: bench_doc::PaneId,
+    /// The pane it reports from now; `None` once it was resumed outside helm.
+    pub pane: Option<bench_doc::PaneId>,
     /// Its process as the last hook reported it; alive is running.
     pub pid: u32,
     pub activity: Activity,
@@ -80,7 +81,7 @@ pub struct Inputs<'a> {
     pub workspace: &'a StandardPath,
     pub bench: &'a [BenchSession],
     pub hosted: &'a [HostedSession],
-    /// Agents in helm panes whose hooks report to benchd.
+    /// Agents helm hosted whose hooks report to benchd, and the pane each reports from now.
     pub hooked: &'a [HookedAgent],
     pub dismissed: &'a [Dismissal],
     /// A handle's mail address: its unread count, and whether benchd holds a live session
@@ -138,6 +139,7 @@ pub fn open_action(
                 resume: true,
                 prompt_file: None,
                 settings: None,
+                codex_server: None,
             })?;
             Ok(OpenAction::Resume {
                 argv: std::iter::once(program).chain(args).collect(),
@@ -316,7 +318,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
         }
     }
 
-    // 2b. Agents in helm panes that benchd knows from their own hooks, not already listed.
+    // 2b. Agents helm hosted that benchd knows from their own hooks, not already listed.
     for h in inputs.hooked {
         let listed = out
             .rows
@@ -326,6 +328,10 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
             continue;
         }
         live.insert(key(h.harness, &h.session));
+        // Running outside helm: no row, like any live agent there, and not finished either.
+        let Some(pane) = h.pane else {
+            continue;
+        };
         let registered = (h.harness == Harness::Claude)
             .then(|| registry.iter().find(|r| r.session == h.session))
             .flatten();
@@ -343,7 +349,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 state: SessionState::Running {
                     activity: h.activity.clone(),
                 },
-                host: Host::Pane { pane: h.pane },
+                host: Host::Pane { pane },
                 mail: Some((inputs.mailbox)(&h.handle)),
                 updated_at_ms: inputs.now_ms,
             },

@@ -95,7 +95,8 @@ Claude and codex put in front of the model as hook context: a busy agent gets it
 next tool call, with nothing typed into a pty. The first event of a session helm or benchd
 declared (`HELM_PANE`, `BENCH_SESSION`) and that runs on a terminal claims its address, recorded
 in `sessions/hosted.json` so it survives a restart. A session resumed in another pane keeps its
-handle, and its record moves to the pane it reports from under the same rule (`mail/moved`). An
+handle, and its record moves to the pane it reports from under the same rule (`mail/moved`); one
+resumed outside helm keeps its handle and mail, and its old pane stops answering for it. An
 idle agent is started through its own channel instead: benchd posts the notice to a Claude
 session's inbox socket (which its hooks
 report), and a push that starts no turn in 10 s goes back to the inbox. A spawn hands its prompt
@@ -103,9 +104,12 @@ over in argv as a pointer, so nothing waits for a TUI to draw. pi's channel is i
 (`pi/extensions/bench`), which reports through `bench hook pi`, watches the inbox benchd names
 and starts its own turn when benchd agrees. An agent the operator starts himself
 reports once its harness is wired to the one fixed command: `bench wiring` prints what to add
-to the three files and `bench wiring --check` says what is missing. codex's idle channel (a
-benchd-owned app-server) is next; until
-then its mail waits for its next prompt or tool call, and the ring proof returns with it. helm
+to the three files and `bench wiring --check` says what is missing. A codex benchd spawns runs
+its TUI against an app-server of its own (`codex --remote`, one per session, leashed to the TUI),
+which is where its hooks run and where benchd starts a turn (`turn/start`) when it is idle; a
+codex the operator starts himself embeds its app-server, so its mail waits for its next prompt
+or tool call. `just mail-ring` is the proof: claude, codex and pi pass a number around through
+benchd, idle and busy, with per-hop latency from the log. helm
 keeps no mailroom of its own since: it asks benchd who is in a pane (`mail/who`) and sends a
 canvas note through `mail/send`.
 
