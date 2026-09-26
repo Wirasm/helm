@@ -5,8 +5,12 @@
 # Always report, spend nothing when there is nothing to gate.
 name: daemon
 
+# The push to development exists to save the cargo cache below: a PR can only read caches
+# saved on its base branch, and this workflow used to run on nothing else.
 on:
   pull_request:
+  push:
+    branches: [development]
 
 jobs:
   gate:
@@ -19,8 +23,10 @@ jobs:
       # The path rule lives in scripts/check.sh, so `just check` and this job agree on it.
       - name: did daemon/ change?
         id: changed
+        env:
+          BASE: ${{ github.event_name == 'push' && github.event.before || format('origin/{0}', github.base_ref) }}
         run: |
-          if bash scripts/check.sh --needs daemon "origin/${{ github.base_ref }}"; then
+          if bash scripts/check.sh --needs daemon "$BASE"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -30,5 +36,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # Saved from development only, for the reason on `on:` above.
+      - if: steps.changed.outputs.run == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: daemon
+          save-if: ${{ github.event_name == 'push' }}
       - if: steps.changed.outputs.run == 'true'
         run: bash scripts/check.sh daemon
