@@ -72,10 +72,14 @@ impl DaemonGuard {
         DaemonGuard::start_with(home, suite, Command::new(benchd_bin()))
     }
 
-    /// A daemon whose `pi` is [`write_fake_pi`]'s: a real harness name, so its sessions are
-    /// rows in `sessions/all`, and no real agent behind it.
+    /// A daemon whose `pi` is [`write_fake_agent`]'s: a real harness name, so its sessions
+    /// are rows in `sessions/all`, and no real agent behind it.
     fn start_with_fake_pi(home: &Path) -> DaemonGuard {
-        let bin = write_fake_pi(home);
+        DaemonGuard::start_with_fake(home, "pi")
+    }
+
+    fn start_with_fake(home: &Path, agent: &str) -> DaemonGuard {
+        let bin = write_fake_agent(home, agent);
         let path = std::env::var("PATH").unwrap_or_default();
         let mut cmd = Command::new(benchd_bin());
         cmd.env("PATH", format!("{}:{path}", bin.display()));
@@ -871,15 +875,16 @@ fn libc_alive(pid: i32) -> bool {
 // Mail: the mailroom, the notice discipline, the wake reactor, the cap
 // ---------------------------------------------------------------------------
 
-/// `<home>/bin/pi`: a stand-in that reads its pty and prints nothing, so it is idle, live,
-/// and dies when its pid is killed. Returns the directory to put on the daemon's PATH.
-fn write_fake_pi(home: &Path) -> PathBuf {
+/// `<home>/bin/<agent>`: a stand-in that ignores its argv, echoes its pty and prints nothing
+/// of its own, so it is quiet, live, and dies when its pid is killed. Returns the directory to
+/// put on the daemon's PATH.
+fn write_fake_agent(home: &Path, agent: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let bin = home.join("bin");
     fs::create_dir_all(&bin).unwrap();
-    let pi = bin.join("pi");
-    fs::write(&pi, "#!/bin/sh\nexec cat\n").unwrap();
-    fs::set_permissions(&pi, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = bin.join(agent);
+    fs::write(&path, "#!/bin/sh\nexec cat\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     bin
 }
 
@@ -1246,6 +1251,94 @@ fn a_send_to_a_live_session_wakes_it_with_a_path_never_the_body() {
 
     // Retired at delivery: the notice's path is where the file already lives.
     let mailbox = home.dir.join(".bench/mail/echo1");
+    assert!(mailbox.join("read").join(format!("{id}.md")).exists());
+}
+
+/// #415: a paste into a Claude permission prompt answers the prompt — measured on 2.1.283,
+/// it approved the pending command and the notice never became a turn. So a Claude session
+/// is pasted into only when its own registry row says it can take a turn, and a held wake
+/// leaves the mail unread in the inbox. The fake `claude` is `cat`: quiet, so today's pty
+/// gate alone would paste, and an echo of anything pasted shows up in the ring.
+#[test]
+fn a_wake_never_pastes_into_a_claude_session_waiting_on_a_prompt() {
+    let home = TestHome::claim("prompt");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start_with_fake(h, "claude");
+    let spawn = bench(
+        h,
+        &[
+            "spawn", "--agent", "claude", "--cwd", "/tmp", "--name", "c1",
+        ],
+    );
+    assert_eq!(spawn.code, 0, "stderr: {}", spawn.stderr);
+    let pid = json_of(&spawn)["pid"].as_u64().unwrap() as u32;
+    let started = bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
+    let registry = h.join(".claude/sessions");
+    fs::create_dir_all(&registry).unwrap();
+    let row = |status: serde_json::Value| {
+        let mut v = serde_json::json!({"pid": pid, "sessionId": "fake", "cwd": "/tmp",
+            "startedAt": started, "kind": "interactive"});
+        v.as_object_mut()
+            .unwrap()
+            .extend(status.as_object().unwrap().clone());
+        fs::write(registry.join(format!("{pid}.json")), v.to_string()).unwrap();
+    };
+    row(serde_json::json!({"status": "waiting", "waitingFor": "permission prompt"}));
+
+    let send = bench(h, &["mail", "send", "--to", "c1", "--body", "hello"]);
+    assert_eq!(send.code, 0, "stderr: {}", send.stderr);
+    let id = json_of(&send)["id"].as_str().unwrap().to_string();
+    let log = || fs::read_to_string(h.join(".bench/events.jsonl")).unwrap_or_default();
+
+    // Well past the 2 s quiet gate and many reactor ticks.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !log().contains("wake/held") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": "s1"}),
+    );
+    assert_eq!(resp["status"], "ok");
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let mut seen = Vec::new();
+    let mut chunk = [0u8; 4096];
+    if let Ok(n) = (&stream).read(&mut chunk) {
+        seen.extend_from_slice(&chunk[..n]);
+    }
+    drop(stream);
+    assert!(
+        !String::from_utf8_lossy(&seen).contains("You have mail"),
+        "pasted into a session waiting on a permission prompt: {}",
+        String::from_utf8_lossy(&seen)
+    );
+    let events = log();
+    assert!(!events.contains("agent/woken"), "{events}");
+    assert!(
+        events.contains("wake/held") && events.contains("permission prompt"),
+        "a held wake says why: {events}"
+    );
+    let mailbox = h.join(".bench/mail/c1");
+    assert!(
+        mailbox.join("inbox").join(format!("{id}.md")).exists(),
+        "a held wake leaves the mail unread in the inbox"
+    );
+    assert!(!mailbox.join("read").join(format!("{id}.md")).exists());
+
+    // Positive control: the same fake is woken the moment its row says idle, so the hold
+    // above was the gate and not a session that cannot be pasted into.
+    row(serde_json::json!({"status": "idle"}));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !log().contains("agent/woken") {
+        assert!(
+            Instant::now() < deadline,
+            "never woken once idle: {}",
+            log()
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
     assert!(mailbox.join("read").join(format!("{id}.md")).exists());
 }
 
