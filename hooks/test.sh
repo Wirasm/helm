@@ -560,6 +560,50 @@ grep -q '"retiredAt"' "$root/returning-7777/owner.json" &&
 	bad "claim: the re-claimed mailbox is still marked retired" ||
 	ok "coming back clears the retirement — the mailbox is live again"
 
+# ── long-retired mailboxes move to .retired/ (#417) ──────────────────────────────────────
+#
+# Retiring never deletes (#236), so before #417 every retired mailbox stayed in the root forever —
+# 12,248 on the operator's machine, each read by helm every two seconds. After seven days one is
+# MOVED under `<root>/.retired/`, which every reader already skips. Nothing is deleted: read/ and
+# any late mail travel with it, and a name already on the shelf gets a suffix, never a merge.
+week_ago=$(( $(date +%s) * 1000 - 8 * 86400000 ))
+recent=$(( $(date +%s) * 1000 - 86400000 ))
+shelve() { # <root> <handle> <retiredAt or "">
+	mkdir -p "$1/$2/read"
+	printf '{"handle":"%s","runtime":"claude","pid":%s,"sessionId":"s-%s","cwd":"/tmp","claimedAt":1%s}\n' \
+		"$2" "$gone_pid" "$2" "${3:+,\"retiredAt\":$3}" >"$1/$2/owner.json"
+}
+root=$(fresh)
+shelve "$root" old-1111 "$week_ago"
+printf '{"id":"k","from":"p","to":"old-1111","subject":"s","body":"b","sentAt":1}\n' >"$root/old-1111/read/k.json"
+printf '{"id":"late","from":"p","to":"old-1111","subject":"s","body":"b","sentAt":1}\n' >"$root/old-1111/late.json"
+shelve "$root" twice-2222 "$week_ago"
+mkdir -p "$root/.retired/twice-2222" && printf 'earlier\n' >"$root/.retired/twice-2222/marker"
+shelve "$root" young-3333 "$recent"
+shelve "$root" live-4444 ""
+# HELM_MAIL_OFF is set on purpose: it switches sessions off, not a command a person typed.
+OUT=$(HELM_MAIL_OFF=1 HELM_MAIL_DIR="$root" node "$HOOKS/helm-mail.mjs" archive </dev/null 2>&1)
+[ "$(ls "$root" | tr '\n' ' ')" = "live-4444 young-3333 " ] &&
+	ok "the archive verb moves only mailboxes retired over seven days: $OUT" ||
+	bad "archive: the root holds $(ls "$root" | tr '\n' ' ')"
+[ -f "$root/.retired/old-1111/read/k.json" ] && [ -f "$root/.retired/old-1111/late.json" ] &&
+	ok "a moved mailbox keeps its read/ archive and any mail that arrived after it retired" ||
+	bad "archive: $(find "$root/.retired" -type f | tr '\n' ' ')"
+[ -f "$root/.retired/twice-2222/marker" ] && [ "$(ls -d "$root/.retired/twice-2222-"* 2>/dev/null | wc -l | tr -d ' ')" = 1 ] &&
+	ok "a name already on the shelf is kept, and the newcomer lands beside it under a suffix" ||
+	bad "archive: the shelf's twice-2222 was merged into or replaced: $(ls "$root/.retired" | tr '\n' ' ')"
+[ "$(find "$root" -name owner.json | wc -l | tr -d ' ')" = 4 ] &&
+	ok "and nothing is deleted — four owner files before, four after" ||
+	bad "archive: $(find "$root" -name owner.json | wc -l) owner files remain of four"
+
+# And every claim does it, so a mailroom tidies itself without anyone running the verb.
+root=$(fresh)
+shelve "$root" old-5555 "$week_ago"
+run "$root" claude-session-start '{"session_id":"019fc78b-f108-7c69-b602-1d44f7639531","cwd":"/tmp/tidy"}'
+[ -d "$root/.retired/old-5555" ] && [ ! -e "$root/old-5555" ] &&
+	ok "a claim archives what has been retired for over seven days" ||
+	bad "claim: old-5555 was not archived: $(ls -a "$root" | tr '\n' ' ')"
+
 # ── the contract that must never break ───────────────────────────────────────────────────
 
 root=$(fresh)

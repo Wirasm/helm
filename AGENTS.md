@@ -339,6 +339,15 @@ bash tool), so a session started from one has no controlling terminal. `HELM_MAI
 outright, which is why the gates still claim. `claimsAMailbox` is the rule, written in both files
 and run over one matrix by `hooks/mailbox-conformance.mjs`.
 
+**A retired mailbox is moved after seven days, never deleted (#417).** Retiring stopped deleting in
+#236, and left every retired mailbox in the root for good — 12,248 on the operator's machine, which
+helm read every two seconds. `archiveRetired` now moves one retired over seven days to
+`<root>/.retired/` after every reap, in both writers (every reader already skips a dot-directory),
+and `node hooks/helm-mail.mjs archive </dev/null` does the same by hand. The conformance harness
+runs both copies on one root. It sits outside `reap` so the two reapers are still compared like for
+like. helm's side of the same ticket is `MailboxOwnerCache`: a publish re-reads only the mailboxes
+whose directory changed.
+
 **An idle agent is woken, and the two runtimes get there differently.** pi's extension is a live
 event loop inside the session, so it watches its own mailbox and calls `sendUserMessage` — a turn
 starts from nothing. Claude Code has no equivalent helm can call, so the notice instead **tells
