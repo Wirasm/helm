@@ -103,6 +103,13 @@ and **badges** it. Lives in benchd's document; helm draws the open one over the 
 (`Sources/Helm/Drawers/`), where and how wide from `[drawer.<name>]` in the keymap file.
 _Avoid_: panel, sidebar, rail (the rail is helm's own and is not a drawer), scratchpad, overlay
 
+**sessions drawer**:
+The drawer on the left (⌘⇧S) listing every agent session in the active workspace, as benchd's
+`sessions/all` answers it (#384): running first, then newest. A row opens with the one action
+benchd computed for it — show its pane, attach, resume or read its transcript — and a finished
+row can be dismissed. helm adds no rule of its own about which sessions belong.
+_Avoid_: agent list, sidebar, session browser
+
 **badge**:
 A drawer's mark that something arrived in it the operator has not seen: an agent put a pane
 there or offered one it already held. Opening the drawer clears it.

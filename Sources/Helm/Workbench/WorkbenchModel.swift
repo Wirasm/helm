@@ -226,6 +226,7 @@ final class WorkbenchModel: ObservableObject {
             CanvasPaneKind { [weak self] model, pane in self?.wireMarks(model, in: pane) })
         terminals.surfaces.register(BrowserPaneKind(make: makeBrowser))
         terminals.surfaces.register(UnsupportedPaneKind())
+        terminals.surfaces.register(SessionsPaneKind(workbench: self, terminals: terminals))
         // The same rewiring for the manager's sessions: a ⌘-clicked link and a `push.sh` are
         // verbs, and this is the bench they are sent to.
         terminals.bench = self

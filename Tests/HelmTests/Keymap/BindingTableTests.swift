@@ -125,6 +125,12 @@ final class BindingTableTests: XCTestCase {
             .verb(.toggleDrawer(name: "browser", surface: .browser)))
     }
 
+    func testShiftCommandSTogglesTheSessionsDrawer() {
+        XCTAssertEqual(
+            match("S", [.command, .shift]),
+            .verb(.toggleDrawer(name: "sessions", surface: .sessions)))
+    }
+
     func testUnboundCombinationsPassThrough() {
         XCTAssertNil(match("j", .command), "⌘J is deliberately unbound — reserved for maximize")
         XCTAssertNil(match("t", .command), "⌘T left with the chat face (#375)")

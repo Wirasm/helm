@@ -141,7 +141,7 @@ struct KeymapFile: Equatable {
         #         down or keycode:N
         # when:   anywhere (the default), terminal, away-from-terminal
         # action: one of the names below; index is 1-based. `drawer` takes name and, optionally,
-        #         surface = "browser" or "file:<path>" for a drawer that holds nothing yet
+        #         surface = "browser", "sessions" or "file:<path>" for a drawer that holds nothing
         #
         # A drawer's place is a table of its own, e.g.
         #   [drawer.notes]

@@ -10,7 +10,7 @@
 # `try` strategies are tried in order until one resolves. With no row matching, or none of its
 # strategies resolving, the pane gets a new column: the one destination that always exists.
 #
-#   surface  terminal | canvas | browser
+#   surface  terminal | canvas | browser | sessions
 #   by       operator | agent | any          (default: any)
 #   try      "existing"                       the pane already showing it
 #            "tab-in-focused"                 a tab in the focused slot
