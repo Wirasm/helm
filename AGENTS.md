@@ -937,7 +937,8 @@ test is simple: two people building two features should not have to edit the sam
 **The slices, largest first, so a stranger knows where to look**: `Canvas/` (6.1k lines) is the
 document surface; `Workbench/` (3.8k) is columns, slots, panes and the offer/insert distinction;
 `Surfaces/` is `SurfaceKind` and the one registry every pane kind's live object is kept in;
-`Keymap/` is the key table and its readers (below);
+`Keymap/` is the key table and its readers (below); `Bench/` is helm as benchd's client —
+the socket, the follower, `DaemonSink` and the one-time import (below);
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
 libghostty seam — sessions, the host view, the pane environment, and `push.sh`'s landing site;
 then `Spool/`, `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,

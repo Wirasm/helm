@@ -238,6 +238,9 @@ struct BenchSnapshot: Codable, Equatable {
         let isFocused: Bool
         let terminal: TerminalRecord?
         let canvas: CanvasRecord?
+        /// Which kind benchd named, for an `unsupported` pane — what its tab shows. nil for
+        /// every kind this build knows.
+        let unsupportedKind: String?
 
         @MainActor
         init(
@@ -267,18 +270,22 @@ struct BenchSnapshot: Codable, Equatable {
                     foregroundPid: foregroundPid,
                     agents: agents)
                 canvas = nil
+                unsupportedKind = nil
             case let .canvas(source):
                 kind = .canvas
                 terminal = nil
                 canvas = CanvasRecord(source: source)
+                unsupportedKind = nil
             case .browser:
                 kind = .browser
                 terminal = nil
                 canvas = nil
-            case .unsupported:
+                unsupportedKind = nil
+            case let .unsupported(named):
                 kind = .unsupported
                 terminal = nil
                 canvas = nil
+                unsupportedKind = named
             }
         }
     }

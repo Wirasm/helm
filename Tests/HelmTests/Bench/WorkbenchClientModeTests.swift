@@ -204,6 +204,21 @@ final class WorkbenchClientModeTests: XCTestCase {
             rig.model.surfaceView(of: pane, in: rig.model.surfaceSlot(for: pane, in: slot)))
     }
 
+    /// The placeholder keeps its kind's name everywhere it is written down: in a saved bench,
+    /// and in `snapshot.json`, which is how an agent without a display reads the bench.
+    func testAPlaceholderKeepsItsKindInTheSnapshotAndThroughCodable() throws {
+        let pane = Pane(content: .unsupported("whiteboard"))
+        let decoded = try JSONDecoder().decode(Pane.self, from: JSONEncoder().encode(pane))
+        XCTAssertEqual(decoded, pane)
+
+        let record = BenchSnapshot.PaneRecord(
+            pane: pane, selected: true, visible: true, focused: false, live: nil,
+            addressBook: AddressBook(owners: [], sessionFor: { _ in nil }),
+            foregroundPid: { _ in nil }, agents: [:])
+        XCTAssertEqual(record.kind, .unsupported)
+        XCTAssertEqual(record.unsupportedKind, "whiteboard")
+    }
+
     /// #85's question stays helm's in daemon mode: a bench worth asking about is not drawn until
     /// the operator answers, and "fresh" goes to benchd as `workspace/reset`.
     func testTheRestoreQuestionIsAskedAndFreshIsAReset() throws {

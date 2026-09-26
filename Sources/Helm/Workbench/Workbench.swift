@@ -978,7 +978,7 @@ extension Pane.Content {
 }
 
 extension Pane.Content: Codable {
-    private enum CodingKeys: String, CodingKey { case kind, source, agent }
+    private enum CodingKeys: String, CodingKey { case kind, source, agent, named }
 
     /// **A `kind` this build does not know throws, and `Slot` skips the pane.** The build
     /// before this one had a third pane type and wrote `{"kind":"archonRun"}` into benches
@@ -1004,10 +1004,10 @@ extension Pane.Content: Codable {
                     ?? nil)
         case .canvas: self = .canvas(try container.decode(CanvasSource.self, forKey: .source))
         case .browser: self = .browser
-        // Never written by a build that knows what the kind is, so there is nothing to read.
+        // Only a daemon's document makes one, and helm saves nothing in daemon mode; written and
+        // read with its name all the same, so a placeholder that ever is saved comes back whole.
         case .unsupported:
-            throw DecodingError.dataCorruptedError(
-                forKey: .kind, in: container, debugDescription: "a placeholder is not a pane")
+            self = .unsupported(try container.decode(String.self, forKey: .named))
         }
     }
 
@@ -1029,8 +1029,9 @@ extension Pane.Content: Codable {
             try container.encode(source, forKey: .source)
         case .browser:
             try container.encode(Kind.browser, forKey: .kind)
-        case .unsupported:
+        case let .unsupported(named):
             try container.encode(Kind.unsupported, forKey: .kind)
+            try container.encode(named, forKey: .named)
         }
     }
 }

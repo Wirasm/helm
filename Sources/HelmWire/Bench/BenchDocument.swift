@@ -9,7 +9,8 @@ import Foundation
 /// `daemon/fixtures/`, the same files the daemon gate pins byte for byte.
 ///
 /// Nested rather than top-level because helm's own `Workspace`, `Column`, `Slot` and `Pane` are
-/// the render values; these are what crosses the socket, and PR 3c converts one into the other.
+/// the render values; these are what crosses the socket, and `BenchDocument+Helm.swift` converts
+/// one into the other.
 package struct BenchDocument: Codable, Equatable, Sendable {
     package var workspaces: [Workspace]
     /// The workspace on screen, by path. nil only when nothing is open.
