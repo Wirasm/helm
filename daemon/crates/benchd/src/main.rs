@@ -27,6 +27,7 @@
 //! wait, a prompt delivery, or an attach pump.
 
 mod layout;
+mod rules;
 mod sessions;
 
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
@@ -262,6 +263,8 @@ struct Core {
     browser_restarts: Vec<Instant>,
     /// The bench document (M4): what `bench.json` holds, and the seq that produced it.
     bench: layout::BenchState,
+    /// Where new panes go: the operator's `rules/placement.toml`, or the built-in table (#356).
+    placement: rules::RulesFile,
     /// The hosted-sessions record and the dismissals (#384).
     session_records: sessions::SessionRecords,
     /// `events --follow` connections, each with its own bounded queue and writer thread.
@@ -433,6 +436,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         last_document_change,
     } = scan_log(&events)?;
     let (bench, bench_events) = layout::load(&root, last_document_change);
+    let (placement, rules_event) = rules::RulesFile::boot(bench_wire::placement_rules_path(&root));
     let (session_records, session_events) = sessions::load(&root);
 
     let log = OpenOptions::new()
@@ -476,6 +480,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         browser_wanted: false,
         browser_restarts: Vec::new(),
         bench,
+        placement,
         session_records,
         followers: Vec::new(),
         unflushed: Arc::new(AtomicBool::new(false)),
@@ -507,7 +512,11 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
             )
             .map_err(StartError::Failed)?;
         }
-        for (kind, data) in bench_events.into_iter().chain(session_events) {
+        let boot_events = bench_events
+            .into_iter()
+            .chain(session_events)
+            .chain(rules_event);
+        for (kind, data) in boot_events {
             c.append(kind, data).map_err(StartError::Failed)?;
         }
         let unflushed = Arc::clone(&c.unflushed);
@@ -857,7 +866,8 @@ fn dispatch(
 
     match Verb::parse(&req.verb) {
         Some(Verb::Status) => {
-            let c = core.lock().unwrap();
+            let mut c = core.lock().unwrap();
+            layout::refresh_rules(&mut c);
             let live = c.sessions.values().filter(|s| s.is_live()).count();
             (
                 ok(json!({
@@ -870,6 +880,7 @@ fn dispatch(
                     "uptime_secs": c.booted.elapsed().as_secs(),
                     "events": c.next_seq,
                     "sessions": { "total": c.sessions.len(), "live": live },
+                    "rules": { "placement": c.placement.status() },
                 })),
                 AfterResponse::Done,
             )

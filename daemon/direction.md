@@ -51,6 +51,15 @@ operator's focus, so an agent's toggle is refused without `asked`, and an agent'
 drawer instead of opening it. No drawer operation touches a workspace. `bench.json` is version 1
 from here, so an older benchd quarantines it rather than dropping drawers on its next save.
 
+**Placement is the operator's file (#356).** Where a new pane goes is a table, and the table is
+TOML: the built-in one is `crates/bench-doc/rules/placement.default.toml`, embedded at build
+time, and `<root>/rules/placement.toml` replaces it whole. benchd looks at the file (one `stat`)
+before each layout verb and each `status`, and rereads it only when it changed, so an edit
+applies to the next verb with no restart and no watcher. A strategy can send a pane to a drawer
+(`{ drawer = "browser" }`). A file that cannot be read changes nothing: the last good table stays
+in force, `rules/rejected` names the file, the line and why once per version, and `bench status`
+reports `rejected` until a good version replaces it. benchd never writes a rules file.
+
 **And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
 every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's
 snapshot), benchd's own sessions, Claude Code `--bg` jobs, running subagents, and finished

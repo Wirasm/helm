@@ -14,7 +14,9 @@
 //! gone by the time it runs is refused with the reason — ids never go stale silently.
 
 use crate::Core;
-use bench_doc::{Caller, Document, Focus, Pane, PaneId, Rules, Surface, Target};
+use bench_doc::{
+    Caller, Destination, Document, Focus, Pane, PaneId, Placement, Rules, Surface, Target,
+};
 use bench_wire::{
     Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider, DocumentAt,
     DocumentChange, DocumentRecord, LayoutReport, LayoutVerb, MoveTo, OpenInto, PaneOpen, Request,
@@ -28,7 +30,6 @@ use std::path::Path;
 /// The document as the daemon holds it, and the seq of the event that last changed it.
 pub struct BenchState {
     pub document: Document,
-    pub rules: Rules,
     /// The seq of the `bench/changed` event this document reflects; 0 before the first.
     pub seq: u64,
 }
@@ -64,11 +65,14 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
         return reply(Status::Ok, None, Some(json!(document_at(core))));
     }
 
+    // The rules file is looked at before every change, so an edit to it applies to the next
+    // verb without a restart; the event says what was adopted or refused.
+    refresh_rules(core);
     let by = req.by.clone().unwrap_or_else(Actor::agent);
     let focus = Actor::focus(&by, req.asked);
     let mut next = core.bench.document.clone();
     let before = next.focused_pane();
-    let outcome = match apply(&mut next, &core.bench.rules, &verb, focus, by.caller()) {
+    let outcome = match apply(&mut next, core.placement.rules(), &verb, focus, by.caller()) {
         Ok(o) => o,
         Err(refusal) => return reply(Status::Refused, Some(refusal.to_string()), None),
     };
@@ -116,6 +120,14 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
         );
     }
     reply(Status::Ok, None, Some(json!(report)))
+}
+
+/// Look at the placement rules file, logging what changed. A log failure here is not the
+/// verb's: the table is already in force, and the next change to the file logs again.
+pub fn refresh_rules(core: &mut Core) {
+    if let Some((kind, data)) = core.placement.refresh() {
+        let _ = core.append(kind, data);
+    }
 }
 
 /// The document and the seq it reflects — `bench/get`'s answer and a follower's first line.
@@ -177,27 +189,19 @@ fn apply(
             Ok(Outcome::default())
         }
         LayoutVerb::PaneOpen(PaneOpen { into, surface }) => {
+            // A named drawer bypasses the rules; otherwise they decide, against the bench the
+            // pane would join, and may send it to a drawer themselves.
             let target = match into {
+                OpenInto::Drawer(name) => return open_in_drawer(doc, name, surface, focus),
                 OpenInto::Active => Target::Active,
                 OpenInto::Workspace(path) => Target::Workspace(path.clone()),
-                // A named drawer bypasses the rules.
-                OpenInto::Drawer(drawer) => {
-                    let pane = Pane::new(surface.clone());
-                    let id = pane.id;
-                    let landed = doc.place_in_drawer(drawer, pane, focus)?;
-                    return Ok(if landed == id {
-                        created(id)
-                    } else {
-                        Outcome {
-                            created: None,
-                            pane: Some(landed),
-                        }
-                    });
-                }
+            };
+            let placement = match rules.place(doc.bench_at(&target)?, surface, caller) {
+                Destination::Drawer(name) => return open_in_drawer(doc, &name, surface, focus),
+                Destination::Bench(placement) => placement,
             };
             doc.edit(target, focus, |bench| {
-                let placement = rules.place(bench, surface, caller);
-                if let bench_doc::Placement::Existing(open) = placement {
+                if let Placement::Existing(open) = placement {
                     bench.place(Pane::new(surface.clone()), placement, focus)?;
                     return Ok(Outcome {
                         created: None,
@@ -269,6 +273,22 @@ fn apply(
     }
 }
 
+/// A new pane in a drawer, or the one there already showing it.
+fn open_in_drawer(
+    doc: &mut Document,
+    drawer: &bench_doc::DrawerName,
+    surface: &Surface,
+    focus: Focus,
+) -> Result<Outcome, bench_doc::Refusal> {
+    let pane = Pane::new(surface.clone());
+    let id = pane.id;
+    let landed = doc.place_in_drawer(drawer, pane, focus)?;
+    Ok(Outcome {
+        created: (landed == id).then_some(id),
+        pane: Some(landed),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // bench.json
 // ---------------------------------------------------------------------------
@@ -306,7 +326,6 @@ pub fn load(
     let mut events = Vec::new();
     let empty = || BenchState {
         document: Document::default(),
-        rules: Rules::defaults(),
         seq: 0,
     };
     let text = match fs::read_to_string(&path) {
@@ -368,7 +387,6 @@ fn read_record(text: &str) -> Result<(BenchState, Vec<String>), String> {
     Ok((
         BenchState {
             document: recovered.value,
-            rules: Rules::defaults(),
             seq,
         },
         recovered.notes,
