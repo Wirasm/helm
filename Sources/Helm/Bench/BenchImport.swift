@@ -31,6 +31,24 @@ enum BenchImport {
         return BenchDocument(workspaces: workspaces, active: active?.path.value)
     }
 
+    /// What `RootView` hands `WorkbenchModel.followDocuments` in daemon mode: import first, then
+    /// let the workspace list follow the newest document.
+    ///
+    /// **The order is the point.** Following an empty document empties the workspace list, and
+    /// the import reads that list — so following first imported nothing, which is what the first
+    /// live run did. And the import draws the document it made before returning, so the list
+    /// follows that one rather than the empty one this call was handed.
+    @MainActor
+    static func follower(
+        model: WorkspaceModel, workbench: WorkbenchModel
+    ) -> (BenchDocument) -> Void {
+        { [weak model, weak workbench] document in
+            guard let model, let workbench else { return }
+            runOnce(into: document, from: model, through: workbench)
+            model.follow(workbench.document ?? document)
+        }
+    }
+
     /// Import if benchd holds nothing and this helm never has. Called with each document; does
     /// nothing after the first that qualifies.
     @MainActor

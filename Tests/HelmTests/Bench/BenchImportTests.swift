@@ -69,16 +69,19 @@ final class BenchImportTests: XCTestCase {
         }
         XCTAssertTrue(Eventually.holds { workbench.document != nil })
 
-        BenchImport.runOnce(
-            into: try XCTUnwrap(workbench.document), from: model, through: workbench)
-        BenchImport.runOnce(
-            into: BenchDocument(workspaces: [], active: nil), from: model, through: workbench)
+        // Wired the way `RootView` wires it, after the first (empty) document has arrived.
+        let follow = BenchImport.follower(model: model, workbench: workbench)
+        workbench.followDocuments(follow)
+        follow(BenchDocument(workspaces: [], active: nil))
 
         let imports = server.verbs.filter { $0["verb"] as? String == "workspace/import" }
         XCTAssertEqual(imports.count, 1, "once, however many empty documents follow")
         XCTAssertEqual((imports.first?["by"] as? [String: Any])?["kind"] as? String, "helm")
         XCTAssertTrue(model.hasImportedIntoBench)
         XCTAssertEqual(workbench.document?.workspaces.count, 2)
+        XCTAssertEqual(
+            model.workspaces, [a, b], "the list follows the imported document, not the empty one")
+        XCTAssertEqual(model.selectedWorkspace, a)
         XCTAssertEqual(WorkspacePersistence.load(from: defaults), before.0)
         XCTAssertEqual(
             WorkspaceContextStore.load(from: defaults), before.1,
