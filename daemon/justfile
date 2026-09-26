@@ -106,7 +106,7 @@ spec:
     echo "bench surface, $(date -u +%Y-%m-%dT%H:%MZ):"
     for verb in status events stop:probe spawn sessions attach close resume \
                 select name capture cmd \
-                attn/post attn/list attn/ack watch mail/send mail/list mail/read \
+                attn/post attn/list attn/ack watch mail/send mail/list mail/read hook \
                 sessions/all sessions/dismiss browser/start browser/status browser/stop browser/setup \
                 bench/get workspace/open workspace/close workspace/activate workspace/reset \
                 workspace/unshelve workspace/import pane/open pane/split pane/close pane/show \

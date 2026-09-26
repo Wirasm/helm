@@ -26,6 +26,7 @@
 //! sits behind one mutex held only for map and log operations — never across a ready
 //! wait, a prompt delivery, or an attach pump.
 
+mod hook;
 mod layout;
 mod rules;
 mod sessions;
@@ -269,6 +270,11 @@ struct Core {
     placement: rules::RulesFile,
     /// The hosted-sessions record and the dismissals (#384).
     session_records: sessions::SessionRecords,
+    /// Every session whose hook has reported (#358): its agent when it has a mailbox, `None`
+    /// when it was asked once and gets none, so the claim rule is not re-run per event.
+    agents: HashMap<bench_wire::SessionKey, Option<hook::Agent>>,
+    /// Hook event names this build does not know, already logged once.
+    unknown_hook_events: HashSet<(&'static str, String)>,
     /// `events --follow` connections, each with its own bounded queue and writer thread.
     /// A frame is handed over here and written there, **never under this mutex**: a 16 KB
     /// frame is larger than a unix socket's send buffer, so one follower that stopped
@@ -309,6 +315,22 @@ impl Core {
             .values()
             .filter(|s| s.is_live())
             .map(|s| s.handle.clone())
+            .collect()
+    }
+
+    /// Every handle a new claim must not take: benchd's own sessions', and every address the
+    /// record holds — a handle outlives its session, and every claim is recorded before it is
+    /// answered, so the record covers every agent in memory too.
+    fn held_handles(&self) -> HashSet<String> {
+        self.sessions
+            .values()
+            .map(|s| s.handle.clone())
+            .chain(
+                self.session_records
+                    .hosted
+                    .iter()
+                    .filter_map(|h| h.handle().map(str::to_string)),
+            )
             .collect()
     }
 
@@ -485,6 +507,8 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         bench,
         placement,
         session_records,
+        agents: HashMap::new(),
+        unknown_hook_events: HashSet::new(),
         followers: Vec::new(),
         unflushed: Arc::new(AtomicBool::new(false)),
     }));
@@ -657,6 +681,16 @@ fn wake_reactor(core: Arc<Mutex<Core>>) {
         }
         for (handle, mail_id, from, session) in candidates {
             if session.idle_for() < WAKE_IDLE_GATE {
+                continue;
+            }
+            // Its hook may have handed the mail out already (#358). Out of the inbox is
+            // delivered, and a second notice for it would be a second delivery.
+            let root = core.lock().unwrap().root.clone();
+            if !bench_mail::is_unread(&root, &handle, &mail_id) {
+                core.lock()
+                    .unwrap()
+                    .pending_wakes
+                    .retain(|p| p.mail_id != mail_id);
                 continue;
             }
             if session.agent == AgentKind::Claude {
@@ -1173,6 +1207,12 @@ fn dispatch(
         }
 
         Some(Verb::SessionsAll) => match sessions::answer_all(core, &req.args) {
+            Ok(data) => (ok(data), AfterResponse::Done),
+            Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
+            Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
+        },
+
+        Some(Verb::Hook) => match hook::answer(core, &req.args) {
             Ok(data) => (ok(data), AfterResponse::Done),
             Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
             Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),

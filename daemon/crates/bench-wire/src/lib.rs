@@ -24,6 +24,9 @@ pub use layout::{
     OpenInto, PaneOpen, RULES_LOADED, RULES_REJECTED, document_path, placement_rules_path,
 };
 
+pub mod hook;
+pub use hook::{HookArgs, HookReply};
+
 mod sessions;
 pub use sessions::{
     Activity, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
@@ -151,6 +154,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "mail/send",
     "mail/list",
     "mail/read",
+    "hook",
     "browser/start",
     "browser/status",
     "browser/stop",
@@ -194,6 +198,8 @@ pub enum Verb {
     MailSend,
     MailList,
     MailRead,
+    /// The sensor (#358): an agent's hook reports an event; the answer carries its mail.
+    Hook,
     BrowserStart,
     BrowserStatus,
     BrowserStop,
@@ -219,6 +225,7 @@ impl Verb {
             "mail/send" => Some(Verb::MailSend),
             "mail/list" => Some(Verb::MailList),
             "mail/read" => Some(Verb::MailRead),
+            "hook" => Some(Verb::Hook),
             "browser/start" => Some(Verb::BrowserStart),
             "browser/status" => Some(Verb::BrowserStatus),
             "browser/stop" => Some(Verb::BrowserStop),
@@ -699,7 +706,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            35,
+            36,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
