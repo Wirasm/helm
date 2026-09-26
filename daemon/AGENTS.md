@@ -50,6 +50,10 @@ knows nor needs the Rust toolchain, in either direction.
   and booting from it.
 - `crates/bench` — the CLI, the one agent-facing surface, and the attach client. `bench log`
   is the one verb that never opens the socket: it reads a transcript file directly.
+- **benchd runs as a login agent** (`com.wirasm.benchd`, `scripts/benchd-agent.sh`, #407). To
+  restart the live one, `launchctl kickstart -k gui/$(id -u)/com.wirasm.benchd`; starting a
+  second benchd by hand beside it is refused at the socket and leaves launchd retrying. Tests and
+  proofs use a suite or `BENCH_DIR`, never the agent.
 - There is deliberately **no root `Cargo.toml`** in the repo: `cargo` at the repo root
   fails loudly instead of half-working.
 

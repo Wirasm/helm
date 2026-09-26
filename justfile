@@ -23,3 +23,13 @@ release-resume session-id *args:
 # Options: [--no-push] [since YYYY-MM-DD, default yesterday]; scripts/day.sh has the details.
 day *args:
     @bash scripts/day.sh "$@"
+
+# benchd as a login agent (com.wirasm.benchd): builds bench and benchd, loads the agent, replaces
+# a hand-started benchd, and starts the shared browser. launchd restarts benchd after a crash, and
+# benchd brings the browser back until `bench browser stop`. Only the live instance, never a suite.
+benchd-install *args:
+    @bash scripts/benchd-agent.sh install "$@"
+
+# Unload the benchd login agent and delete its plist. benchd stops with it.
+benchd-uninstall:
+    @bash scripts/benchd-agent.sh uninstall
