@@ -309,10 +309,21 @@ package struct BenchFrame: Codable, Equatable, Sendable {
     package var event: Event
     package var document: BenchDocument?
 
+    package init(event: Event, document: BenchDocument?) {
+        self.event = event
+        self.document = document
+    }
+
     package struct Event: Codable, Equatable, Sendable {
         package var seq: UInt64
         package var at: String
         package var kind: String
+
+        package init(seq: UInt64, at: String, kind: String) {
+            self.seq = seq
+            self.at = at
+            self.kind = kind
+        }
     }
 }
 
