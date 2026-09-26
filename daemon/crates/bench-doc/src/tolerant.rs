@@ -13,13 +13,16 @@
 //! - a malformed `agent` costs the pane its resume record, not the pane;
 //! - a malformed `name` costs the pane its name, not the pane;
 //! - a bench left with no panes cannot be repaired: the workspace gets today's one-terminal
-//!   frame, and a shelved bench in that state is dropped.
+//!   frame, and a shelved bench in that state is dropped;
+//! - a drawer keeps the panes it can read; one left with none, or with no readable name, is
+//!   dropped, and an open drawer that did not survive is closed.
 //!
 //! Nothing is lost silently. Every skip and repair comes back as a sentence, so the caller
 //! (benchd's boot, the one-time import) can log it: bench-visible means logged.
 
 use crate::bench::{Bench, Pane};
 use crate::document::Document;
+use crate::drawer::DrawerName;
 use crate::ids::{PaneId, StandardPath};
 use crate::surface::{PaneName, Surface};
 use serde_json::Value;
@@ -128,6 +131,7 @@ impl Document {
             }
         }
         repair_active(&mut value, &kept, &mut notes);
+        repair_drawers(&mut value, &mut notes);
         let document = serde_json::from_value(value).map_err(|e| e.to_string())?;
         Ok(Recovered {
             value: document,
@@ -176,6 +180,64 @@ fn repair_active(value: &mut Value, kept: &[String], notes: &mut Vec<String>) {
         }
     };
     fields.insert("active".into(), active);
+}
+
+/// Each drawer's panes read as a bench's are; a drawer left with none, or with no readable name,
+/// is dropped, and a selection naming a skipped pane moves to the first that survived. Duplicate
+/// names are left for the strict decode to refuse, as duplicate workspace paths are.
+fn repair_drawers(value: &mut Value, notes: &mut Vec<String>) {
+    let Some(fields) = value.as_object_mut() else {
+        return;
+    };
+    let mut kept: Vec<String> = Vec::new();
+    if let Some(drawers) = fields.get_mut("drawers").and_then(Value::as_array_mut) {
+        drawers.retain_mut(|drawer| {
+            let name = drawer
+                .get("name")
+                .and_then(Value::as_str)
+                .and_then(|raw| DrawerName::new(raw).ok())
+                .map(|n| n.as_str().to_string());
+            let Some(name) = name else {
+                notes.push(format!(
+                    "a drawer was dropped: it has no readable name ({drawer})"
+                ));
+                return false;
+            };
+            let Some(panes) = drawer.get_mut("panes").and_then(Value::as_array_mut) else {
+                notes.push(format!("drawer {name}: dropped — it holds no panes"));
+                return false;
+            };
+            let taken = std::mem::take(panes);
+            *panes = taken
+                .into_iter()
+                .filter_map(|pane| repair(pane, notes))
+                .collect();
+            let ids: Vec<Value> = panes.iter().filter_map(|p| p.get("id").cloned()).collect();
+            let Some(first) = ids.first().cloned() else {
+                notes.push(format!(
+                    "drawer {name}: dropped — none of its panes could be read"
+                ));
+                return false;
+            };
+            if !drawer.get("selected").is_some_and(|id| ids.contains(id)) {
+                notes.push(format!(
+                    "drawer {name}: its selected pane could not be read — it shows {first} instead"
+                ));
+                drawer["selected"] = first;
+            }
+            kept.push(name);
+            true
+        });
+    }
+    let open = fields.get("open_drawer").and_then(Value::as_str);
+    if let Some(open) = open
+        && !kept.iter().any(|k| k == open)
+    {
+        notes.push(format!(
+            "the open drawer {open} is not one that could be read — no drawer is open"
+        ));
+        fields.remove("open_drawer");
+    }
 }
 
 fn to_value(bench: &Bench) -> Value {

@@ -2482,6 +2482,92 @@ fn a_follower_that_stops_reading_never_parks_the_daemon() {
     );
 }
 
+/// #356: an agent's pane lands in a drawer and badges it, with the operator's keyboard and
+/// every workspace exactly where they were; only the operator opens it; and the drawer comes
+/// back from `bench.json` after a restart.
+#[test]
+fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
+    let home = TestHome::claim("drawer");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (_, _, held) = working_bench(&daemon.socket);
+    let get = |socket: &Path| {
+        ok_data(layout(
+            socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]
+            .clone()
+    };
+    let workspaces = get(&daemon.socket)["workspaces"].clone();
+    let mut reader = follow(&daemon.socket);
+    read_frame(&mut reader);
+
+    let pushed = ok_data(layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "drawer": "notes", "surface": { "kind": "canvas", "source": { "kind": "file", "path": "/tmp/m4-proof/drawers.md" } } }),
+        None,
+        false,
+    ));
+    assert_eq!(pushed["changed"], true, "{pushed}");
+    assert_eq!(pushed["focused_pane_before"], held.as_str());
+    assert_eq!(
+        pushed["focused_pane_after"],
+        held.as_str(),
+        "the keyboard stayed"
+    );
+    let frame = read_frame(&mut reader);
+    assert_eq!(frame["event"]["kind"], "bench/changed");
+    let drawer = &frame["document"]["drawers"][0];
+    assert_eq!(drawer["name"], "notes");
+    assert_eq!(drawer["badged"], true, "the operator is told: {frame}");
+    assert_eq!(drawer["selected"], pushed["pane_created"]);
+    assert!(
+        frame["document"].get("open_drawer").is_none(),
+        "and nothing opened"
+    );
+    assert_eq!(
+        frame["document"]["workspaces"], workspaces,
+        "no workspace moved"
+    );
+
+    // The CLI speaks for an agent, and opening a drawer is the operator's focus.
+    let refused = bench(&home.dir, &["drawer", "toggle", "notes"]);
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(refused.stderr.contains("--asked"), "{}", refused.stderr);
+
+    let opened = ok_data(layout(
+        &daemon.socket,
+        "drawer/toggle",
+        serde_json::json!({ "drawer": "notes" }),
+        operator(),
+        false,
+    ));
+    assert_eq!(opened["focused_pane_after"], pushed["pane_created"]);
+    let document = get(&daemon.socket);
+    assert_eq!(document["open_drawer"], "notes");
+    assert_eq!(document["drawers"][0]["badged"], false, "opening clears it");
+    assert_eq!(
+        document["workspaces"], workspaces,
+        "opening a drawer re-lays-out nothing"
+    );
+    drop(daemon);
+
+    let daemon = DaemonGuard::start(&home.dir, None);
+    assert_eq!(
+        get(&daemon.socket),
+        document,
+        "the drawer came back from bench.json"
+    );
+    let record: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(home.dir.join(".bench").join("bench.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["version"], bench_wire::DOCUMENT_RECORD_VERSION);
+}
+
 #[test]
 fn an_unreadable_bench_json_is_moved_aside_and_the_daemon_starts_empty() {
     let home = TestHome::claim("m4-bad");

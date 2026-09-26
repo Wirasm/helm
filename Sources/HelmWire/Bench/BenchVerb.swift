@@ -73,8 +73,9 @@ package enum BenchVerb: Equatable, Sendable {
     case workspaceUnshelve(path: String)
     case workspaceImport(BenchDocument)
     /// A new pane showing `surface`, placed by benchd's rules; `workspace` nil means the active
-    /// one.
-    case paneOpen(workspace: String? = nil, surface: Surface)
+    /// one. `drawer` names the destination outright: the pane goes in that drawer, badging it
+    /// unless the operator asked.
+    case paneOpen(workspace: String? = nil, drawer: String? = nil, surface: Surface)
     /// A terminal unless a surface is named.
     case paneSplit(workspace: String? = nil, direction: BenchSplit, surface: Surface? = nil)
     case paneClose(UUID)
@@ -86,6 +87,9 @@ package enum BenchVerb: Equatable, Sendable {
     case focusSlot(UUID)
     case focusStep(workspace: String? = nil, direction: BenchDirection)
     case layoutResize(BenchDivider, fraction: Double)
+    /// Show a drawer over the bench, or hide it if it is the one shown. `surface` is what a
+    /// drawer that does not exist yet starts with. Opening is the operator's focus.
+    case drawerToggle(name: String, surface: Surface? = nil)
 
     /// The wire name, which is also the request's `verb`.
     package var name: String {
@@ -107,6 +111,7 @@ package enum BenchVerb: Equatable, Sendable {
         case .focusSlot: "focus/slot"
         case .focusStep: "focus/step"
         case .layoutResize: "layout/resize"
+        case .drawerToggle: "drawer/toggle"
         }
     }
 }
@@ -131,7 +136,7 @@ package struct BenchRequest: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case id, verb, args, by, asked }
     private enum ArgKeys: String, CodingKey {
         case path, document, workspace, surface, direction, pane, to, name, agent, slot, divider,
-            fraction
+            fraction, drawer
     }
     private enum StepKeys: String, CodingKey { case step }
     private enum DividerKeys: String, CodingKey { case between, member, against }
@@ -154,8 +159,9 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             try a.encode(path, forKey: .path)
         case let .workspaceImport(document):
             try a.encode(document, forKey: .document)
-        case let .paneOpen(workspace, surface):
+        case let .paneOpen(workspace, drawer, surface):
             try a.encodeIfPresent(workspace, forKey: .workspace)
+            try a.encodeIfPresent(drawer, forKey: .drawer)
             try a.encode(surface, forKey: .surface)
         case let .paneSplit(workspace, direction, surface):
             try a.encodeIfPresent(workspace, forKey: .workspace)
@@ -192,6 +198,9 @@ package struct BenchRequest: Codable, Equatable, Sendable {
                 try d.encode(against, forKey: .against)
             }
             try a.encode(fraction, forKey: .fraction)
+        case let .drawerToggle(name, surface):
+            try a.encode(name, forKey: .drawer)
+            try a.encodeIfPresent(surface, forKey: .surface)
         }
     }
 
@@ -221,6 +230,7 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case "pane/open":
             verb = .paneOpen(
                 workspace: try a.decodeIfPresent(String.self, forKey: .workspace),
+                drawer: try a.decodeIfPresent(String.self, forKey: .drawer),
                 surface: try a.decode(Surface.self, forKey: .surface))
         case "pane/split":
             verb = .paneSplit(
@@ -251,6 +261,10 @@ package struct BenchRequest: Codable, Equatable, Sendable {
                 ? .slots(member: member, against: against)
                 : .columns(member: member, against: against)
             verb = .layoutResize(divider, fraction: try a.decode(Double.self, forKey: .fraction))
+        case "drawer/toggle":
+            verb = .drawerToggle(
+                name: try a.decode(String.self, forKey: .drawer),
+                surface: try a.decodeIfPresent(Surface.self, forKey: .surface))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .verb, in: c, debugDescription: "not a layout verb: \(name)")

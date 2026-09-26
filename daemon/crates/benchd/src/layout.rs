@@ -67,7 +67,7 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
     let by = req.by.clone().unwrap_or_else(Actor::agent);
     let focus = Actor::focus(&by, req.asked);
     let mut next = core.bench.document.clone();
-    let before = focused_pane(&next);
+    let before = next.focused_pane();
     let outcome = match apply(&mut next, &core.bench.rules, &verb, focus, by.caller()) {
         Ok(o) => o,
         Err(refusal) => return reply(Status::Refused, Some(refusal.to_string()), None),
@@ -78,7 +78,7 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
         pane_created: outcome.created,
         pane: outcome.pane,
         focused_pane_before: before,
-        focused_pane_after: focused_pane(&next),
+        focused_pane_after: next.focused_pane(),
     };
     if !report.changed {
         return reply(Status::Ok, None, Some(json!(report)));
@@ -124,14 +124,6 @@ pub fn document_at(core: &Core) -> DocumentAt {
         seq: core.bench.seq,
         document: core.bench.document.clone(),
     }
-}
-
-/// The pane holding the operator's keyboard: the active workspace's focused pane.
-fn focused_pane(document: &Document) -> Option<PaneId> {
-    document
-        .active_workspace()
-        .and_then(|w| w.bench.focused_pane())
-        .map(|p| p.id)
 }
 
 fn apply(
@@ -184,7 +176,28 @@ fn apply(
             doc.import(document.clone())?;
             Ok(Outcome::default())
         }
-        LayoutVerb::PaneOpen { workspace, surface } => doc.edit(on(workspace), focus, |bench| {
+        LayoutVerb::PaneOpen {
+            drawer: Some(drawer),
+            surface,
+            ..
+        } => {
+            let pane = Pane::new(surface.clone());
+            let id = pane.id;
+            let landed = doc.place_in_drawer(drawer, pane, focus)?;
+            Ok(if landed == id {
+                created(id)
+            } else {
+                Outcome {
+                    created: None,
+                    pane: Some(landed),
+                }
+            })
+        }
+        LayoutVerb::PaneOpen {
+            workspace,
+            drawer: None,
+            surface,
+        } => doc.edit(on(workspace), focus, |bench| {
             let placement = rules.place(bench, surface, caller);
             if let bench_doc::Placement::Existing(open) = placement {
                 bench.place(Pane::new(surface.clone()), placement, focus)?;
@@ -208,12 +221,8 @@ fn apply(
             bench.split(*direction, pane, focus)?;
             Ok(created(id))
         }),
-        LayoutVerb::PaneClose { pane } => doc
-            .edit(Target::Pane(*pane), focus, |b| b.close(*pane))
-            .map(|()| Outcome::default()),
-        LayoutVerb::PaneShow { pane } => doc
-            .edit(Target::Pane(*pane), focus, |b| b.show(*pane, focus))
-            .map(|()| Outcome::default()),
+        LayoutVerb::PaneClose { pane } => doc.close_pane(*pane, focus).map(|()| Outcome::default()),
+        LayoutVerb::PaneShow { pane } => doc.show_pane(*pane, focus).map(|()| Outcome::default()),
         LayoutVerb::PaneMove {
             pane,
             to: MoveTo::Step(direction),
@@ -223,12 +232,10 @@ fn apply(
             })
             .map(|_| Outcome::default()),
         LayoutVerb::PaneName { pane, name } => doc
-            .edit(Target::Pane(*pane), focus, |b| b.name(*pane, name.clone()))
+            .name_pane(*pane, name.clone(), focus)
             .map(|_| Outcome::default()),
         LayoutVerb::PaneRecord { pane, agent } => doc
-            .edit(Target::Pane(*pane), focus, |b| {
-                b.record_agent(*pane, agent.clone())
-            })
+            .record_agent(*pane, agent.clone(), focus)
             .map(|()| Outcome::default()),
         LayoutVerb::FocusSlot { slot } => doc
             .edit(Target::Slot(*slot), focus, |b| b.focus_slot(*slot))
@@ -254,6 +261,12 @@ fn apply(
                 })
                 .map(|()| Outcome::default()),
         },
+        LayoutVerb::DrawerToggle { drawer, surface } => {
+            match doc.toggle_drawer(drawer, surface.clone(), focus)? {
+                Some(id) => Ok(created(id)),
+                None => Ok(Outcome::default()),
+            }
+        }
     }
 }
 

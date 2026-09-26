@@ -3,8 +3,8 @@
 //! travel and where they are kept.
 
 use bench_doc::{
-    ColumnId, Direction, Document, PaneId, PaneName, ResumableAgent, SlotId, Split, StandardPath,
-    Surface,
+    ColumnId, Direction, Document, DrawerName, PaneId, PaneName, ResumableAgent, SlotId, Split,
+    StandardPath, Surface,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -87,10 +87,16 @@ pub enum LayoutVerb {
     /// A new pane showing `surface`, placed by the rules. A terminal gets a fresh id; a
     /// canvas or the browser already showing is brought forward (or, for an agent, left
     /// where it is).
+    ///
+    /// `drawer` names the destination outright and bypasses the rules: the pane goes in that
+    /// drawer, which is created if it has none. An agent's pane badges it; only the operator's
+    /// opens it. A drawer belongs to no workspace, so `workspace` means nothing beside it.
     #[serde(rename = "pane/open")]
     PaneOpen {
         #[serde(default)]
         workspace: Option<StandardPath>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drawer: Option<DrawerName>,
         surface: Surface,
     },
     /// ⌘D / ⌘⇧D. A terminal unless a surface is named.
@@ -127,6 +133,15 @@ pub enum LayoutVerb {
     },
     #[serde(rename = "layout/resize")]
     LayoutResize { divider: Divider, fraction: f64 },
+    /// Show a drawer over the bench, or hide it if it is the one shown. `surface` is what a
+    /// drawer that does not exist yet starts with; without one, opening it is refused. Opening
+    /// is the operator's focus, so an agent needs `asked`.
+    #[serde(rename = "drawer/toggle")]
+    DrawerToggle {
+        drawer: DrawerName,
+        #[serde(default)]
+        surface: Option<Surface>,
+    },
 }
 
 /// Where a moved pane goes. Tagged so drag and drop (#178) adds a destination rather than
@@ -166,6 +181,7 @@ pub const LAYOUT_VERBS: &[&str] = &[
     "focus/slot",
     "focus/step",
     "layout/resize",
+    "drawer/toggle",
 ];
 
 /// The event every document change is logged as. One kind, so a follower that only wants
@@ -222,7 +238,9 @@ pub struct DocumentChange {
 }
 
 pub const DOCUMENT_RECORD_FORMAT: &str = "bench.document";
-pub const DOCUMENT_RECORD_VERSION: u64 = 0;
+/// 1: the document gained drawers (#356). An older build refuses a newer record by this number
+/// rather than reading it and dropping the drawers on its next save.
+pub const DOCUMENT_RECORD_VERSION: u64 = 1;
 
 /// `<root>/bench.json`: the document as benchd last wrote it, stamped with the seq of the
 /// event that produced it. The log says what happened; this file says where things are.

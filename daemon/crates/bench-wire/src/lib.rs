@@ -174,6 +174,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "focus/slot",
     "focus/step",
     "layout/resize",
+    "drawer/toggle",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -665,7 +666,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            34,
+            35,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
