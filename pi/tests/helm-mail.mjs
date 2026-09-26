@@ -17,6 +17,7 @@
  * Usage: node pi/tests/helm-mail.mjs <path-to-extension-index.ts>
  */
 
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -26,6 +27,31 @@ const extensionPath = process.argv[2];
 if (!extensionPath) {
 	console.error("usage: node helm-mail.mjs <path-to-extension-index.ts>");
 	process.exit(2);
+}
+
+// **This harness runs on a terminal, and re-runs itself under one when it is not (#417).** A
+// session claims a mailbox only when a host declared it AND it is on a terminal — the pane's own
+// agent, never something a tool call started. The extension asks about ITS OWN process, which
+// here is this one, and this gate is usually run from an agent's tool call, which has none. So
+// the few tests that cannot use `HELM_MAIL_DIR` (which opts in outright) need a real pty, and
+// `/usr/bin/script` is the one every Mac has. Its exit status is the child's.
+const ownTerminal = (() => {
+	try {
+		return execFileSync("/bin/ps", ["-o", "tty=", "-p", String(process.pid)], { encoding: "utf8" }).trim();
+	} catch {
+		return "";
+	}
+})();
+if (ownTerminal === "" || ownTerminal === "??") {
+	if (process.env.HELM_MAIL_TEST_REEXEC) {
+		console.error("not ok - re-ran under /usr/bin/script and still have no terminal; the hosted tests would measure nothing");
+		process.exit(1);
+	}
+	const rerun = spawnSync("/usr/bin/script", ["-q", "/dev/null", process.execPath, ...process.argv.slice(1)], {
+		stdio: ["ignore", "inherit", "inherit"],
+		env: { ...process.env, HELM_MAIL_TEST_REEXEC: "1" },
+	});
+	process.exit(rerun.status ?? 1);
 }
 
 let failures = 0;
@@ -986,7 +1012,12 @@ await test("an isolated instance's session claims where the operator's agents ne
 		HOME: process.env.HOME,
 		HELM_MAIL_DIR: process.env.HELM_MAIL_DIR,
 		HELM_DEFAULTS_SUITE: process.env.HELM_DEFAULTS_SUITE,
+		HELM_PANE: process.env.HELM_PANE,
+		BENCH_SESSION: process.env.BENCH_SESSION,
 	};
+	// A pane's own agent (#417): declared, and on this harness's terminal.
+	process.env.HELM_PANE = "620BCA56-782F-4230-AFD5-BFAA30D1BF18";
+	delete process.env.BENCH_SESSION;
 	delete process.env.HELM_MAIL_DIR;
 	process.env.HOME = home;
 	process.env.HELM_DEFAULTS_SUITE = "drivetest";
@@ -1017,7 +1048,12 @@ await test("and with no suite set it claims in the shared ~/.helm/mail, as it al
 		HOME: process.env.HOME,
 		HELM_MAIL_DIR: process.env.HELM_MAIL_DIR,
 		HELM_DEFAULTS_SUITE: process.env.HELM_DEFAULTS_SUITE,
+		HELM_PANE: process.env.HELM_PANE,
+		BENCH_SESSION: process.env.BENCH_SESSION,
 	};
+	// A pane's own agent (#417): declared, and on this harness's terminal.
+	process.env.HELM_PANE = "620BCA56-782F-4230-AFD5-BFAA30D1BF18";
+	delete process.env.BENCH_SESSION;
 	delete process.env.HELM_MAIL_DIR;
 	// The control is "no suite", not "whatever suite this gate happens to be running inside".
 	delete process.env.HELM_DEFAULTS_SUITE;
@@ -1033,6 +1069,47 @@ await test("and with no suite set it claims in the shared ~/.helm/mail, as it al
 			`claimed nothing under ~/.helm/mail: ${messages[0]}`,
 		);
 		check(!fs.existsSync(path.join(home, ".helm", "mail-drivetest")), "claimed in a suite's mailroom with no suite set");
+	} finally {
+		restoreEnv(restore);
+	}
+});
+
+/**
+ * #417: a session nothing hosts claims nothing, and says nothing. Before this every pi session on
+ * the machine claimed — 1,902 of the operator's 12,497 mailboxes were pi's, most from SDK runs in
+ * temp directories. This harness IS on a terminal (see the top of the file), so the only thing
+ * missing here is the host's declaration, and that alone must be enough to claim nothing.
+ * The inherited-declaration-without-a-terminal case is `claimsAMailbox`'s, and
+ * `hooks/mailbox-conformance.mjs` runs this file's copy of it over that matrix.
+ */
+await test("a session no host declared claims nothing and announces nothing (#417)", () => {
+	freshRoot();
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "helm-mail-home-"));
+	roots.push(home);
+	const restore = {
+		HOME: process.env.HOME,
+		HELM_MAIL_DIR: process.env.HELM_MAIL_DIR,
+		HELM_DEFAULTS_SUITE: process.env.HELM_DEFAULTS_SUITE,
+		HELM_PANE: process.env.HELM_PANE,
+		BENCH_SESSION: process.env.BENCH_SESSION,
+	};
+	for (const name of ["HELM_MAIL_DIR", "HELM_DEFAULTS_SUITE", "HELM_PANE", "BENCH_SESSION"]) delete process.env[name];
+	process.env.HOME = home;
+	try {
+		const { pi, record } = recordingPi();
+		factory(pi);
+		const { ctx, messages } = recordingCtx("019fc78c-ec03-76f3-8e87-f0fc911898cf", "/tmp/archon-wait-released");
+		capturingStderr(() => record.handlers.get("session_start")({ reason: "startup" }, ctx));
+		check(!fs.existsSync(path.join(home, ".helm")), "an undeclared session created ~/.helm");
+		check(messages.length === 0, `an undeclared session announced: ${JSON.stringify(messages)}`);
+		// The control: the same session, declared, does claim — so the absence above is the rule
+		// and not a harness that cannot claim at all.
+		process.env.HELM_PANE = "620BCA56-782F-4230-AFD5-BFAA30D1BF18";
+		const declared = recordingPi();
+		factory(declared.pi);
+		const again = recordingCtx("019fc78c-ec03-76f3-8e87-f0fc911898cf", "/tmp/archon-wait-released");
+		capturingStderr(() => declared.record.handlers.get("session_start")({ reason: "startup" }, again.ctx));
+		check(fs.existsSync(path.join(home, ".helm", "mail")), `the same session, declared, claimed nothing: ${again.messages[0]}`);
 	} finally {
 		restoreEnv(restore);
 	}

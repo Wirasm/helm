@@ -181,5 +181,52 @@
       }
     }
   ],
-  "active": "/Users/operator/Projects/helm"
+  "active": "/Users/operator/Projects/helm",
+  "drawers": [
+    {
+      "name": "notes",
+      "panes": [
+        {
+          "id": "00000010-0000-4000-8000-000000000010",
+          "surface": {
+            "kind": "canvas",
+            "source": {
+              "kind": "file",
+              "path": "/Users/operator/.prp/helm/research/drawers.md"
+            }
+          }
+        }
+      ],
+      "selected": "00000010-0000-4000-8000-000000000010",
+      "badged": true
+    },
+    {
+      "name": "scratch",
+      "panes": [
+        {
+          "id": "00000011-0000-4000-8000-000000000011",
+          "surface": {
+            "kind": "terminal"
+          }
+        },
+        {
+          "id": "00000012-0000-4000-8000-000000000012",
+          "surface": {
+            "kind": "canvas",
+            "source": {
+              "kind": "file",
+              "path": "/Users/operator/.prp/helm/notes/scratch.md"
+            }
+          },
+          "name": {
+            "source": "chosen",
+            "text": "scratch"
+          }
+        }
+      ],
+      "selected": "00000012-0000-4000-8000-000000000012",
+      "badged": false
+    }
+  ],
+  "open_drawer": "scratch"
 }

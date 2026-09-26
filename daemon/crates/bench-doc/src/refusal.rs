@@ -6,6 +6,7 @@
 //! is not the operation's ordinary answer is a refusal with a reason, and the bench is left
 //! exactly as it was.
 
+use crate::drawer::DrawerName;
 use crate::ids::{ColumnId, PaneId, SlotId, StandardPath};
 use std::fmt;
 
@@ -26,6 +27,15 @@ pub enum Refusal {
     NothingShelved(StandardPath),
     DocumentNotEmpty {
         workspaces: usize,
+    },
+    /// Opening a drawer that holds nothing, with nothing named to put in it.
+    EmptyDrawer(DrawerName),
+    /// Drawer names are one namespace across the document.
+    DuplicateDrawer(DrawerName),
+    /// A bench verb (a move, a resize, a focus) named a pane that lives in a drawer.
+    PaneInDrawer {
+        pane: PaneId,
+        drawer: DrawerName,
     },
     /// The focus rule (bench-architecture.md): a change that would move the operator's
     /// focus, asked for by someone who did not say the operator asked.
@@ -59,6 +69,15 @@ impl fmt::Display for Refusal {
             Refusal::DocumentNotEmpty { workspaces } => write!(
                 f,
                 "an import lands only in an empty document, and this one holds {workspaces} workspace(s)"
+            ),
+            Refusal::EmptyDrawer(name) => write!(
+                f,
+                "drawer {name} holds nothing — name a surface to open it with"
+            ),
+            Refusal::DuplicateDrawer(name) => write!(f, "drawer {name} appears twice"),
+            Refusal::PaneInDrawer { pane, drawer } => write!(
+                f,
+                "pane {pane} is in drawer {drawer}, and this verb acts on the bench"
             ),
             Refusal::WouldMoveFocus => write!(
                 f,

@@ -19,6 +19,7 @@ import SwiftUI
 /// *"act on the focused pane"* and focus is the bench's now. `AGENTS.md`'s rule is exact: a
 /// subscription that has to work while its view is closed belongs on the model.
 @MainActor
+// swiftlint:disable:next type_body_length - legacy (#418): 450 lines, limit 350
 final class WorkbenchModel: ObservableObject {
     /// Nothing open, a question waiting on the operator, or a bench — as one value, so no
     /// combination of the two can be constructed that `MountState` does not name. Its header

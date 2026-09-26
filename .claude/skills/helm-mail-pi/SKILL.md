@@ -11,8 +11,8 @@ disable-model-invocation: true
 `~/.helm/mail/<handle>/`, and writing a JSON file into someone's directory is the whole of sending.
 No daemon, no helm required — `ls` and `cat` are a complete reader.
 
-You are in **pi**. The `helm-mail` extension already claimed your mailbox, watches it, and wakes you
-when mail arrives. **You only need this skill to SEND.** The Claude Code side is `helm-mail-cc`, and
+You are in **pi**. In a helm pane or a benchd session, the `helm-mail` extension already claimed your
+mailbox, watches it, and wakes you when mail arrives; a session nothing hosts claims none (#417). **You only need this skill to SEND.** The Claude Code side is `helm-mail-cc`, and
 it has to do more work — mention that if you are asked about the difference.
 
 **Every snippet below opens with these three lines, and they are not boilerplate.**

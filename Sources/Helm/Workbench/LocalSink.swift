@@ -44,11 +44,15 @@ final class LocalSink: VerbSink {
     }
 
     @discardableResult
+    // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 24, limit 15
     func send(_ verb: BenchVerb, by actor: BenchActor, asked: Bool) -> Pane.ID? {
         let takesFocus = actor == .operatorGesture || asked
         switch verb {
         case let .paneOpen(workspace, surface):
             return open(surface, in: workspace, takesFocus: takesFocus)
+        case .paneOpenInDrawer, .drawerToggle:
+            // Drawers live in benchd's document; the local bench has none (#356).
+            return nil
         case let .paneSplit(workspace, direction, surface):
             // A split holds a terminal; helm has no split for any other kind yet.
             guard isMounted(workspace), surface == nil || isTerminal(surface) else { return nil }

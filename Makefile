@@ -71,6 +71,7 @@ format:
 
 lint:
 	scripts/check-format.sh
+	scripts/check-size.sh
 
 clean:
 	swift package clean

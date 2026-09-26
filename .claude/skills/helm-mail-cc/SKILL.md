@@ -187,8 +187,10 @@ a fresh session in the same process, claims a fresh handle, and abandons the old
 `owner.json` for your pid returns **both**, with nothing to choose between them — that happened, and
 the older box is a ghost that `kill -0` still calls live. The session id has one answer.
 
-If it prints nothing, no mailbox is yours yet — a session started before the hooks were wired. Say
-so rather than adopting the closest-looking handle.
+If it prints nothing, no mailbox is yours — a session started before the hooks were wired, or one
+nothing hosts: since #417 only a session in a helm pane or a benchd session, on its terminal, claims
+one, so a session a tool call started never does. Say so rather than adopting the
+closest-looking handle.
 
 ## Sending
 

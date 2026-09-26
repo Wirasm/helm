@@ -20,4 +20,24 @@ edition = "2024"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The operator's rules files (#356). Pinned exactly: a rules file is his, and a parser that
+# changes what it accepts under him is a silent change to his bench.
+toml = { version = "=1.1.6", default-features = false, features = ["parse", "serde", "std"] }
 time = { version = "0.3", features = ["formatting"] }
+
+# Size and complexity limits (#418), at clippy's defaults: cognitive complexity 25, 100
+# lines per function. `-D warnings` in test.sh makes all three errors.
+#
+# A function that was already over a limit when this landed carries
+# `#[expect(clippy::too_many_lines, reason = "legacy (#418): 588 lines, limit 100")]`.
+# Never add one to new code: split the function. Once a marked function is back under its
+# limit the expectation is unfulfilled, which fails the build until the attribute is
+# deleted, so the set of markers only shrinks. Known gap: an `#[expect]` is on or off, so a
+# marked function can grow without failing. Its recorded value makes that visible in review.
+[workspace.lints.clippy]
+cognitive_complexity = "warn"
+too_many_lines = "warn"
+
+[workspace.lints.rust]
+# Already warn by default; stated so the ratchet above does not depend on a default.
+unfulfilled_lint_expectations = "warn"
