@@ -2,7 +2,7 @@ import AppKit
 
 /// One thing the status bar says you can press.
 ///
-/// Both halves come from the key table (`KeyBindings.all`): `keys` is **rendered** from the rows,
+/// Both halves come from the key table in force (`Keymap.table`): `keys` is **rendered** from the rows,
 /// never typed, and `label` is the row's own `hint`. helm binds a few dozen keys and nothing in
 /// the window mentioned any of them, so the operator could not open a second pane without
 /// reading source — but a hand-written list of glyphs would be a second copy of the keymap, and
@@ -34,11 +34,9 @@ enum KeyHints {
     ///
     /// In the order each label first appears in the table.
     ///
-    /// `rows` is a parameter rather than a read of `KeyBindings.all` so the rules are exercisable
+    /// `rows` is the table in force, passed rather than read so the rules are exercisable
     /// against a two-row table instead of the real one.
-    static func visible(
-        terminalFocused: Bool, in rows: [KeyBinding] = KeyBindings.all
-    ) -> [KeyHint] {
+    static func visible(terminalFocused: Bool, in rows: [KeyBinding]) -> [KeyHint] {
         var labels: [String] = []
         for label in rows.compactMap(\.hint) where !labels.contains(label) {
             labels.append(label)
@@ -102,9 +100,7 @@ enum KeyGlyph {
     ///
     /// The first row that binds the action, which for an action bound once is the only one.
     /// nil when nothing binds it or its trigger has no glyph.
-    static func binding(
-        for action: KeyBinding.Action, in rows: [KeyBinding] = KeyBindings.all
-    ) -> String? {
+    static func binding(for action: KeyBinding.Action, in rows: [KeyBinding]) -> String? {
         guard let row = rows.first(where: { $0.action == action }),
             let key = trigger(row.trigger)
         else { return nil }

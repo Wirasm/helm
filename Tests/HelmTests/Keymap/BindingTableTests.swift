@@ -1,5 +1,6 @@
 import AppKit
 import HelmWire
+import SwiftUI
 import XCTest
 
 @testable import Helm
@@ -15,7 +16,7 @@ final class BindingTableTests: XCTestCase {
     ) -> KeyBinding.Action? {
         KeyBindings.match(
             characters: characters, keyCode: keyCode, modifiers: modifiers,
-            terminalFocused: terminalFocused)?.action
+            terminalFocused: terminalFocused, in: KeyBindings.all)?.action
     }
 
     // MARK: - Focus rules (the reason the map cannot be a dictionary)
@@ -160,8 +161,23 @@ final class BindingTableTests: XCTestCase {
                     characters, keyCode: keyCode, row.modifiers,
                     terminalFocused: row.when == .terminalFocused),
                 row.action,
-                "menu item \(row.menu!.title) does not fire its own keystroke's action")
+                "menu item \(row.menu!) does not fire its own keystroke's action")
         }
+    }
+
+    /// A menu item prints its row's own chord, derived rather than spelled a second time, so
+    /// the menu cannot name a key that the row does not bind.
+    func testTheMenuPrintsEachRowsOwnChord() throws {
+        func shortcut(_ title: String) throws -> KeyboardShortcut? {
+            try XCTUnwrap(KeyBindings.all.first { $0.menu == title }, title).menuShortcut
+        }
+        XCTAssertEqual(
+            try shortcut("Increase Font Size"), KeyboardShortcut("+", modifiers: .command))
+        XCTAssertEqual(
+            try shortcut("Focus Left"),
+            KeyboardShortcut(.leftArrow, modifiers: [.command, .option]))
+        XCTAssertEqual(
+            try shortcut("Shared Browser"), KeyboardShortcut("b", modifiers: [.command, .shift]))
     }
 
     /// `match` returns the FIRST row that fits, so two rows that could both match one keystroke

@@ -28,6 +28,8 @@ struct StatusBarView: View {
     @StateObject private var focus = TerminalFocusWatch()
     /// Same reasoning, and the same lifetime: a badge nobody can see is a poll nobody needs.
     @StateObject private var builds = BuildUpdateModel()
+    /// The keys in force, and why the operator's keymap file was refused, if it was.
+    @ObservedObject private var keymap = Keymap.shared
 
     var body: some View {
         HStack(spacing: 12) {
@@ -51,7 +53,9 @@ struct StatusBarView: View {
     private var hints: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 13) {
-                ForEach(KeyHints.visible(terminalFocused: focus.terminalFocused)) { hint in
+                ForEach(KeyHints.visible(terminalFocused: focus.terminalFocused, in: keymap.table))
+                {
+                    hint in
                     HStack(spacing: 4) {
                         Text(hint.keys).foregroundStyle(Color.textMuted)
                         Text(hint.label).foregroundStyle(Color.textFaint)
@@ -77,6 +81,7 @@ struct StatusBarView: View {
                 BenchStatusBadge(client: client, workbench: workbench)
             }
             isolationBadge
+            keymapBadge
             buildBadge
             if let label = summary.agentLabel {
                 AgentDot(presence: summary.agents)
@@ -111,6 +116,33 @@ struct StatusBarView: View {
                 .padding(.vertical, 1)
                 .background(Color.accent, in: Capsule())
                 .help("Isolated instance — persisting to the \(DefaultsDomain.activeDomain) suite")
+        }
+    }
+
+    /// The operator's keymap file was refused, and the keys are still the last good table.
+    ///
+    /// Says the line and the reason, because a refusal nobody sees is the silent fallback the
+    /// keymap must never be: the operator saved a key, pressed it, and nothing happened. Clicking
+    /// it opens the file as a canvas beside the bench. Absent while the file is good or missing.
+    @ViewBuilder
+    private var keymapBadge: some View {
+        if let problem = keymap.problem, let file = keymap.file {
+            Button {
+                workbench.send(.paneOpen(surface: .canvas(path: file.path)), by: .operatorGesture)
+            } label: {
+                Text(problem.sentence)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 360)
+                    .foregroundStyle(Color.surface)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.attention, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help(
+                "\(file.path) was not loaded, so the last good keys are in force. "
+                    + "\(problem.sentence). Click to open it.")
         }
     }
 

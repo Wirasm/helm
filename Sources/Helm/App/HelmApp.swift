@@ -54,6 +54,7 @@ struct HelmApp: App {
             NSApplication.shared.activate(ignoringOtherApps: true)
         }
         KeymapMonitor.install()
+        Task { await Keymap.shared.watch() }
     }
 
     var body: some Scene {
@@ -81,7 +82,7 @@ struct HelmApp: App {
                 }
                 .pickerStyle(.menu)
             }
-            CommandGroup(after: .toolbar) { KeyBindingMenu() }
+            CommandGroup(after: .toolbar) { KeyBindingMenu(keymap: .shared) }
         }
     }
 }

@@ -7,8 +7,9 @@ import AppKit
 /// embedded it swallows all of them. A local monitor runs before any view's key handling, so
 /// helm's bindings always win; consumed events (returning nil) never reach the pty.
 ///
-/// All this does is ask `KeyBindings.match` and hand the row's action to `Actions`. The table is
-/// data, so the decisions live there, where they can be tested.
+/// All this does is ask `KeyBindings.match` against the table in force (`Keymap`) and hand the
+/// row's action to `Actions`. The table is data, so the decisions live there, where they can be
+/// tested.
 enum KeymapMonitor {
     static func install() {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -20,7 +21,8 @@ enum KeymapMonitor {
                 guard
                     let row = KeyBindings.match(
                         characters: characters, keyCode: keyCode, modifiers: modifiers,
-                        terminalFocused: TerminalManager.shared.anyTerminalHasFocus)
+                        terminalFocused: TerminalManager.shared.anyTerminalHasFocus,
+                        in: Keymap.shared.table)
                 else { return false }
                 Actions.perform(row.action)
                 return true

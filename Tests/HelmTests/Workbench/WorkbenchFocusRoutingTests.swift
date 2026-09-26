@@ -182,7 +182,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
         for (row, direction) in rows {
             let menu = try XCTUnwrap(
                 row.menu, "a focus row that is not in the menu cannot be clicked")
-            XCTAssertEqual(menu.title, "Focus \(direction.rawValue.capitalized)")
+            XCTAssertEqual(menu, "Focus \(direction.rawValue.capitalized)")
         }
     }
 
