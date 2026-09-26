@@ -140,6 +140,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             }
             return Ok(json!(HookReply::default()));
         }
+        follow(&mut c, &args, &key).map_err(Refusal::Failed)?;
         if !c.agents.contains_key(&key) {
             let agent = address(&mut c, &args, &key)
                 .map_err(Refusal::Failed)?
@@ -230,6 +231,41 @@ fn hand_out(
         inbox: None,
         rule: None,
     })
+}
+
+/// A claimed session reporting from a pane other than the one its record names was resumed
+/// there (`claude --resume` in a new pane): the record moves to that pane and keeps the
+/// handle, so `mail/who` answers the pane the session is in now. The move passes the same rule
+/// as a claim, so a detached child that inherited another `HELM_PANE` moves nothing. Runs on
+/// every event, because a session this daemon already holds never reaches [`address`]; the
+/// terminal is probed only when the pane differs.
+fn follow(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<(), String> {
+    let declared_bench = args
+        .bench_session
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty());
+    let Some(pane) = args
+        .pane
+        .as_deref()
+        .and_then(|p| PaneId::parse(p.trim()).ok())
+    else {
+        return Ok(());
+    };
+    let Some(entry) = c.session_records.hosted.iter().find(|h| h.key() == *key) else {
+        return Ok(());
+    };
+    let recorded = match entry.via {
+        HostedVia::Pane { pane, .. } => Some(pane),
+        HostedVia::Bench { .. } => None,
+    };
+    if declared_bench
+        || entry.handle().is_none()
+        || recorded == Some(pane)
+        || !hook::claims_a_mailbox(true, bench_sessions::process::has_terminal(args.pid))
+    {
+        return Ok(());
+    }
+    sessions::record_move(c, key, pane, args.pid)
 }
 
 /// The handle of a session reporting for the first time in this daemon's life, or `None`

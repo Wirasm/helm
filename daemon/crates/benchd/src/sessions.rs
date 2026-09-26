@@ -9,7 +9,7 @@
 //! written, the same order as the layout verbs.
 
 use crate::{Core, now_rfc3339};
-use bench_doc::StandardPath;
+use bench_doc::{PaneId, StandardPath};
 use bench_sessions::{BenchSession, Cache, Inputs};
 use bench_wire::{
     DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
@@ -197,6 +197,38 @@ pub fn record_claim(core: &mut Core, entry: HostedSession, pid: u32) -> Result<(
         Some(i) => core.session_records.hosted[i] = entry,
         None => core.session_records.hosted.push(entry),
     }
+    save_hosted(&core.root, &core.session_records.hosted)
+}
+
+/// A claimed session now in another pane (resumed there): logged as `mail/moved`, then the
+/// entry names the new pane with the same handle, and is written.
+pub fn record_move(
+    core: &mut Core,
+    key: &SessionKey,
+    pane: PaneId,
+    pid: u32,
+) -> Result<(), String> {
+    let Some(i) = core
+        .session_records
+        .hosted
+        .iter()
+        .position(|h| h.key() == *key)
+    else {
+        return Err("a move names a recorded session".into());
+    };
+    let entry = &core.session_records.hosted[i];
+    let Some(handle) = entry.handle().map(str::to_string) else {
+        return Err("a move names a claimed session".into());
+    };
+    let from = entry.via.clone();
+    core.append(
+        "mail/moved",
+        json!({ "handle": handle, "pid": pid, "session": key.id, "harness": key.harness.name(), "from": from, "to": pane }),
+    )?;
+    core.session_records.hosted[i].via = HostedVia::Pane {
+        pane,
+        handle: Some(handle),
+    };
     save_hosted(&core.root, &core.session_records.hosted)
 }
 
