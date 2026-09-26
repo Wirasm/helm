@@ -927,9 +927,14 @@ above and are the easiest to be surprised by:
 **Every change to the bench is a `BenchVerb` sent through one door** (#354).
 `WorkbenchModel.send(_:by:asked:)` is the `VerbSink` every caller uses — a key, a click, a
 drag, a ⌘-clicked link, `push.sh`, the spool — and it says who asked, which is what decides
-focus. Keys are rows of one table, `KeyBindings.all` (`Sources/Helm/Keymap/`), read by the key
-monitor, the menu and the status bar's hints; a row's action is data, a `VerbTemplate` resolved
-against the bench when the key fires or a `LocalAction` that never reaches the document.
+focus. Keys are rows of one table, read by the key monitor, the menu and the status bar's hints;
+a row's action is data, a `VerbTemplate` resolved against the bench when the key fires or a
+`LocalAction` that never reaches the document. The table in force is `Keymap.table`
+(`Sources/Helm/Keymap/`): the built-in `KeyBindings.all` overlaid by the operator's
+`<bench root>/rules/keymap.toml`, reread every second. helm reads that file and nothing writes
+it; a file that does not parse keeps the last good table and puts the line and reason on the
+status bar. `docs/keymap.default.toml` is the built-in table in that format, and
+`KeymapFileTests` fails until it is regenerated after a built-in key changes.
 `LocalActions` in `App/` carries both out. There is no NotificationCenter command bus: do not
 add one. `WorkbenchModel`'s mutation methods each take a `LocalBenchKey`, which only
 `LocalSink` can make, so a direct call from anywhere else does not compile — send the verb. Two sinks take it: `LocalSink` applies it to helm's own

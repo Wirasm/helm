@@ -182,10 +182,17 @@ anything SwiftUI can reach. Two weights of one material, never two materials.
 _Avoid_: blur, vibrancy, frosted (as a noun), calling the chrome's weight "the" glass
 
 **hint**:
-One line the status bar draws saying a key and what it does. Rendered from the key table
-(`KeyBindings.all`), whose rows carry the word as well as the key, so neither is written down
+One line the status bar draws saying a key and what it does. Rendered from the key table in
+force (`Keymap.table`), whose rows carry the word as well as the key, so neither is written down
 twice; which rows get one is a choice, what they are bound to is not.
 _Avoid_: tooltip, help, cheatsheet
+
+**keymap file**:
+`<bench root>/rules/keymap.toml`, the operator's keys. Its rows overlay helm's built-in table
+(`KeyBindings.all`): a row replaces the built-in keys with its chord, `unbind` removes one, and a
+file that does not parse changes nothing. helm reads it; nothing writes it. It sits beside benchd's
+`placement.toml`, which benchd reads and helm does not.
+_Avoid_: keybindings.json, config, shortcuts file
 
 ### What agents produce
 

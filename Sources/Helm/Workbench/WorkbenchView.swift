@@ -111,7 +111,7 @@ struct WorkbenchView: View {
 /// **It offers the action rather than naming a keystroke.** The old copy said "choose a
 /// folder with ⌘⇧O" — a thing to remember, and written backwards besides (macOS prints
 /// modifiers ⌃⌥⇧⌘, so it is ⇧⌘O, which is what the status bar already said). The button is
-/// one click; the key is still shown beside it, rendered from `KeyBindings.all` through
+/// one click; the key is still shown beside it, rendered from the table in force through
 /// `KeyGlyph.binding` so the two can no longer disagree.
 ///
 /// **It asks for the table's own action rather than opening a panel itself**, so the button,
@@ -123,9 +123,12 @@ struct WorkbenchView: View {
 /// with its rhythm collapsed — which is how the issue's capture looked. The horizontal form
 /// is the fallback, not a second design.
 private struct EmptyBench: View {
-    /// nil only if the row is ever removed from the map, in which case the button stands
-    /// alone rather than claiming a key that does not fire.
-    private let keys = KeyGlyph.binding(for: .local(.openWorkspacePanel))
+    /// nil when nothing binds the action (the operator's keymap file can unbind it), in which
+    /// case the button stands alone rather than claiming a key that does not fire.
+    @ObservedObject private var keymap = Keymap.shared
+    private var keys: String? {
+        KeyGlyph.binding(for: .local(.openWorkspacePanel), in: keymap.table)
+    }
 
     var body: some View {
         ViewThatFits(in: .vertical) {

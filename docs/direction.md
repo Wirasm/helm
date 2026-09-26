@@ -211,8 +211,9 @@ Not decisions — things that are true today and shape what is cheap.
   `TerminalManager`, `TerminalStrip`, `GhosttyConfig`).
 - **The source is sliced vertically by feature** — `App/`, `Workspaces/`, `Terminals/`,
   `Canvas/`, `Artifacts/`, `Shared/` — with each vertical owning its own commands, and `App/`
-  reduced to composition. Keyboard shortcuts are a table of values (`KeyBindings`) read by the
-  event monitor, the menu and the status bar's hints. See `AGENTS.md` for the patterns.
+  reduced to composition. Keyboard shortcuts are a table of values (`KeyBindings`, overlaid by the
+  operator's `rules/keymap.toml`) read by the event monitor, the menu and the status bar's hints.
+  See `AGENTS.md` for the patterns.
 - The kild layer was removed on `chore/drop-kild-layer`; what remains is workspaces,
   terminals, artifact rendering, and the app shell.
 - GhosttyKit ships iOS and Catalyst slices alongside macOS.

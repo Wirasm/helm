@@ -37,6 +37,10 @@ let package = Package(
         // shells under it are never touched.
         .package(url: "https://github.com/johnno1962/InjectionNext.git", exact: "2.0.1"),
         .package(url: "https://github.com/krzysztofzablocki/Inject.git", exact: "1.6.0"),
+        // The operator's keymap file (`rules/keymap.toml`, #356). Pure Swift, Codable, no
+        // system dependency, so the Swift gate still needs only the toolchain. Pinned EXACT;
+        // mirrored in project.yml.
+        .package(url: "https://github.com/dduan/TOMLDecoder.git", exact: "0.4.5"),
     ],
     targets: [
         // What crosses the spool's process boundary (#221) — request and result types, and the
@@ -73,6 +77,7 @@ let package = Package(
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),
                 .product(name: "InjectionNext", package: "InjectionNext"),
                 .product(name: "Inject", package: "Inject"),
+                .product(name: "TOMLDecoder", package: "TOMLDecoder"),
             ],
             path: "Sources/Helm",
             resources: [

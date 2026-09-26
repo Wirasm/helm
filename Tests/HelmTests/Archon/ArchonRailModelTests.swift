@@ -44,7 +44,7 @@ final class ArchonRailModelTests: XCTestCase {
         let row = try XCTUnwrap(
             KeyBindings.match(
                 characters: "R", keyCode: 15, modifiers: [.command, .shift],
-                terminalFocused: true))
+                terminalFocused: true, in: KeyBindings.all))
 
         actions.perform(row.action)
 
