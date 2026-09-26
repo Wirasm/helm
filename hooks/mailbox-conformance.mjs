@@ -252,6 +252,7 @@ function extractDecl(source, file, name) {
 }
 
 const IMPORTS = [
+	'import { execFileSync } from "node:child_process";',
 	'import { randomBytes } from "node:crypto";',
 	'import * as fs from "node:fs";',
 	'import * as os from "node:os";',
@@ -325,6 +326,8 @@ const SHARED_NAMES = [
 	"OFF_ENV",
 	"ROOT_ENV",
 	"HANDLE_ENV",
+	"PANE_ENV",
+	"BENCH_SESSION_ENV",
 	"SUITE_ENV",
 	"CANONICAL_DOMAIN",
 	"LEGACY_DOMAIN",
@@ -333,6 +336,8 @@ const SHARED_NAMES = [
 	"OPERATOR_SENDER",
 	"suiteName",
 	"mailRoot",
+	"controllingTerminal",
+	"claimsAMailbox",
 	"slug",
 	"tail",
 	"pidAlive",
@@ -1031,6 +1036,7 @@ async function runConformance({ hooksSource, piSource, handleSource, ownerSource
 	group("the shared surface", () => checkTheSharedSurfaceIsCovered(hooksSource, piSource));
 	group("constants", () => checkTheConstantsAgree(hooks, pi));
 	group("the mail root", () => checkTheMailRootAgrees(hooks, pi, mailRule, suiteRule));
+	group("who claims", () => checkWhoClaimsAgrees(hooks, pi));
 	group("slug/tail", () => checkSlugAndTailAgree(hooks, pi));
 	group("deriveHandle", () => checkDerivationAgrees(hooks, pi));
 	group("the handle alphabet", () => checkSwiftAcceptsWhatTheWritersEmit(hooks, pi, rules));
@@ -1045,6 +1051,72 @@ async function runConformance({ hooksSource, piSource, handleSource, ownerSource
 	group("the operator sender", () => checkTheOperatorSenderAgrees(hooks, pi, swiftSender));
 	group("the deliberate divergences", () => checkTheDeliberateDivergences(hooks, pi));
 	reportTheSwiftRule(rules, schema, mailRule, suiteRule);
+}
+
+/**
+ * WHO GETS A MAILBOX AT ALL — #417. Both writers decide it before claiming, and a drift is either
+ * a hosted agent nobody can address or the leak coming back through one runtime: 12,497 mailboxes,
+ * mostly from Archon's SDK sessions, which inherit `HELM_PANE` from the pane that started them
+ * but not its terminal.
+ */
+const CLAIM_CASES = [
+	{ what: "the pane's own agent: declared, and on the pane's terminal", env: { HELM_PANE: "620BCA56" }, terminal: "ttys002", claims: true },
+	{ what: "a session benchd spawned, on benchd's pty", env: { BENCH_SESSION: "s-1" }, terminal: "ttys009", claims: true },
+	{ what: "a session a pane's agent started from a tool call: the declaration inherited, no terminal (#417)", env: { HELM_PANE: "620BCA56" }, terminal: "", claims: false },
+	{ what: "the same under benchd", env: { BENCH_SESSION: "s-1" }, terminal: "", claims: false },
+	{ what: "a terminal outside helm: Ghostty, Terminal.app", env: {}, terminal: "ttys004", claims: false },
+	{ what: "nothing at all: an SDK session nobody hosts", env: {}, terminal: "", claims: false },
+	{ what: "a blank declaration is no declaration", env: { HELM_PANE: "  ", BENCH_SESSION: "" }, terminal: "ttys002", claims: false },
+	{ what: "an explicit mailroom opts in outright — every test that claims", env: { HELM_MAIL_DIR: "/tmp/helm-conformance-root" }, terminal: "", claims: true },
+	{ what: "and a blank one does not", env: { HELM_MAIL_DIR: " " }, terminal: "", claims: false },
+];
+
+function checkWhoClaimsAgrees(hooks, pi) {
+	let drift = 0;
+	let asked = 0;
+	for (const one of CLAIM_CASES) {
+		const terminal = () => {
+			asked += 1;
+			return one.terminal;
+		};
+		const a = hooks.claimsAMailbox(one.env, terminal);
+		const b = pi.claimsAMailbox(one.env, terminal);
+		if (a !== b || a !== one.claims) {
+			drift += 1;
+			bad(`claimsAMailbox — ${one.what}: expected ${one.claims}, hooks says ${a}, pi says ${b}`);
+		}
+	}
+	check(drift === 0, `both writers claim a mailbox for exactly the hosted sessions, on all ${CLAIM_CASES.length} cases`);
+	// Nobody declared → `ps` is never spawned. The Claude hook runs this on every prompt of every
+	// session on the machine, so the cheap answer has to be the common one.
+	let spawned = 0;
+	for (const module of [hooks, pi]) module.claimsAMailbox({}, () => (spawned += 1, "ttys002"));
+	check(spawned === 0, "and a session no host declared never asks for its terminal");
+
+	// The lookup itself, against real processes. The negative half only: this harness's own
+	// process has a terminal exactly when a person ran the gate from one, so it cannot carry an
+	// assertion either way. `hooks/test.sh` proves the positive end to end, under a real pty.
+	const child = spawnSync(process.execPath, ["-e", `
+		const { spawn } = require("node:child_process");
+		const c = spawn("/bin/sleep", ["5"], { detached: true, stdio: "ignore" });
+		console.log(c.pid); c.unref();`], { encoding: "utf8" });
+	const detached = Number(child.stdout.trim());
+	try {
+		check(
+			hooks.controllingTerminal(detached) === "" && pi.controllingTerminal(detached) === "",
+			"a process started detached, as every tool call is, has no terminal in either runtime",
+		);
+		check(
+			hooks.controllingTerminal(999_999_999) === "" && pi.controllingTerminal(999_999_999) === "",
+			"and neither does a pid that does not exist",
+		);
+	} finally {
+		try {
+			process.kill(detached);
+		} catch {
+			// Already gone; `sleep 5` bounds it either way.
+		}
+	}
 }
 
 /** Run one check group. A throw is that group's failure and nobody else's. */
@@ -1092,7 +1164,7 @@ function checkTheSharedSurfaceIsCovered(hooksSource, piSource) {
 /** The on-disk shape's names and the bounds on another agent's text — #127's numbers. */
 function checkTheConstantsAgree(hooks, pi) {
 	let ran = 0;
-	for (const name of ["NAME", "READ_DIR", "OWNER_FILE", "OFF_ENV", "ROOT_ENV", "HANDLE_ENV", "SUITE_ENV", "CANONICAL_DOMAIN", "LEGACY_DOMAIN", "SUBJECT_MAX", "FROM_MAX", "OPERATOR_SENDER"]) {
+	for (const name of ["NAME", "READ_DIR", "OWNER_FILE", "OFF_ENV", "ROOT_ENV", "HANDLE_ENV", "PANE_ENV", "BENCH_SESSION_ENV", "SUITE_ENV", "CANONICAL_DOMAIN", "LEGACY_DOMAIN", "SUBJECT_MAX", "FROM_MAX", "OPERATOR_SENDER"]) {
 		ran += 1;
 		check(
 			hooks[name] === pi[name],
@@ -1993,6 +2065,13 @@ async function selfChecks() {
 				),
 			},
 			expect: /ownerGone disagrees|both reapers leave the SAME shared root/,
+		},
+		{
+			// #417 from pi's side: a `claimsAMailbox` that trusts the inherited declaration alone is
+			// every Archon SDK session started from a pane claiming a mailbox again.
+			what: "pi claims on HELM_PANE alone, without asking for a terminal (#417)",
+			sources: { ...pristine, piSource: piSource.replace("return declared && terminal() !== \"\";", "return declared;") },
+			expect: /claimsAMailbox — /,
 		},
 		{
 			what: "the hook's slug emits a character no mailbox directory can carry",
