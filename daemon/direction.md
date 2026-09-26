@@ -37,13 +37,31 @@ leash so it dies with the daemon even under SIGKILL. `just browser-proof` is the
 
 **And the bench document (M4, #354), daemon side.** `bench-doc` is helm's `Workbench` —
 workspaces, columns, slots, panes, typed surfaces, placement as data — and benchd serves it:
-the layout verbs (`workspace/*`, `pane/*`, `focus/*`, `layout/resize`, `bench/get`), each
-logged as one `bench/changed` event that says who asked; `bench.json` as the record it boots
-from; and `events --follow`, one line per event with the whole document attached when it
+the layout verbs (`workspace/*`, `pane/*`, `focus/*`, `layout/resize`, `drawer/toggle`,
+`bench/get`), each logged as one `bench/changed` event that says who asked; `bench.json` as the
+record it boots from; and `events --follow`, one line per event with the whole document attached when it
 changed. The focus rule is the document's own: an agent's verb that would move the operator's
 focus is refused unless it says `asked`. helm does not use any of it yet — its client is the
 next step — and `just bench-proof` drives a whole session through the socket and across a
 restart.
+
+**Drawers are in the document (#356).** A drawer is a named holder of tabbed panes beside the
+workspaces, shown over the bench rather than in it; one is open at a time. `drawer/toggle` opens
+or closes one, and `pane/open` takes a `drawer` to put a pane in one. Which drawer is open is the
+operator's focus, so an agent's toggle is refused without `asked`, and an agent's pane badges the
+drawer instead of opening it. No drawer operation touches a workspace. `bench.json` is version 1
+from here, so an older benchd quarantines it rather than dropping drawers on its next save.
+
+**Placement is the operator's file (#356).** Where a new pane goes is a table, and the table is
+TOML: the built-in one is `crates/bench-doc/rules/placement.default.toml`, embedded at build
+time, and `<root>/rules/placement.toml` replaces it whole. benchd reads the file before each
+`pane/open` and each `status` and adopts it only when its text changed, so an edit applies to
+the next open with no restart and no watcher. A strategy can send a pane to a drawer
+(`{ drawer = "browser" }`). A file that cannot be read, or holds no rules, changes nothing: the
+last good table stays in force, `rules/rejected` names the file and why (with the line, for a
+parse error) once per version, and `bench status` reports `rejected` until a good version
+replaces it. Only a file that is gone means the built-in table. benchd never writes a rules
+file.
 
 **And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
 every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's

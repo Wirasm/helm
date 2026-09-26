@@ -1,7 +1,7 @@
 //! The bench document — the layout primitive of `bench-architecture.md`, owned by benchd.
 //!
-//! Workspaces → columns → slots → panes, each pane a view of one typed [`Surface`], and every
-//! rule that changes them: `normalize()`'s invariants, placement as data, and the focus rule.
+//! Workspaces → columns → slots → panes, with drawers beside the workspaces, each pane a view
+//! of one typed [`Surface`], and every rule that changes them: `normalize()`'s invariants, placement as data, and the focus rule.
 //! No IO, no sockets, no clock — the same shape as `bench-mail`: benchd calls this, logs what
 //! happened, and answers. Ported from helm's `Workbench` (`Sources/Helm/Workbench/`), whose
 //! tests are mirrored one for one under `tests/`, named after the Swift test they came from.
@@ -12,6 +12,7 @@
 
 mod bench;
 mod document;
+mod drawer;
 mod ids;
 mod placement;
 mod refusal;
@@ -20,8 +21,9 @@ mod tolerant;
 
 pub use bench::{Bench, Column, Direction, Focus, MINIMUM_FRACTION, Pane, Placement, Slot, Split};
 pub use document::{Document, Target, Workspace};
+pub use drawer::{Drawer, DrawerName};
 pub use ids::{ColumnId, PaneId, SlotId, StandardPath};
-pub use placement::{Caller, Rule, Rules, Strategy};
+pub use placement::{Caller, DEFAULT_RULES, Destination, Rule, Rules, Strategy};
 pub use refusal::Refusal;
 pub use surface::{CanvasSource, PaneName, ResumableAgent, Surface, SurfaceClass};
 pub use tolerant::Recovered;

@@ -11,3 +11,7 @@ serde.workspace = true
 # the layout (measured by `two_relaunches_do_not_move_a_single_fraction`).
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+toml.workspace = true
+
+[lints]
+workspace = true

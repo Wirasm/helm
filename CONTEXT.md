@@ -93,6 +93,20 @@ link in a terminal opens here too, as a new tab, and the keyboard stays in the t
 canvas: a canvas renders a file in helm's own webview.
 _Avoid_: webview, canvas, embedded browser
 
+**drawer**:
+A named holder of tabbed panes, shown over the bench instead of in it (#356). One per name for
+the whole bench document, beside the workspaces rather than inside one, and at most one open at a
+time. Opening or closing one never re-lays-out the bench under it. It holds panes, so anything a
+pane can show can live in one, and it exists only while it holds at least one. Which drawer is open
+is the operator's focus: an agent never opens one without *asked*; its pane lands in the drawer
+and **badges** it. Lives in benchd's document; helm does not draw drawers yet.
+_Avoid_: panel, sidebar, rail (the rail is helm's own and is not a drawer), scratchpad, overlay
+
+**badge**:
+A drawer's mark that something arrived in it the operator has not seen: an agent put a pane
+there or offered one it already held. Opening the drawer clears it.
+_Avoid_: notification, unread count, dot (that is how helm will draw it, not what it is)
+
 ### What helm looks like
 
 **board**:

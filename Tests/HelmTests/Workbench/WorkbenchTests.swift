@@ -7,6 +7,7 @@ import XCTest
 /// **No `@MainActor`, no `TerminalManager`, no window.** `Workbench` is a plain value, so
 /// the whole window manager is exercisable here. A test in this file that needs a runtime
 /// is a test whose rule was put in the wrong place.
+// swiftlint:disable:next type_body_length - legacy (#418): 404 lines, limit 350
 final class WorkbenchTests: XCTestCase {
 
     // MARK: - Helpers

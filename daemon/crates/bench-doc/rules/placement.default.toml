@@ -1,0 +1,54 @@
+# Where a new pane goes: benchd's built-in placement rules (#356).
+#
+# To change them, copy this file to <bench root>/rules/placement.toml (~/.bench/rules/ by
+# default) and edit it there. That file replaces this table whole; benchd rereads it on the next
+# `pane/open` and says so in its event log (`rules/loaded`, or `rules/rejected` naming the line,
+# in which case the last good table stays in force). A file with no rows is refused too: delete
+# it to go back to this table. `bench status` shows which is in use.
+#
+# One [[place]] row per rule. The first row whose `surface` and `by` match decides, and its
+# `try` strategies are tried in order until one resolves. With no row matching, or none of its
+# strategies resolving, the pane gets a new column: the one destination that always exists.
+#
+#   surface  terminal | canvas | browser
+#   by       operator | agent | any          (default: any)
+#   try      "existing"                       the pane already showing it
+#            "tab-in-focused"                 a tab in the focused slot
+#            { tab-in-focused-if-holds = "canvas" }
+#                                             ...if that slot already holds that class
+#            { tab-in-first-holding = "canvas" }
+#                                             a tab in the first slot holding that class
+#            "new-column"                     a new column at the right end
+#            { drawer = "<name>" }            the named drawer: an agent's pane badges it,
+#                                             the operator's opens it
+
+# A canvas: the one already showing it; else a tab beside a canvas you are in; else beside any
+# canvas; else a new column. The tenth offered canvas must not create a tenth column.
+[[place]]
+surface = "canvas"
+by = "any"
+try = [
+    "existing",
+    { tab-in-focused-if-holds = "canvas" },
+    { tab-in-first-holding = "canvas" },
+    "new-column",
+]
+
+# A terminal you opened (⌘N): a tab in the slot you are in.
+[[place]]
+surface = "terminal"
+by = "operator"
+try = ["tab-in-focused"]
+
+# A terminal an agent spawned: a new column. A tab would hide it, and a spawn nobody is watching
+# must be visible.
+[[place]]
+surface = "terminal"
+by = "agent"
+try = ["new-column"]
+
+# The browser: the pane already showing it, else a new column.
+[[place]]
+surface = "browser"
+by = "any"
+try = ["existing", "new-column"]
