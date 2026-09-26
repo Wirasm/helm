@@ -22,6 +22,8 @@ struct RootView: View {
     @StateObject private var workbench = WorkbenchModel(
         terminals: .shared, mode: .fromEnvironment())
     @StateObject private var archonRail = ArchonRailModel()
+    /// The operator's just runs (#356): started by his keys, failures shown on the status bar.
+    @StateObject private var justRuns = JustRuns()
     /// #54's watcher. A `@StateObject` here rather than a `.shared` for the same reason the
     /// bench is: a second window gets its own, and the claim-by-rename in `SpoolDirectory` is
     /// what stops two of them acting on one request — the same mechanism that already has to
@@ -60,7 +62,7 @@ struct RootView: View {
             }
             // Over the bench and the rail, never beside them: a drawer changes nothing under it.
             .overlay { DrawerHost(model: workbench, keymap: .shared) }
-            StatusBarView(model: model, workbench: workbench)
+            StatusBarView(model: model, workbench: workbench, justRuns: justRuns)
         }
         // The base plane, and it has to be painted: `translucentWindow` makes the window
         // non-opaque so the chrome's vibrancy has a desktop to sample, and anything that
@@ -81,9 +83,11 @@ struct RootView: View {
                 model.observe(terminals: terminalManager, workbench: workbench)
                 workbench.workspaceVerbs = apply
             }
+            // benchd's follower hears how a run ended; only daemon mode has one.
+            workbench.mode.client?.onEvent = { [justRuns] in justRuns.receive($0) }
             let actions = LocalActions(
                 workbench: workbench, workspaces: model, rail: archonRail,
-                terminals: terminalManager)
+                terminals: terminalManager, just: justRuns)
             self.actions = actions
             Actions.performer = actions
             // A push from a parked workspace lands on its stored bench, which this model holds

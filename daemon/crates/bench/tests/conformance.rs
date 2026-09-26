@@ -4322,3 +4322,138 @@ fn a_resumed_session_moves_to_the_pane_it_reports_from_and_keeps_its_handle() {
     assert_eq!(json_of(&who(HOOK_PANE))["handle"], handle.as_str());
     assert_eq!(who(NEW_PANE).code, 3);
 }
+
+// ---------------------------------------------------------------------------
+// The just layer (#356)
+// ---------------------------------------------------------------------------
+
+/// `just` where benchd looks for it, or `None`. A runner without it skips the just tests
+/// with a named reason, except in CI, which installs it: the proof has to run somewhere.
+fn just_available() -> bool {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let found = std::env::split_paths(&path)
+        .chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from))
+        .any(|dir| dir.join("just").is_file());
+    if !found {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI must install just: the just layer's proof runs there"
+        );
+        eprintln!("skipped: `just` is not installed (PATH, /opt/homebrew/bin, /usr/local/bin)");
+    }
+    found
+}
+
+/// Polls the event log for `kind` about `run`, within a generous deadline: the run is its own
+/// process, so a slow machine only makes this wait longer.
+fn await_event(root: &Path, kind: &str, run: &str) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if let Some(event) = log_of(root)
+            .into_iter()
+            .find(|e| e["kind"] == kind && e["data"]["run"] == run)
+        {
+            return event;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("no {kind} for {run} within 30s: {:?}", log_of(root));
+}
+
+/// #356: a recipe from `<root>/rules/justfile` runs at the active workspace, its `bench`
+/// verbs reach this daemon, and it is logged as `just/started` (before the answer) and
+/// `just/finished`. Run by the operator its verbs are his and may open a drawer; run by an
+/// agent (`bench just`) the same verb is refused and the run fails. A missing justfile and a
+/// name that is not a recipe are refused.
+#[test]
+fn a_recipe_runs_as_whoever_asked_and_is_logged() {
+    if !just_available() {
+        return;
+    }
+    let home = TestHome::claim("just");
+    let root = home.dir.join(".bench");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": home.dir.display().to_string() }),
+        operator(),
+        false,
+    ));
+
+    let missing = bench(&home.dir, &["just", "open"]);
+    assert_eq!(missing.code, 3, "{}", missing.stderr);
+    assert!(
+        missing.stderr.contains("rules/justfile"),
+        "{}",
+        missing.stderr
+    );
+
+    fs::create_dir_all(root.join("rules")).unwrap();
+    fs::write(
+        root.join("rules").join("justfile"),
+        format!(
+            "open:\n    pwd\n    {} drawer toggle x --surface sessions\n",
+            bench_bin().display()
+        ),
+    )
+    .unwrap();
+    let not_a_recipe = layout(
+        &daemon.socket,
+        "just/run",
+        serde_json::json!({ "recipe": "--justfile" }),
+        operator(),
+        false,
+    );
+    assert_eq!(not_a_recipe["status"], "refused", "{not_a_recipe}");
+
+    let started = ok_data(layout(
+        &daemon.socket,
+        "just/run",
+        serde_json::json!({ "recipe": "open" }),
+        operator(),
+        false,
+    ));
+    let run = started["run"].as_str().unwrap().to_string();
+    let logged = log_of(&root);
+    let begun = logged
+        .iter()
+        .find(|e| e["kind"] == "just/started" && e["data"]["run"] == run.as_str())
+        .unwrap_or_else(|| panic!("just/started is logged before the answer: {logged:?}"));
+    assert_eq!(begun["data"]["by"], "operator");
+    let finished = await_event(&root, "just/finished", &run);
+    assert_eq!(finished["data"]["exit"], 0, "{finished}");
+    let output = fs::read_to_string(started["log"].as_str().unwrap()).unwrap();
+    let workspace = fs::canonicalize(&home.dir).unwrap();
+    assert!(
+        output.contains(&workspace.display().to_string())
+            || output.contains(&home.dir.display().to_string()),
+        "it ran at the active workspace: {output}"
+    );
+    let document = ok_data(layout(
+        &daemon.socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ))["document"]
+        .clone();
+    assert_eq!(
+        document["open_drawer"], "x",
+        "the operator's recipe opened the drawer"
+    );
+
+    let by_agent = bench(&home.dir, &["just", "open"]);
+    assert_eq!(by_agent.code, 0, "{}", by_agent.stderr);
+    let agent_run = json_of(&by_agent)["run"].as_str().unwrap().to_string();
+    let finished = await_event(&root, "just/finished", &agent_run);
+    assert_ne!(
+        finished["data"]["exit"], 0,
+        "an agent's recipe cannot move the operator's focus: {finished}"
+    );
+    let output = fs::read_to_string(finished["data"]["log"].as_str().unwrap()).unwrap();
+    assert!(
+        output.contains("--asked"),
+        "the refusal is in its log: {output}"
+    );
+}

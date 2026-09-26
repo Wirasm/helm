@@ -961,6 +961,11 @@ closing. The status bar has one capsule per drawer, dotted while badged. **An ag
 in a drawer and never opens one**: `pane/open` into a drawer badges it, and `drawer/toggle`
 without *asked* is refused. The keymap's `drawer` action and the capsule are the operator's.
 
+**A key can run a recipe from the operator's bench justfile** (#356, `Sources/Helm/Just/`):
+`action = "just"`, `recipe = "<name>"` in the keymap file sends `just/run` to benchd as the
+operator. benchd runs it (see `daemon/direction.md`); helm only hears `just/finished` on the
+follower and shows a run of his that failed as a status-bar capsule that opens its log.
+
 **Put a command handler where its lifetime is right, not where it looks tidy.** A subscription
 that has to work while its view is closed belongs on the model, which outlives the
 presentation. Attaching it to the view means it is dead in exactly the state it exists for.

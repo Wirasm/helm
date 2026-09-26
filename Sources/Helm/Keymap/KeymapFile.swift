@@ -141,7 +141,8 @@ struct KeymapFile: Equatable {
         #         down or keycode:N
         # when:   anywhere (the default), terminal, away-from-terminal
         # action: one of the names below; index is 1-based. `drawer` takes name and, optionally,
-        #         surface = "browser", "sessions" or "file:<path>" for a drawer that holds nothing
+        #         surface = "browser", "sessions" or "file:<path>" for a drawer that holds nothing.
+        #         `just` takes recipe: a recipe in <bench root>/rules/justfile, run by benchd as you
         #
         # A drawer's place is a table of its own, e.g.
         #   [drawer.notes]
@@ -269,7 +270,8 @@ private struct RawRow: Decodable {
             step: try c.decodeIfPresent(String.self, forKey: "step"),
             offset: try c.decodeIfPresent(Int.self, forKey: "offset"),
             name: try c.decodeIfPresent(String.self, forKey: "name"),
-            surface: try c.decodeIfPresent(String.self, forKey: "surface"))
+            surface: try c.decodeIfPresent(String.self, forKey: "surface"),
+            recipe: try c.decodeIfPresent(String.self, forKey: "recipe"))
         hint = try c.decodeIfPresent(String.self, forKey: "hint")
         menu = try c.decodeIfPresent(String.self, forKey: "menu")
     }

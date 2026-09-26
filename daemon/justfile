@@ -111,7 +111,7 @@ spec:
                 bench/get workspace/open workspace/close workspace/activate workspace/reset \
                 workspace/unshelve workspace/import pane/open pane/split pane/close pane/show \
                 pane/move pane/name pane/record focus/slot focus/step \
-                layout/resize drawer/toggle; do
+                layout/resize drawer/toggle just/run; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then
             # probed last for real; listed here so the row exists

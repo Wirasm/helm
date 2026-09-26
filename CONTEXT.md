@@ -202,6 +202,14 @@ file that does not parse changes nothing. helm reads it; nothing writes it. It s
 `placement.toml`, which benchd reads and helm does not.
 _Avoid_: keybindings.json, config, shortcuts file
 
+**bench justfile**:
+`<bench root>/rules/justfile`, the operator's recipes: compositions of `bench` verbs (#356). A
+key bound to `action = "just"` or an agent's `bench just <recipe>` asks benchd to run one
+(`just/run`), at the active workspace, logged as `just/started` and `just/finished`. Run for
+the operator, its verbs are his and may move his focus; run for an agent, they are the agent's.
+Not a workspace's own justfile.
+_Avoid_: macro, script, recipe file
+
 ### What agents produce
 
 **artifact**:

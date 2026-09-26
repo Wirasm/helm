@@ -27,6 +27,7 @@
 //! wait, a prompt delivery, or an attach pump.
 
 mod hook;
+mod just;
 mod layout;
 mod rules;
 mod sessions;
@@ -1388,6 +1389,12 @@ fn dispatch(
                 AfterResponse::Done,
             )
         }
+
+        Some(Verb::JustRun) => match just::run(core, req) {
+            Ok(started) => (ok(json!(started)), AfterResponse::Done),
+            Err(just::NotStarted::Refused(why)) => (refused(why), AfterResponse::Done),
+            Err(just::NotStarted::Failed(why)) => (errored(why), AfterResponse::Done),
+        },
 
         Some(Verb::BrowserStart) => {
             core.lock().unwrap().browser_restarts.clear();
