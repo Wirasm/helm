@@ -111,4 +111,30 @@ final class BenchWireConformanceTests: XCTestCase {
             try JSONDecoder().decode(Surface.self, from: Data(oldCanvas.utf8)),
             .unsupported(kind: "canvas/url"))
     }
+
+    /// `bench-root.json` is the table `bench_wire::resolve_root` is checked against in the daemon
+    /// gate, so `BenchRoot` and the Rust rule answer every row the same way or one gate goes red.
+    /// It holds only `BENCH_DIR` and `BENCH_SUITE`, the variables `bench` reads. An empty
+    /// `BENCH_DIR` is the row that disagreed until #395.
+    func testTheBenchRootTableResolvesAsTheDaemonResolvesIt() throws {
+        struct Table: Decodable {
+            struct Row: Decodable {
+                let env: [String: String]
+                let root: String?
+                let refused: String?
+            }
+            let home: String
+            let rows: [Row]
+        }
+        let table = try JSONDecoder().decode(Table.self, from: fixture("bench-root.json"))
+        let home = URL(fileURLWithPath: table.home, isDirectory: true)
+        for row in table.rows {
+            switch BenchRoot.resolve(environment: row.env, home: home) {
+            case .success(let root):
+                XCTAssertEqual(root.path, row.root, "\(row.env)")
+            case .failure(let error):
+                XCTAssertEqual(error.variable, row.refused, "\(row.env)")
+            }
+        }
+    }
 }

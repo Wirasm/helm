@@ -1,0 +1,14 @@
+{
+  "home": "/Users/op",
+  "rows": [
+    { "env": {}, "root": "/Users/op/.bench" },
+    { "env": { "BENCH_SUITE": "dev" }, "root": "/Users/op/.bench-dev" },
+    { "env": { "BENCH_DIR": "/r" }, "root": "/r" },
+    { "env": { "BENCH_DIR": "/r", "BENCH_SUITE": "dev" }, "root": "/r" },
+    { "env": { "BENCH_DIR": "" }, "root": "/Users/op/.bench" },
+    { "env": { "BENCH_DIR": "", "BENCH_SUITE": "dev" }, "root": "/Users/op/.bench-dev" },
+    { "env": { "BENCH_SUITE": "a/b" }, "refused": "BENCH_SUITE" },
+    { "env": { "BENCH_SUITE": "" }, "refused": "BENCH_SUITE" },
+    { "env": { "BENCH_DIR": "/r", "BENCH_SUITE": "a/b" }, "refused": "BENCH_SUITE" }
+  ]
+}
