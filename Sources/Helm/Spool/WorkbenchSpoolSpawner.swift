@@ -36,7 +36,9 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
     /// is, which is what they would have made by hand.
     ///
     /// Switching the operator's view is the honest cost of a push channel, and #54 accepts it
-    /// explicitly.
+    /// explicitly — **in local mode**. Drawn from benchd (#354), opening a workspace is an
+    /// agent's `workspace/open`, which benchd's focus rule leaves in the background: the pane
+    /// lands in that workspace and starts there, and the operator's view stays put.
     ///
     /// **`spawnTerminal`, not `newTerminal`** — the two differ in exactly the two ways a
     /// request from outside must (#177). ⌘N's rule is "a tab where you are looking", and
@@ -62,12 +64,11 @@ final class WorkbenchSpoolSpawner: SpoolSpawning {
         // waiting behind it. `activate` above is the non-asking open, so a *different*
         // workspace never leaves one behind for this to find.
         workbench.mountWithoutAsking()
-        guard workbench.workspacePath == workspace.path else {
-            return .failure(
-                SpoolRefusal(
-                    "helm could not make \(workspace.path.value) the active workspace"))
-        }
-        guard let pane = workbench.send(.paneOpen(surface: .terminal(agent: nil)), by: .agent())
+        // Named, so the terminal lands in the request's workspace whichever one is on screen.
+        guard
+            let pane = workbench.send(
+                .paneOpen(workspace: workspace.path.value, surface: .terminal(agent: nil)),
+                by: .agent())
         else {
             return .failure(
                 SpoolRefusal("helm could not open a terminal in \(workspace.path.value)"))
