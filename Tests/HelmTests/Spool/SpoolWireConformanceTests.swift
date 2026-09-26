@@ -1,3 +1,4 @@
+// swiftlint:disable file_length - legacy (#418): 900 lines, limit 600
 import Foundation
 import HelmWire
 import XCTest
@@ -75,14 +76,17 @@ import XCTest
 /// would only prove the test author's memory of the format agrees with itself; this proves the
 /// script's actual behaviour is what `HelmWire` actually describes.
 ///
-/// **Measured cost**: `swift tools/<script>.swift` compiles and runs each script fresh — around
-/// 0.3–0.5s per invocation on this machine. The result-direction and suite tests add roughly
-/// twenty more invocations; the whole file still finishes in a few seconds, not enough to move
-/// this out of the ordinary gate.
+/// **Measured cost, and why the scripts are compiled once.** `swift tools/<script>.swift`
+/// compiles the script on every launch, and this suite launches the six scripts dozens of
+/// times. In CI that compile was most of the suite's minute (#418), so each script is now built
+/// once per test process with `swiftc` (`compiled(_:)`) and the binary is what the tests run.
+/// One test still runs `swift tools/helm-spool.swift` the documented way, as the control for
+/// that invocation.
 ///
-/// **That cost is what every deadline here is really waiting on, and it is not what any test
-/// here has an opinion about** — see `scriptBudget` below for why the number is 60s rather
-/// than the 10s that twice reported a busy machine as a drifted wire format (#291).
+/// **A compile is still what the deadlines guard against, and it is not what any test here has
+/// an opinion about** — see `scriptBudget` below for why the number is 60s rather than the 10s
+/// that twice reported a busy machine as a drifted wire format (#291).
+// swiftlint:disable:next type_body_length - legacy (#418): 895 lines, limit 350
 final class SpoolWireConformanceTests: XCTestCase {
     private var spoolDir: URL!
     private var runningProcesses: [Process] = []
@@ -94,7 +98,9 @@ final class SpoolWireConformanceTests: XCTestCase {
         try SpoolDirectory(root: spoolDir).prepare()
     }
 
-    /// **How long a `swift tools/<script>` invocation is given, and what that number is not.**
+    /// **How long a script invocation is given, and what that number is not.** The numbers
+    /// below were measured for `swift tools/<script>`, which compiles as it runs; the compiled
+    /// binaries most tests now launch are faster, and the budget did not shrink with them.
     ///
     /// It is a **hang guard**, not a performance bar. Every wait in this suite is really
     /// waiting on two things at once — `swift <file>` *compiling* the script, and then the
@@ -111,6 +117,12 @@ final class SpoolWireConformanceTests: XCTestCase {
     /// supposed to mean *the spool wire drifted*, and that is the most alarming thing this
     /// suite can say. It must never be the sentence a busy machine produces.
     private static let scriptBudget: TimeInterval = 60
+
+    /// The compiled scripts are this process's alone; nothing reads them after the suite.
+    override class func tearDown() {
+        try? FileManager.default.removeItem(at: compiledScripts)
+        super.tearDown()
+    }
 
     override func tearDownWithError() throws {
         // Every script that has NOT yet been given a terminal result keeps polling — nothing
@@ -1070,6 +1082,10 @@ final class SpoolWireConformanceTests: XCTestCase {
     /// will ever ask for, so the directory it resolves to — a real
     /// `~/.helm/spool-<uuid>` — cannot collide with an isolated instance's real suite or the
     /// operator's default spool. It is created fresh and removed in this test alone.
+    ///
+    /// **It is also the control for the documented invocation.** Every other test runs a
+    /// compiled copy of its script (`compiled(_:)`); this one runs `swift tools/helm-spool.swift`
+    /// exactly as `AGENTS.md` tells a caller to, so the no-build path stays covered.
     func testHelmSpoolResolvesAnIsolatedSuiteExactlyLikeSpoolDirectory() throws {
         let suite = "conformance-\(UUID().uuidString)"
         let expectedRoot = FileManager.default.homeDirectoryForCurrentUser
@@ -1199,57 +1215,83 @@ final class SpoolWireConformanceTests: XCTestCase {
 
     // MARK: - Running the real script
 
-    /// Launches `swift tools/<script> <arguments>` against `spoolDir`, and leaves it running —
-    /// `tearDown` kills it once the test is done reading what it wrote. For the request
-    /// direction, where the script never gets an answer and polls forever.
-    private func run(_ script: String, _ arguments: [String]) throws {
+    /// Where each script is compiled, once per test process: a fresh directory per process, so
+    /// a binary found there was built from this checkout by this run. `swift tools/<script>`
+    /// recompiles on every launch, and this suite launches the six scripts dozens of times:
+    /// that compile was most of the suite's minute in CI (#418). A binary built from the same
+    /// file by the same compiler behaves the same way; the one thing it does not exercise is
+    /// the documented `swift tools/<script>` invocation itself, which
+    /// `testHelmSpoolResolvesAnIsolatedSuiteExactlyLikeSpoolDirectory` still runs that way.
+    private static let compiledScripts = FileManager.default.temporaryDirectory
+        .appendingPathComponent("helm-spool-scripts-\(UUID().uuidString)")
+
+    /// The compiled binary for `tools/<script>`, building it on first use. A compile failure
+    /// throws with the compiler's output, so a script that stopped compiling fails the test
+    /// that needed it rather than being skipped.
+    private func compiled(_ script: String) throws -> URL {
         let scriptURL = repositoryRoot.appendingPathComponent("tools/\(script)")
+        let binary = Self.compiledScripts
+            .appendingPathComponent(scriptURL.deletingPathExtension().lastPathComponent)
+        if FileManager.default.isExecutableFile(atPath: binary.path) { return binary }
         guard FileManager.default.fileExists(atPath: scriptURL.path) else {
             throw MissingScript(path: scriptURL.path)
         }
+        try FileManager.default.createDirectory(
+            at: Self.compiledScripts, withIntermediateDirectories: true)
 
-        var environment = ProcessInfo.processInfo.environment
-        environment[SpoolDirectory.directoryVariable] = spoolDir.path
-        environment[SpoolDirectory.offVariable] = nil
+        // Output goes to a file rather than a pipe, so a long error listing cannot fill a pipe
+        // buffer and stall the compiler while this waits on it.
+        let log = Self.compiledScripts.appendingPathComponent("\(script).log")
+        FileManager.default.createFile(atPath: log.path, contents: nil)
+        let logHandle = try FileHandle(forWritingTo: log)
+        defer { try? logHandle.close() }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["swift", scriptURL.path] + arguments
-        process.environment = environment
-        // The script's own progress lines on stderr are for a human at a terminal; this test
-        // only cares about the file it wrote.
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        runningProcesses.append(process)
+        let compiler = Process()
+        compiler.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        compiler.arguments = ["swiftc", scriptURL.path, "-o", binary.path]
+        compiler.standardOutput = logHandle
+        compiler.standardError = logHandle
+        try compiler.run()
+        runningProcesses.append(compiler)
+        // The same hang guard as every script run: a compile on a busy machine is slow, not
+        // wrong, and one that never ends must fail the test rather than hang the suite.
+        do {
+            try awaitExit(compiler, script, timeout: Self.scriptBudget)
+        } catch is ScriptNeverExited {
+            throw ScriptDidNotCompile(
+                script: script,
+                output: "swiftc was still running after \(Self.scriptBudget)s; a slow machine "
+                    + "can do this without anything being wrong (#291)")
+        }
+        guard compiler.terminationStatus == 0 else {
+            throw ScriptDidNotCompile(
+                script: script, output: (try? String(contentsOf: log, encoding: .utf8)) ?? "")
+        }
+        return binary
     }
 
-    /// Launches `swift tools/<script> <arguments>` against `spoolDir` and waits for it to exit
-    /// — for the result direction, where a script that has been handed a terminal status is
-    /// expected to answer and stop on its own. Captures stderr, since that is where every
-    /// `die()` message and every success message lands.
-    private func runAndCapture(
-        _ script: String, _ arguments: [String], timeout: TimeInterval = scriptBudget
-    ) throws -> (exitCode: Int32, stderr: String) {
-        let scriptURL = repositoryRoot.appendingPathComponent("tools/\(script)")
-        guard FileManager.default.fileExists(atPath: scriptURL.path) else {
-            throw MissingScript(path: scriptURL.path)
-        }
-
+    /// Starts the compiled `tools/<script> <arguments>` against `spoolDir` and records it for
+    /// `tearDown` to kill.
+    private func launch(
+        _ script: String, _ arguments: [String], stdout: Any, stderr: Any
+    ) throws -> Process {
         var environment = ProcessInfo.processInfo.environment
         environment[SpoolDirectory.directoryVariable] = spoolDir.path
         environment[SpoolDirectory.offVariable] = nil
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["swift", scriptURL.path] + arguments
+        process.executableURL = try compiled(script)
+        process.arguments = arguments
         process.environment = environment
-        let stderrPipe = Pipe()
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = stderrPipe
+        process.standardOutput = stdout
+        process.standardError = stderr
         try process.run()
         runningProcesses.append(process)
+        return process
+    }
 
+    /// Waits for a launched script to exit on its own, then reaps it.
+    private func awaitExit(_ process: Process, _ script: String, timeout: TimeInterval) throws {
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.02)
@@ -1257,48 +1299,45 @@ final class SpoolWireConformanceTests: XCTestCase {
         guard !process.isRunning else {
             throw ScriptNeverExited(script: script, timeout: timeout)
         }
-        // Reaps the process and populates terminationStatus; already confirmed not running
-        // above, so this returns immediately rather than blocking.
+        // Already confirmed not running, so this returns at once and fills terminationStatus.
         process.waitUntilExit()
+    }
+
+    /// Launches `tools/<script> <arguments>` against `spoolDir`, and leaves it running —
+    /// `tearDown` kills it once the test is done reading what it wrote. For the request
+    /// direction, where the script never gets an answer and polls forever.
+    private func run(_ script: String, _ arguments: [String]) throws {
+        // The script's own progress lines on stderr are for a human at a terminal; this test
+        // only cares about the file it wrote.
+        _ = try launch(
+            script, arguments, stdout: FileHandle.nullDevice, stderr: FileHandle.nullDevice)
+    }
+
+    /// Launches `tools/<script> <arguments>` against `spoolDir` and waits for it to exit — for
+    /// the result direction, where a script that has been handed a terminal status is expected
+    /// to answer and stop on its own. Captures stderr, since that is where every `die()`
+    /// message and every success message lands.
+    private func runAndCapture(
+        _ script: String, _ arguments: [String], timeout: TimeInterval = scriptBudget
+    ) throws -> (exitCode: Int32, stderr: String) {
+        let stderrPipe = Pipe()
+        let process = try launch(
+            script, arguments, stdout: FileHandle.nullDevice, stderr: stderrPipe)
+        try awaitExit(process, script, timeout: timeout)
         let data = stderrPipe.fileHandleForReading.readDataToEndOfFile()
         return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
 
-    /// Same shape as `runAndCapture`, but also returns stdout — every other test here only
-    /// needs the exit code and stderr, but the wire-shape tests (#229) need to inspect the
+    /// Same as `runAndCapture`, but also returns stdout — the wire-shape tests (#229) need the
     /// actual JSON a script printed back, which each of them writes to stdout right before
     /// switching on `status` (`helm-spool.swift:186`, `helm-close.swift:153`).
     private func runAndCaptureBoth(
         _ script: String, _ arguments: [String], timeout: TimeInterval = scriptBudget
     ) throws -> (exitCode: Int32, stdout: String, stderr: String) {
-        let scriptURL = repositoryRoot.appendingPathComponent("tools/\(script)")
-        guard FileManager.default.fileExists(atPath: scriptURL.path) else {
-            throw MissingScript(path: scriptURL.path)
-        }
-
-        var environment = ProcessInfo.processInfo.environment
-        environment[SpoolDirectory.directoryVariable] = spoolDir.path
-        environment[SpoolDirectory.offVariable] = nil
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["swift", scriptURL.path] + arguments
-        process.environment = environment
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        try process.run()
-        runningProcesses.append(process)
-
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        guard !process.isRunning else {
-            throw ScriptNeverExited(script: script, timeout: timeout)
-        }
-        process.waitUntilExit()
+        let process = try launch(script, arguments, stdout: stdoutPipe, stderr: stderrPipe)
+        try awaitExit(process, script, timeout: timeout)
         let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
         return (
@@ -1329,6 +1368,12 @@ final class SpoolWireConformanceTests: XCTestCase {
         throw RequestNeverAppeared(path: url.path, timeout: timeout)
     }
 
+    private struct ScriptDidNotCompile: Error, CustomStringConvertible {
+        let script: String
+        let output: String
+        var description: String { "swiftc could not compile tools/\(script):\n\(output)" }
+    }
+
     private struct MissingScript: Error, CustomStringConvertible {
         let path: String
         var description: String { "expected a script at \(path) — nothing here to conform to" }
@@ -1355,10 +1400,10 @@ final class SpoolWireConformanceTests: XCTestCase {
         let timeout: TimeInterval
         var description: String {
             "\(script) was still running \(timeout)s after being given a terminal result — it "
-                + "should have answered and exited. This budget covers `swift <file>` compiling "
-                + "the script as well as running it, so a cold or heavily loaded machine can "
-                + "reach it without anything having drifted (#291). Before reading this as a "
-                + "wire-format failure, re-run it on a quiet machine."
+                + "should have answered and exited. The same budget bounds compiling the "
+                + "script, so a cold or heavily loaded machine can reach it without anything "
+                + "having drifted (#291). Before reading this as a wire-format failure, re-run "
+                + "it on a quiet machine."
         }
     }
 

@@ -23,7 +23,7 @@ pub use bench::{Bench, Column, Direction, Focus, MINIMUM_FRACTION, Pane, Placeme
 pub use document::{Document, Target, Workspace};
 pub use drawer::{Drawer, DrawerName};
 pub use ids::{ColumnId, PaneId, SlotId, StandardPath};
-pub use placement::{Caller, Rule, Rules, Strategy};
+pub use placement::{Caller, DEFAULT_RULES, Destination, Rule, Rules, Strategy};
 pub use refusal::Refusal;
 pub use surface::{CanvasSource, PaneName, ResumableAgent, Surface, SurfaceClass};
 pub use tolerant::Recovered;

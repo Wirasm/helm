@@ -7,6 +7,7 @@ import XCTest
 ///
 /// A spool request is a *file*, so anything that can write a file is a caller. Every rule here
 /// is what stands between that and a login shell with the operator's whole environment.
+// swiftlint:disable:next type_body_length - legacy (#418): 450 lines, limit 350
 final class SpoolPolicyTests: XCTestCase {
     private static let captures = URL(fileURLWithPath: "/tmp/spool/captures")
 

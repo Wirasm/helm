@@ -102,6 +102,13 @@ impl Document {
             .find(|w| w.bench.pane(pane).is_some())
     }
 
+    /// The bench `target` names: what a placement rule is evaluated against before the edit
+    /// that places.
+    pub fn bench_at(&self, target: &Target) -> Result<&Bench, Refusal> {
+        let index = self.resolve(target)?;
+        Ok(&self.workspaces[index].bench)
+    }
+
     pub fn drawers(&self) -> &[Drawer] {
         &self.drawers
     }

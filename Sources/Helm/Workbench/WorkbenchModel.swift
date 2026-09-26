@@ -19,6 +19,7 @@ import SwiftUI
 /// *"act on the focused pane"* and focus is the bench's now. `AGENTS.md`'s rule is exact: a
 /// subscription that has to work while its view is closed belongs on the model.
 @MainActor
+// swiftlint:disable:next type_body_length - legacy (#418): 450 lines, limit 350
 final class WorkbenchModel: ObservableObject {
     /// Nothing open, a question waiting on the operator, or a bench — as one value, so no
     /// combination of the two can be constructed that `MountState` does not name. Its header
@@ -646,7 +647,7 @@ final class WorkbenchModel: ObservableObject {
     ///
     /// Returns the pane showing the browser.
     @discardableResult
-    fileprivate func offerBrowser() -> Pane.ID? {
+    func offerBrowser(_: LocalBenchKey) -> Pane.ID? {
         guard var bench else { return nil }
         let placement = bench.placementForBrowser()
         let shown: Pane
@@ -678,7 +679,7 @@ final class WorkbenchModel: ObservableObject {
     /// spool has to write it into `results/<id>.json` and then send a launch line to that
     /// exact pane. nil is the honest answer when there is no workspace to open one in.
     @discardableResult
-    fileprivate func newTerminal() -> TerminalSession? {
+    func newTerminal(_: LocalBenchKey) -> TerminalSession? {
         guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
         bench.insert(
@@ -701,7 +702,7 @@ final class WorkbenchModel: ObservableObject {
     /// Returns the session for the same reason `newTerminal` does: the spool has to write
     /// its id into `results/<id>.json` and then send the launch line to that exact pane.
     @discardableResult
-    fileprivate func spawnTerminal() -> TerminalSession? {
+    func spawnTerminal(_: LocalBenchKey) -> TerminalSession? {
         guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
         bench.offer(
@@ -791,7 +792,7 @@ final class WorkbenchModel: ObservableObject {
     /// this method's. Returns the pane actually showing the source — which for an
     /// already-open one is the pane that was there, not a second copy.
     @discardableResult
-    fileprivate func open(_ source: CanvasSource) -> Pane.ID? {
+    func open(_: LocalBenchKey, _ source: CanvasSource) -> Pane.ID? {
         guard var bench else { return nil }
         let placement = bench.placement(forOpening: source)
         let pane = Pane(content: .canvas(source))
@@ -833,7 +834,7 @@ final class WorkbenchModel: ObservableObject {
     /// artifact selects that pane and brings it forward, which puts them in front of it and
     /// lets them ask for a reload; nobody is in front of a push by construction.
     @discardableResult
-    fileprivate func offer(_ source: CanvasSource) -> Pane.ID? {
+    func offer(_: LocalBenchKey, _ source: CanvasSource) -> Pane.ID? {
         guard var bench else { return nil }
         let pane = bench.offer(canvas: source)
         if self.bench?.pane(pane) == nil {
@@ -859,14 +860,18 @@ final class WorkbenchModel: ObservableObject {
     /// A re-push of a canvas already on a parked bench refreshes its cached model when there is
     /// one. The cache survives a switch (`closeWorkspace`'s header), so a pane the operator has
     /// looked at still has a render, and #261's reason to refresh it holds unchanged.
-    fileprivate func offer(_ source: CanvasSource, onBenchOf path: WorkspacePath) -> Pane.ID? {
-        if path == workspacePath { return offer(source) }
+    func offer(
+        _ key: LocalBenchKey, _ source: CanvasSource, onBenchOf path: WorkspacePath
+    )
+        -> Pane.ID?
+    {
+        if path == workspacePath { return offer(key, source) }
         guard let pane = parked?.offer(source, toBenchOf: path) else { return nil }
         surfaces.existing(pane, as: CanvasModel.self)?.refresh()
         return pane
     }
 
-    fileprivate func close(_ pane: Pane.ID) {
+    func close(_: LocalBenchKey, _ pane: Pane.ID) {
         guard var bench, bench.close(pane) else { return }
         // The offer goes with the pane it was about. Nothing else would drop it — an offer is
         // keyed by pane id, and a closed pane's id is one nothing resolves any more.
@@ -877,7 +882,7 @@ final class WorkbenchModel: ObservableObject {
         surfaces.close(pane)
     }
 
-    fileprivate func select(_ pane: Pane.ID) {
+    func select(_: LocalBenchKey, _ pane: Pane.ID) {
         guard var bench else { return }
         bench.select(pane)
         commit(bench)
@@ -891,7 +896,7 @@ final class WorkbenchModel: ObservableObject {
     /// for `WorkbenchSpoolPanes.close`'s reason: the spool's result must say what the bench did,
     /// and "I asked" is not that.
     @discardableResult
-    fileprivate func offerSelect(_ pane: Pane.ID) -> Bool {
+    func offerSelect(_: LocalBenchKey, _ pane: Pane.ID) -> Bool {
         guard var bench, bench.pane(pane) != nil else { return false }
         bench.select(offering: pane)
         commit(bench)
@@ -912,7 +917,7 @@ final class WorkbenchModel: ObservableObject {
     /// carries only a source. That is a real limit rather than a hedge, and `helm-name`'s own help
     /// text says so, because a caller reads the name back out of its result either way.
     @discardableResult
-    fileprivate func name(_ pane: Pane.ID, to name: PaneName) -> PaneName? {
+    func name(_: LocalBenchKey, _ pane: Pane.ID, to name: PaneName) -> PaneName? {
         guard var bench else { return nil }
         guard let previous = bench.name(pane, to: name) else { return nil }
         commit(bench)
@@ -928,14 +933,14 @@ final class WorkbenchModel: ObservableObject {
     /// on every click. It also settles the feedback question: a no-op commit would re-render the
     /// bench, and re-renders are what `FocusClaimingTerminalView`'s edge-triggered claim exists
     /// to survive.
-    fileprivate func focus(_ slot: Slot.ID) {
+    func focus(_: LocalBenchKey, _ slot: Slot.ID) {
         guard var bench, bench.focusedSlot != slot else { return }
         bench.focus(slot)
         commit(bench)
     }
 
     @discardableResult
-    fileprivate func splitRight() -> TerminalSession? {
+    func splitRight(_: LocalBenchKey) -> TerminalSession? {
         guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
         bench.splitRight(with: Pane(id: session.id, content: .terminal()))
@@ -944,7 +949,7 @@ final class WorkbenchModel: ObservableObject {
     }
 
     @discardableResult
-    fileprivate func splitDown() -> TerminalSession? {
+    func splitDown(_: LocalBenchKey) -> TerminalSession? {
         guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
         bench.splitDown(with: Pane(id: session.id, content: .terminal()))
@@ -960,7 +965,7 @@ final class WorkbenchModel: ObservableObject {
     /// report the new pane's id in `results/<id>.json`, so the caller's next move
     /// (`helm-close`, or a spawn into it) needs no lookup.
     @discardableResult
-    fileprivate func offerSplitRight() -> TerminalSession? {
+    func offerSplitRight(_: LocalBenchKey) -> TerminalSession? {
         guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
         bench.splitRight(offering: Pane(id: session.id, content: .terminal()))
@@ -970,7 +975,7 @@ final class WorkbenchModel: ObservableObject {
 
     /// ⌘⇧D asked for from outside. See `offerSplitRight`.
     @discardableResult
-    fileprivate func offerSplitDown() -> TerminalSession? {
+    func offerSplitDown(_: LocalBenchKey) -> TerminalSession? {
         guard let path = workspacePath, var bench else { return nil }
         let session = terminals.newTerminal(in: path)
         bench.splitDown(offering: Pane(id: session.id, content: .terminal()))
@@ -984,21 +989,23 @@ final class WorkbenchModel: ObservableObject {
     /// split views have no divider API to persist instead, and ignore the ideal sizes that
     /// were meant to stand in for one (#90). Nothing but a drag reaches here now — the
     /// mount-time measurement that used to is gone.
-    fileprivate func resizeColumn(
-        _ column: Column.ID, to fraction: Double, against neighbour: Column.ID
+    func resizeColumn(
+        _: LocalBenchKey, _ column: Column.ID, to fraction: Double, against neighbour: Column.ID
     ) {
         guard var bench else { return }
         bench.resizeColumn(column, to: fraction, against: neighbour)
         mount = .mounted(bench)
     }
 
-    fileprivate func resizeSlot(_ slot: Slot.ID, to fraction: Double, against neighbour: Slot.ID) {
+    func resizeSlot(
+        _: LocalBenchKey, _ slot: Slot.ID, to fraction: Double, against neighbour: Slot.ID
+    ) {
         guard var bench else { return }
         bench.resizeSlot(slot, to: fraction, against: neighbour)
         mount = .mounted(bench)
     }
 
-    fileprivate func moveFocus(_ direction: Workbench.Direction) {
+    func moveFocus(_: LocalBenchKey, _ direction: Workbench.Direction) {
         guard var bench else { return }
         bench.moveFocus(direction)
         commit(bench)
@@ -1009,7 +1016,7 @@ final class WorkbenchModel: ObservableObject {
     /// caller can mean a different pane (#287). `commit` rather than a bare assignment because a
     /// move changes which panes are on screen: a relocated slot can be the only thing a column
     /// had.
-    fileprivate func move(_ pane: Pane.ID, _ direction: Workbench.Direction) {
+    func move(_: LocalBenchKey, _ pane: Pane.ID, _ direction: Workbench.Direction) {
         guard var bench else { return }
         bench.move(pane, direction)
         commit(bench)
@@ -1025,156 +1032,11 @@ final class WorkbenchModel: ObservableObject {
     }
 
     /// Which agent is in a terminal pane (#63), recorded on the bench so a restart can offer it.
-    fileprivate func record(_ agent: ResumableAgent?, in pane: Pane.ID) {
+    func record(_: LocalBenchKey, _ agent: ResumableAgent?, in pane: Pane.ID) {
         guard var bench else { return }
         bench.record(agent, in: pane)
         guard bench != self.bench else { return }
         commit(bench)
-    }
-
-    // MARK: - Drawn from benchd (#354)
-
-    /// Draw the bench from benchd's document, in daemon mode. Every change reaches the screen
-    /// this way — the operator's key and an agent's verb alike — and nothing else writes `mount`.
-    ///
-    /// **What helm keeps for itself is the live objects**, reconciled against the document:
-    /// a pane in no workspace any more has its object closed through its kind, and a terminal
-    /// that appears while helm runs gets its shell wherever it landed, so a spawn into a
-    /// background workspace is running before anyone looks. A terminal that was already in the
-    /// document when helm started gets its shell when its workspace is first shown, as on
-    /// restore (lazy on visit).
-    ///
-    /// **#85's question stays helm's** (D4): a bench worth asking about is not drawn until the
-    /// operator answers, and the answer goes back to benchd as a verb.
-    ///
-    /// **Re-entered, by design.** A verb sent from inside `documentFollower` (the import) waits
-    /// for the document it made, and that calls this again before the outer call returns. Each
-    /// call draws the document it was handed, and nothing after `documentFollower` reads local
-    /// state, so the inner call's newer document is what stays drawn. Keep it that way.
-    func apply(_ at: DocumentAt) {
-        let document = at.document
-        lastApplied = at
-        self.document = document
-
-        let alive = document.paneIDs
-        for entry in surfaces.entries where !alive.contains(entry.id) {
-            surfaces.close(entry.id)
-        }
-        origins = origins.filter { alive.contains($0.key) }
-        resumeOffers = resumeOffers.filter { alive.contains($0.key) }
-        if let known = knownPanes {
-            for workspace in document.workspaces {
-                let arrived = workspace.bench.columns.flatMap(\.slots).flatMap(\.panes)
-                    .filter { !known.contains($0.id) }
-                    .filter { if case .terminal = $0.surface { true } else { false } }
-                    .map(\.id)
-                guard !arrived.isEmpty else { continue }
-                terminals.adopt(
-                    terminals: arrived, in: WorkspacePath(workspace.path), active: false)
-            }
-        }
-        // Only panes in a workspace count as seen. A terminal in a drawer (#356) has no workspace
-        // to start in and helm draws no drawers yet; when it is moved onto a bench it arrives
-        // there, and starts.
-        knownPanes = Set(
-            document.workspaces.flatMap { workspace in
-                ([workspace.bench] + (workspace.shelved.map { [$0] } ?? []))
-                    .flatMap(\.columns).flatMap(\.slots).flatMap(\.panes).map(\.id)
-            })
-
-        guard let active = document.active.map(WorkspacePath.init),
-            let workspace = document.workspace(at: active),
-            let bench = Workbench(document: workspace.bench)
-        else {
-            workspacePath = nil
-            shelvedBench = nil
-            mount = .empty
-            terminals.deactivate()
-            reconcileSessions()
-            documentFollower?(document)
-            return
-        }
-        workspacePath = active
-        shelvedBench = workspace.shelved.flatMap(Workbench.init(document:))
-        let firstVisit = !answered.contains(active)
-        if firstVisit,
-            case let .ask(offer) = BenchMountPolicy.mount(
-                saved: bench, shelved: shelvedBench, answered: false)
-        {
-            mount = .awaitingRestore(offer)
-            resumeOffers = [:]
-        } else {
-            answered.insert(active)
-            terminals.adopt(terminals: bench.terminalPaneIDs, in: active, active: true)
-            mount = .mounted(bench)
-            if firstVisit { resumeOffers = offers(in: bench) }
-        }
-        reconcileSessions()
-        documentFollower?(document)
-    }
-
-    /// #85's answer in daemon mode. Restoring draws what benchd already holds, bringing the shelf
-    /// back first when the offer was the shelf. Fresh asks benchd to shelve the bench and start
-    /// one shell — unless the offer was the shelf, which fresh leaves where it is.
-    ///
-    /// **A verb that did not happen leaves the question open.** Marked answered before the verb,
-    /// because the document it makes arrives inside the send and must not be asked about again;
-    /// unmarked if no newer document came back, so the operator's choice is never silently
-    /// replaced by the bench he declined.
-    private func answerFromDaemon(
-        _ choice: BenchRestoreChoice, offer: BenchRestoreOffer, path: WorkspacePath
-    ) {
-        answered.insert(path)
-        let offeredTheShelf = shelvedBench == offer.bench
-        let verb: BenchVerb? =
-            switch choice {
-            case .restore where offeredTheShelf: .workspaceUnshelve(path: path.value)
-            case .fresh where !offeredTheShelf: .workspaceReset(path: path.value)
-            case .restore, .fresh: nil
-            }
-        if let verb {
-            let before = lastApplied?.seq
-            send(verb, by: .operatorGesture)
-            guard lastApplied?.seq != before else {
-                answered.remove(path)
-                return
-            }
-        }
-        if let lastApplied { apply(lastApplied) }
-    }
-
-    /// A divider drag. In local mode every step is a `layout/resize`, as it always was. In daemon
-    /// mode the drag is drawn here as it moves and benchd hears once, on release: a round trip
-    /// per mouse event would be a hundred events in the log for one gesture.
-    func resize(_ divider: BenchDivider, to fraction: Double, released: Bool) {
-        guard mode.client != nil else {
-            // The release repeats the last step's fraction, and locally that step already landed.
-            if !released { send(.layoutResize(divider, fraction: fraction), by: .operatorGesture) }
-            return
-        }
-        guard !released else {
-            send(.layoutResize(divider, fraction: fraction), by: .operatorGesture)
-            return
-        }
-        guard var bench else { return }
-        switch divider {
-        case let .columns(member, against):
-            bench.resizeColumn(member, to: fraction, against: against)
-        case let .slots(member, against): bench.resizeSlot(member, to: fraction, against: against)
-        }
-        mount = .mounted(bench)
-    }
-
-    /// Say why a verb did not happen (daemon mode). A refusal is benchd's own sentence.
-    func verbFailed(_ why: String) {
-        NSLog("helm: %@", why)
-        verbFailure = why
-        verbFailureTask?.cancel()
-        verbFailureTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(8))
-            guard !Task.isCancelled else { return }
-            self?.verbFailure = nil
-        }
     }
 
     // MARK: - Visibility
@@ -1289,131 +1151,124 @@ extension WorkbenchModel: VerbSink {
     }
 }
 
-// MARK: - The local sink
+// MARK: - Drawn from benchd (#354)
 
-/// Applies a verb to `WorkbenchModel`'s own bench, with the methods helm has always used.
-///
-/// **This is today's behaviour, reached through the verb.** The one decision made here is
-/// focus, and it is benchd's rule (`bench-doc`'s `Focus`): the keyboard moves only when the
-/// operator acted, or when the caller says he asked. That picks between each pair of methods
-/// helm already had — `open`/`offer`, `newTerminal`/`spawnTerminal`, `splitRight`/
-/// `offerSplitRight`, `select`/`offerSelect` — which were the same two answers written twice.
-///
-/// **It lives in this file so the methods it calls can be `fileprivate`.** They are the only
-/// way to change the bench locally, and a caller reaching one directly would skip the sink —
-/// and, once benchd's sink is in, change a bench nobody renders from. So the compiler, not a
-/// comment, keeps every other caller on `send`.
-///
-/// PR 4 deletes this type with the local path, once benchd's sink has carried the operator's
-/// own use.
-@MainActor
-final class LocalSink: VerbSink {
-    private unowned let workbench: WorkbenchModel
+/// In an extension rather than the class body, which is already over its size limit (#418).
+extension WorkbenchModel {
 
-    init(workbench: WorkbenchModel) {
-        self.workbench = workbench
-    }
+    /// Draw the bench from benchd's document, in daemon mode. Every change reaches the screen
+    /// this way — the operator's key and an agent's verb alike — and nothing else writes `mount`.
+    ///
+    /// **What helm keeps for itself is the live objects**, reconciled against the document:
+    /// a pane in no workspace any more has its object closed through its kind, and a terminal
+    /// that appears while helm runs gets its shell wherever it landed, so a spawn into a
+    /// background workspace is running before anyone looks. A terminal that was already in the
+    /// document when helm started gets its shell when its workspace is first shown, as on
+    /// restore (lazy on visit).
+    ///
+    /// **#85's question stays helm's** (D4): a bench worth asking about is not drawn until the
+    /// operator answers, and the answer goes back to benchd as a verb.
+    ///
+    /// **Re-entered, by design.** A verb sent from inside `documentFollower` (the import) waits
+    /// for the document it made, and that calls this again before the outer call returns. Each
+    /// call draws the document it was handed, and nothing after `documentFollower` reads local
+    /// state, so the inner call's newer document is what stays drawn. Keep it that way.
+    func apply(_ at: DocumentAt) {
+        let document = at.document
+        lastApplied = at
+        self.document = document
 
-    @discardableResult
-    func send(_ verb: BenchVerb, by actor: BenchActor, asked: Bool) -> Pane.ID? {
-        let takesFocus = actor == .operatorGesture || asked
-        switch verb {
-        case let .paneOpen(workspace, surface):
-            return open(surface, in: workspace, takesFocus: takesFocus)
-        case .paneOpenInDrawer, .drawerToggle:
-            // Drawers live in benchd's document; the local bench has none (#356).
-            return nil
-        case let .paneSplit(workspace, direction, surface):
-            // A split holds a terminal; helm has no split for any other kind yet.
-            guard isMounted(workspace), surface == nil || isTerminal(surface) else { return nil }
-            let session =
-                switch (direction, takesFocus) {
-                case (.right, true): workbench.splitRight()
-                case (.right, false): workbench.offerSplitRight()
-                case (.down, true): workbench.splitDown()
-                case (.down, false): workbench.offerSplitDown()
-                }
-            return session?.id
-        case let .paneClose(pane):
-            workbench.close(pane)
-            return nil
-        case let .paneShow(pane):
-            guard workbench.bench?.pane(pane) != nil else { return nil }
-            if takesFocus { workbench.select(pane) } else { workbench.offerSelect(pane) }
-            return pane
-        case let .paneMove(pane, direction):
-            workbench.move(pane, Workbench.Direction(direction))
-            return nil
-        case let .paneName(pane, name):
-            workbench.name(pane, to: name)
-            return nil
-        case let .focusSlot(slot):
-            workbench.focus(slot)
-            return nil
-        case let .focusStep(workspace, direction):
-            guard isMounted(workspace) else { return nil }
-            workbench.moveFocus(Workbench.Direction(direction))
-            return nil
-        case let .layoutResize(divider, fraction):
-            switch divider {
-            case let .columns(member, against):
-                workbench.resizeColumn(member, to: fraction, against: against)
-            case let .slots(member, against):
-                workbench.resizeSlot(member, to: fraction, against: against)
-            }
-            return nil
-        case let .workspaceOpen(path):
-            workbench.workspaceVerbs?(.open(path))
-            return nil
-        case let .workspaceActivate(path):
-            workbench.workspaceVerbs?(.activate(path))
-            return nil
-        case let .workspaceClose(path):
-            workbench.workspaceVerbs?(.close(path))
-            return nil
-        case let .paneRecord(pane, agent):
-            workbench.record(agent.map(ResumableAgent.init), in: pane)
-            return nil
-        case .get, .workspaceImport, .workspaceReset, .workspaceUnshelve:
-            // Verbs that only mean something to benchd. Locally the bench is already here, and
-            // #85's restore answer is the model's own `answer`, which shelves in helm's defaults.
-            return nil
+        let alive = document.paneIDs
+        for entry in surfaces.entries where !alive.contains(entry.id) {
+            surfaces.close(entry.id)
         }
-    }
-
-    private func open(_ surface: Surface, in workspace: String?, takesFocus: Bool) -> Pane.ID? {
-        switch surface {
-        case .terminal:
-            guard isMounted(workspace) else { return nil }
-            let session = takesFocus ? workbench.newTerminal() : workbench.spawnTerminal()
-            return session?.id
-        case let .canvas(path):
-            let source = CanvasSource.file(URL(fileURLWithPath: path))
-            // Only an agent's canvas can land on a parked bench: a push comes from terminal
-            // output, which a workspace keeps producing after the operator leaves it (#349).
-            if takesFocus {
-                guard isMounted(workspace) else { return nil }
-                return workbench.open(source)
+        origins = origins.filter { alive.contains($0.key) }
+        resumeOffers = resumeOffers.filter { alive.contains($0.key) }
+        if let known = knownPanes {
+            for (path, arrived) in document.terminals(arrivedSince: known) {
+                terminals.adopt(terminals: arrived, in: path, active: false)
             }
-            let target = workspace.map(WorkspacePath.init) ?? workbench.workspacePath
-            guard let target else { return nil }
-            return workbench.offer(source, onBenchOf: target)
-        case .browser:
-            // Offered whoever asks (#350): the browser is something to glance at while work
-            // goes on, and even the operator's ⌘⇧B leaves the keyboard where it was.
-            guard isMounted(workspace) else { return nil }
-            return workbench.offerBrowser()
-        case .unsupported:
-            return nil
         }
+        knownPanes = document.workspacePaneIDs
+
+        let drawing = BenchDrawing.of(document, answered: answered)
+        workspacePath = drawing.workspace
+        shelvedBench = drawing.shelved
+        mount = drawing.mount
+        if let active = drawing.workspace, let bench = drawing.mount.bench {
+            let firstVisit = answered.insert(active).inserted
+            terminals.adopt(terminals: bench.terminalPaneIDs, in: active, active: true)
+            if firstVisit { resumeOffers = offers(in: bench) }
+        } else if drawing.workspace == nil {
+            terminals.deactivate()
+        } else {
+            resumeOffers = [:]
+        }
+        reconcileSessions()
+        documentFollower?(document)
     }
 
-    /// A verb that names a workspace acts only on the mounted one; nil means "the active one".
-    private func isMounted(_ workspace: String?) -> Bool {
-        workspace.map { WorkspacePath($0) == workbench.workspacePath } ?? true
+    /// #85's answer in daemon mode. Restoring draws what benchd already holds, bringing the shelf
+    /// back first when the offer was the shelf. Fresh asks benchd to shelve the bench and start
+    /// one shell — unless the offer was the shelf, which fresh leaves where it is.
+    ///
+    /// **A verb that did not happen leaves the question open.** Marked answered before the verb,
+    /// because the document it makes arrives inside the send and must not be asked about again;
+    /// unmarked if no newer document came back, so the operator's choice is never silently
+    /// replaced by the bench he declined.
+    private func answerFromDaemon(
+        _ choice: BenchRestoreChoice, offer: BenchRestoreOffer, path: WorkspacePath
+    ) {
+        answered.insert(path)
+        let offeredTheShelf = shelvedBench == offer.bench
+        let verb: BenchVerb? =
+            switch choice {
+            case .restore where offeredTheShelf: .workspaceUnshelve(path: path.value)
+            case .fresh where !offeredTheShelf: .workspaceReset(path: path.value)
+            case .restore, .fresh: nil
+            }
+        if let verb {
+            let before = lastApplied?.seq
+            send(verb, by: .operatorGesture)
+            guard lastApplied?.seq != before else {
+                answered.remove(path)
+                return
+            }
+        }
+        if let lastApplied { apply(lastApplied) }
     }
 
-    private func isTerminal(_ surface: Surface?) -> Bool {
-        if case .terminal = surface { true } else { false }
+    /// A divider drag. In local mode every step is a `layout/resize`, as it always was. In daemon
+    /// mode the drag is drawn here as it moves and benchd hears once, on release: a round trip
+    /// per mouse event would be a hundred events in the log for one gesture.
+    func resize(_ divider: BenchDivider, to fraction: Double, released: Bool) {
+        guard mode.client != nil else {
+            // The release repeats the last step's fraction, and locally that step already landed.
+            if !released { send(.layoutResize(divider, fraction: fraction), by: .operatorGesture) }
+            return
+        }
+        guard !released else {
+            send(.layoutResize(divider, fraction: fraction), by: .operatorGesture)
+            return
+        }
+        guard var bench else { return }
+        switch divider {
+        case let .columns(member, against):
+            bench.resizeColumn(member, to: fraction, against: against)
+        case let .slots(member, against): bench.resizeSlot(member, to: fraction, against: against)
+        }
+        mount = .mounted(bench)
+    }
+
+    /// Say why a verb did not happen (daemon mode). A refusal is benchd's own sentence.
+    func verbFailed(_ why: String) {
+        NSLog("helm: %@", why)
+        verbFailure = why
+        verbFailureTask?.cancel()
+        verbFailureTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            self?.verbFailure = nil
+        }
     }
 }

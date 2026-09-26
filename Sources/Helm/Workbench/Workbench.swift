@@ -23,6 +23,7 @@ import HelmWire
 /// them is a method in **this file**; an extension elsewhere needing to mutate them is
 /// the signal the rule was put in the wrong place (`AGENTS.md`), not a reason to widen
 /// access. `WorkbenchPlacement.swift` reads and decides, and never writes.
+// swiftlint:disable:next type_body_length - legacy (#418): 388 lines, limit 350
 struct Workbench: Codable, Equatable {
     private(set) var columns: [Column]
     /// The slot the operator's next command targets. A slot **id**, never an index:

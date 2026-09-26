@@ -46,6 +46,7 @@ import XCTest
 /// and keep the measurement in this comment rather than weakening it into another header
 /// assertion.
 @MainActor
+// swiftlint:disable:next type_body_length - legacy (#418): 356 lines, limit 350
 final class CanvasSiblingFreshnessLiveTests: XCTestCase {
     private var directory: URL!
     private var artifact: URL!

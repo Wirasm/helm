@@ -1,0 +1,50 @@
+# Size and complexity limits (#418). Nothing else: formatting is `.swift-format`'s job, and
+# every rule added here is one an agent must satisfy with nobody to ask.
+#
+# Errors only, no warning tier. A warning nobody has to fix prints on every run and teaches
+# everyone to stop reading the output. SwiftLint requires a warning level, so each rule sets
+# it equal to the error level: nothing is ever only a warning.
+#
+# Code that was already over a limit when this landed carries an inline marker naming the
+# value measured then, e.g.
+#   // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 24, limit 15
+# (a file_length marker is `// swiftlint:disable file_length - …` on the file's first line).
+# Never add one to new code: split the function or type instead. Once a marked site is back
+# under its limit, `superfluous_disable_command` fails until the marker is deleted, so the
+# set of markers only shrinks. Known gap: a marker is on or off, so a marked site can grow
+# without failing. Its recorded value is what makes that visible in review.
+#
+# Run with `scripts/check-size.sh` (part of `make lint`).
+only_rules:
+  - cyclomatic_complexity
+  - function_body_length
+  - closure_body_length
+  - type_body_length
+  - file_length
+  - superfluous_disable_command
+
+included:
+  - Sources
+  - Tests
+  - tools
+excluded:
+  - tools/lint/.build
+
+cyclomatic_complexity:
+  warning: 15
+  error: 15
+function_body_length:
+  warning: 60
+  error: 60
+closure_body_length:
+  warning: 50
+  error: 50
+type_body_length:
+  warning: 350
+  error: 350
+file_length:
+  warning: 600
+  error: 600
+  ignore_comment_only_lines: true
+superfluous_disable_command:
+  severity: error

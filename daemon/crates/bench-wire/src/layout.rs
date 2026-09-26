@@ -315,6 +315,19 @@ pub fn document_path(root: &Path) -> PathBuf {
     root.join("bench.json")
 }
 
+/// `<root>/rules/placement.toml`: where new panes go (#356). The operator writes it; benchd
+/// only reads it. Absent means the built-in table.
+pub fn placement_rules_path(root: &Path) -> PathBuf {
+    root.join("rules").join("placement.toml")
+}
+
+/// A rules file was read and is now in force — or, with `source: "default"`, is absent and the
+/// built-in table is. `data`: `{file, source}`.
+pub const RULES_LOADED: &str = "rules/loaded";
+/// A rules file changed and could not be read. The table in force before it stays in force.
+/// `data`: `{file, why}`, once per version of the file.
+pub const RULES_REJECTED: &str = "rules/rejected";
+
 #[cfg(test)]
 mod tests {
     use super::*;

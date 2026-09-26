@@ -5,8 +5,8 @@ import HelmWire
 
 /// The bench's gestures, spelled as the methods tests have always called, and each one a verb.
 ///
-/// `WorkbenchModel`'s own mutation methods are `fileprivate` to its file, so nothing — tests
-/// included — can change the bench around `send`. These keep the old names so a test reads as
+/// `WorkbenchModel`'s own mutation methods take a `LocalBenchKey` only `LocalSink` can make, so
+/// nothing — tests included — can change the bench around `send`. These keep the old names so a test reads as
 /// what it does ("split right", "open this file"), and every one of them goes through the sink
 /// with the actor the old method stood for: the operator's gestures take the keyboard, the
 /// offering twins are an agent's.

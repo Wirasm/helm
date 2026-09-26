@@ -184,6 +184,7 @@ impl Rows<'_> {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 296 lines, limit 100")]
 pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     let ws = Workspace::resolve(inputs.workspace);
     let mut out = Rows {

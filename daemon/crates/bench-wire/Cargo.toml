@@ -8,3 +8,6 @@ description = "Every bench wire type and shared resolution rule, spelled once."
 bench-doc = { path = "../bench-doc" }
 serde.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true

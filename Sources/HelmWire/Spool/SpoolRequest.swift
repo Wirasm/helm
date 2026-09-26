@@ -1,3 +1,4 @@
+// swiftlint:disable file_length - legacy (#418): 676 lines, limit 600
 import Foundation
 
 /// What a caller asks helm to do, as one of the kinds helm knows.
@@ -1015,6 +1016,7 @@ package enum SpoolCommandPolicy {
         HelmCommandName.allCases.filter { verdict(for: $0) == .allowed }
     }
 
+    // swiftlint:disable:next function_body_length - legacy (#418): 73 lines, limit 60
     package static func verdict(for command: HelmCommandName) -> Verdict {
         switch command {
 

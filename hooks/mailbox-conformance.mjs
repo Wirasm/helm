@@ -103,6 +103,11 @@ const SUITE_SOURCE = path.join(REPO, "Sources", "HelmWire", "DefaultsSuite.swift
 // The one Swift WRITER into the mailbox: `CanvasNoteCourier` sends the operator's canvas note.
 // It is here for `OPERATOR_SENDER` — see `checkTheOperatorSenderAgrees`.
 const COURIER_SOURCE = path.join(REPO, "Sources", "Helm", "Canvas", "CanvasNoteCourier.swift");
+// The two HOSTS whose declaration makes a session claim a mailbox (#417): helm names the pane
+// variable here, benchd declares the session variable into every session it spawns. Neither is a
+// mailbox file, and a rename on either side would silently stop every hosted agent claiming.
+const PANE_SOURCE = path.join(REPO, "Sources", "Helm", "Terminals", "PaneEnvironment.swift");
+const BENCHD_SOURCE = path.join(REPO, "daemon", "crates", "benchd", "src", "main.rs");
 
 // ── scratch space ────────────────────────────────────────────────────────────────────────
 
@@ -252,6 +257,7 @@ function extractDecl(source, file, name) {
 }
 
 const IMPORTS = [
+	'import { execFileSync } from "node:child_process";',
 	'import { randomBytes } from "node:crypto";',
 	'import * as fs from "node:fs";',
 	'import * as os from "node:os";',
@@ -325,6 +331,8 @@ const SHARED_NAMES = [
 	"OFF_ENV",
 	"ROOT_ENV",
 	"HANDLE_ENV",
+	"PANE_ENV",
+	"BENCH_SESSION_ENV",
 	"SUITE_ENV",
 	"CANONICAL_DOMAIN",
 	"LEGACY_DOMAIN",
@@ -333,6 +341,8 @@ const SHARED_NAMES = [
 	"OPERATOR_SENDER",
 	"suiteName",
 	"mailRoot",
+	"controllingTerminal",
+	"claimsAMailbox",
 	"slug",
 	"tail",
 	"pidAlive",
@@ -1014,7 +1024,7 @@ function livenessCases() {
  * Everything a caller can vary about a run, so `selfChecks` can point the whole suite at a
  * mutated copy of any one source and require it to go red.
  */
-async function runConformance({ hooksSource, piSource, handleSource, ownerSource, courierSource, suiteSource }) {
+async function runConformance({ hooksSource, piSource, handleSource, ownerSource, courierSource, suiteSource, paneSource, benchdSource }) {
 	// The extractions are NOT in a group: if one of them cannot find its implementation there is
 	// nothing to compare at all, and carrying on would be the silent zero itself.
 	const hooks = await loadHooks(hooksSource);
@@ -1031,6 +1041,8 @@ async function runConformance({ hooksSource, piSource, handleSource, ownerSource
 	group("the shared surface", () => checkTheSharedSurfaceIsCovered(hooksSource, piSource));
 	group("constants", () => checkTheConstantsAgree(hooks, pi));
 	group("the mail root", () => checkTheMailRootAgrees(hooks, pi, mailRule, suiteRule));
+	group("who claims", () => checkWhoClaimsAgrees(hooks, pi));
+	group("the hosts' declarations", () => checkTheHostsDeclareWhatTheWritersRead(hooks, pi, paneSource, benchdSource));
 	group("slug/tail", () => checkSlugAndTailAgree(hooks, pi));
 	group("deriveHandle", () => checkDerivationAgrees(hooks, pi));
 	group("the handle alphabet", () => checkSwiftAcceptsWhatTheWritersEmit(hooks, pi, rules));
@@ -1045,6 +1057,92 @@ async function runConformance({ hooksSource, piSource, handleSource, ownerSource
 	group("the operator sender", () => checkTheOperatorSenderAgrees(hooks, pi, swiftSender));
 	group("the deliberate divergences", () => checkTheDeliberateDivergences(hooks, pi));
 	reportTheSwiftRule(rules, schema, mailRule, suiteRule);
+}
+
+/**
+ * WHO GETS A MAILBOX AT ALL — #417. Both writers decide it before claiming, and a drift is either
+ * a hosted agent nobody can address or the leak coming back through one runtime: 12,497 mailboxes,
+ * mostly from Archon's SDK sessions, which inherit `HELM_PANE` from the pane that started them
+ * but not its terminal.
+ */
+const CLAIM_CASES = [
+	{ what: "the pane's own agent: declared, and on the pane's terminal", env: { HELM_PANE: "620BCA56" }, terminal: "ttys002", claims: true },
+	{ what: "a session benchd spawned, on benchd's pty", env: { BENCH_SESSION: "s-1" }, terminal: "ttys009", claims: true },
+	{ what: "a session a pane's agent started from a tool call: the declaration inherited, no terminal (#417)", env: { HELM_PANE: "620BCA56" }, terminal: "", claims: false },
+	{ what: "the same under benchd", env: { BENCH_SESSION: "s-1" }, terminal: "", claims: false },
+	{ what: "a terminal outside helm: Ghostty, Terminal.app", env: {}, terminal: "ttys004", claims: false },
+	{ what: "nothing at all: an SDK session nobody hosts", env: {}, terminal: "", claims: false },
+	{ what: "a blank declaration is no declaration", env: { HELM_PANE: "  ", BENCH_SESSION: "" }, terminal: "ttys002", claims: false },
+	{ what: "an explicit mailroom opts in outright — every test that claims", env: { HELM_MAIL_DIR: "/tmp/helm-conformance-root" }, terminal: "", claims: true },
+	{ what: "and a blank one does not", env: { HELM_MAIL_DIR: " " }, terminal: "", claims: false },
+];
+
+function checkWhoClaimsAgrees(hooks, pi) {
+	let drift = 0;
+	let asked = 0;
+	for (const one of CLAIM_CASES) {
+		const terminal = () => {
+			asked += 1;
+			return one.terminal;
+		};
+		const a = hooks.claimsAMailbox(one.env, terminal);
+		const b = pi.claimsAMailbox(one.env, terminal);
+		if (a !== b || a !== one.claims) {
+			drift += 1;
+			bad(`claimsAMailbox — ${one.what}: expected ${one.claims}, hooks says ${a}, pi says ${b}`);
+		}
+	}
+	check(drift === 0, `both writers claim a mailbox for exactly the hosted sessions, on all ${CLAIM_CASES.length} cases`);
+	// Nobody declared → `ps` is never spawned. The Claude hook runs this on every prompt of every
+	// session on the machine, so the cheap answer has to be the common one.
+	let spawned = 0;
+	for (const module of [hooks, pi]) module.claimsAMailbox({}, () => (spawned += 1, "ttys002"));
+	check(spawned === 0, "and a session no host declared never asks for its terminal");
+
+	// The lookup itself, against real processes. The negative half only: this harness's own
+	// process has a terminal exactly when a person ran the gate from one, so it cannot carry an
+	// assertion either way. `hooks/test.sh` proves the positive end to end, under a real pty.
+	const child = spawnSync(process.execPath, ["-e", `
+		const { spawn } = require("node:child_process");
+		const c = spawn("/bin/sleep", ["5"], { detached: true, stdio: "ignore" });
+		console.log(c.pid); c.unref();`], { encoding: "utf8" });
+	const detached = Number(child.stdout.trim());
+	try {
+		check(
+			hooks.controllingTerminal(detached) === "" && pi.controllingTerminal(detached) === "",
+			"a process started detached, as every tool call is, has no terminal in either runtime",
+		);
+		check(
+			hooks.controllingTerminal(999_999_999) === "" && pi.controllingTerminal(999_999_999) === "",
+			"and neither does a pid that does not exist",
+		);
+	} finally {
+		try {
+			process.kill(detached);
+		} catch {
+			// Already gone; `sleep 5` bounds it either way.
+		}
+	}
+}
+
+/**
+ * The names the writers wait for are the names the hosts actually declare (#417). Read out of
+ * helm's Swift and benchd's Rust rather than restated: a host renaming its variable would leave
+ * both writers agreeing with each other and every hosted agent without a mailbox.
+ */
+function checkTheHostsDeclareWhatTheWritersRead(hooks, pi, paneSource, benchdSource) {
+	const pane = paneSource.match(/static let paneVariable = "([^"]+)"/)?.[1];
+	check(Boolean(pane), "PaneEnvironment.swift still declares `static let paneVariable = \"…\"`");
+	check(
+		hooks.PANE_ENV === pane && pi.PANE_ENV === pane,
+		`the pane variable both writers read is the one helm declares (helm ${pane}, hooks ${hooks.PANE_ENV}, pi ${pi.PANE_ENV})`,
+	);
+	const sessions = [...benchdSource.matchAll(/\("([A-Z_]+)"\.to_string\(\), id\.clone\(\)\)/g)].map((m) => m[1]);
+	check(sessions.length >= 2, `benchd declares its session id into every spawn path (found ${sessions.length})`);
+	check(
+		sessions.every((name) => name === hooks.BENCH_SESSION_ENV && name === pi.BENCH_SESSION_ENV),
+		`the session variable both writers read is the one benchd declares (benchd ${[...new Set(sessions)].join(",")}, hooks ${hooks.BENCH_SESSION_ENV}, pi ${pi.BENCH_SESSION_ENV})`,
+	);
 }
 
 /** Run one check group. A throw is that group's failure and nobody else's. */
@@ -1092,7 +1190,7 @@ function checkTheSharedSurfaceIsCovered(hooksSource, piSource) {
 /** The on-disk shape's names and the bounds on another agent's text — #127's numbers. */
 function checkTheConstantsAgree(hooks, pi) {
 	let ran = 0;
-	for (const name of ["NAME", "READ_DIR", "OWNER_FILE", "OFF_ENV", "ROOT_ENV", "HANDLE_ENV", "SUITE_ENV", "CANONICAL_DOMAIN", "LEGACY_DOMAIN", "SUBJECT_MAX", "FROM_MAX", "OPERATOR_SENDER"]) {
+	for (const name of ["NAME", "READ_DIR", "OWNER_FILE", "OFF_ENV", "ROOT_ENV", "HANDLE_ENV", "PANE_ENV", "BENCH_SESSION_ENV", "SUITE_ENV", "CANONICAL_DOMAIN", "LEGACY_DOMAIN", "SUBJECT_MAX", "FROM_MAX", "OPERATOR_SENDER"]) {
 		ran += 1;
 		check(
 			hooks[name] === pi[name],
@@ -1971,7 +2069,9 @@ async function selfChecks() {
 	// Every mutation is this, with one source replaced — spelled once, so adding a source to the
 	// harness cannot leave a mutation quietly running against the wrong set. It did have to be
 	// spelled out in every entry, and #285 added the sixth.
-	const pristine = { hooksSource, piSource, handleSource, ownerSource, courierSource, suiteSource };
+	const paneSource = fs.readFileSync(PANE_SOURCE, "utf8");
+	const benchdSource = fs.readFileSync(BENCHD_SOURCE, "utf8");
+	const pristine = { hooksSource, piSource, handleSource, ownerSource, courierSource, suiteSource, paneSource, benchdSource };
 	const mutations = [
 		{
 			what: "a function the harness names is gone from hooks/helm-mail.mjs",
@@ -1993,6 +2093,23 @@ async function selfChecks() {
 				),
 			},
 			expect: /ownerGone disagrees|both reapers leave the SAME shared root/,
+		},
+		{
+			// #417 from pi's side: a `claimsAMailbox` that trusts the inherited declaration alone is
+			// every Archon SDK session started from a pane claiming a mailbox again.
+			what: "pi claims on HELM_PANE alone, without asking for a terminal (#417)",
+			sources: { ...pristine, piSource: piSource.replace("return declared && terminal() !== \"\";", "return declared;") },
+			expect: /claimsAMailbox — /,
+		},
+		{
+			what: "helm renames the pane variable its writers wait for (#417)",
+			sources: { ...pristine, paneSource: paneSource.replace('static let paneVariable = "HELM_PANE"', 'static let paneVariable = "HELM_PANE_ID"') },
+			expect: /the pane variable both writers read is the one helm declares/,
+		},
+		{
+			what: "benchd renames the session variable its writers wait for (#417)",
+			sources: { ...pristine, benchdSource: benchdSource.replaceAll('("BENCH_SESSION".to_string(), id.clone())', '("BENCHD_SESSION".to_string(), id.clone())') },
+			expect: /the session variable both writers read is the one benchd declares/,
 		},
 		{
 			what: "the hook's slug emits a character no mailbox directory can carry",
@@ -2178,6 +2295,8 @@ async function main() {
 			ownerSource: fs.readFileSync(OWNER_SOURCE, "utf8"),
 			courierSource: fs.readFileSync(COURIER_SOURCE, "utf8"),
 			suiteSource: fs.readFileSync(SUITE_SOURCE, "utf8"),
+			paneSource: fs.readFileSync(PANE_SOURCE, "utf8"),
+			benchdSource: fs.readFileSync(BENCHD_SOURCE, "utf8"),
 		});
 	} catch (error) {
 		bad(`the harness could not run: ${error.message}`);

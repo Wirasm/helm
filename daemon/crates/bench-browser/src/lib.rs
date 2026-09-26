@@ -362,6 +362,7 @@ impl Browser {
     /// Start a browser for `root` and return once it is listening. `on_exit` runs on
     /// the supervising thread when the browser ends, for whatever reason, after the
     /// endpoint file is gone.
+    #[expect(clippy::too_many_lines, reason = "legacy (#418): 145 lines, limit 100")]
     pub fn launch(
         root: &Path,
         home: &Path,

@@ -2730,6 +2730,92 @@ fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
     assert_eq!(record["version"], bench_wire::DOCUMENT_RECORD_VERSION);
 }
 
+/// #356: placement comes from `<root>/rules/placement.toml`, reread on the next verb with no
+/// restart; a file that cannot be read is logged naming the line, reported by `status`, and
+/// changes nothing — the last good table keeps placing.
+#[test]
+fn a_rules_file_applies_on_the_next_verb_and_a_bad_one_changes_nothing() {
+    let home = TestHome::claim("rules");
+    let root = home.dir.join(".bench");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    working_bench(&daemon.socket);
+    let rules = root.join("rules").join("placement.toml");
+    let open_canvas = |path: &str| {
+        ok_data(layout(
+            &daemon.socket,
+            "pane/open",
+            serde_json::json!({ "surface": { "kind": "canvas", "source": { "kind": "file", "path": path } } }),
+            None,
+            false,
+        ))
+    };
+    let drawer_panes = || {
+        let document = ok_data(layout(
+            &daemon.socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]
+            .clone();
+        document["drawers"]
+            .as_array()
+            .map_or(0, |d| d[0]["panes"].as_array().unwrap().len())
+    };
+    let status = || json_of(&bench(&home.dir, &["status"]))["rules"]["placement"].clone();
+    assert_eq!(status()["state"], "default");
+
+    open_canvas("/tmp/m4-proof/a.md");
+    assert_eq!(
+        drawer_panes(),
+        0,
+        "the built-in table keeps canvases on the bench"
+    );
+
+    fs::create_dir_all(rules.parent().unwrap()).unwrap();
+    fs::write(
+        &rules,
+        "[[place]]\nsurface = \"canvas\"\nby = \"agent\"\ntry = [{ drawer = \"notes\" }]\n",
+    )
+    .unwrap();
+    let focus = open_canvas("/tmp/m4-proof/b.md");
+    assert_eq!(drawer_panes(), 1, "the file applied without a restart");
+    assert_eq!(focus["focused_pane_before"], focus["focused_pane_after"]);
+    assert_eq!(status()["state"], "ok");
+
+    fs::write(
+        &rules,
+        "[[place]]\nsurface = \"canvas\"\ntry = [\"sideways\"]\n",
+    )
+    .unwrap();
+    open_canvas("/tmp/m4-proof/c.md");
+    assert_eq!(drawer_panes(), 2, "the last good table is still placing");
+    let rejected: Vec<_> = log_of(&root)
+        .into_iter()
+        .filter(|e| e["kind"] == "rules/rejected")
+        .collect();
+    assert_eq!(
+        rejected.len(),
+        1,
+        "logged once for this version of the file"
+    );
+    let why = rejected[0]["data"]["why"].as_str().unwrap();
+    assert!(why.contains("line 3") && why.contains("sideways"), "{why}");
+    assert_eq!(rejected[0]["data"]["file"], rules.display().to_string());
+    let reported = status();
+    assert_eq!(reported["state"], "rejected");
+    assert_eq!(reported["why"], why);
+    open_canvas("/tmp/m4-proof/d.md");
+    assert_eq!(
+        log_of(&root)
+            .iter()
+            .filter(|e| e["kind"] == "rules/rejected")
+            .count(),
+        1,
+        "not once per verb"
+    );
+}
+
 #[test]
 fn an_unreadable_bench_json_is_moved_aside_and_the_daemon_starts_empty() {
     let home = TestHome::claim("m4-bad");
@@ -2905,6 +2991,11 @@ fn mangle(cwd: &Path) -> String {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "legacy (#418): 167 lines, limit 100; cognitive complexity 31, limit 25"
+)]
 fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
     use bench_wire::{Harness, Host, OpenAction, SessionList, SessionState};
     let home = TestHome::claim("sessions");
