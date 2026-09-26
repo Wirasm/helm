@@ -91,10 +91,10 @@ pub enum LayoutVerb {
     /// ⌘D / ⌘⇧D. A terminal unless a surface is named.
     #[serde(rename = "pane/split")]
     PaneSplit {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace: Option<StandardPath>,
         direction: Split,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         surface: Option<Surface>,
     },
     #[serde(rename = "pane/close")]
@@ -116,7 +116,7 @@ pub enum LayoutVerb {
     FocusSlot { slot: SlotId },
     #[serde(rename = "focus/step")]
     FocusStep {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace: Option<StandardPath>,
         direction: Direction,
     },
@@ -371,6 +371,11 @@ mod tests {
                     .unwrap_or_else(|e| panic!("{}: {e}", req.verb));
             let back = serde_json::to_value(&verb).unwrap();
             assert_eq!(back["verb"], Value::String(req.verb.clone()));
+            assert_eq!(
+                back["args"], req.args,
+                "{}: the typed verb writes its arguments as the sample spells them",
+                req.verb
+            );
             seen.push(LAYOUT_VERBS.iter().find(|v| **v == req.verb).unwrap());
         }
         for verb in LAYOUT_VERBS {

@@ -113,6 +113,20 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertFalse(written.contains("drawer"), written)
     }
 
+    /// benchd refuses a `pane/open` naming a workspace and a drawer, and reads a null as absent;
+    /// helm's decode draws the same line.
+    func testPaneOpenNamesAWorkspaceOrADrawerNeverBoth() throws {
+        func decode(_ args: String) throws -> BenchVerb {
+            let line = #"{"id":"x","verb":"pane/open","args":"# + args + "}"
+            return try JSONDecoder().decode(BenchRequest.self, from: Data(line.utf8)).verb
+        }
+        let browser = #""surface":{"kind":"browser"}"#
+        XCTAssertEqual(
+            try decode(#"{"drawer":"notes","workspace":null,"# + browser + "}"),
+            .paneOpenInDrawer("notes", surface: .browser))
+        XCTAssertThrowsError(try decode(#"{"drawer":"notes","workspace":"/tmp/w","# + browser + "}"))
+    }
+
     /// A kind helm does not know is kept as `unsupported`, never dropped: the daemon owns the pane.
     func testASurfaceKindThisBuildDoesNotKnowIsKeptNotDropped() throws {
         let pane = """

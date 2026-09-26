@@ -235,7 +235,7 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case "pane/open":
             let surface = try a.decode(Surface.self, forKey: .surface)
             if let drawer = try a.decodeIfPresent(String.self, forKey: .drawer) {
-                guard !a.contains(.workspace) else {
+                guard try a.decodeIfPresent(String.self, forKey: .workspace) == nil else {
                     throw DecodingError.dataCorruptedError(
                         forKey: .drawer, in: a,
                         debugDescription: "pane/open names a workspace and a drawer")
