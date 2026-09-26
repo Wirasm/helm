@@ -5,8 +5,8 @@ import HelmWire
 
 /// The agent that was running in a terminal pane when helm last looked (#63).
 ///
-/// **A pane is helm's to recreate; a session is the CLI's.** `TerminalManager.activate`
-/// already rebuilds a workspace's terminals under their persisted ids, and those shells come
+/// **A pane is helm's to recreate; a session is the CLI's.** `TerminalManager.adopt(terminals:in:)`
+/// already rebuilds a workspace's terminals under their pane ids, and those shells come
 /// back empty — the pty died with helm's process, and nothing helm owns can bring a
 /// conversation back. What *can* is the agent's own `--resume`, and the only thing it needs
 /// is an id helm was in a position to write down while the agent was alive. That is this
@@ -94,7 +94,7 @@ enum AgentResume {
     ///
     /// # It changes directory first, and that is a measurement rather than a precaution
     ///
-    /// A restored pane's pty is rooted at the **workspace** (`TerminalManager.activate`), and
+    /// A restored pane's pty is rooted at the **workspace** (`TerminalManager.adopt`), and
     /// `ResumableAgent.cwd` is where the agent actually was — a subdirectory, whenever the
     /// operator started it in one. Measured 2026-08-07 against the real CLI, both halves,
     /// because the obvious reasoning gets one of them backwards:

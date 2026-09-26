@@ -17,7 +17,7 @@ import XCTest
 /// **Both sides worked in isolation, which is why nothing caught it.** `CanvasSchemeHandler`
 /// serves a sibling correctly (`CanvasSchemeHandlerTests`), WebKit fetches a fresh one
 /// (`CanvasSiblingFreshnessLiveTests` — six ways, no staleness, which is what closed #228), and
-/// `Workbench.offer` places a pane correctly (`WorkbenchOfferTests`). Every one of those stayed
+/// benchd places a pane correctly (`bench-doc`'s `offer.rs`). Every one of those stayed
 /// green throughout. That is #216's shape exactly, so the test that was missing is the one that
 /// spans the whole distance: **a push in at one end, and what the page ends up with read off the
 /// other**.
