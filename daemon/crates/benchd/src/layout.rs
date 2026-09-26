@@ -231,7 +231,7 @@ fn admit(core: &Core, verb: LayoutVerb, by: &Actor) -> Result<LayoutVerb, String
             "no live session {session:?} — `bench sessions` lists them, and `bench spawn` starts one in a pane"
         ));
     }
-    let Actor::Agent { pane, handle } = by else {
+    let Actor::Agent { pane, .. } = by else {
         return Ok(verb);
     };
     let doc = &core.bench.document;
@@ -281,7 +281,7 @@ fn admit(core: &Core, verb: LayoutVerb, by: &Actor) -> Result<LayoutVerb, String
             into: OpenInto::Active,
             surface,
         }) => Ok(LayoutVerb::PaneOpen(PaneOpen {
-            into: callers_workspace(core, pane.as_deref(), handle.as_deref())
+            into: callers_workspace(core, pane.as_deref())
                 .map_or(OpenInto::Active, OpenInto::Workspace),
             surface,
         })),
@@ -290,7 +290,7 @@ fn admit(core: &Core, verb: LayoutVerb, by: &Actor) -> Result<LayoutVerb, String
             direction,
             surface,
         } => Ok(LayoutVerb::PaneSplit {
-            workspace: callers_workspace(core, pane.as_deref(), handle.as_deref()),
+            workspace: callers_workspace(core, pane.as_deref()),
             direction,
             surface,
         }),
@@ -299,8 +299,9 @@ fn admit(core: &Core, verb: LayoutVerb, by: &Actor) -> Result<LayoutVerb, String
 }
 
 /// An agent's `by`, with the pane it runs in filled in when benchd knows it and the agent did
-/// not say: an agent benchd spawned has no `HELM_PANE`, but the pane showing its session is where
-/// it runs. The logged record then names it, which is how helm remembers who opened a canvas.
+/// not say: an agent benchd spawned has no `HELM_PANE`, but the pane showing its live session is
+/// where it runs. The logged record then names it, which is how helm remembers who opened a
+/// canvas, and it is the pane `callers_workspace` routes by — one lookup for both.
 pub fn placed(core: &Core, by: Actor) -> Actor {
     let Actor::Agent {
         pane: None,
@@ -323,27 +324,15 @@ pub fn placed(core: &Core, by: Actor) -> Actor {
     }
 }
 
-/// The workspace an agent is working in: the one holding its pane (`HELM_PANE`), else the one
-/// holding the pane that shows its benchd session (found by its handle). `None` when neither is
-/// on a bench, and the verb falls back to the active workspace.
-pub fn callers_workspace(
-    core: &Core,
-    pane: Option<&str>,
-    handle: Option<&str>,
-) -> Option<bench_doc::StandardPath> {
-    let doc = &core.bench.document;
-    let in_pane = |id: PaneId| doc.workspace_of(id).map(|w| w.path.clone());
-    if let Some(found) = pane
-        .and_then(|p| PaneId::parse(p.trim()).ok())
-        .and_then(in_pane)
-    {
-        return Some(found);
-    }
-    let session = core
-        .sessions
-        .values()
-        .find(|s| Some(s.handle.as_str()) == handle)?;
-    doc.pane_showing_session(&session.id).and_then(in_pane)
+/// The workspace an agent is working in: the one holding its pane — `HELM_PANE`, or the pane
+/// showing its benchd session, which `placed` has already filled in. `None` when the pane is on no
+/// bench, and the verb falls back to the active workspace.
+pub fn callers_workspace(core: &Core, pane: Option<&str>) -> Option<bench_doc::StandardPath> {
+    let pane = PaneId::parse(pane?.trim()).ok()?;
+    core.bench
+        .document
+        .workspace_of(pane)
+        .map(|w| w.path.clone())
 }
 
 /// Look at the placement rules file, logging what changed. A log failure here is not the

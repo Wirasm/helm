@@ -156,6 +156,19 @@ fn a_malformed_agent_costs_the_pane_its_resume_record_not_the_pane() {
 }
 
 #[test]
+fn a_malformed_session_costs_the_pane_its_session_not_the_pane() {
+    let mut pane = terminal_pane(TERMINAL);
+    pane["surface"]["session"] = json!(7);
+
+    let read = Bench::read_tolerant(bench(vec![pane])).unwrap();
+
+    let kept = read.value.panes().next().unwrap();
+    assert_eq!(kept.id.to_string(), TERMINAL);
+    assert_eq!(kept.surface, Surface::terminal());
+    assert!(read.notes[0].contains("session"), "{:?}", read.notes);
+}
+
+#[test]
 fn a_malformed_name_costs_the_pane_its_name_not_the_pane() {
     let mut pane = canvas_pane(CANVAS);
     pane["name"] = json!("just a string");
@@ -171,7 +184,7 @@ fn a_malformed_name_costs_the_pane_its_name_not_the_pane() {
 #[test]
 fn a_field_a_newer_build_added_is_ignored_not_fatal() {
     let mut pane = terminal_pane(TERMINAL);
-    pane["surface"]["session"] = json!("s7");
+    pane["surface"]["scrollback"] = json!(4096);
     pane["pinned"] = json!(true);
 
     let strict: Bench = serde_json::from_value(bench(vec![pane.clone()])).unwrap();

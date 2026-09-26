@@ -45,7 +45,7 @@ final class TerminalManagerTests: XCTestCase {
                         .init(id: shell, surface: .terminal(agent: nil)),
                     ]))
             ], active: firstWorkspace.value)
-        let attaching = document.attachCommands(bench: "/opt/it's/bench")
+        let attaching = document.workspaces[0].bench.attachCommands(bench: "/opt/it's/bench")
         XCTAssertEqual(attaching, [agent: #"'/opt/it'\''s/bench' 'attach' 's3'"#])
 
         manager.adopt(
@@ -68,7 +68,7 @@ final class TerminalManagerTests: XCTestCase {
                     bench: ToyBench.bench([.init(id: UUID(), surface: .terminal(agent: nil))]))
             ], active: firstWorkspace.value)
         var asked = false
-        let none = plain.attachCommands(
+        let none = plain.workspaces[0].bench.attachCommands(
             bench: {
                 asked = true; return "bench"
             }())

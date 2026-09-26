@@ -5430,5 +5430,36 @@ fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
         bench(&home.dir, &["get", "pane", &pane]).code,
         3,
         "the canvas was closed"
+fn a_spawned_agents_verbs_name_the_pane_that_shows_it() {
+    // An agent `bench spawn` started has no HELM_PANE, only its BENCH_HANDLE. benchd fills in the
+    // pane showing its live session, so the logged `by` names where it runs: that is how helm
+    // remembers which agent opened a canvas (#205), and where its canvas lands.
+    let home = TestHome::claim("m3-placed");
+    let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    working_bench(&daemon.socket);
+    let ws = workspace(&home.dir).display().to_string();
+    let spawned = json_of(&bench(
+        &home.dir,
+        &["spawn", "--agent", "pi", "--cwd", &ws, "--name", "opener"],
+    ));
+    let pane = spawned["pane"].as_str().unwrap().to_string();
+    let plan = artifact(&home.dir, "placed.md");
+
+    let opened = bench_as(&home.dir, &["open", &plan], &[("BENCH_HANDLE", "opener")]);
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+    let canvas = json_of(&opened)["pane"].as_str().unwrap().to_string();
+
+    let change = log_of(&home.dir.join(".bench"))
+        .into_iter()
+        .rev()
+        .find(|e| e["kind"] == "bench/changed" && e["data"]["verb"] == "pane/open")
+        .unwrap();
+    assert_eq!(change["data"]["by"]["pane"], pane.as_str(), "{change}");
+    assert_eq!(change["data"]["by"]["handle"], "opener");
+    let found = json_of(&bench(&home.dir, &["get", "pane", &canvas]));
+    assert_eq!(
+        found["workspace"],
+        ws.as_str(),
+        "it lands in the agent's own workspace"
     );
 }
