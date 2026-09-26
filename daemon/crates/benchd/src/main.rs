@@ -36,8 +36,8 @@ use bench_wire::{
     Activity, BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event,
     KNOWN_VERBS, MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE,
     READY_WAIT, Request, Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb,
-    browser_endpoint_path, check_socket_path, events_path, resolve_root, socket_path,
-    validate_handle,
+    browser_endpoint_path, browser_wanted_path, check_socket_path, events_path, resolve_root,
+    socket_path, validate_handle,
 };
 use bench_wire::{DOCUMENT_CHANGED, Frame};
 use serde_json::{Value, json};
@@ -573,6 +573,27 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         std::thread::spawn(move || wake_reactor(core));
     }
 
+    // A browser that was wanted when the last daemon went away comes back with this one.
+    // On its own thread: the launch waits for the browser to listen, and the socket must
+    // answer meanwhile. A `browser/start` that races it finds this browser.
+    {
+        let mut c = core.lock().unwrap();
+        let marker = browser_wanted_path(&c.root);
+        if marker.exists() {
+            let _ = c.append(
+                "browser/resuming",
+                json!({
+                    "marker": marker.display().to_string(),
+                    "why": "the browser was started and never stopped with `bench browser stop`",
+                }),
+            );
+            let core = Arc::clone(&core);
+            std::thread::spawn(move || {
+                let _ = start_browser(&core, 0, BrowserMode::Headless);
+            });
+        }
+    }
+
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let core = Arc::clone(&core);
@@ -833,7 +854,7 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
             for s in sessions {
                 let _ = s.close(Duration::from_secs(1));
             }
-            let _ = stop_browser(&core, Duration::from_secs(2));
+            let _ = stop_browser(&core, Duration::from_secs(2), Unwant::No);
             // The flusher runs every FLUSH_EVERY; the last events must not wait on it.
             let _ = core.lock().unwrap().log.sync_data();
             let root = core.lock().unwrap().root.clone();
@@ -1486,7 +1507,9 @@ fn dispatch(
                     .as_ref()
                     .is_some_and(|b| b.is_running() && b.mode() == BrowserMode::Setup)
             };
-            if !running_setup && let Err(why) = stop_browser(core, Duration::from_secs(5)) {
+            if !running_setup
+                && let Err(why) = stop_browser(core, Duration::from_secs(5), Unwant::No)
+            {
                 return (errored(why), AfterResponse::Done);
             }
             core.lock().unwrap().browser_restarts.clear();
@@ -1512,7 +1535,7 @@ fn dispatch(
             (ok(data), AfterResponse::Done)
         }
 
-        Some(Verb::BrowserStop) => match stop_browser(core, Duration::from_secs(5)) {
+        Some(Verb::BrowserStop) => match stop_browser(core, Duration::from_secs(5), Unwant::Yes) {
             Ok(pid) => (
                 ok(json!({ "was_running": pid.is_some(), "pid": pid })),
                 AfterResponse::Done,
@@ -1588,6 +1611,11 @@ fn start_browser(
                 browser.stop(Duration::from_secs(2));
                 return Err(LaunchError::Failed(why));
             }
+            // The browser runs either way; an unwritten marker only means the next daemon
+            // will not bring it back, which must not be a surprise nobody can trace.
+            if let Err(e) = fs::write(browser_wanted_path(&c.root), b"") {
+                let _ = c.append("browser/unmarked", json!({ "why": e.to_string() }));
+            }
             Ok((browser, false))
         }
         Err(e) => {
@@ -1606,13 +1634,30 @@ fn start_browser(
     }
 }
 
+/// Whether a stop also removes `<root>/browser/wanted`. Only `browser/stop` does: a daemon
+/// stop and setup making way leave the browser wanted, so the next daemon brings it back.
+#[derive(PartialEq)]
+enum Unwant {
+    Yes,
+    No,
+}
+
 /// Stop the browser if one runs: logged, then the leash is dropped and the exit
 /// awaited. Returns the pid that was stopped.
-fn stop_browser(core: &Arc<Mutex<Core>>, grace: Duration) -> Result<Option<u32>, String> {
+fn stop_browser(
+    core: &Arc<Mutex<Core>>,
+    grace: Duration,
+    unwant: Unwant,
+) -> Result<Option<u32>, String> {
     let _life = BROWSER_LIFECYCLE.lock().unwrap();
     let browser = {
         let mut c = core.lock().unwrap();
         c.browser_wanted = false;
+        // Under the lifecycle lock, like the write in `start_browser`: a launch in flight when
+        // the stop arrived has finished and written the marker by now, so this removal is last.
+        if unwant == Unwant::Yes {
+            let _ = fs::remove_file(browser_wanted_path(&c.root));
+        }
         match c.browser.take().filter(|b| b.is_running()) {
             Some(b) => {
                 if let Err(why) = c.append("browser/stopped", json!({ "pid": b.pid })) {

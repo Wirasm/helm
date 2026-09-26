@@ -1,3 +1,4 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -23,6 +24,7 @@ final class BenchSnapshotModelTests: XCTestCase {
         refreshInterval: Duration = .seconds(60),
         now: @escaping () -> Date = Date.init,
         foregroundPid: @escaping (TerminalSession) -> pid_t? = { _ in nil },
+        mailboxOwners: MailboxOwnerCache = MailboxOwnerCache(),
         writer: BenchSnapshotModel.Writer? = nil
     ) -> (BenchSnapshotModel, WorkspaceModel, WorkbenchModel, TerminalManager) {
         let terminals = TerminalManager()
@@ -36,6 +38,7 @@ final class BenchSnapshotModelTests: XCTestCase {
             // Never the operator's real `~/.claude/sessions`: a test that reads it measures the
             // machine it runs on, and #247 made this model read a registry at all.
             registryRoot: root.appendingPathComponent("sessions"),
+            mailboxOwners: mailboxOwners,
             refreshInterval: refreshInterval,
             now: now,
             foregroundPid: foregroundPid,
@@ -189,6 +192,39 @@ final class BenchSnapshotModelTests: XCTestCase {
         XCTAssertEqual(writes.count, 2)
         let pane = writes.last?.workspaces[0].columns[0].slots[0].panes[0]
         XCTAssertEqual(pane?.terminal?.owner?.handle.value, "owner-4242")
+        model.stop()
+    }
+
+    /// **#417, through the real model: a publish does not re-read a mailroom that did not
+    /// change.** 12,497 mailboxes, every one opened on the main thread every two seconds, held
+    /// the operator's helm at a full core. `MailboxDirectoryTests` pins the cache; this pins
+    /// that the model publishes through one, and fails both ways — a model that bypasses the
+    /// cache opens nothing through it on the first publish, and one that rebuilds it per publish
+    /// opens everything again on every refresh.
+    func testRepeatedPublishesDoNotReReadAnUnchangedMailroom() throws {
+        let mail = root.appendingPathComponent("mail")
+        for i in 0..<1_000 {
+            let dir = mail.appendingPathComponent("project-\(i)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let record =
+                #"{"handle":"project-\#(i)","runtime":"claude","pid":\#(100_000 + i),"#
+                + #""sessionId":"s-\#(i)","cwd":"/tmp","retiredAt":1786040000000}"#
+            let owner = dir.appendingPathComponent("owner.json")
+            try record.write(to: owner, atomically: true, encoding: .utf8)
+        }
+        var opened = 0
+        let (model, workspaces, workbench, terminals) = fixture(
+            foregroundPid: { _ in 4242 },
+            mailboxOwners: MailboxOwnerCache(read: { url in
+                opened += 1
+                return try? Data(contentsOf: url)
+            }),
+            writer: { _ in true })
+
+        model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
+        XCTAssertEqual(opened, 1_000, "the first publish reads every mailbox once")
+        for _ in 0..<5 { model.refresh() }
+        XCTAssertEqual(opened, 1_000, "five more publishes of an unchanged mailroom open nothing")
         model.stop()
     }
 

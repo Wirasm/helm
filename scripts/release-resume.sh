@@ -9,7 +9,8 @@
 #   --pid PID              the helm to quit; must be running from --bundle
 #                          (default: the one process running from --bundle)
 #   --suite NAME           HELM_DEFAULTS_SUITE for the relaunch and the spool (default: none)
-#   --bench-suite NAME     BENCH_SUITE for the benchd restart     (default: --suite)
+#   --bench-suite NAME     BENCH_SUITE for the benchd restart     (default: --suite);
+#                          a loaded login agent for it is restarted with launchctl kickstart
 #   --cargo-root DIR       where bench and benchd are installed  (default: cargo's own, ~/.cargo)
 #   --env KEY=VALUE        extra environment for the relaunched helm, repeatable
 #   --no-remote-control    resume without --remote-control
@@ -47,6 +48,11 @@ refuse() {
 }
 
 realdir() { (cd "$1" 2>/dev/null && pwd -P); }
+
+# agent_label, agent_loaded, bench_pid and agent_crates: how benchd is installed and run under
+# launchd, spelled once.
+# shellcheck source=benchd-agent.sh
+source "$repo/scripts/benchd-agent.sh"
 
 alive() { kill -0 "$1" 2>/dev/null; }
 
@@ -153,7 +159,7 @@ parse() {
     --env) extra_env+=("${2:?--env needs KEY=VALUE}"); shift 2 ;;
     --no-remote-control) remote_control=0; shift ;;
     --detached) detached_log="${2:?}"; shift 2 ;;
-    -h | --help) sed -n '2,19p' "$self" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,20p' "$self" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "release-resume: unknown option $1" >&2; exit 1 ;;
     *) positional+=("$1"); shift ;;
     esac
@@ -297,7 +303,7 @@ detached_run() {
 
   local bin crate
   bin="${cargo_root:-${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}}/bin"
-  for crate in bench benchd; do
+  for crate in "${agent_crates[@]}"; do
     log "step 1: cargo install $crate into $bin"
     timeout 1200 cargo install --locked --force --path "$repo/daemon/crates/$crate" \
       --target-dir "$repo/daemon/target" ${cargo_root:+--root "$cargo_root"} >>"$build_log" 2>&1 ||
@@ -392,6 +398,34 @@ warn() { log "WARNING: $*"; }
 restart_benchd() (
   local bin="$1" logfile="$HOME/Library/Logs/benchd${bench_suite:+-$bench_suite}.log" deadline
   [ -n "$bench_suite" ] && export BENCH_SUITE="$bench_suite"
+
+  # When launchd runs benchd (scripts/benchd-agent.sh), launchd restarts it. Stopping it here and
+  # starting another by hand would leave the agent down and a second, unmanaged benchd in its
+  # place. The browser is benchd's to bring back (<root>/browser/wanted).
+  local label loaded
+  label="$(agent_label "$bench_suite")"
+  agent_loaded "$label"
+  loaded=$?
+  # Unknown is not "not loaded": starting a benchd here could put a second one beside launchd's.
+  if [ "$loaded" -eq 124 ]; then
+    warn "launchctl did not answer whether $label is loaded; leaving benchd as it is"
+    return
+  fi
+  if [ "$loaded" -eq 0 ]; then
+    local before
+    before="$(bench_pid "$bin/bench")"
+    log "step 3: restarting benchd through launchd ($label, pid ${before:-none})"
+    timeout 30 launchctl kickstart -k "gui/$(id -u)/$label" || { warn "launchctl kickstart failed"; return; }
+    deadline=$(($(date +%s) + 30))
+    local now
+    until now="$(bench_pid "$bin/bench")" && [ -n "$now" ] && [ "$now" != "$before" ]; do
+      [ "$(date +%s)" -ge "$deadline" ] && { warn "benchd did not come back under launchd; see $logfile"; return; }
+      sleep 0.2
+    done
+    log "benchd pid $now under launchd"
+    return
+  fi
+
   log "step 3: restarting benchd (suite '${bench_suite}') from $bin, log $logfile"
   timeout 20 "$bin/bench" stop
   deadline=$(($(date +%s) + 20))

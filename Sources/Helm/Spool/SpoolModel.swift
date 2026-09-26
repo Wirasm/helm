@@ -597,6 +597,9 @@ final class SpoolModel: ObservableObject {
         // is the agent saying it can be addressed. Waiting for them in sequence would spend
         // the deadline twice and make the worst case a caller sees twice as long as the number
         // this file names.
+        // One cache for the whole wait: the poll asks five times a second for up to
+        // `claimDeadline`, and re-reading every `owner.json` each time is #417's cost at 5 Hz.
+        let mailboxOwners = MailboxOwnerCache()
         let resolved = await poll(
             until: claimDeadline,
             for: { [mailRoot, registryRoot] () -> (agent: pid_t?, owner: MailboxOwner)? in
@@ -604,9 +607,10 @@ final class SpoolModel: ObservableObject {
                 // **Both halves are re-read on every attempt, and that is the point.** The
                 // mailbox is written by the agent's `SessionStart` hook and its registry row by
                 // the agent itself, so both appear *during* this poll — a book built once
-                // before the loop would be waiting for something it could never see.
+                // before the loop would be waiting for something it could never see. The cache
+                // re-reads exactly the mailboxes that changed, so a claim is still seen.
                 let book = AddressBook(
-                    owners: MailboxDirectory.owners(in: mailRoot),
+                    owners: mailboxOwners.owners(in: mailRoot),
                     sessionFor: AgentRegistry.sessionLookup(in: registryRoot))
                 guard
                     let owner = book.owner(
