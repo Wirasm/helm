@@ -63,6 +63,7 @@ fn usage() -> &'static str {
      \x20               [--body-file <p>] [--subject <s>] [--from <h>]\n\
      \x20     mail list [--handle <h>]            metadata only, unread first\n\
      \x20     mail read <id> [--handle <h>]       body + retirement (inbox -> read)\n\
+     \x20     mail who --pane <uuid>              the mailbox of the agent in a helm pane\n\
      \x20     wiring [--check]                    what to add once so agents you start report to
      \x20                                         benchd; --check says what is missing (exit 3)
      \x20     hook <claude|codex|pi>              the sensor, wired into an agent's own hooks: reads\n\
@@ -125,7 +126,7 @@ fn run() -> i32 {
             "--all" => all = true,
             "--agent" | "--cwd" | "--prompt-file" | "--model" | "--effort" | "--rows"
             | "--cols" | "--name" | "--to" | "--from" | "--subject" | "--body" | "--body-file"
-            | "--handle" | "--workspace" | "--harness" | "--surface" => {
+            | "--handle" | "--workspace" | "--harness" | "--pane" | "--surface" => {
                 let key = arg.trim_start_matches("--").replace('-', "_");
                 match argv.next() {
                     Some(v) => flags.push((key, v)),
@@ -149,7 +150,7 @@ fn run() -> i32 {
     };
     if verb == "mail" {
         if positional.is_empty() {
-            return refuse("mail needs a subcommand: send, list, read");
+            return refuse("mail needs a subcommand: send, list, read, who");
         }
         verb = format!("mail/{}", positional.remove(0));
     }
@@ -356,6 +357,12 @@ fn run() -> i32 {
         "mail/list" => json!(MailListArgs {
             handle: flag("handle").unwrap_or_else(own_handle),
         }),
+        "mail/who" => {
+            let Some(pane) = flag("pane") else {
+                return refuse("mail who needs --pane <uuid>, a helm pane's HELM_PANE");
+            };
+            json!(bench_wire::MailWhoArgs { pane })
+        }
         "mail/read" => {
             let Some(id) = positional.first() else {
                 return refuse("mail read needs a message id — `bench mail list` shows them");

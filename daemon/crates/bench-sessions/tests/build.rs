@@ -3,7 +3,7 @@
 //! through `Inputs::alive`; the real check is `process::alive`, tested beside it.
 
 use bench_doc::{PaneId, StandardPath};
-use bench_sessions::{BenchSession, Built, Cache, Inputs, build};
+use bench_sessions::{BenchSession, Built, Cache, HookedAgent, Inputs, build};
 use bench_wire::{
     Activity, Dismissal, Harness, Host, HostedSession, HostedVia, MailAddress, OpenAction,
     SessionRow, SessionState,
@@ -33,6 +33,7 @@ struct Fixture {
     panes: Vec<Value>,
     bench: Vec<BenchSession>,
     hosted: Vec<HostedSession>,
+    hooked: Vec<HookedAgent>,
     dismissed: Vec<Dismissal>,
     /// handle → messages in its inbox.
     unread: HashMap<String, usize>,
@@ -75,6 +76,7 @@ impl Fixture {
             panes: Vec::new(),
             bench: Vec::new(),
             hosted: Vec::new(),
+            hooked: Vec::new(),
             dismissed: Vec::new(),
             unread: HashMap::new(),
         };
@@ -220,6 +222,7 @@ impl Fixture {
                 workspace: &ws,
                 bench: &self.bench,
                 hosted: &self.hosted,
+                hooked: &self.hooked,
                 dismissed: &self.dismissed,
                 mailbox: &mailbox,
                 now_ms: now_ms(),
@@ -929,6 +932,7 @@ fn a_snapshot_version_this_build_does_not_read_is_reported_and_places_no_one() {
             workspace: &ws_path,
             bench: &[],
             hosted: &[],
+            hooked: &[],
             dismissed: &[],
             mailbox: &|h: &str| MailAddress {
                 handle: h.into(),
@@ -944,4 +948,36 @@ fn a_snapshot_version_this_build_does_not_read_is_reported_and_places_no_one() {
     assert!(built.list.rows.is_empty());
     assert_eq!(built.list.unreadable.len(), 1);
     assert!(built.list.unreadable[0].why.contains("version 2"));
+}
+
+#[test]
+fn an_agent_whose_hooks_report_is_listed_in_its_pane_once_and_only_while_it_lives() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    let pane = PaneId::parse(PANE2).unwrap();
+    let hooked = |harness, session: &str, pid| HookedAgent {
+        harness,
+        session: session.into(),
+        cwd: ws.clone(),
+        pane,
+        pid,
+        activity: Activity::Idle,
+        handle: format!("ws-{session}"),
+    };
+    // A pi agent: no registry, no snapshot record; its hooks are the only source.
+    f.live.insert(300, now_ms());
+    f.hooked.push(hooked(Harness::Pi, "pi-1", 300));
+    // A Claude agent the snapshot already places by its foreground pid: listed once.
+    f.claude(100, "in-pane", &ws, json!({"status": "busy"}));
+    f.pane(PANE, pane_owner(100, "in-pane", &ws));
+    f.hooked.push(hooked(Harness::Claude, "in-pane", 100));
+    let built = f.build();
+    let pi = row(&built, "pi-1").expect("the pi agent is listed");
+    assert_eq!(pi.host, Host::Pane { pane });
+    assert_eq!(*activity(pi), Activity::Idle, "as its hooks last said");
+    assert_eq!(pi.mail, address("ws-pi-1", false, 0));
+    assert_eq!(ids(&built), ["in-pane", "pi-1"], "the Claude agent once");
+    // Its process gone (killed: no SessionEnd), it is no longer a running row.
+    f.live.remove(&300);
+    assert!(row(&f.build(), "pi-1").is_none());
 }

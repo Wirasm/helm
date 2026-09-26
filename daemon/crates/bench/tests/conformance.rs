@@ -4171,3 +4171,39 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
         "wiring needs no daemon and writes nothing"
     );
 }
+
+#[test]
+fn mail_who_names_the_agent_in_a_pane_and_refuses_an_empty_one() {
+    let home = TestHome::claim("who");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (_, pid) = terminal_process(h, "holder");
+    let report = |session: &str| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "claude", "event": "SessionStart", "session": session,
+                "cwd": "/Users/op/Projects/helm", "pid": pid, "pane": HOOK_PANE}),
+        )["handle"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let empty = bench(h, &["mail", "who", "--pane", HOOK_PANE]);
+    assert_eq!(
+        empty.code, 3,
+        "nobody has reported from it yet: {}",
+        empty.stderr
+    );
+    let first = report("0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2");
+    let run = bench(h, &["mail", "who", "--pane", &HOOK_PANE.to_lowercase()]);
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    assert_eq!(json_of(&run)["handle"], first.as_str());
+    // A second agent later in the same pane (the first was killed, no SessionEnd): the one
+    // that reported last is the one in it.
+    std::thread::sleep(Duration::from_millis(20));
+    let second = report("ffffffff-1c4d-4e5f-8a6b-7c8d9e0f0000");
+    let run = bench(h, &["mail", "who", "--pane", HOOK_PANE]);
+    assert_eq!(json_of(&run)["handle"], second.as_str());
+    assert_eq!(json_of(&run)["harness"], "claude");
+    assert_eq!(bench(h, &["mail", "who", "--pane", "not-a-uuid"]).code, 3);
+}

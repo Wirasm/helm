@@ -154,6 +154,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "mail/send",
     "mail/list",
     "mail/read",
+    "mail/who",
     "hook",
     "browser/start",
     "browser/status",
@@ -198,6 +199,8 @@ pub enum Verb {
     MailSend,
     MailList,
     MailRead,
+    /// Which mailbox the agent in a helm pane holds (#358): how helm addresses a pane.
+    MailWho,
     /// The sensor (#358): an agent's hook reports an event; the answer carries its mail.
     Hook,
     BrowserStart,
@@ -225,6 +228,7 @@ impl Verb {
             "mail/send" => Some(Verb::MailSend),
             "mail/list" => Some(Verb::MailList),
             "mail/read" => Some(Verb::MailRead),
+            "mail/who" => Some(Verb::MailWho),
             "hook" => Some(Verb::Hook),
             "browser/start" => Some(Verb::BrowserStart),
             "browser/status" => Some(Verb::BrowserStatus),
@@ -314,6 +318,21 @@ pub struct MailListArgs {
 pub struct MailReadArgs {
     pub handle: String,
     pub id: String,
+}
+
+/// `mail/who`'s payload: a helm pane, by the uuid helm declares as `HELM_PANE`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailWhoArgs {
+    pub pane: String,
+}
+
+/// `mail/who`'s answer: the agent whose hook most recently reported from that pane and claimed
+/// a mailbox there. helm reads it to address a canvas note and to name a spawned agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailWho {
+    pub handle: String,
+    pub harness: Harness,
+    pub session: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -686,6 +705,25 @@ mod tests {
         }
     }
 
+    /// `fixtures/mail-verbs.json` holds the two mail verbs helm sends (#358) and the answer it
+    /// reads; helm's `BenchWireConformanceTests` decodes the same file.
+    #[test]
+    fn the_mail_verbs_fixture_is_what_the_daemon_reads_and_answers() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mail-verbs.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let send: Request = serde_json::from_value(value["send"].clone()).unwrap();
+        let who: Request = serde_json::from_value(value["who"].clone()).unwrap();
+        assert_eq!(Verb::parse(&send.verb), Some(Verb::MailSend));
+        assert_eq!(Verb::parse(&who.verb), Some(Verb::MailWho));
+        let args: MailSendArgs = serde_json::from_value(send.args.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&args).unwrap(), send.args);
+        let args: MailWhoArgs = serde_json::from_value(who.args.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&args).unwrap(), who.args);
+        let reply: MailWho = serde_json::from_value(value["who_reply"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(&reply).unwrap(), value["who_reply"]);
+    }
+
     #[test]
     fn every_known_verb_parses_and_nothing_else_does() {
         for v in KNOWN_VERBS {
@@ -693,7 +731,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            36,
+            37,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

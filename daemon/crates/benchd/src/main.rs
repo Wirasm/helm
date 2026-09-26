@@ -1332,6 +1332,26 @@ fn dispatch(
             )
         }
 
+        Some(Verb::MailWho) => {
+            let parsed: bench_wire::MailWhoArgs = match serde_json::from_value(req.args.clone()) {
+                Ok(a) => a,
+                Err(e) => return (refused(format!("mail/who args: {e}")), AfterResponse::Done),
+            };
+            let pane = match bench_doc::PaneId::parse(parsed.pane.trim()) {
+                Ok(p) => p,
+                Err(why) => return (refused(format!("mail/who: {why}")), AfterResponse::Done),
+            };
+            match hook::who(core, pane) {
+                Some(who) => (ok(json!(who)), AfterResponse::Done),
+                None => (
+                    refused(format!(
+                        "no agent in pane {pane} has a bench mailbox: none has reported through `bench hook`, or its harness is not wired (`bench wiring --check`)"
+                    )),
+                    AfterResponse::Done,
+                ),
+            }
+        }
+
         Some(Verb::MailRead) => {
             let parsed: MailReadArgs = match serde_json::from_value(req.args.clone()) {
                 Ok(a) => a,
