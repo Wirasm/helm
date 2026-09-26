@@ -26,7 +26,7 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | Part | Runs | Needs |
 | --- | --- | --- |
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
-| `swift` | `bash scripts/patch-libghostty.sh && swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`) | Swift toolchain, xcodegen |
+| `swift` | `bash scripts/patch-libghostty.sh && swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
 | `hooks` | `hooks/test.sh` | node |
 | `skills` | the mail, canvas and board skill gates | node, zsh, python3 |
 | `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml` or a `bench-*` skill changed | cargo |
@@ -169,8 +169,9 @@ parts and separate CI jobs.
 
 **CI runs the same parts, with two differences.** Its jobs are `build · test · format` (`lint`
 then `swift`), `mailbox hooks · conformance` (`hooks`), `skill gates` (`skills`) and
-`fmt · clippy · build · test` (`daemon`, reporting success without running when nothing it covers
-changed). `hooks` and `skills` run on every PR, whatever it touched, and so does `just check`:
+`fmt · clippy · build · test` (`daemon`). The first and last report success without running when
+nothing they cover changed, using the `swift` and `daemon` `--needs` rules (the Swift job skips
+its `lint` step on the `swift` answer too). `hooks` and `skills` run on every PR, whatever it touched, and so does `just check`:
 *"a gate that exists, is documented in `AGENTS.md`, and runs only when somebody remembers is the
 drift this workflow exists to stop."* There is no `pi` job: it needs an `npm install` in `pi/`,
 so only `just check` runs it.

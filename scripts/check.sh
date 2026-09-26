@@ -2,8 +2,9 @@
 # The gate, defined once (#418). `just check` runs it; CI runs one part per job, so the two
 # cannot drift apart the way AGENTS.md's one-liner and gate.yml's steps did.
 #
-#   scripts/check.sh                   every part: lint, swift, hooks, skills, then daemon
-#                                      and pi when their paths changed. Ends with a summary.
+#   scripts/check.sh                   every part: lint, hooks and skills always; swift,
+#                                      daemon and pi when their paths changed (see `needs`).
+#                                      Ends with a summary.
 #   scripts/check.sh <part>...         only those parts, whatever changed
 #   scripts/check.sh --needs <part> [base]
 #                                      exit 0 if <part> must run for `base...HEAD`
@@ -38,7 +39,7 @@ changed_paths() {
 needs() {
     local part=$1 base=$2 paths
     case "$part" in
-        lint | swift | hooks | skills) return 0 ;;
+        lint | hooks | skills) return 0 ;;
     esac
     paths=$(changed_paths "$base") || {
         echo "check: cannot diff against $base; running $part" >&2
@@ -47,12 +48,39 @@ needs() {
     case "$part" in
         daemon) grep -qE '^(daemon/|\.github/workflows/daemon\.yml|\.claude/skills/bench-)' <<<"$paths" ;;
         pi) grep -qE '^pi/' <<<"$paths" ;;
+        swift)
+            # Runs when nothing changed at all, too: an empty diff proves nothing.
+            [ -n "$paths" ] || return 0
+            local path
+            while IFS= read -r path; do
+                swift_ignores "$path" || return 0
+            done <<<"$paths"
+            return 1
+            ;;
         *) echo "check: unknown part '$part'" >&2; return 2 ;;
+    esac
+}
+
+
+# A path no Swift build or test reads. Deliberately short, and anything not listed runs the
+# swift part: tests read project.yml, scripts/, daemon/fixtures/ and the canvas and board
+# skills, and Sources/ bundles markdown as resources. Re-grep Tests/ and Sources/ for repo
+# paths before adding to it. CI's Swift job also skips its lint step on this answer, which is
+# safe only while everything lint reads (Sources/, Tests/, tools/, .swiftlint.yml,
+# .swift-format) stays outside this list.
+swift_ignores() {
+    case "$1" in
+        daemon/fixtures/*) return 1 ;;
+        docs/* | pi/* | daemon/* | .claude/agents/* | .github/workflows/daemon.yml) return 0 ;;
+        Sources/* | Tests/* | .claude/skills/*) return 1 ;;
+        *.md) return 0 ;;
+        *) return 1 ;;
     esac
 }
 
 skip_reason() {
     case "$1" in
+        swift) echo "only docs/, pi/, daemon/ (not fixtures) or markdown outside Sources/, Tests/ and skills changed" ;;
         daemon) echo "no changes under daemon/, daemon.yml or .claude/skills/bench-*" ;;
         pi) echo "no changes under pi/" ;;
     esac
