@@ -13,13 +13,9 @@ import Foundation
 /// algorithm to drift from prp's; the derived key is the fallback for a store whose
 /// registration is unreadable.
 enum WorkspaceStore {
-    /// The store `path` belongs to, among the discovered ones — nil when nothing has
-    /// written artifacts for this repo yet.
-    static func store(for path: String, in stores: [ArtifactStore]) -> ArtifactStore? {
-        store(forRoot: repositoryRoot(for: path), in: stores)
-    }
-
-    /// The matching half, pure: no subprocess, so a view may call it per open.
+    /// The store an already-resolved root belongs to, among the discovered ones — nil when
+    /// nothing has written artifacts for this repo yet. Pure: no subprocess, so a view may
+    /// call it per open.
     static func store(forRoot root: String, in stores: [ArtifactStore]) -> ArtifactStore? {
         if let registered = stores.first(where: { $0.projectPath == root }) { return registered }
         let derived = derivedKey(forRoot: root)
@@ -29,13 +25,30 @@ enum WorkspaceStore {
     /// prp's project root for a folder: `git rev-parse --path-format=absolute
     /// --git-common-dir` minus a trailing `/.git`, symlinks resolved. From inside a
     /// worktree that is the MAIN checkout — the reason two workspaces on one repo
-    /// resolve to one store. A folder that is no repo at all is its own root.
+    /// resolve to one store. A folder that is no repo at all is its own root, and so is
+    /// one git refuses (nonzero exit, no git on `PATH`): every caller reads that as
+    /// "no repo here", never as an error.
     ///
-    /// Shells out to git, so callers keep it off the render path (resolved
-    /// once per workspace selection, on a detached task).
-    static func repositoryRoot(for path: String) -> String {
-        let gitDir = git(["-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"])
-        guard let gitDir, !gitDir.isEmpty else { return resolved(path) }
+    /// Through `Subprocess`, so the wait holds no thread and ends at `timeout` (#390).
+    /// A git that has not answered by then throws `Subprocess.Failure.timedOut` rather
+    /// than falling back to the folder: for a worktree the folder is the wrong store, and
+    /// a note written there would register a second store for the same project.
+    static func repositoryRoot(
+        for path: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        timeout: Duration = .seconds(10)
+    ) async throws -> String {
+        let result: Subprocess.Result
+        do {
+            result = try await Subprocess.run(
+                ["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                environment: environment, timeout: timeout)
+        } catch Subprocess.Failure.launchFailed {
+            return resolved(path)
+        }
+        let gitDir = String(decoding: result.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.status == 0, !gitDir.isEmpty else { return resolved(path) }
         return resolved(gitDir.hasSuffix("/.git") ? String(gitDir.dropLast(5)) : gitDir)
     }
 
@@ -76,34 +89,10 @@ enum WorkspaceStore {
 
     /// `pwd -P` semantics, matching prp's `Path.resolve()`: symlinks collapsed for a
     /// folder that exists, the tilde-expanded path as-is for one that does not.
-    private static func resolved(_ path: String) -> String {
+    static func resolved(_ path: String) -> String {
         let expanded = (path as NSString).expandingTildeInPath
         guard let real = realpath(expanded, nil) else { return expanded }
         defer { free(real) }
         return String(cString: real)
-    }
-
-    /// git's stdout, trimmed — nil on any non-zero exit (not a repo, no git, gone
-    /// directory), which every caller treats as "no repo here", never as an error.
-    /// stdin and stderr are /dev/null so git can never block on a prompt.
-    private static func git(_ arguments: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["git"] + arguments
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        // Drain before waiting: a full pipe buffer would deadlock the other order.
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        return String(decoding: data, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

@@ -1184,6 +1184,7 @@ private final class FakeCapturer: SpoolCapturing {
         return .success(
             CaptureReport(
                 path: path, pixelWidth: 2560, pixelHeight: 1600, scale: 2, window: "helm",
+                windowVisible: true,
                 terminalContent: WindowCapture.content(
                     of: terminalSurfaces, missing: terminalSurfaces),
                 terminalSurfaces: terminalSurfaces,
