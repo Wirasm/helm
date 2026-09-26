@@ -959,7 +959,7 @@ fn an_agent_whose_hooks_report_is_listed_in_its_pane_once_and_only_while_it_live
         harness,
         session: session.into(),
         cwd: ws.clone(),
-        pane,
+        pane: Some(pane),
         pid,
         activity: Activity::Idle,
         handle: format!("ws-{session}"),
@@ -980,4 +980,29 @@ fn an_agent_whose_hooks_report_is_listed_in_its_pane_once_and_only_while_it_live
     // Its process gone (killed: no SessionEnd), it is no longer a running row.
     f.live.remove(&300);
     assert!(row(&f.build(), "pi-1").is_none());
+}
+
+/// A session helm hosted, now resumed outside helm: its hooks say it runs in no pane. It gets
+/// no pane row, and while it runs it is not a finished row either — the same as any live agent
+/// outside helm.
+#[test]
+fn a_hosted_session_running_outside_helm_is_neither_in_a_pane_nor_finished() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    f.transcript(&ws, "resumed-elsewhere");
+    f.hosted(Harness::Claude, "resumed-elsewhere", &ws);
+    f.live.insert(400, now_ms());
+    f.hooked.push(HookedAgent {
+        harness: Harness::Claude,
+        session: "resumed-elsewhere".into(),
+        cwd: ws.clone(),
+        pane: None,
+        pid: 400,
+        activity: Activity::Busy,
+        handle: "ws-resumed".into(),
+    });
+    assert!(ids(&f.build()).is_empty(), "{:?}", ids(&f.build()));
+    // Once it exits, the record's finished row is back.
+    f.live.remove(&400);
+    assert_eq!(ids(&f.build()), ["resumed-elsewhere"]);
 }
