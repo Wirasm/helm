@@ -232,7 +232,9 @@ fn open(p: &Parsed, workspace: Option<bench_doc::StandardPath>) -> Result<Layout
     Ok(LayoutVerb::PaneOpen(PaneOpen { into, surface }))
 }
 
-/// The extensions helm renders as a canvas (helm `RenderableFile.isRenderable`).
+/// The extensions helm renders as a canvas: helm's `RenderableFile.isRenderable`, spelled again
+/// because the CLI refuses before anything reaches helm. A test reads the Swift literal and
+/// compares.
 const RENDERABLE: &[&str] = &["md", "markdown", "mdown", "html", "htm"];
 
 fn renderable_file(raw: &str) -> Result<Surface, String> {
@@ -437,5 +439,30 @@ mod tests {
             json!({"source": "chosen", "text": "review of m3"})
         );
         assert_eq!(args["rename"], json!(true));
+    }
+
+    /// The Swift side of `RENDERABLE`: every string literal in `RenderableFile.swift`'s
+    /// extension lists, read from its source so a change there fails here.
+    #[test]
+    fn the_renderable_extensions_are_helms() {
+        let swift = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../Sources/Helm/Shared/RenderableFile.swift"),
+        )
+        .expect("helm's RenderableFile.swift is readable from the bench crate");
+        let mut helms: Vec<String> = swift
+            .lines()
+            .filter(|l| l.contains(".contains(url.pathExtension"))
+            .flat_map(|l| {
+                let list = &l[l.find('[').unwrap() + 1..l.find(']').unwrap()];
+                list.split(',')
+                    .map(|e| e.trim().trim_matches('"').to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        helms.sort();
+        let mut ours: Vec<String> = RENDERABLE.iter().map(|e| e.to_string()).collect();
+        ours.sort();
+        assert_eq!(ours, helms);
     }
 }
