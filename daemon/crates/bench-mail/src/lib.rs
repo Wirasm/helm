@@ -109,6 +109,11 @@ pub fn retired_path(root: &Path, handle: &str, id: &str) -> Result<PathBuf, Stri
     Ok(read_dir_of(root, handle).join(format!("{id}.md")))
 }
 
+/// Whether a message still waits in its recipient's inbox.
+pub fn is_unread(root: &Path, handle: &str, id: &str) -> bool {
+    retired_path(root, handle, id).is_ok() && inbox(root, handle).join(format!("{id}.md")).is_file()
+}
+
 /// Retire a message: inbox → read, never delete. Returns the retired path. Retiring an
 /// already-retired message is fine and answers with where it lives.
 pub fn retire(root: &Path, handle: &str, id: &str) -> Result<PathBuf, String> {

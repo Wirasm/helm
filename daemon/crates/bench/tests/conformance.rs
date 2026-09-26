@@ -3768,3 +3768,80 @@ fn a_hook_never_fails_its_agent() {
         .count();
     assert_eq!(unknown, 1);
 }
+
+#[test]
+fn mail_a_hook_handed_out_is_never_pasted_as_well() {
+    // The pty paste still exists until the next PR. A benchd session whose hook took its mail
+    // must not also get the notice pasted: that would be the same message delivered twice.
+    let home = TestHome::claim("hookpaste");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (session, pid) = terminal_process(h, "w");
+    let send = |body: &str| {
+        let run = bench(h, &["mail", "send", "--to", "w", "--body", body]);
+        assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+        json_of(&run)["id"].as_str().unwrap().to_string()
+    };
+    // Sent and handed out inside the reactor's 2 s idle gate, so the paste has not happened.
+    let taken = send("first");
+    let reply = hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "claude", "event": "PostToolUse", "session": "rt",
+            "cwd": "/tmp", "pid": pid, "bench_session": session, "tool": "Bash"}),
+    );
+    assert!(
+        reply["context"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("read/{taken}.md")),
+        "{reply}"
+    );
+    // The positive control: mail the hook never took is still pasted.
+    let pasted = send("second");
+    wait_until("the second mail is pasted", Duration::from_secs(20), || {
+        event_kinds(h)
+            .iter()
+            .any(|(k, d)| k == "agent/woken" && d["mail"] == pasted.as_str())
+    });
+    let woken: Vec<_> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "agent/woken")
+        .map(|(_, d)| d["mail"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(woken, [pasted], "the handed-out mail was not pasted too");
+}
+
+#[test]
+fn a_shell_string_hook_reports_the_agent_not_the_shell() {
+    // codex runs its hook command as a shell string. The shell execs a single simple command,
+    // so `bench hook`'s parent is still the agent (here, this test process).
+    let home = TestHome::claim("hookshell");
+    let h = &home.dir;
+    let _daemon = DaemonGuard::start(h, None);
+    let (session, _) = terminal_process(h, "w");
+    let payload = serde_json::json!({"session_id": "thread-sh", "hook_event_name": "SessionStart", "cwd": "/tmp"});
+    let mut child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("{} hook codex", bench_bin().display()))
+        .env_remove("BENCH_DIR")
+        .env_remove("BENCH_SUITE")
+        .env("HOME", h)
+        .env("BENCH_SESSION", &session)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    assert_eq!(child.wait_with_output().unwrap().status.code(), Some(0));
+    let claimed: Vec<_> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "mail/claimed")
+        .collect();
+    assert_eq!(claimed.len(), 1, "{claimed:?}");
+    assert_eq!(claimed[0].1["pid"], std::process::id(), "{:?}", claimed[0]);
+}

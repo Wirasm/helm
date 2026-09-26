@@ -2,8 +2,8 @@
 //! hook reports, keeps what the agent is doing, and hands out its unread mail on the events
 //! whose reply the harness puts in front of the model.
 //!
-//! State lives in `Core::agents`, keyed by the harness's own session id, and only for
-//! sessions with a mailbox. The address itself is written to the hosted-sessions record, so
+//! State lives in `Core::agents`, keyed by the harness's own session id: an agent for a
+//! session with a mailbox, `None` for one that was asked once and gets none. The address itself is written to the hosted-sessions record, so
 //! the same session gets the same handle after a daemon restart. What is logged: the claim,
 //! each change of activity (never every tool call), each hand-out, and an event name this
 //! build does not know, once.
@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex};
 /// An agent with a mailbox, as its hook last reported it.
 pub struct Agent {
     pub handle: String,
-    pub pid: u32,
     /// `None` until an event says what it is doing.
     pub activity: Option<Activity>,
     /// It has been given the standing rule. Once per session in this daemon's life, on the
@@ -59,8 +58,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             }
         }
         if transition == Some(Transition::Ended) {
-            c.unaddressable.remove(&key);
-            if let Some(agent) = c.agents.remove(&key) {
+            if let Some(Some(agent)) = c.agents.remove(&key) {
                 c.append(
                     "agent/ended",
                     json!({ "harness": args.harness.name(), "session": args.session, "handle": agent.handle }),
@@ -69,34 +67,23 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             }
             return Ok(json!(HookReply::default()));
         }
-        if c.unaddressable.contains(&key) {
-            return Ok(json!(HookReply::default()));
-        }
         if !c.agents.contains_key(&key) {
-            match address(&mut c, &args, &key).map_err(Refusal::Failed)? {
-                Some(handle) => {
-                    c.agents.insert(
-                        key.clone(),
-                        Agent {
-                            handle,
-                            pid: args.pid,
-                            activity: None,
-                            told: false,
-                        },
-                    );
-                }
-                None => {
-                    c.unaddressable.insert(key);
-                    return Ok(json!(HookReply::default()));
-                }
-            }
+            let agent = address(&mut c, &args, &key)
+                .map_err(Refusal::Failed)?
+                .map(|handle| Agent {
+                    handle,
+                    activity: None,
+                    told: false,
+                });
+            c.agents.insert(key.clone(), agent);
         }
+        let Some(Some(agent)) = c.agents.get_mut(&key) else {
+            return Ok(json!(HookReply::default()));
+        };
         let now = match transition {
             Some(Transition::To(activity)) => Some(activity),
             _ => None,
         };
-        let agent = c.agents.get_mut(&key).expect("inserted above");
-        agent.pid = args.pid;
         let handle = agent.handle.clone();
         let changed = now.filter(|a| agent.activity.as_ref() != Some(a));
         if let Some(a) = &changed {
@@ -208,13 +195,7 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
         return Ok(None);
     }
     let held = c.held_handles();
-    let Some(handle) = hook::derive_handle(&args.cwd, &args.session, |h| held.contains(h)) else {
-        c.append(
-            "mail/claim-refused",
-            json!({ "harness": args.harness.name(), "session": args.session, "why": "every width of its handle is held" }),
-        )?;
-        return Ok(None);
-    };
+    let handle = hook::derive_handle(&args.cwd, &args.session, |h| held.contains(h));
     let via = match (pane, bench_session) {
         (Some(pane), _) => HostedVia::Pane {
             pane,

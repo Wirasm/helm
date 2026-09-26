@@ -200,20 +200,10 @@ fn run() -> i32 {
 
     // Suite validated before any socket is touched — a name that cannot isolate must
     // never resolve to the shared root by accident (#86). One spelling, two edges.
-    let suite_raw = suite_flag.or_else(|| std::env::var("BENCH_SUITE").ok());
-    let suite = match suite_raw.as_deref() {
-        Some(raw) => match SuiteName::validate(raw) {
-            Ok(s) => Some(s),
-            Err(why) => return refuse(&why),
-        },
-        None => None,
+    let root = match record_root(suite_flag) {
+        Ok(root) => root,
+        Err(why) => return refuse(&why),
     };
-    let home = match std::env::var("HOME") {
-        Ok(h) => PathBuf::from(h),
-        Err(_) => return refuse("HOME is not set; bench cannot resolve a record root"),
-    };
-    let bench_dir = std::env::var("BENCH_DIR").ok();
-    let root = resolve_root(bench_dir.as_deref(), suite.as_ref(), &home);
 
     let flag = |name: &str| -> Option<String> {
         flags
@@ -584,16 +574,7 @@ fn hook(harness: Option<&str>) -> i32 {
 /// resolved exactly as every other verb resolves it; a suite that cannot isolate reaches no
 /// daemon at all.
 fn hook_request(args: &HookArgs) -> Option<HookReply> {
-    let suite = match std::env::var("BENCH_SUITE").ok() {
-        Some(raw) => Some(SuiteName::validate(&raw).ok()?),
-        None => None,
-    };
-    let home = PathBuf::from(std::env::var("HOME").ok()?);
-    let root = resolve_root(
-        std::env::var("BENCH_DIR").ok().as_deref(),
-        suite.as_ref(),
-        &home,
-    );
+    let root = record_root(None).ok()?;
     let stream = UnixStream::connect(socket_path(&root)).ok()?;
     let _ = stream.set_write_timeout(Some(HOOK_TIMEOUT));
     let _ = stream.set_read_timeout(Some(HOOK_TIMEOUT));
@@ -611,6 +592,21 @@ fn hook_request(args: &HookArgs) -> Option<HookReply> {
         return None;
     }
     serde_json::from_value(response.data?).ok()
+}
+
+/// The record root every verb talks to: the `--suite` flag or `BENCH_SUITE`, validated
+/// before any socket is touched — a name that cannot isolate must never resolve to the
+/// shared root by accident (#86) — then `BENCH_DIR` and `HOME` by `resolve_root`'s rule.
+fn record_root(suite_flag: Option<String>) -> Result<PathBuf, String> {
+    let suite = suite_flag
+        .or_else(|| std::env::var("BENCH_SUITE").ok())
+        .map(|raw| SuiteName::validate(&raw))
+        .transpose()?;
+    let home = std::env::var("HOME")
+        .map(PathBuf::from)
+        .map_err(|_| "HOME is not set; bench cannot resolve a record root".to_string())?;
+    let bench_dir = std::env::var("BENCH_DIR").ok();
+    Ok(resolve_root(bench_dir.as_deref(), suite.as_ref(), &home))
 }
 
 /// The ordinary one-line-in, one-line-out path.

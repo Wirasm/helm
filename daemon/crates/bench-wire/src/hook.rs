@@ -142,26 +142,39 @@ const WHERE_MAX: usize = 19;
 const TAILS: [usize; 4] = [4, 6, 8, 12];
 
 /// A session's address: `<cwd basename>-<tail of the session id>`, widened while another
-/// session holds it (helm's `deriveHandle`, #126, #262). The tail, because a UUID's head is a
-/// clock. Always carries a `-`, so it is never `operator`. `None` when every width is held,
-/// which takes two sessions sharing twelve characters of id: the claim is refused rather
-/// than handed a mailbox somebody else reads.
-pub fn derive_handle(cwd: &str, session: &str, held: impl Fn(&str) -> bool) -> Option<String> {
+/// session holds it, as helm's `deriveHandle` does (#126, #262). The tail, because a UUID's
+/// head is a clock. Always carries a `-`, so it is never `operator`.
+///
+/// Two differences from helm's copy, both because benchd owns every address: the widest rung
+/// is 12 characters rather than the whole id, because a handle is at most 32; and when every
+/// width is held the fallback is a number (`helm-a1b2-2`) rather than a pid, because benchd
+/// knows every handle it has given out and can pick a free one. So a claim is never refused:
+/// a session that cannot be addressed would be #358's defect again.
+pub fn derive_handle(cwd: &str, session: &str, held: impl Fn(&str) -> bool) -> String {
     let base = cwd.rsplit('/').find(|p| !p.is_empty()).unwrap_or("");
     let mut place = slug(base);
     place.truncate(WHERE_MAX);
     let place = place.trim_end_matches('-');
     let place = if place.is_empty() { "agent" } else { place };
     let id = slug(session);
-    TAILS
+    let candidates: Vec<String> = TAILS
         .iter()
-        .map(|&width| {
-            let start = id.len().saturating_sub(width);
-            id[start..].trim_matches('-')
-        })
+        .map(|&width| id[id.len().saturating_sub(width)..].trim_matches('-'))
         .filter(|tail| !tail.is_empty())
         .map(|tail| format!("{place}-{tail}"))
-        .find(|handle| validate_handle(handle).is_ok() && !held(handle))
+        .collect();
+    let free = |handle: &String| validate_handle(handle).is_ok() && !held(handle);
+    if let Some(handle) = candidates.iter().find(|h| free(h)) {
+        return handle.clone();
+    }
+    let stem = candidates
+        .first()
+        .cloned()
+        .unwrap_or_else(|| format!("{place}-s"));
+    (2u32..)
+        .map(|n| format!("{stem}-{n}"))
+        .find(free)
+        .expect("a finite set of held handles leaves a number free")
 }
 
 /// Lowercase ASCII letters and digits, every other run folded to one `-`. A handle is a
@@ -208,29 +221,24 @@ mod tests {
     fn a_handle_is_the_cwd_and_the_tail_of_the_session() {
         let id = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
         assert_eq!(
-            derive_handle("/Users/op/Projects/helm", id, none_held).as_deref(),
-            Some("helm-a1b2")
+            derive_handle("/Users/op/Projects/helm", id, none_held),
+            "helm-a1b2"
         );
         // Folded like a directory name; a trailing slash is not an empty basename.
         assert_eq!(
-            derive_handle("/x/My Repo.v2/", id, none_held).as_deref(),
-            Some("my-repo-v2-a1b2")
+            derive_handle("/x/My Repo.v2/", id, none_held),
+            "my-repo-v2-a1b2"
         );
-        assert_eq!(
-            derive_handle("/", id, none_held).as_deref(),
-            Some("agent-a1b2")
-        );
+        assert_eq!(derive_handle("/", id, none_held), "agent-a1b2");
     }
 
     #[test]
-    fn a_held_handle_widens_and_every_width_held_is_no_handle() {
+    fn a_held_handle_widens_and_every_width_held_takes_a_number() {
         let id = "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2";
         let held = |h: &str| h == "helm-a1b2" || h == "helm-0fa1b2";
-        assert_eq!(
-            derive_handle("/p/helm", id, held).as_deref(),
-            Some("helm-9e0fa1b2")
-        );
-        assert_eq!(derive_handle("/p/helm", id, |_| true), None);
+        assert_eq!(derive_handle("/p/helm", id, held), "helm-9e0fa1b2");
+        let widths = |h: &str| !h.ends_with("-3") && h.starts_with("helm-");
+        assert_eq!(derive_handle("/p/helm", id, widths), "helm-a1b2-3");
     }
 
     #[test]
@@ -245,7 +253,7 @@ mod tests {
             ("/p/---".into(), "--ab--".into()),
             ("/p/Ünïcode".into(), "session".into()),
         ] {
-            let handle = derive_handle(&cwd, &id, none_held).expect("a handle");
+            let handle = derive_handle(&cwd, &id, none_held);
             assert!(validate_handle(&handle).is_ok(), "{handle}");
             assert_ne!(handle, crate::OPERATOR_HANDLE);
             assert!(handle.contains('-'), "{handle}");
