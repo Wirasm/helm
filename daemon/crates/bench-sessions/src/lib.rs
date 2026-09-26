@@ -139,6 +139,7 @@ pub fn open_action(
                 resume: true,
                 prompt_file: None,
                 settings: None,
+                codex_server: None,
             })?;
             Ok(OpenAction::Resume {
                 argv: std::iter::once(program).chain(args).collect(),

@@ -26,6 +26,7 @@
 //! sits behind one mutex held only for map and log operations — never across a ready
 //! wait, a prompt delivery, or an attach pump.
 
+mod codex;
 mod hook;
 mod layout;
 mod rules;
@@ -941,6 +942,7 @@ fn dispatch(
                 resume: false,
                 prompt_file: parsed.prompt_file.clone(),
                 settings: None,
+                codex_server: None,
             };
             let (id, handle, root, notices) = {
                 let mut c = core.lock().unwrap();
@@ -974,6 +976,18 @@ fn dispatch(
                     Ok(path) => spec.settings = Some(path),
                     Err(why) => return (errored(why), AfterResponse::Done),
                 }
+            }
+            if agent == AgentKind::Codex {
+                let socket = bench_wire::codex_server_socket(&root, &id);
+                if let Some(dir) = socket.parent()
+                    && let Err(e) = fs::create_dir_all(dir)
+                {
+                    return (
+                        errored(format!("cannot create {}: {e}", dir.display())),
+                        AfterResponse::Done,
+                    );
+                }
+                spec.codex_server = Some(socket.display().to_string());
             }
             // The session learns its address and root, so `bench mail send` inside it
             // needs no flags and lands in the right mailroom.
