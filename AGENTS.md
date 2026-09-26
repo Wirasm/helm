@@ -208,7 +208,8 @@ skills' snippets), and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
 `docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
 M0 (skeleton), M5a (daemon-owned ptys), mail, the shared browser (#350) and the daemon half
-of the bench document (M4, #354; helm does not read it yet) are the parts that exist.
+of the bench document (M4, #354) are the parts that exist. helm renders from that document
+when launched with `HELM_BENCH=daemon`, and from its own saved state otherwise.
 
 **`hooks/`'s gate (the `hooks` part), alone:**
 
@@ -1000,7 +1001,8 @@ test is simple: two people building two features should not have to edit the sam
 **The slices, largest first, so a stranger knows where to look**: `Canvas/` (6.1k lines) is the
 document surface; `Workbench/` (3.8k) is columns, slots, panes and the offer/insert distinction;
 `Surfaces/` is `SurfaceKind` and the one registry every pane kind's live object is kept in;
-`Keymap/` is the key table and its readers (below);
+`Keymap/` is the key table and its readers (below); `Bench/` is helm as benchd's client —
+the socket, the follower, `DaemonSink` and the one-time import (below);
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
 libghostty seam — sessions, the host view, the pane environment, and `push.sh`'s landing site;
 then `Spool/`, `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
@@ -1034,8 +1036,22 @@ focus. Keys are rows of one table, `KeyBindings.all` (`Sources/Helm/Keymap/`), r
 monitor, the menu and the status bar's hints; a row's action is data, a `VerbTemplate` resolved
 against the bench when the key fires or a `LocalAction` that never reaches the document.
 `LocalActions` in `App/` carries both out. There is no NotificationCenter command bus: do not
-add one, and do not call `WorkbenchModel`'s mutation methods from a new caller — send the verb,
-so the sink that replaces the local one (benchd's, #354's PR 3c) sees it too.
+add one. `WorkbenchModel`'s mutation methods each take a `LocalBenchKey`, which only
+`LocalSink` can make, so a direct call from anywhere else does not compile — send the verb. Two sinks take it: `LocalSink` applies it to helm's own
+bench, and `DaemonSink` (`Sources/Helm/Bench/`, `HELM_BENCH=daemon`) sends it to benchd and
+draws nothing until benchd's follower delivers the document the verb made
+(`WorkbenchModel.apply`).
+
+**Under `HELM_BENCH=daemon` benchd owns the bench** (#354, strangler until PR 4). The workspace
+list follows the document and nothing about the bench is saved in defaults; the first empty
+document gets helm's saved benches once, as `workspace/import`; #85's question stays helm's and
+its answer goes back as `workspace/reset` or `workspace/unshelve`; a status-bar capsule names the
+socket while benchd is unreachable, and the last document stays on screen. A spool spawn's
+workspace opens in the background there, because an agent's `workspace/open` does not take the
+keyboard. `BenchSnapshotModel` still reports parked workspaces from defaults (D2), so in daemon
+mode only the active workspace's part of `snapshot.json` is current. To try it without touching
+the operator's bench, run your own benchd on a suite and point an isolated helm at it:
+`BENCH_SUITE=<name> benchd` and `HELM_BENCH=daemon HELM_DEFAULTS_SUITE=<name> swift run helm`.
 
 **Put a command handler where its lifetime is right, not where it looks tidy.** A subscription
 that has to work while its view is closed belongs on the model, which outlives the

@@ -102,8 +102,10 @@ struct SplitStack<Member: Identifiable, Content: View>: View {
     let fraction: (Member) -> Double
     let minimumExtent: CGFloat
     /// A divider moved: `id` now takes this fraction of the stack, and `neighbour` — the
-    /// member on the divider's other side — absorbs exactly the difference.
-    let resize: (_ id: Member.ID, _ fraction: Double, _ neighbour: Member.ID) -> Void
+    /// member on the divider's other side — absorbs exactly the difference. `ended` is the
+    /// release: the drag's last position, reported once more so a caller that sends one change
+    /// per drag (benchd's, #354) knows which one to send.
+    let resize: (_ id: Member.ID, _ fraction: Double, _ neighbour: Member.ID, _ ended: Bool) -> Void
     @ViewBuilder let content: (Member) -> Content
 
     private var layout: SplitLayout {
@@ -141,10 +143,10 @@ struct SplitStack<Member: Identifiable, Content: View>: View {
         let neighbour = members[index + 1]
         return SplitDivider(
             axis: axis, leading: fraction(member), trailing: fraction(neighbour)
-        ) { start, against, translation in
+        ) { start, against, translation, ended in
             resize(
                 member.id, layout.dragged(from: start, against: against, by: translation),
-                neighbour.id)
+                neighbour.id, ended)
         }
         // Above the member drawn *after* it, so the half of the grab area that overhangs
         // that side is not buried by it.
@@ -166,7 +168,7 @@ private struct SplitDivider: View {
     let trailing: Double
     /// Reports the pair's fractions as they were when the drag began, and the points moved
     /// since. See `SplitLayout.dragged(from:against:by:)` for why it is not the live pair.
-    let drag: (_ from: Double, _ against: Double, _ by: CGFloat) -> Void
+    let drag: (_ from: Double, _ against: Double, _ by: CGFloat, _ ended: Bool) -> Void
 
     /// Non-nil for exactly the length of one drag.
     @State private var began: (leading: Double, trailing: Double)?
@@ -234,8 +236,15 @@ private struct SplitDivider: View {
                 began = origin
                 drag(
                     origin.leading, origin.trailing,
-                    isHorizontal ? value.translation.width : value.translation.height)
+                    isHorizontal ? value.translation.width : value.translation.height, false)
             }
-            .onEnded { _ in began = nil }
+            .onEnded { value in
+                if let origin = began {
+                    drag(
+                        origin.leading, origin.trailing,
+                        isHorizontal ? value.translation.width : value.translation.height, true)
+                }
+                began = nil
+            }
     }
 }
