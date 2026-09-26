@@ -80,7 +80,8 @@ pub enum CanvasSource {
 /// The coarse classes placement distinguishes. Every canvas source is one class: helm's
 /// rule "the operator put a canvas there, so that is where canvases go" never cared whether
 /// it was a file or a page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SurfaceClass {
     Terminal,
     Canvas,
