@@ -71,6 +71,7 @@ struct BrowserKey: Equatable {
     }
 
     /// Carbon's `kVK_*` codes (HIToolbox `Events.h`) → DOM code and Windows VK.
+    // swiftlint:disable:next closure_body_length - legacy (#418): 65 lines, limit 50
     private static let table: [UInt16: Entry] = {
         var t: [UInt16: Entry] = [:]
         let letters: [(UInt16, Character)] = [

@@ -1,3 +1,4 @@
+// swiftlint:disable file_length - legacy (#418): 611 lines, limit 600
 import AppKit
 import Inject
 import SwiftUI
