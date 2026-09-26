@@ -17,7 +17,10 @@ struct RootView: View {
     /// A `@StateObject` rather than a `.shared`: `TerminalManager.shared` and
     /// `BoardModel.shared` are singletons because other slices reach them, and nothing
     /// outside the workbench reaches this one.
-    @StateObject private var workbench = WorkbenchModel(terminals: .shared)
+    /// Drawn from benchd's document under `HELM_BENCH=daemon` (#354), from helm's own state
+    /// otherwise.
+    @StateObject private var workbench = WorkbenchModel(
+        terminals: .shared, mode: .fromEnvironment())
     @StateObject private var archonRail = ArchonRailModel()
     /// #54's watcher. A `@StateObject` here rather than a `.shared` for the same reason the
     /// bench is: a second window gets its own, and the claim-by-rename in `SpoolDirectory` is
@@ -55,7 +58,7 @@ struct RootView: View {
                         model: archonRail, workspacePath: model.selectedWorkspaceRoot)
                 }
             }
-            StatusBarView(model: model)
+            StatusBarView(model: model, workbench: workbench)
         }
         // The base plane, and it has to be painted: `translucentWindow` makes the window
         // non-opaque so the chrome's vibrancy has a desktop to sample, and anything that
@@ -68,17 +71,26 @@ struct RootView: View {
         // catch because AppKit makes it rather than helm.
         .isolatedInstanceWindow()
         .task {
-            model.observe(terminals: terminalManager, workbench: workbench)
-            workbench.workspaceVerbs = apply
+            if workbench.mode.client != nil {
+                // benchd holds the workspaces and their benches; helm follows the document and
+                // saves none of it.
+                workbench.followDocuments(BenchImport.follower(model: model, workbench: workbench))
+            } else {
+                model.observe(terminals: terminalManager, workbench: workbench)
+                workbench.workspaceVerbs = apply
+            }
             let actions = LocalActions(
                 workbench: workbench, workspaces: model, rail: archonRail,
                 terminals: terminalManager)
             self.actions = actions
             Actions.performer = actions
             // A push from a parked workspace lands on its stored bench, which this model holds
-            // (#349).
-            workbench.parked = model
-            activateSelectedWorkspace()
+            // (#349). Drawn from benchd, a parked bench is benchd's, and the document says
+            // which workspace is on screen.
+            if workbench.mode.client == nil {
+                workbench.parked = model
+                activateSelectedWorkspace()
+            }
             benchSnapshot.start(
                 workspaces: model, workbench: workbench, terminals: terminalManager)
             // `--artifact <path>` (`LaunchOptions.artifactPath`) — a launch seam for
@@ -156,6 +168,12 @@ struct RootView: View {
     /// must never raise #85's restore question: the spool exists for the case where nobody is
     /// at the pane, so a question raised from one is #179's silent hang with a different cause.
     private func openWorkspaceForRequest(_ workspace: Workspace) {
+        // Drawn from benchd, a spawn's workspace is an agent's `workspace/open`: it opens in the
+        // background, and the spawned terminal lands there (`WorkbenchSpoolSpawner`).
+        if workbench.mode.client != nil {
+            workbench.send(.workspaceOpen(path: workspace.path.value), by: .agent())
+            return
+        }
         persistCurrentContext()
         model.open(workspace)
         activateSelectedWorkspace(asking: false)

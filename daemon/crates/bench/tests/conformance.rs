@@ -2113,6 +2113,75 @@ fn working_bench(socket: &Path) -> (String, String, String) {
     (first, right, canvas)
 }
 
+/// `fixtures/bench-report.json` is the sample helm's Swift decodes a layout answer and
+/// `bench/get` against. The Rust gate pins its spelling from the types (`bench-wire`'s
+/// `the_reply_fixture_round_trips`); this pins it against what a live daemon actually answers,
+/// key for key, the way `browser-endpoint.json` is pinned — so the fixture cannot describe a
+/// reply benchd no longer sends.
+#[test]
+fn the_reply_fixture_is_what_a_live_daemon_answers() {
+    let home = TestHome::claim("m4-reply-fixture");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    working_bench(&daemon.socket);
+    let report = ok_data(layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "surface": { "kind": "canvas", "source": { "kind": "file", "path": "/tmp/m4-proof/review.md" } } }),
+        operator(),
+        false,
+    ));
+    let get = ok_data(layout(
+        &daemon.socket,
+        "bench/get",
+        serde_json::Value::Null,
+        None,
+        false,
+    ));
+
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bench-report.json"),
+        )
+        .expect("daemon/fixtures/bench-report.json"),
+    )
+    .unwrap();
+    let keys = |v: &serde_json::Value| {
+        let mut k: Vec<String> = v
+            .as_object()
+            .unwrap_or_else(|| panic!("not an object: {v}"))
+            .keys()
+            .cloned()
+            .collect();
+        k.sort();
+        k
+    };
+    assert_eq!(
+        keys(&report),
+        keys(&fixture["report"]),
+        "a layout answer drifted from the fixture helm reads"
+    );
+    assert_eq!(keys(&get), keys(&fixture["get"]), "bench/get drifted");
+    let live = &get["document"];
+    let sample = &fixture["get"]["document"];
+    assert_eq!(keys(live), keys(sample), "the document drifted");
+    let (live, sample) = (&live["workspaces"][0], &sample["workspaces"][0]);
+    assert_eq!(keys(live), keys(sample), "a workspace drifted");
+    let (live, sample) = (&live["bench"], &sample["bench"]);
+    assert_eq!(keys(live), keys(sample), "a bench drifted");
+    let (live, sample) = (&live["columns"][0], &sample["columns"][0]);
+    assert_eq!(keys(live), keys(sample), "a column drifted");
+    let (live, sample) = (&live["slots"][0], &sample["slots"][0]);
+    assert_eq!(keys(live), keys(sample), "a slot drifted");
+    // An unnamed terminal on both sides: a name is written only when there is one.
+    assert_eq!(
+        keys(&live["panes"][0]),
+        keys(&sample["panes"][1]),
+        "a pane drifted"
+    );
+    serde_json::from_value::<bench_wire::LayoutReport>(report).expect("a LayoutReport");
+    serde_json::from_value::<bench_wire::DocumentAt>(get).expect("a DocumentAt");
+}
+
 #[test]
 fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
     let home = TestHome::claim("m4-session");

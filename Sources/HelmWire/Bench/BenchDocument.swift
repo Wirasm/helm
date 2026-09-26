@@ -9,7 +9,8 @@ import Foundation
 /// `daemon/fixtures/`, the same files the daemon gate pins byte for byte.
 ///
 /// Nested rather than top-level because helm's own `Workspace`, `Column`, `Slot` and `Pane` are
-/// the render values; these are what crosses the socket, and PR 3c converts one into the other.
+/// the render values; these are what crosses the socket, and `BenchDocument+Helm.swift` converts
+/// one into the other.
 package struct BenchDocument: Codable, Equatable, Sendable {
     package var workspaces: [Workspace]
     /// The workspace on screen, by path. nil only when nothing is open.
@@ -85,6 +86,11 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         package var columns: [Column]
         package var focusedSlot: UUID
 
+        package init(columns: [Column], focusedSlot: UUID) {
+            self.columns = columns
+            self.focusedSlot = focusedSlot
+        }
+
         private enum CodingKeys: String, CodingKey {
             case columns
             case focusedSlot = "focused_slot"
@@ -95,6 +101,12 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         package var id: UUID
         package var slots: [Slot]
         package var width: Double
+
+        package init(id: UUID, slots: [Slot], width: Double) {
+            self.id = id
+            self.slots = slots
+            self.width = width
+        }
     }
 
     package struct Slot: Codable, Equatable, Sendable {
@@ -102,6 +114,13 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         package var panes: [Pane]
         package var selected: UUID
         package var height: Double
+
+        package init(id: UUID, panes: [Pane], selected: UUID, height: Double) {
+            self.id = id
+            self.panes = panes
+            self.selected = selected
+            self.height = height
+        }
     }
 
     package struct Pane: Codable, Equatable, Sendable {
