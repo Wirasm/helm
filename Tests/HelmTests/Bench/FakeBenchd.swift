@@ -75,16 +75,15 @@ final class FakeBenchd: @unchecked Sendable {
 
     /// A frame to every follower: the event, and the document when there is one.
     func push(_ at: DocumentAt, kind: String = "bench/changed") {
-        setDocument(at)
         let frame = BenchFrame(
             event: .init(seq: at.seq, at: "2026-09-26T00:00:00Z", kind: kind), document: at.document
         )
         var line = try! JSONEncoder().encode(frame)
         line.append(0x0A)
         lock.lock()
-        let targets = followers
-        lock.unlock()
-        for fd in targets { write(fd, line) }
+        defer { lock.unlock() }
+        document = at
+        for fd in followers { write(fd, line) }
     }
 
     /// Close every follower connection — benchd restarting, or dropping a slow follower.
@@ -146,18 +145,22 @@ final class FakeBenchd: @unchecked Sendable {
         }
         lock.lock()
         recorded.append(request)
-        let at = document
         lock.unlock()
         if request["verb"] as? String == "events" {
-            let data = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(at))
+            // **Answered and registered under one lock, as benchd does** ("registered and
+            // snapshotted under one lock, so no event falls between the document this answers
+            // with and the first frame"). Writing the answer first and registering after left a
+            // gap: the client had the document and the test pushed a frame into it, to nobody.
+            // A loaded CI runner found it; `push` takes the same lock.
+            lock.lock()
+            defer { lock.unlock() }
+            let data = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(document))
             write(
                 fd,
                 try! JSONSerialization.data(withJSONObject: [
                     "id": request["id"] ?? "", "status": "ok", "data": data,
                 ]) + Data([0x0A]))
-            lock.lock()
             followers.append(fd)
-            lock.unlock()
             return
         }
         let reply = answer(request)
