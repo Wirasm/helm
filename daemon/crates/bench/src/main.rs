@@ -15,9 +15,9 @@
 use bench_doc::{DrawerName, Surface};
 use bench_wire::{
     CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, HookArgs, HookReply,
-    LayoutVerb, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, Request, RequestId,
-    Response, SessionArgs, SessionKey, SessionsArgs, SpawnArgs, Status, SuiteName, resolve_root,
-    socket_path,
+    JustRunArgs, LayoutVerb, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, Request,
+    RequestId, Response, SessionArgs, SessionKey, SessionsArgs, SpawnArgs, Status, SuiteName,
+    resolve_root, socket_path,
 };
 use serde_json::{Value, json};
 use std::io::{IsTerminal, Read, Write};
@@ -79,7 +79,11 @@ fn usage() -> &'static str {
      \x20           [--surface <s>]               operator's focus, so refused from an agent. <s>\n\
      \x20                                         is what a new drawer starts with: browser,\n\
      \x20                                         sessions, terminal or file:<path>\n\
-     env:   BENCH_SUITE (flag wins) · BENCH_DIR (root override, wins over suite)\n\
+     \x20     just <recipe> [args...]             run a recipe from <root>/rules/justfile here;\n\
+     \x20                                         answers {run, log}, and just/finished says how\n\
+     \x20                                         it ended\n\
+     env:   BENCH_SUITE (flag wins) · BENCH_DIR (root override, wins over suite) ·\n\
+     \x20     BENCH_ASKED=1 (the operator asked: set by benchd on his own just runs)\n\
      exit:  0 ok · 2 no daemon · 3 refused · 4 daemon failed"
 }
 
@@ -189,6 +193,9 @@ fn run() -> i32 {
     } else if verb == "sessions" && positional.first().map(String::as_str) == Some("dismiss") {
         positional.remove(0);
         verb = "sessions/dismiss".into();
+    }
+    if verb == "just" {
+        verb = "just/run".into();
     }
     if verb == "drawer" {
         if positional.is_empty() {
@@ -334,6 +341,19 @@ fn run() -> i32 {
             json!(SessionKey {
                 harness,
                 id: id.clone(),
+            })
+        }
+        "just/run" => {
+            let Some((recipe, args)) = positional.split_first() else {
+                return refuse("just needs a recipe: bench just <recipe> [args...]");
+            };
+            json!(JustRunArgs {
+                recipe: recipe.clone(),
+                args: args.to_vec(),
+                // Where the agent is, so a recipe runs in the tree it was asked from.
+                cwd: std::env::current_dir()
+                    .ok()
+                    .map(|d| d.display().to_string()),
             })
         }
         "drawer/toggle" => {
@@ -920,9 +940,10 @@ fn open(cli: &Cli) -> Result<(UnixStream, String), i32> {
         verb: cli.verb.clone(),
         args: cli.args.clone(),
         // The CLI speaks for an agent until M3 gives it `--asked` and the layout verbs; an
-        // absent `by` already means exactly that.
+        // absent `by` already means exactly that. `BENCH_ASKED=1` is set by benchd on a just
+        // recipe the operator started (#356): he asked, so its verbs may move his focus.
         by: None,
-        asked: false,
+        asked: std::env::var("BENCH_ASKED").is_ok_and(|v| v == "1"),
     };
     let mut line = match serde_json::to_string(&request) {
         Ok(l) => l,

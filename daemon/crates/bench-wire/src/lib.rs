@@ -27,6 +27,12 @@ pub use layout::{
 pub mod hook;
 pub use hook::{HookArgs, HookReply};
 
+mod just;
+pub use just::{
+    JUST_FINISHED, JUST_STARTED, JustFinished, JustRunArgs, JustStarted, is_recipe_name,
+    just_logs_dir, justfile_path,
+};
+
 mod sessions;
 pub use sessions::{
     Activity, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
@@ -160,6 +166,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "browser/status",
     "browser/stop",
     "browser/setup",
+    "just/run",
     // The layout verbs (M4) — `LAYOUT_VERBS`, spelled again here so this one list stays the
     // whole surface; `every_layout_verb_is_known_and_routes_to_layout` keeps the two in step.
     "bench/get",
@@ -207,6 +214,8 @@ pub enum Verb {
     BrowserStatus,
     BrowserStop,
     BrowserSetup,
+    /// Run a recipe from the operator's bench justfile (#356).
+    JustRun,
     /// Every verb in `LAYOUT_VERBS`; `LayoutVerb` decodes which one and its arguments.
     Layout,
 }
@@ -234,6 +243,7 @@ impl Verb {
             "browser/status" => Some(Verb::BrowserStatus),
             "browser/stop" => Some(Verb::BrowserStop),
             "browser/setup" => Some(Verb::BrowserSetup),
+            "just/run" => Some(Verb::JustRun),
             layout if LAYOUT_VERBS.contains(&layout) => Some(Verb::Layout),
             _ => None,
         }
@@ -742,7 +752,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            37,
+            38,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

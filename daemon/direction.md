@@ -70,6 +70,17 @@ parse error) once per version, and `bench status` reports `rejected` until a goo
 replaces it. Only a file that is gone means the built-in table. benchd never writes a rules
 file. `rules/keymap.toml` beside it is helm's alone: benchd never reads a key.
 
+**The just layer is one verb, `just/run` (#356).** A recipe from `<root>/rules/justfile` is a
+composition of `bench` verbs, and benchd runs it rather than helm, so it is logged and dies with
+the daemon: `just --justfile <root>/rules/justfile --working-directory <cwd> <recipe>`, with
+`BENCH_DIR` (and `BENCH_SUITE`) pointing every `bench` inside it back here. The operator's run
+works at the active workspace and gets `BENCH_ASKED=1`, which makes the CLI send `asked`; an
+agent's (`bench just`) works where it was asked from and gets nothing, so its verbs are judged
+as the agent's. `just/started` is logged before the answer, which does not wait; a reaper logs
+`just/finished` with the exit code; output goes to `<root>/just/<run>.log`. The child is on the
+browser's pipe leash. A name outside `[A-Za-z0-9_-]`, a missing justfile or a missing `just`
+(looked for on `PATH`, then Homebrew's two prefixes) is refused by name.
+
 **And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
 every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's
 snapshot, or by the pane their own hooks report), benchd's own sessions, Claude Code `--bg` jobs, running subagents, and finished

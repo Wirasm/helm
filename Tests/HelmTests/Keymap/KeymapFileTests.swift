@@ -289,6 +289,23 @@ final class KeymapFileTests: XCTestCase {
                 line: nil, reason: "[drawer.Notes]: a drawer name is 1-32 of [a-z0-9-]"))
     }
 
+    /// A key can run a recipe from the operator's bench justfile.
+    func testAJustKeyNamesItsRecipe() throws {
+        let rows = try parse(
+            "[[bind]]\nkey = \"cmd+alt+j\"\naction = \"just\"\nrecipe = \"day\"\n"
+        ).rows.map(\.binding.action)
+        XCTAssertEqual(rows, [.just(recipe: "day")])
+        XCTAssertEqual(
+            problem("[[bind]]\nkey = \"cmd+k\"\naction = \"just\"\n"),
+            KeymapProblem(line: 1, reason: "'just' needs recipe"))
+        XCTAssertEqual(
+            try parse(
+                KeymapFile.render([KeyBinding(.character("j"), .command, .just(recipe: "day"))])
+            )
+            .rows.map(\.binding.action),
+            [.just(recipe: "day")], "a just row round-trips")
+    }
+
     // MARK: - Chords
 
     func testChordsSpellEveryTriggerKind() throws {
