@@ -47,9 +47,9 @@ final class LocalSink: VerbSink {
     func send(_ verb: BenchVerb, by actor: BenchActor, asked: Bool) -> Pane.ID? {
         let takesFocus = actor == .operatorGesture || asked
         switch verb {
-        case let .paneOpen(workspace, nil, surface):
+        case let .paneOpen(workspace, surface):
             return open(surface, in: workspace, takesFocus: takesFocus)
-        case .paneOpen(_, .some, _), .drawerToggle:
+        case .paneOpenInDrawer, .drawerToggle:
             // Drawers live in benchd's document; the local bench has none (#356).
             return nil
         case let .paneSplit(workspace, direction, surface):

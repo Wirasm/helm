@@ -17,8 +17,8 @@ use crate::Core;
 use bench_doc::{Caller, Document, Focus, Pane, PaneId, Rules, Surface, Target};
 use bench_wire::{
     Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider, DocumentAt,
-    DocumentChange, DocumentRecord, LayoutReport, LayoutVerb, MoveTo, Request, Response, Status,
-    document_path,
+    DocumentChange, DocumentRecord, LayoutReport, LayoutVerb, MoveTo, OpenInto, PaneOpen, Request,
+    Response, Status, document_path,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -176,41 +176,40 @@ fn apply(
             doc.import(document.clone())?;
             Ok(Outcome::default())
         }
-        LayoutVerb::PaneOpen {
-            drawer: Some(drawer),
-            surface,
-            ..
-        } => {
-            let pane = Pane::new(surface.clone());
-            let id = pane.id;
-            let landed = doc.place_in_drawer(drawer, pane, focus)?;
-            Ok(if landed == id {
-                created(id)
-            } else {
-                Outcome {
-                    created: None,
-                    pane: Some(landed),
+        LayoutVerb::PaneOpen(PaneOpen { into, surface }) => {
+            let target = match into {
+                OpenInto::Active => Target::Active,
+                OpenInto::Workspace(path) => Target::Workspace(path.clone()),
+                // A named drawer bypasses the rules.
+                OpenInto::Drawer(drawer) => {
+                    let pane = Pane::new(surface.clone());
+                    let id = pane.id;
+                    let landed = doc.place_in_drawer(drawer, pane, focus)?;
+                    return Ok(if landed == id {
+                        created(id)
+                    } else {
+                        Outcome {
+                            created: None,
+                            pane: Some(landed),
+                        }
+                    });
                 }
+            };
+            doc.edit(target, focus, |bench| {
+                let placement = rules.place(bench, surface, caller);
+                if let bench_doc::Placement::Existing(open) = placement {
+                    bench.place(Pane::new(surface.clone()), placement, focus)?;
+                    return Ok(Outcome {
+                        created: None,
+                        pane: Some(open),
+                    });
+                }
+                let pane = Pane::new(surface.clone());
+                let id = pane.id;
+                bench.place(pane, placement, focus)?;
+                Ok(created(id))
             })
         }
-        LayoutVerb::PaneOpen {
-            workspace,
-            drawer: None,
-            surface,
-        } => doc.edit(on(workspace), focus, |bench| {
-            let placement = rules.place(bench, surface, caller);
-            if let bench_doc::Placement::Existing(open) = placement {
-                bench.place(Pane::new(surface.clone()), placement, focus)?;
-                return Ok(Outcome {
-                    created: None,
-                    pane: Some(open),
-                });
-            }
-            let pane = Pane::new(surface.clone());
-            let id = pane.id;
-            bench.place(pane, placement, focus)?;
-            Ok(created(id))
-        }),
         LayoutVerb::PaneSplit {
             workspace,
             direction,

@@ -84,21 +84,10 @@ pub enum LayoutVerb {
     /// The one-time import of helm's saved benches, into an empty document only.
     #[serde(rename = "workspace/import")]
     WorkspaceImport { document: Document },
-    /// A new pane showing `surface`, placed by the rules. A terminal gets a fresh id; a
-    /// canvas or the browser already showing is brought forward (or, for an agent, left
-    /// where it is).
-    ///
-    /// `drawer` names the destination outright and bypasses the rules: the pane goes in that
-    /// drawer, which is created if it has none. An agent's pane badges it; only the operator's
-    /// opens it. A drawer belongs to no workspace, so `workspace` means nothing beside it.
+    /// A new pane showing `surface`. A terminal gets a fresh id; a canvas or the browser
+    /// already showing is brought forward (or, for an agent, left where it is).
     #[serde(rename = "pane/open")]
-    PaneOpen {
-        #[serde(default)]
-        workspace: Option<StandardPath>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        drawer: Option<DrawerName>,
-        surface: Surface,
-    },
+    PaneOpen(PaneOpen),
     /// ⌘D / ⌘⇧D. A terminal unless a surface is named.
     #[serde(rename = "pane/split")]
     PaneSplit {
@@ -139,9 +128,77 @@ pub enum LayoutVerb {
     #[serde(rename = "drawer/toggle")]
     DrawerToggle {
         drawer: DrawerName,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         surface: Option<Surface>,
     },
+}
+
+/// `pane/open`'s arguments: what to show, and where.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "EncodedPaneOpen", into = "EncodedPaneOpen")]
+pub struct PaneOpen {
+    pub into: OpenInto,
+    pub surface: Surface,
+}
+
+/// Where `pane/open` puts a pane. One value, so a request cannot name a workspace and a drawer
+/// at once and have one of them silently ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenInto {
+    /// The active workspace's bench, placed by the rules.
+    Active,
+    /// That workspace's bench, placed by the rules.
+    Workspace(StandardPath),
+    /// That drawer, outright: the rules are not asked. Created if it has none; an agent's pane
+    /// badges it, only the operator's opens it.
+    Drawer(DrawerName),
+}
+
+/// The wire spelling: `workspace` and `drawer` are both optional keys, and naming both is
+/// refused rather than resolved — a drawer belongs to no workspace.
+#[derive(Serialize, Deserialize)]
+struct EncodedPaneOpen {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace: Option<StandardPath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    drawer: Option<DrawerName>,
+    surface: Surface,
+}
+
+impl TryFrom<EncodedPaneOpen> for PaneOpen {
+    type Error = String;
+
+    fn try_from(raw: EncodedPaneOpen) -> Result<Self, Self::Error> {
+        let into = match (raw.workspace, raw.drawer) {
+            (None, None) => OpenInto::Active,
+            (Some(path), None) => OpenInto::Workspace(path),
+            (None, Some(drawer)) => OpenInto::Drawer(drawer),
+            (Some(path), Some(drawer)) => {
+                return Err(format!(
+                    "names both workspace {path} and drawer {drawer} — a drawer belongs to no workspace, so name one"
+                ));
+            }
+        };
+        Ok(PaneOpen {
+            into,
+            surface: raw.surface,
+        })
+    }
+}
+
+impl From<PaneOpen> for EncodedPaneOpen {
+    fn from(open: PaneOpen) -> Self {
+        let (workspace, drawer) = match open.into {
+            OpenInto::Active => (None, None),
+            OpenInto::Workspace(path) => (Some(path), None),
+            OpenInto::Drawer(drawer) => (None, Some(drawer)),
+        };
+        EncodedPaneOpen {
+            workspace,
+            drawer,
+            surface: open.surface,
+        }
+    }
 }
 
 /// Where a moved pane goes. Tagged so drag and drop (#178) adds a destination rather than
@@ -368,6 +425,31 @@ mod tests {
             "the reply spelling drifted from {}",
             path.display()
         );
+    }
+
+    #[test]
+    fn pane_open_names_a_workspace_or_a_drawer_never_both() {
+        let surface = json!({"kind": "browser"});
+        let open = |args: Value| {
+            serde_json::from_value::<LayoutVerb>(json!({"verb": "pane/open", "args": args}))
+        };
+        let into = |args: Value| match open(args).unwrap() {
+            LayoutVerb::PaneOpen(p) => p.into,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(into(json!({"surface": surface})), OpenInto::Active);
+        assert!(matches!(
+            into(json!({"workspace": "/tmp/w", "surface": surface})),
+            OpenInto::Workspace(_)
+        ));
+        assert!(matches!(
+            into(json!({"drawer": "notes", "surface": surface})),
+            OpenInto::Drawer(_)
+        ));
+        let err = open(json!({"workspace": "/tmp/w", "drawer": "notes", "surface": surface}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("name one"), "{err}");
     }
 
     #[test]

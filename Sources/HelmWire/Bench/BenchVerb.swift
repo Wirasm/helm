@@ -73,9 +73,12 @@ package enum BenchVerb: Equatable, Sendable {
     case workspaceUnshelve(path: String)
     case workspaceImport(BenchDocument)
     /// A new pane showing `surface`, placed by benchd's rules; `workspace` nil means the active
-    /// one. `drawer` names the destination outright: the pane goes in that drawer, badging it
-    /// unless the operator asked.
-    case paneOpen(workspace: String? = nil, drawer: String? = nil, surface: Surface)
+    /// one.
+    case paneOpen(workspace: String? = nil, surface: Surface)
+    /// `pane/open` into a named drawer, outright: the rules are not asked, and an agent's pane
+    /// badges the drawer instead of opening it. Its own case because benchd refuses a request
+    /// naming both a workspace and a drawer, so helm cannot build one.
+    case paneOpenInDrawer(String, surface: Surface)
     /// A terminal unless a surface is named.
     case paneSplit(workspace: String? = nil, direction: BenchSplit, surface: Surface? = nil)
     case paneClose(UUID)
@@ -101,7 +104,7 @@ package enum BenchVerb: Equatable, Sendable {
         case .workspaceReset: "workspace/reset"
         case .workspaceUnshelve: "workspace/unshelve"
         case .workspaceImport: "workspace/import"
-        case .paneOpen: "pane/open"
+        case .paneOpen, .paneOpenInDrawer: "pane/open"
         case .paneSplit: "pane/split"
         case .paneClose: "pane/close"
         case .paneShow: "pane/show"
@@ -159,9 +162,11 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             try a.encode(path, forKey: .path)
         case let .workspaceImport(document):
             try a.encode(document, forKey: .document)
-        case let .paneOpen(workspace, drawer, surface):
+        case let .paneOpen(workspace, surface):
             try a.encodeIfPresent(workspace, forKey: .workspace)
-            try a.encodeIfPresent(drawer, forKey: .drawer)
+            try a.encode(surface, forKey: .surface)
+        case let .paneOpenInDrawer(drawer, surface):
+            try a.encode(drawer, forKey: .drawer)
             try a.encode(surface, forKey: .surface)
         case let .paneSplit(workspace, direction, surface):
             try a.encodeIfPresent(workspace, forKey: .workspace)
@@ -228,10 +233,19 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case "workspace/import":
             verb = .workspaceImport(try a.decode(BenchDocument.self, forKey: .document))
         case "pane/open":
-            verb = .paneOpen(
-                workspace: try a.decodeIfPresent(String.self, forKey: .workspace),
-                drawer: try a.decodeIfPresent(String.self, forKey: .drawer),
-                surface: try a.decode(Surface.self, forKey: .surface))
+            let surface = try a.decode(Surface.self, forKey: .surface)
+            if let drawer = try a.decodeIfPresent(String.self, forKey: .drawer) {
+                guard !a.contains(.workspace) else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .drawer, in: a,
+                        debugDescription: "pane/open names a workspace and a drawer")
+                }
+                verb = .paneOpenInDrawer(drawer, surface: surface)
+            } else {
+                verb = .paneOpen(
+                    workspace: try a.decodeIfPresent(String.self, forKey: .workspace),
+                    surface: surface)
+            }
         case "pane/split":
             verb = .paneSplit(
                 workspace: try a.decodeIfPresent(String.self, forKey: .workspace),

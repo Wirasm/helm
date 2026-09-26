@@ -311,11 +311,10 @@ impl Document {
     /// the last pane removes the drawer — closing it, if it was open, which hands focus back to
     /// the bench under it.
     pub fn close_pane(&mut self, pane: PaneId, focus: Focus) -> Result<(), Refusal> {
-        if self.drawer_of(pane).is_none() {
+        let Some((d, at)) = self.drawer_address(pane) else {
             return self.edit(Target::Pane(pane), focus, |b| b.close(pane));
-        }
+        };
         self.commit(focus, |doc| {
-            let (d, at) = doc.drawer_address(pane).expect("checked above");
             let drawer = &mut doc.drawers[d];
             drawer.panes.remove(at);
             if drawer.panes.is_empty() {
@@ -334,11 +333,11 @@ impl Document {
     /// its badge; `Leave` selects it and badges the drawer — refused by the guard when that
     /// drawer is open, because then it is what the operator is looking at.
     pub fn show_pane(&mut self, pane: PaneId, focus: Focus) -> Result<(), Refusal> {
-        let Some(name) = self.drawer_of(pane).map(|d| d.name.clone()) else {
+        let Some((d, _)) = self.drawer_address(pane) else {
             return self.edit(Target::Pane(pane), focus, |b| b.show(pane, focus));
         };
+        let name = self.drawers[d].name.clone();
         self.commit(focus, |doc| {
-            let d = doc.drawer_index(&name).expect("checked above");
             doc.drawers[d].selected = pane;
             doc.arrive(&name, pane, focus);
             Ok(())
@@ -352,11 +351,10 @@ impl Document {
         name: PaneName,
         focus: Focus,
     ) -> Result<PaneName, Refusal> {
-        if self.drawer_of(pane).is_none() {
+        let Some((d, at)) = self.drawer_address(pane) else {
             return self.edit(Target::Pane(pane), focus, |b| b.name(pane, name));
-        }
+        };
         self.commit(focus, |doc| {
-            let (d, at) = doc.drawer_address(pane).expect("checked above");
             Ok(std::mem::replace(&mut doc.drawers[d].panes[at].name, name))
         })
     }
@@ -368,18 +366,15 @@ impl Document {
         agent: Option<ResumableAgent>,
         focus: Focus,
     ) -> Result<(), Refusal> {
-        if self.drawer_of(pane).is_none() {
+        let Some((d, at)) = self.drawer_address(pane) else {
             return self.edit(Target::Pane(pane), focus, |b| b.record_agent(pane, agent));
-        }
-        self.commit(focus, |doc| {
-            let (d, at) = doc.drawer_address(pane).expect("checked above");
-            match &mut doc.drawers[d].panes[at].surface {
-                Surface::Terminal { agent: held } => {
-                    *held = agent;
-                    Ok(())
-                }
-                _ => Err(Refusal::NotATerminal(pane)),
+        };
+        self.commit(focus, |doc| match &mut doc.drawers[d].panes[at].surface {
+            Surface::Terminal { agent: held } => {
+                *held = agent;
+                Ok(())
             }
+            _ => Err(Refusal::NotATerminal(pane)),
         })
     }
 

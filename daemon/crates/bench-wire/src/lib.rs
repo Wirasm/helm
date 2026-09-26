@@ -21,7 +21,7 @@ mod layout;
 pub use layout::{
     Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider, DocumentAt,
     DocumentChange, DocumentRecord, Frame, LAYOUT_VERBS, LayoutReport, LayoutVerb, MoveTo,
-    document_path,
+    OpenInto, PaneOpen, document_path,
 };
 
 mod sessions;
