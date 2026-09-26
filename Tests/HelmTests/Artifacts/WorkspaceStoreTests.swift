@@ -57,11 +57,11 @@ final class WorkspaceStoreTests: XCTestCase {
     }
 
     /// A path with spaces and non-ASCII, end to end against prp's own pipeline.
-    func testStoreKeyMatchesPrpForAwkwardPaths() throws {
+    func testStoreKeyMatchesPrpForAwkwardPaths() async throws {
         for name in ["My Project", "ünïcøde repo", "UPPER_Case"] {
             let dir = tempRoot.appendingPathComponent(name)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let root = WorkspaceStore.repositoryRoot(for: dir.path)
+            let root = try await WorkspaceStore.repositoryRoot(for: dir.path)
             XCTAssertEqual(
                 WorkspaceStore.derivedKey(forRoot: root),
                 try canonicalStoreKey(runIn: dir.path),
@@ -74,12 +74,12 @@ final class WorkspaceStoreTests: XCTestCase {
 
     /// The load-bearing behaviour: a worktree resolves to its MAIN checkout, so two
     /// workspaces on one repo share one `~/.prp` store. Intended, not a bug.
-    func testWorktreeResolvesToItsMainCheckoutsRootAndKey() throws {
+    func testWorktreeResolvesToItsMainCheckoutsRootAndKey() async throws {
         let main = try makeRepo(named: "repo")
         let worktree = try addWorktree(named: "fix", to: main)
 
-        let mainRoot = WorkspaceStore.repositoryRoot(for: main.path)
-        let worktreeRoot = WorkspaceStore.repositoryRoot(for: worktree.path)
+        let mainRoot = try await WorkspaceStore.repositoryRoot(for: main.path)
+        let worktreeRoot = try await WorkspaceStore.repositoryRoot(for: worktree.path)
 
         XCTAssertEqual(worktreeRoot, mainRoot)
         XCTAssertFalse(worktreeRoot.contains("/fix"), "resolved to the worktree, not the checkout")
@@ -98,34 +98,34 @@ final class WorkspaceStoreTests: XCTestCase {
     }
 
     /// A subdirectory of a repo is still the repo — prp keys by root, not by cwd.
-    func testSubdirectoryResolvesToTheRepoRoot() throws {
+    func testSubdirectoryResolvesToTheRepoRoot() async throws {
         let main = try makeRepo(named: "repo")
         let sub = main.appendingPathComponent("Sources/Deep")
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
 
-        XCTAssertEqual(
-            WorkspaceStore.repositoryRoot(for: sub.path),
-            WorkspaceStore.repositoryRoot(for: main.path)
-        )
+        let subRoot = try await WorkspaceStore.repositoryRoot(for: sub.path)
+        let mainRoot = try await WorkspaceStore.repositoryRoot(for: main.path)
+        XCTAssertEqual(subRoot, mainRoot)
     }
 
     /// A plain folder is its own root: no git, no error, still a usable key. The root
     /// is `pwd -P` — symlinks collapsed exactly as prp's `Path.resolve()` does, which
     /// matters under /var/folders where the temp dir is itself a symlink.
-    func testNonRepoFolderIsItsOwnRoot() throws {
+    func testNonRepoFolderIsItsOwnRoot() async throws {
         let plain = tempRoot.appendingPathComponent("plain")
         try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
 
-        let root = WorkspaceStore.repositoryRoot(for: plain.path)
+        let root = try await WorkspaceStore.repositoryRoot(for: plain.path)
         XCTAssertEqual(root, try run("/bin/sh", ["-c", #"cd "$1" && pwd -P"#, "sh", plain.path]))
         XCTAssertEqual(
             WorkspaceStore.derivedKey(forRoot: root), try canonicalStoreKey(runIn: plain.path))
         XCTAssertTrue(WorkspaceStore.derivedKey(forRoot: root).hasPrefix("plain-"))
     }
 
-    func testMissingFolderStillYieldsAKeyRatherThanCrashing() {
+    func testMissingFolderStillYieldsAKeyRatherThanCrashing() async throws {
         let gone = tempRoot.appendingPathComponent("never-existed").path
-        XCTAssertEqual(WorkspaceStore.repositoryRoot(for: gone), gone)
+        let root = try await WorkspaceStore.repositoryRoot(for: gone)
+        XCTAssertEqual(root, gone)
     }
 
     /// helm's own checkout — proof that running from a worktree (this branch is one)
@@ -143,9 +143,9 @@ final class WorkspaceStoreTests: XCTestCase {
     /// expectation is recomputed here the way `prp`'s resolver spells it — basename, lowercased
     /// and slugged, then eight hex of the path's git blob hash — and compared against the
     /// implementation. A drift in either now fails; a change of machine does not.
-    func testThisCheckoutResolvesToTheHelmStore() throws {
+    func testThisCheckoutResolvesToTheHelmStore() async throws {
         let here = (#filePath as NSString).deletingLastPathComponent
-        let root = WorkspaceStore.repositoryRoot(for: here)
+        let root = try await WorkspaceStore.repositoryRoot(for: here)
 
         XCTAssertFalse(root.contains("/.worktrees/"), "a worktree must resolve to its checkout")
         XCTAssertEqual((root as NSString).lastPathComponent, "helm")
@@ -175,6 +175,37 @@ final class WorkspaceStoreTests: XCTestCase {
         process.waitUntilExit()
         return String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - A git that does not answer
+
+    /// **⌘⇧N used to wait on this git on the main thread for as long as it took** (#390). A
+    /// fake `git` that sleeps well past the deadline has to come back as `timedOut`, at the
+    /// deadline, rather than blocking until it exits and then answering "no repo here".
+    ///
+    /// Direction: the assertion needs the deadline to fire *before* the fake exits, so it is the
+    /// risky kind AGENTS.md names. The margins are its 50×: the fake sleeps 60s against a 1s
+    /// deadline, and the call may take up to 50s before the elapsed check calls it blocking.
+    func testAGitThatDoesNotAnswerTimesOutInsteadOfBlocking() async throws {
+        let bin = tempRoot.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let git = bin.appendingPathComponent("git")
+        try "#!/bin/sh\nexec /bin/sleep 60\n".write(to: git, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: git.path)
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = "\(bin.path):/usr/bin:/bin"
+
+        let started = ContinuousClock.now
+        do {
+            let root = try await WorkspaceStore.repositoryRoot(
+                for: tempRoot.path, environment: environment, timeout: .seconds(1))
+            XCTFail("a git that never answered resolved \(root)")
+        } catch let failure as Subprocess.Failure {
+            XCTAssertEqual(failure, .timedOut)
+        }
+        XCTAssertLessThan(
+            ContinuousClock.now - started, .seconds(50),
+            "the call returned at the deadline, not when the fake git exited")
     }
 
     // MARK: - Store matching

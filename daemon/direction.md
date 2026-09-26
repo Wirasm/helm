@@ -17,7 +17,8 @@ repo: one vertical at a time, old code unwired only when the new is proven.
 **Where it stands: M0 + M5a + mail + the shared browser + the bench document's daemon half.** The daemon owns the mailroom (`bench-mail`:
 files are the record, notices carry the path never the body, retire-never-delete,
 metadata-only listings) and the wake reactor (`mail/sent ⇒ agent/woken` by pasting into
-an idle pty the daemon owns, with the loop cap as a per-recipient token bucket in the
+an idle pty the daemon owns — for Claude, idle by its own registry row, never a pty at a
+prompt (#415) — with the loop cap as a per-recipient token bucket in the
 courier — where helm #320 proved it must live). Proven end to end by `just mail-proof`:
 a number passed as mail around a real claude→codex→pi ring, +1 per hop.
 
