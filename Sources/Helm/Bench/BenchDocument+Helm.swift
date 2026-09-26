@@ -1,8 +1,7 @@
 import Foundation
 import HelmWire
 
-// The document benchd sends and the values helm renders, converted in both directions: from the
-// document when a frame arrives, and to it once, for the import of helm's saved benches.
+// The document benchd sends, converted to the values helm renders when a frame arrives.
 
 extension Workbench {
     /// The bench a workspace of benchd's document describes. nil when it holds no pane, which a
@@ -27,30 +26,6 @@ extension Workbench {
     }
 }
 
-extension BenchDocument.Bench {
-    /// A helm bench as the document spells it, for the import. A placeholder pane cannot reach
-    /// here — only a document makes one, and the import runs only into an empty document.
-    init(_ bench: Workbench) {
-        self.init(
-            columns: bench.columns.map { column in
-                BenchDocument.Column(
-                    id: column.id,
-                    slots: column.slots.map { slot in
-                        BenchDocument.Slot(
-                            id: slot.id,
-                            panes: slot.panes.compactMap { pane in
-                                Surface(pane.content).map {
-                                    BenchDocument.Pane(id: pane.id, surface: $0, name: pane.name)
-                                }
-                            },
-                            selected: slot.selected, height: slot.height)
-                    },
-                    width: column.width)
-            },
-            focusedSlot: bench.focusedSlot)
-    }
-}
-
 extension Pane.Content {
     init(_ surface: Surface) {
         switch surface {
@@ -63,19 +38,6 @@ extension Pane.Content {
         case .browser: self = .browser
         case .sessions: self = .sessions
         case let .unsupported(kind): self = .unsupported(kind)
-        }
-    }
-}
-
-extension Surface {
-    /// nil for a placeholder, which is benchd's pane and not helm's to write back.
-    init?(_ content: Pane.Content) {
-        switch content {
-        case let .terminal(agent): self = .terminal(agent: agent.map(BenchDocument.Agent.init))
-        case let .canvas(source): self = .canvas(path: source.fileURL.path)
-        case .browser: self = .browser
-        case .sessions: self = .sessions
-        case .unsupported: return nil
         }
     }
 }

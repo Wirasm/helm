@@ -19,7 +19,7 @@
 //!   dropped, and an open drawer that did not survive is closed.
 //!
 //! Nothing is lost silently. Every skip and repair comes back as a sentence, so the caller
-//! (benchd's boot, the one-time import) can log it: bench-visible means logged.
+//! (benchd's boot) can log it: bench-visible means logged.
 
 use crate::bench::{Bench, Pane};
 use crate::document::Document;

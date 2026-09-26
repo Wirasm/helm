@@ -25,9 +25,6 @@ pub enum Refusal {
     NotADivider,
     NotATerminal(PaneId),
     NothingShelved(StandardPath),
-    DocumentNotEmpty {
-        workspaces: usize,
-    },
     /// Opening a drawer that holds nothing, with nothing named to put in it.
     EmptyDrawer(DrawerName),
     /// Drawer names are one namespace across the document.
@@ -66,10 +63,6 @@ impl fmt::Display for Refusal {
             ),
             Refusal::NotATerminal(id) => write!(f, "pane {id} is not a terminal"),
             Refusal::NothingShelved(path) => write!(f, "workspace {path} has no shelved bench"),
-            Refusal::DocumentNotEmpty { workspaces } => write!(
-                f,
-                "an import lands only in an empty document, and this one holds {workspaces} workspace(s)"
-            ),
             Refusal::EmptyDrawer(name) => write!(
                 f,
                 "drawer {name} holds nothing — name a surface to open it with"

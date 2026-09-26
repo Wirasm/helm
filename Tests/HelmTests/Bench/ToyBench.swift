@@ -31,7 +31,7 @@ struct ToyBench {
         case .get, .paneOpenInDrawer, .drawerToggle, .paneMove:
             return Answer()
         case .workspaceOpen, .workspaceActivate, .workspaceClose, .workspaceReset,
-            .workspaceUnshelve, .workspaceImport:
+            .workspaceUnshelve:
             return try applyWorkspace(request.verb, focus: focus)
         case let .paneOpen(workspace, surface):
             return try open(surface, in: workspace ?? document.active, focus: focus)
@@ -81,11 +81,6 @@ struct ToyBench {
                 workspace.bench = shelved
                 workspace.shelved = nil
             }
-        case let .workspaceImport(imported):
-            guard document.workspaces.isEmpty else {
-                throw Refused(reason: "the document is not empty")
-            }
-            document = imported
         default:
             return Answer()
         }

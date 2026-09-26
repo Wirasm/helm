@@ -60,8 +60,10 @@ final class BrowserPaneBenchTests: XCTestCase {
     }
 
     func testABrowserPaneCrossesTheDocument() throws {
-        let bench = Workbench(panes: [Pane(content: .terminal()), Pane(content: .browser)])
-        let crossed = try XCTUnwrap(Workbench(document: BenchDocument.Bench(bench)))
+        let bench = BenchFixture.bench([
+            BenchFixture.terminal(), BenchDocument.Pane(id: UUID(), surface: .browser),
+        ])
+        let crossed = try XCTUnwrap(Workbench(document: bench))
         XCTAssertEqual(crossed.panes.map(\.content).last, .browser)
     }
 

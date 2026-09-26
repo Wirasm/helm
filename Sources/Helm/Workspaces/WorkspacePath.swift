@@ -52,17 +52,15 @@ struct WorkspacePath: Equatable, Hashable, Codable, Sendable {
         self.init(url.path)
     }
 
-    /// Decoding is a route in like any other, so it normalizes too — a hand-edited defaults
-    /// blob, or a `BenchSnapshot` read by an agent outside the process, cannot reintroduce an
-    /// un-normalized value.
+    /// Decoding is a route in like any other, so it normalizes too — a `BenchSnapshot` read by
+    /// an agent outside the process cannot reintroduce an un-normalized value.
     init(from decoder: Decoder) throws {
         self.init(try decoder.singleValueContainer().decode(String.self))
     }
 
     /// A single-value container, so the wire shape is a bare string — byte-identical to the
     /// `String` this type replaces. `BenchSnapshot.WorkspaceRecord.path` is read by agents
-    /// outside the process and helm's old saved list is read by `BenchImport`; neither may
-    /// change shape for this refactor to be safe.
+    /// outside the process, so it may not change shape.
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(value)

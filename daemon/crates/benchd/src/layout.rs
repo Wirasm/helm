@@ -398,10 +398,6 @@ pub fn apply(
             doc.unshelve(path, focus)?;
             Ok(Outcome::default())
         }
-        LayoutVerb::WorkspaceImport { document } => {
-            doc.import(document.clone())?;
-            Ok(Outcome::default())
-        }
         LayoutVerb::PaneOpen(PaneOpen { into, surface }) => {
             // A named drawer bypasses the rules; otherwise they decide, against the bench the
             // pane would join, and may send it to a drawer themselves.

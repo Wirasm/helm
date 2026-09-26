@@ -11,7 +11,6 @@ import XCTest
 /// plain shell"*, and *"a session whose transcript is gone says so plainly rather than offering
 /// a resume that will fail"*.
 @MainActor
-// swiftlint:disable:next type_body_length - legacy (#418): 399 lines, limit 350
 final class ResumableAgentTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/helm-resume")
 
@@ -48,75 +47,16 @@ final class ResumableAgentTests: XCTestCase {
 
     // MARK: - The record, and that it survives a relaunch
 
-    /// The whole of #63's persistence: without this the offer has nothing to be about. The record
-    /// crosses into benchd's document on import and comes back out of every document after.
+    /// The whole of #63's persistence: without this the offer has nothing to be about. benchd
+    /// keeps the record in its document, and helm reads it back out of every document.
     func testTheAgentOnAPaneSurvivesTheDocument() throws {
         let pane = UUID()
-        let bench = Workbench(
-            panes: [Pane(id: pane, content: .terminal(agent: agent()))])
-
-        let restored = try XCTUnwrap(Workbench(document: BenchDocument.Bench(bench)))
+        let restored = try XCTUnwrap(
+            Workbench(document: BenchFixture.bench([holding(agent(), id: pane)])))
 
         XCTAssertEqual(
             restored.pane(pane)?.content, .terminal(agent: agent()),
             "the pty died with the process; the id of the conversation it held did not")
-    }
-
-    /// A pane with nothing recorded encodes as it always did, so a bench written by this build
-    /// is still readable by one that predates it — and vice versa.
-    func testAPaneWithNoAgentEncodesExactlyAsItDidBefore() throws {
-        let data = try JSONEncoder().encode(Pane.Content.terminal())
-
-        let object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(object.keys.sorted(), ["kind"], "no new key on a pane with nothing to say")
-    }
-
-    /// A pre-#63 blob has no `agent` key at all, which is not an error and has lost nothing.
-    func testABenchWrittenBeforeThisBuildStillDecodes() throws {
-        let pane = UUID()
-        let blob = """
-            {"columns":[{"id":"\(UUID().uuidString)","width":1,"slots":[
-              {"id":"\(UUID().uuidString)","height":1,"selected":"\(pane.uuidString)",
-               "panes":[{"id":"\(pane.uuidString)","content":{"kind":"terminal"}}]}]}],
-             "focusedSlot":"\(UUID().uuidString)"}
-            """
-
-        let bench = try JSONDecoder().decode(Workbench.self, from: Data(blob.utf8))
-
-        XCTAssertEqual(bench.pane(pane)?.content, .terminal(agent: nil))
-    }
-
-    /// A malformed record costs the pane its offer, never the pane. `Slot.init(from:)` skips a
-    /// pane it cannot read at all, and losing a terminal because helm could not read a *hint*
-    /// about it is the wrong trade.
-    func testAMalformedAgentCostsTheOfferAndNotTheTerminal() throws {
-        let pane = UUID()
-        let blob = """
-            {"columns":[{"id":"\(UUID().uuidString)","width":1,"slots":[
-              {"id":"\(UUID().uuidString)","height":1,"selected":"\(pane.uuidString)",
-               "panes":[{"id":"\(pane.uuidString)",
-                         "content":{"kind":"terminal","agent":{"command":42}}}]}]}],
-             "focusedSlot":"\(UUID().uuidString)"}
-            """
-
-        let bench = try JSONDecoder().decode(Workbench.self, from: Data(blob.utf8))
-
-        XCTAssertEqual(bench.terminalPaneIDs, [pane], "the terminal survives")
-        XCTAssertTrue(bench.resumableAgents.isEmpty, "and it simply has nothing to offer")
-    }
-
-    /// A `face` key left in a stored pane by hand (no build ever wrote one; the chat face left
-    /// in #375) must not cost the pane its resume offer.
-    func testAStoredChatFaceKeepsTheAgent() throws {
-        let stored = try JSONEncoder().encode(Pane.Content.terminal(agent: agent()))
-        var object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: stored) as? [String: Any])
-        object["face"] = "chat"
-        let blob = try JSONSerialization.data(withJSONObject: object)
-
-        XCTAssertEqual(
-            try JSONDecoder().decode(Pane.Content.self, from: blob), .terminal(agent: agent()))
     }
 
     // MARK: - The line helm composes
@@ -397,11 +337,7 @@ final class ResumableAgentTests: XCTestCase {
     func testARestoredPaneSaysInTheSnapshotThatItIsBeingOfferedAResume() throws {
         let pane = UUID()
         let snapshot = try project(
-            bench: Workbench(
-                panes: [
-                    Pane(id: pane, content: .terminal(agent: agent())),
-                    Pane(content: .terminal()),
-                ]))
+            bench: BenchFixture.bench([holding(agent(), id: pane), holding(nil)]))
 
         let records = try panes(in: snapshot)
         let offered = try XCTUnwrap(records[pane]?.resumable)
@@ -420,8 +356,7 @@ final class ResumableAgentTests: XCTestCase {
     func testABlockedOfferNamesItsReasonInTheSnapshot() throws {
         let pane = UUID()
         let snapshot = try project(
-            bench: Workbench(
-                panes: [Pane(id: pane, content: .terminal(agent: agent()))]),
+            bench: BenchFixture.bench([holding(agent(), id: pane)]),
             transcripts: [])
 
         let record = try XCTUnwrap(try panes(in: snapshot)[pane]?.resumable)
@@ -434,7 +369,7 @@ final class ResumableAgentTests: XCTestCase {
     func testAPaneThatNeverHeldAnAgentCarriesNoResumeRecord() throws {
         let pane = UUID()
         let snapshot = try project(
-            bench: Workbench(panes: [Pane(id: pane, content: .terminal())]))
+            bench: BenchFixture.bench([holding(nil, id: pane)]))
 
         XCTAssertNil(try panes(in: snapshot)[pane]?.resumable)
         let json = try XCTUnwrap(
@@ -489,11 +424,11 @@ final class ResumableAgentTests: XCTestCase {
     }
 
     private func project(
-        bench: Workbench, transcripts: Set<String>? = nil
+        bench: BenchDocument.Bench, transcripts: Set<String>? = nil
     ) throws -> BenchSnapshot {
         let rig = try toyRig(
             document: BenchDocument(
-                workspaces: [.init(path: workspace.value, bench: BenchDocument.Bench(bench))],
+                workspaces: [.init(path: workspace.value, bench: bench)],
                 active: workspace.value)
         ) { terminals, client in
             WorkbenchModel(

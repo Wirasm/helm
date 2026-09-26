@@ -1,4 +1,4 @@
-//! The document: workspaces, the #85 shelf, import, and the focus rule enforced once for
+//! The document: workspaces, the #85 shelf, and the focus rule enforced once for
 //! every operation. The shelf tests mirror the data half of
 //! `Tests/HelmTests/Workbench/BenchMountTests.swift`; *when* to ask the operator stays helm's.
 
@@ -351,21 +351,7 @@ fn an_agent_cannot_answer_the_restore_question_for_the_operator() {
     );
 }
 
-// MARK: - Import and decoding
-
-#[test]
-fn an_import_lands_only_in_an_empty_document() {
-    let (source, _, _) = one_workspace();
-    let mut empty = Document::default();
-    empty.import(source.clone()).unwrap();
-    assert_eq!(empty, source);
-
-    let (mut live, _, _) = one_workspace();
-    assert_eq!(
-        live.import(source),
-        Err(Refusal::DocumentNotEmpty { workspaces: 1 })
-    );
-}
+// MARK: - Decoding
 
 #[test]
 fn a_document_round_trips_and_refuses_what_no_operation_produces() {
