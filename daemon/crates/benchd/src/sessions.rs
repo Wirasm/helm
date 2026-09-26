@@ -74,7 +74,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
             bench,
             c.session_records.hosted.clone(),
             c.session_records.dismissed.clone(),
-            crate::hook::in_panes(&c),
+            crate::hook::hooked(&c),
         )
     };
     // Read during the build, outside the core mutex, like the harness files. `wakeable` is
@@ -200,32 +200,21 @@ pub fn record_claim(core: &mut Core, entry: HostedSession, pid: u32) -> Result<(
     save_hosted(&core.root, &core.session_records.hosted)
 }
 
-/// A claimed session now in another pane (resumed there): logged as `mail/moved`, then the
-/// entry names the new pane with the same handle, and is written.
-pub fn record_move(
-    core: &mut Core,
-    key: &SessionKey,
-    pane: PaneId,
-    pid: u32,
-) -> Result<(), String> {
-    let Some(i) = core
+/// A claimed session now in another pane (resumed there): the entry names the new pane with
+/// the same handle, and is written. The caller logs the move (`mail/moved`).
+pub fn record_move(core: &mut Core, key: &SessionKey, pane: PaneId) -> Result<(), String> {
+    let Some(entry) = core
         .session_records
         .hosted
-        .iter()
-        .position(|h| h.key() == *key)
+        .iter_mut()
+        .find(|h| h.key() == *key)
     else {
         return Err("a move names a recorded session".into());
     };
-    let entry = &core.session_records.hosted[i];
     let Some(handle) = entry.handle().map(str::to_string) else {
         return Err("a move names a claimed session".into());
     };
-    let from = entry.via.clone();
-    core.append(
-        "mail/moved",
-        json!({ "handle": handle, "pid": pid, "session": key.id, "harness": key.harness.name(), "from": from, "to": pane }),
-    )?;
-    core.session_records.hosted[i].via = HostedVia::Pane {
+    entry.via = HostedVia::Pane {
         pane,
         handle: Some(handle),
     };
