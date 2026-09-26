@@ -26,11 +26,17 @@ if ! [[ "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
     echo "day: since must be a date, YYYY-MM-DD (got \"$since\")" >&2
     exit 2
 fi
-since_ms=$(( $(date -j -f %Y-%m-%d-%H%M%S "$since-000000" +%s) * 1000 ))
+# The round trip refuses a date that is shaped right and does not exist (2026-13-01).
+since_s="$(date -j -f %Y-%m-%d-%H%M%S "$since-000000" +%s 2>/dev/null)"
+if [ -z "$since_s" ] || [ "$(date -j -r "$since_s" +%Y-%m-%d)" != "$since" ]; then
+    echo "day: $since is not a date" >&2
+    exit 2
+fi
+since_ms=$(( since_s * 1000 ))
 today="$(date +%Y-%m-%d)"
 
-# --- PRP store resolver (canonical; keep byte-identical across skills) ---
-# Adopt the store that already records this root; mint a key only when none does.
+# The prp skills' canonical store resolver, rooted at this script's repo rather than $PWD, so
+# `just day` finds helm's store from any directory.
 _gd="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
 case "$_gd" in */.git) _root="${_gd%/.git}" ;; "") _root="$repo" ;; *) _root="$_gd" ;; esac
 _root="$(cd "$_root" && pwd -P)"
@@ -62,11 +68,30 @@ ask() {
     fi
 }
 
+# Renders a source's JSON answer with jq. An answer jq cannot read is reported like a
+# failed command, never rendered as an empty section. Usage: render <label> <json> <jq args…>
+render() {
+    local label="$1" json="$2" out
+    shift 2
+    if out="$(printf '%s' "$json" | jq -r "$@" 2>"$err")"; then
+        printf '%s\n' "$out"
+    else
+        printf '_unavailable: the answer of `%s` is not what this script reads (%s)_\n' \
+            "$label" "$(grep -m1 . "$err")"
+    fi
+}
+
 # The operator's workspaces are the ones helm has open; without helm's snapshot, this repo.
+# A snapshot that exists and cannot be read is said on the page.
 snapshot="${HELM_BENCH_DIR:-$HOME/.helm/bench}/snapshot.json"
 workspaces=()
+snapshot_note=""
 if [ -f "$snapshot" ]; then
-    while IFS= read -r w; do workspaces+=("$w"); done < <(jq -r '.workspaces[].path' "$snapshot")
+    if listed="$(jq -er '.workspaces[].path' "$snapshot" 2>"$err")"; then
+        while IFS= read -r w; do workspaces+=("$w"); done <<<"$listed"
+    else
+        snapshot_note="_$snapshot could not be read ($(grep -m1 . "$err")), so only this repo is listed._"
+    fi
 fi
 [ ${#workspaces[@]} -gt 0 ] || workspaces=("$_root")
 
@@ -74,7 +99,7 @@ sessions() {
     local ws="$1" json
     printf '\n### %s\n\n' "$ws"
     json="$(ask "$BENCH" sessions --all --workspace "$ws")" || { printf '%s\n' "$json"; return; }
-    printf '%s' "$json" | jq -r --argjson since "$since_ms" '
+    render "$BENCH sessions --all" "$json" --argjson since "$since_ms" '
       def when(ms): (ms / 1000 | strflocaltime("%a %H:%M"));
       [.rows[] | select(.state.kind == "running" or .state.at_ms >= $since)] as $rows
       | if ($rows | length) == 0 then "Nothing running or finished since then."
@@ -98,32 +123,33 @@ answer="$(ask "$GH" auth status)" || gh_down="$answer"
     case " ${repos[*]-} " in *" $r "*) ;; *) repos+=("$r") ;; esac
 done
 
-# gh stops at --limit without saying so; the page does.
+# gh stops at --limit without saying so. Asking for one more than is shown tells the page
+# whether anything was cut.
 LIMIT=100
 
 prs() {
     local repo="$1" state="$2" query="$3" json
-    json="$(ask "$GH" pr list --repo "$repo" --state "$state" --search "$query" --limit "$LIMIT" \
-        --json number,title,url,author,isDraft)" || { printf '%s\n' "$json"; return; }
-    printf '%s' "$json" | jq -r --argjson limit "$LIMIT" '
-      if length == 0 then "- none" else .[] | "- [#\(.number)](\(.url)) \(.title) — \(.author.login)"
+    json="$(ask "$GH" pr list --repo "$repo" --state "$state" --search "$query" \
+        --limit $((LIMIT + 1)) --json number,title,url,author,isDraft)" || { printf '%s\n' "$json"; return; }
+    render "$GH pr list" "$json" --argjson limit "$LIMIT" '
+      if length == 0 then "- none" else .[:$limit][] | "- [#\(.number)](\(.url)) \(.title) — \(.author.login)"
         + (if .isDraft then " · draft" else "" end) end,
-      (if length == $limit then "- _the first \($limit) only_" else empty end)'
+      (if length > $limit then "- _the first \($limit) only_" else empty end)'
 }
 
 decisions() {
     local repo="$1" json
-    json="$(ask "$GH" issue list --repo "$repo" --state open --search '"Decision needed"' --limit "$LIMIT" \
-        --json number,title,url)" || { printf '%s\n' "$json"; return; }
-    printf '%s' "$json" | jq -r --argjson limit "$LIMIT" '
-      if length == 0 then "- none" else .[] | "- [#\(.number)](\(.url)) \(.title)" end,
-      (if length == $limit then "- _the first \($limit) only_" else empty end)'
+    json="$(ask "$GH" issue list --repo "$repo" --state open --search '"Decision needed"' \
+        --limit $((LIMIT + 1)) --json number,title,url)" || { printf '%s\n' "$json"; return; }
+    render "$GH issue list" "$json" --argjson limit "$LIMIT" '
+      if length == 0 then "- none" else .[:$limit][] | "- [#\(.number)](\(.url)) \(.title)" end,
+      (if length > $limit then "- _the first \($limit) only_" else empty end)'
 }
 
 mail() {
     local json
     json="$(ask "$BENCH" mail list --handle operator)" || { printf '%s\n' "$json"; return; }
-    printf '%s' "$json" | jq -r '
+    render "$BENCH mail list" "$json" '
       [.mail[] | select(.unread)] as $m
       | if ($m | length) == 0 then "No unread mail."
         else $m[] | "- \(.at) from **\(.from)**: \(.subject // "(no subject)") · `\(.id)`" end,
@@ -135,6 +161,7 @@ mail() {
     printf 'Since %s. Written %s by `just day`.\n' "$since" "$(date '+%H:%M')"
 
     printf '\n## Agent sessions\n'
+    [ -z "$snapshot_note" ] || printf '\n%s\n' "$snapshot_note"
     for ws in "${workspaces[@]}"; do sessions "$ws"; done
     printf '\n`bench log <id>` shows what a session did.\n'
 
