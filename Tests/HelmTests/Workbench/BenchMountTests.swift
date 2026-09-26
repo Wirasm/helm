@@ -99,7 +99,8 @@ final class BenchMountTests: XCTestCase {
 
         let ended = BenchDocument.Pane(id: UUID(), surface: .terminal(agent: agent))
         XCTAssertNotNil(
-            BenchMountPolicy.offer(bench: try XCTUnwrap(Workbench(document: ToyBench.bench([ended]))), shelved: nil),
+            BenchMountPolicy.offer(
+                bench: try XCTUnwrap(Workbench(document: ToyBench.bench([ended]))), shelved: nil),
             "once the session is gone the record is worth a question again")
     }
 

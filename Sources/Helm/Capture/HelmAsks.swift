@@ -49,7 +49,9 @@ final class HelmAsks {
             case let .success(report):
                 send(.init(id: id, ask: asked.ask, status: .ok, reason: nil, data: report))
             case let .failure(refusal):
-                send(.init(id: id, ask: asked.ask, status: .error, reason: refusal.reason, data: nil))
+                send(
+                    .init(id: id, ask: asked.ask, status: .error, reason: refusal.reason, data: nil)
+                )
             }
         case let .unknown(kind):
             send(

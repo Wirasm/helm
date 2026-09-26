@@ -43,7 +43,8 @@ final class BenchWireConformanceTests: XCTestCase {
             .flatMap(\.panes).map(\.surface)
         XCTAssertTrue(surfaces.contains(.browser))
         XCTAssertTrue(surfaces.contains { if case .canvas = $0 { true } else { false } })
-        XCTAssertTrue(surfaces.contains { if case .terminal(.some, _) = $0 { true } else { false } })
+        XCTAssertTrue(
+            surfaces.contains { if case .terminal(.some, _) = $0 { true } else { false } })
         XCTAssertTrue(
             surfaces.contains { if case .terminal(_, .some) = $0 { true } else { false } },
             "a terminal showing a benchd session (M3)")
@@ -215,9 +216,12 @@ final class BenchWireConformanceTests: XCTestCase {
             try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples[key])))
         }
         let asked = try JSONDecoder().decode(
-            HelmAsked.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["asked"])))
+            HelmAsked.self,
+            from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["asked"])))
         XCTAssertEqual(
-            asked, HelmAsked(ask: "a1", request: .capture(path: "/tmp/bench-capture.png", window: "helm — m3")))
+            asked,
+            HelmAsked(
+                ask: "a1", request: .capture(path: "/tmp/bench-capture.png", window: "helm — m3")))
         let answer = HelmAnswerRequest<CaptureReport>(
             id: "helm-answer-1", ask: "a1", status: .error,
             reason: "no window titled like \"helm — m3\" is open", data: nil)

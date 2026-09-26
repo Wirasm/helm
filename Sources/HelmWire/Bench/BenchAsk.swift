@@ -97,7 +97,6 @@ package struct HelmAnswerRequest<Data: Encodable & Equatable>: Encodable, Equata
     }
 }
 
-
 /// A `bench/changed` event's data, reduced to what helm reads of an agent's verb: which verb, who
 /// sent it, and the pane it resolved to. helm reads it to remember which agent opened a canvas,
 /// so a mark on it can be mailed back (#205).

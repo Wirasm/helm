@@ -1,7 +1,7 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
-import HelmWire
 
 /// Session **ownership** — a shell per terminal pane benchd's document names, grouped by
 /// workspace, torn down by pane. Every session creates its surface from the manager's one shared
@@ -68,7 +68,10 @@ final class TerminalManagerTests: XCTestCase {
                     bench: ToyBench.bench([.init(id: UUID(), surface: .terminal(agent: nil))]))
             ], active: firstWorkspace.value)
         var asked = false
-        let none = plain.attachCommands(bench: { asked = true; return "bench" }())
+        let none = plain.attachCommands(
+            bench: {
+                asked = true; return "bench"
+            }())
         XCTAssertTrue(none.isEmpty)
         XCTAssertFalse(asked, "no round trip to benchd for a bench of plain terminals")
     }
