@@ -120,6 +120,8 @@ pub fn open_action(
                 effort: None,
                 runtime_session: Some(id.to_string()),
                 resume: true,
+                prompt_file: None,
+                settings: None,
             })?;
             Ok(OpenAction::Resume {
                 argv: std::iter::once(program).chain(args).collect(),

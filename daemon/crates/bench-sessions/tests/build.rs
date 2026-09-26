@@ -207,7 +207,7 @@ impl Fixture {
                 .is_some_and(|real| claimed.is_none_or(|c| c == *real))
         };
         let ws = StandardPath::new(&workspace.display().to_string()).unwrap();
-        // benchd's rule: wakeable when a live bench session holds the handle.
+        // A stand-in for benchd's rule (an agent that can take a push); the rows only carry it.
         let mailbox = |handle: &str| MailAddress {
             handle: handle.into(),
             wakeable: self.bench.iter().any(|b| b.live && b.handle == handle),

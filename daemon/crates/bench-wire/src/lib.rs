@@ -244,32 +244,19 @@ impl Verb {
 /// client that connects and never finishes its line gets a refusal, not the daemon.
 pub const DAEMON_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// How long the daemon waits for a spawned TUI to look ready before giving up on
-/// prompt delivery. Lives HERE, not in the daemon, because the client's patience is
-/// derived from it below — PR #341's R1 was these two numbers spelled apart (30 vs 15),
-/// so a slow spawn exited 2 "no daemon" while the daemon was mid-success.
-pub const READY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
-
 /// How long `browser/start` waits for Chromium to write `DevToolsActivePort` — the
 /// moment its debugging server is listening. A cold profile on a busy machine takes a
 /// second or two; a browser that has not answered in this long is not going to.
 pub const BROWSER_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
-const fn longest_daemon_wait_secs() -> u64 {
-    if READY_WAIT.as_secs() > BROWSER_READY_WAIT.as_secs() {
-        READY_WAIT.as_secs()
-    } else {
-        BROWSER_READY_WAIT.as_secs()
-    }
-}
-
 /// A caller waits at most this long for an answer — strictly longer than every
-/// daemon-side wait, **true by construction**: the longest wait plus the I/O bound plus
-/// slack, so the two sides cannot drift apart again. A timeout maps to
+/// daemon-side wait, **true by construction**: the longest wait (a browser start; a spawn
+/// waits for nothing since #358) plus the I/O bound plus slack, so the two sides cannot
+/// drift apart again (PR #341's R1). A timeout maps to
 /// `EXIT_NO_DAEMON`: no exit code at all is the one failure an unattended agent cannot
 /// act on.
 pub const CLIENT_READ_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(longest_daemon_wait_secs() + DAEMON_IO_TIMEOUT.as_secs() + 5);
+    std::time::Duration::from_secs(BROWSER_READY_WAIT.as_secs() + DAEMON_IO_TIMEOUT.as_secs() + 5);
 
 // ---------------------------------------------------------------------------
 // Handles and mail payloads
@@ -714,10 +701,6 @@ mod tests {
 
     #[test]
     fn the_clients_patience_outlasts_every_daemon_wait_by_construction() {
-        assert!(
-            CLIENT_READ_TIMEOUT > READY_WAIT + DAEMON_IO_TIMEOUT,
-            "R1's invariant: a daemon-side outcome always outruns the client giving up"
-        );
         assert!(
             CLIENT_READ_TIMEOUT > BROWSER_READY_WAIT + DAEMON_IO_TIMEOUT,
             "the same invariant for a browser start"

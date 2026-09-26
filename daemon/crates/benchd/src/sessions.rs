@@ -49,7 +49,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
     let workspace = StandardPath::new(&args.workspace)
         .map_err(|why| Refusal::Refused(format!("workspace: {why}")))?;
 
-    let (home, root, live_handles, bench, hosted, dismissed) = {
+    let (home, root, pushable, bench, hosted, dismissed) = {
         let c = core.lock().unwrap();
         let bench: Vec<BenchSession> = c
             .sessions
@@ -70,7 +70,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
         (
             c.home.clone(),
             c.root.clone(),
-            c.live_handles(),
+            c.pushable_handles(),
             bench,
             c.session_records.hosted.clone(),
             c.session_records.dismissed.clone(),
@@ -80,7 +80,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
     // `mail/send`'s own test for queueing a wake, taken from the same snapshot.
     let mailbox = |handle: &str| MailAddress {
         handle: handle.to_string(),
-        wakeable: live_handles.contains(handle),
+        wakeable: pushable.contains(handle),
         unread: bench_mail::unread(&root, handle),
     };
     let helm_bench_dir = helm_bench_dir(&home);

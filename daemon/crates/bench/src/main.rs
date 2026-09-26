@@ -228,7 +228,12 @@ fn run() -> i32 {
                 agent: String::new(),
                 cwd: String::new(),
                 name: flag("name"),
-                prompt_file: flag("prompt_file"),
+                // Absolute: the agent reads it from its own cwd, which is not the caller's.
+                prompt_file: flag("prompt_file").map(|p| {
+                    std::env::current_dir()
+                        .map(|cwd| cwd.join(&p).display().to_string())
+                        .unwrap_or(p)
+                }),
                 model: flag("model"),
                 effort: flag("effort"),
                 rows: None,
@@ -550,6 +555,7 @@ fn hook(harness: Option<&str>) -> i32 {
         tool: field("tool_name"),
         pane: env("HELM_PANE"),
         bench_session: env("BENCH_SESSION"),
+        messaging_socket: env("CLAUDE_CODE_MESSAGING_SOCKET"),
     };
     let Some(reply) = hook_request(&args) else {
         return 0;
