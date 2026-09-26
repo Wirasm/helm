@@ -14,9 +14,10 @@ import XCTest
 /// the region the terminal occupies is really marked, and the marker is on the right half of a
 /// flipped view rather than the wrong one.
 ///
-/// **Nothing here needs a window, a display, a Metal device or a grant.** That is the same
-/// claim the feature makes, tested the only way it can honestly be tested — a suite that
-/// needed a screen would be asserting the opposite of what it is for.
+/// **Nothing here needs a display, a Metal device or a grant.** That is the same claim the
+/// feature makes, tested the only way it can honestly be tested — a suite that needed a screen
+/// would be asserting the opposite of what it is for. The one `NSWindow` below is never ordered
+/// in, which is exactly the state it exists to test.
 @MainActor
 final class WindowCaptureTests: XCTestCase {
     private var scratch: URL!
@@ -139,6 +140,40 @@ final class WindowCaptureTests: XCTestCase {
             FileManager.default.fileExists(
                 atPath: scratch.appendingPathComponent("empty.png").path),
             "and no file is left behind for a caller to find and trust")
+    }
+
+    // MARK: - Whether the window was on a display (#408)
+
+    func testAWindowThatIsNotOnScreenIsReportedNotVisible() throws {
+        // **#408's regression.** A locked screen leaves helm's window occluded, WebKit suspends
+        // the canvas, and the capture comes out with a blank page and nothing in the report to
+        // say so. A window that was never ordered in is occluded the same way, without needing
+        // a lock screen or a second window to cover it.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.borderless],
+            backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = Pane(
+            frame: NSRect(x: 0, y: 0, width: 200, height: 100),
+            colour: Palette.helm.surface.nsColor(in: .light))
+        window.contentView = view
+        XCTAssertFalse(
+            window.occlusionState.contains(.visible),
+            "the fixture itself: a window never ordered in must be occluded")
+
+        let (report, _) = try png(of: view)
+        XCTAssertFalse(
+            report.windowVisible,
+            "an occluded window's capture must say so, or a suspended canvas reads as a bug")
+    }
+
+    func testAViewInNoWindowIsNotReportedVisible() throws {
+        // Nothing in a detached view was ever composited, so claiming it visible would vouch
+        // for web content that was never asked to paint.
+        let view = Pane(frame: NSRect(x: 0, y: 0, width: 50, height: 50), colour: .white)
+        let (report, _) = try png(of: view)
+        XCTAssertFalse(report.windowVisible)
     }
 
     // MARK: - Whether the terminal made it in
