@@ -230,6 +230,63 @@ final class ReleaseResumeScriptTests: XCTestCase {
             ])
     }
 
+    /// The caller is normally an agent inside a benchd session or a helm pane, so its identity
+    /// is in the environment the detached run inherits. After the scrub, the resuming `bench`
+    /// must carry none of it: `BENCH_HANDLE` would make the spawn the dead agent's verb, and
+    /// `BENCH_ASKED` would ask for the operator. `BENCH_NOT_YET_INVENTED` stands for the next one,
+    /// which a list of names would miss. The survivors are the control: a scrub that cleared
+    /// everything would also pass the first half, and would lose where the build announces
+    /// itself and where the fallback claude finds its session.
+    func testTheCallersSessionIdentityDoesNotReachTheResume() throws {
+        let bin = scratch.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let record = scratch.appendingPathComponent("env")
+        let stub = bin.appendingPathComponent("bench")
+        try Data("#!/bin/sh\n/usr/bin/env > \"\(record.path)\"\n".utf8).write(to: stub)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+        let timeout = bin.appendingPathComponent("timeout")
+        try Data("#!/bin/sh\nshift\nexec \"$@\"\n".utf8).write(to: timeout)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: timeout.path)
+
+        let identity = [
+            "BENCH_SESSION", "BENCH_HANDLE", "BENCH_ASKED", "BENCH_DIR", "BENCH_SUITE",
+            "BENCH_BROWSER_ENDPOINT", "BENCH_NOT_YET_INVENTED", "HELM_PANE",
+            "HELM_DEFAULTS_SUITE", "HELM_BENCH_DIR", "CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT",
+            "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET",
+            "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SSE_PORT",
+        ]
+        let kept = [
+            "HELM_BUILD_DIR": "/tmp/stamps", "CLAUDE_CONFIG_DIR": "/tmp/claude",
+            "RELEASE_RESUME_UNRELATED": "yes",
+        ]
+        var environment = kept
+        for name in identity { environment[name] = "caller" }
+        environment["PATH"] = bin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "")
+
+        let result = try bash(
+            [
+                "-c",
+                "source \"$1\"; scrub_caller_env; bench_suite='' remote_control=0; resume_in_bench \"$2\" 4b1c /tmp/w /tmp/n.md abc123",
+                "test", script.path, bin.path,
+            ],
+            environment: environment)
+        XCTAssertEqual(result.status, 0, result.stderr)
+
+        let seen = Dictionary(
+            try String(contentsOf: record, encoding: .utf8).split(separator: "\n").compactMap {
+                line -> (String, String)? in
+                guard let eq = line.firstIndex(of: "=") else { return nil }
+                return (String(line[..<eq]), String(line[line.index(after: eq)...]))
+            }, uniquingKeysWith: { $1 })
+        for name in identity {
+            XCTAssertNil(seen[name], "\(name) reached the resuming bench")
+        }
+        for (name, value) in kept {
+            XCTAssertEqual(seen[name], value, "\(name) was scrubbed")
+        }
+    }
+
     func testTheSwapItRunsIsBundleSwapsOwnScript() throws {
         let result = try call("swap_script")
         XCTAssertEqual(result.status, 0, result.stderr)
