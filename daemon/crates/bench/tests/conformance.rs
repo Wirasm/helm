@@ -4112,3 +4112,62 @@ fn a_pi_agent_wakes_itself_only_when_idle_and_under_the_cap() {
     );
     assert_eq!(inbox_count(h, &handle), 1, "capped mail waits unread");
 }
+
+#[test]
+fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
+    let home = TestHome::claim("wiring");
+    let h = &home.dir;
+    let bench_path = bench_bin().canonicalize().unwrap().display().to_string();
+    let plan = bench(h, &["wiring"]);
+    assert_eq!(plan.code, 0, "stderr: {}", plan.stderr);
+    let plan = json_of(&plan);
+    assert_eq!(plan["bench"], bench_path.as_str());
+
+    let unwired = bench(h, &["wiring", "--check"]);
+    assert_eq!(unwired.code, 3, "nothing is wired yet: {}", unwired.stdout);
+    let report = json_of(&unwired);
+    assert_eq!(
+        report["claude"]["missing_events"].as_array().unwrap().len(),
+        8
+    );
+    assert_eq!(
+        report["codex"]["missing_events"].as_array().unwrap().len(),
+        8
+    );
+
+    // Wire exactly what the plan says, the way the operator would: merged into his files.
+    let write = |rel: &str, value: &serde_json::Value| {
+        let path = h.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, value.to_string()).unwrap();
+    };
+    let mut claude = serde_json::json!({"model": "opus", "hooks": {"Stop": [
+        {"hooks": [{"type": "command", "command": "~/.claude/hooks/notify-done.sh"}]}]}});
+    for (event, groups) in plan["claude"]["merge"]["hooks"].as_object().unwrap() {
+        let list = claude["hooks"][event]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        claude["hooks"][event] =
+            serde_json::json!([list, groups.as_array().unwrap().clone()].concat());
+    }
+    write(".claude/settings.json", &claude);
+    write(".codex/hooks.json", &plan["codex"]["merge"]);
+    fs::create_dir_all(h.join(".pi/agent/extensions/bench")).unwrap();
+    fs::write(h.join(".pi/agent/extensions/bench/index.ts"), "").unwrap();
+    let half = json_of(&bench(h, &["wiring", "--check"]));
+    assert_eq!(half["claude"]["missing_events"], serde_json::json!([]));
+    assert_eq!(
+        half["claude"]["cross_session_inbound_accept"], false,
+        "{half}"
+    );
+
+    claude["crossSessionInbound"] = serde_json::json!("accept");
+    write(".claude/settings.json", &claude);
+    let wired = bench(h, &["wiring", "--check"]);
+    assert_eq!(wired.code, 0, "all wired: {}", wired.stdout);
+    assert!(
+        !h.join(".bench").exists(),
+        "wiring needs no daemon and writes nothing"
+    );
+}

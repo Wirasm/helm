@@ -32,6 +32,7 @@ fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let code = match raw.first().map(String::as_str) {
         Some("hook") => hook(raw.get(1).map(String::as_str)),
+        Some("wiring") => wiring(raw.get(1).map(String::as_str)),
         _ => run(),
     };
     process::exit(code);
@@ -62,6 +63,8 @@ fn usage() -> &'static str {
      \x20               [--body-file <p>] [--subject <s>] [--from <h>]\n\
      \x20     mail list [--handle <h>]            metadata only, unread first\n\
      \x20     mail read <id> [--handle <h>]       body + retirement (inbox -> read)\n\
+     \x20     wiring [--check]                    what to add once so agents you start report to
+     \x20                                         benchd; --check says what is missing (exit 3)
      \x20     hook <claude|codex|pi>              the sensor, wired into an agent's own hooks: reads\n\
      \x20                                         the hook payload on stdin, reports it, prints the\n\
      \x20                                         agent's mail as hook context; always exits 0\n\
@@ -503,6 +506,91 @@ fn parse_surface(raw: &str) -> Result<Surface, String> {
                 "--surface is browser, terminal or file:<path>, not {raw:?}"
             )),
         },
+    }
+}
+
+/// `bench wiring`: what to add, once per machine, so an agent the operator starts himself
+/// reports to benchd — the settings and hooks files, and pi's extension. The command is always
+/// this `bench`, by absolute path, so the wiring never changes and codex trusts it once.
+/// benchd gives the sessions it spawns the same wiring on its own.
+///
+/// `bench wiring --check` reads the files and says what is missing: exit 0 when all of it is
+/// there, 3 when something is not. It never writes them.
+fn wiring(mode: Option<&str>) -> i32 {
+    let bench = match std::env::current_exe() {
+        Ok(exe) => bench_wire::hook::sibling_bench(&exe).display().to_string(),
+        Err(e) => return fail(&format!("cannot find this bench: {e}")),
+    };
+    // The wiring names this file for good; a build directory goes away with its checkout.
+    if bench.contains("/target/") || bench.contains("/.worktrees/") {
+        eprintln!(
+            "bench wiring: {bench} is a build, not an installed bench; run the installed one \
+             (`cargo install --path crates/bench`) so the wiring outlives this checkout"
+        );
+    }
+    let Ok(home) = std::env::var("HOME").map(PathBuf::from) else {
+        return refuse("HOME is not set; bench cannot find the files to wire");
+    };
+    let claude_file = home.join(".claude/settings.json");
+    let codex_file = home.join(".codex/hooks.json");
+    let pi_link = home.join(".pi/agent/extensions/bench");
+    match mode {
+        None => {
+            let plan = json!({
+                "bench": bench,
+                "claude": {
+                    "file": claude_file,
+                    "merge": bench_wire::hook::claude_settings(&bench),
+                },
+                "codex": {
+                    "file": codex_file,
+                    "merge": bench_wire::hook::codex_hooks(&bench),
+                    "then": "open codex once and trust the hook in /hooks",
+                },
+                "pi": { "link": pi_link, "to": "<helm checkout>/pi/extensions/bench" },
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&plan).unwrap_or_default()
+            );
+            0
+        }
+        Some("--check") => {
+            let read = |path: &PathBuf| -> Value {
+                std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok())
+                    .unwrap_or(Value::Null)
+            };
+            let claude = read(&claude_file);
+            let claude_missing = bench_wire::hook::unwired(Harness::Claude, &claude, &bench);
+            let codex_missing =
+                bench_wire::hook::unwired(Harness::Codex, &read(&codex_file), &bench);
+            let inbound = claude["crossSessionInbound"] == "accept";
+            let pi = pi_link.join("index.ts").is_file();
+            let exists = PathBuf::from(&bench).is_file();
+            let report = json!({
+                "bench": bench,
+                "bench_exists": exists,
+                "claude": { "file": claude_file, "missing_events": claude_missing,
+                            "cross_session_inbound_accept": inbound },
+                "codex": { "file": codex_file, "missing_events": codex_missing },
+                "pi": { "link": pi_link, "installed": pi },
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
+            let all = exists && claude_missing.is_empty() && codex_missing.is_empty();
+            if all && inbound && pi {
+                0
+            } else {
+                Status::Refused.exit_code()
+            }
+        }
+        Some(other) => refuse(&format!(
+            "bench wiring takes no argument or --check, not {other:?}"
+        )),
     }
 }
 

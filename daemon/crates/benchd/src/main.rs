@@ -654,7 +654,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
 /// and Claude runs an identical handler once, so a machine wired by hand is not called twice.
 fn claude_settings(root: &std::path::Path) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot find benchd itself: {e}"))?;
-    let bench = exe.with_file_name("bench");
+    let bench = bench_wire::hook::sibling_bench(&exe);
     let path = root.join("claude-settings.json");
     let text = serde_json::to_string_pretty(&bench_wire::hook::claude_settings(
         &bench.display().to_string(),

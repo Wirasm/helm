@@ -1,6 +1,6 @@
 ---
 name: bench-mail
-description: Send and receive mail between agents on the bench (benchd). Use when you have a BENCH_HANDLE, when a "You have mail" notice appears in your session, when you need to message another bench agent or the operator, or when you need to find out who you can mail.
+description: Send and receive mail between agents on the bench (benchd). Use when a "You have mail" notice appears in your session, when you have been told your bench address, when you need to message another agent or the operator, or when you need to find out who you can mail.
 ---
 
 # bench mail
@@ -9,10 +9,11 @@ Mail between agents hosted by `benchd`. This is the capability surface — what 
 mailroom does, mechanically. What to say, when to reply, and how to structure a
 conversation are yours.
 
-**Your address is `$BENCH_HANDLE`**, set by the daemon that spawned you. If it is
-unset, you are not a bench session; you can still send and list as `operator`.
-`$BENCH_DIR` (also set for you) is the record root; every command below resolves it
-automatically. The `bench` CLI is on your PATH or named by `$BENCH`.
+**Your address** comes to you when your session starts: a line saying
+`You are <handle> on the bench`. A session benchd spawned also has it as `$BENCH_HANDLE`. An
+agent in a helm pane gets one the first time its harness reports to benchd (see *Wiring*).
+Every command below finds the right bench by itself. The `bench` CLI is on your PATH or named
+by `$BENCH`.
 
 ## Receiving
 
@@ -79,7 +80,8 @@ $BENCH mail send --to operator --subject demo --body "one line is fine"
 ```
 
 - `--body <text>` or `--body-file <path>` (multi-line goes by file).
-- Your identity is `$BENCH_HANDLE` automatically; `--from` overrides.
+- **Sign with `--from <your handle>`.** It defaults to `$BENCH_HANDLE`, which only a session
+  benchd spawned has; without either, a send is signed `operator`.
 - `operator` is always addressable and belongs to the operator.
 - A recipient benchd cannot start a turn for is not woken; the response says
   `"wake": "next-turn"` and the mail waits in their box.
@@ -106,6 +108,28 @@ failed would look like an empty inbox.
 `read` returns the body and retires the message (inbox → `read/`). Nothing in the
 mailroom ever deletes; the files under `$BENCH_DIR/mail/<handle>/` are the record and
 plain `cat` reads them.
+
+## Wiring (once per machine, by the operator)
+
+A session benchd spawns reports to benchd on its own. An agent the operator starts himself —
+Claude Code, codex or pi in a helm pane — reports only once its harness is wired to the one
+fixed command, `bench hook <harness>`. The installed `bench` prints exactly what to add:
+
+```bash
+BENCH="${BENCH:-bench}"
+$BENCH wiring
+```
+
+- **Claude Code:** merge `claude.merge` into `~/.claude/settings.json`: one handler on each
+  event, plus `crossSessionInbound: "accept"` so benchd can start a turn in an idle session.
+  Without that setting, a push is held behind a dialog in the pane and the mail waits for the
+  next prompt.
+- **codex:** merge `codex.merge` into `~/.codex/hooks.json`, then trust the hook once in
+  codex's `/hooks`. The command never changes, so it is trusted once.
+- **pi:** link `pi/extensions/bench` from a helm checkout into `~/.pi/agent/extensions/`.
+
+`bench wiring --check` reads the files and says what is missing (exit 3 until all of it is
+there). Nothing here writes to the operator's files: the wiring is his to add.
 
 ## Exit codes
 
