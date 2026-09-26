@@ -1587,6 +1587,7 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
 /// answers with a version line, and once "listening" it writes `DevToolsActivePort`
 /// into its `--user-data-dir`. It records its argv there, dies on TERM, and with
 /// `--die-after=<s>` crashes by itself — a profile that takes Chromium down on launch.
+/// `--slow-start=<s>` holds off "listening" that long, so a launch can be caught in flight.
 fn write_fake_browser(home: &Path) -> PathBuf {
     let path = home.join("fake-chromium");
     fs::write(
@@ -1598,6 +1599,7 @@ for a in "$@"; do
   case "$a" in
     --user-data-dir=*) dir="${a#--user-data-dir=}" ;;
     --die-after=*) die="${a#--die-after=}" ;;
+    --slow-start=*) sleep "${a#--slow-start=}" ;;
   esac
 done
 printf '%s\n' "$@" > "$dir/argv"
@@ -1955,6 +1957,134 @@ fn an_endpoint_left_by_a_dead_daemon_is_cleared_at_boot_and_logged() {
         event_kinds(&home.dir)
             .iter()
             .any(|(k, _)| k == "browser/cleared")
+    );
+}
+
+/// The pid of a running browser, once the daemon reports one.
+fn await_browser(home: &Path, what: &str) -> u64 {
+    let mut pid = 0;
+    wait_until(what, Duration::from_secs(8), || {
+        let s = json_of(&bench(home, &["browser", "status"]));
+        pid = s["pid"].as_u64().unwrap_or(0);
+        s["running"] == true
+    });
+    pid
+}
+
+#[test]
+fn a_wanted_browser_comes_back_with_the_next_daemon() {
+    // #407: launchd brings benchd back after a crash or a reboot, and the browser has to
+    // come with it — benchd decides that from `<root>/browser/wanted`, not the plist.
+    let home = TestHome::claim("brback");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let marker = home.dir.join(".bench/browser/wanted");
+
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+    let first = json_of(&bench(&home.dir, &["browser", "start"]))["pid"]
+        .as_u64()
+        .unwrap();
+    assert!(marker.exists(), "a started browser is marked wanted");
+
+    // A crash: no cleanup runs, the leash takes the browser down.
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+    wait_until(
+        "the browser to die with its daemon",
+        Duration::from_secs(5),
+        || !libc_alive(first as i32),
+    );
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+    let second = await_browser(&home.dir, "the browser after a crash");
+    assert_ne!(second, first);
+    assert!(
+        event_kinds(&home.dir)
+            .iter()
+            .any(|(k, d)| k == "browser/resuming" && d["marker"] == marker.display().to_string()),
+        "a browser nobody asked this daemon for says why it started"
+    );
+
+    // A clean `bench stop` is not `bench browser stop`: the browser is still wanted.
+    assert_eq!(bench(&home.dir, &["stop"]).code, 0);
+    let _ = daemon.child.wait();
+    assert!(marker.exists());
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let third = await_browser(&home.dir, "the browser after a daemon stop");
+    assert_ne!(third, second);
+}
+
+#[test]
+fn a_stopped_browser_stays_stopped_across_a_restart() {
+    let home = TestHome::claim("brgone");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let marker = home.dir.join(".bench/browser/wanted");
+
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+    assert_eq!(bench(&home.dir, &["browser", "start"]).code, 0);
+    assert_eq!(bench(&home.dir, &["browser", "stop"]).code, 0);
+    assert!(
+        !marker.exists(),
+        "browser/stop is the one thing that unwants it"
+    );
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        json_of(&bench(&home.dir, &["browser", "status"]))["running"],
+        false
+    );
+    let events = event_kinds(&home.dir);
+    let boot = events
+        .iter()
+        .rposition(|(k, _)| k == "daemon/started")
+        .unwrap();
+    assert!(
+        !events[boot..]
+            .iter()
+            .any(|(k, _)| k == "browser/started" || k == "browser/resuming"),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn a_stop_that_lands_during_a_launch_still_unwants_the_browser() {
+    // The launch a restart makes routine: benchd comes back, starts the wanted browser, and
+    // `bench browser stop` arrives before it is up. The stop waits for the launch and takes the
+    // browser down; the marker must go with it, or the next daemon brings it back.
+    let home = TestHome::claim("brrace");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(
+        &home.dir,
+        serde_json::json!({ "binary": fake, "args": ["--slow-start=1.5"] }),
+    );
+    let marker = home.dir.join(".bench/browser/wanted");
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+
+    let starter = {
+        let home = home.dir.clone();
+        std::thread::spawn(move || bench(&home, &["browser", "start"]))
+    };
+    std::thread::sleep(Duration::from_millis(400));
+    let stop = bench(&home.dir, &["browser", "stop"]);
+    assert_eq!(stop.code, 0, "stderr: {}", stop.stderr);
+    assert_eq!(starter.join().unwrap().code, 0);
+    assert_eq!(
+        json_of(&stop)["was_running"],
+        true,
+        "the stop waited for the launch"
+    );
+    assert!(!marker.exists(), "a stopped browser is not wanted");
+
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        json_of(&bench(&home.dir, &["browser", "status"]))["running"],
+        false
     );
 }
 
@@ -3111,4 +3241,160 @@ fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
     // Reading never wrote to a harness file.
     let after_state: Vec<_> = harness_files.iter().map(|d| tree_state(d)).collect();
     assert_eq!(before, after_state);
+}
+
+// ---------------------------------------------------------------------------
+// bench log (#421): a transcript read straight from its file, no daemon
+// ---------------------------------------------------------------------------
+
+/// A Claude transcript under the test home: a prompt, a reply, a tool call that failed, and
+/// one record in a shape nobody knows.
+fn write_claude_transcript(home: &Path, id: &str) -> PathBuf {
+    let at = "2026-09-25T16:49:25.973Z";
+    let lines = [
+        serde_json::json!({"type": "user", "timestamp": at,
+            "message": {"role": "user", "content": "fix the build"}}),
+        serde_json::json!({"type": "assistant", "timestamp": at,
+            "message": {"content": [{"type": "text", "text": "Looking at it."}]}}),
+        serde_json::json!({"type": "assistant", "timestamp": at,
+            "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+                "input": {"command": "cargo build"}}]}}),
+        serde_json::json!({"type": "user", "timestamp": at,
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
+                "is_error": true, "content": "error[E0425]: cannot find value"}]}}),
+        serde_json::json!({"type": "assistant", "timestamp": at,
+            "message": {"content": [{"type": "hologram"}]}}),
+    ];
+    let path = home
+        .join(".claude/projects/-ws")
+        .join(format!("{id}.jsonl"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+fn log_reads_a_transcript_with_no_daemon_and_names_what_it_skipped() {
+    let home = TestHome::claim("log");
+    write_claude_transcript(&home.dir, "s-1");
+
+    let text = bench(&home.dir, &["log", "s-1"]);
+    assert_eq!(text.code, 0, "stderr: {}", text.stderr);
+    for line in [
+        "2026-09-25 16:49:25  user   fix the build",
+        "2026-09-25 16:49:25  agent  Looking at it.",
+        "2026-09-25 16:49:25  tool   Bash  cargo build",
+        "2026-09-25 16:49:25  error  Bash  error[E0425]: cannot find value",
+    ] {
+        assert!(text.stdout.contains(line), "{line:?} in:\n{}", text.stdout);
+    }
+    assert!(
+        text.stderr.contains("s-1.jsonl:5: skipped") && text.stderr.contains("hologram"),
+        "the unknown record is reported with its line: {}",
+        text.stderr
+    );
+
+    let json = bench(&home.dir, &["log", "s-1", "-n", "1", "--json"]);
+    assert_eq!(json.code, 0, "stderr: {}", json.stderr);
+    let v = json_of(&json);
+    assert_eq!(v["harness"], "claude");
+    assert_eq!(
+        (v["total"].as_u64(), v["returned"].as_u64()),
+        (Some(4), Some(1))
+    );
+    assert_eq!(v["entries"][0]["kind"], "error");
+    assert_eq!(v["unreadable"][0]["line"], 5);
+
+    let since = bench(&home.dir, &["log", "s-1", "--since", "1h", "--json"]);
+    assert_eq!(
+        json_of(&since)["total"],
+        0,
+        "every entry is older than an hour"
+    );
+
+    let unknown = bench(&home.dir, &["log", "no-such-session"]);
+    assert_eq!(unknown.code, 3, "stderr: {}", unknown.stderr);
+    assert!(
+        unknown.stderr.contains("no transcript"),
+        "{}",
+        unknown.stderr
+    );
+    let flag = bench(&home.dir, &["status", "--json"]);
+    assert_eq!(flag.code, 3, "--json belongs to log: {}", flag.stderr);
+}
+
+#[test]
+fn the_bench_sessions_skills_snippets_execute() {
+    // The same rule as the mail skill's: every ```bash fence runs, in order.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../.claude/skills/bench-sessions/SKILL.md"),
+    )
+    .expect("bench-sessions SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        snippets.len(),
+        3,
+        "the skill's sessions and two log snippets"
+    );
+
+    let home = TestHome::claim("sskill");
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let ws = workspace(&home.dir);
+    let (_, pi_session) = spawn_pi(&home.dir, &ws, "worker");
+    write_claude_transcript(&home.dir, "s-2");
+    let mut outputs = Vec::new();
+    for (i, snippet) in snippets.iter().enumerate() {
+        let out = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", snippet])
+            .current_dir(&ws)
+            .env_remove("BENCH_SUITE")
+            .env_remove("BENCH_DIR")
+            .env("HOME", &home.dir)
+            .env("BENCH", bench_bin())
+            .env("SESSION", "s-2")
+            .output()
+            .expect("run snippet");
+        assert!(
+            out.status.success(),
+            "SKILL.md snippet {} failed (exit {:?}):\n{}\n--- stderr:\n{}",
+            i + 1,
+            out.status.code(),
+            snippet,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        outputs.push(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    assert!(
+        outputs[0].contains(&format!("pi {pi_session} running")),
+        "the live session is listed: {}",
+        outputs[0]
+    );
+    assert!(
+        outputs[1].contains("tool   Bash  cargo build"),
+        "{}",
+        outputs[1]
+    );
+    assert!(
+        outputs[2].contains("claude") && outputs[2].contains("4 of 4"),
+        "{}",
+        outputs[2]
+    );
+    assert!(outputs[2].contains("user  fix the build"), "{}", outputs[2]);
 }

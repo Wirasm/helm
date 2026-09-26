@@ -350,6 +350,15 @@ bash tool), so a session started from one has no controlling terminal. `HELM_MAI
 outright, which is why the gates still claim. `claimsAMailbox` is the rule, written in both files
 and run over one matrix by `hooks/mailbox-conformance.mjs`.
 
+**A retired mailbox is moved after seven days, never deleted (#417).** Retiring stopped deleting in
+#236, and left every retired mailbox in the root for good — 12,248 on the operator's machine, which
+helm read every two seconds. `archiveRetired` now moves one retired over seven days to
+`<root>/.retired/` after every reap, in both writers (every reader already skips a dot-directory),
+and `node hooks/helm-mail.mjs archive </dev/null` does the same by hand. The conformance harness
+runs both copies on one root. It sits outside `reap` so the two reapers are still compared like for
+like. helm's side of the same ticket is `MailboxOwnerCache`: a publish re-reads only the mailboxes
+whose directory changed.
+
 **An idle agent is woken, and the two runtimes get there differently.** pi's extension is a live
 event loop inside the session, so it watches its own mailbox and calls `sendUserMessage` — a turn
 starts from nothing. Claude Code has no equivalent helm can call, so the notice instead **tells
@@ -912,19 +921,21 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     a helm that can never see an update.
 - **`just release-resume <session-id> [cwd]` is the swap for an operator who is away (#404).**
   It builds (`make release`, `cargo install` of `bench` and `benchd`), quits helm by pid, restarts
-  benchd, swaps the bundle with `BundleSwap.script` itself (read out of the Swift source, so there
-  is one swap), and resumes that Claude Code session in the new helm through the spool with
-  `--remote-control`. It detaches first, because the caller is normally an agent in a pane the
-  quit closes. **Once helm is quit the session always comes back**: any later failure resumes it
-  outside helm with `claude --bg --resume`, and the log says which happened. Logs go to
-  `~/.helm/build/release-resume.log`, last line `RESULT:`. Every target is a flag (`--bundle`,
-  `--pid`, `--suite`, `--bench-suite`, `--cargo-root`, `--env`, `--no-remote-control`), which is
-  how it is tested against a bundle copy under a suite. Two things it does that are easy to undo
-  by accident: it relaunches helm through `env -i`, because `open` hands the app the caller's
-  whole environment (`CLAUDECODE`, the caller's session id) and every pane would inherit it; and
-  it holds `caffeinate -d -u` while relaunching, because with every display asleep the new helm
-  cannot create a terminal (the CoreVideo `-6661` pair above). **Quitting helm kills every pane:
-  run it for real only when the operator has said nothing is in flight.**
+  benchd (with `launchctl kickstart -k` when the login agent from `just benchd-install` is loaded,
+  so it never starts a second one), swaps the bundle with `BundleSwap.script` itself (read out of
+  the Swift source, so there is one swap), and resumes that Claude Code session in the new helm
+  through the spool with `--remote-control`. It detaches first, because the caller is normally an
+  agent in a pane the quit closes. **Once helm is quit the session always comes back**: any later
+  failure resumes it outside helm with `claude --bg --resume`, and the log says which happened.
+  Logs go to `~/.helm/build/release-resume.log`, last line `RESULT:`. Every target is a flag
+  (`--bundle`, `--pid`, `--suite`, `--bench-suite`, `--cargo-root`, `--env`,
+  `--no-remote-control`), which is how it is tested against a bundle copy under a suite. Two
+  things it does that are easy to undo by accident: it relaunches helm through `env -i`, because
+  `open` hands the app the caller's whole environment (`CLAUDECODE`, the caller's session id) and
+  every pane would inherit it; and it holds `caffeinate -d -u` while relaunching, because with
+  every display asleep the new helm cannot create a terminal (the CoreVideo `-6661` pair above).
+  **Quitting helm kills every pane: run it for real only when the operator has said nothing is in
+  flight.**
 - **helm persists to one domain, `com.wirasm.helm`, from both launch paths** — so "did it
   persist?" is `defaults read com.wirasm.helm` whichever way it was started, unless
   `HELM_DEFAULTS_SUITE` overrides it (next bullet). `swift run helm`
@@ -1188,11 +1199,11 @@ cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
 ### The helm-local skills
 
-`.claude/skills/` holds fifteen; **seven are vendored** from `mattpocock/skills` and pinned in
+`.claude/skills/` holds sixteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
-not a change. The other eight are hand-written. The first six below are helm's, the surface an agent
-hosted in helm actually uses. The last two, `bench-mail` and `bench-browser`, are benchd's, and their
-snippets run in the daemon gate's conformance suite. Five gates cover the six, all listed in *Working here* above — the two mail
+not a change. The other nine are hand-written. The first six below are helm's, the surface an agent
+hosted in helm actually uses. The last three, `bench-mail`, `bench-browser` and `bench-sessions`, are
+benchd's, and their snippets run in the daemon gate's conformance suite. Five gates cover the six, all listed in *Working here* above — the two mail
 skills share one, because the send and the mailbox listing are documented identically in each.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `push.sh`, which is how an
@@ -1210,6 +1221,8 @@ skills share one, because the send and the mailbox listing are documented identi
 - **`bench-mail`** — sending and reading mail through benchd's mailroom, and finding who can be mailed.
 - **`bench-browser`** — the operator's shared browser (#350): get its endpoint from `bench browser
   start`, drive it with `playwright-cli attach`, and put it in front of him with `openBrowser`.
+- **`bench-sessions`** — who is working in a workspace (`bench sessions --all`), and what any of
+  them did (`bench log <id>`, #421), read from the transcript without mailing the agent.
 
 ### The two helm-local subagents
 

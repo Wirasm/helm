@@ -168,8 +168,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # All four skill gates: mail, canvas, board and post-canvas (scripts/check.sh). The board
-      # and post-canvas gates need node, which this job already has by virtue of the runner image. A gate that exists, is
-      # documented in AGENTS.md, and runs only when somebody remembers is the drift this
-      # workflow exists to stop — #291 is the same lesson from the other side.
+      # and post-canvas gates need node, which this job already has by virtue of the runner
+      # image. A gate that exists, is documented in AGENTS.md, and runs only when somebody
+      # remembers is the drift this workflow exists to stop — #291 is the same lesson from the
+      # other side.
       - name: skill gates
         run: bash scripts/check.sh skills

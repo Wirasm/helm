@@ -41,18 +41,25 @@ pub fn session(home: &Path, cwd: &str, id: &str) -> Result<Option<PathBuf>, Unre
     BufReader::new(fs::File::open(&path).map_err(|e| bad(e.to_string()))?)
         .read_line(&mut first)
         .map_err(|e| bad(e.to_string()))?;
+    header(&first, id).map_err(bad)?;
+    Ok(Some(path))
+}
+
+/// Checks a session file's first line: the one format version this build reads, naming
+/// `id`. The session list and `bench log` both read pi files through it.
+pub fn header(first_line: &str, id: &str) -> Result<(), String> {
     let header: Value =
-        serde_json::from_str(&first).map_err(|e| bad(format!("first line is not JSON: {e}")))?;
+        serde_json::from_str(first_line).map_err(|e| format!("first line is not JSON: {e}"))?;
     let (kind, version) = (header["type"].as_str(), header["version"].as_u64());
     if kind != Some("session") || version != Some(VERSION) {
-        return Err(bad(format!(
+        return Err(format!(
             "header type {kind:?} version {version:?} — this build reads type \"session\" version {VERSION}"
-        )));
+        ));
     }
     if header["id"].as_str() != Some(id) {
-        return Err(bad(format!("header id {} is not {id:?}", header["id"])));
+        return Err(format!("header id {} is not {id:?}", header["id"]));
     }
-    Ok(Some(path))
+    Ok(())
 }
 
 #[cfg(test)]
