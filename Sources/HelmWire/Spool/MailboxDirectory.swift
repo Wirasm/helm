@@ -198,7 +198,9 @@ package enum MailboxDirectory {
     /// Before #236 a gone owner's `owner.json` was **deleted**, so helm was correct by
     /// construction: the row stopped existing and nothing could join to it. #236 stopped
     /// deleting — `read/` was going with it, and the delete raced a sender mid-write — so a
-    /// retired mailbox now keeps its file, with its last-known pid, **forever**.
+    /// retired mailbox now keeps its file, with its last-known pid, for as long as it stays in the
+    /// root — seven days, since #417 moves a long-retired one to `.retired/`, which the listing
+    /// below skips as a hidden directory.
     ///
     /// That is a live hazard for every consumer here, because they all join on pid: macOS
     /// reuses pids, and this workspace churns them (a process per spawn, a process per hook
@@ -214,22 +216,96 @@ package enum MailboxDirectory {
     /// retired rows is the same shape of defect as the one #236 fixed: one rule, two spellings,
     /// and nothing to notice when they disagree. A consumer that genuinely wants retired rows
     /// should decode them deliberately rather than filter them back out.
+    ///
+    /// A one-shot read of every `owner.json`. A caller that asks repeatedly — a timer, a poll —
+    /// holds a `MailboxOwnerCache` instead, which answers identically and reads only what
+    /// changed; this is that cache used once, so the two cannot disagree.
     package static func owners(in root: URL) -> [MailboxOwner] {
-        guard
-            let entries = try? FileManager.default.contentsOfDirectory(
-                at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-        else { return [] }
-        let decoder = JSONDecoder()
-        return entries.compactMap { entry in
-            let owner = entry.appendingPathComponent("owner.json")
-            guard let data = try? Data(contentsOf: owner) else { return nil }
-            guard let decoded = try? decoder.decode(MailboxOwner.self, from: data) else {
-                return nil
-            }
-            return decoded.retiredAt == nil ? decoded : nil
-        }
+        MailboxOwnerCache().owners(in: root)
     }
 
+}
+
+/// `MailboxDirectory.owners(in:)` for a caller that asks every tick, re-reading only the
+/// mailboxes that changed since it last asked (#417).
+///
+/// # Why it exists
+///
+/// Nothing ever removes a mailbox (#236 retires rather than deletes), and until #417 the Claude
+/// Code hook claimed one for every session on the machine, helm or not. The operator's mailroom
+/// reached 12,497 mailboxes, and `BenchSnapshotModel` read and decoded every `owner.json` on
+/// the main thread every two seconds: a full core, measured with `sample`, for as long as helm
+/// ran. The cost of that read was linear in mailboxes nobody would ever address again.
+///
+/// # The key is the mailbox directory's mtime, and that is sufficient for its writers
+///
+/// Every writer of `owner.json` replaces it by **rename** — `writeAtomic` in both
+/// `hooks/helm-mail.mjs` and `pi/extensions/helm-mail/index.ts` — and a rename inside a
+/// directory changes that directory's modification time. So does a claim's `mkdir`, a message
+/// arriving and a message being consumed. An unchanged mtime therefore means an unchanged
+/// `owner.json`, and the listing that carries the mtimes is one bulk read of the root rather
+/// than an open, read and decode per mailbox.
+///
+/// **The one write it cannot see is an in-place rewrite** of an existing `owner.json` (a
+/// truncate-and-write, not a rename), which leaves the directory's mtime alone. No writer does
+/// that; a hand edit that does is picked up by the next write to that mailbox, or by a helm
+/// restart.
+///
+/// What remains linear is the listing itself — measured at ~3 µs a mailbox against ~30 µs for
+/// the read it replaces. Keeping the root small is the archive's job (`.retired/`, #417), and
+/// stopping mailboxes being claimed outside helm is the hook's.
+///
+/// Not thread-safe: one instance per caller, used from one actor.
+package final class MailboxOwnerCache {
+    private struct Entry {
+        let modified: Date
+        /// Decoded as found, retired or not; `nil` for a missing or malformed `owner.json`, so
+        /// a bad file is not re-read every tick either.
+        let owner: MailboxOwner?
+    }
+
+    private let read: (URL) -> Data?
+    private var entries: [String: Entry] = [:]
+
+    /// `read` is injectable so a test can count what is actually opened. Production reads the
+    /// file.
+    package init(read: @escaping (URL) -> Data? = { try? Data(contentsOf: $0) }) {
+        self.read = read
+    }
+
+    /// Every addressable owner under `root`, in directory order — exactly what
+    /// `MailboxDirectory.owners(in:)` documents, retired rows dropped.
+    package func owners(in root: URL) -> [MailboxOwner] {
+        guard
+            let listing = try? FileManager.default.contentsOfDirectory(
+                at: root, includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles])
+        else {
+            entries = [:]
+            return []
+        }
+        let decoder = JSONDecoder()
+        var next: [String: Entry] = [:]
+        let owners = listing.compactMap { directory -> MailboxOwner? in
+            let name = directory.lastPathComponent
+            let modified = try? directory.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate
+            let owner: MailboxOwner?
+            if let modified, let cached = entries[name], cached.modified == modified {
+                owner = cached.owner
+            } else {
+                owner = read(directory.appendingPathComponent("owner.json")).flatMap {
+                    try? decoder.decode(MailboxOwner.self, from: $0)
+                }
+            }
+            // No mtime, no cache entry: the next call reads it again rather than trusting a
+            // key it could not take.
+            if let modified { next[name] = Entry(modified: modified, owner: owner) }
+            return owner?.retiredAt == nil ? owner : nil
+        }
+        entries = next
+        return owners
+    }
 }
 
 /// Everyone addressable right now, together with the one lookup that turns a pid into an

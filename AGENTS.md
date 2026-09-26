@@ -302,6 +302,14 @@ is deliberately **before** a turn rather than after one: an agent that learns it
 already carried out the instruction it should have read the mail first. pi does the same thing
 through its `context` event.
 
+**A retired mailbox is moved after seven days, never deleted (#417).** Retiring stopped deleting in
+#236, and left every retired mailbox in the root for good — 12,248 on the operator's machine, which
+helm read every two seconds. The hook's `archiveRetired` now moves one retired over seven days to
+`<root>/.retired/` on every claim (every reader already skips a dot-directory), and
+`node hooks/helm-mail.mjs archive </dev/null` does the same by hand. It is hook-only and outside
+`reap` on purpose, so the conformance harness still compares two identical reapers. helm's side of
+the same ticket is `MailboxOwnerCache`: a publish re-reads only the mailboxes whose directory changed.
+
 **An idle agent is woken, and the two runtimes get there differently.** pi's extension is a live
 event loop inside the session, so it watches its own mailbox and calls `sendUserMessage` — a turn
 starts from nothing. Claude Code has no equivalent helm can call, so the notice instead **tells

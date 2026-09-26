@@ -42,6 +42,16 @@ const ROOT_ENV = "HELM_MAIL_DIR";
 const HANDLE_ENV = "HELM_MAIL_HANDLE";
 
 /**
+ * Where a long-retired mailbox goes — inside the root, hidden, so every reader already skips it:
+ * `allHandles` here and in pi drop dot-names, helm lists with `skipsHiddenFiles`, and the skills'
+ * `find -maxdepth 2 -name owner.json` stops a level above `.retired/<handle>/owner.json`. #417.
+ */
+const RETIRED_DIR = ".retired";
+
+/** How long a retired mailbox stays in the root, where a sender is told it is retired. #417. */
+const ARCHIVE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
  * helm's own isolation switch, honoured here so an isolated instance's agents claim somewhere
  * the operator's agents never see — #285.
  *
@@ -470,6 +480,43 @@ function reap(root, mine) {
 	}
 }
 
+/**
+ * Move every mailbox retired for longer than `ARCHIVE_AFTER_MS` into `<root>/.retired/`. #417.
+ *
+ * Retiring stopped deleting (#236), which was right, and left every retired mailbox in the root
+ * forever — 12,248 of them on the operator's machine, and helm read each one every two seconds.
+ * This MOVES, and never deletes: `read/` and any mail that arrived after retirement travel with the
+ * directory, and a name already on the shelf gets a suffix rather than being merged into or
+ * replaced. A session that comes back after that finds no mailbox by its session id and claims a
+ * fresh one; its old archive is still on disk.
+ *
+ * Seven days is how long a sender holding the handle is told "retired" rather than "no such
+ * mailbox", and how long a resumed session walks back into its own `read/`.
+ *
+ * Hook-only, and deliberately not inside `reap`: pi's `reap` must stay the same function as this
+ * file's (`hooks/mailbox-conformance.mjs` runs both on one root), and one runtime archiving is
+ * enough for a mailroom both share. Returns how many it moved.
+ */
+function archiveRetired(root, now = Date.now()) {
+	let moved = 0;
+	for (const handle of allHandles(root)) {
+		const dir = path.join(root, handle);
+		const owner = readJson(path.join(dir, OWNER_FILE));
+		if (typeof owner?.retiredAt !== "number" || now - owner.retiredAt < ARCHIVE_AFTER_MS) continue;
+		const shelf = path.join(root, RETIRED_DIR);
+		let target = path.join(shelf, handle);
+		if (fs.existsSync(target)) target = `${target}-${randomBytes(4).toString("hex")}`;
+		try {
+			fs.mkdirSync(shelf, { recursive: true });
+			fs.renameSync(dir, target);
+			moved += 1;
+		} catch {
+			// Another claim archived it first, or it vanished. Either way it is not in the root.
+		}
+	}
+	return moved;
+}
+
 // ── this session ─────────────────────────────────────────────────────────────────────────
 
 /**
@@ -627,6 +674,7 @@ function claim(root, sessionId, cwd) {
 	// mark from last time goes with the old object rather than being merged forward.
 	writeAtomic(path.join(dir, OWNER_FILE), ownerRecord(handle, sessionId, cwd));
 	reap(root, handle);
+	archiveRetired(root);
 	return { handle, dir };
 }
 
@@ -647,6 +695,15 @@ const verb = process.argv[2];
 const input = await payload();
 
 if (process.env[OFF_ENV]) process.exit(0);
+
+// Not a hook: run by hand, or by whoever tidies a mailroom, with nothing on stdin —
+// `node hooks/helm-mail.mjs archive </dev/null`. Needs no session, so it comes first.
+if (verb === "archive") {
+	const root = mailRoot();
+	const moved = archiveRetired(root);
+	process.stdout.write(`${NAME}: moved ${moved} mailbox(es) retired over ${ARCHIVE_AFTER_MS / 86_400_000} days to ${path.join(root, RETIRED_DIR)}\n`);
+	process.exit(0);
+}
 
 const sessionId = input.session_id || process.env.CLAUDE_CODE_SESSION_ID || "";
 const cwd = input.cwd || process.cwd();

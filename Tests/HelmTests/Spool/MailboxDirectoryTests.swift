@@ -299,6 +299,80 @@ final class MailboxDirectoryTests: XCTestCase {
             "a handle no mailbox can be named by costs its own row; the readable one survives")
     }
 
+    // MARK: - #417: a caller that asks every tick reads only what changed
+
+    /// A reader that counts what it opens, so "reads only what changed" is a number rather than
+    /// a timing. Counting is what makes this deterministic: the cost it stands for is one open,
+    /// read and decode per mailbox, and that is exactly what it counts.
+    private final class CountingReader {
+        var opened: [String] = []
+        func read(_ url: URL) -> Data? {
+            opened.append(url.deletingLastPathComponent().lastPathComponent)
+            return try? Data(contentsOf: url)
+        }
+    }
+
+    /// **#417, staged at a size that shows the shape.** The operator's mailroom held 12,497
+    /// mailboxes, nearly all retired, and every publish opened every one of them. A second ask
+    /// with nothing changed must open none.
+    func testAnUnchangedMailroomIsNotReadAgain() throws {
+        for i in 0..<2_000 {
+            try retiredMailbox("project-\(i)", pid: 100_000 + i, sessionId: "s-\(i)")
+        }
+        try mailbox("helm-4831", runtime: "claude", pid: 13104, sessionId: "s-4831")
+        let reader = CountingReader()
+        let cache = MailboxOwnerCache(read: reader.read)
+
+        XCTAssertEqual(cache.owners(in: root).map(\.handle), ["helm-4831"])
+        XCTAssertEqual(reader.opened.count, 2_001, "the first ask reads every mailbox once")
+
+        reader.opened = []
+        for _ in 0..<5 {
+            XCTAssertEqual(cache.owners(in: root).map(\.handle), ["helm-4831"])
+        }
+        XCTAssertEqual(reader.opened, [], "nothing changed, so nothing is opened")
+    }
+
+    /// The half that must hold either way: a cache that never re-read anything also passes the
+    /// test above. Each writer's move is replayed — a claim, a retirement, and a claim whose
+    /// `mkdir` lands before its `owner.json` — and each is seen on the next ask, by opening
+    /// exactly the mailbox it touched.
+    func testEveryWriterMoveIsSeenByOpeningOnlyTheMailboxItTouched() throws {
+        try mailbox("alpha-1111", runtime: "claude", pid: 11, sessionId: "s-1111")
+        try mailbox("beta-2222", runtime: "pi", pid: 22, sessionId: "s-2222")
+        let reader = CountingReader()
+        let cache = MailboxOwnerCache(read: reader.read)
+        XCTAssertEqual(Set(cache.owners(in: root).map(\.handle)), ["alpha-1111", "beta-2222"])
+
+        // Retirement: the reaper rewrites `owner.json` by rename inside the mailbox.
+        reader.opened = []
+        try retiredMailbox("alpha-1111", pid: 11, sessionId: "s-1111")
+        XCTAssertEqual(cache.owners(in: root).map(\.handle), ["beta-2222"])
+        XCTAssertEqual(reader.opened, ["alpha-1111"])
+
+        // A claim caught between its `mkdir` and its `owner.json`: absent now, present once
+        // the file lands, with no change to the root in between.
+        reader.opened = []
+        let gamma = root.appendingPathComponent("gamma-3333")
+        try FileManager.default.createDirectory(
+            at: gamma.appendingPathComponent("read"), withIntermediateDirectories: true)
+        XCTAssertEqual(cache.owners(in: root).map(\.handle), ["beta-2222"])
+        try mailbox("gamma-3333", runtime: "claude", pid: 33, sessionId: "s-3333")
+        XCTAssertEqual(Set(cache.owners(in: root).map(\.handle)), ["beta-2222", "gamma-3333"])
+        XCTAssertEqual(reader.opened, ["gamma-3333", "gamma-3333"])
+
+        // Un-retiring: a session that comes back claims its old mailbox afresh.
+        reader.opened = []
+        try mailbox("alpha-1111", runtime: "claude", pid: 44, sessionId: "s-1111")
+        XCTAssertEqual(
+            Set(cache.owners(in: root).map(\.handle)), ["alpha-1111", "beta-2222", "gamma-3333"])
+        XCTAssertEqual(reader.opened, ["alpha-1111"])
+
+        // And a mailbox that goes away (the archive moves it) stops being an owner.
+        try FileManager.default.removeItem(at: gamma)
+        XCTAssertEqual(Set(cache.owners(in: root).map(\.handle)), ["alpha-1111", "beta-2222"])
+    }
+
     func testAMissingMailRootIsAbsenceRatherThanAnError() {
         XCTAssertEqual(
             MailboxDirectory.owners(in: root.appendingPathComponent("nope")).count, 0)

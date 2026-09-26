@@ -360,7 +360,9 @@ const SHARED_NAMES = [
  * Hooks-only helpers `claim` calls, lifted so it can run: `mineIn` finds the mailbox this
  * session already owns, `ownerRecord` decides what pid to record and whether to mark it
  * provisional. pi's `claim` is handed those answers by its caller, which is the signature
- * difference — see `checkTheOwnerRecordDecodes`.
+ * difference — see `checkTheOwnerRecordDecodes`. `archiveRetired` and its two constants are the
+ * hook's alone (#417): one runtime moving long-retired mailboxes to `.retired/` is enough for a
+ * mailroom both share, and keeping it out of `reap` keeps `checkReapAgrees` like for like.
  *
  * **This list is a set of names in another file, and it went stale the day it shipped.** #247
  * renamed `ownerPid` to `ownerRecord` on one branch while this list was written on another;
@@ -370,7 +372,7 @@ const SHARED_NAMES = [
  * nothing"* rather than passing with nothing to compare. Keep that guard: it is the only
  * thing standing between a renamed function and a suite that silently measures zero.
  */
-const HOOKS_EXTRA_NAMES = ["mineIn", "ownerRecord"];
+const HOOKS_EXTRA_NAMES = ["mineIn", "ownerRecord", "RETIRED_DIR", "ARCHIVE_AFTER_MS", "archiveRetired"];
 
 /**
  * pi-only helpers the shared rules above call, lifted so those rules can run at all: `warn` for
