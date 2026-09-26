@@ -16,8 +16,35 @@ Direction: `docs/direction.md` (an entry point, not a spec).
 Gate, all green before a PR to `development`:
 
 ```
-bash scripts/patch-libghostty.sh && swift build && swift test && make lint && xcodegen generate
+just check              # or, with no `just` installed: bash scripts/check.sh
 ```
+
+`scripts/check.sh` is the one definition of the gate, and CI calls the same script. It runs
+its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <command>)`, or
+`SKIP (<why>)`. `just check swift` (or any other part names) runs only those.
+
+| Part | Runs | Needs |
+| --- | --- | --- |
+| `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
+| `swift` | `bash scripts/patch-libghostty.sh && swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`) | Swift toolchain, xcodegen |
+| `hooks` | `hooks/test.sh` | node |
+| `skills` | the mail, canvas and board skill gates | node, zsh, python3 |
+| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml` or a `bench-*` skill changed | cargo |
+| `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
+
+"Changed" means against `origin/development`, committed or not. A missing tool is a `FAIL`
+naming it, never a silent skip. The path rules live only in `scripts/check.sh`
+(`scripts/check.sh --needs <part> [base]` asks one), and CI's daemon job asks the same function.
+
+**Size limits (#418).** `lint` fails any new Swift function over cyclomatic complexity 15 or
+60 body lines, a closure over 50, a type over 350 or a file over 600 code lines
+(`.swiftlint.yml`, SwiftLint pinned in `tools/lint/`). `daemon` fails any new Rust function over
+clippy's cognitive complexity 25 or 100 lines. Each finding names the file, the line, the
+declaration and the number. **Split the code; never add a marker to new code.** Code that was
+already over a limit carries a marker recording its value then
+(`// swiftlint:disable:next … - legacy (#418): 24, limit 15`, or `#[expect(clippy::…, reason =
+"legacy (#418): …")]`); once that code is back under the limit the marker fails the gate until
+you delete it, so the markers only shrink.
 
 The patch script is first and not optional — the patched libghostty is gitignored, so a
 fresh worktree has nothing to link against. Never borrow another checkout's `vendor/`;
@@ -135,41 +162,39 @@ reinstating #96's contract (seven tests then also fail on the first-responder as
 not a verdict on the diff — and the evidence to bring is the CoreVideo/ghostty pair, the
 control run, or both.
 
-**This gate needs only the Swift toolchain and xcodegen. Keep it that way.** It is the one
-command a fresh worktree runs, and every dependency added to it is a dependency every
-contributor now needs.
+**The `lint` and `swift` parts need only the Swift toolchain and xcodegen. Keep it that way.**
+They are what a fresh worktree has to pass, and every dependency added to them is a dependency
+every contributor now needs. The other parts need node or cargo, which is why they are separate
+parts and separate CI jobs.
 
-**CI is not this gate, in both directions, and neither difference is stated anywhere but in
-`.github/workflows/gate.yml`'s own comments.** It runs **three** jobs — `build · test · format`,
-`mailbox hooks · conformance`, and `skill gates` — kept apart because the last two need node and
-the Swift gate must not.
+**CI runs the same parts, with two differences.** Its jobs are `build · test · format` (`lint`
+then `swift`), `mailbox hooks · conformance` (`hooks`), `skill gates` (`skills`) and
+`fmt · clippy · build · test` (`daemon`, reporting success without running when nothing it covers
+changed). `hooks` and `skills` run on every PR, whatever it touched, and so does `just check`:
+*"a gate that exists, is documented in `AGENTS.md`, and runs only when somebody remembers is the
+drift this workflow exists to stop."* There is no `pi` job: it needs an `npm install` in `pi/`,
+so only `just check` runs it.
 
 - **Narrower on the Swift job**, by exactly the two suites this section spends forty lines
-  teaching you to diagnose: `INJECTION_NOGENERICS=1 swift test --skip TerminalKeyboardTests
-  --skip WorkbenchFocusRoutingTests`. A runner has no active display and those two need a real
-  ghostty surface (#253) — excluded rather than tolerated, since a gate whose red is sometimes
-  meaningless is a gate nobody reads. So **a green CI is not a green local gate**: a regression in
-  either suite passes CI, and running the full command before the PR is the only thing that
-  catches it.
-- **Broader on everything else**, and this is the half that surprises people: CI runs
-  `hooks/test.sh`, `helm-mail-cc/test.sh`, `helm-canvas/test.sh` and `helm-board/test.sh`
-  **unconditionally, on every PR**, where the rules above ask you to run each only when you
-  touched what it covers. *"A gate that exists, is documented in `AGENTS.md`, and runs only when
-  somebody remembers is the drift this workflow exists to stop."* The `pi-extensions` gate is the
-  one with no CI job — it needs an `npm install` in `pi/` — so that one really is only run by
-  whoever remembers.
-- **And a green local gate is not a green CI either**, for a third reason: CI runs against the
+  teaching you to diagnose. CI sets `HELM_CHECK_HEADLESS=1`, which makes the `swift` part run
+  `INJECTION_NOGENERICS=1 swift test --disable-keychain --skip TerminalKeyboardTests --skip
+  WorkbenchFocusRoutingTests`.
+  A runner has no active display and those two need a real ghostty surface (#253) — excluded
+  rather than tolerated, since a gate whose red is sometimes meaningless is a gate nobody reads.
+  So **a green CI is not a green local gate**: a regression in either suite passes CI, and
+  `just check` before the PR is the only thing that catches it.
+- **And a green local gate is not a green CI either**: CI runs against the
   **merge commit** rather than your branch tip. That is why it exists — two PRs merged 56 seconds
   apart on 2026-08-06, both green on their own branches, both reviewed, touching different files,
   and `development` did not compile.
 
-**If you touched `pi/`, run its gate too — it is separate on purpose:**
+**`pi/`'s gate is separate on purpose; `just check` runs it when `pi/` changed. Alone:**
 
 ```
 bash .claude/skills/pi-extensions/scripts/test.sh
 ```
 
-**If you touched `daemon/`, run its gate:**
+**`daemon/`'s gate (the `daemon` part), alone:**
 
 ```
 bash daemon/test.sh
@@ -184,19 +209,19 @@ skills' snippets), and the Swift gate never learns about it. Read
 M0 (skeleton), M5a (daemon-owned ptys), mail, the shared browser (#350) and the daemon half
 of the bench document (M4, #354; helm does not read it yet) are the parts that exist.
 
-**If you touched `hooks/`, run its gate:**
+**`hooks/`'s gate (the `hooks` part), alone:**
 
 ```
 bash hooks/test.sh
 ```
 
-**If you touched `.claude/skills/helm-canvas/`, run its gate:**
+**`.claude/skills/helm-canvas/`'s gate (part of `skills`), alone:**
 
 ```
 bash .claude/skills/helm-canvas/test.sh
 ```
 
-**If you touched `.claude/skills/helm-board/`, run its gate:**
+**`.claude/skills/helm-board/`'s gate (part of `skills`), alone:**
 
 ```
 bash .claude/skills/helm-board/test.sh
@@ -212,7 +237,7 @@ Needs node, which is why it is not in the Swift gate. **The one thing in that se
 gate does own is `data-helm-surface`**, because three files spell it and one of them is Swift —
 see `CanvasSurface` and `CanvasSurfaceTests`.
 
-**If you touched either mail skill, run its gate:**
+**The mail skills' gate (part of `skills`), alone:**
 
 ```
 bash .claude/skills/helm-mail-cc/test.sh
