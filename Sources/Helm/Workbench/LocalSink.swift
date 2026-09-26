@@ -44,7 +44,7 @@ final class LocalSink: VerbSink {
     }
 
     @discardableResult
-    // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 23, limit 15
+    // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 24, limit 15
     func send(_ verb: BenchVerb, by actor: BenchActor, asked: Bool) -> Pane.ID? {
         let takesFocus = actor == .operatorGesture || asked
         switch verb {

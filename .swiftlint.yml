@@ -7,7 +7,7 @@
 #
 # Code that was already over a limit when this landed carries an inline marker naming the
 # value measured then, e.g.
-#   // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 23, limit 15
+#   // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 24, limit 15
 # (a file_length marker is `// swiftlint:disable file_length - …` on the file's first line).
 # Never add one to new code: split the function or type instead. Once a marked site is back
 # under its limit, `superfluous_disable_command` fails until the marker is deleted, so the
