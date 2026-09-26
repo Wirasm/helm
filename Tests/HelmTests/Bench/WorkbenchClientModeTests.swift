@@ -210,6 +210,49 @@ final class WorkbenchClientModeTests: XCTestCase {
         XCTAssertEqual(by(sent), "operator")
     }
 
+    /// A divider drag is drawn as it moves and reaches benchd once, on release — not as a
+    /// hundred events in the log for one gesture.
+    func testADividerDragIsSentOnceOnRelease() throws {
+        let first = UUID()
+        let second = UUID()
+        let slot = UUID()
+        let other = UUID()
+        let left = UUID()
+        let right = UUID()
+        let bench = BenchDocument.Bench(
+            columns: [
+                .init(
+                    id: left,
+                    slots: [
+                        .init(
+                            id: slot, panes: [BenchFixture.terminal(first)], selected: first,
+                            height: 1)
+                    ], width: 0.5),
+                .init(
+                    id: right,
+                    slots: [
+                        .init(
+                            id: other, panes: [BenchFixture.terminal(second)], selected: second,
+                            height: 1)
+                    ], width: 0.5),
+            ],
+            focusedSlot: slot)
+        let rig = try rig(BenchFixture.document(path, bench, seq: 1))
+
+        for fraction in [0.55, 0.6, 0.65] {
+            rig.model.resize(.columns(member: left, against: right), to: fraction, released: false)
+        }
+        XCTAssertEqual(
+            rig.model.bench?.columns.first?.width ?? 0, 0.65, accuracy: 0.001, "drawn as it moves")
+        XCTAssertTrue(rig.server.verbs.isEmpty, "nothing sent while the drag moves")
+
+        rig.model.resize(.columns(member: left, against: right), to: 0.7, released: true)
+
+        XCTAssertEqual(rig.server.verbs.map { $0["verb"] as? String }, ["layout/resize"])
+        let args = try XCTUnwrap(rig.server.verbs.first?["args"] as? [String: Any])
+        XCTAssertEqual(args["fraction"] as? Double, 0.7)
+    }
+
     /// While benchd is down a verb fails where the operator can see it, and nothing moves.
     func testAVerbWithBenchdGoneFailsVisiblyAndChangesNothing() throws {
         let rig = try rig(
