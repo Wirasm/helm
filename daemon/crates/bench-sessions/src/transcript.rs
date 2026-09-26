@@ -472,7 +472,11 @@ fn claude(record: &Value, tools: &mut HashMap<String, String>) -> Result<Vec<Ent
                 }
                 out.push(stamp.entry(Kind::Tool, Some(name.into()), tool_arg(&b["input"])));
             }
-            Some("thinking") | Some("redacted_thinking") | Some("web_search_tool_result") => {}
+            // `fallback` records a switch to another model mid-turn: metadata, not a reply.
+            Some("thinking")
+            | Some("redacted_thinking")
+            | Some("web_search_tool_result")
+            | Some("fallback") => {}
             other => return Err(format!("assistant block type {other:?}")),
         }
     }
@@ -626,6 +630,7 @@ mod tests {
             user(json!("fix the build")),
             json!({"type": "user", "isMeta": true, "timestamp": AT, "message": {"content": "caveat"}}),
             assistant(json!([{"type": "thinking", "thinking": "hmm"}])),
+            assistant(json!([{"type": "fallback", "from": {"model": "a"}, "to": {"model": "b"}}])),
             assistant(json!([{"type": "text", "text": "Looking."}])),
             assistant(json!([{"type": "tool_use", "id": "t1", "name": "Bash",
                 "input": {"command": "cargo build\n--release", "description": "build"}}])),

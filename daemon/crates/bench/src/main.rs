@@ -43,9 +43,9 @@ fn usage() -> &'static str {
      \x20                                         cwd's): helm panes, bench sessions, --bg jobs,\n\
      \x20                                         running subagents, and finished hosted sessions\n\
      \x20     sessions dismiss <id> --harness <h> hide a finished row until it finishes again\n\
-     \x20     log <session id | transcript path>  a session's prompts, replies, tool calls and errors,\n\
-     \x20         [-n N] [--since 30m|2h|1d|<time>] read from its file (no daemon needed); the last\n\
-     \x20         [--json]                        40 by default. Claude and pi\n\
+     \x20     log <session id | transcript path>  a Claude or pi session's prompts, replies, tool\n\
+     \x20         [-n N] [--since 30m|2h|1d|<time>] calls and errors, read from its transcript with no\n\
+     \x20         [--json]                        daemon; the last 40 unless -n says otherwise\n\
      \x20     attach <session>                    raw relay to a session's pty (Ctrl-\\ detaches)\n\
      \x20     close <session>                     drain-then-die the session\n\
      \x20     resume <session>                    re-enter an exited session's runtime state\n\
