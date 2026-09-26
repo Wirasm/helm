@@ -125,10 +125,11 @@ part_hooks() {
 }
 
 part_skills() {
-    for tool in node zsh python3; do require "$tool" skills || return 1; done
+    for tool in node zsh python3 git; do require "$tool" skills || return 1; done
     bash .claude/skills/helm-mail-cc/test.sh || return 1
     bash .claude/skills/helm-canvas/test.sh || return 1
-    bash .claude/skills/helm-board/test.sh
+    bash .claude/skills/helm-board/test.sh || return 1
+    bash .claude/skills/post-canvas/test.sh
 }
 
 part_daemon() {

@@ -43,6 +43,15 @@ struct Workbench: Codable, Equatable {
         normalize()
     }
 
+    /// A bench built from parts decoded elsewhere — benchd's document (#354). Normalized like
+    /// any other; nil when the parts hold no pane at all, which no bench may be.
+    static func assembled(columns: [Column], focusedSlot: Slot.ID) -> Workbench? {
+        guard columns.contains(where: { $0.slots.contains { !$0.panes.isEmpty } }) else {
+            return nil
+        }
+        return Workbench(columns: columns, focusedSlot: focusedSlot)
+    }
+
     /// The bench helm has always rendered: one column, one slot, one terminal. This is
     /// what a first-run workspace gets, and what `RootView` drew before there was a bench.
     init(terminal id: Pane.ID) {
@@ -904,6 +913,10 @@ struct Pane: Codable, Equatable, Identifiable {
         /// A view onto the shared browser benchd runs (#350). No payload: there is one
         /// browser per bench root, and which tab it shows is live state, not arrangement.
         case browser
+        /// A kind benchd's document holds and this build does not know, named. Kept rather than
+        /// dropped: the daemon owns the pane, so helm shows a placeholder where it is. Only a
+        /// daemon's document makes one; nothing helm saves ever holds one.
+        case unsupported(String)
     }
 }
 
@@ -953,19 +966,20 @@ extension Pane.Content {
     /// The discriminator: which kind of pane this is, without its payload. It is the stored
     /// `kind` string, and it is what `SurfaceRegistry` looks a kind up by — the one switch over
     /// pane kinds that the rest of the app is spared.
-    enum Kind: String, Codable, Hashable { case terminal, canvas, browser }
+    enum Kind: String, Codable, Hashable { case terminal, canvas, browser, unsupported }
 
     var kind: Kind {
         switch self {
         case .terminal: .terminal
         case .canvas: .canvas
         case .browser: .browser
+        case .unsupported: .unsupported
         }
     }
 }
 
 extension Pane.Content: Codable {
-    private enum CodingKeys: String, CodingKey { case kind, source, agent }
+    private enum CodingKeys: String, CodingKey { case kind, source, agent, named }
 
     /// **A `kind` this build does not know throws, and `Slot` skips the pane.** The build
     /// before this one had a third pane type and wrote `{"kind":"archonRun"}` into benches
@@ -991,6 +1005,10 @@ extension Pane.Content: Codable {
                     ?? nil)
         case .canvas: self = .canvas(try container.decode(CanvasSource.self, forKey: .source))
         case .browser: self = .browser
+        // Only a daemon's document makes one, and helm saves nothing in daemon mode; written and
+        // read with its name all the same, so a placeholder that ever is saved comes back whole.
+        case .unsupported:
+            self = .unsupported(try container.decode(String.self, forKey: .named))
         }
     }
 
@@ -1012,6 +1030,9 @@ extension Pane.Content: Codable {
             try container.encode(source, forKey: .source)
         case .browser:
             try container.encode(Kind.browser, forKey: .kind)
+        case let .unsupported(named):
+            try container.encode(Kind.unsupported, forKey: .kind)
+            try container.encode(named, forKey: .named)
         }
     }
 }
