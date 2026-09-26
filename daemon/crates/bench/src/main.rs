@@ -517,10 +517,17 @@ fn parse_surface(raw: &str) -> Result<Surface, String> {
 /// `bench wiring --check` reads the files and says what is missing: exit 0 when all of it is
 /// there, 3 when something is not. It never writes them.
 fn wiring(mode: Option<&str>) -> i32 {
-    let bench = match std::env::current_exe().and_then(|p| p.canonicalize()) {
-        Ok(p) => p.display().to_string(),
+    let bench = match std::env::current_exe() {
+        Ok(exe) => bench_wire::hook::sibling_bench(&exe).display().to_string(),
         Err(e) => return fail(&format!("cannot find this bench: {e}")),
     };
+    // The wiring names this file for good; a build directory goes away with its checkout.
+    if bench.contains("/target/") || bench.contains("/.worktrees/") {
+        eprintln!(
+            "bench wiring: {bench} is a build, not an installed bench; run the installed one \
+             (`cargo install --path crates/bench`) so the wiring outlives this checkout"
+        );
+    }
     let Ok(home) = std::env::var("HOME").map(PathBuf::from) else {
         return refuse("HOME is not set; bench cannot find the files to wire");
     };
@@ -540,10 +547,7 @@ fn wiring(mode: Option<&str>) -> i32 {
                     "merge": bench_wire::hook::codex_hooks(&bench),
                     "then": "open codex once and trust the hook in /hooks",
                 },
-                "pi": {
-                    "link": pi_link,
-                    "to": "<helm checkout>/pi/extensions/bench",
-                },
+                "pi": { "link": pi_link, "to": "<helm checkout>/pi/extensions/bench" },
             });
             println!(
                 "{}",
@@ -558,30 +562,16 @@ fn wiring(mode: Option<&str>) -> i32 {
                     .and_then(|t| serde_json::from_str(&t).ok())
                     .unwrap_or(Value::Null)
             };
-            let wired = |file: &Value, events: &[&str], want: &Value| -> Vec<String> {
-                events
-                    .iter()
-                    .filter(|event| {
-                        !file["hooks"][**event].as_array().is_some_and(|groups| {
-                            groups
-                                .iter()
-                                .any(|g| g["hooks"].as_array().is_some_and(|hs| hs.contains(want)))
-                        })
-                    })
-                    .map(|e| (*e).to_string())
-                    .collect()
-            };
             let claude = read(&claude_file);
-            let codex = read(&codex_file);
-            let claude_want =
-                &bench_wire::hook::claude_settings(&bench)["hooks"]["Stop"][0]["hooks"][0];
-            let codex_want = &bench_wire::hook::codex_hooks(&bench)["hooks"]["Stop"][0]["hooks"][0];
-            let claude_missing = wired(&claude, &bench_wire::hook::CLAUDE_EVENTS, claude_want);
-            let codex_missing = wired(&codex, &bench_wire::hook::CODEX_EVENTS, codex_want);
+            let claude_missing = bench_wire::hook::unwired(Harness::Claude, &claude, &bench);
+            let codex_missing =
+                bench_wire::hook::unwired(Harness::Codex, &read(&codex_file), &bench);
             let inbound = claude["crossSessionInbound"] == "accept";
             let pi = pi_link.join("index.ts").is_file();
+            let exists = PathBuf::from(&bench).is_file();
             let report = json!({
                 "bench": bench,
+                "bench_exists": exists,
                 "claude": { "file": claude_file, "missing_events": claude_missing,
                             "cross_session_inbound_accept": inbound },
                 "codex": { "file": codex_file, "missing_events": codex_missing },
@@ -591,7 +581,8 @@ fn wiring(mode: Option<&str>) -> i32 {
                 "{}",
                 serde_json::to_string_pretty(&report).unwrap_or_default()
             );
-            if claude_missing.is_empty() && codex_missing.is_empty() && inbound && pi {
+            let all = exists && claude_missing.is_empty() && codex_missing.is_empty();
+            if all && inbound && pi {
                 0
             } else {
                 Status::Refused.exit_code()

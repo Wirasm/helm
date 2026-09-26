@@ -189,18 +189,69 @@ pub const CODEX_EVENTS: [&str; 8] = [
     "SessionEnd",
 ];
 
+/// The `bench` a hook should run: the one beside `exe` (a `bench` or `benchd`), after
+/// resolving `exe` through any symlink. Both `bench wiring` and benchd's own settings for the
+/// Claude sessions it spawns ask this, so the two name the same file.
+pub fn sibling_bench(exe: &std::path::Path) -> std::path::PathBuf {
+    exe.canonicalize()
+        .unwrap_or_else(|_| exe.to_path_buf())
+        .with_file_name("bench")
+}
+
+/// codex's command line for the hook: a shell string, the path single-quoted.
+fn codex_command(bench: &str) -> String {
+    format!("'{}' hook codex", bench.replace('\'', "'\\''"))
+}
+
 /// `~/.codex/hooks.json`: `bench hook codex` on every event in [`CODEX_EVENTS`]. codex runs a
 /// hook as a shell string, so the path is quoted. It runs a hook only once its exact
 /// definition has been trusted in `/hooks`, which is why this never changes.
 pub fn codex_hooks(bench: &str) -> serde_json::Value {
     let handler = serde_json::json!([{ "hooks": [{
-        "type": "command", "command": format!("'{bench}' hook codex"), "timeout": 5,
+        "type": "command", "command": codex_command(bench), "timeout": 5,
     }]}]);
     let hooks: serde_json::Map<String, serde_json::Value> = CODEX_EVENTS
         .iter()
         .map(|event| ((*event).to_string(), handler.clone()))
         .collect();
     serde_json::json!({ "hooks": hooks })
+}
+
+/// The events of `settings` (Claude's settings or codex's hooks.json) that do not run `bench`
+/// on every occurrence. A handler counts when it runs this `bench` for this harness, whatever
+/// else it sets (a timeout, say), and only in a group with no matcher: a matcher scopes a hook
+/// to some tools, and the sensor has to see all of them.
+pub fn unwired(harness: Harness, settings: &serde_json::Value, bench: &str) -> Vec<String> {
+    let runs_bench = |h: &serde_json::Value| match harness {
+        Harness::Claude => {
+            h["command"] == bench && h["args"] == serde_json::json!(["hook", "claude"])
+        }
+        Harness::Codex => h["command"] == codex_command(bench).as_str(),
+        Harness::Pi => false,
+    };
+    let every = |group: &serde_json::Value| {
+        group["matcher"]
+            .as_str()
+            .is_none_or(|m| m.is_empty() || m == "*")
+    };
+    let events: &[&str] = match harness {
+        Harness::Claude => &CLAUDE_EVENTS,
+        Harness::Codex => &CODEX_EVENTS,
+        Harness::Pi => &[],
+    };
+    events
+        .iter()
+        .filter(|event| {
+            !settings["hooks"][**event].as_array().is_some_and(|groups| {
+                groups.iter().filter(|g| every(g)).any(|g| {
+                    g["hooks"]
+                        .as_array()
+                        .is_some_and(|hs| hs.iter().any(runs_bench))
+                })
+            })
+        })
+        .map(|e| (*e).to_string())
+        .collect()
 }
 
 /// Who gets a mailbox (#427, the rule moved here from both writers): a session a host
@@ -425,6 +476,27 @@ mod tests {
         for event in PI_EVENTS {
             assert!(transition(Harness::Pi, event, None).is_some(), "{event}");
         }
+    }
+
+    #[test]
+    fn a_handler_counts_whatever_its_timeout_and_only_without_a_matcher() {
+        let bench = "/b/bench";
+        let mut settings = claude_settings(bench);
+        assert!(unwired(Harness::Claude, &settings, bench).is_empty());
+        settings["hooks"]["Stop"][0]["hooks"][0]["timeout"] = serde_json::json!(10);
+        settings["hooks"]["PreToolUse"][0]["matcher"] = serde_json::json!("Bash");
+        assert_eq!(unwired(Harness::Claude, &settings, bench), ["PreToolUse"]);
+        assert_eq!(
+            unwired(Harness::Claude, &settings, "/elsewhere/bench").len(),
+            CLAUDE_EVENTS.len(),
+            "another bench is not this one"
+        );
+        let codex = codex_hooks("/it's/bench");
+        assert_eq!(
+            codex["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "'/it'\\''s/bench' hook codex"
+        );
+        assert!(unwired(Harness::Codex, &codex, "/it's/bench").is_empty());
     }
 
     #[test]
