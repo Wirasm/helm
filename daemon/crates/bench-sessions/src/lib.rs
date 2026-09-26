@@ -22,6 +22,7 @@ pub mod pi;
 pub mod process;
 pub mod scope;
 pub mod snapshot;
+pub mod transcript;
 
 use bench_doc::StandardPath;
 use bench_session::{AgentKind, SpawnSpec};
