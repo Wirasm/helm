@@ -23,16 +23,18 @@ You have mail from <sender>: <path>
 ```
 
 The path IS the message — a markdown file with `from:`/`at:`/`subject:` front-matter and
-the body below it. `cat` it. It is already retired (moved to your `read/` directory), so
-the path in the notice stays valid.
+the body below it. `cat` it. It is moved to your `read/` directory the moment the notice is
+delivered, so the path in the notice is where it lives.
 
 Facts with edges:
 
 - **The notice never contains the body.** Reading the file is how you get the message.
-- **Wakes are delivered only while your pty is idle** (quiet ≥2s), and they are
-  **capped**: burst of 6 per recipient, refilling one per minute. Capped or undeliverable
-  mail waits **unread in your inbox** — nothing is lost, but nothing further will nudge
-  you. `bench mail list` is how you find what accumulated.
+- **Wakes are delivered only while your pty is idle** (quiet ≥2s), and a Claude session
+  only while its own registry says it can take a turn: `idle`, or `waiting` with nothing
+  pending. A permission prompt or dialog holds the wake, because a paste would answer it.
+  They are also **capped**: burst of 6 per recipient, refilling one per minute. Held,
+  capped or undeliverable mail waits **unread in your inbox** — nothing is lost, but
+  nothing further will nudge you. `bench mail list` is how you find what accumulated.
 - Nothing else wakes you. No polling loop exists to arm.
 
 ## Who can I mail
