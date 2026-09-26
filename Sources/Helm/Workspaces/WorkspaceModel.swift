@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import HelmWire
 
 /// The open folders and their per-workspace UI state.
 ///
@@ -59,6 +60,25 @@ final class WorkspaceModel: ObservableObject, ParkedBenches {
         WorkspaceContextStore.save(contexts, to: defaults)
         branches[workspace.path] = nil
         if selectedWorkspace == workspace { select(nil) }
+    }
+
+    /// Whether this helm's saved benches have gone into benchd (`BenchImport`). A marker, never
+    /// a copy: the saved benches themselves are left exactly as they were.
+    var hasImportedIntoBench: Bool { defaults.object(forKey: BenchImport.markerKey) != nil }
+
+    func markImportedIntoBench(at date: Date = Date()) {
+        defaults.set(date, forKey: BenchImport.markerKey)
+    }
+
+    /// The workspaces and the selection benchd's document names, in daemon mode (#354). Nothing
+    /// is saved: benchd holds them, and helm's own saved list is left as it was, which is what
+    /// makes unsetting `HELM_BENCH` a way back.
+    func follow(_ document: BenchDocument) {
+        let listed = document.workspaces.map { Workspace(path: $0.path) }
+        for gone in workspaces where !listed.contains(gone) { branches[gone.path] = nil }
+        if workspaces != listed { workspaces = listed }
+        let active = document.active.map(Workspace.init(path:))
+        if selectedWorkspace != active { selectedWorkspace = active }
     }
 
     func select(_ workspace: Workspace?) {
