@@ -328,6 +328,17 @@ is deliberately **before** a turn rather than after one: an agent that learns it
 already carried out the instruction it should have read the mail first. pi does the same thing
 through its `context` event.
 
+**Only a hosted session claims a mailbox (#417), and "hosted" is two facts, not one.** The hook is
+wired globally, so before #417 every Claude session on the machine claimed — 12,497 mailboxes on
+the operator's, most of them Archon's SDK sessions in temp directories, and helm read every one
+every two seconds. Both writers now claim (and the hook delivers) only when a host **declared** the
+session — `HELM_PANE` from helm, `BENCH_SESSION` from benchd — **and** it is on a terminal.
+`HELM_PANE` alone is not enough, measured: it is inherited by everything a pane's agent spawns,
+Archon's sessions included, but tool calls run detached (Claude Code's Bash tool and hooks, pi's
+bash tool), so a session started from one has no controlling terminal. `HELM_MAIL_DIR` opts in
+outright, which is why the gates still claim. `claimsAMailbox` is the rule, written in both files
+and run over one matrix by `hooks/mailbox-conformance.mjs`.
+
 **An idle agent is woken, and the two runtimes get there differently.** pi's extension is a live
 event loop inside the session, so it watches its own mailbox and calls `sendUserMessage` — a turn
 starts from nothing. Claude Code has no equivalent helm can call, so the notice instead **tells
