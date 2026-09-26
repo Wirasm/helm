@@ -104,6 +104,9 @@ enum VerbTemplate: Equatable {
     case openBrowser
     case activateWorkspace(index: Int)
     case cycleWorkspace(delta: Int)
+    /// Show a drawer over the bench, or hide it (#356). `surface` is what an empty drawer
+    /// starts with; benchd refuses to open an empty drawer without one.
+    case toggleDrawer(name: String, surface: Surface?)
 
     /// The verb this gesture means on `bench`, with `workspaces` open and `active` on screen.
     /// nil when it means nothing right now: no focused pane, no tab at that index, one workspace
@@ -133,6 +136,7 @@ enum VerbTemplate: Equatable {
             let current = active.flatMap { workspaces.firstIndex(of: $0) } ?? 0
             let next = (current + delta + workspaces.count) % workspaces.count
             return .workspaceActivate(path: workspaces[next].value)
+        case let .toggleDrawer(name, surface): return .drawerToggle(name: name, surface: surface)
         }
     }
 }

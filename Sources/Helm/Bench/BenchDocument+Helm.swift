@@ -99,8 +99,8 @@ extension BenchDocument {
     }
 
     /// Every pane id on a workspace's bench or shelf — the panes helm has seen arrive. A terminal
-    /// in a drawer (#356) is not among them: it has no workspace to start in and helm draws no
-    /// drawers yet, so when it is moved onto a bench it arrives there, and starts.
+    /// in a drawer (#356) is not among them: a drawer belongs to no workspace, so a terminal there
+    /// has nowhere to start, and when it is moved onto a bench it arrives there, and starts.
     var workspacePaneIDs: Set<UUID> {
         Set(
             workspaces.flatMap { workspace in
@@ -119,6 +119,11 @@ extension BenchDocument {
                 .map(\.id)
             return arrived.isEmpty ? nil : (WorkspacePath(workspace.path), arrived)
         }
+    }
+
+    /// The drawer a pane is in, if it is in one.
+    func drawer(holding pane: UUID) -> Drawer? {
+        drawers.first { $0.panes.contains { $0.id == pane } }
     }
 
     func workspace(at path: WorkspacePath) -> Workspace? {

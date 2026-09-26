@@ -58,6 +58,8 @@ struct RootView: View {
                         model: archonRail, workspacePath: model.selectedWorkspaceRoot)
                 }
             }
+            // Over the bench and the rail, never beside them: a drawer changes nothing under it.
+            .overlay { DrawerHost(model: workbench, keymap: .shared) }
             StatusBarView(model: model, workbench: workbench)
         }
         // The base plane, and it has to be painted: `translucentWindow` makes the window

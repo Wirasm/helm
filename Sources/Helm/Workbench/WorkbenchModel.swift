@@ -563,18 +563,18 @@ final class WorkbenchModel: ObservableObject {
     /// A pane's body and its tab, from its kind — the one route every kind is drawn by, so
     /// nothing in the bench's views asks what kind a pane is.
     func surfaceView(of pane: Pane, in slot: SurfaceSlot) -> AnyView? {
-        surfaces.view(of: pane, in: slot, workspace: workspacePath)
+        surfaces.view(of: pane, in: slot, workspace: home(of: pane.id))
     }
 
     func surfaceTab(of pane: Pane, in slot: SurfaceSlot) -> AnyView? {
-        surfaces.tab(of: pane, in: slot, workspace: workspacePath)
+        surfaces.tab(of: pane, in: slot, workspace: home(of: pane.id))
     }
 
     /// What a surface needs to know about where it is drawn, answered by the bench.
     func surfaceSlot(for pane: Pane, in slot: Slot) -> SurfaceSlot {
         SurfaceSlot(
             pane: pane,
-            holdsKeyboard: bench?.focusedPane?.id == pane.id,
+            holdsKeyboard: openDrawer == nil && bench?.focusedPane?.id == pane.id,
             isSelected: pane.id == slot.selected,
             canClose: bench?.canClose(pane.id) ?? false,
             select: { [weak self] in self?.send(.paneShow(pane.id), by: .operatorGesture) },

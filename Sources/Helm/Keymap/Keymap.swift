@@ -19,6 +19,8 @@ final class Keymap: ObservableObject {
 
     @Published private(set) var table: [KeyBinding]
     @Published private(set) var problem: KeymapProblem?
+    /// `[drawer.<name>]` from the last good file.
+    @Published private(set) var drawerStyles: [String: DrawerStyle] = [:]
 
     /// `<bench root>/rules/keymap.toml`, so an isolated helm has its own. nil when the root
     /// cannot be resolved, which leaves the built-in table.
@@ -54,17 +56,25 @@ final class Keymap: ObservableObject {
         switch read {
         case .absent:
             table = defaults
+            drawerStyles = [:]
             problem = nil
         case let .unreadable(why):
             reject(KeymapProblem(line: nil, reason: why))
         case let .text(text):
             do {
-                table = try KeymapFile.parse(text).overlay(on: defaults)
+                let file = try KeymapFile.parse(text)
+                table = try file.overlay(on: defaults)
+                drawerStyles = file.drawers
                 problem = nil
             } catch {
                 reject(error)
             }
         }
+    }
+
+    /// Where a drawer is drawn: the file's table for it, else the built-in one.
+    func style(for drawer: String) -> DrawerStyle {
+        drawerStyles[drawer] ?? .builtIn(for: drawer)
     }
 
     private func reject(_ problem: KeymapProblem) {

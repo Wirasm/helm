@@ -99,7 +99,8 @@ the whole bench document, beside the workspaces rather than inside one, and at m
 time. Opening or closing one never re-lays-out the bench under it. It holds panes, so anything a
 pane can show can live in one, and it exists only while it holds at least one. Which drawer is open
 is the operator's focus: an agent never opens one without *asked*; its pane lands in the drawer
-and **badges** it. Lives in benchd's document; helm does not draw drawers yet.
+and **badges** it. Lives in benchd's document; helm draws the open one over the bench
+(`Sources/Helm/Drawers/`), where and how wide from `[drawer.<name>]` in the keymap file.
 _Avoid_: panel, sidebar, rail (the rail is helm's own and is not a drawer), scratchpad, overlay
 
 **badge**:

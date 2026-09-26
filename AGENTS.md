@@ -953,6 +953,14 @@ mode only the active workspace's part of `snapshot.json` is current. To try it w
 the operator's bench, run your own benchd on a suite and point an isolated helm at it:
 `BENCH_SUITE=<name> benchd` and `HELM_BENCH=daemon HELM_DEFAULTS_SUITE=<name> swift run helm`.
 
+**Drawers are drawn over the bench, never in it** (#356, `Sources/Helm/Drawers/`). `DrawerHost`
+is an overlay on the bench and the rail, so the layout under an open drawer is untouched; while
+one is open its selected pane holds the keyboard and the bench's focused pane does not. A drawer
+pane's live object belongs to no workspace, so it survives the drawer being hidden and a workspace
+closing. The status bar has one capsule per drawer, dotted while badged. **An agent puts things
+in a drawer and never opens one**: `pane/open` into a drawer badges it, and `drawer/toggle`
+without *asked* is refused. The keymap's `drawer` action and the capsule are the operator's.
+
 **Put a command handler where its lifetime is right, not where it looks tidy.** A subscription
 that has to work while its view is closed belongs on the model, which outlives the
 presentation. Attaching it to the view means it is dead in exactly the state it exists for.
