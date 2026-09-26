@@ -402,9 +402,16 @@ restart_benchd() (
   # When launchd runs benchd (scripts/benchd-agent.sh), launchd restarts it. Stopping it here and
   # starting another by hand would leave the agent down and a second, unmanaged benchd in its
   # place. The browser is benchd's to bring back (<root>/browser/wanted).
-  local label
+  local label loaded
   label="$(agent_label "$bench_suite")"
-  if agent_loaded "$label"; then
+  agent_loaded "$label"
+  loaded=$?
+  # Unknown is not "not loaded": starting a benchd here could put a second one beside launchd's.
+  if [ "$loaded" -eq 124 ]; then
+    warn "launchctl did not answer whether $label is loaded; leaving benchd as it is"
+    return
+  fi
+  if [ "$loaded" -eq 0 ]; then
     local before
     before="$(bench_pid "$bin/bench")"
     log "step 3: restarting benchd through launchd ($label, pid ${before:-none})"

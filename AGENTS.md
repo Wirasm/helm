@@ -852,16 +852,17 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   so it never starts a second one), swaps the bundle with `BundleSwap.script` itself (read out of
   the Swift source, so there is one swap), and resumes that Claude Code session in the new helm
   through the spool with `--remote-control`. It detaches first, because the caller is normally an
-  agent in a pane the quit closes. **Once helm is quit the session always comes back**: any later failure resumes it
-  outside helm with `claude --bg --resume`, and the log says which happened. Logs go to
-  `~/.helm/build/release-resume.log`, last line `RESULT:`. Every target is a flag (`--bundle`,
-  `--pid`, `--suite`, `--bench-suite`, `--cargo-root`, `--env`, `--no-remote-control`), which is
-  how it is tested against a bundle copy under a suite. Two things it does that are easy to undo
-  by accident: it relaunches helm through `env -i`, because `open` hands the app the caller's
-  whole environment (`CLAUDECODE`, the caller's session id) and every pane would inherit it; and
-  it holds `caffeinate -d -u` while relaunching, because with every display asleep the new helm
-  cannot create a terminal (the CoreVideo `-6661` pair above). **Quitting helm kills every pane:
-  run it for real only when the operator has said nothing is in flight.**
+  agent in a pane the quit closes. **Once helm is quit the session always comes back**: any later
+  failure resumes it outside helm with `claude --bg --resume`, and the log says which happened.
+  Logs go to `~/.helm/build/release-resume.log`, last line `RESULT:`. Every target is a flag
+  (`--bundle`, `--pid`, `--suite`, `--bench-suite`, `--cargo-root`, `--env`,
+  `--no-remote-control`), which is how it is tested against a bundle copy under a suite. Two
+  things it does that are easy to undo by accident: it relaunches helm through `env -i`, because
+  `open` hands the app the caller's whole environment (`CLAUDECODE`, the caller's session id) and
+  every pane would inherit it; and it holds `caffeinate -d -u` while relaunching, because with
+  every display asleep the new helm cannot create a terminal (the CoreVideo `-6661` pair above).
+  **Quitting helm kills every pane: run it for real only when the operator has said nothing is in
+  flight.**
 - **helm persists to one domain, `com.wirasm.helm`, from both launch paths** — so "did it
   persist?" is `defaults read com.wirasm.helm` whichever way it was started, unless
   `HELM_DEFAULTS_SUITE` overrides it (next bullet). `swift run helm`

@@ -52,7 +52,7 @@ final class BenchdAgentScriptTests: XCTestCase {
             "launchctl": """
             echo "launchctl $*" >> \(state)/calls
             case "$1" in
-            print) [ -e \(state)/loaded ] || exit 113 ;;
+            print) [ -e \(state)/hung ] && exit 124; [ -e \(state)/loaded ] || exit 113 ;;
             kickstart) echo $(( $(cat \(state)/pid) + 1 )) > \(state)/pid ;;
             esac
             """,
@@ -154,6 +154,23 @@ final class BenchdAgentScriptTests: XCTestCase {
         XCTAssertTrue(lines(log).contains("benchd"), log)
         XCTAssertTrue(log.contains("bench browser start"), log)
         XCTAssertFalse(log.contains("kickstart"), log)
+    }
+
+    /// `launchctl print` exiting 124 is what `timeout` reports when it hangs: nobody knows whether
+    /// launchd runs benchd, so starting one by hand could put a second benchd beside launchd's.
+    func testReleaseResumeLeavesBenchdAloneWhenLaunchdCannotBeAsked() throws {
+        try writeFakes()
+        FileManager.default.createFile(
+            atPath: scratch.appendingPathComponent("hung").path, contents: nil)
+
+        let run = try restartBenchd(suite: "probe")
+        XCTAssertEqual(run.status, 0, run.stderr)
+
+        let log = recorded()
+        XCTAssertFalse(lines(log).contains("benchd"), "a benchd was started by hand:\n\(log)")
+        XCTAssertFalse(log.contains("bench stop"), log)
+        XCTAssertFalse(log.contains("kickstart"), log)
+        XCTAssertTrue(run.stdout.contains("launchctl did not answer"), run.stdout)
     }
 
     func testInstallRefusesASuiteAndTouchesNothing() throws {

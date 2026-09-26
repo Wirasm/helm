@@ -25,6 +25,7 @@ agent_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # release-resume derives the same label to decide whether to restart through launchctl.
 agent_label() { printf 'com.wirasm.benchd%s\n' "${1:+.$1}"; }
 
+# 0 loaded, 124 launchctl did not answer in time (so nobody knows), anything else not loaded.
 agent_loaded() { timeout 10 launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; }
 
 # The binaries the agent runs and release-resume refreshes, installed from daemon/crates.
