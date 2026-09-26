@@ -3112,3 +3112,159 @@ fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
     let after_state: Vec<_> = harness_files.iter().map(|d| tree_state(d)).collect();
     assert_eq!(before, after_state);
 }
+
+// ---------------------------------------------------------------------------
+// bench log (#421): a transcript read straight from its file, no daemon
+// ---------------------------------------------------------------------------
+
+/// A Claude transcript under the test home: a prompt, a reply, a tool call that failed, and
+/// one record in a shape nobody knows.
+fn write_claude_transcript(home: &Path, id: &str) -> PathBuf {
+    let at = "2026-09-25T16:49:25.973Z";
+    let lines = [
+        serde_json::json!({"type": "user", "timestamp": at,
+            "message": {"role": "user", "content": "fix the build"}}),
+        serde_json::json!({"type": "assistant", "timestamp": at,
+            "message": {"content": [{"type": "text", "text": "Looking at it."}]}}),
+        serde_json::json!({"type": "assistant", "timestamp": at,
+            "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+                "input": {"command": "cargo build"}}]}}),
+        serde_json::json!({"type": "user", "timestamp": at,
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
+                "is_error": true, "content": "error[E0425]: cannot find value"}]}}),
+        serde_json::json!({"type": "assistant", "timestamp": at,
+            "message": {"content": [{"type": "hologram"}]}}),
+    ];
+    let path = home
+        .join(".claude/projects/-ws")
+        .join(format!("{id}.jsonl"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+fn log_reads_a_transcript_with_no_daemon_and_names_what_it_skipped() {
+    let home = TestHome::claim("log");
+    write_claude_transcript(&home.dir, "s-1");
+
+    let text = bench(&home.dir, &["log", "s-1"]);
+    assert_eq!(text.code, 0, "stderr: {}", text.stderr);
+    for line in [
+        "2026-09-25 16:49:25  user   fix the build",
+        "2026-09-25 16:49:25  agent  Looking at it.",
+        "2026-09-25 16:49:25  tool   Bash  cargo build",
+        "2026-09-25 16:49:25  error  Bash  error[E0425]: cannot find value",
+    ] {
+        assert!(text.stdout.contains(line), "{line:?} in:\n{}", text.stdout);
+    }
+    assert!(
+        text.stderr.contains("s-1.jsonl:5: skipped") && text.stderr.contains("hologram"),
+        "the unknown record is reported with its line: {}",
+        text.stderr
+    );
+
+    let json = bench(&home.dir, &["log", "s-1", "-n", "1", "--json"]);
+    assert_eq!(json.code, 0, "stderr: {}", json.stderr);
+    let v = json_of(&json);
+    assert_eq!(v["harness"], "claude");
+    assert_eq!(
+        (v["total"].as_u64(), v["returned"].as_u64()),
+        (Some(4), Some(1))
+    );
+    assert_eq!(v["entries"][0]["kind"], "error");
+    assert_eq!(v["unreadable"][0]["line"], 5);
+
+    let since = bench(&home.dir, &["log", "s-1", "--since", "1h", "--json"]);
+    assert_eq!(
+        json_of(&since)["total"],
+        0,
+        "every entry is older than an hour"
+    );
+
+    let unknown = bench(&home.dir, &["log", "no-such-session"]);
+    assert_eq!(unknown.code, 3, "stderr: {}", unknown.stderr);
+    assert!(
+        unknown.stderr.contains("no transcript"),
+        "{}",
+        unknown.stderr
+    );
+    let flag = bench(&home.dir, &["status", "--json"]);
+    assert_eq!(flag.code, 3, "--json belongs to log: {}", flag.stderr);
+}
+
+#[test]
+fn the_bench_sessions_skills_snippets_execute() {
+    // The same rule as the mail skill's: every ```bash fence runs, in order.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../.claude/skills/bench-sessions/SKILL.md"),
+    )
+    .expect("bench-sessions SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        snippets.len(),
+        3,
+        "the skill's sessions and two log snippets"
+    );
+
+    let home = TestHome::claim("sskill");
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let ws = workspace(&home.dir);
+    let (_, pi_session) = spawn_pi(&home.dir, &ws, "worker");
+    write_claude_transcript(&home.dir, "s-2");
+    let mut outputs = Vec::new();
+    for (i, snippet) in snippets.iter().enumerate() {
+        let out = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", snippet])
+            .current_dir(&ws)
+            .env_remove("BENCH_SUITE")
+            .env_remove("BENCH_DIR")
+            .env("HOME", &home.dir)
+            .env("BENCH", bench_bin())
+            .env("SESSION", "s-2")
+            .output()
+            .expect("run snippet");
+        assert!(
+            out.status.success(),
+            "SKILL.md snippet {} failed (exit {:?}):\n{}\n--- stderr:\n{}",
+            i + 1,
+            out.status.code(),
+            snippet,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        outputs.push(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    assert!(
+        outputs[0].contains(&format!("pi {pi_session} running")),
+        "the live session is listed: {}",
+        outputs[0]
+    );
+    assert!(
+        outputs[1].contains("tool   Bash  cargo build"),
+        "{}",
+        outputs[1]
+    );
+    assert!(
+        outputs[2].contains("claude") && outputs[2].contains("4 of 4"),
+        "{}",
+        outputs[2]
+    );
+    assert!(outputs[2].contains("user  fix the build"), "{}", outputs[2]);
+}
