@@ -93,15 +93,14 @@ function renderPage({ manifest, script, copy, qc, sheets, runId }) {
   const flags = qc.flags.length
     ? qc.flags.map((f) => `<tr><td>${f.t.toFixed(1)}s</td><td class="warn">${esc(f.issue)}</td></tr>`).join("")
     : `<tr><td>flags</td><td class="ok">none</td></tr>`;
-  const failures = qc.global_failures
-    .map((f) => `<tr><td>spec</td><td class="warn">${esc(f)}</td></tr>`)
-    .join("");
   const sheetImgs = sheets.map((f) => `<img src="./${esc(f)}" alt="">`).join("");
 
   // YouTube folds the description after its first line behind "…more".
   const [firstLine, ...rest] = copy.youtube_description.split("\n");
   const restLines = rest.join("\n").trim();
-  const pill = !qc.global_ok ? ["fail", "QC FAILED"] : qc.flags.length ? ["fail", `QC PASSED · ${qc.flags.length} FLAG${qc.flags.length === 1 ? "" : "S"}`] : ["pass", "QC PASSED"];
+  // A spec failure stops the run in qc.py before `store`, so a stored run always passed;
+  // only its flags vary.
+  const pill = qc.flags.length ? ["fail", `QC PASSED · ${qc.flags.length} FLAG${qc.flags.length === 1 ? "" : "S"}`] : ["pass", "QC PASSED"];
 
   return `<meta charset="utf-8">
 <title>Post preview — ${esc(script.title)}</title>
@@ -211,7 +210,7 @@ code{background:#1d2330;padding:1px 5px;border-radius:4px;font-size:12.5px}
 
     <div class="panel">
       <h2>Technical QC</h2>
-      <table>${failures}${flags}</table>
+      <table>${flags}</table>
     </div>
   </div>
 </div>

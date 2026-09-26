@@ -72,7 +72,7 @@ shows every `frames/review-*.jpg` contact sheet.
 - **Alt text**
 - **Script**: the opening overlay, the narration and the opening shot
 - **Brief** and the editor's summary of the edit
-- **Technical QC**: spec failures and every timestamped flag (silence, black or frozen frames,
+- **Technical QC**: every timestamped flag (silence, black or frozen frames,
   shots that look like a recent video)
 - The review contact sheets, 12 labelled frames each
 
@@ -113,9 +113,10 @@ JavaScript**, which is why the driver bakes data in rather than fetching it.
 ## Installing
 
 The skill lives in helm's repo at `.claude/skills/post-canvas/`. Link it into `~/.claude/skills`
-the same way as `helm-canvas`:
+the same way as `helm-canvas`, replacing any older unlinked copy there:
 
 ```bash
+rm -rf ~/.claude/skills/post-canvas
 ln -s <helm-checkout>/.claude/skills/post-canvas ~/.claude/skills/post-canvas
 ```
 
