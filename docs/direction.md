@@ -216,3 +216,5 @@ Not decisions — things that are true today and shape what is cheap.
 - The kild layer was removed on `chore/drop-kild-layer`; what remains is workspaces,
   terminals, artifact rendering, and the app shell.
 - GhosttyKit ships iOS and Catalyst slices alongside macOS.
+
+<!-- probe for #418 PR 4; this PR is never merged -->
