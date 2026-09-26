@@ -79,6 +79,15 @@ sessions — the last only from `sessions/hosted.json`, benchd's record of what 
 hosted, because no harness file says where a session ran. `bench sessions dismiss` hides a
 finished row. helm's drawer is the next step.
 
+**And the sensor (#358, first half of M2 finish).** `bench hook <claude|codex|pi>` is one
+command wired into an agent's own hooks. On every event it reports the agent's state over the
+socket (the `hook` verb), and the reply carries the agent's unread mail as pointer lines, which
+Claude and codex put in front of the model as hook context: a busy agent gets its mail at the
+next tool call, with nothing typed into a pty. The first event of a session helm or benchd
+declared (`HELM_PANE`, `BENCH_SESSION`) and that runs on a terminal claims its address, recorded
+in `sessions/hosted.json` so it survives a restart. Next: idle agents are started through their
+own channel and the pty paste goes.
+
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance
 gate that runs the real binaries. M5a is the pty core: `spawn` puts a real interactive

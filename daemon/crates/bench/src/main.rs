@@ -14,16 +14,17 @@
 
 use bench_doc::{DrawerName, Surface};
 use bench_wire::{
-    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, LayoutVerb, MailListArgs,
-    MailReadArgs, MailSendArgs, OPERATOR_HANDLE, Request, RequestId, Response, SessionArgs,
-    SessionKey, SessionsArgs, SpawnArgs, Status, SuiteName, resolve_root, socket_path,
+    CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, HookArgs, HookReply,
+    LayoutVerb, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, Request, RequestId,
+    Response, SessionArgs, SessionKey, SessionsArgs, SpawnArgs, Status, SuiteName, resolve_root,
+    socket_path,
 };
 use serde_json::{Value, json};
 use std::io::{IsTerminal, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn main() {
     process::exit(run());
@@ -54,6 +55,9 @@ fn usage() -> &'static str {
      \x20               [--body-file <p>] [--subject <s>] [--from <h>]\n\
      \x20     mail list [--handle <h>]            metadata only, unread first\n\
      \x20     mail read <id> [--handle <h>]       body + retirement (inbox -> read)\n\
+     \x20     hook <claude|codex|pi>              the sensor, wired into an agent's own hooks: reads\n\
+     \x20                                         the hook payload on stdin, reports it, prints the\n\
+     \x20                                         agent's mail as hook context; always exits 0\n\
      \x20     browser start                       start the shared browser, or find it running;\n\
      \x20                                         `cdp` in its answer is for playwright-cli attach\n\
      \x20     browser status                      the endpoint, or running: false\n\
@@ -80,6 +84,12 @@ struct Cli {
     reason = "legacy (#418): 250 lines, limit 100; cognitive complexity 26, limit 25"
 )]
 fn run() -> i32 {
+    // `hook` is wired into an agent's own hooks and has its own contract (exit 0, always),
+    // so it leaves before the verb parser, whose refusals exit 3.
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.first().map(String::as_str) == Some("hook") {
+        return hook(raw.get(1).map(String::as_str));
+    }
     let mut argv = std::env::args().skip(1).peekable();
     let mut suite_flag: Option<String> = None;
     let mut verb: Option<String> = None;
@@ -498,6 +508,109 @@ fn parse_surface(raw: &str) -> Result<Surface, String> {
             )),
         },
     }
+}
+
+/// How long a hook waits on the daemon before giving up silently. A hook runs on every tool
+/// call, so a wedged daemon must cost the agent this at most, never `CLIENT_READ_TIMEOUT`.
+const HOOK_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// A hook payload larger than this is not read further; the fields it needs come first.
+const HOOK_STDIN_MAX: u64 = 8 * 1024 * 1024;
+
+/// `bench hook <harness>` (#358): one command per harness, wired once. It reads the harness's
+/// hook payload, sends benchd the typed fields plus what only this process can see — its
+/// parent (the agent) and the host declarations in its environment — and prints what the
+/// harness should put in front of the model. Its contract is the hooks': **exit 0 and print
+/// nothing on any failure**, so a missing daemon never stops an agent's tool call.
+///
+/// Output: for claude and codex, `hookSpecificOutput.additionalContext` when there is
+/// context (the shape both take on SessionStart, UserPromptSubmit, PreToolUse and
+/// PostToolUse; plain stdout is dropped on tool events, measured on Claude 2.1.283). For pi,
+/// the reply itself, which its extension reads.
+fn hook(harness: Option<&str>) -> i32 {
+    let Some(harness) = harness.and_then(Harness::parse) else {
+        eprintln!("bench hook: name the harness: claude, codex or pi");
+        return 0;
+    };
+    let mut input = String::new();
+    if std::io::stdin()
+        .take(HOOK_STDIN_MAX)
+        .read_to_string(&mut input)
+        .is_err()
+    {
+        return 0;
+    }
+    let Ok(payload) = serde_json::from_str::<Value>(&input) else {
+        return 0;
+    };
+    let field = |name: &str| payload[name].as_str().map(str::to_string);
+    let (Some(event), Some(session), Some(cwd)) =
+        (field("hook_event_name"), field("session_id"), field("cwd"))
+    else {
+        return 0;
+    };
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    let args = HookArgs {
+        harness,
+        event: event.clone(),
+        session,
+        cwd,
+        pid: std::os::unix::process::parent_id(),
+        tool: field("tool_name"),
+        pane: env("HELM_PANE"),
+        bench_session: env("BENCH_SESSION"),
+    };
+    let Some(reply) = hook_request(&args) else {
+        return 0;
+    };
+    match harness {
+        Harness::Pi => println!("{}", json!(reply)),
+        Harness::Claude | Harness::Codex => {
+            if let Some(context) = reply.context {
+                println!(
+                    "{}",
+                    json!({ "hookSpecificOutput": {
+                        "hookEventName": event,
+                        "additionalContext": context,
+                    }})
+                );
+            }
+        }
+    }
+    0
+}
+
+/// One request line, one reply line, `None` on anything short of an ok reply. The root is
+/// resolved exactly as every other verb resolves it; a suite that cannot isolate reaches no
+/// daemon at all.
+fn hook_request(args: &HookArgs) -> Option<HookReply> {
+    let suite = match std::env::var("BENCH_SUITE").ok() {
+        Some(raw) => Some(SuiteName::validate(&raw).ok()?),
+        None => None,
+    };
+    let home = PathBuf::from(std::env::var("HOME").ok()?);
+    let root = resolve_root(
+        std::env::var("BENCH_DIR").ok().as_deref(),
+        suite.as_ref(),
+        &home,
+    );
+    let stream = UnixStream::connect(socket_path(&root)).ok()?;
+    let _ = stream.set_write_timeout(Some(HOOK_TIMEOUT));
+    let _ = stream.set_read_timeout(Some(HOOK_TIMEOUT));
+    let request = Request {
+        id: request_id(),
+        verb: "hook".into(),
+        args: json!(args),
+        by: None,
+        asked: false,
+    };
+    let line = serde_json::to_string(&request).ok()? + "\n";
+    (&stream).write_all(line.as_bytes()).ok()?;
+    let response: Response = serde_json::from_str(&read_response_line(&stream)?).ok()?;
+    if response.status != Status::Ok {
+        return None;
+    }
+    serde_json::from_value(response.data?).ok()
 }
 
 /// The ordinary one-line-in, one-line-out path.

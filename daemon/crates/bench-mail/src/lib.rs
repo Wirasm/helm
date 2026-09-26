@@ -200,6 +200,58 @@ pub fn unread(root: &Path, handle: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// A message handed to its recipient: who sent it and where it now lives, in `read/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Taken {
+    pub id: String,
+    pub from: String,
+    pub path: PathBuf,
+}
+
+/// Hand out every unread message: each moves inbox → read, and only the moves this call
+/// made come back. Two callers racing for one mailbox (two hooks of one agent firing at
+/// once) each get a message at most once, because a rename succeeds for exactly one of them.
+/// Oldest first: `m9` before `m10`.
+pub fn take_unread(root: &Path, handle: &str) -> Vec<Taken> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(inbox(root, handle))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|x| x == "md"))
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort_by_key(|p| {
+        let name = p.file_name().unwrap_or_default().to_string_lossy();
+        (name.len(), name.into_owned())
+    });
+    let to_dir = read_dir_of(root, handle);
+    if !entries.is_empty() && fs::create_dir_all(&to_dir).is_err() {
+        return Vec::new();
+    }
+    let mut taken = Vec::new();
+    for from_path in entries {
+        let Some(id) = from_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        // The front matter is read before the move, while the file is still where this call
+        // found it; a failed move discards what was read.
+        let (from, _, _) = parse_front_matter(&fs::read_to_string(&from_path).unwrap_or_default());
+        let to_path = to_dir.join(format!("{id}.md"));
+        if to_path.exists() || fs::rename(&from_path, &to_path).is_err() {
+            continue;
+        }
+        taken.push(Taken {
+            id,
+            from,
+            path: to_path,
+        });
+    }
+    taken
+}
+
 /// (from, at, subject) out of the front-matter block. Absent fields come back empty —
 /// a listing must render whatever is on disk, not refuse a file a human hand-wrote.
 fn parse_front_matter(text: &str) -> (String, String, Option<String>) {
@@ -336,6 +388,33 @@ mod tests {
             assert!(err.contains("not a message id"), "{bad:?}: {err}");
         }
         assert!(path.exists(), "nothing moved");
+        let _ = fs::remove_dir_all(r);
+    }
+
+    #[test]
+    fn taking_unread_mail_moves_each_message_once_oldest_first() {
+        let r = root();
+        deliver(&r, 10, "a", "b", None, "t", "ten").unwrap();
+        deliver(&r, 9, "c", "b", None, "t", "nine").unwrap();
+        let taken = take_unread(&r, "b");
+        assert_eq!(
+            taken
+                .iter()
+                .map(|t| (t.id.as_str(), t.from.as_str()))
+                .collect::<Vec<_>>(),
+            [("m9", "c"), ("m10", "a")]
+        );
+        assert!(
+            taken
+                .iter()
+                .all(|t| t.path.exists() && t.path.parent().unwrap().ends_with("read"))
+        );
+        assert_eq!(unread(&r, "b"), 0);
+        assert!(
+            take_unread(&r, "b").is_empty(),
+            "nothing is handed out twice"
+        );
+        assert!(take_unread(&r, "nobody").is_empty());
         let _ = fs::remove_dir_all(r);
     }
 

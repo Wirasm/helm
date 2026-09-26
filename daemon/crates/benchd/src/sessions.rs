@@ -171,6 +171,33 @@ pub fn record_spawn(
     )
 }
 
+/// A mailbox claimed through `bench hook` (#358): logged as `mail/claimed`, then written.
+/// A session the record already holds keeps its entry and gains the handle; one it already
+/// has an address for is left alone, so a claim never renames anybody.
+pub fn record_claim(core: &mut Core, entry: HostedSession, pid: u32) -> Result<(), String> {
+    let key = entry.key();
+    let Some(handle) = entry.handle().map(str::to_string) else {
+        return Err("a claim names a handle".into());
+    };
+    let existing = core
+        .session_records
+        .hosted
+        .iter()
+        .position(|h| h.key() == key);
+    if existing.is_some_and(|i| core.session_records.hosted[i].handle().is_some()) {
+        return Ok(());
+    }
+    core.append(
+        "mail/claimed",
+        json!({ "handle": handle, "pid": pid, "session": entry }),
+    )?;
+    match existing {
+        Some(i) => core.session_records.hosted[i] = entry,
+        None => core.session_records.hosted.push(entry),
+    }
+    save_hosted(&core.root, &core.session_records.hosted)
+}
+
 /// Add what the record does not hold yet: logged as one `sessions/hosted`, then written.
 /// Another build may have recorded the same session meanwhile, so the check is repeated
 /// here under the lock.

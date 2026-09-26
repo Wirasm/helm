@@ -17,9 +17,33 @@ pub fn alive(pid: u32, claimed_start_ms: Option<u64>) -> bool {
     }
 }
 
-/// When `pid` started, in seconds since the epoch; `None` when there is no such process.
+/// Whether `pid` runs on a controlling terminal. The half of the mailbox claim rule a
+/// declared variable cannot fake (`bench_wire::hook::claims_a_mailbox`): a pane's agent holds
+/// the pane's tty, while anything started from its tool calls runs without one. A process
+/// that does not exist has none.
 #[cfg(target_os = "macos")]
-pub fn started_at_secs(pid: u32) -> Option<u64> {
+pub fn has_terminal(pid: u32) -> bool {
+    bsdinfo(pid).is_some_and(|info| info.e_tdev != u32::MAX)
+}
+
+/// Linux: field 7 of `/proc/<pid>/stat`, `tty_nr`, is 0 for no controlling terminal.
+#[cfg(target_os = "linux")]
+pub fn has_terminal(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let Some(close) = stat.rfind(')') else {
+        return false;
+    };
+    stat[close + 1..]
+        .split_whitespace()
+        .nth(4)
+        .and_then(|t| t.parse::<i64>().ok())
+        .is_some_and(|t| t != 0)
+}
+
+#[cfg(target_os = "macos")]
+fn bsdinfo(pid: u32) -> Option<libc::proc_bsdinfo> {
     let pid = i32::try_from(pid).ok().filter(|p| *p > 0)?;
     // SAFETY: proc_pidinfo writes at most `size` bytes into `info`, a plain C struct, and
     // returns how many it wrote; anything short of a whole struct is treated as absent.
@@ -33,8 +57,14 @@ pub fn started_at_secs(pid: u32) -> Option<u64> {
             (&mut info as *mut libc::proc_bsdinfo).cast(),
             size,
         );
-        (n == size).then_some(info.pbi_start_tvsec)
+        (n == size).then_some(info)
     }
+}
+
+/// When `pid` started, in seconds since the epoch; `None` when there is no such process.
+#[cfg(target_os = "macos")]
+pub fn started_at_secs(pid: u32) -> Option<u64> {
+    bsdinfo(pid).map(|info| info.pbi_start_tvsec)
 }
 
 /// Linux (the daemon's CI): field 22 of `/proc/<pid>/stat` is the start in clock ticks after
@@ -78,5 +108,29 @@ mod tests {
         );
         assert!(!alive(0, None));
         assert!(!alive(u32::MAX, None));
+    }
+
+    /// A child moved into its own session has no controlling terminal, whatever the test
+    /// runner has; no process at all has none either. The terminal-holding side needs a real
+    /// pty and is covered end to end in the conformance suite.
+    #[test]
+    fn a_detached_process_and_no_process_have_no_terminal() {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("30");
+        // SAFETY: setsid is async-signal-safe and touches nothing of the parent's.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn sleep");
+        let detached = has_terminal(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(!detached, "a new session has no controlling terminal");
+        assert!(!has_terminal(0));
+        assert!(!has_terminal(u32::MAX));
     }
 }

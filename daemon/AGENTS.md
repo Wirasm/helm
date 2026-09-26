@@ -38,7 +38,8 @@ knows nor needs the Rust toolchain, in either direction.
   `dismissed.json` and logs `sessions/*`. Every harness file it reads is internal and
   undocumented, so a shape it does not know is a skipped row and a `sessions/unreadable` event,
   never a guess. Each row also carries `mail`: the benchd mailbox of a session benchd spawned
-  (handle, `wakeable`, `unread`), `null` for everyone else — the list is the mail directory
+  or one whose hook claimed a mailbox through `bench hook` (#358) (handle, `wakeable`,
+  `unread`), `null` for everyone else — the list is the mail directory
   too (#396); benchd counts the inboxes and passes them in. `fixtures/session-rows.json`
   pins the reply helm's drawer will decode. `transcript` reads one Claude or pi transcript as
   a log for `bench log` (#421), under the same rule: an unknown record is a named, skipped

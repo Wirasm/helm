@@ -26,6 +26,7 @@
 //! sits behind one mutex held only for map and log operations — never across a ready
 //! wait, a prompt delivery, or an attach pump.
 
+mod hook;
 mod layout;
 mod rules;
 mod sessions;
@@ -269,6 +270,12 @@ struct Core {
     placement: rules::RulesFile,
     /// The hosted-sessions record and the dismissals (#384).
     session_records: sessions::SessionRecords,
+    /// Agents with a mailbox, as their hooks last reported them (#358).
+    agents: HashMap<bench_wire::SessionKey, hook::Agent>,
+    /// Sessions whose hook reported and that get no mailbox: asked once, not on every event.
+    unaddressable: HashSet<bench_wire::SessionKey>,
+    /// Hook event names this build does not know, already logged once.
+    unknown_hook_events: HashSet<(&'static str, String)>,
     /// `events --follow` connections, each with its own bounded queue and writer thread.
     /// A frame is handed over here and written there, **never under this mutex**: a 16 KB
     /// frame is larger than a unix socket's send buffer, so one follower that stopped
@@ -309,6 +316,22 @@ impl Core {
             .values()
             .filter(|s| s.is_live())
             .map(|s| s.handle.clone())
+            .collect()
+    }
+
+    /// Every handle a new claim must not take: benchd's own sessions', every address the
+    /// record holds (a handle outlives its session), and every agent's in memory.
+    fn held_handles(&self) -> HashSet<String> {
+        self.sessions
+            .values()
+            .map(|s| s.handle.clone())
+            .chain(
+                self.session_records
+                    .hosted
+                    .iter()
+                    .filter_map(|h| h.handle().map(str::to_string)),
+            )
+            .chain(self.agents.values().map(|a| a.handle.clone()))
             .collect()
     }
 
@@ -485,6 +508,9 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         bench,
         placement,
         session_records,
+        agents: HashMap::new(),
+        unaddressable: HashSet::new(),
+        unknown_hook_events: HashSet::new(),
         followers: Vec::new(),
         unflushed: Arc::new(AtomicBool::new(false)),
     }));
@@ -1173,6 +1199,12 @@ fn dispatch(
         }
 
         Some(Verb::SessionsAll) => match sessions::answer_all(core, &req.args) {
+            Ok(data) => (ok(data), AfterResponse::Done),
+            Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
+            Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
+        },
+
+        Some(Verb::Hook) => match hook::answer(core, &req.args) {
             Ok(data) => (ok(data), AfterResponse::Done),
             Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
             Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
