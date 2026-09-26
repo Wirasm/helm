@@ -663,7 +663,8 @@ as "$home" "$ON_TTY" claude-session-start tty-session-0001
 # Before Claude Code has published its registry row the hook has only its parent to ask about,
 # which is the Claude process itself — the hook runs detached, so its OWN terminal says nothing.
 # Staged with no registry at all and the hook run under a real pty, so the claim can only come
-# from that fallback; without it there is no pid to ask about and nothing is claimed.
+# from that fallback; without it there is no pid to ask about and nothing is claimed. The payload
+# comes in by `<` redirect so `/bin/sh` stays the hook's parent, on the pty, rather than exec'ing.
 home=$(fresh)
 NO_ROWS=$(fresh)
 mkdir -p "$NO_ROWS/sessions"
