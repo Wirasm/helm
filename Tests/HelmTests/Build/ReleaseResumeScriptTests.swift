@@ -146,8 +146,8 @@ final class ReleaseResumeScriptTests: XCTestCase {
     }
 
     override class func tearDown() {
-        if case .success(let compiled)? = stubs {
-            try? FileManager.default.removeItem(at: compiled.directory)
+        if case .success(let built)? = stubs {
+            try? FileManager.default.removeItem(at: built.directory)
         }
         stubs = nil
         super.tearDown()
@@ -158,10 +158,9 @@ final class ReleaseResumeScriptTests: XCTestCase {
     }
 
     /// Runs an executable, bounded by its own sleep rather than by this suite remembering.
-    private func run(_ executable: URL, _ arguments: [String] = ["30"]) throws -> pid_t {
+    private func run(_ executable: URL) throws -> pid_t {
         let process = Process()
         process.executableURL = executable
-        process.arguments = arguments
         try process.run()
         spawned.append(process)
         return process.processIdentifier
@@ -242,7 +241,7 @@ final class ReleaseResumeScriptTests: XCTestCase {
     /// fails here.
     func testASessionInsideTheHelmPassesTheGuard() throws {
         let bundle = try makeBundle(named: "Target.app", executable: try compiled.forker)
-        let helm = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"), [])
+        let helm = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
         var child = ""
         for _ in 0..<50 where child.isEmpty {
             child = try bash(["-c", "pgrep -P \(helm)"]).stdout
