@@ -34,6 +34,15 @@ has them (#374). Quitting it returns to headless. The daemon never automates the
 restarted (at most 3 in 60s, then `browser/gave-up`), and the browser runs on a pipe
 leash so it dies with the daemon even under SIGKILL. `just browser-proof` is the live check.
 
+**And it runs at login (#407).** `just benchd-install` (root justfile) loads benchd as a user
+LaunchAgent, `com.wirasm.benchd`: started at login, restarted by launchd after a crash or a kill,
+left down after a clean `bench stop`, output in `~/Library/Logs/benchd.log`. benchd decides
+whether the browser comes back: `<root>/browser/wanted` is written when a browser starts and
+removed only by `browser/stop`, so a daemon that boots and finds it logs `browser/resuming` and
+starts the browser again. Only the live instance is installed; `just launchd-proof` bootstraps a
+suite-labelled agent from a temp plist, kills benchd with `-9`, requires both to come back, and
+boots it out.
+
 **And the bench document (M4, #354), daemon side.** `bench-doc` is helm's `Workbench` —
 workspaces, columns, slots, panes, typed surfaces, placement as data — and benchd serves it:
 the layout verbs (`workspace/*`, `pane/*`, `focus/*`, `layout/resize`, `bench/get`), each

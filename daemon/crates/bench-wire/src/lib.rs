@@ -446,6 +446,13 @@ pub fn browser_endpoint_path(root: &Path) -> PathBuf {
     browser_dir(root).join("endpoint.json")
 }
 
+/// Present while the browser is wanted: written when one starts, removed only by
+/// `browser/stop`. A daemon that boots and finds it starts the browser again, so a crash,
+/// a `bench stop` or a reboot does not take the browser away with the daemon (#407).
+pub fn browser_wanted_path(root: &Path) -> PathBuf {
+    browser_dir(root).join("wanted")
+}
+
 pub fn browser_profile_dir(root: &Path) -> PathBuf {
     browser_dir(root).join("profile")
 }

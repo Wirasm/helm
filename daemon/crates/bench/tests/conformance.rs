@@ -1865,6 +1865,95 @@ fn an_endpoint_left_by_a_dead_daemon_is_cleared_at_boot_and_logged() {
     );
 }
 
+/// The pid of a running browser, once the daemon reports one.
+fn await_browser(home: &Path, what: &str) -> u64 {
+    let mut pid = 0;
+    wait_until(what, Duration::from_secs(8), || {
+        let s = json_of(&bench(home, &["browser", "status"]));
+        pid = s["pid"].as_u64().unwrap_or(0);
+        s["running"] == true
+    });
+    pid
+}
+
+#[test]
+fn a_wanted_browser_comes_back_with_the_next_daemon() {
+    // #407: launchd brings benchd back after a crash or a reboot, and the browser has to
+    // come with it — benchd decides that from `<root>/browser/wanted`, not the plist.
+    let home = TestHome::claim("brback");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let marker = home.dir.join(".bench/browser/wanted");
+
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+    let first = json_of(&bench(&home.dir, &["browser", "start"]))["pid"]
+        .as_u64()
+        .unwrap();
+    assert!(marker.exists(), "a started browser is marked wanted");
+
+    // A crash: no cleanup runs, the leash takes the browser down.
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+    wait_until(
+        "the browser to die with its daemon",
+        Duration::from_secs(5),
+        || !libc_alive(first as i32),
+    );
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+    let second = await_browser(&home.dir, "the browser after a crash");
+    assert_ne!(second, first);
+    assert!(
+        event_kinds(&home.dir)
+            .iter()
+            .any(|(k, d)| k == "browser/resuming" && d["marker"] == marker.display().to_string()),
+        "a browser nobody asked this daemon for says why it started"
+    );
+
+    // A clean `bench stop` is not `bench browser stop`: the browser is still wanted.
+    assert_eq!(bench(&home.dir, &["stop"]).code, 0);
+    let _ = daemon.child.wait();
+    assert!(marker.exists());
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let third = await_browser(&home.dir, "the browser after a daemon stop");
+    assert_ne!(third, second);
+}
+
+#[test]
+fn a_stopped_browser_stays_stopped_across_a_restart() {
+    let home = TestHome::claim("brgone");
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(&home.dir, serde_json::json!({ "binary": fake }));
+    let marker = home.dir.join(".bench/browser/wanted");
+
+    let mut daemon = DaemonGuard::start(&home.dir, None);
+    assert_eq!(bench(&home.dir, &["browser", "start"]).code, 0);
+    assert_eq!(bench(&home.dir, &["browser", "stop"]).code, 0);
+    assert!(
+        !marker.exists(),
+        "browser/stop is the one thing that unwants it"
+    );
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        json_of(&bench(&home.dir, &["browser", "status"]))["running"],
+        false
+    );
+    let events = event_kinds(&home.dir);
+    let boot = events
+        .iter()
+        .rposition(|(k, _)| k == "daemon/started")
+        .unwrap();
+    assert!(
+        !events[boot..]
+            .iter()
+            .any(|(k, _)| k == "browser/started" || k == "browser/resuming"),
+        "{events:?}"
+    );
+}
+
 #[test]
 fn setup_opens_the_profile_in_a_plain_window_and_quitting_it_returns_to_headless() {
     let home = TestHome::claim("brsetup");

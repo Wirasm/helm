@@ -35,7 +35,8 @@ use bench_wire::{
     BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
     MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, READY_WAIT,
     Request, Response, SessionArgs, SpawnArgs, Status, SuiteName, Verb, browser_endpoint_path,
-    check_socket_path, events_path, resolve_root, socket_path, validate_handle,
+    browser_wanted_path, check_socket_path, events_path, resolve_root, socket_path,
+    validate_handle,
 };
 use bench_wire::{DOCUMENT_CHANGED, Frame};
 use serde_json::{Value, json};
@@ -559,6 +560,27 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
     {
         let core = Arc::clone(&core);
         std::thread::spawn(move || wake_reactor(core));
+    }
+
+    // A browser that was wanted when the last daemon went away comes back with this one.
+    // On its own thread: the launch waits for the browser to listen, and the socket must
+    // answer meanwhile. A `browser/start` that races it finds this browser.
+    {
+        let mut c = core.lock().unwrap();
+        let marker = browser_wanted_path(&c.root);
+        if marker.exists() {
+            let _ = c.append(
+                "browser/resuming",
+                json!({
+                    "marker": marker.display().to_string(),
+                    "why": "the browser was started and never stopped with `bench browser stop`",
+                }),
+            );
+            let core = Arc::clone(&core);
+            std::thread::spawn(move || {
+                let _ = start_browser(&core, 0, BrowserMode::Headless);
+            });
+        }
     }
 
     for stream in listener.incoming() {
@@ -1439,13 +1461,17 @@ fn dispatch(
             (ok(data), AfterResponse::Done)
         }
 
-        Some(Verb::BrowserStop) => match stop_browser(core, Duration::from_secs(5)) {
-            Ok(pid) => (
-                ok(json!({ "was_running": pid.is_some(), "pid": pid })),
-                AfterResponse::Done,
-            ),
-            Err(why) => (errored(why), AfterResponse::Done),
-        },
+        Some(Verb::BrowserStop) => {
+            // The one route that unwants the browser; every other stop leaves it wanted.
+            let _ = fs::remove_file(browser_wanted_path(&core.lock().unwrap().root));
+            match stop_browser(core, Duration::from_secs(5)) {
+                Ok(pid) => (
+                    ok(json!({ "was_running": pid.is_some(), "pid": pid })),
+                    AfterResponse::Done,
+                ),
+                Err(why) => (errored(why), AfterResponse::Done),
+            }
+        }
 
         None => (
             refused(format!(
@@ -1514,6 +1540,11 @@ fn start_browser(
                 drop(c);
                 browser.stop(Duration::from_secs(2));
                 return Err(LaunchError::Failed(why));
+            }
+            // The browser runs either way; an unwritten marker only means the next daemon
+            // will not bring it back, which must not be a surprise nobody can trace.
+            if let Err(e) = fs::write(browser_wanted_path(&c.root), b"") {
+                let _ = c.append("browser/unmarked", json!({ "why": e.to_string() }));
             }
             Ok((browser, false))
         }
