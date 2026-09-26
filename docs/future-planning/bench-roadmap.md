@@ -65,7 +65,7 @@ Each is argued in the audit doc; this is the checklist form.
    "no socket exposure". The spike (`spike-remote-bench-tunnel.md` in
    `~/.prp/helm-3ec376fc/spikes/`, summarised on #459) ran today's helm and `bench`
    against a benchd reachable only through a forwarded socket: every verb, the follower,
-   mail and a live `bench attach` worked, at 0.2 ms added per verb on loopback. What broke
+   mail and a live `bench attach` worked, at 0.21 ms per verb through a loopback tunnel. What broke
    was only what helm reaches around the socket, each with a verb-sized fix. With verbs
    crossing the link, a request-file path would be a second door.
 7. **Files are the record.** Mail, tasks, events, artifacts persist as files a plain
@@ -499,8 +499,9 @@ Tailscale SSH cannot forward Unix sockets (tailscale/tailscale#6232).
 **Prove:** a markdown and an HTML canvas that exist only under the remote root render,
 live-update, take a note that reaches the agent by mail, and autosave; kill the link for
 30 s and every attached pane resumes without a keypress.
-**Unwire:** helm's direct reads of the bench root (canvas files, `endpoint.json`,
-`<root>/benchd.sock`) and benchd's read of `snapshot.json`.
+**Unwire:** helm's direct access to benchd's side (canvas files, `endpoint.json`, the
+keymap under the bench root, the derived `<root>/benchd.sock`) and benchd's read of
+`snapshot.json`.
 
 ## M6 — Retired
 
