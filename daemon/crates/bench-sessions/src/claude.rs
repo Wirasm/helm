@@ -104,6 +104,15 @@ pub fn registry(
     (live, problems)
 }
 
+/// The registry row of one live process, when it has a readable one: Claude names the file
+/// after the pid, and a row whose process did not start when it says is a stale file for a pid
+/// since reused. benchd reads it for a session's foreground process when its output settles (M1).
+pub fn row_of(home: &Path, pid: u32) -> Option<Registered> {
+    registered(&home.join(format!(".claude/sessions/{pid}.json")))
+        .ok()
+        .filter(|r| r.pid == pid && crate::process::alive(pid, Some(r.started_ms)))
+}
+
 fn registered(path: &Path) -> Result<Registered, String> {
     let v: Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
         .map_err(|e| format!("not JSON: {e}"))?;

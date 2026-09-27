@@ -93,6 +93,9 @@ package enum BenchVerb: Equatable, Sendable {
     /// `agent: nil` records that no agent is in the pane.
     case focusSlot(UUID)
     case focusStep(workspace: String? = nil, direction: BenchDirection)
+    /// The agent waiting on the operator longest, then the next on each press (M1, #357).
+    /// benchd decides which.
+    case focusWaiting
     case layoutResize(BenchDivider, fraction: Double)
     /// Show a drawer over the bench, or hide it if it is the one shown. `surface` is what a
     /// drawer that does not exist yet starts with. Opening is the operator's focus.
@@ -113,6 +116,7 @@ package enum BenchVerb: Equatable, Sendable {
         case .paneName: "pane/name"
         case .focusSlot: "focus/slot"
         case .focusStep: "focus/step"
+        case .focusWaiting: "focus/waiting"
         case .layoutResize: "layout/resize"
         case .drawerToggle: "drawer/toggle"
         }
@@ -184,6 +188,7 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case let .focusStep(workspace, direction):
             try a.encodeIfPresent(workspace, forKey: .workspace)
             try a.encode(direction, forKey: .direction)
+        case .focusWaiting: break
         case let .layoutResize(divider, fraction):
             var d = a.nestedContainer(keyedBy: DividerKeys.self, forKey: .divider)
             switch divider {
@@ -254,6 +259,7 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             verb = .focusStep(
                 workspace: try a.decodeIfPresent(String.self, forKey: .workspace),
                 direction: try a.decode(BenchDirection.self, forKey: .direction))
+        case "focus/waiting": verb = .focusWaiting
         case "layout/resize":
             let d = try a.nestedContainer(keyedBy: DividerKeys.self, forKey: .divider)
             let member = try d.decode(UUID.self, forKey: .member)

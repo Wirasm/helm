@@ -6916,6 +6916,13 @@ fn a_viewer_that_stops_reading_is_dropped_and_the_session_still_answers() {
     // Every connection writes under DAEMON_IO_TIMEOUT, the relay included: a viewer that stops
     // reading holds the engine thread, and with it the session's resizes and screen reads, for
     // that long and then is dropped.
+    //
+    // When the stall begins is the kernel's business: the relay blocks once the viewer's socket
+    // is full, which this side cannot see. So no single read is known to land inside it, and a
+    // read timed against a fixed bound flakes whenever the stall starts just after the read
+    // before it (#487's version did, on CI). Reads run back to back on their own thread instead,
+    // so some read overlaps the stall whenever it starts, and each is bounded by the write limit.
+    let limit = bench_wire::DAEMON_IO_TIMEOUT;
     let home = TestHome::claim("m5b-stuck");
     let daemon = scripted_pi_daemon(
         &home.dir,
@@ -6928,23 +6935,101 @@ fn a_viewer_that_stops_reading_is_dropped_and_the_session_still_answers() {
     // A viewer that reads for a while, then never again.
     let (seen, stream) = attach_and_read(&daemon.socket, &sid, |b| b.len() > 100_000);
     assert!(seen.len() > 100_000, "the flood reached the viewer");
+    // Dropped once one write has waited the limit out; the deadline only says "never", and
+    // bounds the reader too, so a failed assertion below does not leave it running.
+    let deadline = Instant::now() + 3 * limit;
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reads = {
+        let (home, sid, stop) = (home.dir.clone(), sid.clone(), std::sync::Arc::clone(&stop));
+        std::thread::spawn(move || {
+            let mut reads = Vec::new();
+            while !stop.load(Ordering::SeqCst) && Instant::now() < deadline {
+                let started = Instant::now();
+                let screen = bench(&home, &["get", "screen", &sid]);
+                reads.push((screen.code, screen.stderr, started.elapsed()));
+            }
+            reads
+        })
+    };
+    while session_row(&home.dir, &sid)["attached"] != false {
+        assert!(
+            Instant::now() < deadline,
+            "a viewer that stopped reading was never dropped"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    stop.store(true, Ordering::SeqCst);
+    for (code, stderr, waited) in reads.join().unwrap() {
+        assert_eq!(code, 0, "a read while the viewer was stuck: {stderr}");
+        // One stalled write is the most a read may wait behind, not one per chunk of output.
+        assert!(waited < 2 * limit, "a read waited {waited:?}");
+    }
+    // With the viewer gone nothing is left to wait on: no read waits out a write limit.
     let started = Instant::now();
-    let first = bench(&home.dir, &["get", "screen", &sid]);
-    assert_eq!(first.code, 0, "{}", first.stderr);
-    assert!(
-        started.elapsed() < Duration::from_secs(9),
-        "{:?}",
-        started.elapsed()
+    let after = bench(&home.dir, &["get", "screen", &sid]);
+    assert_eq!(after.code, 0, "{}", after.stderr);
+    assert!(started.elapsed() < limit, "{:?}", started.elapsed());
+    drop(stream);
+}
+
+#[test]
+fn a_stalled_viewer_on_one_session_never_holds_up_a_verb_on_another() {
+    // A stalled viewer holds its own session's locks for up to DAEMON_IO_TIMEOUT (see the test
+    // above). `sessions` reads every session, and helm asks it every two seconds: if it read one
+    // of those locks under benchd's core lock, every verb for every pane would wait out the stall
+    // behind it (#517). `sessions` runs back to back here as helm's poll does, so one call
+    // overlaps the stall whenever it starts, while another session's screen is read back to back.
+    let limit = bench_wire::DAEMON_IO_TIMEOUT;
+    let home = TestHome::claim("m5b-stall-other");
+    let daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\ntouch {}/written\nsleep 2\nexec yes 'a line of output that fills the socket'\n",
+            home.dir.display()
+        ),
     );
-    let started = Instant::now();
-    let again = bench(&home.dir, &["get", "screen", &sid]);
-    assert_eq!(again.code, 0, "{}", again.stderr);
+    let stalled = spawn_scripted(&home.dir);
+    let other = spawn_scripted(&home.dir);
+    let (seen, stream) = attach_and_read(&daemon.socket, &stalled, |b| b.len() > 100_000);
+    assert!(seen.len() > 100_000, "the flood reached the viewer");
+    // Every thread here stops at this deadline on its own, whatever the assertions do.
+    let deadline = Instant::now() + 3 * limit;
+    let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let poll = {
+        let (home, stalled, dropped) = (
+            home.dir.clone(),
+            stalled.clone(),
+            std::sync::Arc::clone(&dropped),
+        );
+        std::thread::spawn(move || {
+            while Instant::now() < deadline {
+                if session_row(&home, &stalled)["attached"] == false {
+                    dropped.store(true, Ordering::SeqCst);
+                    return;
+                }
+            }
+        })
+    };
+    let mut reads = Vec::new();
+    while !dropped.load(Ordering::SeqCst) && Instant::now() < deadline {
+        let started = Instant::now();
+        let screen = bench(&home.dir, &["get", "screen", &other]);
+        reads.push((screen.code, screen.stderr, started.elapsed()));
+    }
+    poll.join().unwrap();
     assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "{:?}",
-        started.elapsed()
+        dropped.load(Ordering::SeqCst),
+        "a viewer that stopped reading was never dropped"
     );
-    assert_eq!(session_row(&home.dir, &sid)["attached"], false);
+    for (code, stderr, waited) in reads {
+        assert_eq!(code, 0, "{stderr}");
+        // Behind a blocked `sessions`, a read waits out the rest of the stall: seconds, not the
+        // milliseconds a read of an unrelated session takes.
+        assert!(
+            waited < limit / 2,
+            "reading another session waited {waited:?} behind the stalled viewer"
+        );
+    }
     drop(stream);
 }
 
@@ -7088,4 +7173,100 @@ fn a_prompt_on_a_shell_at_its_prompt_is_not_waiting() {
     std::thread::sleep(Duration::from_secs(3));
     let entry = live_entry(&home.dir, &sid);
     assert!(entry["waiting"].is_null(), "{entry}");
+}
+
+/// ⌘⇧J's verb: the operator goes to the agent waiting on him longest, and each press after that
+/// to the next, round again. An agent may not take him there unasked.
+#[test]
+fn focus_waiting_walks_the_waiting_panes_longest_first() {
+    let home = TestHome::claim("m1-jump");
+    let daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\ncat '{}'\nexec sleep 60\n",
+            capture("pi-trust").display()
+        ),
+    );
+    let ws = workspace(&home.dir).display().to_string();
+    let nothing = layout(
+        &daemon.socket,
+        "focus/waiting",
+        serde_json::json!({}),
+        operator(),
+        false,
+    );
+    assert_eq!(nothing["status"], "refused", "{nothing}");
+    assert!(
+        nothing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("waiting on you"),
+        "{nothing}"
+    );
+
+    let mut spawned = Vec::new();
+    for _ in 0..2 {
+        let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        let answer = json_of(&run);
+        let (sid, pane) = (
+            answer["session"].as_str().unwrap().to_string(),
+            answer["pane"].as_str().unwrap().to_string(),
+        );
+        wait_until("the prompt is seen", Duration::from_secs(10), || {
+            !live_entry(&home.dir, &sid)["waiting"].is_null()
+        });
+        spawned.push(pane);
+    }
+    let jump = |by: Option<serde_json::Value>, asked: bool| {
+        layout(
+            &daemon.socket,
+            "focus/waiting",
+            serde_json::json!({}),
+            by,
+            asked,
+        )
+    };
+    let refused = jump(None, false);
+    assert_eq!(refused["status"], "refused", "an agent, unasked: {refused}");
+
+    let mut visited = Vec::new();
+    for _ in 0..3 {
+        let data = ok_data(jump(operator(), false));
+        assert_eq!(data["focused_pane_after"], data["pane"], "{data}");
+        visited.push(data["pane"].as_str().unwrap().to_string());
+    }
+    assert_eq!(
+        visited,
+        [spawned[0].clone(), spawned[1].clone(), spawned[0].clone()]
+    );
+}
+
+/// A Claude whose hooks are not wired still says it waits, in its own registry row: benchd reads
+/// the row of the process in a session's foreground when its output settles, so a prompt no
+/// screen rule describes is still one the operator is taken to.
+#[test]
+fn a_registry_row_saying_waiting_is_a_wait_without_a_hook_or_a_rule() {
+    let home = TestHome::claim("m1-registry");
+    let sessions = home.dir.join(".claude/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let _daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\nprintf '{{\"pid\":%s,\"sessionId\":\"s-1\",\"cwd\":\"/tmp\",\"startedAt\":%s000,\"status\":\"waiting\",\"waitingFor\":\"dialog open\",\"statusUpdatedAt\":1000}}' $$ $(date +%s) > {}/$$.json\nprintf 'a screen no rule reads\\n'\ntouch {}/written\nexec sleep 60\n",
+            sessions.display(),
+            home.dir.display()
+        ),
+    );
+    let sid = spawn_scripted(&home.dir);
+    let mut entry = serde_json::Value::Null;
+    wait_until("the row is read", Duration::from_secs(10), || {
+        entry = live_entry(&home.dir, &sid);
+        !entry["waiting"].is_null()
+    });
+    assert_eq!(
+        entry["waiting"],
+        serde_json::json!({ "waiting_for": "dialog open", "since_ms": 1000, "source": "registry" }),
+        "{entry}"
+    );
 }

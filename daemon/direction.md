@@ -158,9 +158,14 @@ screen captured from the real CLI in `crates/benchd/screens/`. A shell at its pr
 read. The agent's own report outranks its screen: a hook that says it is waiting keeps its words,
 and a report newer than the screen reading says the prompt is gone; a screen match wins only over
 an older report (`busy` at the tool call, then a prompt, then nothing). A Claude wait ended by Esc,
-which fires no hook, is reconciled against Claude's registry. The one answer per session is
+which fires no hook, is reconciled against Claude's registry, and at each settle benchd also
+reads the registry row of the session's foreground process: a `waiting` there is Claude's own
+report, taken before the screen, so a Claude whose hooks are not wired is still seen waiting in its
+own words. The one answer per session is
 `waiting` in `sessions`, and a running row in `sessions/all` says `waiting` with it;
-`session/waiting` logs each change the screen shows.
+`session/waiting` logs each change the screen shows. `focus/waiting` is the operator's jump
+to them (helm's ⌘⇧J): the pane waiting longest, then the one after the focused pane on each
+press, round again; it moves his focus, so an agent needs `asked`.
 
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance

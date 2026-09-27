@@ -297,7 +297,8 @@ struct Core {
     /// Every session whose hook has reported (#358): its agent when it has a mailbox, `None`
     /// when it was asked once and gets none, so the claim rule is not re-run per event.
     agents: HashMap<bench_wire::SessionKey, Option<hook::Agent>>,
-    /// The prompt each live session's screen showed when its output last settled (`waiting`).
+    /// What each live session showed waiting when its output last settled (`waiting`): its
+    /// Claude registry row, or a prompt on its screen.
     screen_waits: HashMap<String, waiting::Seen>,
     /// Asks of helm waiting for its answer (`helm/ask`).
     asks: ask::Waiting,
@@ -1022,24 +1023,37 @@ fn dispatch(
         Some(Verb::HelmAnswer) => (ask::answer(core, req), AfterResponse::Done),
 
         Some(Verb::Sessions) => {
-            let c = core.lock().unwrap();
-            let sessions = c
-                .sessions
-                .values()
-                .map(|s| bench_wire::SessionEntry {
+            // Copied out under the core lock, read outside it (#517): a session's own locks can
+            // be held across a blocking write (a viewer that stopped reading holds its relay for
+            // up to DAEMON_IO_TIMEOUT), and every verb waits while the core lock does.
+            // `waiting` is read here too: it takes no session lock, only benchd's own records
+            // and each reporting agent's liveness from the kernel.
+            let shown: Vec<_> = {
+                let c = core.lock().unwrap();
+                c.sessions
+                    .values()
+                    .map(|s| {
+                        let pane = c.bench.document.pane_showing_session(&s.id);
+                        (Arc::clone(s), pane, waiting::of_session(&c, &s.id))
+                    })
+                    .collect()
+            };
+            let sessions = shown
+                .into_iter()
+                .map(|(s, pane, waiting)| bench_wire::SessionEntry {
                     session: s.id.clone(),
                     handle: s.handle.clone(),
                     agent: s.agent.name().to_string(),
                     cwd: s.cwd.clone(),
                     pid: s.pid,
-                    pane: c.bench.document.pane_showing_session(&s.id),
+                    pane,
                     foreground_pid: s.foreground_pid(),
                     live: s.is_live(),
                     attached: s.is_attached(),
                     output_bytes: s.output_bytes(),
                     runtime_session: s.runtime_session.clone(),
                     uptime_secs: s.spawned_at.elapsed().as_secs(),
-                    waiting: waiting::of_session(&c, &s.id),
+                    waiting,
                 })
                 .collect();
             (

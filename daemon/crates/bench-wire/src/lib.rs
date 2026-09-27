@@ -187,6 +187,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "pane/name",
     "focus/slot",
     "focus/step",
+    "focus/waiting",
     "layout/resize",
     "drawer/toggle",
     // M3: benchd asks helm for what only helm can do.
@@ -494,6 +495,9 @@ pub struct Waiting {
 pub enum WaitingSource {
     /// Its hook (`bench hook`).
     Hook,
+    /// Claude Code's own registry row for the process in the foreground, read when its output
+    /// settled: the agent's own words even when its hooks are not wired.
+    Registry,
     /// A prompt rule matched its screen.
     Screen,
 }
@@ -964,7 +968,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            39,
+            40,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

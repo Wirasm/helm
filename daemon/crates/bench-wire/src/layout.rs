@@ -118,6 +118,11 @@ pub enum LayoutVerb {
         workspace: Option<StandardPath>,
         direction: Direction,
     },
+    /// The operator's jump to the agent waiting on him longest (M1, #357): the next one after
+    /// the focused pane, oldest first, so pressing again walks them. benchd decides which from
+    /// `waiting`; it moves his focus, so an agent needs `asked`.
+    #[serde(rename = "focus/waiting")]
+    FocusWaiting {},
     #[serde(rename = "layout/resize")]
     LayoutResize { divider: Divider, fraction: f64 },
     /// Show a drawer over the bench, or hide it if it is the one shown. `surface` is what a
@@ -231,6 +236,7 @@ pub const LAYOUT_VERBS: &[&str] = &[
     "pane/name",
     "focus/slot",
     "focus/step",
+    "focus/waiting",
     "layout/resize",
     "drawer/toggle",
 ];
