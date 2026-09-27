@@ -110,8 +110,10 @@ FMT = "fmt · clippy · build · test"
 class FakeGitHub:
     """Answers the gh calls `Queue.land` makes, one scripted poll per `facts()` read.
 
-    A poll is (head, mergeStateStatus, compare status). Check runs are kept per commit, so a
-    new head starts with none and a re-run appends to the head it ran on.
+    A poll is (head, mergeStateStatus, compare status), and optionally the parent counts of
+    the commits the head has and development lacks; by default one ordinary commit when the
+    head is ahead or diverged, none otherwise. Check runs are kept per commit, so a new head
+    starts with none and a re-run appends to the head it ran on.
     """
 
     def __init__(self, polls, runs, on_rerun=None):
@@ -122,19 +124,19 @@ class FakeGitHub:
     def gh_json(self, *args):
         if args[:2] == ("pr", "view") and args[3] == "--json" and "mergeStateStatus" in args[4]:
             self.now = self.polls.pop(0)
-            head, merge_state, _ = self.now
+            head, merge_state = self.now[:2]
             return {"state": "OPEN", "isDraft": False, "baseRefName": BASE,
                     "headRefOid": head, "mergeStateStatus": merge_state}
         if args[:2] == ("pr", "view"):  # await_new_head: the head the next poll will see
             return {"headRefOid": self.polls[0][0]}
+        if args[0] == "api" and "/compare/" in args[1]:
+            status = self.now[2]
+            parents = self.now[3] if len(self.now) > 3 else [1] * (status in ("ahead", "diverged"))
+            return {"status": status, "ahead_by": len(parents), "parents": parents}
         if args[0] == "api" and "/check-runs" in args[1]:
             sha = args[1].split("/commits/")[1].split("/")[0]
             return self.runs.get(sha, [])
         raise AssertionError(f"unexpected gh {args}")
-
-    def gh_text(self, *args):
-        assert "/compare/" in args[1], args
-        return self.now[2]
 
     def run(self, argv, ok=(0,)):
         self.calls.append(argv)
@@ -160,7 +162,6 @@ class Landing(unittest.TestCase):
 
     def land(self, gh):
         with mock.patch.object(merge_queue, "gh_json", gh.gh_json), \
-             mock.patch.object(merge_queue, "gh_text", gh.gh_text), \
              mock.patch.object(merge_queue, "run", gh.run), \
              mock.patch.object(merge_queue.time, "sleep"):
             self.queue.step()
@@ -177,6 +178,26 @@ class Landing(unittest.TestCase):
         self.assertIn(["gh", "pr", "update-branch", "507"], gh.calls)
         self.assertEqual((item["status"], item["head_sha"]), ("tested", "new"))
         self.assertEqual(report["reran"], [])
+
+    def test_a_head_whose_only_new_commit_is_a_merge_has_landed_through(self):
+        # #507 after #510 merged, 2026-09-27. #507's head was an update-branch merge of
+        # development into it; #510 carried #507's commits and that development in, but not the
+        # merge commit itself. So the head is not an ancestor of development (compare: diverged,
+        # one merge ahead), and GitHub called it DIRTY. Nothing of #507 was missing.
+        gh = FakeGitHub(
+            polls=[("merge", "DIRTY", "diverged", [2])],
+            runs={"merge": [run(1, FMT, conclusion="failure")]},
+        )
+        item, report = self.land(gh)
+        self.assertEqual((item["status"], report["landed_through"]), ("landed_through", [507]))
+        self.assertEqual(gh.calls, [])  # reported, never touched
+
+    def test_a_conflicting_head_with_a_commit_of_its_own_is_held(self):
+        # The control: one ordinary commit outside development, beside the merge, is real work.
+        gh = FakeGitHub(polls=[("work", "DIRTY", "diverged", [2, 1])], runs={})
+        item, _ = self.land(gh)
+        self.assertEqual(item["status"], "held")
+        self.assertIn("conflicts with", item["reason"])
 
     def test_a_red_on_the_up_to_date_head_holds_after_its_one_rerun(self):
         def still_red(runs):

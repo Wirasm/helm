@@ -99,7 +99,7 @@ class Facts:
     state: str  # OPEN, CLOSED, MERGED
     is_draft: bool
     base: str
-    head_in_base: bool  # the head is already an ancestor of development
+    head_in_base: bool  # development has every commit on the head except merge commits
     behind: bool  # development has commits the head lacks (from compare, never lazy)
     base_pr_merged: bool  # for a stacked PR: the PR its base branch belongs to has merged
     merge_state: str  # GitHub's mergeStateStatus
@@ -327,7 +327,10 @@ class Queue:
             "state,isDraft,baseRefName,headRefOid,mergeStateStatus",
         )
         head = view["headRefOid"]
-        compare = gh_text("api", f"repos/{self.repo}/compare/{BASE}...{head}", "--jq", ".status")
+        compare = gh_json(
+            "api", f"repos/{self.repo}/compare/{BASE}...{head}",
+            "--jq", "{status, ahead_by, parents: [.commits[].parents | length]}",
+        )
         base_pr_merged = False
         if view["baseRefName"] != BASE:
             owners = gh_json(
@@ -346,8 +349,14 @@ class Queue:
                 state=view["state"],
                 is_draft=view["isDraft"],
                 base=view["baseRefName"],
-                head_in_base=compare in ("behind", "identical"),
-                behind=compare == "diverged",
+                # Landed when every commit the head has and development lacks is a merge: the
+                # head is an ancestor (none), or only update-branch merges are left. #507 on
+                # 2026-09-27 was the second: its head merged development into the branch, #510
+                # then carried both parents in, and GitHub, merging from one of the two merge
+                # bases, called it DIRTY. A list cut short (over 250) is never judged landed.
+                head_in_base=len(compare["parents"]) == compare["ahead_by"]
+                and all(n > 1 for n in compare["parents"]),
+                behind=compare["status"] == "diverged",
                 base_pr_merged=base_pr_merged,
                 merge_state=view["mergeStateStatus"],
                 checks=checks_at(self.state["required"], runs),
@@ -377,7 +386,8 @@ class Queue:
                 # Not closed here: ancestry alone cannot tell a PR carried in by the PR above
                 # it from a branch reset to an older commit. Whoever reads the report closes it.
                 why = "already merged" if f.state == "MERGED" else (
-                    f"head {head[:8]} is already in {BASE}; close it if another PR carried it"
+                    f"every commit on {head[:8]} but merges is already in {BASE}; "
+                    "close it if another PR carried it"
                 )
                 return self.settle(item, "landed_through", why)
             if move == "closed":
