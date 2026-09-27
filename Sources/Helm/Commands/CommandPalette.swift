@@ -10,8 +10,9 @@ import SwiftUI
 @MainActor
 final class CommandPalette: ObservableObject {
     @Published private(set) var isOpen = false
-    /// The bench justfile's recipes, as benchd named them when the palette last opened. Empty
-    /// while benchd has not answered, or could not: the rest of the palette works without them.
+    /// The bench justfile's recipes, as benchd last named them. Empty until benchd first answers;
+    /// an open whose ask fails keeps the last list rather than emptying it, and the rest of the
+    /// palette works either way.
     @Published private(set) var recipes: [String] = []
     private let listRecipes: @Sendable () throws -> [String]
     /// Which open an answer belongs to: only the latest open's answer lands, so a slow answer
@@ -42,7 +43,9 @@ final class CommandPalette: ObservableObject {
             switch answer {
             case let .success(names): recipes = names
             case let .failure(why):
-                NSLog("helm: the palette lists no recipes: %@", String(describing: why))
+                NSLog(
+                    "helm: benchd did not name the recipes, the palette keeps its last list: %@",
+                    String(describing: why))
             }
         }
     }

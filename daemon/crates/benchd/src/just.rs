@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-/// Why a run did not start: refused (the caller's to fix) or failed (benchd's).
+/// Why a run did not start, or a list was not read: refused (the caller's to fix) or failed
+/// (benchd's).
 pub enum NotStarted {
     Refused(String),
     Failed(String),
@@ -127,12 +128,12 @@ pub fn run(core: &Arc<Mutex<Core>>, req: &Request) -> Result<JustStarted, NotSta
 /// justfile's order. No justfile is no recipes, not a refusal: the palette asks every time it
 /// opens. Read-only, so nothing is logged. A justfile `just` cannot parse is refused with
 /// `just`'s own words.
-pub fn list(core: &Arc<Mutex<Core>>) -> Result<JustList, String> {
+pub fn list(core: &Arc<Mutex<Core>>) -> Result<JustList, NotStarted> {
     let justfile = justfile_path(&core.lock().unwrap().root);
     if !justfile.is_file() {
         return Ok(JustList { recipes: vec![] });
     }
-    let just = find_just().ok_or_else(not_installed)?;
+    let just = find_just().ok_or_else(|| NotStarted::Refused(not_installed()))?;
     let output = Command::new(&just)
         .arg("--justfile")
         .arg(&justfile)
@@ -140,13 +141,13 @@ pub fn list(core: &Arc<Mutex<Core>>) -> Result<JustList, String> {
         .arg("--summary")
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| format!("cannot start {}: {e}", just.display()))?;
+        .map_err(|e| NotStarted::Failed(format!("cannot start {}: {e}", just.display())))?;
     if !output.status.success() {
-        return Err(format!(
+        return Err(NotStarted::Refused(format!(
             "{} does not parse: {}",
             justfile.display(),
             String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        )));
     }
     let recipes = String::from_utf8_lossy(&output.stdout)
         .split_whitespace()

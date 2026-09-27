@@ -80,9 +80,10 @@ as the agent's. `just/started` is logged before the answer, which does not wait;
 `just/finished` with the exit code; output goes to `<root>/just/<run>.log`. The child is on the
 browser's pipe leash. A name outside `[A-Za-z0-9_-]`, a missing justfile or a missing `just`
 (looked for on `PATH`, then Homebrew's two prefixes) is refused by name. `just/list` answers
-`just --summary --unsorted` filtered to names `just/run` accepts, so helm's command palette offers
-exactly the recipes a key could run; no justfile is an empty list, since the palette asks every
-time it opens, and nothing is logged.
+`just --summary --unsorted` filtered to names `just/run` accepts, which is every public recipe (a
+private `_name` can still be bound to a key but is not offered); no justfile is an empty list,
+since the palette asks every time it opens, and nothing is logged. A `just` that cannot start is
+an error, as for `just/run`; a justfile it cannot parse is refused.
 
 **And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
 every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's
