@@ -10,7 +10,7 @@ import SwiftUI
 /// the × answered on its 8pt glyph alone, and a click just beside it fell through to the tab's
 /// own tap and selected the pane instead of closing it (#488). This style makes the label's
 /// frame the target, so a small glyph needs a frame of its own (`frame(width:height:)`) to be
-/// easy to hit.
+/// easy to hit. Every button in helm uses it: `ChromeHitTargetTests` fails on a `.plain` one.
 struct ChromeButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

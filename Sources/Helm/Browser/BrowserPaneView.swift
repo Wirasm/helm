@@ -33,19 +33,19 @@ struct BrowserPaneView: View {
             Button {
                 model.goBack()
             } label: {
-                Image(systemName: "chevron.left")
+                Image(systemName: "chevron.left").frame(width: 20, height: 20)
             }
             .help("Back")
             Button {
                 model.goForward()
             } label: {
-                Image(systemName: "chevron.right")
+                Image(systemName: "chevron.right").frame(width: 20, height: 20)
             }
             .help("Forward")
             Button {
                 model.reload()
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Image(systemName: "arrow.clockwise").frame(width: 20, height: 20)
             }
             .help("Reload")
             TextField("Address", text: $address)
@@ -59,7 +59,7 @@ struct BrowserPaneView: View {
                 }
             tabMenu
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.chrome)
         .foregroundStyle(Color.textMuted)
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
