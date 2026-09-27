@@ -6558,14 +6558,17 @@ fn an_agent_types_into_a_shell_pane_and_reads_what_it_printed() {
 
     let sent = bench(&home.dir, &["send", &pane, "echo sum-$((40+2))", "--enter"]);
     assert_eq!(sent.code, 0, "{}", sent.stderr);
-    let screen = screen_until(&home.dir, &pane, |l| l == "sum-42");
+    // A shell that has not printed its prompt yet echoes the typed line first, so the output
+    // can follow a prompt on its row.
+    let ran = |l: &str| l.ends_with("sum-42") && !l.contains("echo");
+    let screen = screen_until(&home.dir, &pane, ran);
     let lines: Vec<&str> = screen["lines"]
         .as_array()
         .unwrap()
         .iter()
         .map(|l| l.as_str().unwrap())
         .collect();
-    assert!(lines.contains(&"sum-42"), "the shell ran it: {screen}");
+    assert!(lines.iter().any(|l| ran(l)), "the shell ran it: {screen}");
     assert_eq!(
         screen["rows"].as_u64().unwrap() as usize,
         lines.len(),
