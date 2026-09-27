@@ -17,17 +17,31 @@ struct WorktreeRecord: Codable, Equatable, Sendable {
     }
 }
 
-enum WorktreeKind: String, Codable, Equatable, Sendable {
-    case archon
+/// Who removes a worktree. Archon keeps a record of the worktrees it makes, so one of its own
+/// goes through `archon complete`, which updates that record; everything else is git's.
+enum WorktreeOwner: Codable, Equatable, Sendable {
     case git
-    case unknown
+    /// `home` is the Archon home the worktree lives under (`~/.archon`, `~/.archon-<name>`),
+    /// which is the database `archon complete` has to read. nil for a worktree recognised only
+    /// by its branch name, which the default home is asked about.
+    case archon(home: String?)
 
-    static func classify(branch: String?) -> Self {
-        guard let branch else { return .unknown }
-        let archonPrefixes = [
-            "archon/task-", "archon/issue-", "archon/pr-", "archon/review-", "archon/thread-",
-        ]
-        return archonPrefixes.contains(where: branch.hasPrefix) ? .archon : .git
+    static let archonBranchPrefixes = [
+        "archon/task-", "archon/issue-", "archon/pr-", "archon/review-", "archon/thread-",
+    ]
+
+    /// Archon's by where it lives (`<home>/.archon*/workspaces/…`), or by a branch name only
+    /// Archon gives out.
+    static func of(path: String, branch: String?) -> WorktreeOwner {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        for index in parts.indices.dropLast()
+        where parts[index].hasPrefix(".archon") && parts[index + 1] == "workspaces" {
+            return .archon(home: parts[...index].joined(separator: "/"))
+        }
+        if let branch, archonBranchPrefixes.contains(where: branch.hasPrefix) {
+            return .archon(home: nil)
+        }
+        return .git
     }
 }
 
@@ -77,14 +91,8 @@ enum WorktreeMergedState: String, Codable, Equatable, Sendable {
     case unknown
 }
 
-enum WorktreeCleanupRoute: Codable, Equatable, Sendable {
-    case archon(branch: String)
-    case git(path: String)
-}
-
 struct Worktree: Identifiable, Codable, Equatable, Sendable {
     let record: WorktreeRecord
-    let kind: WorktreeKind
     let status: WorktreeStatus
     let mergedState: WorktreeMergedState
     let isMain: Bool
@@ -92,22 +100,23 @@ struct Worktree: Identifiable, Codable, Equatable, Sendable {
 
     var id: String { record.path }
 
-    var cleanupRoute: WorktreeCleanupRoute? {
-        guard mergedState == .merged,
-            !isMain,
-            exists,
-            !record.isBare,
-            !record.isDetached,
-            !record.isLocked,
-            !record.isPrunable,
-            let branch = record.branchName
-        else { return nil }
+    var owner: WorktreeOwner { .of(path: record.path, branch: record.branchName) }
 
-        switch kind {
-        case .archon: return .archon(branch: branch)
-        case .git: return .git(path: record.path)
-        case .unknown: return nil
-        }
+    /// Whether this worktree can be removed at all: never the main checkout or a bare
+    /// repository, never a worktree git has locked, and never an Archon one without the branch
+    /// `archon complete` is asked about. What removing it would lose is a separate question,
+    /// `WorktreeLoss`, asked when the operator asks to delete it.
+    var isRemovable: Bool {
+        guard !isMain, !record.isBare, !record.isLocked else { return false }
+        if case .archon = owner { return record.branchName != nil }
+        return true
+    }
+
+    /// Removable with nothing to lose, going by the last refresh: clean, and its branch merged
+    /// into the default branch. What `⇧D` removes without naming a loss.
+    var isMergedAndClean: Bool {
+        isRemovable && exists && mergedState == .merged && status.isDirty == false
+            && record.branchName != nil
     }
 }
 

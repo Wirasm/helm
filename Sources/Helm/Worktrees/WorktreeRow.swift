@@ -67,7 +67,7 @@ struct WorktreeRow: View {
     private var kind: String? {
         var words: [String] = []
         if row.isMain { words.append("main") }
-        if row.kind == .archon { words.append("archon") }
+        if case .archon = row.owner { words.append("archon") }
         if !row.exists { words.append("missing") }
         if row.record.isLocked { words.append("locked") }
         if row.record.isPrunable { words.append("prunable") }

@@ -16,6 +16,14 @@ actor FakeWorktreeClient: WorktreeClient {
     /// Whether each read asked for the status of a repository's lone checkout, in order.
     private(set) var loneStatusAsked: [Bool] = []
     private(set) var removeRequests: [(path: String, repository: GitCommonDir)] = []
+    private(set) var removeLosses: [WorktreeLoss] = []
+    private(set) var archonRequests: [(branch: String, home: String?, main: String)] = []
+    private(set) var createRequests: [(branch: String, repository: GitCommonDir, main: String)] = []
+    private var losses: [String: WorktreeLoss] = [:]
+    private var lossReads = 0
+    private var archonAnswer = "Completed"
+    private var archonKeeps = false
+    private var createFailure: WorktreeCLIError?
 
     init(response: [Worktree] = []) {
         self.response = response
@@ -32,6 +40,14 @@ actor FakeWorktreeClient: WorktreeClient {
         removeFailures[path] = failure
     }
     func setDelay(_ delay: Duration?) { self.delay = delay }
+    func setLoss(_ loss: WorktreeLoss, for path: String) { losses[path] = loss }
+    /// `archon complete` answers `said` and, when `keeps`, leaves the worktree where it was.
+    func setArchon(said: String, keeps: Bool) {
+        archonAnswer = said
+        archonKeeps = keeps
+    }
+    func setCreateFailure(_ failure: WorktreeCLIError?) { createFailure = failure }
+    func lossReadCount() -> Int { lossReads }
 
     func metrics() -> (
         listCalls: Int, maximumListCalls: Int, repositories: [GitCommonDir],
@@ -56,26 +72,72 @@ actor FakeWorktreeClient: WorktreeClient {
         return responsesByRepository[commonDir] ?? response
     }
 
-    func remove(path: String, in commonDir: GitCommonDir) async throws {
-        removeRequests.append((path, commonDir))
-        if let failure = removeFailures[path] { throw failure }
+    func loss(of worktree: Worktree, in commonDir: GitCommonDir) async -> WorktreeLoss {
+        lossReads += 1
+        return losses[worktree.id] ?? .none(branch: worktree.record.branchName)
+    }
+
+    /// A removal takes the worktree out of the next listing, as git would.
+    func remove(
+        _ worktree: Worktree, in commonDir: GitCommonDir, knowing loss: WorktreeLoss
+    ) async throws {
+        removeRequests.append((worktree.id, commonDir))
+        removeLosses.append(loss)
+        if let failure = removeFailures[worktree.id] { throw failure }
+        drop(worktree.id, from: commonDir)
+    }
+
+    func archonComplete(branch: String, home: String?, main: String) async throws -> String {
+        archonRequests.append((branch, home, main))
+        if !archonKeeps {
+            for (repo, rows) in responsesByRepository {
+                for row in rows where row.record.branchName == branch { drop(row.id, from: repo) }
+            }
+        }
+        return archonAnswer
+    }
+
+    func create(
+        branch: String, in commonDir: GitCommonDir, main: String
+    ) async throws
+        -> String
+    {
+        createRequests.append((branch, commonDir, main))
+        if let createFailure { throw createFailure }
+        let path = main + "/.worktrees/" + WorktreePlace.folderName(for: branch)
+        responsesByRepository[commonDir, default: response].append(
+            .fixture(path: path, branch: branch, mergedState: .merged))
+        return path
+    }
+
+    private func drop(_ path: String, from repository: GitCommonDir) {
+        responsesByRepository[repository] = (responsesByRepository[repository] ?? response)
+            .filter { $0.id != path }
     }
 }
 
 extension Worktree {
     static func fixture(
         path: String = "/tmp/project-linked", branch: String? = "feature/one",
-        kind: WorktreeKind? = nil, mergedState: WorktreeMergedState = .merged,
+        mergedState: WorktreeMergedState = .merged,
         isMain: Bool = false, exists: Bool = true, detached: Bool = false,
         locked: Bool = false, prunable: Bool = false, bare: Bool = false,
-        status: WorktreeStatus = .unknown
+        status: WorktreeStatus = WorktreeStatus(isDirty: false, tracking: nil, lastCommitAt: nil)
     ) -> Worktree {
         let record = WorktreeRecord(
             path: path, head: "abc", branch: branch.map { "refs/heads/\($0)" },
             isDetached: detached, isLocked: locked, isPrunable: prunable, isBare: bare,
             unrecognisedFields: [])
         return Worktree(
-            record: record, kind: kind ?? .classify(branch: branch), status: status,
-            mergedState: mergedState, isMain: isMain, exists: exists)
+            record: record, status: status, mergedState: mergedState, isMain: isMain,
+            exists: exists)
+    }
+}
+
+extension WorktreeLoss {
+    static func none(branch: String?) -> WorktreeLoss {
+        WorktreeLoss(
+            uncommittedFiles: 0, unmergedCommits: 0, branch: branch,
+            defaultBranch: "refs/remotes/origin/main")
     }
 }

@@ -10,7 +10,19 @@ protocol WorktreeClient: Sendable {
         in repository: GitCommonDir, statusOfALoneCheckout: Bool
     ) async throws
         -> [Worktree]
-    func remove(path: String, in repository: GitCommonDir) async throws
+    /// What removing `worktree` would lose, read now.
+    func loss(of worktree: Worktree, in repository: GitCommonDir) async -> WorktreeLoss
+    /// Remove a git-owned worktree the operator confirmed, knowing `loss`.
+    func remove(
+        _ worktree: Worktree, in repository: GitCommonDir, knowing loss: WorktreeLoss
+    ) async throws
+    /// Hand an Archon-owned worktree to `archon complete`; answers what Archon printed.
+    func archonComplete(branch: String, home: String?, main: String) async throws -> String
+    /// Add a worktree for `branch` at the repository's conventional place; answers its path.
+    func create(
+        branch: String, in repository: GitCommonDir, main: String
+    ) async throws
+        -> String
 }
 
 struct WorktreeCLIError: Error, Equatable, LocalizedError, Sendable {
@@ -46,15 +58,20 @@ struct WorktreeCLI: WorktreeClient, Sendable {
     let environment: [String: String]
     let gitExecutable: String
     let timeout: Duration
+    /// Where `~/.bun/bin` is looked for when `archon` is run, as `ArchonCLI` does. A test
+    /// points it at a scratch folder so its fake `archon` is the one found, never the real one.
+    let homeDirectory: String
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         gitExecutable: String = "/usr/bin/env",
-        timeout: Duration = WorktreeCLI.defaultTimeout
+        timeout: Duration = WorktreeCLI.defaultTimeout,
+        homeDirectory: String = NSHomeDirectory()
     ) {
         self.environment = environment
         self.gitExecutable = gitExecutable
         self.timeout = timeout
+        self.homeDirectory = homeDirectory
     }
 
     /// Every worktree of one repository, with its status. A repository-wide call each for the
@@ -83,7 +100,6 @@ struct WorktreeCLI: WorktreeClient, Sendable {
             worktrees.append(
                 Worktree(
                     record: record,
-                    kind: .classify(branch: record.branchName),
                     status: WorktreeStatus(
                         isDirty: dirty, tracking: facts?.tracking,
                         lastCommitAt: facts?.committedAt),
@@ -94,8 +110,133 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         return worktrees
     }
 
-    func remove(path: String, in repository: GitCommonDir) async throws {
-        _ = try await runGit(["-C", repository.path, "worktree", "remove", path])
+    // MARK: Changing
+
+    func loss(of worktree: Worktree, in repository: GitCommonDir) async -> WorktreeLoss {
+        let commonDir = repository.path
+        let path = worktree.record.path
+        let uncommitted: Int?
+        if worktree.exists {
+            uncommitted =
+                (try? await runGit([
+                    "--no-optional-locks", "-C", path, "status", "--porcelain",
+                ]))
+                .map { $0.split(separator: "\n").count }
+        } else {
+            uncommitted = 0
+        }
+        let defaultBranch = await resolveDefaultBranch(in: commonDir)
+        let tip = worktree.record.branch ?? worktree.record.head
+        var unmerged: Int?
+        if let defaultBranch, let tip {
+            unmerged =
+                (try? await runGit([
+                    "-C", commonDir, "rev-list", "--count", "\(defaultBranch)..\(tip)",
+                ]))
+                .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+        return WorktreeLoss(
+            uncommittedFiles: uncommitted, unmergedCommits: unmerged,
+            branch: worktree.record.branchName, defaultBranch: defaultBranch)
+    }
+
+    /// `git worktree remove`, with `--force` only when the operator confirmed losing
+    /// uncommitted files; then `prune`, which is also all a worktree whose folder is gone needs;
+    /// then the branch, only when the default branch still reaches every commit on it —
+    /// checked again here, not trusted from the confirmation.
+    func remove(
+        _ worktree: Worktree, in repository: GitCommonDir, knowing loss: WorktreeLoss
+    ) async throws {
+        let commonDir = repository.path
+        if worktree.exists {
+            let force = (loss.uncommittedFiles ?? 0) > 0 ? ["--force"] : []
+            _ = try await runGit(
+                ["-C", commonDir, "worktree", "remove"] + force + [worktree.record.path])
+        }
+        _ = try await runGit(["-C", commonDir, "worktree", "prune"])
+        guard loss.deletesBranch, let branch = worktree.record.branch,
+            let defaultBranch = await resolveDefaultBranch(in: commonDir)
+        else { return }
+        _ = try await runGit([
+            "-C", commonDir, "merge-base", "--is-ancestor", branch, defaultBranch,
+        ])
+        _ = try await runGit([
+            "-C", commonDir, "branch", "-D", worktree.record.branchName ?? branch,
+        ])
+    }
+
+    /// Archon's own cleanup, in the Archon home the worktree lives under. `archon complete`
+    /// exits 0 whether it removed the worktree, refused, or found nothing, so its words are
+    /// answered for the caller to show when git says the worktree is still there.
+    func archonComplete(branch: String, home: String?, main: String) async throws -> String {
+        var environment = ArchonCLI.developmentEnvironment(
+            inherited: self.environment, homeDirectory: homeDirectory)
+        if let home { environment["ARCHON_HOME"] = home }
+        let command = "archon complete \(branch)"
+        let result: Subprocess.Result
+        do {
+            result = try await Subprocess.run(
+                ["archon", "complete", branch], cwd: main, environment: environment,
+                timeout: .seconds(120))
+        } catch let failure as Subprocess.Failure {
+            throw WorktreeCLIError(
+                command: command, reason: Self.reason(for: failure, timeout: .seconds(120)))
+        }
+        let text = [result.stdout, result.stderr]
+            .map { String(decoding: $0, as: UTF8.self) }
+            .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.status == 0 else {
+            throw WorktreeCLIError(
+                command: command,
+                reason: .nonzeroExit(
+                    status: result.status,
+                    stderr: result.stderrSnippet(limit: Self.errorSnippetLimit)))
+        }
+        return text
+    }
+
+    func create(
+        branch: String, in repository: GitCommonDir, main: String
+    ) async throws
+        -> String
+    {
+        _ = try await runGit(["check-ref-format", "--branch", branch])
+        let path = WorktreePlace.path(
+            for: branch, main: main,
+            keepsWorktreesInside: await keepsWorktreesInside(main))
+        guard !FileManager.default.fileExists(atPath: path) else {
+            throw WorktreeCLIError(
+                command: "git worktree add \(path)",
+                reason: .malformedOutput("\(path) already exists"))
+        }
+        let source = await branchSource(branch, in: repository.path)
+        let arguments: [String] =
+            switch source {
+            case .local: [path, branch]
+            case let .remote(ref): ["--track", "-b", branch, path, ref]
+            case let .new(base): ["--no-track", "-b", branch, path, base]
+            }
+        _ = try await runGit(["-C", main, "worktree", "add"] + arguments)
+        return path
+    }
+
+    func branchSource(_ branch: String, in commonDir: String) async -> WorktreeBranchSource {
+        if await refExists("refs/heads/\(branch)", in: commonDir) { return .local }
+        if await refExists("refs/remotes/origin/\(branch)", in: commonDir) {
+            return .remote("origin/\(branch)")
+        }
+        return .new(from: await resolveDefaultBranch(in: commonDir) ?? "HEAD")
+    }
+
+    private func refExists(_ ref: String, in commonDir: String) async -> Bool {
+        (try? await runGit(["-C", commonDir, "show-ref", "--verify", "--quiet", ref])) != nil
+    }
+
+    /// The repository keeps worktrees in `.worktrees` when that folder exists or git ignores it.
+    private func keepsWorktreesInside(_ main: String) async -> Bool {
+        let folder = URL(fileURLWithPath: main).appendingPathComponent(".worktrees").path
+        if FileManager.default.fileExists(atPath: folder) { return true }
+        return (try? await runGit(["-C", main, "check-ignore", "-q", ".worktrees/"])) != nil
     }
 
     static func parsePorcelain(_ output: String) throws -> [WorktreeRecord] {
@@ -238,15 +379,8 @@ struct WorktreeCLI: WorktreeClient, Sendable {
             result = try await Subprocess.run(
                 arguments, environment: environment, timeout: timeout)
         } catch let failure as Subprocess.Failure {
-            let reason: WorktreeCLIError.Reason =
-                switch failure {
-                case let .captureUnavailable(why):
-                    .launchFailed(why ?? "could not create temporary command capture")
-                case let .launchFailed(why): .launchFailed(why)
-                case .timedOut: .timedOut(after: timeout)
-                case let .unreadableOutput(why): .unreadableOutput(why)
-                }
-            throw WorktreeCLIError(command: commandName, reason: reason)
+            throw WorktreeCLIError(
+                command: commandName, reason: Self.reason(for: failure, timeout: timeout))
         }
         guard result.status == 0 else {
             throw WorktreeCLIError(
@@ -256,5 +390,19 @@ struct WorktreeCLI: WorktreeClient, Sendable {
                     stderr: result.stderrSnippet(limit: Self.errorSnippetLimit)))
         }
         return String(decoding: result.stdout, as: UTF8.self)
+    }
+
+    private static func reason(
+        for failure: Subprocess.Failure, timeout: Duration
+    )
+        -> WorktreeCLIError.Reason
+    {
+        switch failure {
+        case let .captureUnavailable(why):
+            .launchFailed(why ?? "could not create temporary command capture")
+        case let .launchFailed(why): .launchFailed(why)
+        case .timedOut: .timedOut(after: timeout)
+        case let .unreadableOutput(why): .unreadableOutput(why)
+        }
     }
 }

@@ -95,7 +95,7 @@ final class WorktreeGitTests: XCTestCase {
     func testReadsBranchStateUpstreamMergedAndDirtyFromGitItself() async throws {
         let app = try makeApp()
 
-        let rows = try await WorktreeCLI(environment: environment)
+        let rows = try await WorktreeCLI(environment: environment, homeDirectory: home.path)
             .worktrees(
                 in: GitCommonDir(app.appendingPathComponent(".git").path),
                 statusOfALoneCheckout: true)
@@ -116,16 +116,120 @@ final class WorktreeGitTests: XCTestCase {
         XCTAssertLessThan(abs(age.timeIntervalSinceNow), 600)
     }
 
-    /// Removal from the common directory — how the drawer names a repository — works.
-    func testRemoveFromTheCommonDirectoryRemovesTheWorktree() async throws {
+    private var cli: WorktreeCLI { WorktreeCLI(environment: environment, homeDirectory: home.path) }
+
+    private func listed(_ app: URL) async throws -> [String: Worktree] {
+        let rows = try await cli.worktrees(
+            in: GitCommonDir(app.appendingPathComponent(".git").path), statusOfALoneCheckout: true)
+        return Dictionary(uniqueKeysWithValues: rows.map { ($0.record.branchName ?? $0.id, $0) })
+    }
+
+    /// What a removal loses, in git's own counts: the untracked file and both commits on
+    /// `feature` (one pushed, one not — neither is on origin/main), and nothing on `merged-one`.
+    func testLossCountsUncommittedFilesAndCommitsTheDefaultBranchLacks() async throws {
         let app = try makeApp()
-        let merged = app.appendingPathComponent(".worktrees/merged-one").path
+        let repo = GitCommonDir(app.appendingPathComponent(".git").path)
+        let rows = try await listed(app)
 
-        try await WorktreeCLI(environment: environment)
-            .remove(path: merged, in: GitCommonDir(app.appendingPathComponent(".git").path))
+        let feature = await cli.loss(of: try XCTUnwrap(rows["feature"]), in: repo)
+        XCTAssertEqual(feature.uncommittedFiles, 1)
+        XCTAssertEqual(feature.unmergedCommits, 2)
+        XCTAssertEqual(feature.defaultBranch, "refs/remotes/origin/main")
+        XCTAssertFalse(feature.deletesBranch)
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: merged))
-        XCTAssertFalse(try git("worktree", "list", in: app).contains("merged-one"))
+        let merged = await cli.loss(of: try XCTUnwrap(rows["merged-one"]), in: repo)
+        XCTAssertTrue(merged.losesNothing)
+        XCTAssertTrue(merged.deletesBranch)
+    }
+
+    /// A merged, clean worktree goes with its branch; unmerged, dirty work goes only by force,
+    /// and its branch stays, so no commit is lost with the worktree.
+    func testRemovalTakesAMergedBranchAndKeepsAnUnmergedOne() async throws {
+        let app = try makeApp()
+        let repo = GitCommonDir(app.appendingPathComponent(".git").path)
+        var rows = try await listed(app)
+
+        for name in ["merged-one", "feature"] {
+            let row = try XCTUnwrap(rows[name])
+            let loss = await cli.loss(of: row, in: repo)
+            try await cli.remove(row, in: repo, knowing: loss)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: row.record.path), name)
+        }
+
+        rows = try await listed(app)
+        XCTAssertNil(rows["merged-one"])
+        XCTAssertNil(rows["feature"])
+        let branches = try git("branch", "--format=%(refname:short)", in: app)
+        XCTAssertFalse(branches.contains("merged-one"), "merged, so it went too")
+        XCTAssertTrue(branches.contains("feature"), "unmerged, so it stays")
+    }
+
+    /// A worktree whose folder is already gone is only git's record; `prune` clears it.
+    func testAWorktreeWhoseFolderIsGoneIsPruned() async throws {
+        let app = try makeApp()
+        let repo = GitCommonDir(app.appendingPathComponent(".git").path)
+        let gone = app.appendingPathComponent(".worktrees/gone")
+        try FileManager.default.removeItem(at: gone)
+        let before = try await listed(app)
+        let row = try XCTUnwrap(before["gone"])
+        XCTAssertFalse(row.exists)
+
+        let loss = await cli.loss(of: row, in: repo)
+        try await cli.remove(row, in: repo, knowing: loss)
+
+        let after = try await listed(app)
+        XCTAssertNil(after["gone"])
+    }
+
+    /// A new worktree checks out a local branch, tracks one only origin has, or starts a new
+    /// branch from the default branch; inside `.worktrees` where the repository keeps them,
+    /// beside the main checkout where it does not.
+    func testCreateUsesTheBranchThatExistsAndTheRepositorysPlace() async throws {
+        let app = try makeApp()
+        let repo = GitCommonDir(app.appendingPathComponent(".git").path)
+        try git("push", "-q", "origin", "main:refs/heads/remote-only", in: app)
+        try git("fetch", "-q", in: app)
+        try git("branch", "-q", "local-only", in: app)
+
+        let fresh = try await cli.create(branch: "feat/fresh", in: repo, main: app.path)
+        let remote = try await cli.create(branch: "remote-only", in: repo, main: app.path)
+        let local = try await cli.create(branch: "local-only", in: repo, main: app.path)
+
+        XCTAssertEqual(fresh, app.appendingPathComponent(".worktrees/feat-fresh").path)
+        XCTAssertEqual(
+            try git(
+                "rev-parse", "--abbrev-ref", "HEAD@{upstream}", in: URL(fileURLWithPath: remote)
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            "origin/remote-only")
+        XCTAssertEqual(
+            try git("rev-parse", "HEAD", in: URL(fileURLWithPath: fresh)),
+            try git("rev-parse", "origin/main", in: app), "a new branch starts at the default")
+        XCTAssertEqual(
+            try git("branch", "--show-current", in: URL(fileURLWithPath: local))
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            "local-only")
+
+        let lib = try folder("home/Projects/acme/lib")
+        try git("init", "-q", "-b", "main", in: lib)
+        try commit("first", in: lib)
+        let sibling = try await cli.create(
+            branch: "fix/a", in: GitCommonDir(lib.appendingPathComponent(".git").path),
+            main: lib.path)
+        XCTAssertEqual(
+            sibling, lib.deletingLastPathComponent().appendingPathComponent("lib-fix-a").path)
+    }
+
+    func testCreateRefusesABranchNameGitWouldNot() async throws {
+        let app = try makeApp()
+        do {
+            _ = try await cli.create(
+                branch: "bad..name", in: GitCommonDir(app.appendingPathComponent(".git").path),
+                main: app.path)
+            XCTFail("expected a refusal")
+        } catch let error as WorktreeCLIError {
+            XCTAssertTrue(error.command.contains("check-ref-format"), error.command)
+        }
     }
 
     // MARK: - Discovery

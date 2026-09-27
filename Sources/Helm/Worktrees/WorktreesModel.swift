@@ -13,19 +13,24 @@ import Foundation
 /// the repositories are read `concurrentRepositories` at a time, each published the moment it
 /// answers. A repository that fails keeps the rows it last had and says why.
 ///
-/// Cleanup is #141's, unchanged: only a merged, existing, ordinary linked worktree can be
-/// cleaned, the operator confirms first, and it goes through its owner — `archon complete` for
-/// an Archon branch, `git worktree remove` without force for the rest.
+/// **Changes are the operator's, one at a time** (#141): a new worktree at the repository's
+/// conventional place, and a removal he confirmed after being told what it loses —
+/// uncommitted files, commits the default branch does not have. A branch goes with its worktree
+/// only when the default branch has every commit on it. An Archon worktree goes through
+/// `archon complete` in its own Archon home, which refuses what it will not remove; helm never
+/// forces it.
 @MainActor
 final class WorktreesModel: ObservableObject {
     enum Confirmation: Equatable, Identifiable {
-        case row(path: String)
-        case cleanAll(repo: GitCommonDir, paths: [String])
+        /// One worktree, and what removing it loses, read when the operator asked.
+        case delete(path: String, loss: WorktreeLoss)
+        /// Every merged, clean worktree of one repository: nothing to lose, so nothing to name.
+        case cleanMerged(repo: GitCommonDir, paths: [String])
 
         var id: String {
             switch self {
-            case let .row(path): "row:\(path)"
-            case let .cleanAll(repo, paths): "all:\(repo):\(paths.joined(separator: "\u{0}"))"
+            case let .delete(path, _): "delete:\(path)"
+            case let .cleanMerged(repo, paths): "all:\(repo):\(paths.joined(separator: "\u{0}"))"
             }
         }
     }
@@ -39,6 +44,9 @@ final class WorktreesModel: ObservableObject {
     @Published private(set) var confirmation: Confirmation?
     @Published private(set) var actingPaths: Set<String> = []
     @Published private(set) var actionFailures: [String: String] = [:]
+    /// Why the last new worktree could not be made.
+    @Published private(set) var createFailure: String?
+    @Published private(set) var isCreating = false
 
     /// Six: enough to hide one slow `git status`, few enough that a refresh does not take the
     /// machine from the agents working on it. Measured over 364 worktrees in 129 repositories:
@@ -54,18 +62,15 @@ final class WorktreesModel: ObservableObject {
     var unlistedCount: Int { repos.count - listed.count }
 
     private let worktreeClient: any WorktreeClient
-    private let archonClient: any ArchonClient
     private let discover: @Sendable ([String]) -> [WorktreeDiscovery.Found]
 
     init(
         worktreeClient: any WorktreeClient = WorktreeCLI(),
-        archonClient: any ArchonClient = ArchonCLI(),
         discover: @escaping @Sendable ([String]) -> [WorktreeDiscovery.Found] = {
             WorktreeDiscovery().repositories(workspaces: $0)
         }
     ) {
         self.worktreeClient = worktreeClient
-        self.archonClient = archonClient
         self.discover = discover
     }
 
@@ -159,18 +164,51 @@ final class WorktreesModel: ObservableObject {
         apply(outcome, to: dir, order: repos.map(\.id))
     }
 
-    // MARK: Cleanup (#141)
+    // MARK: Creating
 
-    func requestCleanup(of row: Worktree) {
-        guard row.cleanupRoute != nil, repo(containing: row.id) != nil else { return }
-        confirmation = .row(path: row.id)
+    /// A worktree for `branch` in `repoID`: the branch if it exists here or on origin, else a
+    /// new one from the default branch. Answers the new worktree's path.
+    func create(branch: String, in repoID: GitCommonDir) async -> String? {
+        let branch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !branch.isEmpty, !isCreating,
+            let repo = repos.first(where: { $0.id == repoID })
+        else { return nil }
+        guard let main = repo.mainPath else {
+            createFailure = "\(repo.name) has no main checkout to add a worktree from."
+            return nil
+        }
+        isCreating = true
+        createFailure = nil
+        defer { isCreating = false }
+        do {
+            let path = try await worktreeClient.create(
+                branch: branch, in: repoID, main: main)
+            await reread(repoID)
+            return path
+        } catch {
+            createFailure = error.localizedDescription
+            return nil
+        }
     }
 
-    func requestCleanAll(in repoID: GitCommonDir) {
+    func clearCreateFailure() {
+        createFailure = nil
+    }
+
+    // MARK: Removing (#141)
+
+    /// Read what removing `row` loses, then ask. Nothing is removed before `confirm()`.
+    func requestDelete(of row: Worktree) async {
+        guard row.isRemovable, let repo = repo(containing: row.id) else { return }
+        let loss = await worktreeClient.loss(of: row, in: repo.id)
+        confirmation = .delete(path: row.id, loss: loss)
+    }
+
+    func requestCleanMerged(in repoID: GitCommonDir) {
         guard let repo = repos.first(where: { $0.id == repoID }) else { return }
-        let paths = repo.worktrees.filter { $0.cleanupRoute != nil }.map(\.id)
+        let paths = repo.worktrees.filter(\.isMergedAndClean).map(\.id)
         guard !paths.isEmpty else { return }
-        confirmation = .cleanAll(repo: repoID, paths: paths)
+        confirmation = .cleanMerged(repo: repoID, paths: paths)
     }
 
     func cancelConfirmation() {
@@ -181,43 +219,65 @@ final class WorktreesModel: ObservableObject {
         guard let confirmation else { return }
         self.confirmation = nil
         switch confirmation {
-        case let .row(path):
+        case let .delete(path, loss):
             guard let repo = repo(containing: path) else { return }
-            _ = await performCleanup(path: path)
+            await remove(path: path, knowing: loss)
             await reread(repo.id)
-        case let .cleanAll(repo, paths):
+        case let .cleanMerged(repo, paths):
             for path in paths {
-                _ = await performCleanup(path: path)
+                guard
+                    let row = self.repo(containing: path)?.worktrees.first(where: { $0.id == path }
+                    ),
+                    row.isMergedAndClean
+                else { continue }
+                // Read again rather than trusted from the last refresh: the list can be minutes
+                // old, and an agent may have written into the worktree since.
+                let loss = await worktreeClient.loss(of: row, in: repo)
+                guard loss.losesNothing else {
+                    actionFailures[path] =
+                        "Skipped: it has \(loss.clauses.joined(separator: ", ")) now."
+                    continue
+                }
+                await remove(path: path, knowing: loss)
             }
             await reread(repo)
         }
     }
 
-    private func performCleanup(path: String) async -> Bool {
+    private func remove(path: String, knowing loss: WorktreeLoss) async {
         guard let repo = repo(containing: path),
-            let row = repo.worktrees.first(where: { $0.id == path }),
-            let route = row.cleanupRoute,
+            let row = repo.worktrees.first(where: { $0.id == path }), row.isRemovable,
             !actingPaths.contains(path)
-        else { return false }
+        else { return }
         actingPaths.insert(path)
         actionFailures[path] = nil
         defer { actingPaths.remove(path) }
         do {
-            switch route {
-            case let .archon(branch):
+            switch row.owner {
+            case let .archon(home):
                 // Archon resolves the project from the working directory: the main checkout.
-                guard let main = repo.mainPath else {
+                guard let main = repo.mainPath, let branch = row.record.branchName else {
                     actionFailures[path] = "\(repo.name) has no main checkout to run archon in."
-                    return false
+                    return
                 }
-                try await archonClient.complete(branch: branch, in: WorkspacePath(main))
-            case let .git(path):
-                try await worktreeClient.remove(path: path, in: repo.commonDir)
+                let said = try await worktreeClient.archonComplete(
+                    branch: branch, home: home, main: main)
+                await reread(repo.id)
+                // `archon complete` exits 0 when it refuses, so git is asked whether it went.
+                if self.repo(containing: path) != nil {
+                    actionFailures[path] = "Archon kept it: " + Self.lastLines(of: said)
+                }
+            case .git:
+                try await worktreeClient.remove(row, in: repo.id, knowing: loss)
             }
-            return true
         } catch {
             actionFailures[path] = error.localizedDescription
-            return false
         }
+    }
+
+    /// Archon's refusal is its last few lines; the rest is its progress.
+    private static func lastLines(of text: String) -> String {
+        let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        return lines.suffix(4).joined(separator: " ")
     }
 }

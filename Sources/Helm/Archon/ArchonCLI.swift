@@ -12,7 +12,6 @@ protocol ArchonClient: Sendable {
     func workflows(in workspacePath: WorkspacePath) async throws -> ArchonWorkflowListResponse
     func status(in workspacePath: WorkspacePath) async throws -> ArchonStatusResponse
     func launch(_ request: ArchonLaunchRequest) async throws -> ArchonLaunchAcknowledgement
-    func complete(branch: String, in workspacePath: WorkspacePath) async throws
     func decide(
         _ decision: ArchonGateDecision, text: String?, on runID: String,
         in workspacePath: WorkspacePath
@@ -142,17 +141,6 @@ struct ArchonCLI: ArchonClient, Sendable {
         return try await decode(
             ArchonLaunchAcknowledgement.self, arguments: arguments,
             in: request.workspacePath.value)
-    }
-
-    func complete(branch: String, in workspacePath: WorkspacePath) async throws {
-        let arguments = ["complete", branch]
-        let data = try await capture(arguments: arguments, in: workspacePath.value)
-        let text = String(decoding: data, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.localizedCaseInsensitiveContains("not found") {
-            throw ArchonCLIError(
-                command: Self.command(arguments), reason: .actionRejected(text))
-        }
     }
 
     /// Answer one gate. **Recording the decision is all this does** — see `resume(_:)`.

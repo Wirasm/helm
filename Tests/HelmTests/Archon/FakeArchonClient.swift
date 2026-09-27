@@ -14,7 +14,6 @@ actor FakeArchonClient: ArchonClient {
     /// Fails only the per-run detail call, which is how a run keeps its line and loses its
     /// subline.
     var detailFailure: ArchonCLIError?
-    var completeFailure: ArchonCLIError?
     var delay: Duration?
     var decision: ArchonActionAcknowledgement = .fixture()
     var decisionFailure: ArchonCLIError?
@@ -28,7 +27,6 @@ actor FakeArchonClient: ArchonClient {
     private(set) var cancelRequests: [String] = []
     private(set) var workspacePaths: [WorkspacePath] = []
     private(set) var launchRequests: [ArchonLaunchRequest] = []
-    private(set) var completeRequests: [(branch: String, workspacePath: WorkspacePath)] = []
     private(set) var decisions:
         [(
             decision: ArchonGateDecision, text: String?, runID: String,
@@ -48,7 +46,6 @@ actor FakeArchonClient: ArchonClient {
 
     func setFailure(_ failure: ArchonCLIError?) { self.failure = failure }
     func setDetailFailure(_ failure: ArchonCLIError?) { detailFailure = failure }
-    func setCompleteFailure(_ failure: ArchonCLIError?) { completeFailure = failure }
     func setDelay(_ delay: Duration?) { self.delay = delay }
     func setRuns(_ response: ArchonRunsResponse) { runsResponse = response }
     func setStatusRuns(_ runs: [ArchonRun]) { statusRuns = runs }
@@ -68,7 +65,6 @@ actor FakeArchonClient: ArchonClient {
     }
 
     func lastLaunch() -> ArchonLaunchRequest? { launchRequests.last }
-    func completions() -> [(branch: String, workspacePath: WorkspacePath)] { completeRequests }
 
     func runs(in workspacePath: WorkspacePath) async throws -> ArchonRunsResponse {
         listCalls += 1
@@ -109,12 +105,6 @@ actor FakeArchonClient: ArchonClient {
         launchRequests.append(request)
         if let failure { throw failure }
         return acknowledgement
-    }
-
-    func complete(branch: String, in workspacePath: WorkspacePath) async throws {
-        completeRequests.append((branch, workspacePath))
-        if let completeFailure { throw completeFailure }
-        if let failure { throw failure }
     }
 
     func decide(
