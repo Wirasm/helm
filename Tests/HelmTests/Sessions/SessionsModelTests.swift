@@ -78,11 +78,13 @@ final class SessionsModelTests: XCTestCase {
 
         XCTAssertEqual(
             bench.verbs,
-            [.paneShow(pane), .paneOpen(surface: .canvas(path: "/t/agent-1.jsonl"))])
+            [
+                .paneShow(pane), .paneOpen(surface: .canvas(path: "/t/agent-1.jsonl")),
+                .paneOpen(surface: .terminal(agent: nil, session: "s2")),
+            ])
         XCTAssertEqual(
             bench.lines,
             [
-                "'bench' 'attach' 's2'",
                 "'claude' 'attach' 'j 1'",
                 "cd '/w/it'\\''s' && 'claude' '--resume' 'abc'",
             ])

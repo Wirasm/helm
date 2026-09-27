@@ -72,7 +72,10 @@ final class SessionsModel: ObservableObject {
             actions.hideDrawer()
             actions.send(.paneOpen(surface: .canvas(path: path)))
         case let .benchAttach(session):
-            await run(["bench", "attach", session], in: nil)
+            // A pane that shows the session, as `bench spawn` makes one: benchd opens it, and
+            // helm shows it with the `bench` it resolved (`BenchExecutable`), never a bare name.
+            actions.hideDrawer()
+            actions.send(.paneOpen(surface: .terminal(agent: nil, session: session)))
         case let .claudeAttach(job):
             await run(["claude", "attach", job], in: nil)
         case let .resume(argv, cwd):
