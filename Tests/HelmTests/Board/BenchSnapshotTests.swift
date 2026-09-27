@@ -222,6 +222,22 @@ final class BenchSnapshotTests: XCTestCase {
             terminal.agent, "another pid's row says nothing about this pane")
     }
 
+    /// A pane helm cannot show its session in (no `bench` to attach with) reads as failed, with
+    /// the pane's own reason, to an agent reading the snapshot — not as a terminal starting up.
+    func testAPaneWithNoBenchToShowItsSessionIsReportedFailedWithItsReason() {
+        let manager = TerminalManager()
+        let reason = "helm cannot find the bench CLI to show this session"
+        let session = TerminalSession(
+            ordinal: 1, workspacePath: WorkspacePath("/tmp/bench-snapshot-unattachable"),
+            controller: manager.controller, unattachable: reason)
+
+        let record = BenchSnapshot.TerminalRecord(
+            id: session.id, session: session, foregroundPid: { _ in nil }, agents: [:])
+
+        XCTAssertEqual(record.status, "failed")
+        XCTAssertEqual(record.failure, reason)
+    }
+
     /// A row this build cannot read the status of still carries the two fields that name a
     /// stall, rather than costing the pane its whole record.
     func testARowWithNothingToSayProducesNoRecordAndOneWithOnlyAReasonStillDoes() throws {

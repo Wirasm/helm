@@ -5,9 +5,9 @@ import HelmWire
 /// instead of a login shell. The agent lives in benchd's pty, so it keeps running while the pane
 /// is hidden, the display sleeps or helm restarts; the pane is a view of it, and ends when it does.
 ///
-/// The `bench` is the one beside the benchd helm follows (`status` names it), so the viewer is
-/// always the daemon's own build. The pane's environment carries the suite (`PaneEnvironment`),
-/// so it reaches the same root.
+/// The `bench` is an absolute path (`BenchExecutable`): the one beside the benchd helm follows
+/// (`status` names it), so the viewer is the daemon's own build. The pane's environment carries
+/// the suite (`PaneEnvironment`), so it reaches the same root.
 enum SessionAttach {
     /// The line ghostty runs for a pane showing `session`. It is run the way ghostty runs its own
     /// `command`, through the shell, so every word is quoted.
@@ -16,21 +16,35 @@ enum SessionAttach {
     }
 }
 
+/// What a pane that shows a benchd session runs: `bench attach`, or, with no `bench` to run,
+/// nothing, and the reason in the pane.
+enum SessionLaunch: Equatable {
+    case attach(command: String)
+    case unavailable(reason: String)
+}
+
 extension BenchDocument.Bench {
-    /// The command for every terminal pane on this bench that shows a benchd session. Asked of
-    /// the bench being drawn only — its terminals are the ones helm starts — and `bench` (benchd's
-    /// own binary, `BenchClient.benchBinary`) is asked for only when a pane here shows a session,
-    /// since asking is a round trip to benchd.
-    func attachCommands(bench: @autoclosure () -> String) -> [UUID: String] {
+    /// The launch for every terminal pane on this bench that shows a benchd session. Asked of
+    /// the bench being drawn only — its terminals are the ones helm starts — and `bench`
+    /// (`BenchClient.benchExecutable`) is asked for only when a pane here shows a session, since
+    /// asking is a round trip to benchd.
+    func attachCommands(
+        bench: @autoclosure () -> Result<String, BenchExecutable.NotFound>
+    ) -> [UUID: SessionLaunch] {
         let sessions = columns.flatMap(\.slots).flatMap(\.panes).compactMap {
             pane -> (UUID, String)? in
             guard case let .terminal(_, session?) = pane.surface else { return nil }
             return (pane.id, session)
         }
         guard !sessions.isEmpty else { return [:] }
-        let bench = bench()
+        let launch: (String) -> SessionLaunch
+        switch bench() {
+        case let .success(bench):
+            launch = { .attach(command: SessionAttach.command(session: $0, bench: bench)) }
+        case let .failure(missing):
+            launch = { _ in .unavailable(reason: missing.description) }
+        }
         return Dictionary(
-            sessions.map { ($0.0, SessionAttach.command(session: $0.1, bench: bench)) },
-            uniquingKeysWith: { first, _ in first })
+            sessions.map { ($0.0, launch($0.1)) }, uniquingKeysWith: { first, _ in first })
     }
 }

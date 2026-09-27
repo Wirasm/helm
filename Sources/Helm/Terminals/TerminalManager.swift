@@ -93,12 +93,24 @@ final class TerminalManager: ObservableObject {
     /// The exception is a pane that shows a benchd session (M3): `attaching` names the command
     /// its pty runs instead, `bench attach <session>`, so the pane is the agent benchd runs.
     private func restore(
-        _ ids: [UUID], in workspacePath: WorkspacePath, attaching: [UUID: String] = [:]
+        _ ids: [UUID], in workspacePath: WorkspacePath, attaching: [UUID: SessionLaunch] = [:]
     ) {
         for id in ids {
-            let session = TerminalSession(
-                id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
-                controller: controller, command: attaching[id] ?? command())
+            let session: TerminalSession
+            switch attaching[id] {
+            case let .attach(command)?:
+                session = TerminalSession(
+                    id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
+                    controller: controller, command: command)
+            case let .unavailable(reason)?:
+                session = TerminalSession(
+                    id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
+                    controller: controller, unattachable: reason)
+            case nil:
+                session = TerminalSession(
+                    id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
+                    controller: controller, command: command())
+            }
             nextOrdinal += 1
             session.manager = self
             surfaces.adopt(session, as: id, kind: .terminal, in: workspacePath)
@@ -118,7 +130,9 @@ final class TerminalManager: ObservableObject {
     /// `attaching` is the command for each pane that shows a benchd session
     /// (`BenchDocument.Bench.attachCommands`): `bench attach <session>`, so the pane is the agent benchd
     /// runs. Every other pane gets a login shell.
-    func adopt(terminals ids: [UUID], in path: WorkspacePath, attaching: [UUID: String] = [:]) {
+    func adopt(
+        terminals ids: [UUID], in path: WorkspacePath, attaching: [UUID: SessionLaunch] = [:]
+    ) {
         activeWorkspacePath = path
         let missing = ids.filter { surfaces.existing($0, as: TerminalSession.self) == nil }
         guard !missing.isEmpty else { return }

@@ -151,7 +151,7 @@ enum SessionLine {
     static func help(_ row: BenchSessionRow) -> String {
         switch row.open {
         case .focusPane: "Show the pane it runs in"
-        case .benchAttach: "Attach to it in a new terminal"
+        case .benchAttach: "Show it in a new pane"
         case .claudeAttach: "Attach to the background job in a new terminal"
         case .resume: "Resume it in a new terminal, in \(row.cwd)"
         case .transcript: "Open its transcript"
