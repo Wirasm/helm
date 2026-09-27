@@ -5962,3 +5962,49 @@ fn after_a_restart_restore_resumes_the_recorded_agent_and_gives_other_panes_a_sh
         "live panes are left alone"
     );
 }
+
+#[test]
+fn restore_never_resumes_a_conversation_a_live_session_already_holds() {
+    // `just release-resume` resumes its caller's conversation in a pane of its own, then restores
+    // the rest: the caller's old pane must not resume it a second time, which would fork it.
+    let home = TestHome::claim("m5b-nofork");
+    let ws = workspace(&home.dir).display().to_string();
+    let (old_pane, runtime) = {
+        let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let spawned = json_of(&bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]));
+        (
+            spawned["pane"].as_str().unwrap().to_string(),
+            spawned["runtime_session"].as_str().unwrap().to_string(),
+        )
+    };
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let resumed = bench(
+        &home.dir,
+        &["spawn", "--agent", "pi", "--cwd", &ws, "--resume", &runtime],
+    );
+    assert_eq!(resumed.code, 0, "{}", resumed.stderr);
+
+    let restored = json_of(&bench(&home.dir, &["restore", "--all"]));
+    let old = restored["restored"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["pane"] == old_pane.as_str())
+        .cloned()
+        .unwrap_or_else(|| panic!("{restored}"));
+    assert_eq!(old["how"], "shell", "{restored}");
+    let holders = json_of(&bench(&home.dir, &["sessions"]))["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["runtime_session"] == runtime.as_str() && s["live"] == true)
+        .count();
+    assert_eq!(holders, 1, "one process on the conversation");
+}

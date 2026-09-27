@@ -10,7 +10,9 @@
 //!   spells, as a benchd session shown in the same pane, under the mailbox it had.
 //! - **Otherwise** the operator's login shell, in the pane's workspace.
 //!
-//! A pane that already shows a live session is left alone, so a second run changes nothing.
+//! A pane that already shows a live session is left alone, so a second run changes nothing; and a
+//! recorded conversation a live session already holds (resumed elsewhere) gets a shell instead of a
+//! second, forking resume.
 
 use crate::{Core, claude_settings, shells, spawn};
 use bench_doc::{PaneId, ResumableAgent};
@@ -59,6 +61,10 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
     let mut restored = Vec::new();
     for (pane, workspace, _) in waiting {
         let agent = next.pane(pane).and_then(recorded_agent);
+        // A conversation a live session already holds is not resumed a second time: two
+        // processes on one conversation fork it. `just release-resume` resumes its caller's
+        // session in a pane of its own before it restores the rest.
+        let agent = agent.filter(|a| !held(&c, &a.session));
         let one = match agent {
             Some(agent) => match resume(&mut c, pane, &agent) {
                 Ok(session) => Some((session, "resumed", None)),
@@ -95,6 +101,13 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         crate::layout::Committed::Failed(why) => Err(why),
         _ => Ok(json!({ "restored": list })),
     }
+}
+
+/// Whether a live session already holds conversation `runtime`.
+fn held(core: &Core, runtime: &str) -> bool {
+    core.sessions
+        .values()
+        .any(|s| s.is_live() && s.runtime_session.as_deref() == Some(runtime))
 }
 
 /// The agent a pane's record names, if it is one benchd can resume.

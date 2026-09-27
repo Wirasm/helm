@@ -609,7 +609,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   benchd (with `launchctl kickstart -k` when the login agent from `just benchd-install` is loaded,
   so it never starts a second one), swaps the bundle with `BundleSwap.script` itself (read out of
   the Swift source, so there is one swap), and resumes that Claude Code session with `bench spawn
-  --resume` and `--remote-control`, in a benchd pty shown in a pane of the new helm. It detaches first, because the caller is normally an
+  --resume` and `--remote-control`, in a benchd pty shown in a pane of the new helm, and then brings
+  every other pane back with `bench restore --all` (what `just resume-all` runs; benchd refuses to
+  resume the caller's conversation a second time in its old pane). It detaches first, because the caller is normally an
   agent in a pane the quit closes. **Once helm is quit the session always comes back**: any later
   failure resumes it outside helm with `claude --bg --resume`, and the log says which happened.
   Logs go to `~/.helm/build/release-resume.log`, last line `RESULT:`. Every target is a flag

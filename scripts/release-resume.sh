@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the latest helm, swap it in, restart benchd, and resume one Claude Code session inside
 # the new helm with Remote Control on (#404). For an operator who is away from the machine and
-# driving the work from his phone through that session.
+# driving the work from his phone through that session. Then every other pane comes back
+# (`bench restore --all`, what `just resume-all` runs): the benchd restart ended every session.
 #
 #   scripts/release-resume.sh <session-id> [cwd] [options]      (or: just release-resume …)
 #
@@ -375,6 +376,12 @@ detached_run() {
 
   local resumed
   resumed="$(await_session "$old_session_pids")" || fail "no live process took up session $session"
+
+  # 7. Every other pane back (M5b): benchd's restart ended every session, and each pane keeps
+  # its record. After step 6, so the pane that held this session does not resume it a second
+  # time (benchd refuses a conversation a live session holds, and gives that pane a shell).
+  log "step 7: bench restore --all"
+  restore_panes "$bin" || warn "bench restore --all failed; run \`just resume-all\` to bring the panes back"
   finish "resumed-in-helm — session $session, pid $resumed, helm pid $new_pid, build $sha$(rc_state)"
 }
 
@@ -408,6 +415,12 @@ resume_in_bench() (
   [ "$remote_control" -eq 1 ] && rc_args=(--arg --remote-control --arg "helm $sha")
   timeout 60 "$bin/bench" spawn --agent claude --cwd "$cwd" --resume "$session" \
     --prompt-file "$notice" --asked ${rc_args[@]+"${rc_args[@]}"}
+)
+
+restore_panes() (
+  local bin="$1"
+  [ -n "$bench_suite" ] && export BENCH_SUITE="$bench_suite"
+  timeout 120 "$bin/bench" restore --all
 )
 
 # A subshell, so BENCH_SUITE is set for bench and benchd only. It is exported only when there is
