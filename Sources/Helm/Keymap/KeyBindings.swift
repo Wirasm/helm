@@ -132,6 +132,10 @@ enum KeyBindings {
         ]
 
     private static let chrome: [KeyBinding] = [
+        // ⌘K — the command palette (#500): anything a key can do, found by typing its name.
+        KeyBinding(
+            .character("k"), .command, .local(.toggleCommandPalette), hint: "commands",
+            menu: "Command Palette"),
         KeyBinding(
             .character("o"), [.command, .shift], .local(.openWorkspacePanel), hint: "folder",
             menu: "Open Workspace…"),
