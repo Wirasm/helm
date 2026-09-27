@@ -183,7 +183,15 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
         // The bar is the bottom 40pt of the window; window coordinates start at the bottom.
         let hidden = try bench.paneRect(inSlot: lower)
         XCTAssertLessThan(hidden.minY, 0, "the lower slot should run on past the bench when zoomed")
-        bench.click(at: NSPoint(x: hidden.midX, y: 20), windowNumber: bench.window.windowNumber)
+        let onBar = NSPoint(x: hidden.midX, y: 20)
+        // The chrome drawn after the bench is also the view AppKit hands the click to — the rail
+        // and the status bar are that shape in `RootView`; the workspace bar, drawn before the
+        // bench, needs its `zIndex` for it.
+        let hit = try XCTUnwrap(bench.window.contentView?.hitTest(onBar))
+        XCTAssertFalse(
+            sequence(first: hit, next: \.superview).contains { $0 is FocusClaimingTerminalView },
+            "the hidden terminal, not the bar, takes a click on the bar")
+        bench.click(at: onBar, windowNumber: bench.window.windowNumber)
         XCTAssertEqual(
             bench.workbench.bench?.focusedSlot, upper,
             "a click on the bar under a zoomed bench focused the slot hidden beneath it")
@@ -195,6 +203,29 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
         XCTAssertEqual(
             bench.workbench.bench?.focusedSlot, lower,
             "a click on the part of the lower slot that shows did not focus it")
+    }
+
+    /// The camera pans **to** the slot: zoomed on the lower of two stacked slots, that slot is
+    /// held flush with the bench's bottom edge and whole on screen, while the upper one runs off
+    /// the top. A pan applied the wrong way would push the zoomed slot off the window instead.
+    func testAZoomedLowerSlotIsPannedIntoView() throws {
+        let bench = try Bench(terminals: 2)
+        defer { bench.close() }
+
+        let upper = try XCTUnwrap(bench.workbench.bench?.slots.first?.id)
+        let lower = try XCTUnwrap(bench.workbench.bench?.slots.last?.id)
+        try bench.clickPane(inSlot: lower)
+        Eventually.holds { bench.workbench.bench?.focusedSlot == lower }
+        bench.workbench.isZoomed = true
+        bench.settle()
+
+        let window = try XCTUnwrap(bench.window.contentView?.bounds)
+        let zoomed = try bench.paneRect(inSlot: lower)
+        XCTAssertEqual(zoomed.minY, window.minY, accuracy: 1, "flush with the bench's bottom edge")
+        XCTAssertLessThanOrEqual(zoomed.maxY, window.maxY, "the zoomed slot is whole on screen")
+        XCTAssertGreaterThan(
+            try bench.paneRect(inSlot: upper).maxY, window.maxY,
+            "the upper slot runs on past the top")
     }
 
     // MARK: - The menu's route

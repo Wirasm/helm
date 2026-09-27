@@ -45,7 +45,8 @@ final class WorkbenchModel: ObservableObject {
     /// ⌘J: the bench is drawn through `BenchCamera`, on the focused slot. helm's view and not
     /// the bench's, so it is here rather than in the document: no verb, no agent can set it, and
     /// a relaunch starts unzoomed. It names no slot: the camera follows focus, so there is no id
-    /// to go stale when a pane closes.
+    /// to go stale when a pane closes. One flag for the window, not one per workspace: switching
+    /// workspace stays zoomed, on that workspace's focused slot.
     @Published var isZoomed = false
 
     /// Why ⌘⇧N did not produce a note (#289) — no workspace open, or a `~/.prp` helm could not
