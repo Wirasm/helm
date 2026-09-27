@@ -120,7 +120,7 @@ spec:
                 bench/get workspace/open workspace/close workspace/activate \
                 pane/open pane/split pane/close pane/show \
                 pane/move pane/name focus/slot focus/step focus/waiting \
-                layout/resize drawer/toggle just/run restore screen/get screen/send; do
+                layout/resize drawer/toggle just/run just/list restore screen/get screen/send; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then
             # probed last for real; listed here so the row exists

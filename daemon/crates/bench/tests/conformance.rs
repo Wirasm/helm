@@ -4904,6 +4904,49 @@ fn a_recipe_runs_as_whoever_asked_and_is_logged() {
     );
 }
 
+/// #500: `just/list` names the recipes `just/run` would run, in the justfile's own order, for
+/// helm's command palette. No justfile is no recipes rather than a refusal, because the palette
+/// asks every time it opens; a justfile `just` cannot parse is refused in `just`'s words.
+#[test]
+fn the_recipes_are_listed_in_the_justfiles_order() {
+    if !just_available() {
+        return;
+    }
+    let home = TestHome::claim("justlist");
+    let rules = home.dir.join(".bench").join("rules");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let list = || {
+        layout(
+            &daemon.socket,
+            "just/list",
+            serde_json::json!({}),
+            None,
+            false,
+        )
+    };
+    assert_eq!(
+        ok_data(list())["recipes"],
+        serde_json::json!([]),
+        "no justfile"
+    );
+
+    fs::create_dir_all(&rules).unwrap();
+    fs::write(
+        rules.join("justfile"),
+        "zed:\n    true\n\nopen:\n    true\n\n_helper:\n    true\n",
+    )
+    .unwrap();
+    assert_eq!(
+        ok_data(list())["recipes"],
+        serde_json::json!(["zed", "open"]),
+        "in the file's order, and a private recipe is not offered"
+    );
+
+    fs::write(rules.join("justfile"), "open\n    true\n").unwrap();
+    let broken = list();
+    assert_eq!(broken["status"], "refused", "{broken}");
+}
+
 /// A session claimed in a pane and resumed outside helm (`claude --resume` in another terminal
 /// app: no `HELM_PANE`, on a terminal) leaves the pane: `mail/who` names nobody there, and the
 /// session keeps its handle, so mail sent to it is still handed out. A report with no terminal

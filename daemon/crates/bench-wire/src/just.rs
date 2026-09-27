@@ -1,5 +1,6 @@
 //! The just layer on the wire (#356): `just/run` runs a recipe from the operator's bench
-//! justfile, and two events say when it started and how it ended. benchd executes it
+//! justfile, and two events say when it started and how it ended. `just/list` names the
+//! recipes, for helm's command palette (#500). benchd executes it
 //! (`benchd/src/just.rs`); `bench just` and helm's key action send it.
 
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,14 @@ pub struct JustFinished {
     pub log: String,
 }
 
+/// `just/list`'s answer: the recipes `just/run` would run, in the justfile's order. Empty when
+/// there is no justfile. Only names `is_recipe_name` accepts: a recipe in a module (`m::r`)
+/// is not one `just/run` can reach, so it is not offered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JustList {
+    pub recipes: Vec<String>,
+}
+
 /// A recipe started. `data`: `{run, recipe, by, cwd, log}`.
 pub const JUST_STARTED: &str = "just/started";
 /// A recipe ended. `data`: a `JustFinished`.
@@ -71,7 +80,8 @@ mod tests {
     use serde_json::{Value, json};
 
     /// `fixtures/just-verbs.json` pins what helm sends and reads: the operator's `just/run`,
-    /// its answer, and the `just/finished` frame, each written back byte for byte.
+    /// its answer, the `just/finished` frame, and `just/list` with its answer, each written
+    /// back byte for byte.
     #[test]
     fn the_just_fixture_round_trips() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/just-verbs.json");
@@ -85,12 +95,17 @@ mod tests {
         let finished: JustFinished =
             serde_json::from_value(value["finished"]["event"]["data"].clone()).unwrap();
         assert_eq!(value["finished"]["event"]["kind"], JUST_FINISHED);
+        let list: crate::Request = serde_json::from_value(value["list"].clone()).unwrap();
+        assert_eq!(list.verb, "just/list");
+        let listed: JustList = serde_json::from_value(value["listed"].clone()).unwrap();
         let mut frame = value["finished"].clone();
         frame["event"]["data"] = json!(finished);
         let written = serde_json::to_string_pretty(&json!({
             "run": crate::Request { args: json!(args), ..run },
             "started": started,
             "finished": frame,
+            "list": list,
+            "listed": listed,
         }))
         .unwrap()
             + "\n";

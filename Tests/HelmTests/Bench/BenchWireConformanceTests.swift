@@ -212,8 +212,8 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertTrue(list.rows.contains { if case .finished = $0.state { true } else { false } })
     }
 
-    /// The operator's `just/run`, its answer and the `just/finished` frame, as benchd reads and
-    /// writes them (#356).
+    /// The operator's `just/run`, its answer and the `just/finished` frame, and `just/list` with
+    /// its answer (#500), as benchd reads and writes them (#356).
     func testTheJustRequestMatchesTheDaemonsSampleAndItsAnswersDecode() throws {
         let data = try fixture("just-verbs.json")
         let samples = try JSONSerialization.jsonObject(with: data) as! [String: Any]
@@ -232,6 +232,14 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertEqual(frame.event.kind, "just/finished")
         XCTAssertEqual(frame.event.data.run, started.run)
         XCTAssertTrue(frame.event.data.failed)
+
+        XCTAssertEqual(
+            try normalized(JSONEncoder().encode(BenchJustListRequest(id: "helm-2"))),
+            try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples["list"]))))
+        let listed = try JSONDecoder().decode(
+            BenchJustList.self,
+            from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["listed"])))
+        XCTAssertEqual(listed.recipes, ["day", "review-queue"])
     }
 
     /// What benchd asks helm and what helm answers (M3): the ask decodes, and helm's answer and

@@ -1367,6 +1367,12 @@ fn dispatch(
             Err(just::NotStarted::Failed(why)) => (errored(why), AfterResponse::Done),
         },
 
+        Some(Verb::JustList) => match just::list(core) {
+            Ok(list) => (ok(json!(list)), AfterResponse::Done),
+            Err(just::NotStarted::Refused(why)) => (refused(why), AfterResponse::Done),
+            Err(just::NotStarted::Failed(why)) => (errored(why), AfterResponse::Done),
+        },
+
         Some(Verb::BrowserStart) => {
             core.lock().unwrap().browser_restarts.clear();
             match start_browser(core, 0, BrowserMode::Headless) {

@@ -191,7 +191,7 @@ final class CommandListTests: XCTestCase {
 
     @MainActor
     func testThePickStaysInsideTheList() {
-        let palette = CommandPalette()
+        let palette = CommandPalette(listRecipes: { [] })
         palette.open()
         palette.move(-1, count: 3)
         XCTAssertEqual(palette.selection, 0)
@@ -201,5 +201,66 @@ final class CommandListTests: XCTestCase {
         XCTAssertEqual(palette.selection, 0, "a new query starts at the best match")
         palette.toggle()
         XCTAssertFalse(palette.isOpen)
+    }
+
+    /// Every time the palette opens it asks benchd for the recipes afresh, so one added to the
+    /// justfile is offered the next time; when benchd cannot answer, the rest still works.
+    @MainActor
+    func testOpeningAsksForTheRecipesAfresh() async throws {
+        let answers = Answers([["day"], ["day", "deploy"]])
+        let palette = CommandPalette(listRecipes: { try answers.next() })
+        palette.open()
+        try await until { palette.recipes == ["day"] }
+        palette.close()
+        palette.open()
+        try await until { palette.recipes == ["day", "deploy"] }
+
+        // A slow answer to an earlier open does not overwrite the latest open's list.
+        let gate = DispatchSemaphore(value: 0)
+        let calls = Answers([["old"], ["new"]])
+        let slow = CommandPalette(listRecipes: {
+            let answer = try calls.next()
+            if answer == ["old"] { gate.wait() }
+            return answer
+        })
+        slow.open()
+        try await until { calls.taken == 1 }  // the first open's answer is on its way, held
+        slow.close()
+        slow.open()
+        try await until { slow.recipes == ["new"] }
+        gate.signal()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(slow.recipes, ["new"], "the earlier open's answer came last and was dropped")
+
+        let broken = CommandPalette(listRecipes: { throw JustRuns.Refused(description: "gone") })
+        broken.open()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(broken.recipes, [])
+        XCTAssertTrue(broken.isOpen)
+    }
+
+    @MainActor
+    private func until(_ done: () -> Bool) async throws {
+        for _ in 0..<200 where !done() { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(done())
+    }
+}
+
+/// Canned `just/list` answers, one per call.
+private final class Answers: @unchecked Sendable {
+    private var queue: [[String]]
+    private let lock = NSLock()
+    init(_ queue: [[String]]) { self.queue = queue }
+    private var count = 0
+    var taken: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+    func next() throws -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        return queue.removeFirst()
     }
 }

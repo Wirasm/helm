@@ -13,7 +13,7 @@
 
 use crate::Core;
 use bench_wire::{
-    Actor, JUST_FINISHED, JUST_STARTED, JustFinished, JustRunArgs, JustStarted, Request,
+    Actor, JUST_FINISHED, JUST_STARTED, JustFinished, JustList, JustRunArgs, JustStarted, Request,
     is_recipe_name, just_logs_dir, justfile_path,
 };
 use serde_json::json;
@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-/// Why a run did not start: refused (the caller's to fix) or failed (benchd's).
+/// Why a run did not start, or a list was not read: refused (the caller's to fix) or failed
+/// (benchd's).
 pub enum NotStarted {
     Refused(String),
     Failed(String),
@@ -64,12 +65,7 @@ pub fn run(core: &Arc<Mutex<Core>>, req: &Request) -> Result<JustStarted, NotSta
             justfile.display()
         )));
     }
-    let just = find_just().ok_or_else(|| {
-        NotStarted::Refused(format!(
-            "just is not installed: looked on PATH, then in {}",
-            FALLBACK_BINS.join(", ")
-        ))
-    })?;
+    let just = find_just().ok_or_else(|| NotStarted::Refused(not_installed()))?;
     let cwd = working_directory(&c, &args, asked)?;
 
     let run = format!("run-{}", c.next_seq);
@@ -128,6 +124,39 @@ pub fn run(core: &Arc<Mutex<Core>>, req: &Request) -> Result<JustStarted, NotSta
     Ok(started)
 }
 
+/// `just/list`: the recipes `just/run` would run, as `just --summary` names them, in the
+/// justfile's order. No justfile is no recipes, not a refusal: the palette asks every time it
+/// opens. Read-only, so nothing is logged. A justfile `just` cannot parse is refused with
+/// `just`'s own words.
+pub fn list(core: &Arc<Mutex<Core>>) -> Result<JustList, NotStarted> {
+    let justfile = justfile_path(&core.lock().unwrap().root);
+    if !justfile.is_file() {
+        return Ok(JustList { recipes: vec![] });
+    }
+    let just = find_just().ok_or_else(|| NotStarted::Refused(not_installed()))?;
+    let output = Command::new(&just)
+        .arg("--justfile")
+        .arg(&justfile)
+        .arg("--unsorted")
+        .arg("--summary")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| NotStarted::Failed(format!("cannot start {}: {e}", just.display())))?;
+    if !output.status.success() {
+        return Err(NotStarted::Refused(format!(
+            "{} does not parse: {}",
+            justfile.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let recipes = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .filter(|name| is_recipe_name(name))
+        .map(String::from)
+        .collect();
+    Ok(JustList { recipes })
+}
+
 /// Waits for the run on a thread of its own and logs how it ended. The leash lives here until
 /// then: dropping it early would TERM the run.
 fn reap(
@@ -170,6 +199,13 @@ fn working_directory(c: &Core, args: &JustRunArgs, asked: bool) -> Result<PathBu
         )));
     }
     Ok(cwd)
+}
+
+fn not_installed() -> String {
+    format!(
+        "just is not installed: looked on PATH, then in {}",
+        FALLBACK_BINS.join(", ")
+    )
 }
 
 fn find_just() -> Option<PathBuf> {

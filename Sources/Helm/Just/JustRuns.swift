@@ -84,17 +84,35 @@ final class JustRuns: ObservableObject {
     nonisolated static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> @Sendable (String) throws -> BenchJustStarted {
+        let ask = asker(environment, answering: BenchJustStarted.self)
+        return { recipe in try ask { BenchJustRequest(id: $0, recipe: recipe) } }
+    }
+
+    /// `just/list` against benchd at this helm's bench root: the recipes the palette offers
+    /// (#500). Blocking; called off the main actor.
+    nonisolated static func liveRecipes(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> @Sendable () throws -> [String] {
+        let ask = asker(environment, answering: BenchJustList.self)
+        return { try ask { BenchJustListRequest(id: $0) }.recipes }
+    }
+
+    /// One request to benchd at the bench root resolved once, its `ok` answer or a `Refused`
+    /// saying why not: the shape both just verbs share.
+    private nonisolated static func asker<Payload: Decodable & Sendable>(
+        _ environment: [String: String], answering _: Payload.Type
+    ) -> @Sendable (_ request: (String) -> any Encodable) throws -> Payload {
         let socket = BenchRoot.resolve(environment: environment)
             .map { $0.appendingPathComponent("benchd.sock").path }
-        return { recipe in
+        return { request in
             let path = try socket.mapError { Refused(description: $0.sentence) }.get()
             let answer = try BenchClient.request(
-                BenchJustRequest(id: "helm-\(UUID().uuidString.lowercased())", recipe: recipe),
-                at: path, answering: BenchJustStarted.self)
-            guard answer.status == .ok, let started = answer.data else {
+                request("helm-\(UUID().uuidString.lowercased())"), at: path,
+                answering: Payload.self)
+            guard answer.status == .ok, let data = answer.data else {
                 throw Refused(description: answer.reason ?? "benchd \(answer.status.rawValue)")
             }
-            return started
+            return data
         }
     }
 

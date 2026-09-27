@@ -70,7 +70,7 @@ parse error) once per version, and `bench status` reports `rejected` until a goo
 replaces it. Only a file that is gone means the built-in table. benchd never writes a rules
 file. `rules/keymap.toml` beside it is helm's alone: benchd never reads a key.
 
-**The just layer is one verb, `just/run` (#356).** A recipe from `<root>/rules/justfile` is a
+**The just layer is two verbs: `just/run` (#356) runs a recipe, `just/list` (#500) names them.** A recipe from `<root>/rules/justfile` is a
 composition of `bench` verbs, and benchd runs it rather than helm, so it is logged and dies with
 the daemon: `just --justfile <root>/rules/justfile --working-directory <cwd> <recipe>`, with
 `BENCH_DIR` (and `BENCH_SUITE`) pointing every `bench` inside it back here. The operator's run
@@ -79,7 +79,11 @@ agent's (`bench just`) works where it was asked from and gets nothing, so its ve
 as the agent's. `just/started` is logged before the answer, which does not wait; a reaper logs
 `just/finished` with the exit code; output goes to `<root>/just/<run>.log`. The child is on the
 browser's pipe leash. A name outside `[A-Za-z0-9_-]`, a missing justfile or a missing `just`
-(looked for on `PATH`, then Homebrew's two prefixes) is refused by name.
+(looked for on `PATH`, then Homebrew's two prefixes) is refused by name. `just/list` answers
+`just --summary --unsorted` filtered to names `just/run` accepts, which is every public recipe (a
+private `_name` can still be bound to a key but is not offered); no justfile is an empty list,
+since the palette asks every time it opens, and nothing is logged. A `just` that cannot start is
+an error, as for `just/run`; a justfile it cannot parse is refused.
 
 **And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
 every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's

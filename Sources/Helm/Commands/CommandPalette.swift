@@ -4,11 +4,24 @@ import SwiftUI
 /// Whether the command palette is open, what is typed in it and which line is picked (#500).
 ///
 /// The model outlives the panel, so ⌘K toggles it from `LocalActions` whether or not the panel
-/// is drawn. It holds no list: the lines are derived each time the panel draws
-/// (`CommandList.of`), so nothing here can go stale.
+/// is drawn. It holds no list but the recipes: the lines are derived each time the panel draws
+/// (`CommandList.of`). The recipes are benchd's to name (`just/list`), asked afresh every time
+/// the palette opens, so a recipe added to the justfile is there the next time.
 @MainActor
 final class CommandPalette: ObservableObject {
     @Published private(set) var isOpen = false
+    /// The bench justfile's recipes, as benchd last named them. Empty until benchd first answers;
+    /// an open whose ask fails keeps the last list rather than emptying it, and the rest of the
+    /// palette works either way.
+    @Published private(set) var recipes: [String] = []
+    private let listRecipes: @Sendable () throws -> [String]
+    /// Which open an answer belongs to: only the latest open's answer lands, so a slow answer
+    /// from an earlier open cannot overwrite a newer list.
+    private var opened = 0
+
+    init(listRecipes: @escaping @Sendable () throws -> [String] = JustRuns.liveRecipes()) {
+        self.listRecipes = listRecipes
+    }
     @Published var query = "" {
         didSet { selection = 0 }
     }
@@ -21,6 +34,20 @@ final class CommandPalette: ObservableObject {
     func open() {
         query = ""
         isOpen = true
+        opened += 1
+        let this = opened
+        let list = listRecipes
+        Task {
+            let answer = await Task.detached(operation: { Result { try list() } }).value
+            guard this == opened else { return }
+            switch answer {
+            case let .success(names): recipes = names
+            case let .failure(why):
+                NSLog(
+                    "helm: benchd did not name the recipes, the palette keeps its last list: %@",
+                    String(describing: why))
+            }
+        }
     }
 
     func close() {
