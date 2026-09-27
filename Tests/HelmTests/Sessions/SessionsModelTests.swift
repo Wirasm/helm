@@ -138,9 +138,9 @@ final class SessionsModelTests: XCTestCase {
     func testAClosedWindowsRegistrationMakesNoList() {
         let terminals = TerminalManager()
         let open = WorkbenchModel(
-            terminals: terminals, agents: .blind, client: BenchClient(unreachable: "no benchd"))
+            terminals: terminals, client: BenchClient(unreachable: "no benchd"))
         var closed: WorkbenchModel? = WorkbenchModel(
-            terminals: terminals, agents: .blind, client: BenchClient(unreachable: "no benchd"))
+            terminals: terminals, client: BenchClient(unreachable: "no benchd"))
         weak let gone = closed
         closed = nil
         XCTAssertNil(gone, "the closed window's model is released")

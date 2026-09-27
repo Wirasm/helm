@@ -11,12 +11,14 @@
 //! A pane that existed before and has no session — one whose session ended with a benchd restart
 //! — is left alone: bringing it back is `bench restore`'s, run by `just resume-all`.
 
+use crate::layout::{Change, commit};
 use crate::{Core, shell_env};
 use bench_doc::{Document, PaneId, StandardPath};
 use bench_session::{AgentKind, Session, SpawnSpec, login_shell};
+use bench_wire::Actor;
 use serde_json::json;
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Start a shell for every terminal pane in `next` that is not in `before` and shows no session,
@@ -133,4 +135,51 @@ pub fn abandon(core: &mut Core, started: Vec<Arc<Session>>) {
         );
         std::thread::spawn(move || session.close(Duration::ZERO));
     }
+}
+
+/// Record where each pane's shell is working now, when that changed: the directory `bench
+/// restore` starts its fresh shell in after a restart. Read off the shell process (its cwd), off
+/// the core lock; one logged change for everything that moved.
+pub fn record_cwds(core: &Arc<Mutex<Core>>) {
+    let watched: Vec<(PaneId, Arc<Session>)> = {
+        let c = core.lock().unwrap();
+        c.sessions
+            .values()
+            .filter(|s| s.agent == AgentKind::Shell && s.is_live())
+            .filter_map(|s| Some((c.bench.document.pane_showing_session(&s.id)?, Arc::clone(s))))
+            .collect()
+    };
+    let seen: Vec<(PaneId, String)> = watched
+        .iter()
+        .filter_map(|(pane, s)| Some((*pane, s.cwd_now()?)))
+        .collect();
+    if seen.is_empty() {
+        return;
+    }
+    let mut c = core.lock().unwrap();
+    let mut next = c.bench.document.clone();
+    let moved: Vec<_> = seen
+        .into_iter()
+        .filter(|(pane, cwd)| next.record_cwd(*pane, cwd))
+        .collect();
+    if moved.is_empty() {
+        return;
+    }
+    let change = Change {
+        verb: "pane/cwd".into(),
+        args: json!(
+            moved
+                .iter()
+                .map(|(pane, cwd)| json!({ "pane": pane, "cwd": cwd }))
+                .collect::<Vec<_>>()
+        ),
+        // Nobody asked: benchd read it off the shell. An agent's actor is the one that can never
+        // move the operator's focus, and this moves nothing.
+        by: Actor::agent(),
+        asked: false,
+        next,
+        created: None,
+        pane: None,
+    };
+    commit(&mut c, change);
 }

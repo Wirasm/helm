@@ -138,7 +138,7 @@ final class BenchClientTests: XCTestCase {
         }
         let client = BenchClient(socketPath: server.path)
         let model = WorkbenchModel(
-            terminals: TerminalManager(), agents: .blind, client: client)
+            terminals: TerminalManager(), client: client)
         defer { client.stop() }
         XCTAssertTrue(Eventually.holds { model.bench != nil })
         let before = model.bench

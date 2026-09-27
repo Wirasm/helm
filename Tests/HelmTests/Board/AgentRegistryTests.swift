@@ -50,9 +50,6 @@ final class AgentRegistryTests: XCTestCase {
 
     // MARK: - Decode
 
-    /// `sessionId` is decoded alongside the board's own three fields. The board
-    /// does not read it — the resume record (#63) does, because `sessionId` + `cwd`
-    /// are what locate the transcript on disk. One registry row type, per #28.
     func testDecodesTheFieldsTheBoardReads() throws {
         try write(row(pid: 9139, status: "busy", cwd: "/Users/x/ws"), as: "9139.json")
 
@@ -63,7 +60,6 @@ final class AgentRegistryTests: XCTestCase {
             [
                 AgentSession(
                     pid: 9139, cwd: "/Users/x/ws", status: .busy,
-                    sessionId: "7b3277cb-4fcb-4df0-a452-d30059772818",
                     // Same expression the decoder evaluates, so this is an equality rather
                     // than a float comparison dressed up as one.
                     statusUpdatedAt: Date(timeIntervalSince1970: 1_785_596_922_634.0 / 1000))

@@ -307,6 +307,10 @@ struct Core {
     /// Set by every append; cleared by the flusher, which fsyncs off this mutex (see
     /// `Flusher`).
     unflushed: Arc<AtomicBool>,
+    /// Set by `stop` before it ends every session: the agents it ends report their own end
+    /// (Claude's `SessionEnd` on the hangup), and that must not erase the pane records `bench
+    /// restore` needs after the restart.
+    stopping: bool,
 }
 
 /// How many frames a follower may fall behind before it is dropped.
@@ -562,6 +566,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         followers: Vec::new(),
         asks: ask::Waiting::default(),
         unflushed: Arc::new(AtomicBool::new(false)),
+        stopping: false,
     }));
 
     let listener = {
@@ -653,9 +658,15 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
     {
         let core = Arc::clone(&core);
         std::thread::spawn(move || {
+            let mut tick = 0u64;
             loop {
                 std::thread::sleep(Duration::from_millis(400));
                 hook::deliver_to_idle(&core);
+                // Where each pane's shell is working, for `bench restore` (M5b): every 2s.
+                tick += 1;
+                if tick.is_multiple_of(5) {
+                    shells::record_cwds(&core);
+                }
             }
         });
     }
@@ -820,7 +831,8 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
             // Drain-then-die for every session, then leave. process::exit is deliberate:
             // the accept loop has no other owner to unblock.
             let sessions: Vec<Arc<Session>> = {
-                let c = core.lock().unwrap();
+                let mut c = core.lock().unwrap();
+                c.stopping = true;
                 c.sessions.values().cloned().collect()
             };
             for s in sessions {

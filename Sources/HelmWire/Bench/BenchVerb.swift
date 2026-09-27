@@ -10,7 +10,7 @@ package enum BenchActor: Codable, Equatable, Sendable {
     /// An agent. `pane` is where it runs, when it is known; `handle` is its mailbox. Both are
     /// for the record only.
     case agent(pane: String? = nil, handle: String? = nil)
-    /// helm acting on its own observation: recording which agent is in a pane.
+    /// helm acting on its own, never on a person's behalf.
     case helm
 
     private enum CodingKeys: String, CodingKey { case kind, pane, handle }
@@ -91,7 +91,6 @@ package enum BenchVerb: Equatable, Sendable {
     case paneMove(UUID, BenchDirection)
     case paneName(UUID, PaneName)
     /// `agent: nil` records that no agent is in the pane.
-    case paneRecord(UUID, agent: BenchDocument.Agent?)
     case focusSlot(UUID)
     case focusStep(workspace: String? = nil, direction: BenchDirection)
     case layoutResize(BenchDivider, fraction: Double)
@@ -112,7 +111,6 @@ package enum BenchVerb: Equatable, Sendable {
         case .paneShow: "pane/show"
         case .paneMove: "pane/move"
         case .paneName: "pane/name"
-        case .paneRecord: "pane/record"
         case .focusSlot: "focus/slot"
         case .focusStep: "focus/step"
         case .layoutResize: "layout/resize"
@@ -181,10 +179,6 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case let .paneName(pane, name):
             try a.encode(pane, forKey: .pane)
             try a.encode(name, forKey: .name)
-        case let .paneRecord(pane, agent):
-            try a.encode(pane, forKey: .pane)
-            // `null` is the message — "no agent is here" — so it is written, not omitted.
-            try a.encode(agent, forKey: .agent)
         case let .focusSlot(slot):
             try a.encode(slot, forKey: .slot)
         case let .focusStep(workspace, direction):
@@ -255,9 +249,6 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             verb = .paneMove(try pane(), try to.decode(BenchDirection.self, forKey: .step))
         case "pane/name":
             verb = .paneName(try pane(), try a.decode(PaneName.self, forKey: .name))
-        case "pane/record":
-            verb = .paneRecord(
-                try pane(), agent: try a.decodeIfPresent(BenchDocument.Agent.self, forKey: .agent))
         case "focus/slot": verb = .focusSlot(try a.decode(UUID.self, forKey: .slot))
         case "focus/step":
             verb = .focusStep(

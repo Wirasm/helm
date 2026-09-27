@@ -141,32 +141,6 @@
     }
   },
   {
-    "id": "v-17",
-    "verb": "pane/record",
-    "args": {
-      "agent": {
-        "command": "claude",
-        "cwd": "/Users/operator/Projects/helm",
-        "session": "0b5e7a1c-3f7d-4d7e-9a51-5b3f7d6c2e10"
-      },
-      "pane": "00000001-0000-4000-8000-000000000001"
-    },
-    "by": {
-      "kind": "helm"
-    }
-  },
-  {
-    "id": "v-18",
-    "verb": "pane/record",
-    "args": {
-      "agent": null,
-      "pane": "00000001-0000-4000-8000-000000000001"
-    },
-    "by": {
-      "kind": "helm"
-    }
-  },
-  {
     "id": "v-19",
     "verb": "focus/slot",
     "args": {

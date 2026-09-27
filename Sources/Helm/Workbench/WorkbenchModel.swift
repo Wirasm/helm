@@ -83,12 +83,6 @@ final class WorkbenchModel: ObservableObject {
     /// `swift test` with a benchd the test answers for, and nothing sent to the operator's own.
     private let notes: CanvasNoteCourier
 
-    /// How helm learns which agent is in a pane, and whether its transcript is still there
-    /// (#63). Injected for `notes`' reason exactly: every rule that depends on it is then
-    /// reachable from `swift test` against a fixture directory, on a machine that has never
-    /// run Claude Code and with nothing read out of the operator's own `~/.claude`.
-    private let agents: AgentObserver
-
     /// Where the project stores are — `~/.prp` in production (#289).
     ///
     /// **One reader now, and that is the widening.** It used to be handed to `CanvasModel` too,
@@ -97,7 +91,7 @@ final class WorkbenchModel: ObservableObject {
     /// in front of the canvas instead, so the only thing that still needs this is deciding where
     /// a *new* note lands — and there is no second answer left to disagree with.
     ///
-    /// Injected for `notes`' and `agents`' reason exactly: every rule below is then reachable
+    /// Injected for `notes`' reason exactly: every rule below is then reachable
     /// from `swift test` against a temporary directory, with nothing written near the operator's
     /// own `~/.prp`.
     private let artifactRoot: URL
@@ -141,7 +135,6 @@ final class WorkbenchModel: ObservableObject {
     init(
         terminals: TerminalManager,
         notes: CanvasNoteCourier = CanvasNoteCourier(),
-        agents: AgentObserver = .live(),
         artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot,
         resolveRepository: @escaping @Sendable (String) async throws -> String = {
             try await WorkspaceStore.repositoryRoot(for: $0)
@@ -152,7 +145,6 @@ final class WorkbenchModel: ObservableObject {
         self.client = client
         self.terminals = terminals
         self.notes = notes
-        self.agents = agents
         self.artifactRoot = artifactRoot
         self.resolveRepository = resolveRepository
         // Registered here rather than by the manager because both need the bench: the canvas
@@ -172,72 +164,19 @@ final class WorkbenchModel: ObservableObject {
         client.start()
     }
 
-    // MARK: - Which agent is in which pane (#63)
+    // MARK: - What has each pane's terminal
 
-    /// Watch the panes for agents until cancelled — driven from `WorkbenchView`'s `.task`, so
-    /// its lifetime is the window's and SwiftUI cancels it on teardown. The same shape, and
-    /// the same two-second cadence, `BoardModel.poll` already runs against the same registry.
+    /// Ask benchd, every two seconds until cancelled, what has each terminal pane's terminal
+    /// (`SessionForegrounds`): presence and the snapshot join Claude's registry on it. Driven from
+    /// `WorkbenchView`'s `.task`, so its lifetime is the window's.
     ///
-    /// **Polling, not watching**, for `BoardModel`'s reason: a session's row is rewritten in
-    /// place, which a directory-level `DispatchSource` does not reliably see.
-    func watchAgents(every interval: Duration = .seconds(2)) async {
+    /// Which agent a pane held is benchd's record now (M5b), written from the agents' own hooks;
+    /// helm no longer writes it.
+    func watchForegrounds(every interval: Duration = .seconds(2)) async {
         while !Task.isCancelled {
             await terminals.foregrounds.refresh(using: client)
-            observeAgents()
             try? await Task.sleep(for: interval)
         }
-    }
-
-    /// One tick: write down who is in each pane — what `bench restore` resumes there after a
-    /// benchd restart (`just resume-all`).
-    ///
-    /// **The record is sticky — set when an agent is seen, never cleared when it stops being
-    /// seen.** A `claude` running a bash command hands the terminal's foreground to a child for
-    /// as long as that command takes, so a record cleared on absence would be erased and
-    /// rewritten several times a minute — a `pane/record` event each time, and nothing at all if
-    /// benchd went down inside one of those windows, which is the case the record exists for.
-    /// The cost: an agent the operator exited on purpose is resumed by the next `resume-all`.
-    ///
-    /// **The active workspace only.** A background workspace's record is whatever was written
-    /// while it was on screen, which is the last moment helm looked.
-    func observeAgents() {
-        guard let bench else { return }
-        let live = liveAgents(in: bench)
-        // Only a real change is sent: an identical record every two seconds would be an event
-        // per tick in benchd's log for the life of the process.
-        // Sent as `pane/record` by helm itself: an observation, never anyone's gesture. Not
-        // while benchd is unreachable: each would wait out the request timeout on the main
-        // thread, and a record not sent now is sent on the next tick.
-        let reachable = if case .disconnected = client.state { false } else { true }
-        for (pane, agent) in live where reachable {
-            guard case let .terminal(recorded) = bench.pane(pane)?.content,
-                recorded != agent
-            else { continue }
-            send(.paneRecord(pane, agent: BenchDocument.Agent(agent)), by: .helm)
-        }
-    }
-
-    /// Which agent is running in each terminal pane **right now**, per Claude Code's own
-    /// registry. Absent from the dictionary means the registry says nothing about that pane —
-    /// never "there is no agent".
-    private func liveAgents(in bench: Workbench) -> [Pane.ID: ResumableAgent] {
-        // Re-read per call rather than captured: the row helm is waiting for is written by an
-        // agent that has not started yet, so a lookup taken earlier could never see it.
-        let rows = agents.sessionsNow()
-        var found: [Pane.ID: ResumableAgent] = [:]
-        for id in bench.terminalPaneIDs {
-            guard let session = terminals.sessions.first(where: { $0.id == id }),
-                let pid = agents.foregroundPid(session), let row = rows[pid],
-                let sessionId = row.sessionId, !sessionId.isEmpty
-            else { continue }
-            found[id] = ResumableAgent(
-                command: AgentResume.claude, session: sessionId,
-                // The registry's own `cwd` when it has one — an agent started in a
-                // subdirectory is not working in the workspace root, and it is the `cwd` that
-                // finds the transcript.
-                cwd: row.cwd ?? session.workspacePath.value)
-        }
-        return found
     }
 
     // MARK: - Resolving panes to the objects they name

@@ -8,7 +8,8 @@
 //! - **An agent was recorded there** (`Surface::Terminal::agent`: its harness, its conversation
 //!   and where it ran): that conversation is resumed, with the posture `bench_session::argv`
 //!   spells, as a benchd session shown in the same pane, under the mailbox it had.
-//! - **Otherwise** the operator's login shell, in the pane's workspace.
+//! - **Otherwise** the operator's login shell, in the directory the pane's shell was last seen
+//!   working in (`Surface::Terminal::cwd`), else the pane's workspace.
 //!
 //! A pane that already shows a live session is left alone, so a second run changes nothing; and a
 //! recorded conversation a live session already holds (resumed elsewhere) gets a shell instead of a
@@ -61,6 +62,14 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
     let mut restored = Vec::new();
     for (pane, workspace, _) in waiting {
         let agent = next.pane(pane).and_then(recorded_agent);
+        let cwd = next.pane(pane).and_then(recorded_cwd);
+        let shell = |c: &mut Core, note| {
+            match cwd.as_deref() {
+                Some(dir) => shells::start_in(c, pane, dir),
+                None => shells::start(c, pane, workspace.as_ref()),
+            }
+            .map(|s| (s, "shell", note))
+        };
         // A conversation a live session already holds is not resumed a second time: two
         // processes on one conversation fork it. `just release-resume` resumes its caller's
         // session in a pane of its own before it restores the rest.
@@ -69,14 +78,18 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
                 "conversation {} is already live in another session",
                 a.session
             ))),
+            // Claude reports its id at start, before anything is said: a conversation nobody
+            // wrote in has no transcript, and `claude --resume` of it exits at once.
+            Some(a) if a.command == "claude" && !has_transcript(&a.session) => Err(Some(format!(
+                "claude conversation {} was never written in: nothing to resume",
+                a.session
+            ))),
             Some(a) => resume(&mut c, pane, &a).map_err(Some),
             None => Err(None),
         };
         let one = match resumed {
             Ok(session) => Some((session, "resumed", None)),
-            Err(note) => {
-                shells::start(&mut c, pane, workspace.as_ref()).map(|s| (s, "shell", note))
-            }
+            Err(note) => shell(&mut c, note),
         };
         if let Some((session, how, note)) = one {
             next.show_session(pane, &session.id);
@@ -107,11 +120,50 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
     }
 }
 
+/// Whether Claude has written a transcript for conversation `id`: `<config>/projects/<dir>/<id>.jsonl`,
+/// where the config directory is `CLAUDE_CONFIG_DIR` when set, as Claude reads it, else
+/// `~/.claude`. benchd's environment is what the resumed claude inherits, so both see one place.
+fn has_transcript(id: &str) -> bool {
+    let config = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => match std::env::var_os("HOME") {
+            Some(home) => std::path::Path::new(&home).join(".claude"),
+            None => return false,
+        },
+    };
+    // An id is a hook's word, and it becomes a file name: nothing that can leave the directory.
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return false;
+    }
+    let file = format!("{id}.jsonl");
+    std::fs::read_dir(config.join("projects"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|project| project.path().join(&file).is_file())
+}
+
 /// Whether a live session already holds conversation `runtime`.
 fn held(core: &Core, runtime: &str) -> bool {
     core.sessions
         .values()
         .any(|s| s.is_live() && s.runtime_session.as_deref() == Some(runtime))
+}
+
+/// Where the pane's shell was last working, if that directory is still there.
+fn recorded_cwd(pane: &bench_doc::Pane) -> Option<String> {
+    match &pane.surface {
+        bench_doc::Surface::Terminal { cwd: Some(cwd), .. }
+            if std::path::Path::new(cwd).is_dir() =>
+        {
+            Some(cwd.clone())
+        }
+        _ => None,
+    }
 }
 
 /// The agent a pane's record names, if it is one benchd can resume.

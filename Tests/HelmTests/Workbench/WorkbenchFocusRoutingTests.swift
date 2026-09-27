@@ -251,7 +251,7 @@ private final class Bench {
         terminals = TerminalManager(command: { registry.next() })
         let ids = (0..<count).map { _ in UUID() }
         (server, client) = try startToyBenchd(.only(workspacePath, Self.stacked(ids)))
-        let workbench = WorkbenchModel(terminals: terminals, agents: .blind, client: client)
+        let workbench = WorkbenchModel(terminals: terminals, client: client)
         self.workbench = workbench
         XCTAssertNotNil(client.document(atLeast: 1, within: 5), "benchd never answered")
         XCTAssertNotNil(workbench.bench, "no bench was drawn")

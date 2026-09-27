@@ -174,7 +174,7 @@ final class BenchSnapshotTests: XCTestCase {
             agents: [
                 4242: AgentSession(
                     pid: 4242, cwd: workspace.path.value, status: .waiting,
-                    sessionId: "2e758d00", waitingFor: "permission prompt",
+                    waitingFor: "permission prompt",
                     statusUpdatedAt: since)
             ])
         let terminal = try XCTUnwrap(value.workspaces[0].columns[0].slots[0].panes[0].terminal)

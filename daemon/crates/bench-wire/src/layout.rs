@@ -3,8 +3,8 @@
 //! travel and where they are kept.
 
 use bench_doc::{
-    ColumnId, Direction, Document, DrawerName, PaneId, PaneName, ResumableAgent, SlotId, Split,
-    StandardPath, Surface,
+    ColumnId, Direction, Document, DrawerName, PaneId, PaneName, SlotId, Split, StandardPath,
+    Surface,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -109,13 +109,6 @@ pub enum LayoutVerb {
         name: PaneName,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         rename: bool,
-    },
-    /// Which agent is in a terminal pane — or, with `agent: null`, that none is.
-    #[serde(rename = "pane/record")]
-    PaneRecord {
-        pane: PaneId,
-        #[serde(default)]
-        agent: Option<ResumableAgent>,
     },
     #[serde(rename = "focus/slot")]
     FocusSlot { slot: SlotId },
@@ -236,7 +229,6 @@ pub const LAYOUT_VERBS: &[&str] = &[
     "pane/show",
     "pane/move",
     "pane/name",
-    "pane/record",
     "focus/slot",
     "focus/step",
     "layout/resize",

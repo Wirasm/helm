@@ -419,9 +419,11 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     a new terminal pane gets his login shell, started by benchd with the pane's environment
     (`HELM_PANE`, truecolor, the bench root, no inherited `CLAUDE*`/`PI_*`) and Ghostty's shell
     integration, and helm shows it with `bench attach --in-pane`. So quitting helm ends nothing.
-    A benchd restart ends every session; the panes stay with their `agent` records, and **`just
+    A benchd restart ends every session; the panes stay with their records, and **`just
     resume-all`** (`bench restore --all`) is the one way back: a recorded agent is resumed, every
-    other pane gets a fresh shell.
+    other pane gets a fresh shell in the directory its shell was last in. benchd writes the record
+    itself: the agent from each harness's own hook (`bench hook`), the directory read off the
+    shell's process every two seconds.
   - **Unattended postures (#179): a posture removes a prompt; it never withholds capability.**
     `claude` → `--dangerously-skip-permissions` (what `cls` is), `codex` →
     `--dangerously-bypass-approvals-and-sandbox`, `pi` → `--approve`, spelled once in

@@ -112,7 +112,7 @@ final class SurfaceRegistryTests: XCTestCase {
                         focusedSlot: slots[0].id))
             ], active: workspace.value)
         let rig = try toyRig(document: document) { terminals, client in
-            let model = WorkbenchModel(terminals: terminals, agents: .blind, client: client)
+            let model = WorkbenchModel(terminals: terminals, client: client)
             // After the model registered its own browser kind: re-registering replaces, which
             // is exactly how a new kind would plug in.
             terminals.surfaces.register(fake)

@@ -300,6 +300,7 @@ fn pane_for(plan: &Plan, id: &str) -> Surface {
                 cwd: plan.spec.cwd.clone(),
             }),
         session: Some(id.to_string()),
+        cwd: None,
     }
 }
 

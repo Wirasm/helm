@@ -93,6 +93,42 @@ pub(crate) fn process_name(pid: i32) -> Option<String> {
     }
 }
 
+/// A process's current directory.
+pub(crate) fn process_cwd(pid: i32) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as i32;
+        // SAFETY: proc_pidinfo writes at most `size` bytes into `info`, which is that large.
+        let n = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDVNODEPATHINFO,
+                0,
+                (&mut info as *mut libc::proc_vnodepathinfo).cast(),
+                size,
+            )
+        };
+        if n != size {
+            return None;
+        }
+        let path = &info.pvi_cdir.vip_path;
+        let bytes: Vec<u8> = path
+            .iter()
+            .flatten()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8)
+            .collect();
+        (!bytes.is_empty()).then(|| String::from_utf8_lossy(&bytes).into_owned())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .ok()
+            .map(|p| p.display().to_string())
+    }
+}
+
 /// Start `program` on a fresh pty and return the master and the child.
 pub(crate) fn spawn(
     program: &str,
@@ -295,6 +331,30 @@ mod tests {
         // `sh` is bash on macOS and dash on Debian: its name is whatever the kernel says.
         assert!(process_name(shell).is_some_and(|n| n.ends_with("sh")));
         hang_up_then_kill(&mut child);
+    }
+
+    #[test]
+    fn a_process_cwd_is_read_off_the_process() {
+        let dir = std::env::temp_dir().join(format!("bpcwd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (_master, mut child) = spawn(
+            "/bin/sh",
+            &["-c".into(), "sleep 30".into()],
+            dir.to_str().unwrap(),
+            &Env::default(),
+            24,
+            80,
+        )
+        .unwrap();
+        let seen = process_cwd(child.id() as i32);
+        hang_up_then_kill(&mut child);
+        let _ = std::fs::remove_dir_all(&dir);
+        let want = dir.canonicalize().unwrap_or(dir);
+        assert!(
+            seen.as_deref()
+                .is_some_and(|s| std::path::Path::new(s).ends_with(want.file_name().unwrap())),
+            "{seen:?} is not {want:?}"
+        );
     }
 
     #[test]

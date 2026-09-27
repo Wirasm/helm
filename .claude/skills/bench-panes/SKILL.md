@@ -93,7 +93,8 @@ BENCH="${BENCH:-bench}"
   holding his keyboard also needs `--asked`, and a workspace's last pane is never closed. Closing
   a canvas destroys nothing: the file and his notes beside it stay.
 - A benchd restart ends every session. The panes stay; `just resume-all` (`bench restore --all`)
-  gives each a session again: the agent recorded there resumed, a shell anywhere else.
+  gives each a session again: the agent recorded there resumed (claude, codex or pi, recorded from
+  its own hook), else a shell in the directory the pane's shell was last working in.
 
 ## See what he sees
 

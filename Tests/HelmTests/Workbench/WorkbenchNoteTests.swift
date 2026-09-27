@@ -47,11 +47,11 @@ final class WorkbenchNoteTests: XCTestCase {
         let rig = try toyRig(document: document) { terminals, client in
             if let resolveRepository {
                 WorkbenchModel(
-                    terminals: terminals, agents: .blind, artifactRoot: root,
+                    terminals: terminals, artifactRoot: root,
                     resolveRepository: resolveRepository, client: client)
             } else {
                 WorkbenchModel(
-                    terminals: terminals, agents: .blind, artifactRoot: root, client: client)
+                    terminals: terminals, artifactRoot: root, client: client)
             }
         }
         self.rig = rig

@@ -26,7 +26,7 @@ final class DrawerTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("helm-drawers-\(UUID().uuidString)")
         let model = WorkbenchModel(
-            terminals: terminals, agents: .blind,
+            terminals: terminals,
             makeBrowser: makeBrowser
                 ?? { BrowserPaneModel(environment: ["BENCH_DIR": root.path], home: root) },
             client: client)

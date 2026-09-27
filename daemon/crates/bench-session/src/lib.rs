@@ -200,11 +200,16 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             "claude"
         }
         AgentKind::Codex => {
+            // codex names its session after the fact; the id comes from its own hook, which is
+            // how a pane's record knows it (M5b), and `codex resume <id>` takes every flag below.
             if spec.resume {
-                return Err(
-                    "codex names its own sessions after the fact; resume is not supported for it yet — spawn fresh, or use claude/pi where the bench mints the id"
-                        .into(),
-                );
+                let Some(id) = &spec.runtime_session else {
+                    return Err(
+                        "codex resume needs the session id its hook reported — spawn fresh, or use claude/pi where the bench mints the id"
+                            .into(),
+                    );
+                };
+                args.extend(["resume".into(), id.clone()]);
             }
             args.push("--dangerously-bypass-approvals-and-sandbox".into());
             // The hooks report to benchd, and hooks run only once trusted, which is a choice
@@ -488,6 +493,14 @@ impl Session {
         }
         let name = pty::process_name(group).unwrap_or_else(|| format!("pid {group}"));
         Some((group, name))
+    }
+
+    /// Where this session's own process is working now, while it lives.
+    pub fn cwd_now(&self) -> Option<String> {
+        if !self.is_live() {
+            return None;
+        }
+        pty::process_cwd(self.pid as i32)
     }
 
     /// The pid in the foreground of this session's terminal: its own process, or the job a shell
@@ -818,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_needs_a_minted_id_and_codex_refuses_with_the_reason() {
+    fn resume_needs_the_conversation_id_for_every_runtime() {
         let mut s = spec(AgentKind::Claude);
         s.resume = true;
         assert!(argv(&s).is_err(), "resume without an id must refuse");
@@ -841,8 +854,19 @@ mod tests {
         s.resume = true;
         let err = argv(&s).unwrap_err();
         assert!(
-            err.contains("resume is not supported"),
+            err.contains("the session id its hook reported"),
             "the refusal names the reason: {err}"
+        );
+        s.runtime_session = Some("019a-codex".into());
+        let (p, a) = argv(&s).unwrap();
+        assert_eq!(p, "codex");
+        assert_eq!(
+            a[..3],
+            [
+                "resume",
+                "019a-codex",
+                "--dangerously-bypass-approvals-and-sandbox"
+            ]
         );
     }
 
