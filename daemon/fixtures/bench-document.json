@@ -106,7 +106,8 @@
                     "id": "00000007-0000-4000-8000-000000000007",
                     "surface": {
                       "kind": "terminal",
-                      "session": "s3"
+                      "session": "s3",
+                      "cwd": "/Users/operator/Projects/helm/.worktrees/drawers"
                     }
                   }
                 ],

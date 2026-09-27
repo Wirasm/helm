@@ -91,12 +91,15 @@ final class BindingTableTests: XCTestCase {
                 + "applied, so this arrives uppercase")
     }
 
-    /// ⌘⇧R is Archon's drawer now (#382), and the rail it used to toggle is Worktrees' on ⌘⇧G.
-    func testShiftCommandROpensTheArchonDrawerAndGTheWorktreesRail() {
+    /// ⌘⇧R and ⌘⇧G are drawers now (#382): Archon along the bottom, Worktrees on the right.
+    /// The rail both used to toggle is gone.
+    func testShiftCommandROpensTheArchonDrawerAndGTheWorktreesDrawer() {
         XCTAssertEqual(
             match("r", [.command, .shift]),
             .verb(.toggleDrawer(name: "archon", surface: .archon)))
-        XCTAssertEqual(match("g", [.command, .shift]), .local(.toggleRail))
+        XCTAssertEqual(
+            match("g", [.command, .shift]),
+            .verb(.toggleDrawer(name: "worktrees", surface: .worktrees)))
     }
 
     /// ⌘W is unavailable — SwiftUI's `WindowGroup` binds it to close-window — so the pane

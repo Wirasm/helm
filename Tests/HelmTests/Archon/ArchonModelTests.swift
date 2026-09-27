@@ -7,7 +7,7 @@ import XCTest
 /// from one `workflow status`, gates answered through the composer, and the finished inbox.
 ///
 /// The rail's visibility tests left with the rail: the drawer is shown by benchd's document
-/// (`DrawerTests`), and the rail's own flag is Worktrees' now (`WorktreesRailModelTests`).
+/// (`DrawerTests`), and the rail itself is gone (#382).
 // swiftlint:disable:next type_body_length - legacy (#418): 521 lines, limit 350
 final class ArchonModelTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/project")

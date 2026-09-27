@@ -257,5 +257,18 @@
     "by": {
       "kind": "operator"
     }
+  },
+  {
+    "id": "v-27",
+    "verb": "drawer/toggle",
+    "args": {
+      "drawer": "worktrees",
+      "surface": {
+        "kind": "worktrees"
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
   }
 ]

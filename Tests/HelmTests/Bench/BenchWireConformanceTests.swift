@@ -45,10 +45,13 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertTrue(surfaces.contains(.browser))
         XCTAssertTrue(surfaces.contains { if case .canvas = $0 { true } else { false } })
         XCTAssertTrue(
-            surfaces.contains { if case .terminal(.some, _) = $0 { true } else { false } })
+            surfaces.contains { if case .terminal(.some, _, _) = $0 { true } else { false } })
         XCTAssertTrue(
-            surfaces.contains { if case .terminal(_, .some) = $0 { true } else { false } },
+            surfaces.contains { if case .terminal(_, .some, _) = $0 { true } else { false } },
             "a terminal showing a benchd session (M3)")
+        XCTAssertTrue(
+            surfaces.contains { if case .terminal(_, _, .some) = $0 { true } else { false } },
+            "a terminal whose shell's directory benchd read (M5b), which Worktrees reads")
         XCTAssertFalse(
             surfaces.contains { if case .unsupported = $0 { true } else { false } },
             "every kind in the daemon's own sample is one helm knows")

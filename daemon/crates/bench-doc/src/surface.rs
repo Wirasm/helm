@@ -45,6 +45,9 @@ pub enum Surface {
     /// The Archon runs of the active workspace (helm #382), read by helm from Archon's own CLI.
     /// No payload, for the same reason as `Sessions`, and nothing about a run is kept here.
     Archon,
+    /// Every git worktree on the machine (helm #382), found and read by helm from git itself.
+    /// No payload: which repositories it lists is the machine's, not arrangement.
+    Worktrees,
 }
 
 impl Surface {
@@ -84,7 +87,8 @@ impl Surface {
             (Surface::Canvas { source: a }, Surface::Canvas { source: b }) => a == b,
             (Surface::Browser, Surface::Browser)
             | (Surface::Sessions, Surface::Sessions)
-            | (Surface::Archon, Surface::Archon) => true,
+            | (Surface::Archon, Surface::Archon)
+            | (Surface::Worktrees, Surface::Worktrees) => true,
             (
                 Surface::Terminal {
                     session: Some(a), ..
@@ -105,6 +109,7 @@ impl Surface {
             Surface::Browser => SurfaceClass::Browser,
             Surface::Sessions => SurfaceClass::Sessions,
             Surface::Archon => SurfaceClass::Archon,
+            Surface::Worktrees => SurfaceClass::Worktrees,
         }
     }
 }
@@ -131,6 +136,7 @@ pub enum SurfaceClass {
     Browser,
     Sessions,
     Archon,
+    Worktrees,
 }
 
 /// The agent a terminal pane held (helm `ResumableAgent`), recorded so a restart can offer
@@ -234,6 +240,7 @@ mod tests {
             (Surface::Browser, json!({"kind": "browser"})),
             (Surface::Sessions, json!({"kind": "sessions"})),
             (Surface::Archon, json!({"kind": "archon"})),
+            (Surface::Worktrees, json!({"kind": "worktrees"})),
         ] {
             assert_eq!(serde_json::to_value(&surface).unwrap(), encoded);
             assert_eq!(serde_json::from_value::<Surface>(encoded).unwrap(), surface);

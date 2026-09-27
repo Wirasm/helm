@@ -26,40 +26,34 @@ helm having an agent is helm rendering someone else's.
 
 ## Layout
 
-One column for the early route: the **workbench**, under the workspace bar. A **right bar**
-arrives last, with Archon.
+One column: the **workbench**, under the workspace bar, and nothing either side of it.
 
-- **Workbench** — the middle. Where panes are organised. **Panes live here, full stop** — the
-  bar is not a second place one can dock.
-- **Right bar** — a rail of **quick actions on things that are not your current work**.
-  Operating on worktrees, and whatever earns a line later. Archon was its first tenant and moved
-  to a drawer along the bottom (#382), where a row of stage dots per run has the width it needs. Toggleable,
-  remembered, **default hidden**; Archon is ranked last, so helm has nothing either side of
-  the bench for the whole early route.
+- **Workbench** — the middle. Where panes are organised. **Panes live here, full stop** — a
+  drawer is not a second place one can dock.
+- **Drawers** — what is consulted rather than worked in slides over the bench and away again
+  (#356): the sessions list on the left (⌘⇧S), Archon's runs along the bottom (⌘⇧R), every
+  worktree on the machine on the right (⌘⇧G), the shared browser (⌘⇧B). Opening one changes
+  nothing under it.
 
-  This first said *not actions — ambient things you monitor*, with Archon's run list as its
-  one tenant. Dogfooding said otherwise: what you actually want from the run list is to
-  **start, approve and cancel** runs, and the second tenant to arrive is worktree cleanup,
-  which is nothing but a verb. Monitoring is what the rail shows you *so that* you can act.
-
-  **A tenant is one collapsed line that expands** — `Worktrees` — not a panel. That
-  shape is what makes a tenant nearly free when it is not in use, and it is why the rail can
-  hold things consulted rarely without earning its keep every minute. Build the rail that way
-  first; a run list that merely sits on the right is not one.
+  There used to be a **right bar**, a rail of quick actions on things that are not your current
+  work, with Archon and then Worktrees as its tenants. Both became drawers (#382) and the rail
+  went with them: a column beside the bench made the bench narrower whenever it was shown, and a
+  drawer covers it only while open. What the rail taught stays true — what you want from a list
+  of runs or worktrees is to **act** on them (start, approve, cancel, clean), and monitoring is
+  what it shows you *so that* you can.
 
 The **artifact browser is a ⌘O popover**, not a bar tenant — a picker you summon, not
 something you watch. Copying an artifact's path is a context menu on its row, and the path is
 the tilde-absolute `~/.prp/<key>/plans/foo.md` (the form prp's own README invokes).
 
-There is **no file tree**. A tree is navigation, which is not what the rail is for, and
+There is **no file tree**. A tree is navigation, which is not what a drawer is for, and
 `git status` already answers the one job it had — checking the agent put files where it
 should. It stays a deferral, not a rejection: dogfooding decides.
 
 There is **no left bar**. Every job proposed for one is taken — workspaces by the workspace
-bar, terminals by the tab strip, the file tree by the right bar — so it leaves the early
-route rather than being designed. The two ideas parked here for later — *a list of open
-worktrees, running Archon workflows* — waited on dogfooding to prove a need, and it did:
-the worktrees are a tenant of the **right** rail, and Archon's runs are a drawer (#382).
+bar, terminals by the tab strip — so it leaves the early route rather than being designed.
+The two ideas parked here for later — *a list of open worktrees, running Archon workflows* —
+waited on dogfooding to prove a need, and it did: both are drawers now (#382).
 
 ## Primitives
 
@@ -77,7 +71,7 @@ the worktrees are a tenant of the **right** rail, and Archon's runs are a drawer
   - **Browser** — a view onto the shared browser benchd runs (#350). A ⌘-clicked http link
     opens there as a new tab (#376); the URL canvas that used to take it was removed.
 
-  A third type was built for Archon and then removed with the rail it served. The argument for
+  A third type was built for Archon and then removed with the rail that served it. The argument for
   it is not preserved here: the operator reads run detail in Archon's own web UI, so there is
   nothing left for a run pane to render, and a short list is easier to defend than a longer
   one with a footnote.
@@ -120,14 +114,42 @@ from it.
   Status is deliberately not brand: a running stage is Archon's electric blue, a stage waiting on
   you amber, a failure its red, a done stage the brand teal. All of it is governed tokens held at
   helm's contrast floors, never hex in a view.
-- **Worktrees.** A second, collapsed tenant reads `git worktree list --porcelain` only when
-  expanded, then shows every record with owner kind, local disk size, directory activity and
-  reachability from the repository's resolved remote default branch. That reachability is Git's
-  “merged”, not pull-request state; if the base cannot be resolved the row stays unknown and is
-  not cleanable. Confirmed cleanup routes through `archon complete <branch>` for recognised
-  Archon branches and guarded `git worktree remove <path>` for the rest, without force flags.
-  Clean All serialises those same visible, eligible routes. It never uses Archon's global cleanup,
-  reads Archon's database or HTTP API, inventories unrelated repositories, or becomes a file tree.
+
+## Worktrees surface
+
+A drawer on the right (⌘⇧G, #382) listing **every git worktree on the machine**, grouped by
+repository. The operator asked for exactly that on 2026-09-27 (*"I want to be able to see and
+CRUD all worktrees on the machine"*), which reverses what this section used to say: the rail
+tenant it replaced read only the active workspace's repository and **never inventoried unrelated
+repositories**. Now it does, on purpose.
+
+**Where it looks**: the repositories of the bench's workspaces, every repository under
+`~/Projects` (four folders deep, skipping dependencies and build output), and every repository an
+Archon worktree under `~/.archon*/workspaces` was made from. Found by reading `.git` on disk, no
+process started; `HELM_WORKTREES_HOME` moves the home it searches. A repository with only its main
+checkout is left out unless a workspace is in it, and the drawer says how many it left out.
+
+**What each worktree shows**, from git and nothing else: its branch, dirty or clean (`git status`,
+without taking the index lock), ahead and behind its upstream, merged — Git reachability from the
+repository's resolved remote default branch, never pull-request state, and unknown (never
+cleanable) when there is no default — how old its last commit is, and which bench panes are
+working in it (benchd's record of each terminal's directory). No disk size: `du` would walk every
+file of every worktree, about 126 GB under helm's alone. No database, no Archon database or HTTP
+API.
+
+**When it reads**: every time the drawer is shown, and on `r`. Never while hidden, and never polled.
+Repositories are read six at a time and each appears the moment it answers, so the last answer
+stays on screen while the next one is read.
+
+**What it does**, from the keyboard: cleanup, #141's, unchanged — only a merged, existing,
+ordinary linked worktree, after the operator's confirmation, through `archon complete <branch>`
+for a recognised Archon branch and `git worktree remove <path>` without force for the rest (`d`,
+or `⇧D` for every merged one of a repository). Creating a worktree, opening one and deleting
+unmerged work behind a confirmation that names what would be lost are the next change. It never
+becomes a file tree.
+
+**Agents do not use it**: git is their view. benchd and `bench` know only the drawer's surface
+kind, `worktrees`, as they know `sessions` and `archon`; nothing about a worktree is kept in benchd.
 
 ## Sizing
 
