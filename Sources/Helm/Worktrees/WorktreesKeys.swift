@@ -11,7 +11,7 @@ enum WorktreesKeyAction: Equatable {
     /// Ask to clean one worktree; the model's confirmation follows.
     case clean(Worktree)
     /// Ask to clean every cleanable worktree of one repository.
-    case cleanAll(repo: String)
+    case cleanAll(repo: GitCommonDir)
 }
 
 enum WorktreesKeys {

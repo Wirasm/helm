@@ -57,15 +57,18 @@ final class WorktreesDrawerTests: XCTestCase {
         let merged = Worktree.fixture(path: "/w/merged")
         let unmerged = Worktree.fixture(path: "/w/unmerged", mergedState: .unmerged)
         let main = Worktree.fixture(path: "/w", branch: "main", isMain: true)
-        let repo = WorktreeRepo(commonDir: "/w/.git", worktrees: [main, merged, unmerged])
-        let dirtyOnly = WorktreeRepo(commonDir: "/v/.git", worktrees: [main, unmerged])
+        let repo = WorktreeRepo(
+            commonDir: GitCommonDir("/w/.git"), worktrees: [main, merged, unmerged])
+        let dirtyOnly = WorktreeRepo(
+            commonDir: GitCommonDir("/v/.git"), worktrees: [main, unmerged])
 
         XCTAssertEqual(WorktreesKeys.action(for: "r", on: nil, in: nil), .refresh)
         XCTAssertEqual(WorktreesKeys.action(for: "d", on: merged, in: repo), .clean(merged))
         XCTAssertEqual(WorktreesKeys.action(for: "d", on: unmerged, in: repo), .none)
         XCTAssertEqual(WorktreesKeys.action(for: "d", on: main, in: repo), .none)
         XCTAssertEqual(
-            WorktreesKeys.action(for: "D", on: unmerged, in: repo), .cleanAll(repo: "/w/.git"),
+            WorktreesKeys.action(for: "D", on: unmerged, in: repo),
+            .cleanAll(repo: GitCommonDir("/w/.git")),
             "clean-all is the repository's, whichever row is selected")
         XCTAssertEqual(WorktreesKeys.action(for: "D", on: unmerged, in: dirtyOnly), .none)
         XCTAssertEqual(WorktreesKeys.action(for: "x", on: merged, in: repo), .none)

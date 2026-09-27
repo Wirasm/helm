@@ -4,26 +4,28 @@ import Foundation
 
 actor FakeWorktreeClient: WorktreeClient {
     private var response: [Worktree]
-    private var responsesByRepository: [String: [Worktree]] = [:]
-    private var listFailures: [String: WorktreeCLIError] = [:]
+    private var responsesByRepository: [GitCommonDir: [Worktree]] = [:]
+    private var listFailures: [GitCommonDir: WorktreeCLIError] = [:]
     private var removeFailures: [String: WorktreeCLIError] = [:]
     private var delay: Duration?
 
     private(set) var listCalls = 0
     private(set) var currentListCalls = 0
     private(set) var maximumListCalls = 0
-    private(set) var repositories: [String] = []
-    private(set) var removeRequests: [(path: String, repository: String)] = []
+    private(set) var repositories: [GitCommonDir] = []
+    /// Whether each read asked for the status of a repository's lone checkout, in order.
+    private(set) var loneStatusAsked: [Bool] = []
+    private(set) var removeRequests: [(path: String, repository: GitCommonDir)] = []
 
     init(response: [Worktree] = []) {
         self.response = response
     }
 
     func setResponse(_ response: [Worktree]) { self.response = response }
-    func setResponse(_ response: [Worktree], for repository: String) {
+    func setResponse(_ response: [Worktree], for repository: GitCommonDir) {
         responsesByRepository[repository] = response
     }
-    func setListFailure(_ failure: WorktreeCLIError?, for repository: String) {
+    func setListFailure(_ failure: WorktreeCLIError?, for repository: GitCommonDir) {
         listFailures[repository] = failure
     }
     func setRemoveFailure(_ failure: WorktreeCLIError?, for path: String) {
@@ -32,13 +34,18 @@ actor FakeWorktreeClient: WorktreeClient {
     func setDelay(_ delay: Duration?) { self.delay = delay }
 
     func metrics() -> (
-        listCalls: Int, maximumListCalls: Int, repositories: [String],
-        removeRequests: [(path: String, repository: String)]
+        listCalls: Int, maximumListCalls: Int, repositories: [GitCommonDir],
+        removeRequests: [(path: String, repository: GitCommonDir)]
     ) {
         (listCalls, maximumListCalls, repositories, removeRequests)
     }
 
-    func worktrees(inRepository commonDir: String) async throws -> [Worktree] {
+    func worktrees(
+        in commonDir: GitCommonDir, statusOfALoneCheckout: Bool
+    ) async throws
+        -> [Worktree]
+    {
+        loneStatusAsked.append(statusOfALoneCheckout)
         listCalls += 1
         currentListCalls += 1
         maximumListCalls = max(maximumListCalls, currentListCalls)
@@ -49,7 +56,7 @@ actor FakeWorktreeClient: WorktreeClient {
         return responsesByRepository[commonDir] ?? response
     }
 
-    func remove(path: String, inRepository commonDir: String) async throws {
+    func remove(path: String, in commonDir: GitCommonDir) async throws {
         removeRequests.append((path, commonDir))
         if let failure = removeFailures[path] { throw failure }
     }

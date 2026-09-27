@@ -20,7 +20,7 @@ import Foundation
 final class WorktreesModel: ObservableObject {
     enum Confirmation: Equatable, Identifiable {
         case row(path: String)
-        case cleanAll(repo: String, paths: [String])
+        case cleanAll(repo: GitCommonDir, paths: [String])
 
         var id: String {
             switch self {
@@ -32,13 +32,12 @@ final class WorktreesModel: ObservableObject {
 
     @Published private(set) var repos: [WorktreeRepo] = []
     /// The repositories a bench workspace is in, listed even with no linked worktree.
-    @Published private(set) var workspaceRepos: Set<String> = []
+    @Published private(set) var workspaceRepos: Set<GitCommonDir> = []
     @Published private(set) var isRefreshing = false
     /// Why a repository's last read failed, by common directory.
-    @Published private(set) var refreshFailures: [String: String] = [:]
+    @Published private(set) var refreshFailures: [GitCommonDir: String] = [:]
     @Published private(set) var confirmation: Confirmation?
     @Published private(set) var actingPaths: Set<String> = []
-    @Published private(set) var isCleaningAll = false
     @Published private(set) var actionFailures: [String: String] = [:]
 
     /// Six: enough to hide one slow `git status`, few enough that a refresh does not take the
@@ -86,21 +85,32 @@ final class WorktreesModel: ObservableObject {
         let found = await Task.detached { discover(workspaces) }.value
         let order = found.map(\.commonDir)
         workspaceRepos = Set(found.filter(\.isWorkspace).map(\.commonDir))
+        let workspaceRepos = self.workspaceRepos
         repos.removeAll { !order.contains($0.id) }
         refreshFailures = refreshFailures.filter { order.contains($0.key) }
 
         let client = worktreeClient
-        await withTaskGroup(of: (String, Outcome?).self) { group in
+        await withTaskGroup(of: (GitCommonDir, Outcome?).self) { group in
             var waiting = order.makeIterator()
+            func start(_ dir: GitCommonDir) {
+                let lone = workspaceRepos.contains(dir)
+                group.addTask {
+                    (dir, await Self.read(dir, with: client, statusOfALoneCheckout: lone))
+                }
+            }
             for _ in 0..<Self.concurrentRepositories {
                 guard let dir = waiting.next() else { break }
-                group.addTask { (dir, await Self.read(dir, with: client)) }
+                start(dir)
             }
             for await (dir, outcome) in group {
-                if let outcome { apply(outcome, to: dir, order: order) }
-                if let dir = waiting.next() {
-                    group.addTask { (dir, await Self.read(dir, with: client)) }
+                // Hidden mid-refresh: stop starting reads nobody will see, so a quick reopen
+                // is not dropped behind a refresh that is only draining.
+                guard !Task.isCancelled else {
+                    group.cancelAll()
+                    break
                 }
+                if let outcome { apply(outcome, to: dir, order: order) }
+                if let dir = waiting.next() { start(dir) }
             }
         }
     }
@@ -112,12 +122,11 @@ final class WorktreesModel: ObservableObject {
 
     /// nil when cancelled: the drawer was hidden, and nothing about the repository changed.
     private nonisolated static func read(
-        _ dir: String, with client: any WorktreeClient
-    ) async
-        -> Outcome?
-    {
+        _ dir: GitCommonDir, with client: any WorktreeClient, statusOfALoneCheckout: Bool
+    ) async -> Outcome? {
         do {
-            return .listed(try await client.worktrees(inRepository: dir))
+            return .listed(
+                try await client.worktrees(in: dir, statusOfALoneCheckout: statusOfALoneCheckout))
         } catch is CancellationError {
             return nil
         } catch {
@@ -125,7 +134,7 @@ final class WorktreesModel: ObservableObject {
         }
     }
 
-    private func apply(_ outcome: Outcome, to dir: String, order: [String]) {
+    private func apply(_ outcome: Outcome, to dir: GitCommonDir, order: [GitCommonDir]) {
         switch outcome {
         case let .listed(worktrees):
             refreshFailures[dir] = nil
@@ -142,8 +151,11 @@ final class WorktreesModel: ObservableObject {
         }
     }
 
-    private func reread(_ dir: String) async {
-        guard let outcome = await Self.read(dir, with: worktreeClient) else { return }
+    private func reread(_ dir: GitCommonDir) async {
+        guard
+            let outcome = await Self.read(
+                dir, with: worktreeClient, statusOfALoneCheckout: workspaceRepos.contains(dir))
+        else { return }
         apply(outcome, to: dir, order: repos.map(\.id))
     }
 
@@ -154,7 +166,7 @@ final class WorktreesModel: ObservableObject {
         confirmation = .row(path: row.id)
     }
 
-    func requestCleanAll(in repoID: String) {
+    func requestCleanAll(in repoID: GitCommonDir) {
         guard let repo = repos.first(where: { $0.id == repoID }) else { return }
         let paths = repo.worktrees.filter { $0.cleanupRoute != nil }.map(\.id)
         guard !paths.isEmpty else { return }
@@ -174,11 +186,9 @@ final class WorktreesModel: ObservableObject {
             _ = await performCleanup(path: path)
             await reread(repo.id)
         case let .cleanAll(repo, paths):
-            isCleaningAll = true
             for path in paths {
                 _ = await performCleanup(path: path)
             }
-            isCleaningAll = false
             await reread(repo)
         }
     }
@@ -202,7 +212,7 @@ final class WorktreesModel: ObservableObject {
                 }
                 try await archonClient.complete(branch: branch, in: WorkspacePath(main))
             case let .git(path):
-                try await worktreeClient.remove(path: path, inRepository: repo.commonDir)
+                try await worktreeClient.remove(path: path, in: repo.commonDir)
             }
             return true
         } catch {

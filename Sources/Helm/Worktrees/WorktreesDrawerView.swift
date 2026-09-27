@@ -161,7 +161,7 @@ private struct WorktreesRepoHeader: View {
                 Text(repo.name)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.textPrimary)
-                Text(Self.abbreviated(repo.mainPath ?? repo.commonDir))
+                Text(Self.abbreviated(repo.mainPath ?? repo.commonDir.path))
                     .font(.system(size: 9.5, design: .monospaced))
                     .foregroundStyle(Color.textFaint)
                     .lineLimit(1)

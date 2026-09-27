@@ -32,7 +32,7 @@ struct WorktreeDiscovery: Sendable {
     }
 
     struct Found: Equatable, Sendable {
-        let commonDir: String
+        let commonDir: GitCommonDir
         /// Some bench workspace is in this repository.
         let isWorkspace: Bool
     }
@@ -48,7 +48,7 @@ struct WorktreeDiscovery: Sendable {
         for dir in projects() + archonWorktrees() where found[dir] == nil {
             found[dir] = false
         }
-        return found.map { Found(commonDir: $0.key, isWorkspace: $0.value) }
+        return found.map { Found(commonDir: GitCommonDir($0.key), isWorkspace: $0.value) }
             .sorted {
                 ($0.isWorkspace ? 0 : 1, $0.commonDir) < ($1.isWorkspace ? 0 : 1, $1.commonDir)
             }

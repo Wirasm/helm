@@ -30,7 +30,8 @@ pub enum Surface {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<String>,
         /// Where the pane's shell was last seen working (M5b): the directory `bench restore`
-        /// starts a fresh shell in after a restart. benchd writes it; helm does not read it.
+        /// starts a fresh shell in after a restart. benchd writes it; helm's Worktrees drawer
+        /// reads it to say which worktree a pane is working in.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
     },

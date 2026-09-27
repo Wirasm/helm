@@ -7,9 +7,9 @@ import XCTest
 /// not a workspace, and has no collapsed state. Its cleanup tests are kept, per repository.
 @MainActor
 final class WorktreesModelTests: XCTestCase {
-    private let app = "/work/app/.git"
-    private let lib = "/work/lib/.git"
-    private let solo = "/work/solo/.git"
+    private let app = GitCommonDir("/work/app/.git")
+    private let lib = GitCommonDir("/work/lib/.git")
+    private let solo = GitCommonDir("/work/solo/.git")
 
     private func model(
         _ client: FakeWorktreeClient, archon: FakeArchonClient = FakeArchonClient(),
@@ -58,7 +58,7 @@ final class WorktreesModelTests: XCTestCase {
         let client = FakeWorktreeClient(response: [main("/work/x")])
         await client.setDelay(.milliseconds(30))
         let found = (0..<14).map {
-            WorktreeDiscovery.Found(commonDir: "/r\($0)/.git", isWorkspace: false)
+            WorktreeDiscovery.Found(commonDir: GitCommonDir("/r\($0)/.git"), isWorkspace: false)
         }
         let model = model(client, found: found)
 
@@ -69,6 +69,44 @@ final class WorktreesModelTests: XCTestCase {
         XCTAssertEqual(metrics.maximumListCalls, WorktreesModel.concurrentRepositories)
         XCTAssertEqual(
             model.repos.map(\.id), found.map(\.commonDir), "published in discovery order")
+    }
+
+    /// `git status` of a lone main checkout is read only for a workspace's repository: every
+    /// other repository with only its main checkout is not listed, so its status is never shown.
+    func testOnlyAWorkspacesRepositoryHasItsLoneCheckoutsStatusRead() async {
+        let client = FakeWorktreeClient(response: [main("/work/x")])
+        let model = model(client)
+
+        await model.refresh(workspaces: [])
+
+        let asked = await client.loneStatusAsked
+        let repositories = await client.metrics().repositories
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: zip(repositories, asked)),
+            [app: true, lib: false, solo: false])
+    }
+
+    /// Hidden mid-refresh: the reads running are cancelled and no new ones start, so the
+    /// refresh ends at once and the next showing's refresh is not dropped behind it.
+    func testAHiddenDrawersRefreshStartsNoMoreReads() async throws {
+        let client = FakeWorktreeClient(response: [main("/work/x")])
+        await client.setDelay(.seconds(30))
+        let found = (0..<14).map {
+            WorktreeDiscovery.Found(commonDir: GitCommonDir("/r\($0)/.git"), isWorkspace: false)
+        }
+        let model = model(client, found: found)
+
+        let refresh = Task { await model.refresh(workspaces: []) }
+        for _ in 0..<500
+        where await client.metrics().listCalls < WorktreesModel.concurrentRepositories {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        refresh.cancel()
+        await refresh.value
+
+        let metrics = await client.metrics()
+        XCTAssertEqual(metrics.listCalls, WorktreesModel.concurrentRepositories)
+        XCTAssertFalse(model.isRefreshing, "done, so the next showing refreshes")
     }
 
     /// A refresh asked for while one runs is dropped: the running one answers the same question.
@@ -195,7 +233,6 @@ final class WorktreesModelTests: XCTestCase {
         XCTAssertEqual(
             metrics.removeRequests.map(\.path), ["/work/b"], "never another repository's row")
         XCTAssertNotNil(model.actionFailures["/work/a"])
-        XCTAssertFalse(model.isCleaningAll)
     }
 
     /// After a cleanup only that repository is read again, not the machine.

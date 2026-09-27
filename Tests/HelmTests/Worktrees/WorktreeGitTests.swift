@@ -96,7 +96,9 @@ final class WorktreeGitTests: XCTestCase {
         let app = try makeApp()
 
         let rows = try await WorktreeCLI(environment: environment)
-            .worktrees(inRepository: app.appendingPathComponent(".git").path)
+            .worktrees(
+                in: GitCommonDir(app.appendingPathComponent(".git").path),
+                statusOfALoneCheckout: true)
         let byBranch = Dictionary(uniqueKeysWithValues: rows.map { ($0.record.branchName!, $0) })
 
         XCTAssertEqual(rows.first?.record.branchName, "main")
@@ -120,7 +122,7 @@ final class WorktreeGitTests: XCTestCase {
         let merged = app.appendingPathComponent(".worktrees/merged-one").path
 
         try await WorktreeCLI(environment: environment)
-            .remove(path: merged, inRepository: app.appendingPathComponent(".git").path)
+            .remove(path: merged, in: GitCommonDir(app.appendingPathComponent(".git").path))
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: merged))
         XCTAssertFalse(try git("worktree", "list", in: app).contains("merged-one"))
@@ -160,9 +162,15 @@ final class WorktreeGitTests: XCTestCase {
         XCTAssertEqual(
             found,
             [
-                .init(commonDir: app.appendingPathComponent(".git").path, isWorkspace: true),
-                .init(commonDir: lib.appendingPathComponent(".git").path, isWorkspace: false),
-                .init(commonDir: solo.appendingPathComponent(".git").path, isWorkspace: false),
+                .init(
+                    commonDir: GitCommonDir(app.appendingPathComponent(".git").path),
+                    isWorkspace: true),
+                .init(
+                    commonDir: GitCommonDir(lib.appendingPathComponent(".git").path),
+                    isWorkspace: false),
+                .init(
+                    commonDir: GitCommonDir(solo.appendingPathComponent(".git").path),
+                    isWorkspace: false),
             ],
             "node_modules and anything below the depth bound are not searched")
     }

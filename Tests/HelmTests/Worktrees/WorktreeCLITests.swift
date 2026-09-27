@@ -59,7 +59,8 @@ final class WorktreeCLITests: XCTestCase {
             fi
             """, at: git)
 
-        let rows = try await client().worktrees(inRepository: workspace.path)
+        let rows = try await client().worktrees(
+            in: GitCommonDir(workspace.path), statusOfALoneCheckout: true)
 
         XCTAssertEqual(rows.map(\.mergedState), [.merged, .unmerged])
         XCTAssertEqual(rows.map(\.status.isDirty), [false, true])
@@ -70,6 +71,29 @@ final class WorktreeCLITests: XCTestCase {
             recorded.contains(
                 "for-each-ref\n--merged\nrefs/remotes/origin/development\n--format=%(refname)"))
         XCTAssertTrue(recorded.contains("--no-optional-locks\n-C\n\(linked.path)\nstatus"))
+    }
+
+    /// A repository whose main checkout is its only worktree has its status read only when
+    /// asked: the drawer does not show such a repository unless a workspace is in it.
+    func testALoneCheckoutsStatusIsReadOnlyWhenAsked() async throws {
+        try install(
+            """
+            printf '%s\\n' "$1" >> "$CALLS"
+            if [ "$3" = worktree ]; then
+              printf 'worktree %s\\nHEAD aaaa\\nbranch refs/heads/main\\n\\n' "$WORKSPACE"
+            fi
+            """, at: git)
+        let repository = GitCommonDir(workspace.path)
+
+        let skipped = try await client().worktrees(in: repository, statusOfALoneCheckout: false)
+        XCTAssertNil(skipped.first?.status.isDirty)
+        XCTAssertFalse(
+            try String(contentsOf: calls, encoding: .utf8).contains("--no-optional-locks"))
+
+        let read = try await client().worktrees(in: repository, statusOfALoneCheckout: true)
+        XCTAssertEqual(read.first?.status.isDirty, false)
+        XCTAssertTrue(
+            try String(contentsOf: calls, encoding: .utf8).contains("--no-optional-locks"))
     }
 
     func testNoRemoteDefaultLeavesMergedStateUnknown() async throws {
@@ -85,7 +109,8 @@ final class WorktreeCLITests: XCTestCase {
             fi
             """, at: git)
 
-        let rows = try await client().worktrees(inRepository: workspace.path)
+        let rows = try await client().worktrees(
+            in: GitCommonDir(workspace.path), statusOfALoneCheckout: true)
         let row = try XCTUnwrap(rows.first)
         XCTAssertEqual(row.mergedState, .unknown)
         XCTAssertNil(row.status.isDirty, "a status failure is the row's own, and unknown")
@@ -95,7 +120,7 @@ final class WorktreeCLITests: XCTestCase {
     func testRemovePassesTheLiteralPathAndNeverForce() async throws {
         try install("printf '%s\\n' \"$@\" > \"$CALLS\"\n", at: git)
 
-        try await client().remove(path: linked.path, inRepository: workspace.path)
+        try await client().remove(path: linked.path, in: GitCommonDir(workspace.path))
 
         XCTAssertEqual(
             try String(contentsOf: calls, encoding: .utf8),
@@ -108,7 +133,8 @@ final class WorktreeCLITests: XCTestCase {
             at: git)
 
         do {
-            _ = try await client().worktrees(inRepository: workspace.path)
+            _ = try await client().worktrees(
+                in: GitCommonDir(workspace.path), statusOfALoneCheckout: true)
             XCTFail("expected failure")
         } catch let error as WorktreeCLIError {
             XCTAssertEqual(error.command, "git -C \(workspace.path) worktree list --porcelain")
@@ -136,8 +162,8 @@ final class WorktreeCLITests: XCTestCase {
         // capturing `self` to reach the `client(…)` helper is a `sending` violation. The
         // cancellation test below is shaped this way for the same reason.
         let client = client(extraEnvironment: ["PID_RECORD": pidRecord.path], timeout: budget)
-        let repository = workspace.path
-        let call = Task { try await client.worktrees(inRepository: repository) }
+        let repository = GitCommonDir(workspace.path)
+        let call = Task { try await client.worktrees(in: repository, statusOfALoneCheckout: true) }
         try await waitForPid(pidRecord)
 
         do {
@@ -153,8 +179,8 @@ final class WorktreeCLITests: XCTestCase {
         let pidRecord = root.appendingPathComponent("git-pid")
         try install("printf '%s' \"$$\" > \"$PID_RECORD\"\nexec /bin/sleep 999\n", at: git)
         let client = client(extraEnvironment: ["PID_RECORD": pidRecord.path])
-        let repository = workspace.path
-        let call = Task { try await client.worktrees(inRepository: repository) }
+        let repository = GitCommonDir(workspace.path)
+        let call = Task { try await client.worktrees(in: repository, statusOfALoneCheckout: true) }
         try await waitForPid(pidRecord)
         call.cancel()
 
@@ -193,13 +219,13 @@ final class WorktreeCLITests: XCTestCase {
 
         let cores = ProcessInfo.processInfo.activeProcessorCount
         let client = client(extraEnvironment: ["GATE": gate.path, "STARTED": started.path])
-        let repository = workspace.path
+        let repository = GitCommonDir(workspace.path)
         let linkedPath = linked.path
         let finished = expectation(description: "every call returned")
         finished.expectedFulfillmentCount = cores * 2
         for _ in 0..<(cores * 2) {
             Task.detached {
-                try? await client.remove(path: linkedPath, inRepository: repository)
+                try? await client.remove(path: linkedPath, in: repository)
                 finished.fulfill()
             }
         }

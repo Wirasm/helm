@@ -111,16 +111,30 @@ struct Worktree: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+/// A repository's identity: its common git directory, the one thing every worktree of it
+/// shares. A type rather than a `String` so it cannot be passed where a worktree's own path
+/// belongs — the two sit side by side in every call that removes one.
+struct GitCommonDir: Hashable, Comparable, Sendable, CustomStringConvertible {
+    let path: String
+
+    init(_ path: String) {
+        self.path = path
+    }
+
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.path < rhs.path }
+    var description: String { path }
+}
+
 /// One repository and every worktree `git worktree list` knows for it, the main one first.
 ///
 /// **Identified by its common git directory**, the one thing every worktree of a repository
 /// shares: two checkouts of one repository are one entry, and a worktree Archon made under
 /// `~/.archon` lands with the repository it was made from.
 struct WorktreeRepo: Identifiable, Equatable, Sendable {
-    let commonDir: String
+    let commonDir: GitCommonDir
     let worktrees: [Worktree]
 
-    var id: String { commonDir }
+    var id: GitCommonDir { commonDir }
 
     /// The main checkout, where a repository-wide command runs. nil for a bare repository.
     var mainPath: String? {
@@ -129,7 +143,7 @@ struct WorktreeRepo: Identifiable, Equatable, Sendable {
 
     /// The main checkout's folder name, or the common directory's for a bare repository.
     var name: String {
-        let url = URL(fileURLWithPath: mainPath ?? commonDir)
+        let url = URL(fileURLWithPath: mainPath ?? commonDir.path)
         let last = url.lastPathComponent
         return last == ".git" ? url.deletingLastPathComponent().lastPathComponent : last
     }

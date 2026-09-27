@@ -4,8 +4,13 @@ import Foundation
 /// common git directory (`WorktreeRepo.commonDir`); git runs there, so a bare repository and one
 /// whose main checkout was moved answer the same way.
 protocol WorktreeClient: Sendable {
-    func worktrees(inRepository commonDir: String) async throws -> [Worktree]
-    func remove(path: String, inRepository commonDir: String) async throws
+    /// `statusOfALoneCheckout` false skips `git status` when the main checkout is the only
+    /// worktree: the drawer does not list such a repository unless a workspace is in it.
+    func worktrees(
+        in repository: GitCommonDir, statusOfALoneCheckout: Bool
+    ) async throws
+        -> [Worktree]
+    func remove(path: String, in repository: GitCommonDir) async throws
 }
 
 struct WorktreeCLIError: Error, Equatable, LocalizedError, Sendable {
@@ -56,7 +61,12 @@ struct WorktreeCLI: WorktreeClient, Sendable {
     /// list, the default branch, the branches' upstream counts and dates, and which branches
     /// are merged; then `git status` once per worktree, which is the only per-row cost.
     /// No disk size: `du` walks every file of every worktree, about 126 GB under helm's alone.
-    func worktrees(inRepository commonDir: String) async throws -> [Worktree] {
+    func worktrees(
+        in repository: GitCommonDir, statusOfALoneCheckout: Bool
+    ) async throws
+        -> [Worktree]
+    {
+        let commonDir = repository.path
         let listing = try await runGit(["-C", commonDir, "worktree", "list", "--porcelain"])
         let records = try Self.parsePorcelain(listing)
         let defaultBranch = await resolveDefaultBranch(in: commonDir)
@@ -67,7 +77,9 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         for (index, record) in records.enumerated() {
             let exists = FileManager.default.fileExists(atPath: record.path)
             let facts = record.branch.flatMap { branches[$0] }
-            let dirty = exists && !record.isBare ? await isDirty(record.path) : nil
+            let readsStatus =
+                exists && !record.isBare && (records.count > 1 || statusOfALoneCheckout)
+            let dirty = readsStatus ? await isDirty(record.path) : nil
             worktrees.append(
                 Worktree(
                     record: record,
@@ -82,8 +94,8 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         return worktrees
     }
 
-    func remove(path: String, inRepository commonDir: String) async throws {
-        _ = try await runGit(["-C", commonDir, "worktree", "remove", path])
+    func remove(path: String, in repository: GitCommonDir) async throws {
+        _ = try await runGit(["-C", repository.path, "worktree", "remove", path])
     }
 
     static func parsePorcelain(_ output: String) throws -> [WorktreeRecord] {
