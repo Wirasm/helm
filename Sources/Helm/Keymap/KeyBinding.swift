@@ -153,4 +153,6 @@ enum LocalAction: Equatable {
     case toggleRail
     /// Writes a dated note file, then opens it with a `pane/open`.
     case newNote
+    /// Holds or lets go of helm's power assertions (`KeepAwake`).
+    case toggleKeepAwake
 }

@@ -345,6 +345,12 @@ hint = "sessions"
 menu = "Sessions"
 
 [[bind]]
+key = "cmd+shift+a"
+action = "keep-awake"
+hint = "awake"
+menu = "Keep Awake"
+
+[[bind]]
 key = "cmd+="
 action = "font-size"
 step = "increase"
