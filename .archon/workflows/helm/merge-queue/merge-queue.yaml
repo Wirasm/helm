@@ -80,7 +80,8 @@ nodes:
         held: { type: array, items: { type: integer } }
         unverified: { type: array, items: { type: integer } }
         queued: { type: array, items: { type: integer } }
+        reran: { type: array, items: { type: integer } }
         reasons: { type: object }
         stopped: { type: string }
         summary: { type: string }
-      required: [mode, base_sha, merged, tested, landed_through, held, unverified, queued, reasons, stopped, summary]
+      required: [mode, base_sha, merged, tested, landed_through, held, unverified, queued, reran, reasons, stopped, summary]

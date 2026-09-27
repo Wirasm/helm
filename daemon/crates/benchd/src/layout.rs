@@ -76,8 +76,12 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
         Err(why) => return reply(Status::Refused, Some(why), None),
     };
     let focus = Actor::focus(&by, req.asked);
+    let waiting = matches!(verb, LayoutVerb::FocusWaiting {})
+        .then(|| crate::waiting::next_pane(core))
+        .flatten();
     let mut next = core.bench.document.clone();
-    let outcome = match apply(&mut next, core.placement.rules(), &verb, focus, by.caller()) {
+    let rules = core.placement.rules();
+    let outcome = match apply(&mut next, rules, &verb, focus, by.caller(), waiting) {
         Ok(o) => o,
         Err(refusal) => return reply(Status::Refused, Some(refusal.to_string()), None),
     };
@@ -335,12 +339,14 @@ pub fn document_at(core: &Core) -> DocumentAt {
 }
 
 #[expect(clippy::too_many_lines, reason = "legacy (#418): 124 lines, limit 100")]
+/// `waiting` is where a `focus/waiting` goes, which only the daemon knows (`waiting::next_pane`).
 pub fn apply(
     doc: &mut Document,
     rules: &Rules,
     verb: &LayoutVerb,
     focus: Focus,
     caller: Caller,
+    waiting: Option<PaneId>,
 ) -> Result<Outcome, bench_doc::Refusal> {
     let on = |workspace: &Option<bench_doc::StandardPath>| match workspace {
         Some(path) => Target::Workspace(path.clone()),
@@ -434,6 +440,14 @@ pub fn apply(
                 Ok(())
             })
             .map(|()| Outcome::default()),
+        LayoutVerb::FocusWaiting {} => {
+            let pane = waiting.ok_or(bench_doc::Refusal::NothingWaiting)?;
+            doc.go_to(pane, focus)?;
+            Ok(Outcome {
+                created: None,
+                pane: Some(pane),
+            })
+        }
         LayoutVerb::LayoutResize { divider, fraction } => match *divider {
             Divider::Columns { member, against } => doc
                 .edit(Target::Column(member), focus, |b| {

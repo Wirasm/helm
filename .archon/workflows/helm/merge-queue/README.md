@@ -14,12 +14,18 @@ It takes the PR numbers in the order given. The orchestrator owns the order. For
    commit looks the same, so the queue never closes it. Whoever reads the report does.
 2. If the PR is stacked on a branch whose PR has merged, retarget it to `development`. If
    that PR is still open, hold it.
-3. If it conflicts with `development`, hold it. If it is behind, run `gh pr update-branch`.
-   That is a merge, not a rebase, so the reviewed commits keep their SHAs.
+3. If it conflicts with `development`, hold it; the reason says to merge `development` in,
+   resolve and queue it again. If it is behind, run `gh pr update-branch`. That is a merge,
+   not a rebase, so the reviewed commits keep their SHAs. "Behind" comes from the compare API
+   as well as GitHub's `mergeStateStatus`, which reads `UNKNOWN` for a while after
+   `development` moves. Checks on a head that is behind are never judged: a red there ran
+   against an older base.
 4. Wait until every check that branch protection requires has passed on **that exact head
-   SHA**. The required names come from the protection API, not from this file. A red check
-   holds the PR. If a check has not appeared three minutes after the head appeared, the queue
-   closes and reopens the PR once, because a retarget does not start CI.
+   SHA**. The required names come from the protection API, not from this file. A red check on
+   an up-to-date head gets **one** re-run of its failed jobs per PR per batch; red again holds
+   the PR, and the report lists every PR that needed the re-run under `reran`. If a check has
+   not appeared three minutes after the head appeared, the queue closes and reopens the PR
+   once, because a retarget does not start CI.
 5. Merge with `gh pr merge --merge --match-head-commit <head>`, then read the PR back. It must
    be MERGED, and the merge commit's parents must be exactly `[development tip before the
    merge, head]`. If the PR did not merge, it is held. If it merged with any other parents,
@@ -58,9 +64,11 @@ archon workflow get <runId> --json | jq '.status, .terminal_record.returns.value
 `wait` exits 0 when the run has an answer, 3 when `--timeout` passed with the run still
 going, and 1 when the wait itself failed. A failed run also exits 0, so read `status`.
 The answer is the `report` node:
-`{mode, base_sha, merged, tested, landed_through, held, unverified, queued, reasons, stopped, summary}`.
+`{mode, base_sha, merged, tested, landed_through, held, unverified, queued, reran, reasons, stopped, summary}`.
 `unverified` means `development` changed and nobody checked how: stop and look. `queued` lists
-PRs the run never reached (it stopped first). `reasons` maps a PR number to why.
+PRs the run never reached (it stopped first). `reran` lists PRs whose red check was re-run
+once: each is a flake to fix or a real red, whatever the PR's final status. `reasons` maps a
+PR number to why.
 
 A launch while a queue is live does not queue behind it. Archon cancels the new run
 (`precondition_failed`, "This worktree is in use"). Check `status` first, and send the PRs
@@ -88,12 +96,12 @@ This table is the input for the Archon design.
 | Who tests the composed tree? | The queue: `git merge-tree` builds a candidate and the local gate runs on it | The forge: `update-branch` builds it, and the required CI checks test it | helm's Swift gate needs vendored libghostty, and two suites need a display. `development` also only accepts a head that is up to date. Tells us whether a queue can own no gate at all and only sequence and verify. |
 | Test all, then merge | Tests the whole chain, then an approval, then merges the lot | Tests and merges one PR before touching the next | Strict protection makes testing ahead impossible: the base the next PR needs does not exist until this one merges. Costs one CI run (about 5 min) per PR, serially. Tells us the real batch time. |
 | What pins the merge | `--match-head-commit`, plus the tree landed on `dev` equals the tested tree (squash) | `--match-head-commit` on the head the checks passed on, plus the merge commit's parents | helm merges with `--merge`, so commits, not only trees, are the identity. Tells us whether a parent readback is enough, or whether a tree check is still worth having. |
-| Checks | Its own gate's exit code | Branch protection's required contexts, latest run per name, at the exact head SHA | The scratchpad script read `gh pr checks` without a SHA and once went on past a PR that did not merge. Tells us whether a per-SHA read plus `mergeStateStatus` is enough. |
+| Checks | Its own gate's exit code | Branch protection's required contexts, latest run per name, at the exact head SHA, judged only once the head is up to date with `development` | The scratchpad script read `gh pr checks` without a SHA and once went on past a PR that did not merge. A per-SHA read plus `mergeStateStatus` was not enough: on 2026-09-27 #507 was four commits behind, GitHub still said `UNKNOWN`, and a red from before the flaky test's fix held it. Behind now comes from the compare API too. |
 | Stacked PRs | Out of scope ("land one, rebase the next, queue it") | Retargets once the lower PR merged; reports (does not close) a PR whose head already landed | helm stacks PRs often. Tells us whether stack handling belongs in the queue or before it. |
 | Batches vs per PR | One batch per run; the path lock keeps it to one run | Same | Archon's trigger admission could queue per-PR runs, but needs two Archon changes (`trigger fire --input`, and a drain after `trigger execute`). Tells us whether batches are painful enough to want them. |
 | Ordering and judgment | An agent orders and assesses; a policy file decides auto-landing | None: the order given, no agent, no approval node | The orchestrator already reviewed and decided (it is the approval). Tells us whether a queue needs its own judgment when the caller already has it. |
-| Report | `{base_sha, tested, held, merged, summary}` plus a board and dashboard from the ledger | The same keys plus `landed_through`, `unverified`, `queued`, `reasons`, `stopped`; ledger only, no board | The caller is an agent that acts on the result, so reasons and the stop point are in the value rather than in prose. |
-| Repair | A spend-gated agent repairs conflicts | None: a conflict is held for the PR's owner | Keeps the prototype small. |
+| Report | `{base_sha, tested, held, merged, summary}` plus a board and dashboard from the ledger | The same keys plus `landed_through`, `unverified`, `queued`, `reran`, `reasons`, `stopped`; ledger only, no board | The caller is an agent that acts on the result, so reasons and the stop point are in the value rather than in prose. |
+| Repair | A spend-gated agent repairs conflicts | A conflict is held for the PR's owner; a red required job on an up-to-date head is re-run once per PR per batch | Keeps the prototype small. A flaky test cost three holds on 2026-09-27; `reran` tells us how often the one re-run pays for itself. |
 
 Findings from real runs go to the research note that started this:
 `~/.prp/helm-3ec376fc/research/archon-merge-queue-2026-09.md`.
