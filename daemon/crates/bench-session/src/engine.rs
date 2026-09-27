@@ -10,8 +10,8 @@
 //!   does not answer them again into the program.
 //! - **Queries are answered by whoever the program is talking to.** While a viewer is attached,
 //!   its Ghostty answers; while none is, the engine does, as Ghostty would.
-//! - **A frame is never cut.** An attach inside a synchronized update (mode 2026) waits for the
-//!   update to end, for at most a second, as Ghostty's own renderer does.
+//! - **A frame is never cut.** An attach or a screen read inside a synchronized update (mode
+//!   2026) waits for the update to end, for at most a second, as Ghostty's own renderer does.
 
 use std::fs::File;
 use std::io::Write;
@@ -85,11 +85,17 @@ pub(crate) struct Shared {
     pub notices: Sender<Notice>,
 }
 
-struct Pending {
-    stream: UnixStream,
-    generation: u64,
-    reply: SyncSender<Result<(), String>>,
-    deadline: Instant,
+/// A request that must see a finished frame, waiting for the program's update to end.
+enum Waiter {
+    Attach {
+        stream: UnixStream,
+        generation: u64,
+        reply: SyncSender<Result<(), String>>,
+    },
+    Screen {
+        history: bool,
+        reply: SyncSender<Result<Screen, String>>,
+    },
 }
 
 /// Start the engine thread for a session of `cols` × `rows`, once its terminal exists.
@@ -103,7 +109,8 @@ pub(crate) fn start(shared: Shared, rows: u16, cols: u16, rx: Receiver<Msg>) -> 
                 Engine {
                     term,
                     shared,
-                    pending: None,
+                    waiting: Vec::new(),
+                    deadline: None,
                 }
                 .run(&rx);
             }
@@ -120,15 +127,17 @@ pub(crate) fn start(shared: Shared, rows: u16, cols: u16, rx: Receiver<Msg>) -> 
 struct Engine {
     term: Terminal,
     shared: Shared,
-    pending: Option<Pending>,
+    /// Served, in order, once the screen is a finished frame or `deadline` passes.
+    waiting: Vec<Waiter>,
+    deadline: Option<Instant>,
 }
 
 impl Engine {
     fn run(mut self, rx: &Receiver<Msg>) {
         loop {
-            let msg = match &self.pending {
-                Some(p) => {
-                    match rx.recv_timeout(p.deadline.saturating_duration_since(Instant::now())) {
+            let msg = match self.deadline {
+                Some(deadline) => {
+                    match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                         Ok(m) => Some(m),
                         Err(RecvTimeoutError::Timeout) => None,
                         Err(RecvTimeoutError::Disconnected) => return,
@@ -142,7 +151,7 @@ impl Engine {
             if let Some(msg) = msg {
                 self.handle(msg);
             }
-            self.serve_pending();
+            self.serve_waiting();
         }
     }
 
@@ -164,23 +173,23 @@ impl Engine {
                 if rows > 0 && cols > 0 {
                     let _ = self.resize(rows, cols);
                 }
-                if let Some(old) = self.pending.take() {
-                    let _ = old.reply.send(Err("replaced by a newer attach".into()));
-                }
-                self.pending = Some(Pending {
+                self.wait(Waiter::Attach {
                     stream,
                     generation,
                     reply,
-                    deadline: Instant::now() + HOLD_LIMIT,
                 });
             }
             Msg::Resize { rows, cols, reply } => {
                 let _ = reply.send(self.resize(rows, cols));
             }
-            Msg::Screen { history, reply } => {
-                let _ = reply.send(self.screen(history));
-            }
+            Msg::Screen { history, reply } => self.wait(Waiter::Screen { history, reply }),
         }
+    }
+
+    fn wait(&mut self, waiter: Waiter) {
+        self.waiting.push(waiter);
+        self.deadline
+            .get_or_insert_with(|| Instant::now() + HOLD_LIMIT);
     }
 
     /// The engine first, then the viewer: what is relayed is what the engine has seen.
@@ -217,20 +226,32 @@ impl Engine {
             .map_err(|e| format!("resize: {e}"))
     }
 
-    fn serve_pending(&mut self) {
-        let due = match &self.pending {
-            Some(p) => !self.term.held() || Instant::now() >= p.deadline,
-            None => false,
+    fn serve_waiting(&mut self) {
+        let Some(deadline) = self.deadline else {
+            return;
         };
-        if !due {
+        if self.term.held() && Instant::now() < deadline {
             return;
         }
-        let p = self.pending.take().unwrap();
         if self.term.held() {
             // A program that never ends its update does not keep the viewer out.
             let _ = self.term.release_hold();
         }
-        let _ = p.reply.send(self.install(p.stream, p.generation));
+        self.deadline = None;
+        for waiter in std::mem::take(&mut self.waiting) {
+            match waiter {
+                Waiter::Attach {
+                    stream,
+                    generation,
+                    reply,
+                } => {
+                    let _ = reply.send(self.install(stream, generation));
+                }
+                Waiter::Screen { history, reply } => {
+                    let _ = reply.send(self.screen(history));
+                }
+            }
+        }
     }
 
     /// Redraw the screen in the viewer, then make it the viewer: nothing between the two is
@@ -265,9 +286,18 @@ impl Engine {
         })
     }
 
+    /// Whoever was waiting for a frame is answered with the last one; an attach is refused.
     fn closed(&mut self) {
-        if let Some(p) = self.pending.take() {
-            let _ = p.reply.send(Err("the session has ended".into()));
+        self.deadline = None;
+        for waiter in std::mem::take(&mut self.waiting) {
+            match waiter {
+                Waiter::Attach { reply, .. } => {
+                    let _ = reply.send(Err("the session has ended".into()));
+                }
+                Waiter::Screen { history, reply } => {
+                    let _ = reply.send(self.screen(history));
+                }
+            }
         }
         finish(&self.shared);
     }

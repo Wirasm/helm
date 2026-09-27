@@ -33,6 +33,7 @@ mod just;
 mod layout;
 mod restore;
 mod rules;
+mod screen;
 mod sessions;
 mod shell_env;
 mod shells;
@@ -904,6 +905,21 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
     }
 }
 
+/// A verb's answer to `req`, or its refusal, closing the connection.
+fn answered(req: &Request, result: Result<Value, String>) -> (Response, AfterResponse) {
+    let (status, reason, data) = match result {
+        Ok(data) => (Status::Ok, None, Some(data)),
+        Err(why) => (Status::Refused, Some(why), None),
+    };
+    let response = Response {
+        id: req.id.clone(),
+        status,
+        reason,
+        data,
+    };
+    (response, AfterResponse::Done)
+}
+
 #[expect(clippy::too_many_lines, reason = "legacy (#418): 588 lines, limit 100")]
 fn dispatch(
     core: &Arc<Mutex<Core>>,
@@ -966,10 +982,10 @@ fn dispatch(
                 AfterResponse::Follow(rx),
             )
         }
-        Some(Verb::Restore) => match restore::answer(core, &req.args, req.by.clone()) {
-            Ok(data) => (ok(data), AfterResponse::Done),
-            Err(why) => (refused(why), AfterResponse::Done),
-        },
+        Some(verb @ (Verb::ScreenGet | Verb::ScreenSend)) => {
+            answered(req, screen::answer(core, verb, &req.args, req.by.clone()))
+        }
+        Some(Verb::Restore) => answered(req, restore::answer(core, &req.args, req.by.clone())),
         Some(Verb::Layout) => {
             let response = layout::answer(&mut core.lock().unwrap(), req);
             (response, AfterResponse::Done)
