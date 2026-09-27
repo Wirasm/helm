@@ -144,9 +144,11 @@ enum KeyBindings {
             .character("r"), [.command, .shift],
             .verb(.toggleDrawer(name: "archon", surface: .archon)), hint: "archon",
             menu: "Archon"),
+        // ⌘⇧G — every git worktree on the machine, grouped by repository, on the right (#382).
         KeyBinding(
-            .character("g"), [.command, .shift], .local(.toggleRail), hint: "worktrees",
-            menu: "Toggle Worktrees Rail"),
+            .character("g"), [.command, .shift],
+            .verb(.toggleDrawer(name: "worktrees", surface: .worktrees)), hint: "worktrees",
+            menu: "Worktrees"),
         // ⌘J — the camera on the focused slot (`BenchCamera`): the bench laid out larger and
         // panned to it, the neighbours peeking in at the edges. ⌘J again returns. `.anywhere`,
         // because the pane you want to look at is usually the terminal holding the keyboard.

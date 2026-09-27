@@ -98,7 +98,11 @@ final class KeyHintTests: XCTestCase {
             keys("folder", terminalFocused: true),
             "the empty bench and the key pop-up must not be able to disagree")
         XCTAssertEqual(KeyGlyph.binding(for: .verb(.newTerminal), in: KeyBindings.all), "⌘N")
-        XCTAssertEqual(KeyGlyph.binding(for: .local(.toggleRail), in: KeyBindings.all), "⇧⌘G")
+        XCTAssertEqual(
+            KeyGlyph.binding(
+                for: .verb(.toggleDrawer(name: "worktrees", surface: .worktrees)),
+                in: KeyBindings.all),
+            "⇧⌘G")
     }
 
     /// An action nothing binds gets nil rather than a plausible-looking string, so a caller

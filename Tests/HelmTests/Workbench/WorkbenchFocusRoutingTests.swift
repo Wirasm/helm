@@ -255,12 +255,8 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     func testTheMenusFocusRowMovesFocusOnARealBench() throws {
         let bench = try Bench(terminals: 2)
         defer { bench.close() }
-        let defaults = try isolatedDefaults("focus-menu-route")
         let actions = LocalActions(
             workbench: bench.workbench, workspaces: WorkspaceModel(),
-            rail: WorktreesRailModel(
-                worktreeClient: FakeWorktreeClient(), archonClient: FakeArchonClient(),
-                defaults: defaults),
             terminals: bench.terminals)
         Actions.performer = actions
         defer { Actions.performer = nil }

@@ -50,7 +50,7 @@ extension BenchDocument.Bench {
     ) -> [UUID: SessionLaunch] {
         let sessions = columns.flatMap(\.slots).flatMap(\.panes).compactMap {
             pane -> (UUID, String)? in
-            guard case let .terminal(_, session?) = pane.surface else { return nil }
+            guard case let .terminal(_, session?, _) = pane.surface else { return nil }
             return (pane.id, session)
         }
         guard !sessions.isEmpty else { return [:] }

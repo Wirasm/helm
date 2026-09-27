@@ -113,7 +113,7 @@ pane can show can live in one, and it exists only while it holds at least one. W
 is the operator's focus: an agent never opens one without *asked*; its pane lands in the drawer
 and **badges** it. Lives in benchd's document; helm draws the open one over the bench
 (`Sources/Helm/Drawers/`), where and how wide from `[drawer.<name>]` in the keymap file.
-_Avoid_: panel, sidebar, rail (the rail is helm's own and is not a drawer), scratchpad, overlay
+_Avoid_: panel, sidebar, rail (retired with #382), scratchpad, overlay
 
 **sessions drawer**:
 The drawer on the left (⌘⇧S) listing every agent session in the active workspace, as benchd's
@@ -156,24 +156,17 @@ pane, and nothing in the **board** above knows it exists. Owned by the `helm-boa
 where the colliding word comes from — no Swift in `Sources/Helm/Board/` is about this at all.
 _Avoid_: board unqualified (that word is the workspace marks), whiteboard, sketch pane, diagram
 
-**rail**:
-The remembered, default-hidden strip to the right of the workbench (⌘⇧G): **somewhere to start
-work that is not your current work**. Its one tenant is Worktrees; Archon moved to the **Archon
-drawer** (#382). Worktrees is one collapsed line until requested, then becomes a per-repository ledger of every
-record from `git worktree list --porcelain`: branch and owner kind, local disk size and directory
-activity, and reachability from the resolved remote default branch. It does not poll. Cleanup is
-confirmed and owner-routed through `archon complete` or guarded `git worktree remove`, never force.
-Nothing opens from the rail. It is not another place panes can dock, a file tree, or a
-cross-repository inventory.
-_Avoid_: sidebar, pane dock, monitor rail, calling it a run list
-
-**Worktrees**:
-The rail's on-demand, per-repository ledger of linked Git worktrees. Git porcelain is the shared
-discovery source for hand-made and Archon-owned trees. “Merged” means Git reachability from an
-explicit resolved remote default branch, not pull-request state; an unknown base is never
-cleanable. helm does not read Archon's database or HTTP API, call global `archon isolation
-cleanup`, inventory unrelated repositories, or automatically force deletion.
-_Avoid_: worktree pane, worktree sidebar, file tree, disk dashboard
+**Worktrees drawer**:
+The drawer on the right (⌘⇧G) listing **every git worktree on the machine**, grouped by
+repository (#382): the bench's workspaces' repositories, those under `~/Projects`, and those
+Archon's worktrees were made from. Each worktree shows its branch, dirty or clean, ahead and
+behind its upstream, **merged** (Git reachability from the resolved remote default branch, never
+pull-request state; unknown when there is none), the age of its last commit, and the bench panes
+working in it. Read from git alone when the drawer is shown and on `r`; it never polls. Cleanup is
+#141's: confirmed, merged only, owner-routed through `archon complete` or `git worktree remove`,
+never force. It replaced the **rail**, a remembered strip right of the bench that held Worktrees
+(and Archon before its drawer) and was deleted with #382.
+_Avoid_: rail, worktree pane, worktree sidebar, file tree, disk dashboard
 
 **running run**:
 A run with status `running`, listed in the Archon drawer between the runs waiting on you
@@ -302,8 +295,9 @@ _Avoid_: callback, event, message (nothing is delivered — the agent reads a fi
 Closing a pane with `bench close` — the inverse of a spawn, and it stops at the **pane**. benchd
 refuses an agent's close of a terminal unless it says `--force`, and the pane the operator is
 working in unless it says `--asked`. Worktrees and branches are not teardown's:
-that is #141's rail, which confirms with the operator and never deletes unmerged work.
-_Avoid_: kill, destroy, cleanup (cleanup is the worktree rail's word)
+that is the Worktrees drawer's (#141), which confirms with the operator and never deletes
+unmerged work.
+_Avoid_: kill, destroy, cleanup (cleanup is the Worktrees drawer's word)
 
 ### Not levels in helm
 

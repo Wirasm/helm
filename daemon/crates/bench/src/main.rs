@@ -109,7 +109,8 @@ fn usage() -> &'static str {
      \x20     drawer toggle <name>                show a drawer over the bench, or hide it: the\n\
      \x20           [--surface <s>]               operator's focus, so refused from an agent. <s>\n\
      \x20                                         is what a new drawer starts with: browser,\n\
-     \x20                                         sessions, archon, terminal or file:<path>\n\
+     \x20                                         sessions, archon, worktrees, terminal or\n\
+     \x20                                         file:<path>\n\
      \x20     just <recipe> [args...]             run a recipe from <root>/rules/justfile here;\n\
      \x20                                         answers {run, log}, and just/finished says how\n\
      \x20                                         it ended\n\
@@ -528,6 +529,7 @@ fn parse_surface(raw: &str) -> Result<Surface, String> {
         "browser" => Ok(Surface::Browser),
         "sessions" => Ok(Surface::Sessions),
         "archon" => Ok(Surface::Archon),
+        "worktrees" => Ok(Surface::Worktrees),
         "terminal" => Ok(Surface::terminal()),
         _ => match raw.strip_prefix("file:") {
             Some(path) => {
@@ -535,7 +537,7 @@ fn parse_surface(raw: &str) -> Result<Surface, String> {
                 Surface::file(&cwd.join(path).display().to_string())
             }
             None => Err(format!(
-                "--surface is browser, sessions, archon, terminal or file:<path>, not {raw:?}"
+                "--surface is browser, sessions, archon, worktrees, terminal or file:<path>, not {raw:?}"
             )),
         },
     }

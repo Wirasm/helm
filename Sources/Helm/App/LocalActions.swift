@@ -4,24 +4,21 @@ import HelmWire
 ///
 /// **Composition, which is why it is in `App/`.** A verb needs the bench and the workspace list
 /// to resolve against; the local actions each touch one owner — the focused terminal, the
-/// artifact popover, the rail, the note store. `RootView` holds all of them and builds this.
+/// artifact popover, the note store. `RootView` holds all of them and builds this.
 @MainActor
 final class LocalActions: ActionPerformer {
     private let workbench: WorkbenchModel
     private let workspaces: WorkspaceModel
-    private let rail: WorktreesRailModel
     private let terminals: TerminalManager
     private let just: JustRuns
     private let palette: CommandPalette
 
     init(
-        workbench: WorkbenchModel, workspaces: WorkspaceModel, rail: WorktreesRailModel,
-        terminals: TerminalManager, just: JustRuns = JustRuns(),
-        palette: CommandPalette = CommandPalette()
+        workbench: WorkbenchModel, workspaces: WorkspaceModel, terminals: TerminalManager,
+        just: JustRuns = JustRuns(), palette: CommandPalette = CommandPalette()
     ) {
         self.workbench = workbench
         self.workspaces = workspaces
-        self.rail = rail
         self.terminals = terminals
         self.just = just
         self.palette = palette
@@ -56,8 +53,6 @@ final class LocalActions: ActionPerformer {
             workbench.send(.workspaceOpen(path: folder.path.value), by: .operatorGesture)
         case .openArtifactPanel:
             workbench.isBrowserOpen.toggle()
-        case .toggleRail:
-            rail.toggleVisibility()
         case .toggleZoom:
             workbench.isZoomed.toggle()
         case .newNote:

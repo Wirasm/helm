@@ -114,11 +114,12 @@ enum CommandList {
     static func title(of pane: BenchDocument.Pane, live: String?) -> String? {
         if let name = pane.name.text { return name }
         switch pane.surface {
-        case let .terminal(agent, _): return live ?? agent?.command
+        case let .terminal(agent, _, _): return live ?? agent?.command
         case let .canvas(path): return (path as NSString).lastPathComponent
         case .browser: return "browser"
         case .sessions: return "sessions"
         case .archon: return "archon"
+        case .worktrees: return "worktrees"
         case let .unsupported(kind): return kind
         }
     }
@@ -169,7 +170,6 @@ extension LocalAction {
         case let .jumpToPrompt(offset): offset < 0 ? "Previous Prompt" : "Next Prompt"
         case .openWorkspacePanel: "Open Workspace…"
         case .openArtifactPanel: "Open Artifact…"
-        case .toggleRail: "Toggle Worktrees Rail"
         case .newNote: "New Note"
         case .toggleKeepAwake: "Keep Awake"
         case .toggleZoom: "Zoom Pane"

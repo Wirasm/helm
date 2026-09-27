@@ -1,8 +1,16 @@
 import Foundation
 
+/// Reads and changes one repository's worktrees through git. The repository is named by its
+/// common git directory (`WorktreeRepo.commonDir`); git runs there, so a bare repository and one
+/// whose main checkout was moved answer the same way.
 protocol WorktreeClient: Sendable {
-    func worktrees(in workspacePath: WorkspacePath) async throws -> [Worktree]
-    func remove(path: String, in workspacePath: WorkspacePath) async throws
+    /// `statusOfALoneCheckout` false skips `git status` when the main checkout is the only
+    /// worktree: the drawer does not list such a repository unless a workspace is in it.
+    func worktrees(
+        in repository: GitCommonDir, statusOfALoneCheckout: Bool
+    ) async throws
+        -> [Worktree]
+    func remove(path: String, in repository: GitCommonDir) async throws
 }
 
 struct WorktreeCLIError: Error, Equatable, LocalizedError, Sendable {
@@ -37,46 +45,57 @@ struct WorktreeCLI: WorktreeClient, Sendable {
 
     let environment: [String: String]
     let gitExecutable: String
-    let duExecutable: String
     let timeout: Duration
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         gitExecutable: String = "/usr/bin/env",
-        duExecutable: String = "/usr/bin/du",
         timeout: Duration = WorktreeCLI.defaultTimeout
     ) {
         self.environment = environment
         self.gitExecutable = gitExecutable
-        self.duExecutable = duExecutable
         self.timeout = timeout
     }
 
-    func worktrees(in workspacePath: WorkspacePath) async throws -> [Worktree] {
-        let listing = try await runGit([
-            "-C", workspacePath.value, "worktree", "list", "--porcelain",
-        ])
-        let records = try Self.parsePorcelain(listing.stdout)
-        let defaultBranch = await resolveDefaultBranch(in: workspacePath)
+    /// Every worktree of one repository, with its status. A repository-wide call each for the
+    /// list, the default branch, the branches' upstream counts and dates, and which branches
+    /// are merged; then `git status` once per worktree, which is the only per-row cost.
+    /// No disk size: `du` walks every file of every worktree, about 126 GB under helm's alone.
+    func worktrees(
+        in repository: GitCommonDir, statusOfALoneCheckout: Bool
+    ) async throws
+        -> [Worktree]
+    {
+        let commonDir = repository.path
+        let listing = try await runGit(["-C", commonDir, "worktree", "list", "--porcelain"])
+        let records = try Self.parsePorcelain(listing)
+        let defaultBranch = await resolveDefaultBranch(in: commonDir)
+        let branches = await branchFacts(in: commonDir)
+        let merged = await mergedBranches(into: defaultBranch, in: commonDir)
 
         var worktrees: [Worktree] = []
         for (index, record) in records.enumerated() {
             let exists = FileManager.default.fileExists(atPath: record.path)
+            let facts = record.branch.flatMap { branches[$0] }
+            let readsStatus =
+                exists && !record.isBare && (records.count > 1 || statusOfALoneCheckout)
+            let dirty = readsStatus ? await isDirty(record.path) : nil
             worktrees.append(
                 Worktree(
                     record: record,
                     kind: .classify(branch: record.branchName),
-                    metadata: await metadata(for: record.path, exists: exists),
-                    mergedState: await mergedState(
-                        of: record.branch, into: defaultBranch, in: workspacePath),
+                    status: WorktreeStatus(
+                        isDirty: dirty, tracking: facts?.tracking,
+                        lastCommitAt: facts?.committedAt),
+                    mergedState: Self.mergedState(of: record.branch, in: merged),
                     isMain: index == 0,
                     exists: exists))
         }
         return worktrees
     }
 
-    func remove(path: String, in workspacePath: WorkspacePath) async throws {
-        _ = try await runGit(["-C", workspacePath.value, "worktree", "remove", path])
+    func remove(path: String, in repository: GitCommonDir) async throws {
+        _ = try await runGit(["-C", repository.path, "worktree", "remove", path])
     }
 
     static func parsePorcelain(_ output: String) throws -> [WorktreeRecord] {
@@ -134,50 +153,78 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         return records
     }
 
-    private func resolveDefaultBranch(in workspacePath: WorkspacePath) async -> String? {
+    private func resolveDefaultBranch(in commonDir: String) async -> String? {
         guard
-            let result = try? await runGit([
-                "-C", workspacePath.value, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD",
+            let text = try? await runGit([
+                "-C", commonDir, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD",
             ])
         else { return nil }
-        let branch = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let branch = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return branch.isEmpty ? nil : branch
     }
 
-    private func mergedState(
-        of branch: String?, into defaultBranch: String?, in workspacePath: WorkspacePath
-    ) async -> WorktreeMergedState {
-        guard let branch, let defaultBranch else { return .unknown }
-        do {
-            _ = try await runGit([
-                "-C", workspacePath.value, "merge-base", "--is-ancestor", branch, defaultBranch,
+    struct BranchFacts: Equatable {
+        let tracking: WorktreeTracking?
+        let committedAt: Date?
+    }
+
+    /// Every local branch's upstream counts and tip date, in one `for-each-ref`. A failure
+    /// leaves every row's counts and age unknown, never the listing.
+    private func branchFacts(in commonDir: String) async -> [String: BranchFacts] {
+        guard
+            let text = try? await runGit([
+                "-C", commonDir, "for-each-ref", "refs/heads",
+                "--format=%(refname)%00%(upstream)%00%(upstream:track,nobracket)%00%(committerdate:unix)",
             ])
-            return .merged
-        } catch let error as WorktreeCLIError {
-            if case .nonzeroExit(status: 1, stderr: _) = error.reason { return .unmerged }
-            return .unknown
-        } catch {
-            return .unknown
-        }
+        else { return [:] }
+        return Self.parseBranchFacts(text)
     }
 
-    private func metadata(for path: String, exists: Bool) async -> WorktreeMetadata {
-        guard exists else { return WorktreeMetadata(diskBytes: nil, directoryModifiedAt: nil) }
-        let date =
-            (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date
-        let bytes: Int64?
-        if let result = try? await run(
-            arguments: [duExecutable, "-sk", path], commandName: "du -sk \(path)"),
-            let kilobytes = Int64(result.stdout.split(whereSeparator: \.isWhitespace).first ?? "")
-        {
-            bytes = kilobytes * 1_024
-        } else {
-            bytes = nil
+    static func parseBranchFacts(_ text: String) -> [String: BranchFacts] {
+        var facts: [String: BranchFacts] = [:]
+        for line in text.split(separator: "\n") {
+            let fields = line.split(separator: "\0", omittingEmptySubsequences: false)
+            guard fields.count == 4 else { continue }
+            facts[String(fields[0])] = BranchFacts(
+                tracking: fields[1].isEmpty ? nil : WorktreeTracking.parse(String(fields[2])),
+                committedAt: TimeInterval(fields[3]).map(Date.init(timeIntervalSince1970:)))
         }
-        return WorktreeMetadata(diskBytes: bytes, directoryModifiedAt: date)
+        return facts
     }
 
-    private func runGit(_ arguments: [String]) async throws -> ProcessResult {
+    /// The local branches whose tips the default branch reaches: Git's "merged", never a pull
+    /// request's. nil when there is no default branch or git refused, so no row is cleanable.
+    private func mergedBranches(
+        into defaultBranch: String?, in commonDir: String
+    ) async
+        -> Set<String>?
+    {
+        guard let defaultBranch,
+            let text = try? await runGit([
+                "-C", commonDir, "for-each-ref", "--merged", defaultBranch,
+                "--format=%(refname)", "refs/heads",
+            ])
+        else { return nil }
+        return Set(text.split(separator: "\n").map(String.init))
+    }
+
+    static func mergedState(of branch: String?, in merged: Set<String>?) -> WorktreeMergedState {
+        guard let branch, let merged else { return .unknown }
+        return merged.contains(branch) ? .merged : .unmerged
+    }
+
+    /// `--no-optional-locks` so reading a worktree never takes its index lock from under an
+    /// agent working in it. nil when git could not say.
+    private func isDirty(_ path: String) async -> Bool? {
+        guard
+            let text = try? await runGit([
+                "--no-optional-locks", "-C", path, "status", "--porcelain",
+            ])
+        else { return nil }
+        return !text.isEmpty
+    }
+
+    private func runGit(_ arguments: [String]) async throws -> String {
         let executableArguments =
             gitExecutable == "/usr/bin/env" ? ["git"] + arguments : [gitExecutable] + arguments
         return try await run(
@@ -185,7 +232,7 @@ struct WorktreeCLI: WorktreeClient, Sendable {
             commandName: (["git"] + arguments).joined(separator: " "))
     }
 
-    private func run(arguments: [String], commandName: String) async throws -> ProcessResult {
+    private func run(arguments: [String], commandName: String) async throws -> String {
         let result: Subprocess.Result
         do {
             result = try await Subprocess.run(
@@ -208,10 +255,6 @@ struct WorktreeCLI: WorktreeClient, Sendable {
                     status: result.status,
                     stderr: result.stderrSnippet(limit: Self.errorSnippetLimit)))
         }
-        return ProcessResult(stdout: String(decoding: result.stdout, as: UTF8.self))
-    }
-
-    private struct ProcessResult {
-        let stdout: String
+        return String(decoding: result.stdout, as: UTF8.self)
     }
 }

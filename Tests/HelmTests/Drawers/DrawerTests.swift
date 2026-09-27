@@ -136,12 +136,8 @@ final class DrawerTests: XCTestCase {
     /// and what an empty one starts with.
     func testTheDrawerKeySendsDrawerToggleAsTheOperator() throws {
         let rig = try rig(document(BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
-        let defaults = try isolatedDefaults("drawer-key")
         let actions = LocalActions(
             workbench: rig.model, workspaces: WorkspaceModel(),
-            rail: WorktreesRailModel(
-                worktreeClient: FakeWorktreeClient(), archonClient: FakeArchonClient(),
-                defaults: defaults),
             terminals: rig.terminals)
 
         actions.perform(.verb(.toggleDrawer(name: "browser", surface: .browser)))
