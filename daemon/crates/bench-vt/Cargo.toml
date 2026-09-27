@@ -1,0 +1,9 @@
+[package]
+name = "bench-vt"
+version.workspace = true
+edition.workspace = true
+description = "benchd's VT engine: libghostty-vt at helm's Ghostty commit, linked from the vendored archive."
+links = "ghostty-vt"
+
+[lints]
+workspace = true

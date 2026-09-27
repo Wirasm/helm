@@ -60,6 +60,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bench-vt"
+version = "0.0.1"
+
+[[package]]
 name = "bench-wire"
 version = "0.0.1"
 dependencies = [
