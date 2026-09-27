@@ -280,10 +280,19 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// - `font-size`: only once ⌘+/⌘- has been used. A size chosen inside helm
     ///   is a more direct statement of intent than a config written months ago,
     ///   so it outranks even the user config.
+    /// - `window-vsync = false`: **a hang, not a preference (#495).** With vsync on,
+    ///   ghostty's renderer thread starts and stops a `CVDisplayLink`, and after a
+    ///   display reconfiguration (wake, a monitor turned off and on) `CVDisplayLinkStop`
+    ///   can block forever. The wedged renderer stops draining its 64-slot mailbox, and
+    ///   the next click that focuses the pane blocks the main thread in
+    ///   `ghostty_surface_set_focus`. Upstream: ghostty-org/ghostty discussion #14150.
+    ///   helm already paces draws itself (`TerminalSurfaceCoordinator`'s display link),
+    ///   so the renderer's own link bought nothing but the hang.
     static var sessionOverrides: TerminalConfiguration {
         let chosenFontSize = persistedFontSize
         return TerminalConfiguration { builder in
             builder.withCustom("term", "xterm-256color")
+            builder.withCustom("window-vsync", "false")
             builder.withCustom("scrollback-limit", "16777216")  // 16 MiB — see above
             builder.withWindowPaddingX(paneInset.horizontal)
             builder.withWindowPaddingY(paneInset.vertical)

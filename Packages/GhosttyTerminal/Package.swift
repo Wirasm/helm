@@ -20,13 +20,10 @@ let package = Package(
     products: [
         .library(name: "GhosttyTerminal", targets: ["GhosttyTerminal"]),
     ],
-    dependencies: [
-        .package(url: "https://github.com/Lakr233/MSDisplayLink.git", exact: "2.2.0"),
-    ],
     targets: [
         .target(
             name: "GhosttyTerminal",
-            dependencies: ["GhosttyKit", "MSDisplayLink"],
+            dependencies: ["GhosttyKit"],
             // What the static libghostty references and nothing autolinks. SwiftPM got
             // GameController for free and xcodebuild did not (`GCController` undefined,
             // from Dear ImGui's macOS backend in the inspector).

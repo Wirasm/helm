@@ -121,9 +121,11 @@ macOS slice of [Lakr233/libghostty-spm](https://github.com/Lakr233/libghostty-sp
 it). helm owns it now. What was taken out: UIKit; the in-memory session and the host-managed IO
 backend it needs (a Ghostty patch of Lakr233's, not official Ghostty); the SwiftUI view layer
 (`TerminalViewState`, the representables, `TerminalSurfaceView`), since helm hosts
-`AppTerminalView` in its own `GhosttyHostView`; the snapshot helper; and the resources lookup
-(`GhosttyRuntimeResources`), which helm's `GhosttyResources` replaces. Its one other dependency
-is `MSDisplayLink`, exact `2.2.0`. It is outside `make lint` on purpose: its text stays close to
+`AppTerminalView` in its own `GhosttyHostView`; the snapshot helper; the resources lookup
+(`GhosttyRuntimeResources`), which helm's `GhosttyResources` replaces; and `MSDisplayLink`, whose
+macOS driver is a `CVDisplayLink` stopped on the main thread, replaced by the view's own
+`CADisplayLink` (#495: `CVDisplayLinkStop` can block forever after a display reconfiguration). It
+has no other dependency. It is outside `make lint` on purpose: its text stays close to
 upstream's so a fix there can still be diffed in by hand.
 
 **Why not Lakr233's package, as before.** Its `GhosttyKit.xcframework` is Ghostty with 17 of
