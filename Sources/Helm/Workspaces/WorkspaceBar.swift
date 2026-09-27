@@ -32,9 +32,9 @@ struct WorkspaceBar: View {
             Button {
                 Actions.perform(.local(.openWorkspacePanel))
             } label: {
-                Image(systemName: "plus")
+                Image(systemName: "plus").frame(width: 20, height: 20)
             }
-            .buttonStyle(.plain).foregroundStyle(Color.textMuted)
+            .buttonStyle(.chrome).foregroundStyle(Color.textMuted)
             // Rendered from the map rather than typed. This tooltip said ⌘⇧O while the
             // status bar said ⇧⌘O — macOS prints modifiers ⌃⌥⇧⌘, so the bar was right
             // and one window disagreed with itself about one key (#149).
@@ -72,7 +72,7 @@ struct WorkspaceBar: View {
                 isSelected ? Color.selection : .clear,
                 in: RoundedRectangle(cornerRadius: 5))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.chrome)
         .contextMenu {
             Button("Close Workspace") { close(workspace) }
             Button("Copy Path") { Pasteboard.copy(workspace.path.value) }

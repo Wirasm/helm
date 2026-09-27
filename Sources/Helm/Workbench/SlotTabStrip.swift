@@ -38,9 +38,9 @@ struct SlotTabStrip: View {
                 model.send(.focusSlot(slot.id), by: .operatorGesture)
                 model.send(.paneOpen(surface: .terminal(agent: nil)), by: .operatorGesture)
             } label: {
-                Image(systemName: "plus")
+                Image(systemName: "plus").frame(width: 18, height: 18)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             .foregroundStyle(Color.textMuted)
             .help("New terminal (⌘N)")
 
@@ -51,9 +51,9 @@ struct SlotTabStrip: View {
                 Button {
                     model.isBrowserOpen.toggle()
                 } label: {
-                    Image(systemName: "doc.text")
+                    Image(systemName: "doc.text").frame(width: 18, height: 18)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.chrome)
                 .foregroundStyle(Color.textMuted)
                 .help("Open artifact (⌘O)")
                 .popover(isPresented: $model.isBrowserOpen, arrowEdge: .bottom) {
