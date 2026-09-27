@@ -102,6 +102,9 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// surface holds, and it runs `bench attach` (M5b).
     var foregroundPid: pid_t? { manager?.foregrounds.pid(ofPane: id) }
 
+    /// The agent in this pane is waiting on the operator, as benchd sees it (M1, #357).
+    var waiting: BenchLiveSessions.Waiting? { manager?.foregrounds.waiting[id] }
+
     /// What the pane holding this session is called (#313), pushed in by `WorkbenchModel` on
     /// every bench change exactly as `isVisible` is — the bench owns it and persists it, and a
     /// session has no way to ask.
