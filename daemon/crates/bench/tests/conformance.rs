@@ -7064,6 +7064,67 @@ fn a_viewer_that_stops_reading_is_dropped_and_the_session_still_answers() {
 }
 
 #[test]
+fn a_stalled_viewer_on_one_session_never_holds_up_a_verb_on_another() {
+    // A stalled viewer holds its own session's locks for up to DAEMON_IO_TIMEOUT (see the test
+    // above). `sessions` reads every session, and helm asks it every two seconds: if it read one
+    // of those locks under benchd's core lock, every verb for every pane would wait out the stall
+    // behind it (#517). `sessions` runs back to back here as helm's poll does, so one call
+    // overlaps the stall whenever it starts, while another session's screen is read back to back.
+    let limit = bench_wire::DAEMON_IO_TIMEOUT;
+    let home = TestHome::claim("m5b-stall-other");
+    let daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\ntouch {}/written\nsleep 2\nexec yes 'a line of output that fills the socket'\n",
+            home.dir.display()
+        ),
+    );
+    let stalled = spawn_scripted(&home.dir);
+    let other = spawn_scripted(&home.dir);
+    let (seen, stream) = attach_and_read(&daemon.socket, &stalled, |b| b.len() > 100_000);
+    assert!(seen.len() > 100_000, "the flood reached the viewer");
+    // Every thread here stops at this deadline on its own, whatever the assertions do.
+    let deadline = Instant::now() + 3 * limit;
+    let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let poll = {
+        let (home, stalled, dropped) = (
+            home.dir.clone(),
+            stalled.clone(),
+            std::sync::Arc::clone(&dropped),
+        );
+        std::thread::spawn(move || {
+            while Instant::now() < deadline {
+                if session_row(&home, &stalled)["attached"] == false {
+                    dropped.store(true, Ordering::SeqCst);
+                    return;
+                }
+            }
+        })
+    };
+    let mut reads = Vec::new();
+    while !dropped.load(Ordering::SeqCst) && Instant::now() < deadline {
+        let started = Instant::now();
+        let screen = bench(&home.dir, &["get", "screen", &other]);
+        reads.push((screen.code, screen.stderr, started.elapsed()));
+    }
+    poll.join().unwrap();
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "a viewer that stopped reading was never dropped"
+    );
+    for (code, stderr, waited) in reads {
+        assert_eq!(code, 0, "{stderr}");
+        // Behind a blocked `sessions`, a read waits out the rest of the stall: seconds, not the
+        // milliseconds a read of an unrelated session takes.
+        assert!(
+            waited < limit / 2,
+            "reading another session waited {waited:?} behind the stalled viewer"
+        );
+    }
+    drop(stream);
+}
+
+#[test]
 fn a_session_flooding_its_viewer_still_answers_at_once() {
     // Output and requests share the engine thread; a program that never pauses must not keep a
     // resize or a screen read waiting behind its output.
