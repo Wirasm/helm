@@ -120,11 +120,23 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
     }
 }
 
-/// Whether Claude has written a transcript for conversation `id`.
+/// Whether Claude has written a transcript for conversation `id`: `<config>/projects/<dir>/<id>.jsonl`,
+/// where the config directory is `CLAUDE_CONFIG_DIR` when set, as Claude reads it, else
+/// `~/.claude`. benchd's environment is what the resumed claude inherits, so both see one place.
 fn has_transcript(id: &str) -> bool {
-    std::env::var_os("HOME").is_some_and(|home| {
-        bench_sessions::transcript::locate(std::path::Path::new(&home), id).is_ok()
-    })
+    let config = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => match std::env::var_os("HOME") {
+            Some(home) => std::path::Path::new(&home).join(".claude"),
+            None => return false,
+        },
+    };
+    let file = format!("{id}.jsonl");
+    std::fs::read_dir(config.join("projects"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|project| project.path().join(&file).is_file())
 }
 
 /// Whether a live session already holds conversation `runtime`.

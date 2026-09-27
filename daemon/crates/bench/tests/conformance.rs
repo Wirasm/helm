@@ -51,6 +51,8 @@ const INHERITED: &[&str] = &[
     "HELM_PANE",
     "HELM_BENCH_DIR",
     "PLAYWRIGHT_BROWSERS_PATH",
+    // Where Claude keeps its transcripts, which `restore` reads: the test's HOME decides it.
+    "CLAUDE_CONFIG_DIR",
 ];
 
 /// The one way this suite starts a child: without any of [`INHERITED`], so a test sets only
@@ -6309,6 +6311,45 @@ fn a_claude_conversation_with_a_transcript_is_resumed_after_a_restart() {
     fs::create_dir_all(&projects).unwrap();
     fs::write(projects.join("c-7e2d.jsonl"), "{}\n").unwrap();
     let _daemon = DaemonGuard::start_with_fake(&home.dir, "claude");
+    let restored = json_of(&bench(&home.dir, &["restore", &pane]));
+    assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
+}
+
+#[test]
+fn a_claude_transcript_is_looked_for_where_claude_config_dir_puts_it() {
+    let home = TestHome::claim("m5b-claudecfg");
+    let ws = workspace(&home.dir).display().to_string();
+    let config = home.dir.join("elsewhere-claude");
+    let pane = {
+        let daemon = DaemonGuard::start(&home.dir, None);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let pane = json_of(&bench(&home.dir, &["open", "terminal"]))["pane"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (_, pid) = terminal_process(&home.dir, "holder");
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "claude", "event": "SessionStart", "session": "c-9a1f",
+                "cwd": ws, "pid": pid, "pane": pane}),
+        );
+        pane
+    };
+    let projects = config.join("projects/ws");
+    fs::create_dir_all(&projects).unwrap();
+    fs::write(projects.join("c-9a1f.jsonl"), "{}\n").unwrap();
+    let bin = write_fake_agent(&home.dir, "claude");
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("PATH", format!("{}:{path}", bin.display()))
+        .env("CLAUDE_CONFIG_DIR", &config);
+    let _daemon = DaemonGuard::start_with(&home.dir, None, cmd);
     let restored = json_of(&bench(&home.dir, &["restore", &pane]));
     assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
 }
