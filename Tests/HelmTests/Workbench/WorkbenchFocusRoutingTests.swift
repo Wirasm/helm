@@ -184,9 +184,9 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
         let hidden = try bench.paneRect(inSlot: lower)
         XCTAssertLessThan(hidden.minY, 0, "the lower slot should run on past the bench when zoomed")
         let onBar = NSPoint(x: hidden.midX, y: 20)
-        // The chrome drawn after the bench is also the view AppKit hands the click to — the rail
-        // and the status bar are that shape in `RootView`; the workspace bar, drawn before the
-        // bench, needs its `zIndex` for it.
+        // Chrome drawn after the bench and below it, the status bar's shape in `RootView`, is
+        // also the view AppKit hands the click to. Only that case is measured here: the
+        // workspace bar above the bench (its `zIndex`) and the rail beside it are not.
         let hit = try XCTUnwrap(bench.window.contentView?.hitTest(onBar))
         XCTAssertFalse(
             sequence(first: hit, next: \.superview).contains { $0 is FocusClaimingTerminalView },
