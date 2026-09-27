@@ -10,7 +10,7 @@ final class TerminalFocusWatchTests: XCTestCase {
     /// **The dedup is the whole design, so it is worth a test.** `didUpdate` fires freely —
     /// it brackets every event a window handles — and the watch subscribes to it precisely
     /// because it is the only public signal that covers a first-responder change. What keeps
-    /// that from re-rendering the status bar on every keystroke the operator types into the
+    /// that from re-rendering the key pop-up on every keystroke the operator types into the
     /// terminal is the guard in `refresh`, and nothing else. Republishing unconditionally
     /// would still be *correct*, which is exactly why the regression would go unnoticed.
     ///

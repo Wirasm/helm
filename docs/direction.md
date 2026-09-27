@@ -212,7 +212,7 @@ Not decisions — things that are true today and shape what is cheap.
 - **The source is sliced vertically by feature** — `App/`, `Workspaces/`, `Terminals/`,
   `Canvas/`, `Artifacts/`, `Shared/` — with each vertical owning its own commands, and `App/`
   reduced to composition. Keyboard shortcuts are a table of values (`KeyBindings`, overlaid by the
-  operator's `rules/keymap.toml`) read by the event monitor, the menu and the status bar's hints.
+  operator's `rules/keymap.toml`) read by the event monitor, the menu and the key pop-up.
   See `AGENTS.md` for the patterns.
 - The kild layer was removed on `chore/drop-kild-layer`; what remains is workspaces,
   terminals, artifact rendering, and the app shell.

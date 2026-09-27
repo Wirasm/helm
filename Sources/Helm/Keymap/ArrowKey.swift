@@ -2,7 +2,7 @@ import HelmWire
 import SwiftUI
 
 /// The four arrow keys, once: the key code a keystroke carries, the word the keymap file uses,
-/// the menu's key equivalent, the status bar's glyph and the bench direction. Matched on the code
+/// the menu's key equivalent, the key pop-up's glyph and the bench direction. Matched on the code
 /// because arrows carry function-key code points rather than typable characters.
 enum ArrowKey: UInt16, CaseIterable {
     // The order is the menu's: Focus Left, Right, Up, Down.

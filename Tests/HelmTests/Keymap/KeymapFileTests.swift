@@ -81,7 +81,7 @@ final class KeymapFileTests: XCTestCase {
         XCTAssertEqual(
             table.firstIndex { $0.chord.spelled == "cmd+d" },
             KeyBindings.all.firstIndex { $0.chord.spelled == "cmd+d" },
-            "in the default's place, so the status bar keeps its order")
+            "in the default's place, so the key pop-up keeps its order")
     }
 
     func testUnbindRemovesABuiltInKeyAndLeavesTheRest() throws {

@@ -63,6 +63,9 @@ struct RootView: View {
             }
             // Over the bench and the rail, never beside them: a drawer changes nothing under it.
             .overlay { DrawerHost(model: workbench, keymap: .shared) }
+            // The keys available now, while the manage key is held (#499). Over the drawer too:
+            // it answers "what can I press", wherever the keyboard is.
+            .overlay { KeyPopup(keymap: .shared, hold: .shared) }
             StatusBarView(model: model, workbench: workbench, justRuns: justRuns)
         }
         // The base plane, and it has to be painted: `translucentWindow` makes the window
