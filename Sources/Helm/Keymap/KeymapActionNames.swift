@@ -41,6 +41,7 @@ extension VerbTemplate {
         case let .cycleWorkspace(delta): ("cycle-workspace", .init(delta: delta))
         case let .toggleDrawer(name, surface):
             ("drawer", .init(name: name, surface: surface?.keymapSpelling))
+        case .focusWaiting: ("focus-waiting", .none)
         }
     }
 
@@ -58,6 +59,7 @@ extension VerbTemplate {
         case "drawer":
             let drawer = try a.drawer(name)
             self = .toggleDrawer(name: drawer.name, surface: drawer.surface)
+        case "focus-waiting": try a.none(name); self = .focusWaiting
         default: return nil
         }
     }
