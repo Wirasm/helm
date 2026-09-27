@@ -30,7 +30,7 @@ pub use hook::{HookArgs, HookReply};
 
 mod just;
 pub use just::{
-    JUST_FINISHED, JUST_STARTED, JustFinished, JustRunArgs, JustStarted, is_recipe_name,
+    JUST_FINISHED, JUST_STARTED, JustFinished, JustList, JustRunArgs, JustStarted, is_recipe_name,
     just_logs_dir, justfile_path,
 };
 
@@ -168,6 +168,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "browser/stop",
     "browser/setup",
     "just/run",
+    "just/list",
     // M5b: give terminal panes whose session ended a session again (`just resume-all`).
     "restore",
     // M5b: read and type into any terminal, through its session's VT engine.
@@ -221,6 +222,8 @@ pub enum Verb {
     BrowserSetup,
     /// Run a recipe from the operator's bench justfile (#356).
     JustRun,
+    /// Name the recipes in it (#500).
+    JustList,
     /// Every verb in `LAYOUT_VERBS`; `LayoutVerb` decodes which one and its arguments.
     Layout,
     /// Terminal panes whose session ended get one again (`RestoreArgs`).
@@ -261,6 +264,7 @@ impl Verb {
             "helm/ask" => Some(Verb::HelmAsk),
             "helm/answer" => Some(Verb::HelmAnswer),
             "just/run" => Some(Verb::JustRun),
+            "just/list" => Some(Verb::JustList),
             "restore" => Some(Verb::Restore),
             "screen/get" => Some(Verb::ScreenGet),
             "screen/send" => Some(Verb::ScreenSend),

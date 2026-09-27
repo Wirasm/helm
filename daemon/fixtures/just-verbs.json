@@ -12,6 +12,17 @@
       "seq": 43
     }
   },
+  "list": {
+    "args": {},
+    "id": "helm-2",
+    "verb": "just/list"
+  },
+  "listed": {
+    "recipes": [
+      "day",
+      "review-queue"
+    ]
+  },
   "run": {
     "args": {
       "args": [

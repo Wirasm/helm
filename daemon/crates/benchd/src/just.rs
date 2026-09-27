@@ -13,8 +13,8 @@
 
 use crate::Core;
 use bench_wire::{
-    Actor, JUST_FINISHED, JUST_STARTED, JustFinished, JustRunArgs, JustStarted, Request,
-    is_recipe_name, just_logs_dir, justfile_path,
+    Actor, JUST_FINISHED, JUST_STARTED, JustFinished, JustList, JustRunArgs, JustStarted,
+    Request, is_recipe_name, just_logs_dir, justfile_path,
 };
 use serde_json::json;
 use std::fs::{self, File};
@@ -126,6 +126,44 @@ pub fn run(core: &Arc<Mutex<Core>>, req: &Request) -> Result<JustStarted, NotSta
     let started = JustStarted { run, log: log_str };
     reap(Arc::clone(core), child, leash, started.clone(), args.recipe);
     Ok(started)
+}
+
+/// `just/list`: the recipes `just/run` would run, as `just --summary` names them, in the
+/// justfile's order. No justfile is no recipes, not a refusal: the palette asks every time it
+/// opens. Read-only, so nothing is logged. A justfile `just` cannot parse is refused with
+/// `just`'s own words.
+pub fn list(core: &Arc<Mutex<Core>>) -> Result<JustList, String> {
+    let justfile = justfile_path(&core.lock().unwrap().root);
+    if !justfile.is_file() {
+        return Ok(JustList { recipes: vec![] });
+    }
+    let just = find_just().ok_or_else(|| {
+        format!(
+            "just is not installed: looked on PATH, then in {}",
+            FALLBACK_BINS.join(", ")
+        )
+    })?;
+    let output = Command::new(&just)
+        .arg("--justfile")
+        .arg(&justfile)
+        .arg("--unsorted")
+        .arg("--summary")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot start {}: {e}", just.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{} does not parse: {}",
+            justfile.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let recipes = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .filter(|name| is_recipe_name(name))
+        .map(String::from)
+        .collect();
+    Ok(JustList { recipes })
 }
 
 /// Waits for the run on a thread of its own and logs how it ended. The leash lives here until

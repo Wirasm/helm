@@ -4765,7 +4765,8 @@ fn await_event(root: &Path, kind: &str, run: &str) -> serde_json::Value {
 /// verbs reach this daemon, and it is logged as `just/started` (before the answer) and
 /// `just/finished`. Run by the operator its verbs are his and may open a drawer; run by an
 /// agent (`bench just`) the same verb is refused and the run fails. A missing justfile and a
-/// name that is not a recipe are refused.
+/// name that is not a recipe are refused. `just/list` names the recipes in the justfile's own
+/// order, and none while there is no justfile (#500).
 #[test]
 fn a_recipe_runs_as_whoever_asked_and_is_logged() {
     if !just_available() {
@@ -4782,6 +4783,18 @@ fn a_recipe_runs_as_whoever_asked_and_is_logged() {
         false,
     ));
 
+    let list = || {
+        ok_data(layout(
+            &daemon.socket,
+            "just/list",
+            serde_json::json!({}),
+            operator(),
+            false,
+        ))["recipes"]
+            .clone()
+    };
+    assert_eq!(list(), serde_json::json!([]), "no justfile is no recipes");
+
     let missing = bench(&home.dir, &["just", "open"]);
     assert_eq!(missing.code, 3, "{}", missing.stderr);
     assert!(
@@ -4794,11 +4807,12 @@ fn a_recipe_runs_as_whoever_asked_and_is_logged() {
     fs::write(
         root.join("rules").join("justfile"),
         format!(
-            "open:\n    pwd\n    {} drawer toggle x --surface sessions\n",
+            "zed:\n    true\n\nopen:\n    pwd\n    {} drawer toggle x --surface sessions\n",
             bench_bin().display()
         ),
     )
     .unwrap();
+    assert_eq!(list(), serde_json::json!(["zed", "open"]), "in the justfile's order");
     let not_a_recipe = layout(
         &daemon.socket,
         "just/run",
