@@ -43,7 +43,7 @@ use bench_wire::{
     Status, SuiteName, Verb, browser_endpoint_path, browser_wanted_path, check_socket_path,
     events_path, resolve_root, socket_path, validate_handle,
 };
-use bench_wire::{DOCUMENT_CHANGED, Frame};
+use bench_wire::{DOCUMENT_CHANGED, Frame, attach};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -688,37 +688,6 @@ fn close_session(core: &Arc<Mutex<Core>>, req: &Request) -> Response {
     )
 }
 
-/// `resize`: an attached viewer's terminal changed size, so the session's pty follows. Not
-/// logged: a pane dragged across the screen resizes many times a second, and the size is
-/// the viewer's, not a fact about the bench.
-fn resize(core: &Arc<Mutex<Core>>, req: &Request) -> Response {
-    let reply = |status: Status, reason: Option<String>| Response {
-        id: req.id.clone(),
-        status,
-        reason,
-        data: None,
-    };
-    let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
-        Ok(a) => a,
-        Err(e) => return reply(Status::Refused, Some(format!("resize args: {e}"))),
-    };
-    let (Some(rows), Some(cols)) = (parsed.rows, parsed.cols) else {
-        return reply(Status::Refused, Some("resize needs rows and cols".into()));
-    };
-    let session = core.lock().unwrap().sessions.get(&parsed.session).cloned();
-    let Some(session) = session else {
-        let why = format!(
-            "no session {:?} — `bench sessions` lists them",
-            parsed.session
-        );
-        return reply(Status::Refused, Some(why));
-    };
-    match session.resize(rows, cols) {
-        Ok(()) => reply(Status::Ok, None),
-        Err(why) => reply(Status::Refused, Some(why)),
-    }
-}
-
 /// `<root>/claude-settings.json`, rewritten at every Claude spawn so it always names the
 /// `bench` beside this daemon: the hooks that report to benchd and the inbound rule that lets
 /// benchd start a turn in an idle session. The operator's own wiring names the same handler,
@@ -739,7 +708,8 @@ enum AfterResponse {
     Done,
     /// The connection upgrades to an attach relay AFTER the response line: replay
     /// happens then, so the protocol stays "one response line first" even with a full
-    /// ring. This thread then pumps client bytes into the session's pty until EOF.
+    /// ring. This thread then reads the viewer's frames (`bench_wire::attach`) into the session
+    /// until EOF.
     Pump {
         session: Arc<Session>,
         stream: UnixStream,
@@ -862,16 +832,19 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
                     return;
                 }
             };
-            let mut input = raw;
-            let mut chunk = [0u8; 8192];
-            loop {
-                match input.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if session.write_input(&chunk[..n]).is_err() {
-                            break;
-                        }
+            // The viewer's frames: keys for the pty, and its size, in the order it sent them.
+            // A malformed frame ends the attachment like a closed one.
+            let mut input = BufReader::new(raw);
+            while let Ok(Some(frame)) = attach::AttachFrame::read(&mut input) {
+                let written = match frame {
+                    attach::AttachFrame::Input(bytes) => session.write_input(&bytes),
+                    // A size the pty refuses keeps the last one; the next frame tries again.
+                    attach::AttachFrame::Size { rows, cols } => {
+                        session.resize(rows, cols).or(Ok(()))
                     }
+                };
+                if written.is_err() {
+                    break;
                 }
             }
             // Only the attachment this pump owns is cleared; a taken-over pump's
@@ -975,7 +948,6 @@ fn dispatch(
         Some(Verb::Spawn) => (spawn::answer(core, req), AfterResponse::Done),
         Some(Verb::HelmAsk) => (ask::ask(core, req), AfterResponse::Done),
         Some(Verb::HelmAnswer) => (ask::answer(core, req), AfterResponse::Done),
-        Some(Verb::Resize) => (resize(core, req), AfterResponse::Done),
 
         Some(Verb::Sessions) => {
             let c = core.lock().unwrap();

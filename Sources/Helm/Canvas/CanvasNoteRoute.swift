@@ -38,7 +38,7 @@ struct CanvasOrigin: Equatable, Hashable {
 ///
 /// **Pure, and the whole decision.** #205's acceptance asks for a test over the routing decision
 /// rather than over a note posted by hand, and this is the shape that makes one possible: the
-/// lookup is a closure, so the rule is a test that asks no daemon. `AgentLocator` splits itself the same way and for the same reason.
+/// lookup is a closure, so the rule is a test that asks no daemon.
 enum CanvasNoteRoute: Equatable {
     /// The agent that pushed this canvas, still reachable.
     case mailbox(Handle)
