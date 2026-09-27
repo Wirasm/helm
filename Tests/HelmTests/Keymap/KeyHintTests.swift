@@ -42,7 +42,7 @@ final class KeyHintTests: XCTestCase {
 
     /// Modifier order is macOS's, not the codebase's prose: helm's comments write ⌘⇧D
     /// because that is how it is said out loud, while every menu on the machine — including
-    /// helm's own, an inch above this bar — prints ⇧⌘D. The pop-up matches the menus.
+    /// helm's own — prints ⇧⌘D. The pop-up matches the menus.
     func testGlyphsMatchWhatAMenuWouldPrint() {
         XCTAssertEqual(keys("new", terminalFocused: true), "⌘N")
         XCTAssertEqual(keys("split", terminalFocused: true), "⌘D")
@@ -90,7 +90,7 @@ final class KeyHintTests: XCTestCase {
     /// right, because that is the order every menu on the machine prints. Nothing outside
     /// this file may type a glyph now; it asks here, and gets the pop-up's answer by
     /// construction.
-    func testABindingRendersTheSameGlyphsTheBarShows() {
+    func testABindingRendersTheSameGlyphsThePopUpShows() {
         XCTAssertEqual(
             KeyGlyph.binding(for: .local(.openWorkspacePanel), in: KeyBindings.all), "⇧⌘O")
         XCTAssertEqual(
