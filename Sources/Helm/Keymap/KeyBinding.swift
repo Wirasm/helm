@@ -8,7 +8,7 @@ import SwiftUI
 ///
 /// **The table is the one place a key is defined** (M4 PR 3b of #354). The keymap monitor
 /// matches chords against it, the menu is built from the rows that have a `menu`, and the
-/// status bar's hints come from the rows that have a `hint`. It replaces `HelmCommand`, its
+/// key pop-up's hints come from the rows that have a `hint`. It replaces `HelmCommand`, its
 /// NotificationCenter bus, `Shortcut`, `HelmCommands` and `KeyHintCatalog`: five places that had
 /// to agree about one key.
 ///
@@ -21,7 +21,7 @@ struct KeyBinding: Equatable {
     let modifiers: NSEvent.ModifierFlags
     let when: When
     let action: Action
-    /// The label on the status bar. Rows sharing a label are shown as one hint.
+    /// The label in the key pop-up. Rows sharing a label are shown as one hint.
     let hint: String?
     /// The menu item's title. Its shortcut is the row's own chord (`menuShortcut`), so a row
     /// cannot show one key in the menu and fire on another.

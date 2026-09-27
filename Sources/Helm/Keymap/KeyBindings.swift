@@ -11,7 +11,7 @@ import SwiftUI
 ///
 /// **⌘T is unbound.** It left with the chat face (#375). Muscle memory lives here.
 enum KeyBindings {
-    /// In hint order: the status bar shows hints in the order their label first appears here,
+    /// In hint order: the key pop-up shows hints in the order their label first appears here,
     /// and the menu lists items in this order. Match order would only matter where two rows
     /// could both match, and `BindingTableTests` forbids that.
     ///
@@ -73,7 +73,7 @@ enum KeyBindings {
         }
 
     /// Manage + ⇧ + the same keys, moving the **pane** rather than the keyboard (#287). Shift
-    /// turns *go there* into *take this there*, and the two sit side by side on the status bar
+    /// turns *go there* into *take this there*, and the two sit side by side in the key pop-up
     /// because reading them together is what teaches the second one. `.anywhere`, like focus:
     /// the terminal holds the keyboard almost all the time, so a key that could not fire from
     /// inside a pane could not move that pane.

@@ -4,7 +4,7 @@ import HelmWire
 /// The key table in force: the built-in rows, overlaid by the operator's keymap file.
 ///
 /// **One reader, and it never leaves the operator without keys.** The monitor, the menu and the
-/// status bar's hints all read `table`. A file that does not parse, cannot be read or claims a
+/// key pop-up all read `table`. A file that does not parse, cannot be read or claims a
 /// chord twice changes nothing: the last good table stays, `problem` says which line and why,
 /// and the status bar shows it until a good save clears it. Only a missing file means the
 /// built-in table.
@@ -21,6 +21,9 @@ final class Keymap: ObservableObject {
     @Published private(set) var problem: KeymapProblem?
     /// `[drawer.<name>]` from the last good file.
     @Published private(set) var drawerStyles: [String: DrawerStyle] = [:]
+    /// The manage key in force (#498): the last good file's, else the built-in one. The key
+    /// pop-up shows while it is held, and the status bar names it.
+    @Published private(set) var manage: ManageKey = .builtIn
 
     /// `<bench root>/rules/keymap.toml`, so an isolated helm has its own. nil when the root
     /// cannot be resolved, which leaves the built-in table.
@@ -57,6 +60,7 @@ final class Keymap: ObservableObject {
         case .absent:
             table = defaults
             drawerStyles = [:]
+            manage = .builtIn
             problem = nil
         case let .unreadable(why):
             reject(KeymapProblem(line: nil, reason: why))
@@ -65,6 +69,7 @@ final class Keymap: ObservableObject {
                 let file = try KeymapFile.parse(text)
                 table = try file.overlay(on: defaults)
                 drawerStyles = file.drawers
+                manage = file.manage
                 problem = nil
             } catch {
                 reject(error)

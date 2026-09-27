@@ -1,6 +1,6 @@
 import AppKit
 
-/// One thing the status bar says you can press.
+/// One thing the key pop-up says you can press (#499).
 ///
 /// Both halves come from the key table in force (`Keymap.table`): `keys` is **rendered** from the rows,
 /// never typed, and `label` is the row's own `hint`. helm binds a few dozen keys and nothing in
@@ -10,9 +10,9 @@ import AppKit
 /// the table used to be answered by a separate catalogue of labels, and a test had to keep the
 /// two in step.
 ///
-/// Rows without a `hint` stay off the bar on purpose. Font size is bound five ways — ⌘=, ⌘+,
+/// Rows without a `hint` stay out of the pop-up on purpose. Font size is bound five ways — ⌘=, ⌘+,
 /// ⌘⇧+, ⌘-, ⌘0 — because of how shift reaches `charactersIgnoringModifiers`, and rendering
-/// that honestly would spend a tenth of the bar on the one command every macOS app binds
+/// that honestly would spend a line on the one command every macOS app binds
 /// identically. It keeps its menu items, which is where a universal shortcut belongs.
 struct KeyHint: Equatable, Identifiable {
     /// "⌘⌥1–9", "⌘↑↓", "⌘N" — glyphs, from the table.
@@ -105,7 +105,7 @@ enum KeyGlyph {
     /// **Because typing them by hand goes wrong, and did.** The empty bench said `⌘⇧O` while
     /// the status bar said `⇧⌘O`, two places in one window disagreeing about one key (#149);
     /// the second is right, because macOS prints modifiers in the fixed order ⌃⌥⇧⌘ and the
-    /// operator's eye already parses that. Any surface outside the status bar that wants to
+    /// operator's eye already parses that. Any surface outside the key pop-up that wants to
     /// name a key asks here instead, on `KeyHint`'s own reasoning: a hand-written glyph is a
     /// second copy of the keymap, and the second copy is the one that goes stale.
     ///
