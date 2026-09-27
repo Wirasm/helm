@@ -120,13 +120,13 @@ final class KeyPopupTests: XCTestCase {
         let popup = sections(try file.overlay(on: KeyBindings.all), manage: file.manage)
         XCTAssertEqual(keys(popup.held, "jot"), "N")
         XCTAssertEqual(keys(popup.held, "focus"), "↑↓←→ HJKL")
-        XCTAssertEqual(keys(popup.other, "workspace"), nil, "⌃1–9 cannot fire in a terminal")
+        let away = sections(
+            try file.overlay(on: KeyBindings.all), manage: file.manage, terminalFocused: false)
         XCTAssertEqual(
-            keys(
-                sections(
-                    try file.overlay(on: KeyBindings.all), manage: file.manage,
-                    terminalFocused: false
-                ).other, "workspace"), "⌃1–9",
-            "and it is listed where it can")
+            keys(away.other, "cycle"), "⌃←→", "a key that fires only away is listed there")
+        XCTAssertNil(keys(popup.other, "cycle"), "and not in a terminal, where it cannot fire")
+        XCTAssertNil(
+            keys(away.other, "workspace"),
+            "⌃1–9 also switches workspace, but the layer already says 1–9: one word, once")
     }
 }

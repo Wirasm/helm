@@ -7,7 +7,7 @@ import XCTest
 ///
 /// Deliberately asserted on `KeyBindings.all` rather than on fixtures wherever the point is
 /// "what will the operator actually see" — a hint rendered from a two-row toy map proves
-/// the renderer and nothing about the bar. Fixtures appear only where a rule needs a shape
+/// the renderer and nothing about the pop-up. Fixtures appear only where a rule needs a shape
 /// the real map does not happen to contain.
 final class KeyHintTests: XCTestCase {
     private func keys(_ label: String, terminalFocused: Bool) -> String? {
@@ -18,7 +18,7 @@ final class KeyHintTests: XCTestCase {
 
     // MARK: - Focus
 
-    /// The case the bar exists for. ⌃1–9 is the workspace switcher only while focus is
+    /// The case the hints exist for. ⌃1–9 is the workspace switcher only while focus is
     /// away from the grid — inside it those are the shell's own control codes — so a fixed
     /// hint would be wrong in whichever state it was not written for.
     func testWorkspaceHintFollowsFocus() {
@@ -42,7 +42,7 @@ final class KeyHintTests: XCTestCase {
 
     /// Modifier order is macOS's, not the codebase's prose: helm's comments write ⌘⇧D
     /// because that is how it is said out loud, while every menu on the machine — including
-    /// helm's own, an inch above this bar — prints ⇧⌘D. The bar matches the menus.
+    /// helm's own, an inch above this bar — prints ⇧⌘D. The pop-up matches the menus.
     func testGlyphsMatchWhatAMenuWouldPrint() {
         XCTAssertEqual(keys("new", terminalFocused: true), "⌘N")
         XCTAssertEqual(keys("split", terminalFocused: true), "⌘D")
@@ -82,13 +82,13 @@ final class KeyHintTests: XCTestCase {
             KeyHints.visible(terminalFocused: true, in: rows).first?.keys, "⌘1 ⌘2 ⌘4")
     }
 
-    // MARK: - One action's keys, for surfaces outside the bar
+    // MARK: - One action's keys, for surfaces outside the pop-up
 
     /// **The bug this exists to make impossible.** The empty bench said `⌘⇧O` and the
     /// workspace bar's `+` tooltip said the same, while the status bar an inch below said
     /// `⇧⌘O` — one window, three surfaces, two answers about one key (#149). The bar was
     /// right, because that is the order every menu on the machine prints. Nothing outside
-    /// this file may type a glyph now; it asks here, and gets the bar's answer by
+    /// this file may type a glyph now; it asks here, and gets the pop-up's answer by
     /// construction.
     func testABindingRendersTheSameGlyphsTheBarShows() {
         XCTAssertEqual(
@@ -96,7 +96,7 @@ final class KeyHintTests: XCTestCase {
         XCTAssertEqual(
             KeyGlyph.binding(for: .local(.openWorkspacePanel), in: KeyBindings.all),
             keys("folder", terminalFocused: true),
-            "the empty bench and the status bar must not be able to disagree")
+            "the empty bench and the key pop-up must not be able to disagree")
         XCTAssertEqual(KeyGlyph.binding(for: .verb(.newTerminal), in: KeyBindings.all), "⌘N")
         XCTAssertEqual(KeyGlyph.binding(for: .local(.toggleRail), in: KeyBindings.all), "⇧⌘R")
     }
@@ -112,7 +112,7 @@ final class KeyHintTests: XCTestCase {
     /// **The guard that the label moving onto the row left to keep.** A hint's word used to
     /// live in a catalogue beside the keymap, and a test made every bound command either named
     /// there or deliberately omitted. The word is on the row now, so there is nothing to keep
-    /// in step — but a row added with no `hint` would still vanish from the bar silently. The
+    /// in step — but a row added with no `hint` would still vanish from the pop-up silently. The
     /// one deliberate omission is font size (`KeyHint`'s header), so it is the only one allowed.
     func testEveryRowWithoutAHintIsFontSize() {
         for row in KeyBindings.all where row.hint == nil {
@@ -123,7 +123,7 @@ final class KeyHintTests: XCTestCase {
         }
     }
 
-    /// **The half the test above cannot see.** It asks whether a row is on the bar; this asks
+    /// **The half the test above cannot see.** It asks whether a row is in the pop-up; this asks
     /// whether its KEYS can be drawn. `KeyGlyph.trigger` answers nil for a keyCode it does not
     /// name, and `render` quietly drops it — so binding a hinted action to Escape, Tab or a
     /// function key would pass every other test here while the hint silently lost a glyph or
@@ -138,7 +138,7 @@ final class KeyHintTests: XCTestCase {
 
     /// `KeyHint.id` is its label, so a duplicated one is two rows with one identity — which
     /// SwiftUI's `ForEach` renders wrong rather than refusing. Rows share a label on purpose
-    /// (⌘↑ and ⌘↓ are one "turn"), so this asks it of what the bar draws.
+    /// (⌘↑ and ⌘↓ are one "turn"), so this asks it of what the pop-up draws.
     func testVisibleLabelsAreUnique() {
         for focused in [true, false] {
             let labels = KeyHints.visible(terminalFocused: focused, in: KeyBindings.all).map(
@@ -147,7 +147,7 @@ final class KeyHintTests: XCTestCase {
         }
     }
 
-    /// The bar reads in the table's order, and the pane keys lead because they are the ones an
+    /// The pop-up reads in the table's order, and the pane keys lead because they are the ones an
     /// operator needs on day one and nothing else in the window hints at.
     func testHintsReadInTheTablesOrder() {
         XCTAssertEqual(
@@ -159,7 +159,7 @@ final class KeyHintTests: XCTestCase {
             ])
     }
 
-    /// Every hint the bar draws says something in both halves. An empty glyph string would
+    /// Every hint the pop-up draws says something in both halves. An empty glyph string would
     /// render as a floating word with no key, which reads as a bug rather than as a hint.
     func testEveryVisibleHintIsComplete() {
         for focused in [true, false] {

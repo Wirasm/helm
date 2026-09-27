@@ -12,7 +12,9 @@ enum KeyPopupContent {
         /// The manage layer, written without the manage key he is already holding: `HJKL`,
         /// `⇧HJKL`, `1–9`.
         let held: [KeyHint]
-        /// Everything else he can press here, with its full chord.
+        /// Everything else he can press here, with its full chord. A word the layer already
+        /// says is not said again: ⌃1–9 switches workspace too, but he is holding ⌥⌘ and 1–9 is
+        /// right there.
         let other: [KeyHint]
     }
 
@@ -24,11 +26,11 @@ enum KeyPopupContent {
                 row.trigger, row.modifiers.subtracting(manage.modifiers), row.action,
                 when: row.when, hint: row.hint, menu: row.menu)
         }
+        let held = KeyHints.visible(terminalFocused: terminalFocused, in: layer)
+        let other = KeyHints.visible(
+            terminalFocused: terminalFocused, in: table.filter { !manage.holds($0.modifiers) })
         return Sections(
-            held: KeyHints.visible(terminalFocused: terminalFocused, in: layer),
-            other: KeyHints.visible(
-                terminalFocused: terminalFocused,
-                in: table.filter { !manage.holds($0.modifiers) }))
+            held: held, other: other.filter { hint in !held.contains { $0.label == hint.label } })
     }
 }
 
