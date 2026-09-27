@@ -17,9 +17,7 @@ final class WorkbenchClientModeTests: XCTestCase {
         let terminals: TerminalManager
     }
 
-    /// `restoring` answers #85's question when the first bench is worth asking about, which is
-    /// what the operator does before anything else on a restored bench.
-    private func rig(_ first: DocumentAt, restoring: Bool = true) throws -> Rig {
+    private func rig(_ first: DocumentAt) throws -> Rig {
         let server = try FakeBenchd(document: first)
         let client = BenchClient(socketPath: server.path)
         let terminals = TerminalManager()
@@ -29,7 +27,6 @@ final class WorkbenchClientModeTests: XCTestCase {
             server.stop()
         }
         XCTAssertTrue(Eventually.holds { model.document != nil }, "the first document never came")
-        if restoring, model.restoreOffer != nil { model.answer(.restore) }
         return Rig(server: server, client: client, model: model, terminals: terminals)
     }
 
@@ -185,29 +182,24 @@ final class WorkbenchClientModeTests: XCTestCase {
             rig.terminals.sessions.first { $0.id == waiting }?.workspacePath, WorkspacePath(other))
     }
 
-    /// **The import's first document starts nothing it has not been asked to.** benchd's first
-    /// document is empty and the import fills it, so every workspace is new at once; starting
-    /// their terminals as arrivals would spawn the very shells #85's question is about to ask
-    /// whether to restore. Measured against a live import before this was written.
-    func testTheDocumentAfterAnEmptyOneStartsNoShellBehindAnOpenQuestion() throws {
-        let rig = try rig(
-            DocumentAt(seq: 1, document: BenchDocument(workspaces: [], active: nil)),
-            restoring: false)
+    /// A relaunched helm draws the bench it finds at once (M5b): every terminal pane is a benchd
+    /// session, so there is nothing to ask about restoring — #85's question is gone. Only the
+    /// workspace on screen gets session objects.
+    func testABenchWithManyPanesIsDrawnAtOnceAndOnlyTheShownWorkspaceStartsAnything() throws {
         let panes = (0..<3).map { _ in BenchFixture.terminal() }
-
-        rig.server.push(
+        let rig = try rig(
             BenchFixture.document(
-                path, BenchFixture.bench(panes), seq: 2,
+                path, BenchFixture.bench(panes), seq: 1,
                 others: [
                     .init(
                         path: "/tmp/helm-client-mode-other",
                         bench: BenchFixture.bench([BenchFixture.terminal()]))
                 ]))
 
-        XCTAssertTrue(Eventually.holds { rig.model.restoreOffer != nil }, "three panes ask")
-        XCTAssertTrue(
-            rig.terminals.sessions.isEmpty,
-            "nothing is spawned while the question is open, nor in a workspace not yet shown")
+        XCTAssertEqual(rig.model.bench?.terminalPaneIDs.count, 3)
+        XCTAssertEqual(
+            Set(rig.terminals.sessions.map(\.id)), Set(panes.map(\.id)),
+            "the shown workspace's panes, and none of the other's")
     }
 
     /// A kind this build does not know keeps its pane, with a placeholder where it is.
@@ -238,41 +230,6 @@ final class WorkbenchClientModeTests: XCTestCase {
             foregroundPid: { _ in nil }, agents: [:])
         XCTAssertEqual(record.kind, .unsupported)
         XCTAssertEqual(record.unsupportedKind, "whiteboard")
-    }
-
-    /// #85's question stays helm's (D4): a bench worth asking about is not drawn until
-    /// the operator answers, and "fresh" goes to benchd as `workspace/reset`.
-    func testTheRestoreQuestionIsAskedAndFreshIsAReset() throws {
-        let panes = (0..<3).map { _ in BenchFixture.terminal() }
-        let rig = try rig(
-            BenchFixture.document(path, BenchFixture.bench(panes), seq: 1), restoring: false)
-
-        XCTAssertNotNil(rig.model.restoreOffer, "three saved panes are worth asking about")
-        XCTAssertTrue(
-            rig.terminals.sessions.isEmpty, "nothing is spawned while the question is open")
-
-        rig.model.answer(.fresh)
-
-        let sent = try XCTUnwrap(rig.server.verbs.last)
-        XCTAssertEqual(sent["verb"] as? String, "workspace/reset")
-        XCTAssertEqual(by(sent), "operator")
-    }
-
-    /// A "fresh" benchd refuses leaves the question open rather than mounting the bench the
-    /// operator declined.
-    func testARefusedResetLeavesTheRestoreQuestionOpen() throws {
-        let panes = (0..<3).map { _ in BenchFixture.terminal() }
-        let rig = try rig(
-            BenchFixture.document(path, BenchFixture.bench(panes), seq: 1), restoring: false)
-        rig.server.answer = { request in
-            ["id": request["id"] ?? "", "status": "refused", "reason": "not now"]
-        }
-
-        rig.model.answer(.fresh)
-
-        XCTAssertNotNil(rig.model.restoreOffer, "the choice did not happen, so it is still asked")
-        XCTAssertNil(rig.model.bench)
-        XCTAssertTrue(rig.terminals.sessions.isEmpty)
     }
 
     /// While benchd is down a verb fails where the operator can see it, and nothing moves.

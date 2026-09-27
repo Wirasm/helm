@@ -69,28 +69,13 @@ struct Workbench: Equatable {
         panes.filter { if case .canvas = $0.content { true } else { false } }
     }
 
-    /// Every terminal pane that has an agent recorded against it, in bench order (#63). The
-    /// input to both offers: `BenchRestoreOffer.agentCount` says what declining a restore
-    /// costs, and `WorkbenchModel` turns each entry into one pane's resume offer.
+    /// Every terminal pane that has an agent recorded against it, in bench order (#63): what
+    /// `bench restore` would resume.
     var resumableAgents: [(pane: Pane.ID, agent: ResumableAgent)] {
         panes.compactMap { pane in
             guard case let .terminal(agent) = pane.content, let agent else { return nil }
             return (pane.id, agent)
         }
-    }
-
-    /// Whether this bench is what `fresh` would build anyway: one terminal pane, nothing
-    /// recorded in it.
-    ///
-    /// The one shape a restore offer must NOT be made about, because there is no decision
-    /// under it — see `BenchMountPolicy.offer`. A pane carrying an agent fails this even
-    /// alone, and that is the case it exists to catch: a single pane whose whole value is the
-    /// conversation it held.
-    var isOneEmptyShell: Bool {
-        guard panes.count == 1, case let .terminal(agent) = panes[0].content else {
-            return false
-        }
-        return agent == nil
     }
 
     /// The panes actually on screen: one per slot. Several at once, which is the whole

@@ -178,3 +178,48 @@ extension BenchSessionRow.Open: Decodable {
         }
     }
 }
+
+/// `sessions`: every session benchd runs (M5b). helm asks for the pane each one is shown in and
+/// what has its terminal, which is how it finds the agent in a pane: the operator's shells run in
+/// benchd now, so a pane's own pty holds `bench attach`, not the agent. The answer is pinned by
+/// `daemon/fixtures/session-list.json`, which the daemon gate holds to `bench_wire::LiveSessions`.
+package struct BenchLiveSessionsRequest: Encodable, Equatable, Sendable {
+    package var id: String
+    package var verb = "sessions"
+
+    package init(id: String) { self.id = id }
+}
+
+/// `sessions`' answer, reduced to what helm reads.
+package struct BenchLiveSessions: Decodable, Equatable, Sendable {
+    package var sessions: [Entry]
+
+    package struct Entry: Decodable, Equatable, Sendable {
+        package var session: String
+        /// The pane showing it, if one does.
+        package var pane: UUID?
+        /// What has the terminal: the session's own process, or the job its shell runs. nil once
+        /// the session has ended.
+        package var foregroundPid: Int32?
+
+        private enum CodingKeys: String, CodingKey {
+            case session, pane
+            case foregroundPid = "foreground_pid"
+        }
+
+        package init(session: String, pane: UUID?, foregroundPid: Int32?) {
+            self.session = session
+            self.pane = pane
+            self.foregroundPid = foregroundPid
+        }
+    }
+
+    /// The foreground pid of each pane that shows a live session.
+    package var foregroundByPane: [UUID: Int32] {
+        Dictionary(
+            sessions.compactMap { entry in
+                entry.pane.flatMap { pane in entry.foregroundPid.map { (pane, $0) } }
+            },
+            uniquingKeysWith: { first, _ in first })
+    }
+}

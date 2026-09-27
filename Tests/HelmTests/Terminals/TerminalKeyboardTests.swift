@@ -279,8 +279,6 @@ private final class HelmWindow {
         let workbench = WorkbenchModel(terminals: terminals, agents: .blind, client: client)
         self.workbench = workbench
         XCTAssertNotNil(client.document(atLeast: 1, within: 5), "benchd never answered")
-        // Two panes are worth #85's question; answer it as the operator would.
-        if workbench.restoreOffer != nil { workbench.answer(.restore) }
         XCTAssertNotNil(workbench.bench, "no bench was drawn")
 
         window = NSWindow(

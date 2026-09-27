@@ -116,18 +116,12 @@ impl Document {
                 );
                 fields.insert("bench".into(), to_value(&recovered.value));
 
-                if let Some(shelved) = fields.remove("shelved").filter(|v| !v.is_null()) {
-                    match Bench::read_tolerant(shelved) {
-                        Ok(r) => {
-                            notes.extend(
-                                r.notes.into_iter().map(|n| format!("workspace {path}, shelf: {n}")),
-                            );
-                            fields.insert("shelved".into(), to_value(&r.value));
-                        }
-                        Err(e) => notes.push(format!(
-                            "workspace {path}: its shelved bench could not be read ({e}) and was dropped"
-                        )),
-                    }
+                // helm #85's declined layout, kept until M5b: nothing asks about restoring any
+                // more, so a stored one goes, and says so.
+                if fields.remove("shelved").is_some_and(|v| !v.is_null()) {
+                    notes.push(format!(
+                        "workspace {path}: its shelved bench (a layout declined at a restore question that no longer exists) was dropped"
+                    ));
                 }
             }
         }

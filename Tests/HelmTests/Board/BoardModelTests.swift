@@ -5,9 +5,8 @@ import XCTest
 /// The board's wiring: fixture registry → decode → rollup → published map, and the
 /// poll loop's lifetime.
 ///
-/// The pid *match* cannot be exercised here — no pty spawns under a shielded
-/// display, so `foregroundPid` never returns an agent. Everything either side of
-/// the match can be, and is.
+/// The pid a pane is matched on is the one benchd reports for the session the pane shows
+/// (M5b, `SessionForegrounds`), so a test says what benchd would answer.
 ///
 /// Isolation sits on the test methods rather than the class: `setUpWithError` and
 /// `tearDownWithError` override nonisolated XCTest API, so a `@MainActor` class
@@ -49,6 +48,21 @@ final class BoardModelTests: XCTestCase {
         XCTAssertNil(
             board.presence[workspace.value],
             "an unattached surface reports no foreground pid, so there is nothing to match")
+    }
+
+    @MainActor
+    func testTheAgentInAPanesBenchdSessionMarksItsWorkspace() async throws {
+        // The shell's job is `claude`, pid 9139: benchd reports it as the pane's foreground,
+        // since helm's own pty runs `bench attach` and says nothing about the agent.
+        try writeRow(pid: 9139, status: "idle")
+        let manager = TerminalManager()
+        let session = manager.adoptShell(in: workspace)
+        manager.foregrounds.set([session.id: 9139])
+
+        let board = BoardModel(manager: manager, root: root)
+        await board.refresh()
+
+        XCTAssertEqual(board.presence[workspace.value], .notWorking)
     }
 
     @MainActor

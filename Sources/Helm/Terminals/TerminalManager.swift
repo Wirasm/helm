@@ -56,16 +56,21 @@ final class TerminalManager: ObservableObject {
     /// The single ghostty runtime every session's surface is created on.
     let controller: TerminalController
 
+    /// What has each pane's terminal in benchd (M5b): where a pane's agent is found.
+    let foregrounds = SessionForegrounds()
+
     private var nextOrdinal = 1
 
-    /// What each new session's surface runs instead of the login shell. A factory rather than
-    /// a value because a test gives every session its own recorder; see `TerminalSession.init`.
-    private let command: @MainActor () -> String?
+    /// What a terminal pane with no benchd session runs: nothing, in the app — every terminal
+    /// pane is a benchd session (M5b), so one without a session is waiting for `bench restore`
+    /// and says so. The keyboard tests give each such pane a recorder of their own instead,
+    /// which is why this is a factory; see `TerminalSession.init`.
+    private let command: (@MainActor () -> String?)?
 
     /// Internal (not private) so tests can build isolated managers; the app
-    /// itself only ever uses `.shared`, whose command is `nil` — a real login shell.
+    /// itself only ever uses `.shared`, which starts nothing helm-side.
     init(
-        command: @escaping @MainActor () -> String? = { nil },
+        command: (@MainActor () -> String?)? = nil,
         surfaces: SurfaceRegistry = SurfaceRegistry()
     ) {
         self.command = command
@@ -83,15 +88,10 @@ final class TerminalManager: ObservableObject {
         surfaces.models(TerminalSession.self, in: workspacePath)
     }
 
-    /// A login shell under each of `ids`. After a relaunch they name terminals whose ptys died
-    /// with the old process, so the row is rebuilt under those same ids — and **the shells come
-    /// back empty**. This type starts nothing but a login shell: helm attaches to agents, it
-    /// never owns their launch. A restored *pane* whose record names an agent shows an **offer**
-    /// to resume it (`AgentResumeBar`), and only the operator accepting one puts a `--resume`
-    /// line in a pty.
-    ///
-    /// The exception is a pane that shows a benchd session (M3): `attaching` names the command
-    /// its pty runs instead, `bench attach <session>`, so the pane is the agent benchd runs.
+    /// A session object for each of `ids`, under those ids (a terminal pane's id is its
+    /// session's). Every terminal pane is a benchd session (M5b), so each shows its session with
+    /// `bench attach`; helm starts no shell of its own. A pane with no session yet (benchd
+    /// restarted, or its shell could not start) shows why, until `bench restore` gives it one.
     private func restore(
         _ ids: [UUID], in workspacePath: WorkspacePath, attaching: [UUID: SessionLaunch] = [:]
     ) {
@@ -107,9 +107,15 @@ final class TerminalManager: ObservableObject {
                     id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
                     controller: controller, unattachable: reason)
             case nil:
-                session = TerminalSession(
-                    id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
-                    controller: controller, command: command())
+                if let command {
+                    session = TerminalSession(
+                        id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
+                        controller: controller, command: command())
+                } else {
+                    session = TerminalSession(
+                        id: id, ordinal: nextOrdinal, workspacePath: workspacePath,
+                        controller: controller, unattachable: SessionAttach.noSession)
+                }
             }
             nextOrdinal += 1
             session.manager = self
@@ -117,23 +123,39 @@ final class TerminalManager: ObservableObject {
         }
     }
 
+    /// What pane `id` should show: its session, or, with none, the reason — except under a test's
+    /// command factory, which gives such a pane its own recorder and is never replaced.
+    private func launch(of id: UUID, attaching: [UUID: SessionLaunch]) -> SessionLaunch? {
+        if let launch = attaching[id] { return launch }
+        return command == nil ? .unavailable(reason: SessionAttach.noSession) : nil
+    }
+
     func deactivate() {
         activeWorkspacePath = nil
     }
 
-    /// The workspace on screen, `path`, and a session for every terminal pane in `ids` that has
-    /// none — benchd's document naming terminals this helm has not started (#354). The pane id is
-    /// the session id, as on restore, and like a restore each comes back as a fresh login shell.
-    /// Only the workspace on screen is adopted: its shells start when it is first shown, which
+    /// The workspace on screen, `path`, and a session object for every terminal pane in `ids`
+    /// that has none — benchd's document naming terminals this helm has not shown yet (#354).
+    /// Only the workspace on screen is adopted: its surfaces start when it is first shown, which
     /// bounds startup to what is drawn.
     ///
-    /// `attaching` is the command for each pane that shows a benchd session
-    /// (`BenchDocument.Bench.attachCommands`): `bench attach <session>`, so the pane is the agent benchd
-    /// runs. Every other pane gets a login shell.
+    /// `attaching` is the launch for each pane that shows a benchd session
+    /// (`BenchDocument.Bench.attachCommands`): `bench attach <session>`, so the pane is what
+    /// benchd runs there. A pane with no session starts nothing and says why.
+    ///
+    /// A pane whose launch changed gets a new surface (M5b): `bench restore` gave it a session
+    /// after benchd restarted, or benchd restarted and it has none, which it then says.
     func adopt(
         terminals ids: [UUID], in path: WorkspacePath, attaching: [UUID: SessionLaunch] = [:]
     ) {
         activeWorkspacePath = path
+        let stale = ids.filter { id in
+            guard let wanted = launch(of: id, attaching: attaching),
+                let live = surfaces.existing(id, as: TerminalSession.self)
+            else { return false }
+            return !wanted.isShown(by: live)
+        }
+        for id in stale { surfaces.close(id) }
         let missing = ids.filter { surfaces.existing($0, as: TerminalSession.self) == nil }
         guard !missing.isEmpty else { return }
         restore(missing, in: path, attaching: attaching)

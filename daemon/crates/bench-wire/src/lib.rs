@@ -168,14 +168,14 @@ pub const KNOWN_VERBS: &[&str] = &[
     "browser/stop",
     "browser/setup",
     "just/run",
+    // M5b: give terminal panes whose session ended a session again (`just resume-all`).
+    "restore",
     // The layout verbs (M4) — `LAYOUT_VERBS`, spelled again here so this one list stays the
     // whole surface; `every_layout_verb_is_known_and_routes_to_layout` keeps the two in step.
     "bench/get",
     "workspace/open",
     "workspace/close",
     "workspace/activate",
-    "workspace/reset",
-    "workspace/unshelve",
     "pane/open",
     "pane/split",
     "pane/close",
@@ -221,6 +221,8 @@ pub enum Verb {
     JustRun,
     /// Every verb in `LAYOUT_VERBS`; `LayoutVerb` decodes which one and its arguments.
     Layout,
+    /// Terminal panes whose session ended get one again (`RestoreArgs`).
+    Restore,
     /// Something only helm can do, asked of whichever helm follows the bench (`HelmAsk`).
     HelmAsk,
     /// helm's answer to one (`HelmAnswer`).
@@ -253,6 +255,7 @@ impl Verb {
             "helm/ask" => Some(Verb::HelmAsk),
             "helm/answer" => Some(Verb::HelmAnswer),
             "just/run" => Some(Verb::JustRun),
+            "restore" => Some(Verb::Restore),
             layout if LAYOUT_VERBS.contains(&layout) => Some(Verb::Layout),
             _ => None,
         }
@@ -439,6 +442,43 @@ pub struct HelmAnswer {
 }
 
 pub const HELM_ASKED: &str = "helm/asked";
+
+/// One row of `sessions`: a session benchd runs, and the pane that shows it. helm reads `pane`
+/// and `foreground_pid` to find the agent in a pane (it joins the pid against Claude's
+/// registry), so the shape is pinned by `fixtures/session-list.json` on both sides.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionEntry {
+    pub session: String,
+    pub handle: String,
+    /// `claude`, `codex`, `pi`, `shell` (a terminal pane's own), or `test-echo`.
+    pub agent: String,
+    pub cwd: String,
+    pub pid: u32,
+    /// The pane showing it, if one does.
+    pub pane: Option<bench_doc::PaneId>,
+    /// What has the terminal: the session's own process, or the job a shell is running. `None`
+    /// once the session has ended.
+    pub foreground_pid: Option<i32>,
+    pub live: bool,
+    pub attached: bool,
+    pub output_bytes: u64,
+    pub runtime_session: Option<String>,
+    pub uptime_secs: u64,
+}
+
+/// The answer to `sessions`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveSessions {
+    pub sessions: Vec<SessionEntry>,
+}
+
+/// `restore`: one terminal pane, or every one (`pane` absent), whose session has ended gets a
+/// session again — its recorded agent resumed, or a shell.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RestoreArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<String>,
+}
 
 /// The payload shared by `attach`, `close` and `resume`: a session id, plus the
 /// viewer's size where the verb has a viewer.
@@ -809,6 +849,25 @@ mod tests {
         assert_eq!(serde_json::to_value(&reply).unwrap(), value["who_reply"]);
     }
 
+    /// `fixtures/session-list.json` holds a `sessions` answer as helm reads it (M5b).
+    #[test]
+    fn the_session_list_fixture_is_what_the_daemon_answers() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/session-list.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let request: Request = serde_json::from_value(value["request"].clone()).unwrap();
+        assert_eq!(Verb::parse(&request.verb), Some(Verb::Sessions));
+        let reply: LiveSessions = serde_json::from_value(value["reply"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(&reply).unwrap(), value["reply"]);
+        assert!(
+            reply
+                .sessions
+                .iter()
+                .any(|s| s.agent == "shell" && s.pane.is_some())
+        );
+    }
+
     /// `fixtures/helm-ask.json` holds what benchd asks helm and what helm answers (M3); helm's
     /// `BenchWireConformanceTests` decodes the ask and encodes the answer against the same file.
     #[test]
@@ -836,7 +895,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            39,
+            38,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

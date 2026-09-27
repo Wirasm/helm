@@ -78,6 +78,9 @@ fn usage() -> &'static str {
      \x20     attach <session> [--in-pane]        relay to a session's pty (Ctrl-\\ detaches); the\n\
      \x20                                         pty follows this terminal's size. --in-pane:\n\
      \x20                                         what a helm pane runs (quiet, no detach key)\n\
+     \x20     restore <pane> | --all              a terminal pane whose session ended gets one:\n\
+     \x20                                         its recorded agent resumed, else a shell\n\
+     \x20                                         (`just resume-all` after a benchd restart)\n\
      \x20     close <session>                     drain-then-die the session (a pane id closes\n\
      \x20                                         the pane, above)\n\
      \x20     resume <session>                    re-enter an exited session's runtime state\n\
@@ -188,8 +191,8 @@ fn run() -> i32 {
     if follow && verb != "events" {
         return refuse("--follow is for `events`");
     }
-    if all && verb != "sessions" {
-        return refuse("--all is for `sessions`");
+    if all && verb != "sessions" && verb != "restore" {
+        return refuse("--all is for `sessions` and `restore`");
     }
     if (json_out || count.is_some()) && verb != "log" {
         return refuse("-n and --json are for `log`");
@@ -279,6 +282,17 @@ fn run() -> i32 {
                 cols,
             })
         }
+        "restore" => match (positional.first(), all) {
+            (Some(pane), false) => json!(bench_wire::RestoreArgs {
+                pane: Some(pane.clone())
+            }),
+            (None, true) => json!(bench_wire::RestoreArgs::default()),
+            _ => {
+                return refuse(
+                    "restore needs a pane id, or --all for every terminal pane whose session ended",
+                );
+            }
+        },
         "mail/send" => {
             let Some(to) = flag("to") else {
                 return refuse("mail send needs --to <handle>");

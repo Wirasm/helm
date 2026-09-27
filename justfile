@@ -18,6 +18,13 @@ check *parts:
 release-resume session-id *args:
     @bash scripts/release-resume.sh "$@"
 
+# The one way back after benchd restarted (an upgrade, a crash, a reboot): every terminal pane
+# whose session ended gets one again. A pane where an agent ran resumes that conversation; any
+# other pane gets a fresh shell. Panes that still have a live session are left alone, so running
+# it twice is harmless. Honours BENCH_SUITE / BENCH_DIR like every `bench` call.
+resume-all:
+    bench restore --all
+
 # The day on one page: agent sessions per workspace, PRs merged and opened, unread operator mail,
 # open decisions. Written to the prp store and pushed to the bench when run in a helm pane.
 # Options: [--no-push] [since YYYY-MM-DD, default yesterday]; scripts/day.sh has the details.

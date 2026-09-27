@@ -97,6 +97,11 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// through it any more, which is what let `selectedID` be deleted outright.
     weak var manager: TerminalManager?
 
+    /// What has this pane's terminal in benchd: its shell, or the job the shell runs. The pid an
+    /// agent registry row is joined on. Not `hostView.foregroundPid`: that is the pty helm's own
+    /// surface holds, and it runs `bench attach` (M5b).
+    var foregroundPid: pid_t? { manager?.foregrounds.pid(ofPane: id) }
+
     /// What the pane holding this session is called (#313), pushed in by `WorkbenchModel` on
     /// every bench change exactly as `isVisible` is — the bench owns it and persists it, and a
     /// session has no way to ask.

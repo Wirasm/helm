@@ -28,7 +28,7 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
 | `skills` | the board and post-canvas skill gates | node, zsh, python3, git |
-| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill (their snippets run against a real benchd) or `RenderableFile.swift` (the CLI's `bench open` checks its list) changed | cargo |
+| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill (their snippets run against a real benchd), `RenderableFile.swift` (the CLI's `bench open` checks its list) or the vendored shell integration (benchd builds it in) changed | cargo |
 | `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
 
 "Changed" means against `origin/development`, committed or not. A missing tool is a `FAIL`
@@ -402,9 +402,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `--asked` means the operator asked, and only then may a verb bring something forward or move
     his keyboard. benchd cannot know what he said, so "only when asked" is the agent's rule; the
     document refuses any unasked change that would move his focus, and names `--asked`.
-  - **The rules the spool kept, now at benchd's verb boundary.** Closing a terminal needs
-    `--force` (it ends what runs there; a helm-hosted shell is opaque to benchd until M5b), and the
-    pane holding the keyboard also needs `--asked`. Closing a canvas destroys nothing: the file and
+  - **The rules the spool kept, now at benchd's verb boundary.** Closing a terminal where
+    something runs needs `--force`, and the refusal names it: an agent's session, or the job a
+    shell is running (benchd asks the pty for its foreground group; a shell at its prompt closes
+    without it). The pane holding the keyboard also needs `--asked`. Closing a canvas destroys nothing: the file and
     its `.notes.md` sidecar outlive the tab. A close stops at the pane — no worktree, no branch, no
     git (#141's rail owns that, behind the operator's own confirmation). `show` only moves a tab in
     a slot he is not in (#284). A name somebody chose needs `--rename` (#313); benchd's own
@@ -413,12 +414,18 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     pane runs `bench attach <session>` (`SessionAttach`), so the agent keeps running while the
     pane is hidden, the display sleeps or helm restarts, and it needs no display, no shell and no
     launch line — which retired #253 and #324. The answer carries `handle`, `session`, `pid` and
-    `pane`, so mailing it needs no lookup. A benchd restart ends its sessions; the pane keeps the
-    `agent` record, and #85's resume offer brings it back.
+    `pane`, so mailing it needs no lookup.
+  - **Every terminal pane is a benchd session (M5b, #359)**, the operator's shells included:
+    a new terminal pane gets his login shell, started by benchd with the pane's environment
+    (`HELM_PANE`, truecolor, the bench root, no inherited `CLAUDE*`/`PI_*`) and Ghostty's shell
+    integration, and helm shows it with `bench attach --in-pane`. So quitting helm ends nothing.
+    A benchd restart ends every session; the panes stay with their `agent` records, and **`just
+    resume-all`** (`bench restore --all`) is the one way back: a recorded agent is resumed, every
+    other pane gets a fresh shell.
   - **Unattended postures (#179): a posture removes a prompt; it never withholds capability.**
     `claude` → `--dangerously-skip-permissions` (what `cls` is), `codex` →
     `--dangerously-bypass-approvals-and-sandbox`, `pi` → `--approve`, spelled once in
-    `bench_session::argv`. helm's copy (`UnattendedPosture`) serves only #85's resume line.
+    `bench_session::argv`, the one copy.
   - **A posture cannot remove every prompt, and no flag will fix that — #283 is the measurement.**
     Claude Code keeps some guardrails **bypass-immune** (`CIRCUIT_BREAKER_TRAITS.dangerousRemoval =
     { bypassImmune: true }` in 2.1.226): under `--dangerously-skip-permissions` a plain
@@ -437,7 +444,7 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   - **A line helm types into a terminal is pasted, then submitted separately.** libghostty wraps
     every `sendText` in bracketed-paste markers when the shell has mode 2004 on, so a trailing
     `\r` sits on the command line unsubmitted. `TerminalLaunchLine.send` pastes, then sends Return
-    as a binding action; #85's resume offer and the sessions drawer use it.
+    as a binding action; the sessions drawer uses it.
 - **To read the bench without a display, read helm's snapshot** —
   `~/.helm/bench/snapshot.json`, or `~/.helm/bench-<suite>/snapshot.json` under
   `HELM_DEFAULTS_SUITE`; `HELM_BENCH_DIR` explicitly overrides that root. It is private
@@ -568,8 +575,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   `/Applications/Helm.app`, is circular**: that path only changes *after* the quit the badge
   exists to ask for. So the **build** leaves the note — `~/.helm/build/latest.json`,
   `HELM_BUILD_DIR` to redirect it — and a running helm polls it and offers the swap on a
-  capsule in the status bar's right-hand group. Clicking quits helm, installs and reopens;
-  **every pane and its agent goes with it**, which the tooltip says before you press it. It is
+  capsule in the status bar's right-hand group. Clicking quits helm, installs and reopens; every
+  terminal pane is a benchd session (M5b), so its shells and agents keep running and the new helm
+  shows them again, which the tooltip says before you press it. It is
   a badge rather than a dialog because #125's *appear, don't seize* applies to helm's own
   surfaces too.
   - **Identity is baked, not derived.** `scripts/stamp-build.sh` writes the commit into the
@@ -611,8 +619,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   `open` hands the app the caller's whole environment (`CLAUDECODE`, the caller's session id) and
   every pane would inherit it; and it holds `caffeinate -d -u` while relaunching, because with
   every display asleep the new helm cannot create a terminal (the CoreVideo `-6661` pair above).
-  **Quitting helm kills every pane: run it for real only when the operator has said nothing is in
-  flight.**
+  **Restarting benchd ends every session: run it for real only when the operator has said nothing
+  is in flight.**
 - **helm persists to one domain, `com.wirasm.helm`, from both launch paths** — so "did it
   persist?" is `defaults read com.wirasm.helm` whichever way it was started, unless
   `HELM_DEFAULTS_SUITE` overrides it (next bullet). `swift run helm`
@@ -673,8 +681,8 @@ the door every change goes out through;
 `Keymap/` is the key table and its readers (below); `Bench/` is helm as benchd's client —
 the socket and the follower (below);
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
-libghostty seam — sessions, the host view, the pane environment, and `SessionAttach` (a pane
-that shows a benchd session); then `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
+libghostty seam — the host view, and `SessionAttach`: every terminal pane shows a benchd session
+through `bench attach` (M5b), and helm owns no pty but that one; then `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
 `StatusBar/`, `Build/`, `Shared/`, `Capture/`, `Mail/`. Two of those have no bullet anywhere
 above and are the easiest to be surprised by:
 
@@ -716,11 +724,11 @@ bench: nothing is drawn until benchd's follower delivers the document the verb m
 - **helm keeps no bench.** The workspace list follows the document, and nothing about the bench
   is in defaults. The one-time import of the benches helm used to save there ran and was
   deleted in #470; the old keys are left on disk, read by nothing.
-- **#85's question stays helm's** until M5b: its answer goes back as `workspace/reset` or
-  `workspace/unshelve`. A pane showing a running benchd session is never asked about: the agent
-  is right there. **The question is invisible to benchd**, so an agent's `bench` verb into a
-  workspace helm is asking about still lands, and the operator's "fresh" shelves it with the rest.
-  Accepted until M5b dissolves the question (plan D4 of #354).
+- **helm asks nothing at launch (M5b).** #85's "Restore N panes?" and the per-pane resume offer
+  existed because helm's terminals died with helm. Every terminal pane is a benchd session now,
+  so a relaunched helm draws the panes as they are; `workspace/reset`, `workspace/unshelve` and
+  shelved benches went with the question. After a **benchd** restart, `just resume-all` brings
+  the panes back.
 - **benchd unreachable** is a status-bar capsule naming the socket; the last document stays on
   screen and a verb fails visibly. helm never starts benchd: `just benchd-install` makes it a
   login agent.

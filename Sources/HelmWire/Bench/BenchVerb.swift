@@ -77,8 +77,6 @@ package enum BenchVerb: Equatable, Sendable {
     case workspaceOpen(path: String)
     case workspaceClose(path: String)
     case workspaceActivate(path: String)
-    case workspaceReset(path: String)
-    case workspaceUnshelve(path: String)
     /// A new pane showing `surface`, placed by benchd's rules; `workspace` nil means the active
     /// one.
     case paneOpen(workspace: String? = nil, surface: Surface)
@@ -108,8 +106,6 @@ package enum BenchVerb: Equatable, Sendable {
         case .workspaceOpen: "workspace/open"
         case .workspaceClose: "workspace/close"
         case .workspaceActivate: "workspace/activate"
-        case .workspaceReset: "workspace/reset"
-        case .workspaceUnshelve: "workspace/unshelve"
         case .paneOpen, .paneOpenInDrawer: "pane/open"
         case .paneSplit: "pane/split"
         case .paneClose: "pane/close"
@@ -164,8 +160,7 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         var a = c.nestedContainer(keyedBy: ArgKeys.self, forKey: .args)
         switch verb {
         case .get: break
-        case let .workspaceOpen(path), let .workspaceClose(path), let .workspaceActivate(path),
-            let .workspaceReset(path), let .workspaceUnshelve(path):
+        case let .workspaceOpen(path), let .workspaceClose(path), let .workspaceActivate(path):
             try a.encode(path, forKey: .path)
         case let .paneOpen(workspace, surface):
             try a.encodeIfPresent(workspace, forKey: .workspace)
@@ -234,8 +229,6 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case "workspace/open": verb = .workspaceOpen(path: try path())
         case "workspace/close": verb = .workspaceClose(path: try path())
         case "workspace/activate": verb = .workspaceActivate(path: try path())
-        case "workspace/reset": verb = .workspaceReset(path: try path())
-        case "workspace/unshelve": verb = .workspaceUnshelve(path: try path())
         case "pane/open":
             let surface = try a.decode(Surface.self, forKey: .surface)
             if let drawer = try a.decodeIfPresent(String.self, forKey: .drawer) {

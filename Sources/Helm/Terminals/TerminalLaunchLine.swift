@@ -31,23 +31,3 @@ enum TerminalLaunchLine {
         }
     }
 }
-
-/// Running a composed line in a named pane, as a seam.
-///
-/// `WorkbenchModel` resolves panes to sessions and could reach `hostView` directly; a protocol
-/// is here so `resume(_:)` is reachable from `swift test` without a ghostty surface.
-@MainActor
-protocol TerminalLaunching {
-    func run(_ line: String, in terminal: Pane.ID)
-}
-
-/// The live one: look the session up in the manager that owns it, and send.
-@MainActor
-struct TerminalLineLauncher: TerminalLaunching {
-    let terminals: TerminalManager
-
-    func run(_ line: String, in terminal: Pane.ID) {
-        guard let session = terminals.sessions.first(where: { $0.id == terminal }) else { return }
-        TerminalLaunchLine.send(line, to: session)
-    }
-}

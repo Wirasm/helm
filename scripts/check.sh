@@ -47,7 +47,8 @@ needs() {
     }
     case "$part" in
         # RenderableFile.swift: the bench CLI checks its extension list against it (bench open).
-        daemon) grep -qE '^(daemon/|\.github/workflows/daemon\.yml|\.claude/skills/bench-|\.claude/skills/helm-canvas/|Sources/Helm/Shared/RenderableFile\.swift)' <<<"$paths" ;;
+        # The shell-integration tree: benchd builds it in, for the shells terminal panes run.
+        daemon) grep -qE '^(daemon/|\.github/workflows/daemon\.yml|\.claude/skills/bench-|\.claude/skills/helm-canvas/|Sources/Helm/Shared/RenderableFile\.swift|Sources/Helm/Resources/ghostty/shell-integration/)' <<<"$paths" ;;
         pi) grep -qE '^pi/' <<<"$paths" ;;
         swift)
             # Runs when nothing changed at all, too: an empty diff proves nothing.
@@ -82,7 +83,7 @@ swift_ignores() {
 skip_reason() {
     case "$1" in
         swift) echo "only docs/, pi/, daemon/ (not fixtures) or markdown outside Sources/, Tests/ and skills changed" ;;
-        daemon) echo "no changes under daemon/, daemon.yml, .claude/skills/bench-*, helm-canvas or RenderableFile.swift" ;;
+        daemon) echo "no changes under daemon/, daemon.yml, .claude/skills/bench-*, helm-canvas, RenderableFile.swift or the shell integration" ;;
         pi) echo "no changes under pi/" ;;
     esac
 }

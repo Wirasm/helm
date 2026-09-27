@@ -30,8 +30,7 @@ struct ToyBench {
         switch request.verb {
         case .get, .paneOpenInDrawer, .drawerToggle, .paneMove:
             return Answer()
-        case .workspaceOpen, .workspaceActivate, .workspaceClose, .workspaceReset,
-            .workspaceUnshelve:
+        case .workspaceOpen, .workspaceActivate, .workspaceClose:
             return try applyWorkspace(request.verb, focus: focus)
         case let .paneOpen(workspace, surface):
             return try open(surface, in: workspace ?? document.active, focus: focus)
@@ -70,17 +69,6 @@ struct ToyBench {
         case let .workspaceClose(path):
             document.workspaces.removeAll { $0.path == path }
             if document.active == path { document.active = document.workspaces.first?.path }
-        case let .workspaceReset(path):
-            try change(path) { workspace in
-                workspace.shelved = workspace.bench
-                workspace.bench = Self.bench([Self.terminal()])
-            }
-        case let .workspaceUnshelve(path):
-            try change(path) { workspace in
-                guard let shelved = workspace.shelved else { return }
-                workspace.bench = shelved
-                workspace.shelved = nil
-            }
         default:
             return Answer()
         }
@@ -395,14 +383,12 @@ extension XCTestCase {
 
     /// helm drawn from a toy benchd holding `document` — by default one workspace at `path` with
     /// one terminal, which is what a first visit gets. `make` builds the model on the client, for
-    /// a test that injects collaborators. Waits for the first document, and — unless `answering`
-    /// is false — answers #85's question by restoring when the first bench is worth asking about.
+    /// a test that injects collaborators. Waits for the first document.
     @MainActor
     func toyRig(
         _ path: String = "/tmp/helm-toy",
         document: BenchDocument? = nil,
         terminals: TerminalManager = TerminalManager(),
-        answering: Bool = true,
         make: ((TerminalManager, BenchClient) -> WorkbenchModel)? = nil
     ) throws -> ToyRig {
         let document =
@@ -418,7 +404,6 @@ extension XCTestCase {
         // `async` test runs on the main queue, which a nested run loop cannot drain.
         XCTAssertNotNil(
             client.document(atLeast: 1, within: 5), "the first document never came")
-        if answering, model.restoreOffer != nil { model.answer(.restore) }
         return ToyRig(server: server, client: client, model: model, terminals: terminals)
     }
 }

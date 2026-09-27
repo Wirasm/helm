@@ -27,35 +27,15 @@ import os
 /// subscription that has to work while its view is closed belongs on the model.
 @MainActor
 final class WorkbenchModel: ObservableObject {
-    /// Nothing open, a question waiting on the operator, or a bench — as one value, so no
-    /// combination of the two can be constructed that `MountState` does not name. Its header
-    /// has the argument for why this is a type and not two paired Optionals.
+    /// Nothing open, or a bench.
     @Published private(set) var mount: MountState = .empty
 
-    /// nil when no workspace is open — **or when a mount is waiting on an answer** (#85). Not
-    /// an "empty bench": `Workbench`'s first invariant is that a bench always holds at least
+    /// nil when no workspace is open. Not an "empty bench": `Workbench`'s first invariant is that a bench always holds at least
     /// one pane, so there is no such value to make.
     ///
     /// Computed rather than stored: every reader outside this file reads what it always read,
     /// and `mount` is the one thing a writer can set.
     var bench: Workbench? { mount.bench }
-
-    /// The unanswered mount question, if there is one (#85). See `BenchMountPolicy` for when
-    /// it is asked and which bench it is about.
-    var restoreOffer: BenchRestoreOffer? { mount.restoreOffer }
-
-    /// The active workspace's shelf: a bench a *fresh* declined, kept by benchd so that one
-    /// wrong click cannot destroy a layout (#85). Offered again by `BenchMountPolicy` in the one
-    /// case where it is still the operator's live question.
-    @Published private(set) var shelvedBench: Workbench?
-
-    /// One resume offer per restored terminal pane that had an agent (#63), keyed by pane.
-    ///
-    /// **Not persisted, and `ResumableAgent`'s header says why**: the record of what was
-    /// running belongs on the bench, the question about it belongs to this launch. Entries go
-    /// when the operator answers, and when a tick of `observeAgents` finds a live agent in the
-    /// pane after all — which is what makes an accepted resume put its own offer away.
-    @Published private(set) var resumeOffers: [Pane.ID: AgentResumeOffer] = [:]
 
     /// ⌘O's popover. App chrome rather than slot chrome — it appears once, on the focused
     /// slot's strip, because repeating it on every strip would multiply it by N. The
@@ -109,11 +89,6 @@ final class WorkbenchModel: ObservableObject {
     /// run Claude Code and with nothing read out of the operator's own `~/.claude`.
     private let agents: AgentObserver
 
-    /// How a resume line reaches the pty it is meant for. A seam rather than a direct
-    /// `hostView` call so `resume(_:)` is testable, and the default is paste-then-Return
-    /// (`TerminalLaunchLine.send`).
-    private let launcher: TerminalLaunching
-
     /// Where the project stores are — `~/.prp` in production (#289).
     ///
     /// **One reader now, and that is the widening.** It used to be handed to `CanvasModel` too,
@@ -131,17 +106,6 @@ final class WorkbenchModel: ObservableObject {
     /// `git` run in production, which has a deadline; injected so a test can hold the answer
     /// back or make it time out without a real git that hangs.
     private let resolveRepository: @Sendable (String) async throws -> String
-
-    /// Workspaces shown, or asked about, in this process. #85's question is asked once per
-    /// workspace per launch: re-asking on every switch back would make it chrome rather than a
-    /// decision (`BenchDrawing`).
-    private var answered: Set<WorkspacePath> = []
-
-    /// Workspaces whose resume offers (#63) have been made in this process: at the first drawing
-    /// of their bench, which after #85's question is the drawing that follows the answer. Its
-    /// own set rather than `answered`, which the question marks before that drawing happens —
-    /// sharing it made a restored bench's agents never offered at all.
-    private var offered: Set<WorkspacePath> = []
 
     /// benchd, over its socket: a request per verb, and the follower that delivers documents.
     let client: BenchClient
@@ -166,9 +130,6 @@ final class WorkbenchModel: ObservableObject {
         if let document { follower(document) }
     }
 
-    /// The document last drawn, kept so an answer to the mount question can draw it again.
-    private var lastApplied: DocumentAt?
-
     /// `AnyCancellable`s rather than NotificationCenter tokens: they unsubscribe in their
     /// own deinit, and Swift 6 forbids a nonisolated deinit from touching the non-Sendable
     /// token the observer API hands back.
@@ -181,7 +142,6 @@ final class WorkbenchModel: ObservableObject {
         terminals: TerminalManager,
         notes: CanvasNoteCourier = CanvasNoteCourier(),
         agents: AgentObserver = .live(),
-        launcher: TerminalLaunching? = nil,
         artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot,
         resolveRepository: @escaping @Sendable (String) async throws -> String = {
             try await WorkspaceStore.repositoryRoot(for: $0)
@@ -193,7 +153,6 @@ final class WorkbenchModel: ObservableObject {
         self.terminals = terminals
         self.notes = notes
         self.agents = agents
-        self.launcher = launcher ?? TerminalLineLauncher(terminals: terminals)
         self.artifactRoot = artifactRoot
         self.resolveRepository = resolveRepository
         // Registered here rather than by the manager because both need the bench: the canvas
@@ -213,44 +172,6 @@ final class WorkbenchModel: ObservableObject {
         client.start()
     }
 
-    // MARK: - #85's question
-
-    /// The operator's answer to the mount question (#85). See `answerFromDaemon`.
-    func answer(_ choice: BenchRestoreChoice) {
-        guard let path = workspacePath, let offer = restoreOffer else { return }
-        answerFromDaemon(choice, offer: offer, path: path)
-    }
-
-    /// One offer per pane whose record names an agent that is **not already running there**.
-    ///
-    /// The liveness check is what stops a switch away and back from re-offering an agent the
-    /// operator already resumed: the record stays on the pane while the agent runs — that is
-    /// the point of it — so "has a record" alone would ask about a conversation that is on
-    /// screen.
-    private func offers(in bench: Workbench?) -> [Pane.ID: AgentResumeOffer] {
-        // A bench with nothing recorded on it has nothing to ask about, and asking costs two
-        // directory reads — the registry, and a transcript lookup per pane. Every mount before
-        // an agent has ever run in a workspace takes this branch, which is most of them.
-        guard let bench, !bench.resumableAgents.isEmpty else { return [:] }
-        let live = liveAgents(in: bench)
-        return Dictionary(
-            bench.resumableAgents.compactMap { pane, agent in
-                guard live[pane] == nil else { return nil }
-                return (
-                    pane,
-                    AgentResumeOffer.offer(
-                        agent, in: pane, transcriptExists: agents.transcriptExists)
-                )
-            },
-            // **`uniquingKeysWith:`, and first-in-bench-order.** A bench arrives decoded from a
-            // document, and nothing helm can check dedupes pane ids on the way in.
-            // `uniqueKeysWithValues:` traps on a duplicate, which here is a crash at the first
-            // showing of a workspace, on every launch. `AgentRegistry.rows(in:)` makes exactly
-            // this argument and is the reason to make it here too. First rather than last,
-            // because `Workbench.pane(_:)` finds the first, so that is the pane an offer is about.
-            uniquingKeysWith: { first, _ in first })
-    }
-
     // MARK: - Which agent is in which pane (#63)
 
     /// Watch the panes for agents until cancelled — driven from `WorkbenchView`'s `.task`, so
@@ -261,23 +182,21 @@ final class WorkbenchModel: ObservableObject {
     /// place, which a directory-level `DispatchSource` does not reliably see.
     func watchAgents(every interval: Duration = .seconds(2)) async {
         while !Task.isCancelled {
+            await terminals.foregrounds.refresh(using: client)
             observeAgents()
             try? await Task.sleep(for: interval)
         }
     }
 
-    /// One tick: write down who is in each pane, and put away any offer that has been answered
-    /// by the agent turning up.
+    /// One tick: write down who is in each pane — what `bench restore` resumes there after a
+    /// benchd restart (`just resume-all`).
     ///
     /// **The record is sticky — set when an agent is seen, never cleared when it stops being
-    /// seen.** That is deliberate and it is the whole point of the field. A `claude` running a
-    /// bash command hands the pty's foreground to a child for as long as that command takes,
-    /// so a record cleared on absence would be erased and rewritten several times a minute —
-    /// a `pane/record` event each time, and, far worse, nothing at all if helm died inside one
-    /// of those windows. A crash is exactly the case
-    /// #63 exists for. The cost, recorded: an agent the operator exited on purpose is still
-    /// offered on the next launch. That offer names its session and is one click to decline,
-    /// which is the cheap side of the trade.
+    /// seen.** A `claude` running a bash command hands the terminal's foreground to a child for
+    /// as long as that command takes, so a record cleared on absence would be erased and
+    /// rewritten several times a minute — a `pane/record` event each time, and nothing at all if
+    /// benchd went down inside one of those windows, which is the case the record exists for.
+    /// The cost: an agent the operator exited on purpose is resumed by the next `resume-all`.
     ///
     /// **The active workspace only.** A background workspace's record is whatever was written
     /// while it was on screen, which is the last moment helm looked.
@@ -296,10 +215,6 @@ final class WorkbenchModel: ObservableObject {
             else { continue }
             send(.paneRecord(pane, agent: BenchDocument.Agent(agent)), by: .helm)
         }
-        // An offer whose pane now holds a live agent has been answered by events: the operator
-        // accepted it, or started one by hand. Either way there is nothing left to ask.
-        let stale = resumeOffers.keys.filter { live[$0] != nil }
-        if !stale.isEmpty { for pane in stale { resumeOffers[pane] = nil } }
     }
 
     /// Which agent is running in each terminal pane **right now**, per Claude Code's own
@@ -323,33 +238,6 @@ final class WorkbenchModel: ObservableObject {
                 cwd: row.cwd ?? session.workspacePath.value)
         }
         return found
-    }
-
-    /// The operator accepted a pane's resume offer (#63).
-    ///
-    /// helm composes the agent's own `--resume` and puts it in that pane's pty. It does not
-    /// reimplement resume, and it does not touch focus: the line goes to the surface helm
-    /// created for that pane, so it cannot land in whatever pane holds the keyboard (#96).
-    ///
-    /// The offer is retired here rather than left for `observeAgents` to notice: the operator
-    /// clicked, so the question is answered whether or not the agent turns up. The **record**
-    /// stays on the pane, because it is still true — that agent is what is running there — and
-    /// the next tick confirms it without writing anything.
-    func resume(_ pane: Pane.ID) {
-        guard let offer = resumeOffers[pane], offer.canResume,
-            let line = AgentResume.line(resuming: offer.agent)
-        else { return }
-        resumeOffers[pane] = nil
-        launcher.run(line, in: pane)
-    }
-
-    /// The operator declined a pane's resume offer, or acknowledged one helm cannot make good
-    /// on. **The record goes with it** — a declined agent left on the pane is one that is
-    /// offered again on every launch until the pane is closed.
-    func dismissResume(_ pane: Pane.ID) {
-        guard resumeOffers[pane] != nil else { return }
-        resumeOffers[pane] = nil
-        send(.paneRecord(pane, agent: nil), by: .operatorGesture)
     }
 
     // MARK: - Resolving panes to the objects they name
@@ -690,7 +578,6 @@ extension WorkbenchModel {
     /// state, so the inner call's newer document is what stays drawn. Keep it that way.
     func apply(_ at: DocumentAt) {
         let document = at.document
-        lastApplied = at
         self.document = document
 
         let alive = document.paneIDs
@@ -698,54 +585,20 @@ extension WorkbenchModel {
             surfaces.close(entry.id)
         }
         origins = origins.filter { alive.contains($0.key) }
-        resumeOffers = resumeOffers.filter { alive.contains($0.key) }
 
-        let drawing = BenchDrawing.of(document, answered: answered)
+        let drawing = BenchDrawing.of(document)
         workspacePath = drawing.workspace
-        shelvedBench = drawing.shelved
         mount = drawing.mount
         if let active = drawing.workspace, let bench = drawing.mount.bench {
-            answered.insert(active)
             terminals.adopt(
                 terminals: bench.terminalPaneIDs, in: active,
                 attaching: document.workspace(at: active)?.bench
                     .attachCommands(bench: client.benchExecutable) ?? [:])
-            if offered.insert(active).inserted { resumeOffers = offers(in: bench) }
         } else if drawing.workspace == nil {
             terminals.deactivate()
         }
         reconcileSessions()
         documentFollower?(document)
-    }
-
-    /// #85's answer. Restoring draws what benchd already holds, bringing the shelf
-    /// back first when the offer was the shelf. Fresh asks benchd to shelve the bench and start
-    /// one shell — unless the offer was the shelf, which fresh leaves where it is.
-    ///
-    /// **A verb that did not happen leaves the question open.** Marked answered before the verb,
-    /// because the document it makes arrives inside the send and must not be asked about again;
-    /// unmarked if no newer document came back, so the operator's choice is never silently
-    /// replaced by the bench he declined.
-    private func answerFromDaemon(
-        _ choice: BenchRestoreChoice, offer: BenchRestoreOffer, path: WorkspacePath
-    ) {
-        answered.insert(path)
-        let offeredTheShelf = shelvedBench == offer.bench
-        let verb: BenchVerb? =
-            switch choice {
-            case .restore where offeredTheShelf: .workspaceUnshelve(path: path.value)
-            case .fresh where !offeredTheShelf: .workspaceReset(path: path.value)
-            case .restore, .fresh: nil
-            }
-        if let verb {
-            let before = lastApplied?.seq
-            send(verb, by: .operatorGesture)
-            guard lastApplied?.seq != before else {
-                answered.remove(path)
-                return
-            }
-        }
-        if let lastApplied { apply(lastApplied) }
     }
 
     /// Say why a verb did not happen. A refusal is benchd's own sentence.

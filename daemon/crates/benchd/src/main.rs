@@ -31,8 +31,11 @@ mod codex;
 mod hook;
 mod just;
 mod layout;
+mod restore;
 mod rules;
 mod sessions;
+mod shell_env;
+mod shells;
 mod spawn;
 
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
@@ -155,6 +158,23 @@ struct Scanned {
     next_seq: u64,
     repair: Option<RepairNote>,
     last_document_change: Option<u64>,
+    /// One past the highest session id (`s<N>`) any daemon on this root spawned. Ids never
+    /// repeat across restarts: a pane that showed `s1` before a restart must not show a new `s1`
+    /// after one, or helm, seeing the same id, would keep the ended session's surface (M5b).
+    next_session: u64,
+}
+
+/// The number in a `session/spawned` event's `s<N>`, if it is one.
+fn spawned_session_number(ev: &Event) -> Option<u64> {
+    if ev.kind != "session/spawned" {
+        return None;
+    }
+    ev.data
+        .get("session")?
+        .as_str()?
+        .strip_prefix('s')?
+        .parse()
+        .ok()
 }
 
 fn scan_log(events: &PathBuf) -> Result<Scanned, StartError> {
@@ -165,10 +185,12 @@ fn scan_log(events: &PathBuf) -> Result<Scanned, StartError> {
                 next_seq: 0,
                 repair: None,
                 last_document_change: None,
+                next_session: 1,
             });
         }
     };
     let mut last_document_change = None;
+    let mut next_session = 1u64;
     let text = String::from_utf8_lossy(&bytes);
     let mut seq = 0u64;
     let mut offset = 0usize;
@@ -185,6 +207,9 @@ fn scan_log(events: &PathBuf) -> Result<Scanned, StartError> {
                 offset += chunk.len();
                 if ev.kind == DOCUMENT_CHANGED {
                     last_document_change = Some(ev.seq);
+                }
+                if let Some(n) = spawned_session_number(&ev) {
+                    next_session = next_session.max(n + 1);
                 }
             }
             Err(e) => {
@@ -224,6 +249,7 @@ fn scan_log(events: &PathBuf) -> Result<Scanned, StartError> {
                         dropped_bytes: dropped.len(),
                     }),
                     last_document_change,
+                    next_session,
                 });
             }
         }
@@ -232,6 +258,7 @@ fn scan_log(events: &PathBuf) -> Result<Scanned, StartError> {
         next_seq: seq,
         repair: None,
         last_document_change,
+        next_session,
     })
 }
 
@@ -481,6 +508,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         next_seq,
         repair,
         last_document_change,
+        next_session,
     } = scan_log(&events)?;
     let (bench, bench_events) = layout::load(&root, last_document_change);
     let (placement, rules_event) = rules::RulesFile::boot(bench_wire::placement_rules_path(&root));
@@ -517,7 +545,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         started_at: now_rfc3339(),
         booted: Instant::now(),
         sessions: HashMap::new(),
-        next_session: 1,
+        next_session,
         next_mail,
         wake_tokens: HashMap::new(),
         notices: notice_tx,
@@ -560,6 +588,12 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
                 json!({ "endpoint": stale.display().to_string(), "why": "left by a daemon that is no longer running" }),
             )
             .map_err(StartError::Failed)?;
+        }
+        // Ghostty's shell integration, for the shells terminal panes run (M5b). A failure is
+        // logged and the shells start without it: prompt marks are missing, nothing else.
+        if let Err(why) = shell_env::install(&c.root) {
+            c.append("shells/no-integration", json!({ "why": why }))
+                .map_err(StartError::Failed)?;
         }
         let boot_events = bench_events
             .into_iter()
@@ -919,11 +953,12 @@ fn dispatch(
                 AfterResponse::Follow(rx),
             )
         }
+        Some(Verb::Restore) => match restore::answer(core, &req.args, req.by.clone()) {
+            Ok(data) => (ok(data), AfterResponse::Done),
+            Err(why) => (refused(why), AfterResponse::Done),
+        },
         Some(Verb::Layout) => {
-            let (response, ended) = layout::answer(&mut core.lock().unwrap(), req);
-            if let Some(session) = ended {
-                std::thread::spawn(move || session.close(Duration::from_secs(2)));
-            }
+            let response = layout::answer(&mut core.lock().unwrap(), req);
             (response, AfterResponse::Done)
         }
         Some(Verb::Events) => {
@@ -951,25 +986,28 @@ fn dispatch(
 
         Some(Verb::Sessions) => {
             let c = core.lock().unwrap();
-            let list: Vec<Value> = c
+            let sessions = c
                 .sessions
                 .values()
-                .map(|s| {
-                    json!({
-                        "session": s.id,
-                        "handle": s.handle,
-                        "agent": s.agent.name(),
-                        "cwd": s.cwd,
-                        "pid": s.pid,
-                        "live": s.is_live(),
-                        "attached": s.is_attached(),
-                        "output_bytes": s.output_bytes(),
-                        "runtime_session": s.runtime_session,
-                        "uptime_secs": s.spawned_at.elapsed().as_secs(),
-                    })
+                .map(|s| bench_wire::SessionEntry {
+                    session: s.id.clone(),
+                    handle: s.handle.clone(),
+                    agent: s.agent.name().to_string(),
+                    cwd: s.cwd.clone(),
+                    pid: s.pid,
+                    pane: c.bench.document.pane_showing_session(&s.id),
+                    foreground_pid: s.foreground_pid(),
+                    live: s.is_live(),
+                    attached: s.is_attached(),
+                    output_bytes: s.output_bytes(),
+                    runtime_session: s.runtime_session.clone(),
+                    uptime_secs: s.spawned_at.elapsed().as_secs(),
                 })
                 .collect();
-            (ok(json!({ "sessions": list })), AfterResponse::Done)
+            (
+                ok(json!(bench_wire::LiveSessions { sessions })),
+                AfterResponse::Done,
+            )
         }
 
         Some(Verb::SessionsAll) => match sessions::answer_all(core, &req.args) {
@@ -1081,18 +1119,13 @@ fn dispatch(
                 c.next_session += 1;
                 (id, c.root.clone(), c.notices.clone())
             };
-            let extra_env = [
-                ("BENCH_SESSION".to_string(), id.clone()),
-                ("BENCH_HANDLE".to_string(), old.handle.clone()),
-                ("BENCH_DIR".to_string(), root.display().to_string()),
-            ];
             let session = match Session::spawn(
                 id.clone(),
                 old.handle.clone(),
                 &spec,
                 40,
                 140,
-                &extra_env,
+                &spawn::agent_env(&root, &id, &old.handle),
                 notices,
             ) {
                 Ok(s) => s,

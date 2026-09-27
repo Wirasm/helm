@@ -23,6 +23,8 @@
 
 mod pty;
 
+pub use pty::Env;
+
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -56,6 +58,10 @@ pub enum AgentKind {
     /// `/bin/cat`, admitted only when `BENCH_SESSION_TEST_AGENT=1` — the conformance
     /// suite's echo oracle, refused everywhere else.
     TestEcho,
+    /// The operator's login shell in a terminal pane (M5b). Never parsed from a request: a
+    /// shell is what benchd starts for a terminal pane, with no argv from anyone, so the
+    /// allowlist above still refuses an arbitrary program.
+    Shell,
 }
 
 impl AgentKind {
@@ -77,6 +83,7 @@ impl AgentKind {
             AgentKind::Codex => "codex",
             AgentKind::Pi => "pi",
             AgentKind::TestEcho => "test-echo",
+            AgentKind::Shell => "shell",
         }
     }
 
@@ -143,6 +150,28 @@ exec codex --remote "unix://$s" "$@"
 /// The sentence a first prompt becomes in argv.
 pub fn prompt_pointer(path: &str) -> String {
     format!("Read and act on the prompt in {path}")
+}
+
+/// The operator's shell, as a terminal finds it: `$SHELL` (what his login session and
+/// Ghostty go by), else his entry in the user database, else `/bin/sh`.
+pub fn login_shell() -> String {
+    if let Ok(shell) = std::env::var("SHELL")
+        && shell.starts_with('/')
+    {
+        return shell;
+    }
+    // SAFETY: getpwuid returns a pointer into static storage or null; the string is copied out
+    // at once, and nothing else in benchd calls getpwuid concurrently with a spawn.
+    unsafe {
+        let entry = libc::getpwuid(libc::getuid());
+        if !entry.is_null() && !(*entry).pw_shell.is_null() {
+            let shell = std::ffi::CStr::from_ptr((*entry).pw_shell).to_string_lossy();
+            if shell.starts_with('/') {
+                return shell.into_owned();
+            }
+        }
+    }
+    "/bin/sh".to_string()
 }
 
 /// The single spelling of how each runtime is started unattended. Postures verbatim
@@ -232,6 +261,12 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             }
             // `cat` would read a pointer as a file to print; it takes no prompt.
             return Ok(("/bin/cat".to_string(), args));
+        }
+        AgentKind::Shell => {
+            if spec.resume {
+                return Err("a shell has no conversation to resume".into());
+            }
+            return Ok((login_shell(), vec!["-l".to_string()]));
         }
     };
     args.extend(spec.extra_args.iter().cloned());
@@ -355,14 +390,14 @@ impl Session {
         spec: &SpawnSpec,
         rows: u16,
         cols: u16,
-        extra_env: &[(String, String)],
+        env: &Env,
         notices: Sender<Notice>,
     ) -> Result<Arc<Session>, String> {
         let (program, args) = argv(spec)?;
-        // `extra_env` is how the session learns its own address and root — what lets an
+        // `env` is how the session learns its own address and root — what lets an
         // agent inside run `bench mail send` with no flags and land in the right mailroom
         // (the same declare-don't-derive rule as helm's PaneEnvironment).
-        let (master, child) = pty::spawn(&program, &args, &spec.cwd, extra_env, rows, cols)
+        let (master, child) = pty::spawn(&program, &args, &spec.cwd, env, rows, cols)
             .map_err(|e| format!("spawn {program} in {}: {e}", spec.cwd))?;
         let mut reader = master
             .try_clone()
@@ -437,6 +472,31 @@ impl Session {
 
     pub fn is_live(&self) -> bool {
         !self.exited.load(Ordering::SeqCst)
+    }
+
+    /// What runs in the foreground of this session's terminal, when it is not the session's own
+    /// process: a shell's running command (an interactive shell puts each job in a group of its
+    /// own), answered as its pid and name. `None` means the session's process has the terminal
+    /// — a shell at its prompt, or an agent — or the session has ended.
+    pub fn foreground_job(&self) -> Option<(i32, String)> {
+        if !self.is_live() {
+            return None;
+        }
+        let group = pty::foreground(&self.master.lock().unwrap())?;
+        if group == self.pid as i32 {
+            return None;
+        }
+        let name = pty::process_name(group).unwrap_or_else(|| format!("pid {group}"));
+        Some((group, name))
+    }
+
+    /// The pid in the foreground of this session's terminal: its own process, or the job a shell
+    /// is running. How a pane's agent is found (helm joins it against Claude's registry).
+    pub fn foreground_pid(&self) -> Option<i32> {
+        if !self.is_live() {
+            return None;
+        }
+        pty::foreground(&self.master.lock().unwrap())
     }
 
     pub fn is_attached(&self) -> bool {

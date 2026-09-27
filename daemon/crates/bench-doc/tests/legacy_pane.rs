@@ -106,6 +106,11 @@ fn one_workspaces_legacy_pane_does_not_wipe_every_other_workspaces_layout() {
 
     let read = Document::read_tolerant(stored).unwrap();
 
+    assert!(
+        read.notes.iter().any(|n| n.contains("shelved bench")),
+        "a stored shelf (M5b retired #85's question) is dropped, and says so: {:?}",
+        read.notes
+    );
     let doc = read.value;
     assert_eq!(doc.workspaces().len(), 3, "every workspace keeps its place");
     assert_eq!(
@@ -123,7 +128,6 @@ fn one_workspaces_legacy_pane_does_not_wipe_every_other_workspaces_layout() {
         fallback.bench.panes().next().unwrap().surface,
         Surface::Terminal { agent: None, .. }
     ));
-    assert_eq!(fallback.shelved, None, "an unreadable shelf is dropped");
     assert_eq!(
         doc.workspaces()[2].bench,
         survivor,

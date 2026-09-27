@@ -71,14 +71,10 @@ package struct BenchDocument: Codable, Equatable, Sendable {
     package struct Workspace: Codable, Equatable, Sendable {
         package var path: String
         package var bench: Bench
-        /// A bench the operator declined to restore (helm #85), kept so one click destroys
-        /// nothing.
-        package var shelved: Bench?
 
-        package init(path: String, bench: Bench, shelved: Bench? = nil) {
+        package init(path: String, bench: Bench) {
             self.path = path
             self.bench = bench
-            self.shelved = shelved
         }
     }
 

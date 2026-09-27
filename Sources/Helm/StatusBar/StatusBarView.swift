@@ -176,11 +176,12 @@ struct StatusBarView: View {
                     .background(Color.attention, in: Capsule())
             }
             .buttonStyle(.plain)
-            // Says what it will cost before it costs it: this quits helm, and every pane goes
-            // with it. The sha is what tells the operator which build they are being offered.
+            // Says what it will cost before it costs it. Every terminal pane is a benchd session
+            // (M5b), so quitting helm ends none of them: the new helm shows the same panes. The
+            // sha is what tells the operator which build they are being offered.
             .help(
                 "Build \(stamp.sha) is ready — click to quit helm, install it and reopen. "
-                    + "Every terminal and its agent closes.")
+                    + "Terminals keep running in benchd and come back with it.")
         }
     }
 }

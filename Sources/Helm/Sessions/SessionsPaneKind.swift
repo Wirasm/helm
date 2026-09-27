@@ -113,7 +113,7 @@ enum NewTerminalLine {
         let until = ContinuousClock.now + deadline
         while ContinuousClock.now < until {
             if let session = terminals.sessions.first(where: { $0.id == pane }),
-                session.hostView.foregroundPid != nil
+                session.foregroundPid != nil
             {
                 TerminalLaunchLine.send(line, to: session)
                 return nil

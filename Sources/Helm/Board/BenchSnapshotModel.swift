@@ -33,7 +33,7 @@ final class BenchSnapshotModel: ObservableObject {
         registryRoot: URL = AgentRegistry.defaultRoot,
         refreshInterval: Duration = .seconds(2),
         now: @escaping () -> Date = Date.init,
-        foregroundPid: @escaping (TerminalSession) -> pid_t? = { $0.hostView.foregroundPid },
+        foregroundPid: @escaping (TerminalSession) -> pid_t? = { $0.foregroundPid },
         writer: Writer? = nil
     ) {
         self.directory = directory

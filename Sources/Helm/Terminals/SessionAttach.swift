@@ -10,9 +10,17 @@ import HelmWire
 /// the suite (`PaneEnvironment`), so it reaches the same root.
 enum SessionAttach {
     /// The line ghostty runs for a pane showing `session`. It is run the way ghostty runs its own
-    /// `command`, through the shell, so every word is quoted.
+    /// `command`, through the shell, so every word is quoted. `--in-pane`: `bench attach` prints
+    /// nothing of its own into the pane, and passes Ctrl-\ on (a shell's SIGQUIT) instead of
+    /// detaching on it.
+    /// What a terminal pane with no benchd session says. It starts nothing: helm owns no pty of
+    /// its own (M5b), and a session comes back only through benchd.
+    static let noSession =
+        "This terminal has no session: benchd restarted, or its shell could not start. "
+        + "Run `just resume-all` to bring every such pane back."
+
     static func command(session: String, bench: String) -> String {
-        [bench, "attach", session].map(LaunchLine.quoted).joined(separator: " ")
+        [bench, "attach", session, "--in-pane"].map(LaunchLine.quoted).joined(separator: " ")
     }
 }
 
@@ -21,6 +29,15 @@ enum SessionAttach {
 enum SessionLaunch: Equatable {
     case attach(command: String)
     case unavailable(reason: String)
+
+    /// Whether `session` is already this launch: the same command, or the same reason shown.
+    @MainActor
+    func isShown(by session: TerminalSession) -> Bool {
+        switch self {
+        case let .attach(command): session.hostView.configuration.command == command
+        case let .unavailable(reason): session.status == .unattachable(reason)
+        }
+    }
 }
 
 extension BenchDocument.Bench {
