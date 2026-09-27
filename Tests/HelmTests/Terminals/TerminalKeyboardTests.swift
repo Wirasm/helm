@@ -471,8 +471,9 @@ final class Pty: CustomDebugStringConvertible {
     let command: String
 
     init() {
+        _ = Self.sweptOnce
         directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("helm-pty-\(UUID().uuidString)")
+            .appendingPathComponent("helm-pty-\(getpid())-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let script = directory.appendingPathComponent("record")
         let body = """
@@ -488,6 +489,20 @@ final class Pty: CustomDebugStringConvertible {
     }
 
     deinit { try? FileManager.default.removeItem(at: directory) }
+
+    /// A run that crashed or was killed never reaches `deinit`, so the first recorder of each run
+    /// removes the ones left by runs whose process is gone. The pid in the name is the owner: a
+    /// suite running in another worktree keeps its recorders.
+    private static let sweptOnce: Void = {
+        let temporary = FileManager.default.temporaryDirectory
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: temporary.path)) ?? []
+        for name in names where name.hasPrefix("helm-pty-") {
+            let owner = name.dropFirst("helm-pty-".count).split(separator: "-").first
+            guard let pid = owner.flatMap({ pid_t($0) }), kill(pid, 0) != 0, errno == ESRCH
+            else { continue }
+            try? FileManager.default.removeItem(at: temporary.appendingPathComponent(name))
+        }
+    }()
 
     /// The recorder is running with its tty in raw mode. A keystroke typed before this can
     /// sit in the line discipline's canonical buffer and never reach `cat`.
