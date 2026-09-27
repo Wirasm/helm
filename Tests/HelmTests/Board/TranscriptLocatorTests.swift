@@ -71,7 +71,7 @@ final class TranscriptLocatorTests: XCTestCase {
     // MARK: - The registry field this depends on
 
     /// `sessionId` is decoded by the shared registry reader. The board does not
-    /// use it; the resume record (#63) and the spool's owner join cannot work without it.
+    /// use it; the resume record (#63) cannot work without it.
     func testRegistryRowCarriesTheSessionId() throws {
         let row = """
             {"pid":42,"sessionId":"7b3277cb-4fcb","cwd":"/tmp/ws","status":"idle"}

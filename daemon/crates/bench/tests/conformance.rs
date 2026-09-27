@@ -757,9 +757,10 @@ fn spawn_refuses_a_cwd_that_is_not_an_absolute_directory() {
 
 #[test]
 fn a_session_relays_bytes_faithfully_including_an_osc_sequence() {
-    // THE canvas-passthrough proof (M5a's named assumption): an OSC 777 written by the
-    // agent must cross the relay byte-for-byte, because whatever terminal hosts
-    // `bench attach` is what parses it — helm included.
+    // M5a's named assumption: an OSC sequence written by the agent must cross the relay
+    // byte-for-byte, because whatever terminal hosts `bench attach` is what parses it —
+    // in helm, ghostty reads titles, OSC 9/777 notifications and OSC 133 from it. (This
+    // was once the canvas-passthrough proof; a canvas arrives through `bench open` now.)
     let home = TestHome::claim("relay");
     let daemon = DaemonGuard::start(&home.dir, None);
     let run = bench(

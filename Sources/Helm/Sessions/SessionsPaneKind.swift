@@ -97,9 +97,9 @@ extension SessionsActions {
 
 /// A new terminal on the bench, running one line once its shell is up.
 ///
-/// **Waited on, never slept for**, the spool's rule: a line pasted before the login shell has
-/// started is lost, and the shell having a foreground process is the pty's own answer to "am I
-/// ready". The wait's direction is safe — a slow machine only makes it take longer.
+/// **Waited on, never slept for**, a rule kept from the spool: a line pasted before the login
+/// shell has started is lost, and the shell having a foreground process is the pty's own answer
+/// to "am I ready". The wait's direction is safe — a slow machine only makes it take longer.
 @MainActor
 enum NewTerminalLine {
     static func run(
