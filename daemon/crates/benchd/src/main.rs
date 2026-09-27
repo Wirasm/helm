@@ -1014,17 +1014,25 @@ fn dispatch(
         Some(Verb::HelmAnswer) => (ask::answer(core, req), AfterResponse::Done),
 
         Some(Verb::Sessions) => {
-            let c = core.lock().unwrap();
-            let sessions = c
-                .sessions
-                .values()
-                .map(|s| bench_wire::SessionEntry {
+            // Copied out under the core lock, read outside it (#517): a session's own locks can
+            // be held across a blocking write (a viewer that stopped reading holds its relay for
+            // up to DAEMON_IO_TIMEOUT), and every verb waits while the core lock does.
+            let shown: Vec<_> = {
+                let c = core.lock().unwrap();
+                c.sessions
+                    .values()
+                    .map(|s| (Arc::clone(s), c.bench.document.pane_showing_session(&s.id)))
+                    .collect()
+            };
+            let sessions = shown
+                .into_iter()
+                .map(|(s, pane)| bench_wire::SessionEntry {
                     session: s.id.clone(),
                     handle: s.handle.clone(),
                     agent: s.agent.name().to_string(),
                     cwd: s.cwd.clone(),
                     pid: s.pid,
-                    pane: c.bench.document.pane_showing_session(&s.id),
+                    pane,
                     foreground_pid: s.foreground_pid(),
                     live: s.is_live(),
                     attached: s.is_attached(),
