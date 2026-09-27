@@ -337,6 +337,17 @@ final class KeymapFileTests: XCTestCase {
                 line: 1, reason: "'drawer' name 'Notes': a drawer name is 1-32 of [a-z0-9-]"))
     }
 
+    /// A drawer can sit along the bottom of the window (#382); `size` is then its height. An
+    /// edge helm cannot draw is refused when the file loads, naming the ones it can.
+    func testADrawerCanSitOnTheBottomEdgeAndNoOtherNewOne() throws {
+        let file = try parse("[drawer.archon]\nedge = \"bottom\"\nsize = 0.34\n")
+        XCTAssertEqual(file.drawers["archon"], DrawerStyle(edge: .bottom, size: 0.34))
+        XCTAssertEqual(
+            problem("[drawer.x]\nedge = \"top\"\n"),
+            KeymapProblem(line: nil, reason: "[drawer.x]: edge is left, right or bottom, not 'top'")
+        )
+    }
+
     /// `[drawer.<name>]` sets where a drawer sits; what it leaves out is the drawer's built-in.
     func testADrawerTableOverridesOnlyWhatItSets() throws {
         let file = try parse(
