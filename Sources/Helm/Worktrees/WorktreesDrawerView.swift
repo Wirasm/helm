@@ -2,15 +2,19 @@ import SwiftUI
 
 /// The Worktrees drawer (#382): every repository on the machine with a linked worktree, and the
 /// bench's own, each a group of its worktrees. Driven from the keyboard: ↑↓ pick a worktree and
-/// every other key is `WorktreesKeys`'s table. Showing the drawer refreshes it; the last answer
-/// stays on screen while the next is read.
+/// every other key is `WorktreesKeys`'s table — open, new, delete. Showing the drawer refreshes
+/// it; the last answer stays on screen while the next is read.
 struct WorktreesDrawerView: View {
     let drawer: WorktreesDrawer
     @ObservedObject var model: WorktreesModel
     let holdsKeyboard: Bool
 
     @State private var selected: String?
+    /// The repository a new worktree is being typed for, while the composer is open.
+    @State private var creatingIn: GitCommonDir?
+    @State private var notice: String?
     @FocusState private var focused: Bool
+    @FocusState private var composerFocused: Bool
 
     init(drawer: WorktreesDrawer, holdsKeyboard: Bool) {
         self.drawer = drawer
@@ -32,10 +36,19 @@ struct WorktreesDrawerView: View {
                 isRefreshing: model.isRefreshing)
             Color.border.frame(height: 1)
             list
+            if let repoID = creatingIn {
+                Color.border.frame(height: 1)
+                WorktreeComposer(
+                    repoName: repos.first { $0.id == repoID }?.name ?? "",
+                    isCreating: model.isCreating, failure: model.createFailure,
+                    focus: $composerFocused,
+                    submit: { branch in create(branch, in: repoID) },
+                    cancel: closeComposer)
+            }
             Color.border.frame(height: 1)
             WorktreesFooter(
                 hints: WorktreesKeys.hints(on: selectedRow, in: selectedRepo),
-                unlisted: model.unlistedCount)
+                notice: notice, unlisted: model.unlistedCount)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.surface)
@@ -51,9 +64,11 @@ struct WorktreesDrawerView: View {
         .task { await model.refresh(workspaces: drawer.workspaces) }
         .alert(item: confirmation) { target in
             Alert(
-                title: Text(WorktreesConfirmText.title(target)),
+                title: Text(WorktreesConfirmText.title(target, in: model)),
                 message: Text(WorktreesConfirmText.message(target, in: model)),
-                primaryButton: .destructive(Text("Clean")) { Task { await model.confirm() } },
+                primaryButton: .destructive(Text(WorktreesConfirmText.button(target, in: model))) {
+                    Task { await model.confirm() }
+                },
                 secondaryButton: .cancel { model.cancelConfirmation() })
         }
     }
@@ -103,20 +118,48 @@ struct WorktreesDrawerView: View {
     }
 
     private func handle(_ press: KeyPress) -> KeyPress.Result {
-        guard press.modifiers.isEmpty || press.modifiers == .shift,
-            let key = press.characters.first
+        guard !composerFocused, press.modifiers.isEmpty || press.modifiers == .shift,
+            let key = press.key == .return ? "\r" : press.characters.first
         else { return .ignored }
-        switch WorktreesKeys.action(for: key, on: selectedRow, in: selectedRepo) {
+        let action = WorktreesKeys.action(for: key, on: selectedRow, in: selectedRepo)
+        if action != .none { notice = nil }
+        switch action {
         case .none:
             return .ignored
         case .refresh:
             Task { await model.refresh(workspaces: drawer.workspaces) }
-        case let .clean(row):
-            model.requestCleanup(of: row)
-        case let .cleanAll(repo):
-            model.requestCleanAll(in: repo)
+        case let .openWorkspace(row):
+            drawer.openWorkspace(row.record.path)
+        case let .openTerminal(row):
+            let drawer = self.drawer
+            Task {
+                notice = await drawer.runInNewTerminal(
+                    WorktreesDrawer.changeDirectoryLine(to: row.record.path))
+            }
+        case let .create(repo):
+            model.clearCreateFailure()
+            creatingIn = repo
+            composerFocused = true
+        case let .delete(row):
+            Task { await model.requestDelete(of: row) }
+        case let .cleanMerged(repo):
+            model.requestCleanMerged(in: repo)
         }
         return .handled
+    }
+
+    private func create(_ branch: String, in repoID: GitCommonDir) {
+        Task {
+            guard let path = await model.create(branch: branch, in: repoID) else { return }
+            selected = path
+            closeComposer()
+        }
+    }
+
+    private func closeComposer() {
+        creatingIn = nil
+        composerFocused = false
+        focused = true
     }
 
     private var confirmation: Binding<WorktreesModel.Confirmation?> {
@@ -184,9 +227,11 @@ private struct WorktreesRepoHeader: View {
     }
 }
 
-/// The keys that apply to the selected worktree, and how many repositories were left out.
+/// The keys that apply to the selected worktree, the last thing a key could not do, and how
+/// many repositories were left out.
 private struct WorktreesFooter: View {
     let hints: [String]
+    let notice: String?
     let unlisted: Int
 
     var body: some View {
@@ -197,7 +242,12 @@ private struct WorktreesFooter: View {
                     .foregroundStyle(Color.textMuted)
             }
             Spacer()
-            if unlisted > 0 {
+            if let notice {
+                Text(notice)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.danger)
+                    .lineLimit(1)
+            } else if unlisted > 0 {
                 Text("\(counted(unlisted, "repo")) with only a main checkout not shown")
                     .font(.system(size: 10))
                     .foregroundStyle(Color.textFaint)
@@ -206,36 +256,6 @@ private struct WorktreesFooter: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
-    }
-}
-
-/// The words of the confirmation #141 requires before anything is removed.
-enum WorktreesConfirmText {
-    @MainActor
-    static func title(_ target: WorktreesModel.Confirmation) -> String {
-        switch target {
-        case .row: "Clean this worktree?"
-        case let .cleanAll(_, paths): "Clean \(paths.count) merged worktrees?"
-        }
-    }
-
-    @MainActor
-    static func message(_ target: WorktreesModel.Confirmation, in model: WorktreesModel) -> String {
-        switch target {
-        case let .row(path):
-            guard let row = model.repo(containing: path)?.worktrees.first(where: { $0.id == path }),
-                let route = row.cleanupRoute
-            else { return path }
-            switch route {
-            case let .archon(branch):
-                return "Archon will complete \(branch) and preserve its lifecycle metadata."
-            case let .git(path):
-                return "Git will remove \(path) using its normal dirty-worktree guardrails."
-            }
-        case .cleanAll:
-            return "Each merged worktree of this repository will use its owning command, one at a "
-                + "time. No force flags are used."
-        }
     }
 }
 

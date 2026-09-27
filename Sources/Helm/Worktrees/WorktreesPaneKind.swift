@@ -9,9 +9,11 @@ import SwiftUI
 final class WorktreesPaneKind: SurfaceKind {
     /// Weak for `SessionsPaneKind`'s reason: the registration can outlive a closed window.
     private weak var workbench: WorkbenchModel?
+    private weak var terminals: TerminalManager?
 
-    init(workbench: WorkbenchModel) {
+    init(workbench: WorkbenchModel, terminals: TerminalManager) {
         self.workbench = workbench
+        self.terminals = terminals
     }
 
     let kind: Pane.Content.Kind = .worktrees
@@ -20,7 +22,14 @@ final class WorktreesPaneKind: SurfaceKind {
         guard let workbench else { return nil }
         return WorktreesDrawer(
             model: WorktreesModel(),
-            document: { [weak workbench] in workbench?.document })
+            document: { [weak workbench] in workbench?.document },
+            openWorkspace: { [weak workbench] path in
+                workbench?.send(.workspaceOpen(path: path), by: .operatorGesture)
+            },
+            runInNewTerminal: { [weak workbench, weak terminals] line in
+                guard let workbench, let terminals else { return "helm is closing" }
+                return await NewTerminalLine.run(line, workbench: workbench, terminals: terminals)
+            })
     }
 
     func view(of drawer: WorktreesDrawer, in slot: SurfaceSlot) -> AnyView {
@@ -40,16 +49,32 @@ final class WorktreesPaneKind: SurfaceKind {
     func close(_ drawer: WorktreesDrawer) {}
 }
 
-/// One Worktrees pane's live object: the model, and benchd's document, which says which
-/// repositories the bench's workspaces are in and which panes work where.
+/// One Worktrees pane's live object: the model; benchd's document, which says which
+/// repositories the bench's workspaces are in and which panes work where; and the two ways to
+/// open a worktree, both the operator's gestures.
 @MainActor
 final class WorktreesDrawer {
     let model: WorktreesModel
     let document: @MainActor () -> BenchDocument?
+    /// `workspace/open` for the worktree's folder.
+    let openWorkspace: @MainActor (String) -> Void
+    /// Opens a terminal on the bench and runs one line in it; answers why it could not.
+    let runInNewTerminal: @MainActor (String) async -> String?
 
-    init(model: WorktreesModel, document: @escaping @MainActor () -> BenchDocument?) {
+    init(
+        model: WorktreesModel, document: @escaping @MainActor () -> BenchDocument?,
+        openWorkspace: @escaping @MainActor (String) -> Void,
+        runInNewTerminal: @escaping @MainActor (String) async -> String?
+    ) {
         self.model = model
         self.document = document
+        self.openWorkspace = openWorkspace
+        self.runInNewTerminal = runInNewTerminal
+    }
+
+    /// The line a new terminal runs to stand in `path`.
+    nonisolated static func changeDirectoryLine(to path: String) -> String {
+        "cd '" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     var workspaces: [String] { document()?.workspaces.map(\.path) ?? [] }

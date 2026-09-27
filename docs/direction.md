@@ -141,12 +141,30 @@ API.
 Repositories are read six at a time and each appears the moment it answers, so the last answer
 stays on screen while the next one is read.
 
-**What it does**, from the keyboard: cleanup, #141's, unchanged — only a merged, existing,
-ordinary linked worktree, after the operator's confirmation, through `archon complete <branch>`
-for a recognised Archon branch and `git worktree remove <path>` without force for the rest (`d`,
-or `⇧D` for every merged one of a repository). Creating a worktree, opening one and deleting
-unmerged work behind a confirmation that names what would be lost are the next change. It never
-becomes a file tree.
+**What it does**, from the keyboard, each the operator's own act:
+
+- **Open**: Enter opens the worktree as a workspace of its own; `t` opens a terminal on the bench
+  standing in it.
+- **Create** (`n`): a branch for a new worktree of the selected repository. A branch that exists
+  is checked out, one only origin has is tracked, and any other name is a new branch from the
+  default branch. It goes in `.worktrees/<name>` when the repository keeps its worktrees there
+  (the folder exists or git ignores it), else beside the main checkout as `<repo>-<name>`.
+- **Delete** (`d`), #141's rules widened to unmerged and dirty work: before anything goes, git is
+  asked what it would lose — uncommitted files, commits the default branch lacks — and the
+  confirmation names it. Uncommitted files are removed only with `--force` after that
+  confirmation. The branch goes with its worktree only when the default branch has every commit
+  on it, checked again just before; an unmerged branch is kept, so no commit is lost with the
+  worktree. What the worktree loses is read again at the click; if an agent changed it while the
+  dialog was open, the operator is asked again with the new loss. A worktree whose folder is
+  already gone is cleared with `git worktree prune`.
+  An Archon worktree (in Archon's `<home>/workspaces/<owner>/<repo>/worktrees/`, or on an Archon
+  branch) goes through `archon complete`
+  in its own Archon home instead, which removes the branch and its remote branch too and refuses
+  what it will not remove; helm never forces it, and since `archon complete` exits 0 when it
+  refuses, helm reads git afterwards and shows Archon's words when the worktree is still there.
+  `⇧D` removes every merged, clean worktree of a repository, each checked again before it goes.
+
+Fetch, rebase and rename are not here. It never becomes a file tree.
 
 **Agents do not use it**: git is their view. benchd and `bench` know only the drawer's surface
 kind, `worktrees`, as they know `sessions` and `archon`; nothing about a worktree is kept in benchd.

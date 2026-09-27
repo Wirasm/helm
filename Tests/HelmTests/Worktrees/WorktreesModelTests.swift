@@ -4,7 +4,8 @@ import XCTest
 
 /// The Worktrees drawer's model (#382). The rail's per-workspace tests (collapsed does no I/O,
 /// a workspace switch drops the old answer) left with the rail: the drawer lists the machine,
-/// not a workspace, and has no collapsed state. Its cleanup tests are kept, per repository.
+/// not a workspace, and has no collapsed state. Its cleanup tests became the removal tests
+/// below, per repository.
 @MainActor
 final class WorktreesModelTests: XCTestCase {
     private let app = GitCommonDir("/work/app/.git")
@@ -12,8 +13,7 @@ final class WorktreesModelTests: XCTestCase {
     private let solo = GitCommonDir("/work/solo/.git")
 
     private func model(
-        _ client: FakeWorktreeClient, archon: FakeArchonClient = FakeArchonClient(),
-        found: [WorktreeDiscovery.Found]? = nil
+        _ client: FakeWorktreeClient, found: [WorktreeDiscovery.Found]? = nil
     ) -> WorktreesModel {
         let found =
             found ?? [
@@ -21,8 +21,7 @@ final class WorktreesModelTests: XCTestCase {
                 .init(commonDir: lib, isWorkspace: false),
                 .init(commonDir: solo, isWorkspace: false),
             ]
-        return WorktreesModel(
-            worktreeClient: client, archonClient: archon, discover: { _ in found })
+        return WorktreesModel(worktreeClient: client, discover: { _ in found })
     }
 
     private func main(_ path: String) -> Worktree {
@@ -146,7 +145,7 @@ final class WorktreesModelTests: XCTestCase {
         ]
         let box = FoundBox(found)
         let model = WorktreesModel(
-            worktreeClient: client, archonClient: FakeArchonClient(), discover: { _ in box.value })
+            worktreeClient: client, discover: { _ in box.value })
         await model.refresh(workspaces: [])
         XCTAssertEqual(model.repos.map(\.id), [app, lib])
 
@@ -157,100 +156,228 @@ final class WorktreesModelTests: XCTestCase {
         XCTAssertEqual(model.repos.map(\.id), [lib])
     }
 
-    // MARK: - Cleanup (#141), per repository
+    // MARK: - Creating
 
-    func testConfirmationGateAndOwnerRoutingUseExactRequests() async {
-        let gitRow = Worktree.fixture(path: "/work/app-git", branch: "feature/one")
-        let archonRow = Worktree.fixture(path: "/work/app-archon", branch: "archon/task-141")
+    func testANewWorktreeIsMadeFromTheMainCheckoutAndListed() async {
         let client = FakeWorktreeClient()
-        await client.setResponse([main("/work/app"), gitRow, archonRow], for: app)
-        let archon = FakeArchonClient()
-        let model = model(client, archon: archon)
+        await client.setResponse([main("/work/app")], for: app)
+        let model = model(client)
         await model.refresh(workspaces: [])
 
-        model.requestCleanup(of: gitRow)
-        var metrics = await client.metrics()
-        XCTAssertEqual(metrics.removeRequests.count, 0, "nothing before the operator confirms")
-        await model.confirm()
-        metrics = await client.metrics()
-        XCTAssertEqual(metrics.removeRequests.map(\.path), ["/work/app-git"])
-        XCTAssertEqual(metrics.removeRequests.map(\.repository), [app])
+        let path = await model.create(branch: " feat/new ", in: app)
 
-        model.requestCleanup(of: archonRow)
-        await model.confirm()
-        let completions = await archon.completions()
-        XCTAssertEqual(completions.map(\.branch), ["archon/task-141"])
+        XCTAssertEqual(path, "/work/app/.worktrees/feat-new")
+        let requests = await client.createRequests
+        XCTAssertEqual(requests.map(\.branch), ["feat/new"], "trimmed, never blank")
+        XCTAssertEqual(requests.map(\.main), ["/work/app"])
         XCTAssertEqual(
-            completions.map(\.workspacePath), [WorkspacePath("/work/app")],
-            "archon runs in the repository's main checkout")
+            model.repos.first { $0.id == app }?.worktrees.map(\.id),
+            ["/work/app", "/work/app/.worktrees/feat-new"], "read again, so it is on the list")
     }
 
-    func testIneligibleRowsCannotReachEitherProcess() async {
+    func testAFailedCreateSaysWhyAndABlankBranchAsksNothing() async {
+        let client = FakeWorktreeClient()
+        await client.setResponse([main("/work/app")], for: app)
+        let failure = WorktreeCLIError(
+            command: "git worktree add", reason: .nonzeroExit(status: 128, stderr: "in use"))
+        await client.setCreateFailure(failure)
+        let model = model(client)
+        await model.refresh(workspaces: [])
+
+        let blank = await model.create(branch: "  ", in: app)
+        XCTAssertNil(blank)
+        let requestsAfterBlank = await client.createRequests
+        XCTAssertTrue(requestsAfterBlank.isEmpty)
+
+        let path = await model.create(branch: "x", in: app)
+        XCTAssertNil(path)
+        XCTAssertEqual(model.createFailure, failure.localizedDescription)
+    }
+
+    // MARK: - Removing (#141), per repository
+
+    /// Nothing goes before the operator confirms, the confirmation carries what git says is
+    /// lost, and the removal is handed that same loss.
+    func testADeleteAsksWithTheLossFirstAndRemovesOnlyOnConfirm() async {
+        let row = Worktree.fixture(
+            path: "/work/app-wip", branch: "feat/wip", mergedState: .unmerged)
+        let loss = WorktreeLoss(
+            uncommittedFiles: 2, unmergedCommits: 3, branch: "feat/wip",
+            defaultBranch: "refs/remotes/origin/main")
+        let client = FakeWorktreeClient()
+        await client.setResponse([main("/work/app"), row], for: app)
+        await client.setLoss(loss, for: row.id)
+        let model = model(client)
+        await model.refresh(workspaces: [])
+
+        await model.requestDelete(of: row)
+        XCTAssertEqual(model.confirmation, .delete(path: row.id, loss: loss))
+        var removed = await client.removeRequests
+        XCTAssertTrue(removed.isEmpty, "nothing before the operator confirms")
+
+        await model.confirm()
+        removed = await client.removeRequests
+        XCTAssertEqual(removed.map(\.path), [row.id])
+        XCTAssertEqual(removed.map(\.repository), [app])
+        let handed = await client.removeLosses
+        XCTAssertEqual(handed, [loss])
+        XCTAssertEqual(model.repos.first { $0.id == app }?.worktrees.count, 1)
+    }
+
+    /// An agent writing into the worktree while the dialog is open changes the loss; nothing the
+    /// operator was not told about goes, and he is asked again with what is there now.
+    func testALossThatChangedWhileAskingIsAskedAgainNotRemoved() async {
+        let row = Worktree.fixture(path: "/work/app-busy", mergedState: .unmerged)
+        func loss(_ files: Int) -> WorktreeLoss {
+            WorktreeLoss(
+                uncommittedFiles: files, unmergedCommits: 1, branch: "feature/one",
+                defaultBranch: "refs/remotes/origin/main")
+        }
+        let client = FakeWorktreeClient()
+        await client.setResponse([main("/work/app"), row], for: app)
+        await client.setLoss(loss(1), for: row.id)
+        let model = model(client)
+        await model.refresh(workspaces: [])
+
+        await model.requestDelete(of: row)
+        await client.setLoss(loss(6), for: row.id)
+        await model.confirm()
+
+        let removed = await client.removeRequests
+        XCTAssertTrue(removed.isEmpty)
+        XCTAssertEqual(model.confirmation, .delete(path: row.id, loss: loss(6)))
+    }
+
+    func testArchonsRefusalKeepsEveryReasonAndDropsItsForceAdvice() {
+        let said = """
+              Blocked: archon/task-2
+                ✗ uncommitted changes in worktree
+                ✗ 2 commit(s) not pushed to remote
+                ✗ open PR #12 — "x"
+              Use --force to override.
+
+            Complete: 0 completed, 1 failed, 0 not found
+            """
+        XCTAssertEqual(
+            WorktreesModel.refusal(in: said),
+            "Blocked: archon/task-2 ✗ uncommitted changes in worktree ✗ 2 commit(s) not pushed "
+                + "to remote ✗ open PR #12 — \"x\"")
+    }
+
+    func testCancellingRemovesNothing() async {
+        let row = Worktree.fixture(path: "/work/app-x")
+        let client = FakeWorktreeClient()
+        await client.setResponse([main("/work/app"), row], for: app)
+        let model = model(client)
+        await model.refresh(workspaces: [])
+
+        await model.requestDelete(of: row)
+        model.cancelConfirmation()
+        await model.confirm()
+
+        let removed = await client.removeRequests
+        XCTAssertTrue(removed.isEmpty)
+    }
+
+    func testTheMainCheckoutALockedOneAndABareRepositoryCannotBeAskedAbout() async {
         let rows = [
-            main("/main"),
-            Worktree.fixture(path: "/detached", branch: nil, detached: true),
-            Worktree.fixture(path: "/locked", locked: true),
-            Worktree.fixture(path: "/prunable", prunable: true),
-            Worktree.fixture(path: "/unmerged", mergedState: .unmerged),
-            Worktree.fixture(path: "/unknown", mergedState: .unknown),
+            main("/main"), Worktree.fixture(path: "/locked", locked: true),
+            Worktree.fixture(path: "/bare", bare: true),
         ]
         let client = FakeWorktreeClient()
         await client.setResponse(rows, for: app)
-        let archon = FakeArchonClient()
-        let model = model(client, archon: archon)
+        let model = model(client)
         await model.refresh(workspaces: [])
 
-        for row in rows { model.requestCleanup(of: row) }
-        model.requestCleanAll(in: app)
-        await model.confirm()
+        for row in rows { await model.requestDelete(of: row) }
 
         XCTAssertNil(model.confirmation)
-        let metrics = await client.metrics()
-        let completions = await archon.completions()
-        XCTAssertEqual(metrics.removeRequests.count, 0)
-        XCTAssertEqual(completions.count, 0)
+        let reads = await client.lossReadCount()
+        XCTAssertEqual(reads, 0)
     }
 
-    /// Clean All is one repository's merged worktrees, and one failure does not stop the rest.
-    func testCleanAllContinuesAfterAnArchonFailureAndKeepsItVisible() async {
-        let archonRow = Worktree.fixture(path: "/work/a", branch: "archon/task-141")
-        let gitRow = Worktree.fixture(path: "/work/b", branch: "feature/two")
+    /// An Archon worktree goes through `archon complete` in its own Archon home, run from the
+    /// repository's main checkout; git's own removal is never used on it.
+    func testAnArchonWorktreeGoesToArchonInItsOwnHome() async {
+        let path = "/h/.archon-demo/workspaces/o/app/worktrees/archon/task-1"
+        let row = Worktree.fixture(path: path, branch: "archon/task-1")
         let client = FakeWorktreeClient()
-        await client.setResponse([main("/work/app"), archonRow, gitRow], for: app)
-        await client.setResponse([main("/work/lib"), .fixture(path: "/work/lib-c")], for: lib)
-        let archon = FakeArchonClient()
-        await archon.setCompleteFailure(
-            ArchonCLIError(command: "archon complete", reason: .actionRejected("Not found")))
-        let model = model(client, archon: archon)
+        await client.setResponse([main("/work/app"), row], for: app)
+        let model = model(client)
         await model.refresh(workspaces: [])
 
-        model.requestCleanAll(in: app)
+        await model.requestDelete(of: row)
         await model.confirm()
 
-        let completions = await archon.completions()
-        let metrics = await client.metrics()
-        XCTAssertEqual(completions.map(\.branch), ["archon/task-141"])
-        XCTAssertEqual(
-            metrics.removeRequests.map(\.path), ["/work/b"], "never another repository's row")
-        XCTAssertNotNil(model.actionFailures["/work/a"])
+        let requests = await client.archonRequests
+        XCTAssertEqual(requests.map(\.branch), ["archon/task-1"])
+        XCTAssertEqual(requests.map(\.home), ["/h/.archon-demo"])
+        XCTAssertEqual(requests.map(\.main), ["/work/app"])
+        let removed = await client.removeRequests
+        XCTAssertTrue(removed.isEmpty)
+        XCTAssertNil(model.actionFailures[path])
     }
 
-    /// After a cleanup only that repository is read again, not the machine.
-    func testACleanupRereadsOnlyItsRepository() async {
+    /// `archon complete` exits 0 when it refuses, so its success is read from git: a worktree
+    /// still listed afterwards is a failure, in Archon's own words.
+    func testAnArchonRefusalIsSeenInGitAndShownInArchonsWords() async {
+        let path = "/h/.archon/workspaces/o/app/worktrees/archon/task-2"
+        let row = Worktree.fixture(path: path, branch: "archon/task-2")
+        let client = FakeWorktreeClient()
+        await client.setResponse([main("/work/app"), row], for: app)
+        await client.setArchon(
+            said: "  Blocked: archon/task-2\n    ✗ 2 commit(s) not pushed to remote\n"
+                + "  Use --force to override.\n\nComplete: 0 completed, 1 failed, 0 not found",
+            keeps: true)
+        let model = model(client)
+        await model.refresh(workspaces: [])
+
+        await model.requestDelete(of: row)
+        await model.confirm()
+
+        let failure = try? XCTUnwrap(model.actionFailures[path])
+        XCTAssertTrue(failure?.contains("not pushed to remote") == true, failure ?? "no failure")
+    }
+
+    /// Clean-merged is one repository's merged, clean worktrees, each read again just before it
+    /// goes; one that has work in it by then is skipped and says so.
+    func testCleanMergedRereadsEachAndSkipsOneThatGainedWork() async {
+        let quiet = Worktree.fixture(path: "/work/a", branch: "fix/a")
+        let busy = Worktree.fixture(path: "/work/b", branch: "fix/b")
+        let unmerged = Worktree.fixture(path: "/work/c", mergedState: .unmerged)
+        let client = FakeWorktreeClient()
+        await client.setResponse([main("/work/app"), quiet, busy, unmerged], for: app)
+        await client.setResponse([main("/work/lib"), .fixture(path: "/work/lib-d")], for: lib)
+        await client.setLoss(
+            WorktreeLoss(
+                uncommittedFiles: 1, unmergedCommits: 0, branch: "fix/b",
+                defaultBranch: "refs/remotes/origin/main"), for: busy.id)
+        let model = model(client)
+        await model.refresh(workspaces: [])
+
+        model.requestCleanMerged(in: app)
+        XCTAssertEqual(model.confirmation, .cleanMerged(repo: app, paths: ["/work/a", "/work/b"]))
+        await model.confirm()
+
+        let removed = await client.removeRequests
+        XCTAssertEqual(removed.map(\.path), ["/work/a"], "never another repository's row")
+        XCTAssertNotNil(model.actionFailures["/work/b"])
+    }
+
+    /// After a removal only that repository is read again, not the machine.
+    func testARemovalRereadsOnlyItsRepository() async {
         let row = Worktree.fixture(path: "/work/app-git")
         let client = FakeWorktreeClient()
         await client.setResponse([main("/work/app"), row], for: app)
         let model = model(client)
         await model.refresh(workspaces: [])
-        await client.setResponse([main("/work/app")], for: app)
 
-        model.requestCleanup(of: row)
+        await model.requestDelete(of: row)
         await model.confirm()
 
         let metrics = await client.metrics()
         XCTAssertEqual(metrics.repositories.suffix(1), [app])
         XCTAssertEqual(metrics.listCalls, 4)
-        XCTAssertEqual(model.repos.first { $0.id == app }?.worktrees.count, 1)
     }
 }
 

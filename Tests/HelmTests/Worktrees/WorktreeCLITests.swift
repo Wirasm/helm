@@ -36,7 +36,9 @@ final class WorktreeCLITests: XCTestCase {
             "WORKSPACE": workspace.path, "LINKED": linked.path, "CALLS": calls.path,
         ]
         environment.merge(extraEnvironment) { _, new in new }
-        return WorktreeCLI(environment: environment, gitExecutable: git.path, timeout: timeout)
+        return WorktreeCLI(
+            environment: environment, gitExecutable: git.path, timeout: timeout,
+            homeDirectory: root.path)
     }
 
     /// The repository-wide reads are one call each whatever the number of worktrees, and the
@@ -117,14 +119,49 @@ final class WorktreeCLITests: XCTestCase {
         XCTAssertNil(row.status.tracking)
     }
 
-    func testRemovePassesTheLiteralPathAndNeverForce() async throws {
-        try install("printf '%s\\n' \"$@\" > \"$CALLS\"\n", at: git)
+    /// Force only when the operator was told about uncommitted files; the literal path is one
+    /// argument; and an unmerged branch is never touched.
+    func testRemoveForcesOnlyForConfirmedUncommittedFilesAndKeepsAnUnmergedBranch() async throws {
+        try install("printf '%s ' \"$@\" >> \"$CALLS\"; printf '\\n' >> \"$CALLS\"\n", at: git)
+        let row = Worktree.fixture(path: linked.path, branch: "feat/x", mergedState: .unmerged)
+        let repository = GitCommonDir(workspace.path)
+        func loss(_ files: Int) -> WorktreeLoss {
+            WorktreeLoss(
+                uncommittedFiles: files, unmergedCommits: 2, branch: "feat/x",
+                defaultBranch: "refs/remotes/origin/main")
+        }
 
-        try await client().remove(path: linked.path, in: GitCommonDir(workspace.path))
+        try await client().remove(row, in: repository, knowing: loss(0))
+        try await client().remove(row, in: repository, knowing: loss(3))
 
         XCTAssertEqual(
             try String(contentsOf: calls, encoding: .utf8),
-            "-C\n\(workspace.path)\nworktree\nremove\n\(linked.path)\n")
+            """
+            -C \(workspace.path) worktree remove \(linked.path) \n\
+            -C \(workspace.path) worktree remove --force \(linked.path) \n
+            """, "no prune for a worktree that exists: it would clear other records unasked")
+    }
+
+    /// Archon's own cleanup, in the worktree's Archon home, from the main checkout, never
+    /// forced; what it prints comes back, because its exit status does not say what it did.
+    func testArchonCompleteRunsInItsHomeFromTheMainCheckoutUnforced() async throws {
+        let bin = root.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try install(
+            """
+            printf '%s|%s|%s\\n' "$*" "$PWD" "$ARCHON_HOME" > "$CALLS"
+            printf '  Blocked: %s\\n' "$2" >&2
+            """, at: bin.appendingPathComponent("archon"))
+
+        let said = try await client(extraEnvironment: ["PATH": bin.path + ":/usr/bin:/bin"])
+            .archonComplete(branch: "archon/task-1", home: "/h/.archon-demo", main: workspace.path)
+
+        let fields = try String(contentsOf: calls, encoding: .utf8)
+            .trimmingCharacters(in: .newlines).components(separatedBy: "|")
+        XCTAssertEqual(fields.first, "complete archon/task-1")
+        XCTAssertTrue(fields[1].hasSuffix("/workspace"), "run from the main checkout: \(fields[1])")
+        XCTAssertEqual(fields.last, "/h/.archon-demo")
+        XCTAssertEqual(said, "Blocked: archon/task-1")
     }
 
     func testGitFailureCarriesExitStatusBoundedStderrAndCommand() async throws {
@@ -220,12 +257,11 @@ final class WorktreeCLITests: XCTestCase {
         let cores = ProcessInfo.processInfo.activeProcessorCount
         let client = client(extraEnvironment: ["GATE": gate.path, "STARTED": started.path])
         let repository = GitCommonDir(workspace.path)
-        let linkedPath = linked.path
         let finished = expectation(description: "every call returned")
         finished.expectedFulfillmentCount = cores * 2
         for _ in 0..<(cores * 2) {
             Task.detached {
-                try? await client.remove(path: linkedPath, in: repository)
+                _ = try? await client.worktrees(in: repository, statusOfALoneCheckout: true)
                 finished.fulfill()
             }
         }

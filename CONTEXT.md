@@ -162,9 +162,11 @@ repository (#382): the bench's workspaces' repositories, those under `~/Projects
 Archon's worktrees were made from. Each worktree shows its branch, dirty or clean, ahead and
 behind its upstream, **merged** (Git reachability from the resolved remote default branch, never
 pull-request state; unknown when there is none), the age of its last commit, and the bench panes
-working in it. Read from git alone when the drawer is shown and on `r`; it never polls. Cleanup is
-#141's: confirmed, merged only, owner-routed through `archon complete` or `git worktree remove`,
-never force. It replaced the **rail**, a remembered strip right of the bench that held Worktrees
+working in it. Read from git alone when the drawer is shown and on `r`; it never polls. From the
+keyboard it opens a worktree as a workspace or a terminal, creates one (`n`) at the repository's
+conventional place, and deletes one (`d`) after a confirmation that names what is lost — uncommitted
+files, commits the default branch lacks. A branch goes only when merged; an Archon worktree goes
+through `archon complete` in its own Archon home, never forced. It replaced the **rail**, a remembered strip right of the bench that held Worktrees
 (and Archon before its drawer) and was deleted with #382.
 _Avoid_: rail, worktree pane, worktree sidebar, file tree, disk dashboard
 
