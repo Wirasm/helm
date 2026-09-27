@@ -139,7 +139,7 @@ part_pi() {
 # Run a part with TMPDIR pointed at a directory of its own, then hold it to leaving nothing
 # there: a file left over is a test that does not clean up after itself, and a process with a
 # file open there is one a test started and never stopped. Either fails the part, by name; the
-# process is stopped and the directory removed either way, so a red run does not leave them too.
+# process is stopped (TERM, then KILL) and the directory removed either way, so a red run does not leave them too.
 # The Rust suites, the skill gates and pi's all honour TMPDIR. The swift part runs without it:
 # Foundation's temporary directory ignores TMPDIR, and SwiftPM keeps the locks that serialise
 # builds sharing a .build there, so a private one would let two builds collide.
@@ -160,6 +160,8 @@ run_contained() {
         echo "check: $part left processes running with files in its temp dir; stopping them:"
         ps -o pid=,command= -p "$(paste -sd, - <<<"$holders")"
         kill $holders 2>/dev/null
+        sleep 1
+        kill -9 $holders 2>/dev/null
         status=1
     fi
     left=$(cd "$check_tmp" && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||')

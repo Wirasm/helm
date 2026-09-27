@@ -72,9 +72,9 @@ while IFS= read -r line; do
     esac
 done < <(git worktree list --porcelain; echo)
 
-git worktree prune
 if [ "$dry_run" = 1 ]; then
     echo "prune: $removed would go, $kept stay"
 else
+    git worktree prune
     echo "prune: $removed removed, $kept kept"
 fi
