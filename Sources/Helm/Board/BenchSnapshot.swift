@@ -410,16 +410,18 @@ struct BenchSnapshot: Codable, Equatable {
         }
 
         /// The pane's record from Claude's registry and benchd's `waiting` (M1, #357). The
-        /// registry keeps its own words when it already says `waiting`; otherwise benchd's wait
-        /// stands, which is how a codex or pi at a prompt, a Claude trust prompt before the
-        /// session registers, or a Claude registry row left saying `busy` under a prompt (#283)
-        /// gets a record at all.
+        /// registry keeps its own words when it already says what it waits for; otherwise
+        /// benchd's wait stands, which is how a codex or pi at a prompt, a Claude trust prompt
+        /// before the session registers, or a Claude registry row left saying `busy` (or a bare
+        /// `waiting`) under a prompt (#283) gets a record that names the wait. With no wait from
+        /// benchd the registry's record is reported as it is: a bare `waiting` is a finished
+        /// turn, which is not a stall, and benchd does not count it either.
         static func of(
             registry: AgentRecord?, waiting: BenchLiveSessions.Waiting?
         ) -> AgentRecord? {
-            guard let waiting, registry?.status != AgentStatus.waiting.rawValue else {
-                return registry
-            }
+            guard let waiting,
+                registry?.status != AgentStatus.waiting.rawValue || registry?.waitingFor == nil
+            else { return registry }
             return AgentRecord(
                 status: AgentStatus.waiting.rawValue, waitingFor: waiting.waitingFor,
                 statusUpdatedAt: waiting.since)

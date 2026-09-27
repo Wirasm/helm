@@ -277,6 +277,12 @@ final class BenchSnapshotTests: XCTestCase {
         XCTAssertEqual(
             BenchSnapshot.AgentRecord.of(registry: claudeWaiting, waiting: screen), claudeWaiting)
         XCTAssertEqual(BenchSnapshot.AgentRecord.of(registry: busy, waiting: nil), busy)
+        let bare = BenchSnapshot.AgentRecord(
+            status: "waiting", waitingFor: nil, statusUpdatedAt: Date(timeIntervalSince1970: 9))
+        XCTAssertEqual(
+            BenchSnapshot.AgentRecord.of(registry: bare, waiting: screen), fromBenchd,
+            "a bare waiting names no wait; benchd's does")
+        XCTAssertEqual(BenchSnapshot.AgentRecord.of(registry: bare, waiting: nil), bare)
         XCTAssertNil(BenchSnapshot.AgentRecord.of(registry: nil, waiting: nil))
     }
 
