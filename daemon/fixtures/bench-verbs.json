@@ -252,5 +252,31 @@
     "by": {
       "kind": "operator"
     }
+  },
+  {
+    "id": "v-26",
+    "verb": "drawer/toggle",
+    "args": {
+      "drawer": "archon",
+      "surface": {
+        "kind": "archon"
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-27",
+    "verb": "drawer/toggle",
+    "args": {
+      "drawer": "worktrees",
+      "surface": {
+        "kind": "worktrees"
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
   }
 ]

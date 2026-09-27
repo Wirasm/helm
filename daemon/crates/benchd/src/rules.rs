@@ -129,11 +129,24 @@ mod tests {
     use super::*;
     use bench_doc::{Caller, Destination, Surface};
 
-    fn scratch(name: &str) -> PathBuf {
+    /// A rules file in a directory of its own, removed with the test that asked for it.
+    struct Scratch {
+        dir: PathBuf,
+        path: PathBuf,
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
         let dir = std::env::temp_dir().join(format!("benchd-rules-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        dir.join("placement.toml")
+        let path = dir.join("placement.toml");
+        Scratch { dir, path }
     }
 
     fn browser_goes(file: &RulesFile) -> Destination {
@@ -162,7 +175,8 @@ mod tests {
 
     #[test]
     fn a_bad_version_keeps_the_last_good_table_and_is_reported_once() {
-        let path = scratch("bad");
+        let scratch = scratch("bad");
+        let path = scratch.path.clone();
         let (mut file, booted) = RulesFile::boot(path.clone());
         assert_eq!(booted, None, "no file is the ordinary case");
         assert_eq!(file.state, RulesState::Default);
@@ -201,7 +215,8 @@ mod tests {
     #[test]
     fn only_a_missing_file_means_the_built_in_table() {
         use std::os::unix::fs::PermissionsExt;
-        let path = scratch("unreadable");
+        let scratch = scratch("unreadable");
+        let path = scratch.path.clone();
         fs::write(&path, TO_DRAWER).unwrap();
         let (mut file, _) = RulesFile::boot(path.clone());
         assert!(browser_goes(&file) == operators());
@@ -227,7 +242,8 @@ mod tests {
 
     #[test]
     fn a_change_is_seen_by_its_text_not_its_timestamp() {
-        let path = scratch("same-length");
+        let scratch = scratch("same-length");
+        let path = scratch.path.clone();
         fs::write(&path, TO_DRAWER).unwrap();
         let (mut file, _) = RulesFile::boot(path.clone());
         let stamp = fs::metadata(&path).unwrap().modified().unwrap();
@@ -249,7 +265,8 @@ mod tests {
 
     #[test]
     fn a_bad_file_at_boot_leaves_the_built_in_table() {
-        let path = scratch("boot");
+        let scratch = scratch("boot");
+        let path = scratch.path.clone();
         fs::write(&path, "surface = 3").unwrap();
         let (file, booted) = RulesFile::boot(path);
         assert_eq!(booted.map(|(kind, _)| kind), Some(RULES_REJECTED));

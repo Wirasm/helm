@@ -15,7 +15,6 @@ struct RootView: View {
     /// `BoardModel.shared` are singletons because other slices reach them, and nothing
     /// outside the workbench reaches this one. Drawn from benchd's document (#354).
     @StateObject private var workbench: WorkbenchModel
-    @StateObject private var archonRail = ArchonRailModel()
     /// The operator's just runs (#356): started by his keys, failures shown on the status bar.
     @StateObject private var justRuns = JustRuns()
     /// The command palette (#500): ⌘K opens it through `LocalActions`, the overlay draws it.
@@ -55,30 +54,22 @@ struct RootView: View {
             // Above the bench, which it precedes: a zoomed bench (⌘J, `BenchCamera`) is laid out
             // past its own top edge, and a terminal there would otherwise take the bar's clicks.
             .zIndex(1)
-            HStack(spacing: 0) {
-                WorkbenchView(
-                    model: workbench, workspaceRoot: model.selectedWorkspaceRoot?.value)
-                if archonRail.isVisible {
-                    Color.border.frame(width: 1)
-                    ArchonRailView(
-                        model: archonRail, workspacePath: model.selectedWorkspaceRoot)
+            WorkbenchView(model: workbench, workspaceRoot: model.selectedWorkspaceRoot?.value)
+                // Over the bench, never beside it: a drawer changes nothing under it.
+                .overlay { DrawerHost(model: workbench, keymap: .shared) }
+                // The keys available now, while the manage key is held (#499). Over the drawer
+                // too: it answers "what can I press", wherever the keyboard is.
+                .overlay { KeyPopup(keymap: .shared, hold: .shared) }
+                .overlay {
+                    CommandPaletteView(
+                        palette: palette,
+                        commands: CommandList.of(
+                            table: keymap.table, document: workbench.document,
+                            recipes: palette.recipes,
+                            liveTitle: { CommandList.liveTitle(of: $0, in: workbench) }),
+                        run: runCommand)
                 }
-            }
-            // Over the bench and the rail, never beside them: a drawer changes nothing under it.
-            .overlay { DrawerHost(model: workbench, keymap: .shared) }
-            // The keys available now, while the manage key is held (#499). Over the drawer too:
-            // it answers "what can I press", wherever the keyboard is.
-            .overlay { KeyPopup(keymap: .shared, hold: .shared) }
-            .overlay {
-                CommandPaletteView(
-                    palette: palette,
-                    commands: CommandList.of(
-                        table: keymap.table, document: workbench.document,
-                        recipes: palette.recipes,
-                        liveTitle: { CommandList.liveTitle(of: $0, in: workbench) }),
-                    run: runCommand)
-            }
-            .onChange(of: palette.isOpen) { _, open in if !open { returnKeyboard() } }
+                .onChange(of: palette.isOpen) { _, open in if !open { returnKeyboard() } }
             StatusBarView(model: model, workbench: workbench, justRuns: justRuns)
         }
         // The base plane, and it has to be painted: `translucentWindow` makes the window
@@ -102,8 +93,8 @@ struct RootView: View {
                 asks.receive($0)
             }
             let actions = LocalActions(
-                workbench: workbench, workspaces: model, rail: archonRail,
-                terminals: terminalManager, just: justRuns, palette: palette)
+                workbench: workbench, workspaces: model, terminals: terminalManager,
+                just: justRuns, palette: palette)
             self.actions = actions
             Actions.performer = actions
             benchSnapshot.start(

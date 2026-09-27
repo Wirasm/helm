@@ -156,6 +156,32 @@ final class PaletteTests: XCTestCase {
         }
     }
 
+    /// The Archon drawer draws on Archon's own ground (#382), so everything it writes has to
+    /// read there as it does on helm's surface: body text at AAA, the muted voice at AA, every
+    /// brand and status mark at AA for small text, and the quiet voice and the rule still visible.
+    func testTheArchonDrawersGroundCarriesEverythingDrawnOnIt() {
+        for appearance in Palette.Appearance.allCases {
+            for ground in [palette.archonSurface, palette.archonSurfaceRaised] {
+                XCTAssertGreaterThanOrEqual(
+                    contrast(palette.textPrimary, on: ground, in: appearance), 7)
+                XCTAssertGreaterThanOrEqual(
+                    contrast(palette.textMuted, on: ground, in: appearance), 4.5)
+                XCTAssertGreaterThanOrEqual(
+                    contrast(palette.textFaint, on: ground, in: appearance), 3)
+                for (name, token) in [
+                    ("archonTeal", palette.archonTeal), ("archonRunning", palette.archonRunning),
+                    ("attention", palette.attention), ("danger", palette.danger),
+                    ("archonMagenta", palette.archonMagenta),
+                ] {
+                    let ratio = contrast(token, on: ground, in: appearance)
+                    XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(name) in \(appearance): \(ratio)")
+                }
+            }
+            let rule = contrast(palette.archonBorder, on: palette.archonSurface, in: appearance)
+            XCTAssertGreaterThan(rule, 1.2, "the drawer's rule vanishes in \(appearance)")
+        }
+    }
+
     /// A gradient whose stops are indistinguishable is a flat fill with extra steps — and the
     /// point of the duotone is that you can see it travel from magenta to teal.
     func testTheBrandStopsAreVisiblyDifferentFromEachOther() {

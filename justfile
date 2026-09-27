@@ -40,3 +40,10 @@ benchd-install *args:
 # Unload the benchd login agent and delete its plist. benchd stops with it.
 benchd-uninstall:
     @bash scripts/benchd-agent.sh uninstall
+
+# Keeps any worktree that is locked, dirty, fresh or has a process working in it, and says why.
+# `--dry-run` only lists.
+#
+# Remove the worktrees whose work has merged into origin/development, with their multi-GB builds
+prune-worktrees *args:
+    @bash scripts/prune-worktrees.sh "$@"

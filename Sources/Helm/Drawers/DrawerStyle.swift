@@ -5,11 +5,12 @@
 /// nothing about how it is drawn.
 struct DrawerStyle: Equatable {
     enum Edge: String {
-        case left, right
+        case left, right, bottom
     }
 
     var edge: Edge
-    /// A fraction of the window's width.
+    /// A fraction of the window: of its height for a drawer on the bottom edge, of its width
+    /// for one on a side.
     var size: Double
 
     static let sizes = 0.1...0.9
@@ -26,10 +27,14 @@ struct DrawerStyle: Equatable {
 
     static let nameRule = "a drawer name is 1-32 of [a-z0-9-]"
 
-    /// The sessions list is a narrow column on the left, like a sidebar (#384); anything else —
-    /// a browser, a canvas — wants room, on the right.
+    /// The sessions list is a narrow column on the left, like a sidebar (#384); Archon's runs
+    /// are rows of stage dots that want the window's width, along the bottom (#382); anything
+    /// else — a browser, a canvas — wants room, on the right.
     static func builtIn(for name: String) -> DrawerStyle {
-        name == "sessions"
-            ? DrawerStyle(edge: .left, size: 0.28) : DrawerStyle(edge: .right, size: 0.5)
+        switch name {
+        case "sessions": DrawerStyle(edge: .left, size: 0.28)
+        case "archon": DrawerStyle(edge: .bottom, size: 0.42)
+        default: DrawerStyle(edge: .right, size: 0.5)
+        }
     }
 }

@@ -71,16 +71,32 @@ struct ArchonRun: Codable, Equatable, Sendable {
     let completedAt: Date?
     let metadata: Metadata?
     let nodes: [ArchonNode]?
+    /// The nodes Archon is in right now, folded from its events on every read. Absent from
+    /// `workflow get`; present on `workflow runs` and `workflow status`.
+    let activeNodes: [String]?
 
     struct Metadata: Codable, Equatable, Sendable {
         let error: String?
         /// The gate a paused run is waiting at. Written by `pauseWorkflowRun` and carried
         /// whole into `workflow runs --json`, so it costs no extra call — see `ArchonGate`.
         let approval: ArchonGate?
+        /// Every top-level node of the workflow, in order, which Archon's executor writes before
+        /// the first one runs (`terminal_graph`). What a run's stage dots are drawn from; absent
+        /// on runs from before Archon recorded it.
+        let terminalGraph: TerminalGraph?
 
-        init(error: String?, approval: ArchonGate?) {
+        struct TerminalGraph: Codable, Equatable, Sendable {
+            let nodeIds: [String]
+
+            private enum CodingKeys: String, CodingKey {
+                case nodeIds = "node_ids"
+            }
+        }
+
+        init(error: String?, approval: ArchonGate?, terminalGraph: TerminalGraph? = nil) {
             self.error = error
             self.approval = approval
+            self.terminalGraph = terminalGraph
         }
 
         /// **A gate helm cannot read costs the gate, never the run.** `ArchonGate` already
@@ -91,6 +107,13 @@ struct ArchonRun: Codable, Equatable, Sendable {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             error = try container.decodeIfPresent(String.self, forKey: .error)
             approval = try? container.decodeIfPresent(ArchonGate.self, forKey: .approval)
+            terminalGraph = try? container.decodeIfPresent(
+                TerminalGraph.self, forKey: .terminalGraph)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case error, approval
+            case terminalGraph = "terminal_graph"
         }
     }
 
@@ -149,6 +172,7 @@ struct ArchonRun: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, status, metadata, nodes
+        case activeNodes = "active_nodes"
         case workflowName = "workflow_name"
         case workingPath = "working_path"
         case userMessage = "user_message"
@@ -274,6 +298,11 @@ struct ArchonRunsResponse: Codable, Equatable, Sendable {
     /// answer for a project one; helm passes that on for the same reason.
     let scopeFallback: Bool
 
+}
+
+/// `workflow status --json --verbose`: the live runs, with their nodes.
+struct ArchonStatusResponse: Codable, Equatable, Sendable {
+    let runs: [ArchonRun]
 }
 
 struct ArchonWorkflowListResponse: Codable, Equatable, Sendable {

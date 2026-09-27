@@ -173,16 +173,21 @@ package struct BenchDocument: Codable, Equatable, Sendable {
 package enum Surface: Codable, Equatable, Sendable {
     /// A terminal. `session` names the benchd session it shows (`term:<session>`, M3): helm runs
     /// `bench attach <session>` in it rather than a login shell. benchd clears it when it
-    /// restarts, because no session outlives its daemon.
-    case terminal(agent: BenchDocument.Agent?, session: String? = nil)
+    /// restarts, because no session outlives its daemon. `cwd` is where benchd last saw the
+    /// pane's shell working (M5b); helm reads it to say which worktree a pane is in.
+    case terminal(agent: BenchDocument.Agent?, session: String? = nil, cwd: String? = nil)
     /// A canvas over a file, the only canvas source there is since #376.
     case canvas(path: String)
     case browser
     /// The active workspace's agent sessions (#384).
     case sessions
+    /// The active workspace's Archon runs (#382).
+    case archon
+    /// Every git worktree on the machine (#382).
+    case worktrees
     case unsupported(kind: String)
 
-    private enum CodingKeys: String, CodingKey { case kind, agent, session, source }
+    private enum CodingKeys: String, CodingKey { case kind, agent, session, cwd, source }
     private enum SourceKeys: String, CodingKey { case kind, path }
 
     package init(from decoder: any Decoder) throws {
@@ -192,7 +197,8 @@ package enum Surface: Codable, Equatable, Sendable {
         case "terminal":
             self = .terminal(
                 agent: try c.decodeIfPresent(BenchDocument.Agent.self, forKey: .agent),
-                session: try c.decodeIfPresent(String.self, forKey: .session))
+                session: try c.decodeIfPresent(String.self, forKey: .session),
+                cwd: try c.decodeIfPresent(String.self, forKey: .cwd))
         case "canvas":
             let source = try c.nestedContainer(keyedBy: SourceKeys.self, forKey: .source)
             let sourceKind = try source.decode(String.self, forKey: .kind)
@@ -205,6 +211,10 @@ package enum Surface: Codable, Equatable, Sendable {
             self = .browser
         case "sessions":
             self = .sessions
+        case "archon":
+            self = .archon
+        case "worktrees":
+            self = .worktrees
         default:
             self = .unsupported(kind: kind)
         }
@@ -213,10 +223,11 @@ package enum Surface: Codable, Equatable, Sendable {
     package func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .terminal(agent, session):
+        case let .terminal(agent, session, cwd):
             try c.encode("terminal", forKey: .kind)
             try c.encodeIfPresent(agent, forKey: .agent)
             try c.encodeIfPresent(session, forKey: .session)
+            try c.encodeIfPresent(cwd, forKey: .cwd)
         case let .canvas(path):
             try c.encode("canvas", forKey: .kind)
             var source = c.nestedContainer(keyedBy: SourceKeys.self, forKey: .source)
@@ -226,6 +237,10 @@ package enum Surface: Codable, Equatable, Sendable {
             try c.encode("browser", forKey: .kind)
         case .sessions:
             try c.encode("sessions", forKey: .kind)
+        case .archon:
+            try c.encode("archon", forKey: .kind)
+        case .worktrees:
+            try c.encode("worktrees", forKey: .kind)
         case let .unsupported(kind):
             // Never sent: helm only ever asks benchd for kinds it has. Encoded as its name so a
             // round trip of a document helm did not understand is still honest about it.

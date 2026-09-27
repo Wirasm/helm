@@ -43,13 +43,11 @@ final class WorkbenchClientModeTests: XCTestCase {
                 path,
                 BenchFixture.bench([BenchFixture.terminal(first), BenchFixture.terminal(second)]),
                 seq: 1))
-        let defaults = try isolatedDefaults("client-mode-keys")
         // The workspace list follows the document, as `RootView` wires it.
         let workspaces = WorkspaceModel()
         workspaces.follow(try XCTUnwrap(rig.model.document))
         let actions = LocalActions(
             workbench: rig.model, workspaces: workspaces,
-            rail: ArchonRailModel(client: FakeArchonClient(), defaults: defaults),
             terminals: rig.terminals)
         let gestures = KeyBindings.all.compactMap { row -> KeyBinding.Action? in
             guard case .verb(let template) = row.action else { return nil }

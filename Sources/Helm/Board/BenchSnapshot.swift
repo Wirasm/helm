@@ -174,7 +174,9 @@ struct BenchSnapshot: Codable, Equatable {
         /// browser's own endpoint and tabs are benchd's and CDP's to report, not the bench's.
         /// `unsupported` is a pane benchd's document holds in a kind this build cannot show
         /// (#354); only a helm rendering from benchd has one. Additive, so the version stays.
-        enum Kind: String, Codable { case terminal, canvas, browser, sessions, unsupported }
+        enum Kind: String, Codable {
+            case terminal, canvas, browser, sessions, archon, worktrees, unsupported
+        }
 
         let id: UUID
         let kind: Kind
@@ -224,6 +226,16 @@ struct BenchSnapshot: Codable, Equatable {
                 unsupportedKind = nil
             case .sessions:
                 kind = .sessions
+                terminal = nil
+                canvas = nil
+                unsupportedKind = nil
+            case .archon:
+                kind = .archon
+                terminal = nil
+                canvas = nil
+                unsupportedKind = nil
+            case .worktrees:
+                kind = .worktrees
                 terminal = nil
                 canvas = nil
                 unsupportedKind = nil

@@ -27,9 +27,9 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | --- | --- | --- |
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
-| `skills` | the board and post-canvas skill gates | node, zsh, python3, git |
-| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill (their snippets run against a real benchd), `RenderableFile.swift` (the CLI's `bench open` checks its list) or the vendored shell integration (benchd builds it in) changed | cargo |
-| `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
+| `skills` | the board and post-canvas skill gates | node, zsh, python3, git, lsof |
+| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill (their snippets run against a real benchd), `RenderableFile.swift` (the CLI's `bench open` checks its list) or the vendored shell integration (benchd builds it in) changed | cargo, lsof |
+| `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/`, lsof |
 
 "Changed" means against `origin/development`, committed or not. A missing tool is a `FAIL`
 naming it, never a silent skip. The path rules live only in `scripts/check.sh`
@@ -314,6 +314,16 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   loop with a deadline it checks itself, or a `trap ... EXIT` — in that order of preference,
   because the first two survive `SIGKILL` on the parent and the third does not. **Then check.**
   `ps -Ao pcpu,etime,pid,command -r | head` before you report, and say what you left running.
+- **A test leaves nothing behind, and a killed one leaves nothing for long.** Whatever a test
+  creates it removes itself (`Drop`, `addTeardownBlock`, `trap … EXIT`). The two whose owner
+  lives long enough to be killed mid-run carry its pid, and the next run removes them once that
+  pid is gone: `bcf-<pid>-<n>` in the conformance suite and `helm-pty-<pid>-…` in the keyboard
+  suites. `just check` runs the `daemon`, `skills` and `pi` parts with `TMPDIR` in a directory of
+  their own and fails a part that leaves a file or a running process there, by name. Do not end a
+  test's child with SIGQUIT or SIGABRT: macOS writes a crash report for every one
+  (`~/Library/Logs/DiagnosticReports`), which is how 30 `cat` reports piled up. On 2026-09-28 the
+  disk was down to 3.3 GB, mostly merged worktrees each holding its own build (1–6 GB):
+  **`just prune-worktrees`** removes the ones whose work has merged, and `--dry-run` lists them.
 - **Before blaming the machine, look at what is on it.** *"The machine was busy"* is a real
   diagnosis — #291 is one — but it is also the easiest wrong one to reach for, and twice today it
   was true for a reason another agent had caused and could have found in one `ps`. Load has an
@@ -408,8 +418,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     shell is running (benchd asks the pty for its foreground group; a shell at its prompt closes
     without it). The pane holding the keyboard also needs `--asked`. Closing a canvas destroys nothing: the file and
     its `.notes.md` sidecar outlive the tab. A close stops at the pane — no worktree, no branch, no
-    git (#141's rail owns that, behind the operator's own confirmation). `show` only moves a tab in
-    a slot he is not in (#284). A name somebody chose needs `--rename` (#313); benchd's own
+    git (the Worktrees drawer's cleanup, #141, owns that, behind the operator's own
+    confirmation). `show` only moves a tab in a slot he is not in (#284). A name somebody chose needs `--rename` (#313); benchd's own
     `<agent> · <folder>` label does not.
   - **`bench spawn` puts the agent in a benchd pty, shown in a pane** of `--cwd`'s workspace: the
     pane runs `bench attach <session>` (`SessionAttach`), so the agent keeps running while the
@@ -693,21 +703,24 @@ the door every change goes out through;
 `Surfaces/` is `SurfaceKind` and the one registry every pane kind's live object is kept in;
 `Keymap/` is the key table and its readers (below); `Bench/` is helm as benchd's client —
 the socket and the follower (below);
-`Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
+`Archon/` is the Archon drawer and `Worktrees/` the Worktrees drawer; `Terminals/` (2.1k) is the
 libghostty seam — the host view, and `SessionAttach`: every terminal pane shows a benchd session
 through `bench attach` (M5b), and helm owns no pty but that one; then `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
 `StatusBar/`, `Build/`, `Shared/`, `Capture/`, `Mail/`. Two of those have no bullet anywhere
 above and are the easiest to be surprised by:
 
-- **`Archon/` and `Worktrees/` are the rail, and the rail is *somewhere to start work that is not
-  your current work*.** Nothing docks there and nothing opens from it — run detail is read in
-  Archon's own web UI. Archon's tenant is deliberately a **reduction** of one that was built, used
-  and cut back on the operator's verdict *"too much bloat"*: three lists (gates, running,
-  finished), one input field, and a dismissible line per finished run rather than a tally. Read
-  `ArchonRailModel`'s header before adding anything to it — several of the obvious additions are
-  things that were removed. Worktrees is `git worktree list --porcelain` and nothing else: helm
-  reads no Archon database, and "merged" means Git reachability from a resolved remote default
-  branch, never pull-request state. `CONTEXT.md` has both.
+- **`Archon/` is the Archon drawer (⌘⇧R, #382), and `Worktrees/` the Worktrees drawer (⌘⇧G).**
+  The Archon drawer lists what Archon is doing in the active workspace's project — runs waiting on you, running,
+  finished — as rows of stage dots, read from Archon's CLI alone (`workflow runs --json`, plus
+  `workflow status --json --verbose` while a run is live), and answers gates, resumes, cancels and
+  launches from the keyboard. It is the successor of a rail tenant the operator cut back as *"too
+  much bloat"*: read `ArchonModel`'s header before adding anything, since several obvious additions
+  are things that were removed. Agents never use it; Archon's CLI is their view. The Worktrees
+  drawer lists every worktree on the machine, grouped by repository, read from git alone
+  (`WorktreeDiscovery` finds the repositories on disk; `HELM_WORKTREES_HOME` moves where it looks,
+  which is how an isolated instance lists scratch repositories): helm reads no Archon database,
+  and "merged" means Git reachability from a resolved remote default branch, never pull-request
+  state. There is no rail any more; both were its tenants. `CONTEXT.md` has both.
 - **`Board/` is agent presence and the bench snapshot — it is not the drawable board.** The
   collision is real and worth knowing before a grep sends you to the wrong one. `Sources/Helm/Board/`
   is `BoardModel`, `AgentDot` and `BenchSnapshot`: which workspace tab has an agent that has
@@ -749,7 +762,7 @@ bench: nothing is drawn until benchd's follower delivers the document the verb m
   tested in Rust. A Swift test asserts what helm sent, or what it drew from the document.
 
 **Drawers are drawn over the bench, never in it** (#356, `Sources/Helm/Drawers/`). `DrawerHost`
-is an overlay on the bench and the rail, so the layout under an open drawer is untouched; while
+is an overlay on the bench, so the layout under an open drawer is untouched; while
 one is open its selected pane holds the keyboard and the bench's focused pane does not. A drawer
 pane's live object belongs to no workspace, so it survives the drawer being hidden and a workspace
 closing. The status bar has one capsule per drawer, dotted while badged. **An agent puts things
