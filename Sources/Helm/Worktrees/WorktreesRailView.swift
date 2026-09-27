@@ -59,7 +59,7 @@ struct WorktreesRailView: View {
             .foregroundStyle(Color.textMuted)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.chrome)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
@@ -91,7 +91,7 @@ struct WorktreesRailView: View {
                     Button("CLEAN ALL \(model.cleanableRows.count)") {
                         model.requestCleanAll()
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.chrome)
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .foregroundStyle(Color.danger)
                     .disabled(model.isCleaningAll)
@@ -113,7 +113,7 @@ struct WorktreesRailView: View {
                 Spacer(minLength: 4)
                 if row.cleanupRoute != nil {
                     Button("CLEAN") { model.requestCleanup(of: row) }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.chrome)
                         .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                         .foregroundStyle(Color.danger)
                         .disabled(model.actingPaths.contains(row.id))

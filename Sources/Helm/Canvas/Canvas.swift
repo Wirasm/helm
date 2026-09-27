@@ -1124,7 +1124,7 @@ struct CanvasView: View {
                 Text(message).lineLimit(2)
                 Spacer()
                 Button("Reload") { model.reloadArtifact() }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.chrome)
                     .foregroundStyle(Color.accent)
             }
             .font(.system(size: 11))
@@ -1150,11 +1150,11 @@ struct CanvasView: View {
                 Text(message).lineLimit(2)
                 Spacer()
                 Button("Keep mine") { model.keepMine() }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.chrome)
                     .foregroundStyle(Color.accent)
                     .help("Write what you have typed over the version on disk")
                 Button("Take theirs") { model.takeTheirs() }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.chrome)
                     .foregroundStyle(Color.accent)
                     .help("Load the version on disk and lose what you have typed")
             }
@@ -1200,7 +1200,7 @@ struct CanvasView: View {
                 .font(.system(size: 11))
                 .frame(minWidth: 32)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.chrome)
         .foregroundStyle(model.draft == nil ? Color.textMuted : Color.accent)
         .help(model.draft == nil ? "Edit this file" : "Render this file")
     }
@@ -1333,24 +1333,24 @@ struct CanvasView: View {
                     Text(model.notes.isEmpty ? "Notes" : "Notes (\(model.notes.count))")
                         .font(.system(size: 11))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.chrome)
                 .foregroundStyle(model.showsNotes ? Color.accent : Color.textMuted)
                 .help("The comments written beside this canvas")
             }
             Button {
                 model.revealInFinder()
             } label: {
-                Image(systemName: "magnifyingglass.circle")
+                Image(systemName: "magnifyingglass.circle").frame(width: 18, height: 18)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             .foregroundStyle(Color.textMuted)
             .help("Reveal in Finder")
             Button {
                 model.close()
             } label: {
-                Image(systemName: "xmark.circle")
+                Image(systemName: "xmark.circle").frame(width: 18, height: 18)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             .foregroundStyle(Color.textMuted)
             .help("Close artifact")
         }

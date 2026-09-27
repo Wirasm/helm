@@ -62,6 +62,36 @@ final class ChromeHitTargetTests: XCTestCase {
         XCTAssertGreaterThan(map.count(of: "S"), 4 * map.count(of: "X"), "\(map)")
     }
 
+    // MARK: - No button is glyph-only
+
+    /// `.plain` is the style that made the tabs and the × glyph-only, and it looks harmless on
+    /// the next button too. Every button in helm uses `.chrome`, and this keeps it that way.
+    func testNoButtonInHelmUsesThePlainStyle() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // Design/
+            .deletingLastPathComponent()  // HelmTests/
+            .deletingLastPathComponent()  // Tests/
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent("Sources/Helm")
+        let walk = try XCTUnwrap(
+            FileManager.default.enumerator(atPath: root.path),
+            "could not read \(root.path) — this guard must fail loudly, not skip")
+        var offenders: [String] = []
+        var read = 0
+        for case let relative as String in walk where relative.hasSuffix(".swift") {
+            let text = try String(
+                contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+            read += 1
+            for (index, line) in text.components(separatedBy: "\n").enumerated()
+            where line.contains("buttonStyle(.plain)") || line.contains("PlainButtonStyle") {
+                offenders.append("\(relative):\(index + 1)")
+            }
+        }
+        XCTAssertGreaterThan(read, 50, "read too few sources to mean anything: \(root.path)")
+        XCTAssertEqual(
+            offenders, [], "use .buttonStyle(.chrome), which makes the whole label the target")
+    }
+
     // MARK: - Harness
 
     private func workspaceBarMap() throws -> HitMap {

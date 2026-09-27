@@ -219,9 +219,9 @@ struct ArchonRailView: View {
             Image(systemName: "xmark")
                 .font(.system(size: 10))
                 .foregroundStyle(Color.textMuted)
-                .contentShape(Rectangle())
+                .frame(width: 18, height: 18)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.chrome)
         .help("Back to launching — nothing is sent")
     }
 
@@ -256,7 +256,7 @@ struct ArchonRailView: View {
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 4))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.chrome)
         .disabled(busy)
         .opacity(busy ? 0.4 : 1)
     }
@@ -280,9 +280,9 @@ struct ArchonRailView: View {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.textMuted)
-                .contentShape(Rectangle())
+                .frame(width: 18, height: 18)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.chrome)
         .help("What Send launches: the workflow, and how it isolates")
         .popover(isPresented: $model.isConfigOpen, arrowEdge: .bottom) { configuration }
     }
@@ -487,7 +487,7 @@ struct ArchonRailView: View {
                 .background(RoundedRectangle(cornerRadius: 3).fill(tint.opacity(0.12)))
                 .contentShape(RoundedRectangle(cornerRadius: 3))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.chrome)
     }
 
     private func choose(_ decision: ArchonGateDecision, on run: ArchonRun) {
@@ -582,7 +582,7 @@ struct ArchonRailView: View {
                 // A run with no worktree has nowhere to send you, so the row stays a row.
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             .disabled(link == nil)
             .help(link.map { "Open the pull request for \($0.branch)" } ?? "")
 
@@ -602,7 +602,7 @@ struct ArchonRailView: View {
                     .frame(width: 14, height: 14)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             // Revealed on hover: the row is read far more often than it is cleared, and a
             // permanent × on every line turns a list into a form. **Hidden here means gone,
             // not faint** — SwiftUI drops a fully transparent view from hit testing, so the
