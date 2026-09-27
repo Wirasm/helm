@@ -114,15 +114,17 @@ final class CommandListTests: XCTestCase {
     }
 
     /// A pane is named by its name, else what its tab shows. A terminal with no live session
-    /// (its workspace not drawn since launch) is its agent, else `shell N` counted in its
-    /// workspace: two plain shells in a parked workspace must be two different lines.
+    /// (its workspace not drawn since launch) is its agent, else `terminal N`, numbered among
+    /// only those: two plain shells in a parked workspace are two different lines, and none can
+    /// print the `shell N` a live tab numbers app-wide.
     func testAPaneWithNoLiveSessionIsStillTellableApart() {
         func terminal(_ agent: BenchDocument.Agent? = nil) -> BenchDocument.Pane {
             .init(id: UUID(), surface: .terminal(agent: agent))
         }
+        let live = terminal()
+        let claude = terminal(.init(command: "claude", session: "s", cwd: "/w"))
         let first = terminal()
         let second = terminal()
-        let claude = terminal(.init(command: "claude", session: "s", cwd: "/w"))
         let slot = UUID()
         let parked = BenchDocument(
             workspaces: [
@@ -134,26 +136,22 @@ final class CommandListTests: XCTestCase {
                                 id: UUID(),
                                 slots: [
                                     .init(
-                                        id: slot, panes: [first, second, claude],
-                                        selected: first.id,
-                                        height: 1)
+                                        id: slot, panes: [live, claude, first, second],
+                                        selected: first.id, height: 1)
                                 ], width: 1)
                         ], focusedSlot: slot))
             ], active: nil)
-        let titles = CommandList.of(table: [], document: parked, recipes: [])
-            .filter { $0.detail == "parked" }.map(\.title)
-        XCTAssertEqual(titles, ["shell 1", "shell 2", "claude"])
-        XCTAssertEqual(
-            CommandList.of(table: [], document: parked, recipes: []) {
-                $0.id == second.id ? "zsh" : nil
-            }
-            .filter { $0.detail == "parked" }.map(\.title),
-            ["shell 1", "zsh", "claude"], "a live session's tab title wins")
+        let titles = CommandList.of(table: [], document: parked, recipes: []) {
+            $0.id == live.id ? "shell 2" : nil
+        }
+        .filter { $0.detail == "parked" }.map(\.title)
+        XCTAssertEqual(titles, ["shell 2", "claude", "terminal 1", "terminal 2"])
+        XCTAssertEqual(Set(titles).count, titles.count, "no two lines read the same")
         XCTAssertEqual(
             CommandList.title(
                 of: .init(
                     id: UUID(), surface: .canvas(path: "/w/plan.md"), name: .chosen("the plan")),
-                live: nil, shell: 0),
+                live: nil),
             "the plan")
     }
 

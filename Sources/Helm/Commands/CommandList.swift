@@ -92,12 +92,13 @@ enum CommandList {
         return document.workspaces.flatMap { workspace in
             let here = workspace.path == document.active
             let activate: [BenchVerb] = here ? [] : [.workspaceActivate(path: workspace.path)]
-            var shells = 0
+            var untitled = 0
             return workspace.bench.columns.flatMap(\.slots).flatMap { slot in
                 slot.panes.map { pane in
-                    if case .terminal = pane.surface { shells += 1 }
+                    let known = title(of: pane, live: liveTitle(pane))
+                    if known == nil { untitled += 1 }
                     return Command(
-                        title: title(of: pane, live: liveTitle(pane), shell: shells),
+                        title: known ?? "terminal \(untitled)",
                         detail: here ? nil : Workspace(path: workspace.path).name,
                         run: .verbs(activate + [.paneShow(pane.id), .focusSlot(slot.id)]))
                 }
@@ -105,13 +106,15 @@ enum CommandList {
         }
     }
 
-    /// A pane's line: its name, else what its tab would show. A terminal with no live session
-    /// (its workspace not drawn since launch) is its agent, else `shell N`, counted in its
-    /// workspace, so two plain shells in a parked workspace are still two different lines.
-    static func title(of pane: BenchDocument.Pane, live: String?, shell: Int) -> String {
+    /// A pane's line: its name, else what its tab would show. nil for a terminal with no name,
+    /// no live session (its workspace not drawn since launch) and no agent: the caller numbers
+    /// those `terminal N` in their workspace, counting only them, so two such shells are two
+    /// lines. `terminal`, not `shell`, because a live tab's own `shell N` is numbered app-wide
+    /// and the two must never print the same label.
+    static func title(of pane: BenchDocument.Pane, live: String?) -> String? {
         if let name = pane.name.text { return name }
         switch pane.surface {
-        case let .terminal(agent, _): return live ?? agent?.command ?? "shell \(shell)"
+        case let .terminal(agent, _): return live ?? agent?.command
         case let .canvas(path): return (path as NSString).lastPathComponent
         case .browser: return "browser"
         case .sessions: return "sessions"
