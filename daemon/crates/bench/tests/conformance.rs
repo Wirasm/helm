@@ -6412,7 +6412,7 @@ fn a_viewer_that_attaches_late_is_shown_the_alternate_screen_the_program_opened(
     let daemon = scripted_pi_daemon(
         &home.dir,
         &format!(
-            "#!/bin/sh\nprintf '\\033[?1049h\\033[5;3HON ALT'\ntouch {}/written\nexec sleep 60\n",
+            "#!/bin/sh\nprintf '\\033]2;my title\\007\\033[?1049h\\033[5;3HON ALT'\ntouch {}/written\nexec sleep 60\n",
             home.dir.display()
         ),
     );
@@ -6427,6 +6427,10 @@ fn a_viewer_that_attaches_late_is_shown_the_alternate_screen_the_program_opened(
     assert!(
         text.contains("\x1b[5;9H"),
         "the cursor is where the program left it: {text:?}"
+    );
+    assert!(
+        text.contains("\x1b]2;my title"),
+        "the title it set: {text:?}"
     );
 }
 

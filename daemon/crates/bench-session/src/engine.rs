@@ -258,6 +258,12 @@ impl Engine {
     /// lost or doubled, because no output is handled until this returns.
     fn install(&mut self, mut stream: UnixStream, generation: u64) -> Result<(), String> {
         let mut replay = b"\x1b[H\x1b[2J".to_vec();
+        // The formatter redraws the screen, not the window: the title the program set comes
+        // back as its own sequence, or the pane's tab would lose it until the program set it again.
+        let title = self.term.title().replace(|c: char| c.is_control(), "");
+        if !title.is_empty() {
+            replay.extend(format!("\x1b]2;{title}\x1b\\").into_bytes());
+        }
         replay.extend(self.term.format(Format::Vt).map_err(|e| e.to_string())?);
         replay.extend(self.term.continuation().unwrap_or_default());
         stream
