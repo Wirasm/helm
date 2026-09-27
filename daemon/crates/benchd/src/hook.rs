@@ -32,6 +32,9 @@ pub struct Agent {
     pub handle: String,
     /// `None` until an event says what it is doing.
     pub activity: Option<Activity>,
+    /// When `activity` last changed, in epoch ms: how long a waiting agent has waited, and
+    /// whether its report is older than what its screen shows (`waiting`).
+    pub activity_since_ms: u64,
     /// It has been given the standing rule. Once per session in this daemon's life, by the
     /// first reply or push that reached it.
     pub told: bool,
@@ -80,6 +83,7 @@ impl Agent {
             pane,
             handle,
             activity: None,
+            activity_since_ms: sessions::now_ms(),
             told: false,
             push: Push::Ready,
             seen: Instant::now(),
@@ -113,6 +117,7 @@ impl Agent {
         };
         (self.activity.as_ref() != Some(&now)).then(|| {
             self.activity = Some(now.clone());
+            self.activity_since_ms = sessions::now_ms();
             now
         })
     }

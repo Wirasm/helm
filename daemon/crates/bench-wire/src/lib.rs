@@ -472,6 +472,30 @@ pub struct SessionEntry {
     pub output_bytes: u64,
     pub runtime_session: Option<String>,
     pub uptime_secs: u64,
+    /// The agent in it is waiting on the operator (M1, #357); absent when it is not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<Waiting>,
+}
+
+/// An agent waiting on the operator: at a permission prompt, a trust prompt, a question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Waiting {
+    /// What for, in words: the agent's own when it said so (`permission prompt`), else the
+    /// screen rule's.
+    pub waiting_for: String,
+    /// Since when, in epoch ms: when the agent said so, or when its screen first showed it.
+    pub since_ms: u64,
+    pub source: WaitingSource,
+}
+
+/// Who said an agent is waiting. The agent's own report outranks its screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitingSource {
+    /// Its hook (`bench hook`).
+    Hook,
+    /// A prompt rule matched its screen.
+    Screen,
 }
 
 /// The answer to `sessions`.

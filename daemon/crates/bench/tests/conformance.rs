@@ -6990,3 +6990,100 @@ fn a_session_flooding_its_viewer_still_answers_at_once() {
     let _ = bench(&home.dir, &["close", &sid]);
     let _ = reading.join();
 }
+
+/// A captured screen from `crates/benchd/screens/`.
+fn capture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../benchd/screens")
+        .join(format!("{name}.txt"))
+        .canonicalize()
+        .unwrap()
+}
+
+/// `bench sessions`' entry for `session`.
+fn live_entry(home: &Path, session: &str) -> serde_json::Value {
+    let run = bench(home, &["sessions"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    json_of(&run)["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["session"] == session)
+        .cloned()
+        .unwrap_or_else(|| panic!("no session {session}"))
+}
+
+#[test]
+fn an_agent_parked_at_a_prompt_is_seen_waiting_from_its_screen() {
+    let home = TestHome::claim("m1-waiting");
+    // pi's real trust prompt, drawn by a program that then goes silent, as pi does.
+    let _daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\ncat '{}'\ntouch {}/written\nexec sleep 60\n",
+            capture("pi-trust").display(),
+            home.dir.display()
+        ),
+    );
+    let sid = spawn_scripted(&home.dir);
+    let mut entry = serde_json::Value::Null;
+    wait_until("the prompt is seen", Duration::from_secs(10), || {
+        entry = live_entry(&home.dir, &sid);
+        !entry["waiting"].is_null()
+    });
+    assert_eq!(entry["waiting"]["waiting_for"], "trust prompt", "{entry}");
+    assert_eq!(entry["waiting"]["source"], "screen", "{entry}");
+    assert!(entry["waiting"]["since_ms"].as_u64().unwrap() > 0);
+
+    // The session list says so too: pi publishes no status of its own.
+    let ws = workspace(&home.dir).display().to_string();
+    let all = json_of(&bench(
+        &home.dir,
+        &["sessions", "--all", "--workspace", &ws],
+    ));
+    let row = all["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["host"]["session"] == sid.as_str())
+        .unwrap_or_else(|| panic!("no row for {sid}: {all}"));
+    assert_eq!(
+        row["state"]["activity"],
+        serde_json::json!({ "kind": "waiting", "waiting_for": "trust prompt" }),
+        "{row}"
+    );
+    let logged = event_kinds(&home.dir)
+        .into_iter()
+        .find(|(kind, _)| kind == "session/waiting")
+        .expect("session/waiting logged");
+    assert_eq!(logged.1["waiting_for"], "trust prompt", "{:?}", logged.1);
+    assert_eq!(logged.1["rule"], "pi", "{:?}", logged.1);
+}
+
+/// A prompt left on a shell's screen by a program that exited is history, not a wait: a
+/// claude that stopped at its trust prompt and was answered "No, exit" leaves exactly this.
+#[test]
+fn a_prompt_on_a_shell_at_its_prompt_is_not_waiting() {
+    let home = TestHome::claim("m1-shell");
+    let ws = workspace(&home.dir).display().to_string();
+    let daemon = DaemonGuard::start(&home.dir, None);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let opened = bench(&home.dir, &["open", "terminal"]);
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+    let pane = json_of(&opened)["pane"].as_str().unwrap().to_string();
+    let line = format!("cat '{}'", capture("claude-trust").display());
+    let sent = bench(&home.dir, &["send", &pane, &line, "--enter"]);
+    assert_eq!(sent.code, 0, "{}", sent.stderr);
+    let screen = screen_until(&home.dir, &pane, |l| l.contains("Yes, I trust this folder"));
+    let sid = screen["session"].as_str().unwrap().to_string();
+    // Longer than output takes to settle, however it trickles in.
+    std::thread::sleep(Duration::from_secs(3));
+    let entry = live_entry(&home.dir, &sid);
+    assert!(entry["waiting"].is_null(), "{entry}");
+}

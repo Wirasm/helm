@@ -12,9 +12,10 @@ use crate::{Core, now_rfc3339};
 use bench_doc::{PaneId, StandardPath};
 use bench_sessions::{BenchSession, Cache, Inputs};
 use bench_wire::{
-    DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
-    HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, HostedRecord, HostedSession, HostedVia,
-    MailAddress, SessionKey, SessionsArgs, Unreadable, dismissed_path, hosted_path,
+    Activity, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
+    HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host, HostedRecord, HostedSession,
+    HostedVia, MailAddress, SessionKey, SessionRow, SessionState, SessionsArgs, Unreadable,
+    dismissed_path, hosted_path,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -116,7 +117,37 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
     for u in &built.list.unreadable {
         report(&mut c, u).map_err(Refusal::Failed)?;
     }
-    Ok(json!(built.list))
+    let mut list = built.list;
+    show_waiting(&c, &mut list.rows);
+    Ok(json!(list))
+}
+
+/// A running row whose session benchd sees waiting on the operator (`waiting`) says so, unless
+/// its harness already does: Claude's registry and an agent's hook keep their own words.
+fn show_waiting(c: &Core, rows: &mut [SessionRow]) {
+    for row in rows {
+        let session = match &row.host {
+            Host::Bench { session } => Some(session.clone()),
+            Host::Pane { pane } => c
+                .bench
+                .document
+                .pane(*pane)
+                .and_then(|p| p.surface.session())
+                .map(str::to_string),
+            _ => None,
+        };
+        let SessionState::Running { activity } = &mut row.state else {
+            continue;
+        };
+        if matches!(activity, Activity::Waiting { .. }) {
+            continue;
+        }
+        if let Some(w) = session.and_then(|s| crate::waiting::of_session(c, &s)) {
+            *activity = Activity::Waiting {
+                waiting_for: Some(w.waiting_for),
+            };
+        }
+    }
 }
 
 pub fn answer_dismiss(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
@@ -273,7 +304,7 @@ fn helm_bench_dir(home: &Path, suite: Option<&str>, explicit: Option<String>) ->
     }
 }
 
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
