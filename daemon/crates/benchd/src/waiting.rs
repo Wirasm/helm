@@ -30,7 +30,9 @@ pub struct Seen {
 }
 
 /// A session's output settled: read its screen, off the core lock (a read inside a
-/// synchronized update waits for it to end), and keep what it shows.
+/// synchronized update waits for it to end), and keep what it shows. This runs on the one
+/// notice thread, so such a wait (at most a second) holds back other sessions' notices too;
+/// they are logged late, never lost.
 pub fn settled(core: &Arc<Mutex<Core>>, id: &str) {
     let session = {
         let c = core.lock().unwrap();

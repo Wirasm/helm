@@ -10,12 +10,11 @@
 
 use crate::{Core, now_rfc3339};
 use bench_doc::{PaneId, StandardPath};
-use bench_sessions::{BenchSession, Cache, Inputs};
+use bench_sessions::{BenchSession, Cache, Inputs, Waits};
 use bench_wire::{
-    Activity, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
-    HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host, HostedRecord, HostedSession,
-    HostedVia, MailAddress, SessionKey, SessionRow, SessionState, SessionsArgs, Unreadable,
-    dismissed_path, hosted_path,
+    DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
+    HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, HostedRecord, HostedSession, HostedVia,
+    MailAddress, SessionKey, SessionsArgs, Unreadable, dismissed_path, hosted_path,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -79,6 +78,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
             crate::hook::hooked(&c),
         )
     };
+    let waits = waits(&core.lock().unwrap());
     // Read during the build, outside the core mutex, like the harness files. `wakeable` is
     // `mail/send`'s own test for queueing a wake, taken from the same snapshot.
     let mailbox = |handle: &str| MailAddress {
@@ -104,6 +104,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
                 hooked: &hooked,
                 dismissed: &dismissed,
                 mailbox: &mailbox,
+                waits: &waits,
                 now_ms: now_ms(),
                 now: &now,
                 alive: &bench_sessions::process::alive,
@@ -117,37 +118,22 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
     for u in &built.list.unreadable {
         report(&mut c, u).map_err(Refusal::Failed)?;
     }
-    let mut list = built.list;
-    show_waiting(&c, &mut list.rows);
-    Ok(json!(list))
+    Ok(json!(built.list))
 }
 
-/// A running row whose session benchd sees waiting on the operator (`waiting`) says so, unless
-/// its harness already does: Claude's registry and an agent's hook keep their own words.
-fn show_waiting(c: &Core, rows: &mut [SessionRow]) {
-    for row in rows {
-        let session = match &row.host {
-            Host::Bench { session } => Some(session.clone()),
-            Host::Pane { pane } => c
-                .bench
-                .document
-                .pane(*pane)
-                .and_then(|p| p.surface.session())
-                .map(str::to_string),
-            _ => None,
-        };
-        let SessionState::Running { activity } = &mut row.state else {
+/// Every live session benchd sees waiting on the operator, by id and by the pane showing it.
+fn waits(c: &Core) -> Waits {
+    let mut waits = Waits::default();
+    for id in c.sessions.keys() {
+        let Some(w) = crate::waiting::of_session(c, id) else {
             continue;
         };
-        if matches!(activity, Activity::Waiting { .. }) {
-            continue;
+        if let Some(pane) = c.bench.document.pane_showing_session(id) {
+            waits.by_pane.insert(pane, w.clone());
         }
-        if let Some(w) = session.and_then(|s| crate::waiting::of_session(c, &s)) {
-            *activity = Activity::Waiting {
-                waiting_for: Some(w.waiting_for),
-            };
-        }
+        waits.by_session.insert(id.clone(), w);
     }
+    waits
 }
 
 pub fn answer_dismiss(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {

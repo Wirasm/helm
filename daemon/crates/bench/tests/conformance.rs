@@ -7052,6 +7052,8 @@ fn an_agent_parked_at_a_prompt_is_seen_waiting_from_its_screen() {
         serde_json::json!({ "kind": "waiting", "waiting_for": "trust prompt" }),
         "{row}"
     );
+    // Dated from when the wait began, not the session's start: the age is what says stall.
+    assert_eq!(row["updated_at_ms"], entry["waiting"]["since_ms"], "{row}");
     let logged = event_kinds(&home.dir)
         .into_iter()
         .find(|(kind, _)| kind == "session/waiting")
