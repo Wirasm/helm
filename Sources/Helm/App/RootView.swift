@@ -18,6 +18,9 @@ struct RootView: View {
     @StateObject private var archonRail = ArchonRailModel()
     /// The operator's just runs (#356): started by his keys, failures shown on the status bar.
     @StateObject private var justRuns = JustRuns()
+    /// The command palette (#500): ⌘K opens it through `LocalActions`, the overlay draws it.
+    @StateObject private var palette = CommandPalette()
+    @ObservedObject private var keymap = Keymap.shared
     @StateObject private var benchSnapshot = BenchSnapshotModel()
     @ObservedObject private var terminalManager = TerminalManager.shared
     /// What a key, a menu item or a button asks for is carried out here (`Actions`). Held so
@@ -66,6 +69,15 @@ struct RootView: View {
             // The keys available now, while the manage key is held (#499). Over the drawer too:
             // it answers "what can I press", wherever the keyboard is.
             .overlay { KeyPopup(keymap: .shared, hold: .shared) }
+            .overlay {
+                CommandPaletteView(
+                    palette: palette,
+                    commands: CommandList.of(
+                        table: keymap.table, document: workbench.document, recipes: [],
+                        paneTitle: { CommandList.title(of: $0, in: workbench) }),
+                    run: runCommand)
+            }
+            .onChange(of: palette.isOpen) { _, open in if !open { returnKeyboard() } }
             StatusBarView(model: model, workbench: workbench, justRuns: justRuns)
         }
         // The base plane, and it has to be painted: `translucentWindow` makes the window
@@ -90,7 +102,7 @@ struct RootView: View {
             }
             let actions = LocalActions(
                 workbench: workbench, workspaces: model, rail: archonRail,
-                terminals: terminalManager, just: justRuns)
+                terminals: terminalManager, just: justRuns, palette: palette)
             self.actions = actions
             Actions.performer = actions
             benchSnapshot.start(
@@ -106,5 +118,24 @@ struct RootView: View {
         }
         .onDisappear { benchSnapshot.stop() }
         .enableInjection()
+    }
+
+    /// A palette line, carried out through the doors a key uses.
+    private func runCommand(_ run: Command.Run) {
+        switch run {
+        case let .action(action): Actions.perform(action)
+        case let .verbs(verbs):
+            for verb in verbs { workbench.send(verb, by: .operatorGesture) }
+        }
+    }
+
+    /// The palette's field took the keyboard; however it closed (a line run, Esc, ⌘K again),
+    /// the terminal holding focus gets it back. A verb that moves focus hands it on again when
+    /// its document lands, through the terminal's own claim.
+    private func returnKeyboard() {
+        guard let view = workbench.focusedTerminal?.hostView, let window = view.window else {
+            return
+        }
+        window.makeFirstResponder(view)
     }
 }
