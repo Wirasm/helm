@@ -145,6 +145,23 @@ final class WorkbenchModelTests: XCTestCase {
             "a switch back finds its canvases where it left them")
     }
 
+    // MARK: - Zoom
+
+    /// ⌘J's zoom is a look at one workspace's pane: switching workspace ends it, and anything
+    /// that stays in the workspace (a split here, the control) leaves it on.
+    func testSwitchingWorkspaceTurnsZoomOff() throws {
+        let rig = try mounted()
+        rig.model.isZoomed = true
+
+        rig.model.send(.paneSplit(direction: .right), by: .operatorGesture)
+        XCTAssertEqual(rig.model.bench?.slots.count, 2, "the split should have landed")
+        XCTAssertTrue(rig.model.isZoomed, "a change inside the workspace must not end the zoom")
+
+        rig.model.send(.workspaceOpen(path: other.value), by: .operatorGesture)
+        XCTAssertEqual(rig.model.workspacePath, other)
+        XCTAssertFalse(rig.model.isZoomed, "the zoom carried over into another workspace")
+    }
+
     // MARK: - Visibility
 
     func testVisibilityIsPushedOntoExactlyTheOnScreenPanes() throws {
