@@ -478,9 +478,14 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `updatedAt` and left `statusUpdatedAt` alone, and twelve minutes of a continuously working
     session moved it not at all. A prompt replaced by a *different* prompt does restart the age —
     which is what you want, since the question is *waiting for **this** since when*.
-  - **Claude Code only, and absence is absence.** pi and codex publish no registry, so their panes
-    carry no `agent` at all — never a false `idle`. A `status` this build does not model is absent
-    too, and `waitingFor` still comes through.
+  - **Claude Code's registry, plus benchd's `waiting` (M1, #357), and absence is absence.** pi
+    and codex publish no registry, so their panes carry an `agent` only while benchd sees them
+    waiting on the operator — their own hooks, or a prompt benchd read off their screen — and
+    none otherwise, never a false `idle`. benchd's wait also fills in a Claude pane whose registry
+    says anything but `waiting` (a trust prompt before the session registers, a row left `busy`
+    under a prompt). A `status` this build does not model is absent too, and `waitingFor` still
+    comes through. ⌘⇧J (`focus/waiting`) takes the operator to the pane waiting longest, and the
+    status bar counts them.
   - **helm cannot answer this from the pty, which is why it asks the agent.** The ghostty
     wrapper surfaces parsed *actions* — title, bell, OSC 9;4 progress, OSC 133 command-finished,
     OSC 9/777 — and never bytes, so "this pane has produced nothing for N minutes" is not a
