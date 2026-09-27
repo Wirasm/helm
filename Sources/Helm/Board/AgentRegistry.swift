@@ -31,14 +31,6 @@ struct AgentSession: Equatable {
     /// ever explain a surprising mark while debugging.
     let cwd: String?
     let status: AgentStatus?
-    /// Claude Code's own id for the conversation. The board does not use it; the
-    /// resume record (#63) does.
-    ///
-    /// It lives here rather than in a second reader by #28's ruling — one registry
-    /// row type, split only if the two consumers genuinely diverge. `var` with a
-    /// default so the memberwise initializer stays source-compatible for callers
-    /// that only care about the board's three fields.
-    var sessionId: String? = nil
     /// What the agent says it is waiting **for**, in Claude Code's own words — `"permission
     /// prompt"`, `"input needed"`, `"dialog open"`, `"sandbox request"`, … Absent unless
     /// `status` is `waiting`.
@@ -50,8 +42,7 @@ struct AgentSession: Equatable {
     /// agent that cannot finish and that nobody is going to answer, because nobody is at a
     /// spawned agent's pane.
     ///
-    /// A bare `String` rather than an enum, for `BenchSnapshot.ResumableRecord.blockedReason`'s
-    /// reason: this is a free-form label Claude Code composes, and a reason this build has never
+    /// A bare `String` rather than an enum: this is a free-form label Claude Code composes, and a reason this build has never
     /// heard of is something a reader can still print.
     var waitingFor: String? = nil
     /// When `status` **or `waitingFor`** last changed — a transition time, not a heartbeat.
@@ -82,14 +73,13 @@ struct AgentSession: Equatable {
 
 extension AgentSession: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case pid, cwd, status, sessionId, waitingFor, statusUpdatedAt
+        case pid, cwd, status, waitingFor, statusUpdatedAt
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         pid = try container.decode(pid_t.self, forKey: .pid)
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
-        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
         waitingFor = try container.decodeIfPresent(String.self, forKey: .waitingFor)
         // Milliseconds, and a non-finite one is dropped rather than turned into a `Date` no
         // arithmetic can survive — Claude Code's own reader range-checks this field too.
