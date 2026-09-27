@@ -7,7 +7,7 @@
 
 import Foundation
 import GhosttyKit
-import MSDisplayLink
+import QuartzCore
 
 /// Shared terminal state and logic used by both UIKit and AppKit views.
 ///
@@ -46,6 +46,9 @@ final class TerminalSurfaceCoordinator {
     var onMetricsUpdate: (() -> Void)?
     var onCellSizeDidChange: (() -> Void)?
     var onMouseShape: ((ghostty_action_mouse_shape_e) -> Void)?
+    /// Makes the display link that paces `tick`, calling `selector` on `target`.
+    /// `nil` while the view has nothing to make one from.
+    var makeDisplayLink: (_ target: Any, _ selector: Selector) -> CADisplayLink? = { _, _ in nil }
 
     /// Called after every display-link render (`tick`).
     ///
@@ -85,14 +88,21 @@ final class TerminalSurfaceCoordinator {
     /// often than the screen can show and starves input handling under heavy
     /// output. The link paces draws to vsync instead, and is released after
     /// a stretch of idle frames so a quiet terminal costs no per-frame
-    /// wakeups at all. All instances share one platform link.
+    /// wakeups at all.
+    ///
+    /// **A `CADisplayLink`, never a `CVDisplayLink` (#495).** This link is
+    /// stopped on the main thread every time a terminal goes idle, and
+    /// `CVDisplayLinkStop` is a blocking join on CoreVideo's IO thread that can
+    /// wait forever after a display reconfiguration. Invalidating a
+    /// `CADisplayLink` joins nothing. The platform view makes it
+    /// (`makeDisplayLink`), so it follows the view's screen by itself.
     ///
     /// The range floors at 60: letting the system drop to 30 while output
     /// streams read as flicker on a scrolling screen. ProMotion displays may
     /// go to 120.
-    private var displayLink: DisplayLink?
+    private var displayLink: CADisplayLink?
     private var idleFrameCount = 0
-    private static let displayLinkFrameRateRange = DisplayLinkFrameRateRange(
+    private static let displayLinkFrameRateRange = CAFrameRateRange(
         minimum: 60,
         maximum: 120,
         preferred: 120
@@ -567,15 +577,18 @@ final class TerminalSurfaceCoordinator {
         }
         idleFrameCount = 0
         guard displayLink == nil else { return }
-        let link = DisplayLink(preferredFrameRateRange: Self.displayLinkFrameRateRange)
-        link.delegatingObject(self)
+        let target = DisplayLinkTarget(coordinator: self)
+        guard let link = makeDisplayLink(target, #selector(DisplayLinkTarget.step(_:))) else { return }
+        link.preferredFrameRateRange = Self.displayLinkFrameRateRange
+        link.add(to: .main, forMode: .common)
         displayLink = link
         TerminalDebugLog.log(.lifecycle, "display link acquired")
     }
 
     private func releaseDisplayLink() {
-        guard displayLink != nil else { return }
-        displayLink = nil
+        guard let displayLink else { return }
+        displayLink.invalidate()
+        self.displayLink = nil
         idleFrameCount = 0
         TerminalDebugLog.log(.lifecycle, "display link released")
     }
@@ -605,12 +618,18 @@ final class TerminalSurfaceCoordinator {
     }
 }
 
-extension TerminalSurfaceCoordinator: DisplayLinkDelegate {
-    // The shared CADisplayLink dispatches synchronously on the main run
-    // loop; the protocol just cannot say so.
-    nonisolated func synchronization(context _: DisplayLinkCallbackContext) {
-        MainActor.assumeIsolated {
-            tick()
-        }
+/// A `CADisplayLink` retains its target, so the coordinator is held weakly
+/// here: otherwise coordinator → link → coordinator never frees.
+/// Main-actor because `ensureDisplayLink` adds the link to the main run loop.
+@MainActor
+private final class DisplayLinkTarget: NSObject {
+    weak var coordinator: TerminalSurfaceCoordinator?
+
+    init(coordinator: TerminalSurfaceCoordinator) {
+        self.coordinator = coordinator
+    }
+
+    @objc func step(_: CADisplayLink) {
+        coordinator?.tick()
     }
 }

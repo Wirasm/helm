@@ -106,6 +106,10 @@
             core.onPostRender = { [weak self] in
                 self?.enforceMetalLayerScale()
             }
+            // The view's own CADisplayLink: it follows the window's screen.
+            core.makeDisplayLink = { [weak self] target, selector in
+                self?.displayLink(target: target, selector: selector)
+            }
         }
 
         // Upstream's rule: Copy is offered whenever ghostty has a selection.
