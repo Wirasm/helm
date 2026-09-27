@@ -131,6 +131,14 @@ fn has_transcript(id: &str) -> bool {
             None => return false,
         },
     };
+    // An id is a hook's word, and it becomes a file name: nothing that can leave the directory.
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return false;
+    }
     let file = format!("{id}.jsonl");
     std::fs::read_dir(config.join("projects"))
         .into_iter()
