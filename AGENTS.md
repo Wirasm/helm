@@ -27,9 +27,9 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | --- | --- | --- |
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
-| `skills` | the board and post-canvas skill gates | node, zsh, python3, git |
-| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill (their snippets run against a real benchd), `RenderableFile.swift` (the CLI's `bench open` checks its list) or the vendored shell integration (benchd builds it in) changed | cargo |
-| `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/` |
+| `skills` | the board and post-canvas skill gates | node, zsh, python3, git, lsof |
+| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill (their snippets run against a real benchd), `RenderableFile.swift` (the CLI's `bench open` checks its list) or the vendored shell integration (benchd builds it in) changed | cargo, lsof |
+| `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/`, lsof |
 
 "Changed" means against `origin/development`, committed or not. A missing tool is a `FAIL`
 naming it, never a silent skip. The path rules live only in `scripts/check.sh`
@@ -314,6 +314,16 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   loop with a deadline it checks itself, or a `trap ... EXIT` — in that order of preference,
   because the first two survive `SIGKILL` on the parent and the third does not. **Then check.**
   `ps -Ao pcpu,etime,pid,command -r | head` before you report, and say what you left running.
+- **A test leaves nothing behind, and a killed one leaves nothing for long.** Whatever a test
+  creates it removes itself (`Drop`, `addTeardownBlock`, `trap … EXIT`). The two whose owner
+  lives long enough to be killed mid-run carry its pid, and the next run removes them once that
+  pid is gone: `bcf-<pid>-<n>` in the conformance suite and `helm-pty-<pid>-…` in the keyboard
+  suites. `just check` runs the `daemon`, `skills` and `pi` parts with `TMPDIR` in a directory of
+  their own and fails a part that leaves a file or a running process there, by name. Do not end a
+  test's child with SIGQUIT or SIGABRT: macOS writes a crash report for every one
+  (`~/Library/Logs/DiagnosticReports`), which is how 30 `cat` reports piled up. On 2026-09-28 the
+  disk was down to 3.3 GB, mostly merged worktrees each holding its own build (1–6 GB):
+  **`just prune-worktrees`** removes the ones whose work has merged, and `--dry-run` lists them.
 - **Before blaming the machine, look at what is on it.** *"The machine was busy"* is a real
   diagnosis — #291 is one — but it is also the easiest wrong one to reach for, and twice today it
   was true for a reason another agent had caused and could have found in one `ps`. Load has an

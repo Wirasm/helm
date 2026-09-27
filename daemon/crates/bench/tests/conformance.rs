@@ -82,6 +82,8 @@ impl TestHome {
     /// is kept only for the panic message.
     fn claim(label: &str) -> TestHome {
         static NEXT: AtomicU32 = AtomicU32::new(0);
+        static SWEPT: std::sync::Once = std::sync::Once::new();
+        SWEPT.call_once(sweep_dead_runs);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("bcf-{}-{n}", std::process::id()));
         fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("claim home for {label}: {e}"));
@@ -89,9 +91,43 @@ impl TestHome {
     }
 }
 
+/// Remove the homes of runs that died before their Drop ran: a killed or aborted test binary.
+/// The pid in the name is the owner, so a home is removed only once no process has that pid;
+/// another worktree's run in progress keeps its homes.
+fn sweep_dead_runs() {
+    let Ok(entries) = fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("bcf-"))
+            .and_then(|rest| rest.split_once('-'))
+            .and_then(|(pid, _)| pid.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        // SAFETY: signal 0 only asks whether the pid exists.
+        let gone = unsafe { libc::kill(pid, 0) } != 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        if gone {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 impl Drop for TestHome {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.dir);
+        // A session's shell writes its history into this HOME as it exits, and the daemon's
+        // Drop has only just hung it up: a write that lands mid-removal fails the removal and
+        // left the directory behind. Retry until the late writer is done.
+        for _ in 0..40 {
+            if fs::remove_dir_all(&self.dir).is_ok() || !self.dir.exists() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 
@@ -113,7 +149,12 @@ impl DaemonGuard {
     }
 
     fn start_with_fake(home: &Path, agent: &str) -> DaemonGuard {
-        let bin = write_fake_agent(home, agent);
+        DaemonGuard::start_with_script(home, agent, "exec cat")
+    }
+
+    /// A daemon whose `agent` runs `body` under `/bin/sh`.
+    fn start_with_script(home: &Path, agent: &str, body: &str) -> DaemonGuard {
+        let bin = write_agent_script(home, agent, body);
         let path = std::env::var("PATH").unwrap_or_default();
         let mut cmd = isolated(benchd_bin());
         cmd.env("PATH", format!("{}:{path}", bin.display()));
@@ -996,11 +1037,15 @@ fn libc_alive(pid: i32) -> bool {
 /// of its own, so it is quiet, live, and dies when its pid is killed. Returns the directory to
 /// put on the daemon's PATH.
 fn write_fake_agent(home: &Path, agent: &str) -> PathBuf {
+    write_agent_script(home, agent, "exec cat")
+}
+
+fn write_agent_script(home: &Path, agent: &str, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let bin = home.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let path = bin.join(agent);
-    fs::write(&path, "#!/bin/sh\nexec cat\n").unwrap();
+    fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     bin
 }
@@ -5238,7 +5283,15 @@ fn ctrl_backslash_detaches_a_terminal_viewer_and_reaches_the_session_from_a_pane
     // In a shell Ctrl-\ is SIGQUIT, so a helm pane (`--in-pane`) must pass it on; a viewer in
     // the operator's own terminal keeps it as the detach key.
     let home = TestHome::claim("m5b-detach");
-    let _daemon = DaemonGuard::start(&home.dir, None);
+    // The session quits on SIGQUIT by a trap rather than by the signal's default action,
+    // which dumps core: `cat` killed that way left a crash report in
+    // ~/Library/Logs/DiagnosticReports on every run. `read` and `echo` are builtins, so the
+    // shell is the pty's whole foreground group.
+    let _daemon = DaemonGuard::start_with_script(
+        &home.dir,
+        "pi",
+        "trap 'exit 0' QUIT\nwhile IFS= read -r line; do echo \"$line\"; done",
+    );
     let wait_exit = |child: &mut Child| {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
@@ -5260,10 +5313,7 @@ fn ctrl_backslash_detaches_a_terminal_viewer_and_reaches_the_session_from_a_pane
             .is_some_and(|s| s["live"] == true)
     };
     for (extra, session_survives) in [(&[][..], true), (&["--in-pane"][..], false)] {
-        let run = bench(
-            &home.dir,
-            &["spawn", "--agent", "test-echo", "--cwd", "/tmp"],
-        );
+        let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", "/tmp"]);
         let sid = json_of(&run)["session"].as_str().unwrap().to_string();
         let (mut master, mut viewer) = attach_on_pty(&home.dir, &sid, extra, 24, 80);
         std::thread::sleep(Duration::from_millis(500));
@@ -5273,7 +5323,7 @@ fn ctrl_backslash_detaches_a_terminal_viewer_and_reaches_the_session_from_a_pane
         assert_eq!(
             live(&sid),
             session_survives,
-            "{extra:?}: detaching leaves the session; a forwarded Ctrl-\\ quits `cat`"
+            "{extra:?}: detaching leaves the session; a forwarded Ctrl-\\ quits the agent"
         );
     }
 }

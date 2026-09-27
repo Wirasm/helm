@@ -425,3 +425,24 @@ final class ReleaseResumeScriptTests: XCTestCase {
         XCTAssertTrue(result.stderr.contains("no directory"), result.stderr)
     }
 }
+
+extension ReleaseResumeScriptTests {
+    /// Every run leaves a directory with its build log in it; only the newest five stay, so the
+    /// build directory stops growing. Something else in that directory is not the script's to
+    /// remove.
+    func testOnlyTheNewestFiveRunDirectoriesAreKept() throws {
+        let fm = FileManager.default
+        let stamps = (1...7).map { "release-resume-2026092\($0)T120000Z" }
+        for stamp in stamps {
+            try fm.createDirectory(
+                at: scratch.appendingPathComponent(stamp), withIntermediateDirectories: true)
+        }
+        try Data("{}".utf8).write(to: scratch.appendingPathComponent("latest.json"))
+
+        let result = try call("prune_states", scratch.path)
+
+        XCTAssertEqual(result.status, 0, result.stderr)
+        let left = try fm.contentsOfDirectory(atPath: scratch.path).sorted()
+        XCTAssertEqual(left, ["latest.json"] + stamps.suffix(5))
+    }
+}

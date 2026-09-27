@@ -32,6 +32,7 @@
 #
 # The log is ~/.helm/build/release-resume-<stamp>/log (HELM_BUILD_DIR moves it), and
 # ~/.helm/build/release-resume.log always points at the newest. Its last line starts `RESULT:`.
+# Each run's directory holds its build log (about half a megabyte); the newest five are kept.
 #
 # Sourcing this file defines the functions and runs nothing; ReleaseResumeScriptTests does that.
 
@@ -225,6 +226,14 @@ check() {
   done
 }
 
+# Keep the newest five run directories. The stamp sorts by time, and the one just made is
+# among the five.
+prune_states() {
+  local states=() i
+  for i in "$1"/release-resume-2*/; do [ -d "$i" ] && states+=("${i%/}"); done
+  for ((i = 0; i + 5 < ${#states[@]}; i++)); do rm -rf "${states[$i]}"; done
+}
+
 detach() {
   local build_dir stamp state
   build_dir="${HELM_BUILD_DIR:-$HOME/.helm/build}"
@@ -232,6 +241,7 @@ detach() {
   state="$build_dir/release-resume-$stamp"
   mkdir -p "$state" || refuse "cannot create $state"
   ln -sfn "$state/log" "$build_dir/release-resume.log"
+  prune_states "$build_dir"
 
   local args=()
   while IFS= read -r -d '' a; do args+=("$a"); done < <(forwarded)
