@@ -21,6 +21,10 @@ enum KeyBindings {
     static let all: [KeyBinding] =
         panes + tabs + focusSteps + paneMoves + turns + workspaceKeys + chrome + fontSize
 
+    /// The manage key's modifiers (`ManageKey`, #498): every row on these, alone or with ⇧, is
+    /// the manage layer, and moves with `manage = "…"` in the keymap file.
+    private static let manage = ManageKey.builtIn.modifiers
+
     private static let panes: [KeyBinding] = [
         KeyBinding(
             .character("n"), .command, .verb(.newTerminal), hint: "new",
@@ -37,10 +41,10 @@ enum KeyBindings {
         KeyBinding(
             .character("d"), [.command, .shift], .verb(.split(.down)), hint: "split down",
             menu: "Split Down"),
-        // ⌘⌥W, because ⌘W belongs to SwiftUI's `WindowGroup` (close window) and helm would be
-        // fighting its own shell for it.
+        // Manage + W, because ⌘W belongs to SwiftUI's `WindowGroup` (close window) and helm
+        // would be fighting its own shell for it.
         KeyBinding(
-            .character("w"), [.command, .option], .verb(.closeFocused), hint: "close",
+            .character("w"), manage, .verb(.closeFocused), hint: "close",
             menu: "Close Pane"),
     ]
 
@@ -50,24 +54,42 @@ enum KeyBindings {
             .character("\(index)"), .command, .verb(.showTab(index: index - 1)), hint: "pane")
     }
 
-    /// ⌘⌥ + arrows, because ⌘⌥1–9 is already the workspace fallback.
-    private static let focusSteps: [KeyBinding] = ArrowKey.allCases.map { arrow in
-        KeyBinding(
-            arrow.trigger, [.command, .option], .verb(.stepFocus(arrow.direction)), hint: "focus",
-            menu: "Focus \(arrow.name.capitalized)")
-    }
+    /// Vim's four letters, in vim's order, so the manage layer's focus and move keys sit on the
+    /// home row as well as on the arrows (#498).
+    private static let homeRow: [(String, ArrowKey)] = [
+        ("h", .left), ("j", .down), ("k", .up), ("l", .right),
+    ]
 
-    /// ⌘⌥⇧ + arrows — the same four keys with shift, moving the **pane** rather than the
-    /// keyboard (#287). Shift turns *go there* into *take this there*, and the two sit side by
-    /// side on the status bar because reading them together is what teaches the second one.
-    /// `.anywhere`, like focus: the terminal holds the keyboard almost all the time, so a key
-    /// that could not fire from inside a pane could not move that pane.
-    private static let paneMoves: [KeyBinding] = ArrowKey.allCases.map { arrow in
-        KeyBinding(
-            arrow.trigger, [.command, .option, .shift], .verb(.moveFocused(arrow.direction)),
-            hint: "move",
-            menu: "Move Pane \(arrow.name.capitalized)")
-    }
+    /// Manage + arrows or H/J/K/L. The arrows carry the menu items; the letters are the same
+    /// verbs a hand already on the home row can reach.
+    private static let focusSteps: [KeyBinding] =
+        ArrowKey.allCases.map { arrow in
+            KeyBinding(
+                arrow.trigger, manage, .verb(.stepFocus(arrow.direction)), hint: "focus",
+                menu: "Focus \(arrow.name.capitalized)")
+        }
+        + homeRow.map { letter, arrow in
+            KeyBinding(
+                .character(letter), manage, .verb(.stepFocus(arrow.direction)), hint: "focus")
+        }
+
+    /// Manage + ⇧ + the same keys, moving the **pane** rather than the keyboard (#287). Shift
+    /// turns *go there* into *take this there*, and the two sit side by side on the status bar
+    /// because reading them together is what teaches the second one. `.anywhere`, like focus:
+    /// the terminal holds the keyboard almost all the time, so a key that could not fire from
+    /// inside a pane could not move that pane.
+    private static let paneMoves: [KeyBinding] =
+        ArrowKey.allCases.map { arrow in
+            KeyBinding(
+                arrow.trigger, manage.union(.shift), .verb(.moveFocused(arrow.direction)),
+                hint: "move",
+                menu: "Move Pane \(arrow.name.capitalized)")
+        }
+        + homeRow.map { letter, arrow in
+            KeyBinding(
+                .character(letter), manage.union(.shift), .verb(.moveFocused(arrow.direction)),
+                hint: "move")
+        }
 
     /// ⌘O and ⌘↑/⌘↓. The prompt jumps fire only inside a terminal, so ⌘↑/⌘↓ keeps its
     /// text-navigation meaning everywhere else.
@@ -88,8 +110,8 @@ enum KeyBindings {
     ]
 
     /// ⌃1–⌃9 and ⌃←/⌃→ are Mission Control's keys when the operator has handed them over, and
-    /// are never stolen from a focused shell, which owns them as control codes. ⌘⌥1–⌘⌥9 is the
-    /// fallback that needs no System Settings change and fires anywhere.
+    /// are never stolen from a focused shell, which owns them as control codes. Manage + 1–9 is
+    /// the one that needs no System Settings change and fires anywhere.
     private static let workspaceKeys: [KeyBinding] =
         (1...9).map { index in
             KeyBinding(
@@ -98,7 +120,7 @@ enum KeyBindings {
         }
         + (1...9).map { index in
             KeyBinding(
-                .character("\(index)"), [.command, .option],
+                .character("\(index)"), manage,
                 .verb(.activateWorkspace(index: index - 1)), hint: "workspace")
         }
         + [

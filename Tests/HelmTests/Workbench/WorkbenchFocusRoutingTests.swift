@@ -171,17 +171,18 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
     /// nil on every row that carried a direction in a separate `direction` field (#152). The
     /// channel that let the menu and the keymap assemble a command differently is gone — both
     /// hand the row's own action to `Actions` — so what is left to ask is whether each row
-    /// carries the direction its menu title claims.
-    func testEveryFocusRowCarriesTheDirectionItsMenuNames() throws {
-        let rows = KeyBindings.all.compactMap { row -> (KeyBinding, BenchDirection)? in
-            guard case let .verb(.stepFocus(direction)) = row.action else { return nil }
-            return (row, direction)
+    /// carries the direction its menu title claims. Every direction has exactly one item: the
+    /// home-row letters (#498) are a second key for the same step and carry no item of their own.
+    func testEveryFocusRowCarriesTheDirectionItsMenuNames() {
+        let menus = KeyBindings.all.compactMap { row -> (BenchDirection, String)? in
+            guard case let .verb(.stepFocus(direction)) = row.action, let menu = row.menu
+            else { return nil }
+            return (direction, menu)
         }
-        XCTAssertEqual(rows.count, 4, "the four ⌘⌥arrow rows are the ones carrying a direction")
-
-        for (row, direction) in rows {
-            let menu = try XCTUnwrap(
-                row.menu, "a focus row that is not in the menu cannot be clicked")
+        XCTAssertEqual(
+            Set(menus.map(\.0)), [.left, .right, .up, .down], "one clickable item per direction")
+        XCTAssertEqual(menus.count, 4)
+        for (direction, menu) in menus {
             XCTAssertEqual(menu, "Focus \(direction.rawValue.capitalized)")
         }
     }

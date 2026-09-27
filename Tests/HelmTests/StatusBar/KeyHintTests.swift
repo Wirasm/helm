@@ -50,7 +50,8 @@ final class KeyHintTests: XCTestCase {
         XCTAssertEqual(keys("close", terminalFocused: true), "⌥⌘W")
         XCTAssertEqual(keys("folder", terminalFocused: true), "⇧⌘O")
         XCTAssertEqual(keys("pane", terminalFocused: true), "⌘1–9")
-        XCTAssertEqual(keys("focus", terminalFocused: true), "⌥⌘↑↓←→")
+        XCTAssertEqual(keys("focus", terminalFocused: true), "⌥⌘↑↓←→ HJKL")
+        XCTAssertEqual(keys("move", terminalFocused: true), "⌥⇧⌘↑↓←→ HJKL")
         XCTAssertEqual(keys("archon", terminalFocused: true), "⇧⌘R")
     }
 

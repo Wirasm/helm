@@ -5,11 +5,14 @@
 #   - a [[bind]] row replaces the built-in rows with the same key in an overlapping `when`,
 #     or adds a key;
 #   - unbind = ["cmd+shift+r"] removes a built-in key;
+#   - manage = "cmd+ctrl" moves every manage+ key below onto another modifier. It must
+#     include cmd, so it never takes a key a terminal types, and cannot include shift;
 #   - a file that does not parse changes nothing, and the status bar says why.
 # Copying this whole file in is valid and changes nothing.
 #
-# key:    cmd, ctrl, alt, shift joined by + before one character, plus, left, right, up,
-#         down or keycode:N
+# key:    manage, cmd, ctrl, alt, shift joined by + before one character, plus, left,
+#         right, up, down or keycode:N. manage is the manage key: hold it and the
+#         manage+ keys arrange the bench, release it and the keyboard types again
 # when:   anywhere (the default), terminal, away-from-terminal
 # action: one of the names below; index is 1-based. `drawer` takes name and, optionally,
 #         surface = "browser", "sessions" or "file:<path>" for a drawer that holds nothing.
@@ -20,6 +23,8 @@
 #   edge = "left"             # left or right
 #   size = 0.3                # a fraction of the window's width, 0.1 to 0.9
 # Built in: sessions on the left at 0.28, every other drawer on the right at 0.5.
+
+manage = "cmd+alt"
 
 [[bind]]
 key = "cmd+n"
@@ -48,7 +53,7 @@ hint = "split down"
 menu = "Split Down"
 
 [[bind]]
-key = "cmd+alt+w"
+key = "manage+w"
 action = "close-pane"
 hint = "close"
 menu = "Close Pane"
@@ -108,60 +113,108 @@ index = 9
 hint = "pane"
 
 [[bind]]
-key = "cmd+alt+left"
+key = "manage+left"
 action = "focus"
 direction = "left"
 hint = "focus"
 menu = "Focus Left"
 
 [[bind]]
-key = "cmd+alt+right"
+key = "manage+right"
 action = "focus"
 direction = "right"
 hint = "focus"
 menu = "Focus Right"
 
 [[bind]]
-key = "cmd+alt+up"
+key = "manage+up"
 action = "focus"
 direction = "up"
 hint = "focus"
 menu = "Focus Up"
 
 [[bind]]
-key = "cmd+alt+down"
+key = "manage+down"
 action = "focus"
 direction = "down"
 hint = "focus"
 menu = "Focus Down"
 
 [[bind]]
-key = "cmd+alt+shift+left"
+key = "manage+h"
+action = "focus"
+direction = "left"
+hint = "focus"
+
+[[bind]]
+key = "manage+j"
+action = "focus"
+direction = "down"
+hint = "focus"
+
+[[bind]]
+key = "manage+k"
+action = "focus"
+direction = "up"
+hint = "focus"
+
+[[bind]]
+key = "manage+l"
+action = "focus"
+direction = "right"
+hint = "focus"
+
+[[bind]]
+key = "manage+shift+left"
 action = "move-pane"
 direction = "left"
 hint = "move"
 menu = "Move Pane Left"
 
 [[bind]]
-key = "cmd+alt+shift+right"
+key = "manage+shift+right"
 action = "move-pane"
 direction = "right"
 hint = "move"
 menu = "Move Pane Right"
 
 [[bind]]
-key = "cmd+alt+shift+up"
+key = "manage+shift+up"
 action = "move-pane"
 direction = "up"
 hint = "move"
 menu = "Move Pane Up"
 
 [[bind]]
-key = "cmd+alt+shift+down"
+key = "manage+shift+down"
 action = "move-pane"
 direction = "down"
 hint = "move"
 menu = "Move Pane Down"
+
+[[bind]]
+key = "manage+shift+h"
+action = "move-pane"
+direction = "left"
+hint = "move"
+
+[[bind]]
+key = "manage+shift+j"
+action = "move-pane"
+direction = "down"
+hint = "move"
+
+[[bind]]
+key = "manage+shift+k"
+action = "move-pane"
+direction = "up"
+hint = "move"
+
+[[bind]]
+key = "manage+shift+l"
+action = "move-pane"
+direction = "right"
+hint = "move"
 
 [[bind]]
 key = "cmd+o"
@@ -249,55 +302,55 @@ index = 9
 hint = "workspace"
 
 [[bind]]
-key = "cmd+alt+1"
+key = "manage+1"
 action = "workspace"
 index = 1
 hint = "workspace"
 
 [[bind]]
-key = "cmd+alt+2"
+key = "manage+2"
 action = "workspace"
 index = 2
 hint = "workspace"
 
 [[bind]]
-key = "cmd+alt+3"
+key = "manage+3"
 action = "workspace"
 index = 3
 hint = "workspace"
 
 [[bind]]
-key = "cmd+alt+4"
+key = "manage+4"
 action = "workspace"
 index = 4
 hint = "workspace"
 
 [[bind]]
-key = "cmd+alt+5"
+key = "manage+5"
 action = "workspace"
 index = 5
 hint = "workspace"
 
 [[bind]]
-key = "cmd+alt+6"
+key = "manage+6"
 action = "workspace"
 index = 6
 hint = "workspace"
 
 [[bind]]
-key = "cmd+alt+7"
+key = "manage+7"
 action = "workspace"
 index = 7
 hint = "workspace"
 
 [[bind]]
-key = "cmd+alt+8"
+key = "manage+8"
 action = "workspace"
 index = 8
 hint = "workspace"
 
 [[bind]]
-key = "cmd+alt+9"
+key = "manage+9"
 action = "workspace"
 index = 9
 hint = "workspace"

@@ -119,6 +119,37 @@ final class BindingTableTests: XCTestCase {
         }
     }
 
+    /// The manage layer's home row (#498): hold ⌘⌥ and H/J/K/L step focus the way the arrows do,
+    /// ⇧ turns them into pane moves, and both fire from inside a terminal, which is where the
+    /// keyboard nearly always is. ⌘⌥H is "Hide Others" in every app menu; the monitor runs
+    /// before menu key equivalents, so it is helm's.
+    func testManageHomeRowStepsFocusAndMovesThePane() {
+        for (letter, direction) in [
+            ("h", BenchDirection.left), ("j", .down), ("k", .up), ("l", .right),
+        ] {
+            XCTAssertEqual(
+                match(letter, [.command, .option], terminalFocused: true),
+                .verb(.stepFocus(direction)), letter)
+            XCTAssertEqual(
+                match(letter.uppercased(), [.command, .option, .shift], terminalFocused: true),
+                .verb(.moveFocused(direction)), "shift + \(letter)")
+        }
+        XCTAssertNil(match("h", .command), "⌘H without the manage key is not the layer")
+    }
+
+    /// Every row in the manage layer is on the manage key, so `manage = "…"` in the file moves
+    /// the whole family: focus, move, workspace and close.
+    func testTheBenchKeysAreTheManageLayer() {
+        let layer = KeyBindings.all.filter { ManageKey.builtIn.holds($0.modifiers) }
+        let verbs = Set(
+            layer.compactMap { row -> String? in
+                guard case let .verb(template) = row.action else { return nil }
+                return template.spelled.name
+            })
+        XCTAssertEqual(verbs, ["focus", "move-pane", "workspace", "close-pane"])
+        XCTAssertEqual(layer.count, 8 + 8 + 9 + 1)
+    }
+
     func testShiftCommandBTogglesTheBrowserDrawer() {
         XCTAssertEqual(
             match("B", [.command, .shift]),

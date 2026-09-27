@@ -33,18 +33,20 @@ final class MovePaneKeystrokeTests: XCTestCase {
         }
     }
 
-    /// Every move row is in the menu and names the direction it moves. #152 is the reason this
-    /// is asserted rather than assumed: four View ▸ Focus rows were silent no-ops for as long as
-    /// the payload rode in an untyped `Notification.object`.
-    func testEveryMoveRowIsClickableAndNamesItsOwnDirection() throws {
-        let rows = KeyBindings.all.compactMap { row -> (KeyBinding, BenchDirection)? in
-            guard case let .verb(.moveFocused(direction)) = row.action else { return nil }
-            return (row, direction)
+    /// Every direction a pane can move in is in the menu, once, named for that direction. #152
+    /// is the reason this is asserted rather than assumed: four View ▸ Focus rows were silent
+    /// no-ops for as long as the payload rode in an untyped `Notification.object`. The home-row
+    /// letters (#498) are a second key for the same move and carry no item of their own.
+    func testEveryMoveDirectionIsClickableOnceAndNamesItself() {
+        let menus = KeyBindings.all.compactMap { row -> (BenchDirection, String)? in
+            guard case let .verb(.moveFocused(direction)) = row.action, let menu = row.menu
+            else { return nil }
+            return (direction, menu)
         }
-        XCTAssertEqual(rows.count, 4, "one row per arrow")
-
-        for (row, direction) in rows {
-            let menu = try XCTUnwrap(row.menu, "a move row not in the menu cannot be clicked")
+        XCTAssertEqual(
+            Set(menus.map(\.0)), [.left, .right, .up, .down], "one clickable item per direction")
+        XCTAssertEqual(menus.count, 4)
+        for (direction, menu) in menus {
             XCTAssertEqual(menu, "Move Pane \(direction.rawValue.capitalized)")
         }
     }

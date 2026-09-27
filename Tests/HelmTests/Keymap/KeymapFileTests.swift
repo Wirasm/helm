@@ -139,6 +139,78 @@ final class KeymapFileTests: XCTestCase {
             .verb(.newTerminal))
     }
 
+    // MARK: - The manage key (#498)
+
+    /// `manage` moves the whole layer: every built-in row on ⌘⌥ or ⌘⌥⇧ lands on the new set,
+    /// keeping its ⇧, and every other row stays where it was.
+    func testTheManageKeyMovesTheWholeLayerAndNothingElse() throws {
+        let table = try parse(#"manage = "cmd+ctrl""#).overlay(on: KeyBindings.all)
+        XCTAssertEqual(table.count, KeyBindings.all.count)
+        XCTAssertEqual(match("j", [.command, .control], in: table), .verb(.stepFocus(.down)))
+        XCTAssertEqual(
+            match(nil, keyCode: 123, [.command, .control, .shift], in: table),
+            .verb(.moveFocused(.left)))
+        XCTAssertEqual(
+            match("4", [.command, .control], in: table), .verb(.activateWorkspace(index: 3)))
+        XCTAssertEqual(match("w", [.command, .control], in: table), .verb(.closeFocused))
+        XCTAssertNil(match("j", [.command, .option], in: table), "the old layer is gone")
+        XCTAssertEqual(
+            match("3", .control, in: table), .verb(.activateWorkspace(index: 2)),
+            "⌃3 is not the layer and stays")
+        XCTAssertEqual(match("d", .command, in: table), .verb(.split(.right)))
+    }
+
+    /// `manage` in a key or an unbind means the file's manage key, not the built-in one.
+    func testManageInAChordIsTheFilesManageKey() throws {
+        let table = try parse(
+            """
+            manage = "cmd+ctrl"
+            unbind = ["manage+w"]
+
+            [[bind]]
+            key = "manage+shift+n"
+            action = "new-note"
+            """
+        ).overlay(on: KeyBindings.all)
+        XCTAssertEqual(match("N", [.command, .control, .shift], in: table), .local(.newNote))
+        XCTAssertNil(match("w", [.command, .control], in: table))
+        XCTAssertEqual(
+            try KeyChord(parsing: "manage+shift+h"),
+            KeyChord(.character("h"), [.command, .option, .shift]),
+            "with no manage field, manage is the built-in ⌘⌥")
+    }
+
+    /// The invariant: the manage key never takes a keystroke a terminal types (⌥ types
+    /// characters on his layout, ⌃ sends control codes), never includes the layer's own ⇧, and
+    /// never lands the layer on a chord another row has.
+    func testAManageKeyThatWouldBreakTypingOrCollideIsRefused() {
+        for (manage, expected) in [
+            ("alt", "must include cmd"),
+            ("ctrl", "must include cmd"),
+            ("cmd+shift", "cannot include shift"),
+            ("cmd+hyper", "'hyper' is not"),
+            ("cmd+cmd", "'cmd' twice"),
+            ("cmd", "manage cmd puts cmd+"),
+        ] {
+            let reason = problem("manage = \"\(manage)\"")?.reason ?? "accepted"
+            XCTAssertTrue(reason.contains(expected), "\(manage): \(reason)")
+        }
+        XCTAssertEqual(
+            problem(
+                """
+                [[bind]]
+                key = "manage+cmd+x"
+                action = "new-terminal"
+                """)?.reason, "key 'manage+cmd+x': 'cmd' twice")
+    }
+
+    /// A file that does not name the manage key is read against the built-in one, so a file
+    /// written before the field existed means what it meant.
+    func testAFileWithoutManageIsReadAgainstTheBuiltInKey() throws {
+        XCTAssertEqual(try parse("").manage, .builtIn)
+        XCTAssertEqual(try parse("").overlay(on: KeyBindings.all), KeyBindings.all)
+    }
+
     // MARK: - Refusals name the line
 
     func testAnUnknownActionIsRefusedWithItsLine() {
@@ -159,7 +231,7 @@ final class KeymapFileTests: XCTestCase {
 
     func testABadChordIsRefused() {
         for (key, reason) in [
-            ("cmd+shfit+b", "key 'cmd+shfit+b': 'shfit' is not cmd, ctrl, alt or shift"),
+            ("cmd+shfit+b", "key 'cmd+shfit+b': 'shfit' is not manage, cmd, ctrl, alt or shift"),
             ("cmd++", "key 'cmd++': write the + key as 'plus'"),
             (
                 "cmd+enter",
