@@ -5306,14 +5306,18 @@ fn a_malformed_attach_stream_ends_the_attachment_and_not_the_session() {
 /// A daemon whose `pi` prints its size (`stty size`) whenever its pty's size changes, once it
 /// has said `ready`.
 fn size_reporting_daemon(home: &Path) -> DaemonGuard {
+    scripted_pi_daemon(
+        home,
+        "#!/bin/sh\ntrap 'stty size' WINCH\necho ready\nwhile :; do sleep 0.1; done\n",
+    )
+}
+
+/// A daemon whose `pi` is `script`.
+fn scripted_pi_daemon(home: &Path, script: &str) -> DaemonGuard {
     let bin = home.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let agent = bin.join("pi");
-    fs::write(
-        &agent,
-        "#!/bin/sh\ntrap 'stty size' WINCH\necho ready\nwhile :; do sleep 0.1; done\n",
-    )
-    .unwrap();
+    fs::write(&agent, script).unwrap();
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
     let path = std::env::var("PATH").unwrap_or_default();
@@ -6352,4 +6356,161 @@ fn a_claude_transcript_is_looked_for_where_claude_config_dir_puts_it() {
     let _daemon = DaemonGuard::start_with(&home.dir, None, cmd);
     let restored = json_of(&bench(&home.dir, &["restore", &pane]));
     assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
+}
+
+// ---------------------------------------------------------------------------
+// M5b PR 4: each session's VT engine
+// ---------------------------------------------------------------------------
+
+/// Attach raw and read what the viewer is sent until `done` holds or ten seconds pass.
+fn attach_and_read(
+    socket: &Path,
+    sid: &str,
+    done: impl Fn(&[u8]) -> bool,
+) -> (Vec<u8>, UnixStream) {
+    let (resp, stream) = raw_request(socket, "attach", serde_json::json!({"session": sid}));
+    assert_eq!(resp["status"], "ok", "{resp}");
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+    let seen = read_until(&stream, Duration::from_secs(10), done);
+    (seen, stream)
+}
+
+/// Spawn `pi` (a scripted one) and wait until its script has touched `<home>/written`: what it
+/// wrote before that is in the session before any viewer attaches.
+fn spawn_scripted(home: &Path) -> String {
+    let ws = workspace(home).display().to_string();
+    let run = bench(home, &["spawn", "--agent", "pi", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let marker = home.join("written");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline, "the script never got going");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The marker is written after the output, which then still has to cross the pty.
+    std::thread::sleep(Duration::from_millis(200));
+    json_of(&run)["session"].as_str().unwrap().to_string()
+}
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn a_viewer_that_attaches_late_is_shown_the_alternate_screen_the_program_opened() {
+    let home = TestHome::claim("m5b-alt");
+    let daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\nprintf '\\033[?1049h\\033[5;3HON ALT'\ntouch {}/written\nexec sleep 60\n",
+            home.dir.display()
+        ),
+    );
+    // Written before any viewer existed.
+    let sid = spawn_scripted(&home.dir);
+    let (seen, _stream) = attach_and_read(&daemon.socket, &sid, |b| contains(b, b"ON ALT"));
+    let text = String::from_utf8_lossy(&seen);
+    let alt = text
+        .find("\x1b[?1049h")
+        .unwrap_or_else(|| panic!("no alternate screen: {text:?}"));
+    assert!(alt < text.find("ON ALT").unwrap(), "{text:?}");
+    assert!(
+        text.contains("\x1b[5;9H"),
+        "the cursor is where the program left it: {text:?}"
+    );
+}
+
+/// A program that asks the terminal what it is (DA1) and prints the answer it got, in hex.
+const ASKS_DA1: &str = "#!/bin/sh\nstty -icanon -echo min 1\necho ready\nIFS= read -r go\nprintf '\\033[c'\nhead -c 9 | od -An -tx1\nexec sleep 60\n";
+
+#[test]
+fn a_query_is_answered_by_benchd_while_no_viewer_is_attached() {
+    let home = TestHome::claim("m5b-da1");
+    let daemon = scripted_pi_daemon(&home.dir, ASKS_DA1);
+    let ws = workspace(&home.dir).display().to_string();
+    let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+    // Start it through a viewer, then leave, so the query lands with nobody attached.
+    {
+        let (_seen, stream) = attach_and_read(&daemon.socket, &sid, |b| contains(b, b"ready"));
+        (&stream)
+            .write_all(&AttachFrame::Input(b"go\n".to_vec()).encode())
+            .unwrap();
+        let _ = stream.shutdown(std::net::Shutdown::Both);
+    }
+    std::thread::sleep(Duration::from_millis(1500));
+    let (seen, _stream) = attach_and_read(&daemon.socket, &sid, |b| contains(b, b"63"));
+    let text = String::from_utf8_lossy(&seen);
+    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    // `ESC [ ? 6 2 ; 2 2 c`, what Ghostty answers.
+    assert!(words.contains("1b 5b 3f 36 32 3b 32 32 63"), "{text:?}");
+}
+
+#[test]
+fn a_query_is_left_to_the_viewer_while_one_is_attached() {
+    let home = TestHome::claim("m5b-da1v");
+    let daemon = scripted_pi_daemon(&home.dir, ASKS_DA1);
+    let ws = workspace(&home.dir).display().to_string();
+    let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+    let (_seen, stream) = attach_and_read(&daemon.socket, &sid, |b| contains(b, b"ready"));
+    (&stream)
+        .write_all(&AttachFrame::Input(b"go\n".to_vec()).encode())
+        .unwrap();
+    // The query reaches the viewer, which (a socket, not a terminal) never answers it.
+    let seen = read_until(&stream, Duration::from_secs(3), |b| contains(b, b"1b"));
+    assert!(
+        contains(&seen, b"\x1b[c"),
+        "{:?}",
+        String::from_utf8_lossy(&seen)
+    );
+    assert!(
+        !contains(&seen, b"1b"),
+        "benchd answered for an attached viewer: {:?}",
+        String::from_utf8_lossy(&seen)
+    );
+}
+
+#[test]
+fn a_viewer_that_attaches_mid_frame_is_shown_the_finished_frame() {
+    let home = TestHome::claim("m5b-hold");
+    let daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\nprintf '\\033[?2026hPART'\ntouch {}/written\nsleep 1\nprintf 'WHOLE\\033[?2026l'\nexec sleep 60\n",
+            home.dir.display()
+        ),
+    );
+    let sid = spawn_scripted(&home.dir);
+    let (seen, _stream) = attach_and_read(&daemon.socket, &sid, |b| contains(b, b"WHOLE"));
+    let text = String::from_utf8_lossy(&seen);
+    // Replayed as one frame, rather than PART on screen and WHOLE arriving after it.
+    assert!(text.contains("PARTWHOLE"), "{text:?}");
+}
+
+#[test]
+fn a_frame_that_never_finishes_keeps_a_viewer_out_for_a_second_at_most() {
+    let home = TestHome::claim("m5b-hold2");
+    let daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\nprintf '\\033[?2026hSTUCK'\ntouch {}/written\nexec sleep 60\n",
+            home.dir.display()
+        ),
+    );
+    let sid = spawn_scripted(&home.dir);
+    let started = Instant::now();
+    let (seen, _stream) = attach_and_read(&daemon.socket, &sid, |b| contains(b, b"STUCK"));
+    assert!(
+        contains(&seen, b"STUCK"),
+        "{:?}",
+        String::from_utf8_lossy(&seen)
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
 }

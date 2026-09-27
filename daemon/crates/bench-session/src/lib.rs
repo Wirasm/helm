@@ -21,24 +21,20 @@
 //! - **The reader never stops draining the master** — an undrained pty blocks the agent
 //!   on write (pty spike).
 
+mod engine;
 mod pty;
 
+pub use engine::{SCROLLBACK_BYTES, Screen};
 pub use pty::Env;
 
-use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-/// Ring capacity per session: enough scrollback for an attach to land mid-thought,
-/// small enough that fifty sessions are a footnote. The cap is reported to an attacher
-/// via `replayed`, never silent.
-pub const RING_CAPACITY: usize = 256 * 1024;
 
 /// The environment gate for the conformance-test agent. Real deployments never set it;
 /// CI has no claude/codex/pi, and the relay's byte-fidelity still has to be proven
@@ -335,30 +331,6 @@ pub enum Notice {
     Detached { session: String },
 }
 
-struct Ring {
-    bytes: VecDeque<u8>,
-    total: u64,
-}
-
-impl Ring {
-    fn new() -> Ring {
-        Ring {
-            bytes: VecDeque::with_capacity(8192),
-            total: 0,
-        }
-    }
-
-    fn push(&mut self, chunk: &[u8]) {
-        self.total += chunk.len() as u64;
-        for &b in chunk {
-            if self.bytes.len() == RING_CAPACITY {
-                self.bytes.pop_front();
-            }
-            self.bytes.push_back(b);
-        }
-    }
-}
-
 pub struct Session {
     pub id: String,
     /// The mailbox address and human name for this session — `--name` at spawn, else
@@ -371,10 +343,14 @@ pub struct Session {
     pub pid: u32,
     pub runtime_session: Option<String>,
     pub spawned_at: Instant,
-    /// The pty master: input and resize go through it; the drain thread reads a dup.
-    master: Mutex<File>,
+    /// The pty master: input, resize and the engine's answers go through it; the drain thread
+    /// reads a dup.
+    master: Arc<Mutex<File>>,
     child: Arc<Mutex<Child>>,
-    ring: Arc<Mutex<Ring>>,
+    /// Bytes the program has written, all told.
+    output_total: Arc<AtomicU64>,
+    /// The session's VT engine (`engine.rs`): output, attaches, resizes and screen reads.
+    engine: SyncSender<engine::Msg>,
     /// dtach-grade: at most one attached client. A new attach REPLACES the old one —
     /// reconnect-after-drop is the common case, and "already attached" refusals would
     /// strand every dropped connection until a timeout nothing owns. The generation is
@@ -408,31 +384,47 @@ impl Session {
             .try_clone()
             .map_err(|e| format!("clone reader: {e}"))?;
 
+        let pid = child.id();
+        let child = Arc::new(Mutex::new(child));
+        let master = Arc::new(Mutex::new(master));
+        let attached: engine::Attached = Arc::new(Mutex::new(None));
+        let exited = Arc::new(AtomicBool::new(false));
+        let (engine, output) = sync_channel(engine::QUEUE);
+        let shared = engine::Shared {
+            id: id.clone(),
+            master: Arc::clone(&master),
+            attached: Arc::clone(&attached),
+            child: Arc::clone(&child),
+            exited: Arc::clone(&exited),
+            notices,
+        };
+        if let Err(why) = engine::start(shared, rows, cols, output) {
+            pty::hang_up_then_kill(&mut child.lock().unwrap());
+            return Err(why);
+        }
         let session = Arc::new(Session {
-            pid: child.id(),
+            pid,
             handle,
             spec: spec.clone(),
-            id: id.clone(),
+            id,
             agent: spec.agent,
             cwd: spec.cwd.clone(),
             runtime_session: spec.runtime_session.clone(),
             spawned_at: Instant::now(),
-            master: Mutex::new(master),
-            child: Arc::new(Mutex::new(child)),
-            ring: Arc::new(Mutex::new(Ring::new())),
-            attached: Arc::new(Mutex::new(None)),
+            master,
+            child,
+            output_total: Arc::new(AtomicU64::new(0)),
+            engine: engine.clone(),
+            attached,
             attach_gen: AtomicU64::new(0),
-            exited: Arc::new(AtomicBool::new(false)),
+            exited,
         });
 
-        // The drain thread: the pty owner's first duty. It also carries live output to
-        // the attached client, byte-for-byte — escape sequences included, which is what
-        // lets an OSC ride the relay into whatever terminal hosts `bench attach`.
+        // The drain thread: the pty owner's first duty. Everything it reads goes to the engine
+        // thread, which relays it to the viewer — escape sequences included, which is what lets
+        // an OSC ride the relay into whatever terminal hosts `bench attach`.
         {
-            let ring = Arc::clone(&session.ring);
-            let attached = Arc::clone(&session.attached);
-            let exited = Arc::clone(&session.exited);
-            let child = Arc::clone(&session.child);
+            let total = Arc::clone(&session.output_total);
             std::thread::spawn(move || {
                 let mut chunk = [0u8; 8192];
                 loop {
@@ -440,36 +432,17 @@ impl Session {
                         // EIO once the child's side has closed is the pty's EOF.
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            ring.lock().unwrap().push(&chunk[..n]);
-                            let mut guard = attached.lock().unwrap();
-                            if let Some((_, stream)) = guard.as_mut()
-                                && stream.write_all(&chunk[..n]).is_err()
+                            total.fetch_add(n as u64, Ordering::Relaxed);
+                            if engine
+                                .send(engine::Msg::Output(chunk[..n].to_vec()))
+                                .is_err()
                             {
-                                let _ = stream.shutdown(std::net::Shutdown::Both);
-                                *guard = None;
-                                let _ = notices.send(Notice::Detached {
-                                    session: id.clone(),
-                                });
+                                break;
                             }
                         }
                     }
                 }
-                // Reap at the moment of exit (PR #341 review, R2): EOF on the master
-                // means the child is gone or going; wait() here ends its lifetime with
-                // its bytes, so no session leaves a zombie for `close` to find — and
-                // `resume`'s removal of the old session needs no second job. close() after
-                // this finds the status already collected and signals nothing.
-                let _ = child.lock().unwrap().wait();
-                exited.store(true, Ordering::SeqCst);
-                // The viewer's relay ends with the session: every byte is relayed by now, so
-                // the attached client sees EOF and exits, rather than sitting on a relay no
-                // process will ever write to again (a helm pane showing a finished agent).
-                if let Some((_, stream)) = attached.lock().unwrap().take() {
-                    let _ = stream.shutdown(std::net::Shutdown::Both);
-                }
-                let _ = notices.send(Notice::Exited {
-                    session: id.clone(),
-                });
+                let _ = engine.send(engine::Msg::Closed);
             });
         }
         Ok(session)
@@ -517,7 +490,7 @@ impl Session {
     }
 
     pub fn output_bytes(&self) -> u64 {
-        self.ring.lock().unwrap().total
+        self.output_total.load(Ordering::Relaxed)
     }
 
     pub fn write_input(&self, bytes: &[u8]) -> Result<(), String> {
@@ -527,38 +500,47 @@ impl Session {
         Ok(())
     }
 
-    /// Attach: resize to the viewer, replay the ring, then hand live output to this
-    /// stream. Replaces any previous attachment — the old stream is shut down, which
-    /// its client sees as EOF. Returns the generation this attachment owns; the pump
-    /// hands it back to `detach_generation` so a replaced pump cannot clear its
-    /// replacement.
+    /// Attach: resize to the viewer, redraw the session's screen in it, then hand live output to
+    /// this stream. Replaces any previous attachment — the old stream is shut down, which its
+    /// client sees as EOF. Returns the generation this attachment owns; the pump hands it back
+    /// to `detach_generation` so a replaced pump cannot clear its replacement.
     pub fn attach(&self, stream: UnixStream, rows: u16, cols: u16) -> Result<u64, String> {
-        if rows > 0 && cols > 0 {
-            let master = self.master.lock().unwrap();
-            let _ = pty::resize(&master, rows, cols);
-        }
-        let replay: Vec<u8> = {
-            let ring = self.ring.lock().unwrap();
-            ring.bytes.iter().copied().collect()
-        };
-        let mut s = stream;
-        s.write_all(&replay).map_err(|e| format!("replay: {e}"))?;
         let generation = self.attach_gen.fetch_add(1, Ordering::SeqCst) + 1;
-        let mut guard = self.attached.lock().unwrap();
-        if let Some((_, old)) = guard.take() {
-            let _ = old.shutdown(std::net::Shutdown::Both);
-        }
-        *guard = Some((generation, s));
+        self.ask(|reply| engine::Msg::Attach {
+            stream,
+            generation,
+            rows,
+            cols,
+            reply,
+        })?;
         Ok(generation)
     }
 
-    /// The viewer's terminal changed size: the pty follows, and the kernel tells the agent.
+    /// The viewer's terminal changed size: the pty and the engine follow, and the kernel tells
+    /// the program.
     pub fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
-        if rows == 0 || cols == 0 {
-            return Err(format!("a terminal is at least 1x1, not {rows}x{cols}"));
-        }
-        let master = self.master.lock().unwrap();
-        pty::resize(&master, rows, cols).map_err(|e| format!("resize: {e}"))
+        self.ask(|reply| engine::Msg::Resize { rows, cols, reply })
+    }
+
+    /// The session's terminal as its viewer shows it, with the history above when asked.
+    pub fn screen(&self, history: bool) -> Result<Screen, String> {
+        self.ask(|reply| engine::Msg::Screen { history, reply })
+    }
+
+    /// Put a request to the engine thread and wait for its answer. The wait is bounded: an
+    /// attach waits out at most a second of synchronized update, and the rest are immediate
+    /// once the output ahead of them is handled.
+    fn ask<T>(
+        &self,
+        msg: impl FnOnce(SyncSender<Result<T, String>>) -> engine::Msg,
+    ) -> Result<T, String> {
+        let (reply, answer) = sync_channel(1);
+        self.engine
+            .send(msg(reply))
+            .map_err(|_| "the session's terminal engine has stopped".to_string())?;
+        answer
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "the session's terminal engine did not answer".to_string())?
     }
 
     /// Unconditional — for close/stop, where whatever is attached goes.
@@ -886,13 +868,5 @@ mod tests {
         let id = mint_session_id();
         assert_eq!(id.len(), 36, "{id}");
         assert_eq!(id.chars().filter(|&c| c == '-').count(), 4);
-    }
-
-    #[test]
-    fn the_ring_caps_and_reports_totals() {
-        let mut ring = Ring::new();
-        ring.push(&vec![b'x'; RING_CAPACITY + 100]);
-        assert_eq!(ring.bytes.len(), RING_CAPACITY);
-        assert_eq!(ring.total, (RING_CAPACITY + 100) as u64);
     }
 }

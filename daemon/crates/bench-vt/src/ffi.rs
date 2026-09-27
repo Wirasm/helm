@@ -15,8 +15,6 @@ pub const OPT_USERDATA: i32 = 0;
 pub const OPT_WRITE_PTY: i32 = 1;
 pub const OPT_XTVERSION: i32 = 4;
 pub const OPT_DEVICE_ATTRIBUTES: i32 = 8;
-pub const OPT_COLOR_FOREGROUND: i32 = 11;
-pub const OPT_COLOR_BACKGROUND: i32 = 12;
 pub const OPT_SCROLLBACK_MAX_BYTES: i32 = 27;
 pub const OPT_CONTINUATION_MAX_BYTES: i32 = 31;
 pub const OPT_MODE: i32 = 34;
@@ -30,6 +28,7 @@ pub const DATA_ACTIVE_SCREEN: i32 = 6;
 pub const DATA_CURSOR_VISIBLE: i32 = 7;
 pub const DATA_TITLE: i32 = 12;
 pub const DATA_PWD: i32 = 13;
+pub const DATA_SCROLLBACK_ROWS: i32 = 15;
 pub const DATA_MODE: i32 = 37;
 
 pub const SCREEN_ALTERNATE: i32 = 1;
@@ -45,13 +44,6 @@ pub const fn mode(value: u16, ansi: bool) -> u16 {
 pub struct GString {
     pub ptr: *const u8,
     pub len: usize,
-}
-
-#[repr(C)]
-pub struct Rgb {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
 }
 
 #[repr(C)]
@@ -168,7 +160,6 @@ unsafe extern "C" {
 const _: () = {
     use std::mem::{offset_of, size_of};
     assert!(size_of::<GString>() == 16);
-    assert!(size_of::<Rgb>() == 3);
     assert!(size_of::<ModeConfig>() == 4);
     assert!(offset_of!(ModeConfig, value) == 2);
     assert!(size_of::<DeviceAttributes>() == 160);

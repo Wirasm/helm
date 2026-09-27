@@ -67,11 +67,11 @@ impl Mode {
 /// How [`Terminal::format`] writes the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
-    /// Text only, soft wraps joined, trailing blanks trimmed: for reading.
+    /// Text only, one line per row, trailing blanks trimmed: for reading.
     Plain,
     /// The escape sequences that redraw this screen in a fresh terminal of the same size:
     /// scrollback and screen, styles, hyperlinks, the modes that differ from their defaults,
-    /// scrolling region, pwd, keyboard modes, palette and cursor.
+    /// scrolling region, pwd, keyboard modes and cursor. Not the palette, which is the viewer's.
     Vt,
 }
 
@@ -163,30 +163,6 @@ impl Terminal {
         Ok(())
     }
 
-    /// Set the default colours, which OSC 10 and 11 report.
-    pub fn set_default_colors(&mut self, fg: [u8; 3], bg: [u8; 3]) -> Result<(), Error> {
-        let fg = ffi::Rgb {
-            r: fg[0],
-            g: fg[1],
-            b: fg[2],
-        };
-        let bg = ffi::Rgb {
-            r: bg[0],
-            g: bg[1],
-            b: bg[2],
-        };
-        self.set(
-            "color_foreground",
-            ffi::OPT_COLOR_FOREGROUND,
-            &fg as *const _ as *const c_void,
-        )?;
-        self.set(
-            "color_background",
-            ffi::OPT_COLOR_BACKGROUND,
-            &bg as *const _ as *const c_void,
-        )
-    }
-
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), Error> {
         check("terminal_resize", unsafe {
             ffi::ghostty_terminal_resize(self.raw, cols.max(1), rows.max(1), 0, 0)
@@ -208,6 +184,11 @@ impl Terminal {
     /// The cursor's (column, row) on the screen, from zero.
     pub fn cursor(&self) -> (u16, u16) {
         (self.get(ffi::DATA_CURSOR_X), self.get(ffi::DATA_CURSOR_Y))
+    }
+
+    /// Rows of history above the screen.
+    pub fn scrollback_rows(&self) -> usize {
+        self.get(ffi::DATA_SCROLLBACK_ROWS)
     }
 
     pub fn cursor_visible(&self) -> bool {
@@ -266,11 +247,15 @@ impl Terminal {
             } else {
                 ffi::FORMAT_PLAIN
             },
-            unwrap: !vt,
+            // A soft-wrapped line replays as one line, so it wraps (and later reflows) in the
+            // viewer as it did here; plain text keeps one line per row.
+            unwrap: vt,
             trim: !vt,
             extra: ffi::TerminalExtra {
                 size: size_of::<ffi::TerminalExtra>(),
-                palette: vt,
+                // The palette is the viewer's: libghostty reports its defaults for colours the
+                // program never set, and they would replace helm's.
+                palette: false,
                 modes: vt,
                 scrolling_region: vt,
                 // A fresh terminal's tabstops are the defaults; programs that move them are rare
@@ -302,6 +287,19 @@ impl Terminal {
         unsafe { ffi::ghostty_formatter_free(formatter) };
         check("formatter_format_alloc", code)?;
         Ok(unsafe { take_alloc(out, len) })
+    }
+
+    /// The screen as text, one string per row, and when `history` the rows above it first.
+    pub fn lines(&self, history: bool) -> Result<Vec<String>, Error> {
+        let text = String::from_utf8_lossy(&self.format(Format::Plain)?).into_owned();
+        let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+        // Trailing blank rows are trimmed from the text; the screen still has them.
+        let total = self.scrollback_rows() + usize::from(self.size().1);
+        lines.resize(total.max(lines.len()), String::new());
+        if !history {
+            lines.drain(..lines.len() - usize::from(self.size().1));
+        }
+        Ok(lines)
     }
 
     /// The bytes of a sequence the program has begun and not finished, to append after a

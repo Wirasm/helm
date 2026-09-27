@@ -71,6 +71,23 @@ fn a_vt_replay_reproduces_the_terminal() {
     assert!(b.mode(Mode::BRACKETED_PASTE));
 }
 
+/// A replay carries the screen, not the look: a palette the program never set is Ghostty's
+/// default, and writing it into the viewer would paint over helm's own colours.
+#[test]
+fn a_vt_replay_leaves_the_viewers_palette_alone() {
+    let mut a = term();
+    a.write(b"text\x1b]7;file://h/tmp/x\x07");
+    let replay = a.format(Format::Vt).unwrap();
+    assert!(
+        !replay.windows(4).any(|w| w == b"\x1b]4;"),
+        "{}",
+        String::from_utf8_lossy(&replay)
+    );
+    let mut b = term();
+    b.write(&replay);
+    assert_eq!(b.pwd(), a.pwd());
+}
+
 #[test]
 fn a_sequence_cut_off_mid_write_is_finished_in_the_replay() {
     let mut a = term();
@@ -83,4 +100,35 @@ fn a_sequence_cut_off_mid_write_is_finished_in_the_replay() {
     b.write(b"1mX");
     assert_eq!(plain(&b), plain(&a));
     assert_eq!(a.format(Format::Vt).unwrap(), b.format(Format::Vt).unwrap());
+}
+
+#[test]
+fn lines_are_the_screens_rows_with_history_above_when_asked() {
+    let mut t = term();
+    for i in 0..8 {
+        t.write(format!("line {i}\r\n").as_bytes());
+    }
+    t.write(b"a line that wraps past twenty");
+    let screen = t.lines(false).unwrap();
+    assert_eq!(
+        screen,
+        [
+            "line 5",
+            "line 6",
+            "line 7",
+            "a line that wraps pa",
+            "st twenty"
+        ]
+    );
+    let all = t.lines(true).unwrap();
+    assert_eq!(all.len(), t.scrollback_rows() + 5);
+    assert_eq!(all[0], "line 0");
+    assert_eq!(&all[all.len() - 5..], &screen[..]);
+}
+
+#[test]
+fn blank_rows_below_the_text_are_still_rows() {
+    let mut t = term();
+    t.write(b"top");
+    assert_eq!(t.lines(false).unwrap(), ["top", "", "", "", ""]);
 }
