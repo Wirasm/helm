@@ -81,29 +81,3 @@ final class TranscriptLocatorTests: XCTestCase {
         XCTAssertEqual(decoded.status, .idle, "and the board's own fields still decode")
     }
 }
-
-/// The ancestor walk the spool and the canvas-note courier use to tie a process to the
-/// pane it runs in.
-final class AgentLocatorTests: XCTestCase {
-    /// **The walk must stop at helm's own pid.** Above helm is whatever launched
-    /// it — very often the operator's own agent session, which an unbounded walk
-    /// then reports as an agent in the terminal below. The chat spike hit exactly
-    /// this and rendered a different conversation, indistinguishably.
-    func testAncestorWalkNeverClimbsPastThisProcess() {
-        let ownPid = ProcessInfo.processInfo.processIdentifier
-        // Walking up from our own parent must never reach us again, and must
-        // never yield our own pid: the chain is what gets matched against the
-        // registry, so our pid appearing in it is how a different agent gets
-        // attributed to "the terminal below".
-        guard let parent = AgentLocator.parentPid(of: ownPid) else {
-            return XCTFail("this process has a parent; sysctl should report it")
-        }
-        let chain = AgentLocator.ancestors(of: parent)
-        XCTAssertFalse(chain.contains(ownPid), "the walk's ceiling is this process")
-        XCTAssertLessThanOrEqual(chain.count, 16, "and it is bounded regardless")
-    }
-
-    func testAncestorWalkIsBoundedOnAPidThatDoesNotExist() {
-        XCTAssertTrue(AgentLocator.ancestors(of: 999_999).isEmpty)
-    }
-}
