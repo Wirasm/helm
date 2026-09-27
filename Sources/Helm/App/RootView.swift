@@ -74,7 +74,7 @@ struct RootView: View {
                     palette: palette,
                     commands: CommandList.of(
                         table: keymap.table, document: workbench.document, recipes: [],
-                        paneTitle: { CommandList.title(of: $0, in: workbench) }),
+                        liveTitle: { CommandList.liveTitle(of: $0, in: workbench) }),
                     run: runCommand)
             }
             .onChange(of: palette.isOpen) { _, open in if !open { returnKeyboard() } }

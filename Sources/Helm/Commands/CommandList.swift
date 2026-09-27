@@ -29,12 +29,14 @@ struct Command: Equatable {
 /// The two index-based gestures, "tab N" and "workspace N", are left out as themselves: the
 /// palette names the workspace and the pane instead, and shows the key beside it.
 enum CommandList {
+    /// `liveTitle` is what a terminal's tab shows, from its live session; nil for a pane with no
+    /// live session, which is every terminal in a workspace not drawn since launch.
     static func of(
         table: [KeyBinding], document: BenchDocument?, recipes: [String],
-        paneTitle: (BenchDocument.Pane) -> String
+        liveTitle: (BenchDocument.Pane) -> String? = { _ in nil }
     ) -> [Command] {
         actions(table) + workspaces(document, table: table)
-            + panes(document, paneTitle: paneTitle) + just(recipes, table: table)
+            + panes(document, liveTitle: liveTitle) + just(recipes, table: table)
     }
 
     /// One line per distinct action, in table order, titled by the first row that has a menu
@@ -81,22 +83,39 @@ enum CommandList {
     }
 
     /// Every pane of every workspace: going there activates its workspace when it is not the
-    /// one on screen, shows its tab and moves the keyboard to its slot.
+    /// one on screen, shows its tab and moves the keyboard to its slot. A pane in another
+    /// workspace says which.
     private static func panes(
-        _ document: BenchDocument?, paneTitle: (BenchDocument.Pane) -> String
+        _ document: BenchDocument?, liveTitle: (BenchDocument.Pane) -> String?
     ) -> [Command] {
         guard let document else { return [] }
         return document.workspaces.flatMap { workspace in
-            let activate: [BenchVerb] =
-                workspace.path == document.active ? [] : [.workspaceActivate(path: workspace.path)]
+            let here = workspace.path == document.active
+            let activate: [BenchVerb] = here ? [] : [.workspaceActivate(path: workspace.path)]
+            var shells = 0
             return workspace.bench.columns.flatMap(\.slots).flatMap { slot in
                 slot.panes.map { pane in
-                    Command(
-                        title: paneTitle(pane),
-                        detail: Workspace(path: workspace.path).name,
+                    if case .terminal = pane.surface { shells += 1 }
+                    return Command(
+                        title: title(of: pane, live: liveTitle(pane), shell: shells),
+                        detail: here ? nil : Workspace(path: workspace.path).name,
                         run: .verbs(activate + [.paneShow(pane.id), .focusSlot(slot.id)]))
                 }
             }
+        }
+    }
+
+    /// A pane's line: its name, else what its tab would show. A terminal with no live session
+    /// (its workspace not drawn since launch) is its agent, else `shell N`, counted in its
+    /// workspace, so two plain shells in a parked workspace are still two different lines.
+    static func title(of pane: BenchDocument.Pane, live: String?, shell: Int) -> String {
+        if let name = pane.name.text { return name }
+        switch pane.surface {
+        case let .terminal(agent, _): return live ?? agent?.command ?? "shell \(shell)"
+        case let .canvas(path): return (path as NSString).lastPathComponent
+        case .browser: return "browser"
+        case .sessions: return "sessions"
+        case let .unsupported(kind): return kind
         }
     }
 

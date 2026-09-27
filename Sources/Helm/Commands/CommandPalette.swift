@@ -153,18 +153,11 @@ struct CommandPaletteView: View {
 }
 
 extension CommandList {
-    /// A pane's line in the palette: its name, else what its tab shows.
+    /// What a terminal pane's tab shows, when it has a live session to ask: the same words.
     @MainActor
-    static func title(of pane: BenchDocument.Pane, in workbench: WorkbenchModel) -> String {
-        if let name = pane.name.text { return name }
-        switch pane.surface {
-        case .terminal:
-            return workbench.session(for: Pane(id: pane.id, content: .init(pane.surface)))?
-                .displayTitle ?? "terminal"
-        case let .canvas(path): return (path as NSString).lastPathComponent
-        case .browser: return "browser"
-        case .sessions: return "sessions"
-        case let .unsupported(kind): return kind
-        }
+    static func liveTitle(of pane: BenchDocument.Pane, in workbench: WorkbenchModel) -> String? {
+        guard case .terminal = pane.surface else { return nil }
+        return workbench.session(for: Pane(id: pane.id, content: .init(pane.surface)))?
+            .displayTitle
     }
 }

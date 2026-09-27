@@ -44,9 +44,7 @@ final class CommandListTests: XCTestCase {
     private func list(
         _ table: [KeyBinding] = KeyBindings.all, recipes: [String] = []
     ) -> [Command] {
-        CommandList.of(table: table, document: document, recipes: recipes) { pane in
-            pane.name.text ?? (pane.surface == .terminal(agent: nil) ? "shell" : "plan.md")
-        }
+        CommandList.of(table: table, document: document, recipes: recipes)
     }
 
     private func line(_ title: String, in commands: [Command]) -> Command? {
@@ -104,8 +102,8 @@ final class CommandListTests: XCTestCase {
         let commands = list()
         XCTAssertEqual(
             line("plan.md", in: commands),
-            Command(
-                title: "plan.md", detail: "app", run: .verbs([.paneShow(b), .focusSlot(slotB)])))
+            Command(title: "plan.md", run: .verbs([.paneShow(b), .focusSlot(slotB)])),
+            "a pane in the workspace on screen needs no workspace beside it")
         XCTAssertEqual(
             line("codex", in: commands),
             Command(
@@ -113,6 +111,50 @@ final class CommandListTests: XCTestCase {
                 run: .verbs([
                     .workspaceActivate(path: "/w/api"), .paneShow(c), .focusSlot(slotC),
                 ])))
+    }
+
+    /// A pane is named by its name, else what its tab shows. A terminal with no live session
+    /// (its workspace not drawn since launch) is its agent, else `shell N` counted in its
+    /// workspace: two plain shells in a parked workspace must be two different lines.
+    func testAPaneWithNoLiveSessionIsStillTellableApart() {
+        func terminal(_ agent: BenchDocument.Agent? = nil) -> BenchDocument.Pane {
+            .init(id: UUID(), surface: .terminal(agent: agent))
+        }
+        let first = terminal()
+        let second = terminal()
+        let claude = terminal(.init(command: "claude", session: "s", cwd: "/w"))
+        let slot = UUID()
+        let parked = BenchDocument(
+            workspaces: [
+                .init(
+                    path: "/w/parked",
+                    bench: .init(
+                        columns: [
+                            .init(
+                                id: UUID(),
+                                slots: [
+                                    .init(
+                                        id: slot, panes: [first, second, claude],
+                                        selected: first.id,
+                                        height: 1)
+                                ], width: 1)
+                        ], focusedSlot: slot))
+            ], active: nil)
+        let titles = CommandList.of(table: [], document: parked, recipes: [])
+            .filter { $0.detail == "parked" }.map(\.title)
+        XCTAssertEqual(titles, ["shell 1", "shell 2", "claude"])
+        XCTAssertEqual(
+            CommandList.of(table: [], document: parked, recipes: []) {
+                $0.id == second.id ? "zsh" : nil
+            }
+            .filter { $0.detail == "parked" }.map(\.title),
+            ["shell 1", "zsh", "claude"], "a live session's tab title wins")
+        XCTAssertEqual(
+            CommandList.title(
+                of: .init(
+                    id: UUID(), surface: .canvas(path: "/w/plan.md"), name: .chosen("the plan")),
+                live: nil, shell: 0),
+            "the plan")
     }
 
     /// Each recipe in the bench justfile is a line; one a key already runs is not listed twice.
@@ -130,8 +172,7 @@ final class CommandListTests: XCTestCase {
 
     /// With benchd not answering there is no document: the table's lines are still there.
     func testWithNoDocumentTheKeysAreStillThere() {
-        let commands = CommandList.of(
-            table: KeyBindings.all, document: nil, recipes: [], paneTitle: { _ in "" })
+        let commands = CommandList.of(table: KeyBindings.all, document: nil, recipes: [])
         XCTAssertNotNil(line("New Terminal", in: commands))
         XCTAssertFalse(commands.contains { $0.title.hasPrefix("Workspace ") })
     }
