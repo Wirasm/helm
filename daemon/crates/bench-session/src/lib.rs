@@ -346,6 +346,10 @@ pub struct Session {
     /// The pty master: input, resize and the engine's answers go through it; the drain thread
     /// reads a dup.
     master: Arc<Mutex<File>>,
+    /// Another dup, for asking the kernel about the terminal (its foreground group). That takes
+    /// no turn at the master, and must not wait for one: `write_input` holds the master's lock
+    /// for as long as the program leaves its input unread, which can be for good (#517).
+    terminal: File,
     child: Arc<Mutex<Child>>,
     /// Bytes the program has written, all told.
     output_total: Arc<AtomicU64>,
@@ -383,6 +387,9 @@ impl Session {
         let mut reader = master
             .try_clone()
             .map_err(|e| format!("clone reader: {e}"))?;
+        let terminal = master
+            .try_clone()
+            .map_err(|e| format!("clone terminal: {e}"))?;
 
         let pid = child.id();
         let child = Arc::new(Mutex::new(child));
@@ -412,6 +419,7 @@ impl Session {
             runtime_session: spec.runtime_session.clone(),
             spawned_at: Instant::now(),
             master,
+            terminal,
             child,
             output_total: Arc::new(AtomicU64::new(0)),
             engine: engine.clone(),
@@ -460,7 +468,7 @@ impl Session {
         if !self.is_live() {
             return None;
         }
-        let group = pty::foreground(&self.master.lock().unwrap())?;
+        let group = pty::foreground(&self.terminal)?;
         if group == self.pid as i32 {
             return None;
         }
@@ -482,7 +490,7 @@ impl Session {
         if !self.is_live() {
             return None;
         }
-        pty::foreground(&self.master.lock().unwrap())
+        pty::foreground(&self.terminal)
     }
 
     pub fn is_attached(&self) -> bool {
