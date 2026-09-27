@@ -688,21 +688,22 @@ the door every change goes out through;
 `Surfaces/` is `SurfaceKind` and the one registry every pane kind's live object is kept in;
 `Keymap/` is the key table and its readers (below); `Bench/` is helm as benchd's client —
 the socket and the follower (below);
-`Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
+`Archon/` is the Archon drawer and `Worktrees/` the rail's one tenant; `Terminals/` (2.1k) is the
 libghostty seam — the host view, and `SessionAttach`: every terminal pane shows a benchd session
 through `bench attach` (M5b), and helm owns no pty but that one; then `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
 `StatusBar/`, `Build/`, `Shared/`, `Capture/`, `Mail/`. Two of those have no bullet anywhere
 above and are the easiest to be surprised by:
 
-- **`Archon/` and `Worktrees/` are the rail, and the rail is *somewhere to start work that is not
-  your current work*.** Nothing docks there and nothing opens from it — run detail is read in
-  Archon's own web UI. Archon's tenant is deliberately a **reduction** of one that was built, used
-  and cut back on the operator's verdict *"too much bloat"*: three lists (gates, running,
-  finished), one input field, and a dismissible line per finished run rather than a tally. Read
-  `ArchonRailModel`'s header before adding anything to it — several of the obvious additions are
-  things that were removed. Worktrees is `git worktree list --porcelain` and nothing else: helm
-  reads no Archon database, and "merged" means Git reachability from a resolved remote default
-  branch, never pull-request state. `CONTEXT.md` has both.
+- **`Archon/` is the Archon drawer (⌘⇧R, #382), and `Worktrees/` is the rail (⌘⇧G).** The drawer
+  lists what Archon is doing in the active workspace's project — runs waiting on you, running,
+  finished — as rows of stage dots, read from Archon's CLI alone (`workflow runs --json`, plus
+  `workflow status --json --verbose` while a run is live), and answers gates, resumes, cancels and
+  launches from the keyboard. It is the successor of a rail tenant the operator cut back as *"too
+  much bloat"*: read `ArchonModel`'s header before adding anything, since several obvious additions
+  are things that were removed. Agents never use it; Archon's CLI is their view. Worktrees is
+  `git worktree list --porcelain` and nothing else: helm reads no Archon database, and "merged"
+  means Git reachability from a resolved remote default branch, never pull-request state.
+  `CONTEXT.md` has both.
 - **`Board/` is agent presence and the bench snapshot — it is not the drawable board.** The
   collision is real and worth knowing before a grep sends you to the wrong one. `Sources/Helm/Board/`
   is `BoardModel`, `AgentDot` and `BenchSnapshot`: which workspace tab has an agent that has

@@ -139,9 +139,14 @@ enum KeyBindings {
         KeyBinding(
             .character("o"), [.command, .shift], .local(.openWorkspacePanel), hint: "folder",
             menu: "Open Workspace…"),
+        // ⌘⇧R — Archon's runs, gates and stage dots in a drawer along the bottom (#382).
         KeyBinding(
-            .character("r"), [.command, .shift], .local(.toggleRail), hint: "archon",
-            menu: "Toggle Archon Rail"),
+            .character("r"), [.command, .shift],
+            .verb(.toggleDrawer(name: "archon", surface: .archon)), hint: "archon",
+            menu: "Archon"),
+        KeyBinding(
+            .character("g"), [.command, .shift], .local(.toggleRail), hint: "worktrees",
+            menu: "Toggle Worktrees Rail"),
         // ⌘J — the camera on the focused slot (`BenchCamera`): the bench laid out larger and
         // panned to it, the neighbours peeking in at the edges. ⌘J again returns. `.anywhere`,
         // because the pane you want to look at is usually the terminal holding the keyboard.

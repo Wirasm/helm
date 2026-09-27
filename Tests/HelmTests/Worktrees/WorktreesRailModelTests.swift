@@ -5,6 +5,46 @@ import XCTest
 final class WorktreesRailModelTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/project")
 
+    // MARK: - The rail is Worktrees' (#382)
+
+    /// Moved from the Archon rail's tests when Archon became a drawer: the rail's remembered
+    /// visibility is this model's, under the key the rail always used.
+    @MainActor
+    func testTheRailDefaultsHiddenAndRemembersBeingShown() throws {
+        let defaults = try isolatedDefaults("worktrees-rail-visibility")
+        let model = WorktreesRailModel(
+            worktreeClient: FakeWorktreeClient(), archonClient: FakeArchonClient(),
+            defaults: defaults)
+        XCTAssertFalse(model.isVisible)
+
+        model.toggleVisibility()
+
+        XCTAssertTrue(model.isVisible)
+        XCTAssertTrue(defaults.bool(forKey: WorktreesRailModel.visibilityKey))
+    }
+
+    /// ⇧⌘G end to end: the key table's row, carried out by the performer `RootView` composes.
+    @MainActor
+    func testTheToggleKeyReachesTheRail() throws {
+        let defaults = try isolatedDefaults("worktrees-rail-key")
+        let model = WorktreesRailModel(
+            worktreeClient: FakeWorktreeClient(), archonClient: FakeArchonClient(),
+            defaults: defaults)
+        let terminals = TerminalManager()
+        let actions = LocalActions(
+            workbench: try toyRig(terminals: terminals).model,
+            workspaces: WorkspaceModel(), rail: model, terminals: terminals)
+        let row = try XCTUnwrap(
+            KeyBindings.match(
+                characters: "G", keyCode: 5, modifiers: [.command, .shift],
+                terminalFocused: true, in: KeyBindings.all))
+
+        actions.perform(row.action)
+
+        XCTAssertTrue(
+            model.isVisible, "the rail is hidden by default, so the key has to work alone")
+    }
+
     @MainActor
     func testCollapsedDoesNoIOAndExpansionListsOnce() async {
         let worktrees = FakeWorktreeClient(response: [.fixture()])

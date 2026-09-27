@@ -81,7 +81,9 @@ final class ArchonCLITests: XCTestCase {
         try install(
             "printf '%s\\n' \"$@\" > \"$ARGS_RECORD\"\ncase \"$2\" in "
                 + "list) printf '{\"workflows\":[],\"errors\":[]}' ;; "
-                + "get) printf '{\"id\":\"r1\",\"workflow_name\":\"ship\",\"status\":\"running\"}' ;; "
+                + "status) printf '{\"runs\":[]}' ;; "
+                + "cancel) printf '{\"ok\":true,\"runId\":\"r1\",\"action\":\"cancel\"}' ;; "
+                + "respond) printf '{\"ok\":true,\"runId\":\"r1\",\"action\":\"respond\",\"resumable\":true}' ;; "
                 + "runs) printf '{\"runs\":[],\"total\":0,\"counts\":{},\"scopeFallback\":false}' ;; "
                 + "run) printf '{\"ok\":true,\"action\":\"run\",\"detached\":true,\"workflow\":"
                 + "\"ship\",\"branch\":\"b\",\"conversationId\":\"c\",\"logPath\":null}' ;; esac\n")
@@ -90,8 +92,17 @@ final class ArchonCLITests: XCTestCase {
         _ = try await client.workflows(in: WorkspacePath(workspace))
         XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nlist\n--json\n")
 
-        _ = try await client.run(id: "r1", in: WorkspacePath(workspace))
-        XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nget\nr1\n--json\n--verbose\n")
+        _ = try await client.status(in: WorkspacePath(workspace))
+        XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nstatus\n--json\n--verbose\n")
+
+        _ = try await client.cancel(runID: "r1", in: WorkspacePath(workspace))
+        XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\ncancel\nr1\n--json\n")
+
+        _ = try await client.decide(
+            .declared("ship-it"), text: "looks right", on: "r1", in: WorkspacePath(workspace))
+        XCTAssertEqual(
+            try String(contentsOf: argsRecord),
+            "workflow\nrespond\nr1\nship-it\n--json\n--text\nlooks right\n")
 
         _ = try await client.runs(in: WorkspacePath(workspace))
         XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nruns\n--json\n")

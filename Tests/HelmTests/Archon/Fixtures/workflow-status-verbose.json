@@ -1,0 +1,102 @@
+{
+  "runs": [
+    {
+      "id": "e34e7e05799ea11bf77e4eb8f28a5e23",
+      "workflow_name": "helm-merge-queue",
+      "status": "running",
+      "working_path": "/Users/operator/Projects/mine/sild/helm/.worktrees/merge-queue",
+      "user_message": "",
+      "started_at": "2026-09-26T09:31:48.000Z",
+      "completed_at": null,
+      "metadata": {
+        "inputs": {
+          "prs": "423"
+        },
+        "model_bindings": {
+          "overrides": {},
+          "effective": {
+            "defaultProvider": "codex",
+            "aliases": {
+              "small": {
+                "provider": "codex",
+                "model": "gpt-5.6-luna"
+              },
+              "medium": {
+                "provider": "codex",
+                "model": "gpt-5.6-terra"
+              },
+              "large": {
+                "provider": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": "xhigh"
+              }
+            }
+          }
+        },
+        "dispatch": {
+          "base_branch": "development",
+          "source": "project"
+        },
+        "execution_owner": {
+          "host": "Rasmuss-MacBook-Pro.local",
+          "pid": 33968,
+          "uid": 501
+        },
+        "workflow_source": {
+          "version": 1,
+          "root": "/Users/operator/.archon/workspaces/Wirasm/helm/workflow-source/runs/e34e7e05799ea11bf77e4eb8f28a5e23",
+          "origin": "/Users/operator/Projects/mine/sild/helm/.worktrees/mq-420",
+          "captured_at": "2026-09-26T09:31:48.888Z",
+          "digest": "b1d532d2d4894b20417d200c43357aa68553134e65959e88b09e8320ed79f00e",
+          "source_config": {
+            "load_default_workflows": true,
+            "load_default_commands": true
+          },
+          "file_count": 127,
+          "byte_count": 930663
+        },
+        "terminal_graph": {
+          "node_ids": [
+            "intake",
+            "candidates",
+            "report"
+          ],
+          "returns": "report"
+        },
+        "node_counts": {
+          "completed": 3,
+          "failed": 0,
+          "skipped": 0,
+          "total": 3
+        }
+      },
+      "active_nodes": [
+        "report"
+      ],
+      "nodes": [
+        {
+          "nodeId": "intake",
+          "state": "completed",
+          "startedAt": "2026-09-26 09:31:49",
+          "durationMs": 2162,
+          "outputPreview": "{\"queued\":[423],\"base_sha\":\"ffef85de9c57c3265d1c2df7cc5ab0e549a0cd41\",\"summary\":\"development at ffef85de; queued [423]; required ['build \u00b7 test \u00b7 format', 'mailbox hooks \u00b7 conformance', 'skill gates',..."
+        },
+        {
+          "nodeId": "candidates",
+          "state": "completed",
+          "startedAt": "2026-09-26 09:31:51",
+          "durationMs": 2316,
+          "outputPreview": "{\"done\":true,\"number\":423,\"status\":\"held\",\"summary\":\"#423 held: conflicts with development\"}"
+        },
+        {
+          "nodeId": "candidates.step",
+          "state": "completed",
+          "startedAt": "2026-09-26 09:31:52",
+          "durationMs": 2160,
+          "outputPreview": "{\"done\":true,\"number\":423,\"status\":\"held\",\"summary\":\"#423 held: conflicts with development\"}"
+        }
+      ]
+    }
+  ],
+  "scopeFallback": false
+}

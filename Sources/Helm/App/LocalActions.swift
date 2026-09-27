@@ -9,13 +9,13 @@ import HelmWire
 final class LocalActions: ActionPerformer {
     private let workbench: WorkbenchModel
     private let workspaces: WorkspaceModel
-    private let rail: ArchonRailModel
+    private let rail: WorktreesRailModel
     private let terminals: TerminalManager
     private let just: JustRuns
     private let palette: CommandPalette
 
     init(
-        workbench: WorkbenchModel, workspaces: WorkspaceModel, rail: ArchonRailModel,
+        workbench: WorkbenchModel, workspaces: WorkspaceModel, rail: WorktreesRailModel,
         terminals: TerminalManager, just: JustRuns = JustRuns(),
         palette: CommandPalette = CommandPalette()
     ) {

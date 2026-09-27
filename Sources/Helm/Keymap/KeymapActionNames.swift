@@ -101,6 +101,8 @@ extension Surface {
             self = .browser
         } else if text == "sessions" {
             self = .sessions
+        } else if text == "archon" {
+            self = .archon
         } else if text.hasPrefix("file:"), text.count > "file:".count {
             self = .canvas(
                 path: (String(text.dropFirst("file:".count)) as NSString)
@@ -116,6 +118,7 @@ extension Surface {
         switch self {
         case .browser: "browser"
         case .sessions: "sessions"
+        case .archon: "archon"
         case let .canvas(path): "file:" + path
         case .terminal: "terminal"
         case let .unsupported(kind): kind
@@ -209,7 +212,8 @@ struct KeymapArguments: Equatable {
             throw KeymapProblem(
                 line: nil,
                 reason:
-                    "'\(action)' surface is browser, sessions or file:<path>, not '\(surface)'")
+                    "'\(action)' surface is browser, sessions, archon or file:<path>, not '\(surface)'"
+            )
         }
         return (name, parsed)
     }

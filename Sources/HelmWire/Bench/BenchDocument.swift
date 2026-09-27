@@ -180,6 +180,8 @@ package enum Surface: Codable, Equatable, Sendable {
     case browser
     /// The active workspace's agent sessions (#384).
     case sessions
+    /// The active workspace's Archon runs (#382).
+    case archon
     case unsupported(kind: String)
 
     private enum CodingKeys: String, CodingKey { case kind, agent, session, source }
@@ -205,6 +207,8 @@ package enum Surface: Codable, Equatable, Sendable {
             self = .browser
         case "sessions":
             self = .sessions
+        case "archon":
+            self = .archon
         default:
             self = .unsupported(kind: kind)
         }
@@ -226,6 +230,8 @@ package enum Surface: Codable, Equatable, Sendable {
             try c.encode("browser", forKey: .kind)
         case .sessions:
             try c.encode("sessions", forKey: .kind)
+        case .archon:
+            try c.encode("archon", forKey: .kind)
         case let .unsupported(kind):
             // Never sent: helm only ever asks benchd for kinds it has. Encoded as its name so a
             // round trip of a document helm did not understand is still honest about it.

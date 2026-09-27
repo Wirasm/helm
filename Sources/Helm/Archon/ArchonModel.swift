@@ -1,52 +1,38 @@
 import Combine
 import Foundation
 
-/// The rail's one tenant: **a place to start Archon work, and the smallest possible answer to
-/// "is anything happening?"**
+/// The Archon drawer's model (#382): what Archon is doing in the active workspace's project, and
+/// the verbs the operator answers it with.
 ///
-/// **This is the reduction of a rail that was built, used and cut back.** The version before
-/// it opened runs as workbench panes, listed finished runs, carried Archon's `approve`,
-/// `reject` and `abandon` verbs, kept a per-workspace dismissal filter, and said whether the
-/// CLI had answered. The operator's verdict on all of it was *"too much bloat, I want to start
-/// simple"*. What is left renders five things and nothing else: a title, a field, a send
-/// button, one line per **running** run with a subline naming its current stage, and one
-/// collapsed count per other status. Run detail is read in Archon's own web UI.
+/// **Three lists, from two calls.** `gated` (paused runs, the only rows blocked on the
+/// operator, so they come first), `running`, and `finished` (completed or failed runs he has
+/// not cleared). `workflow runs --json` answers all three with each run's stage list; when any
+/// run is live, `workflow status --json --verbose` adds the per-node fold its stage dots are
+/// coloured from. A refresh is one or two `archon` processes whatever the number of runs. It
+/// used to be one plus one `workflow get` per running run.
 ///
-/// **The bottom of the rail is an inbox, not a ledger.** It was a tally — `3 COMPLETED`,
-/// `1 FAILED` — and a tally is the wrong signal twice over. It cannot be acted on, and it could
-/// be wrong by two orders of magnitude without saying so: Archon answers a git worktree with
-/// every run on the machine (`scopeFallback`, measured at 1 against 128), and a bare number
-/// gives the operator no way to notice. A finished run now gets one dismissible line that opens
-/// what it produced. Clearing one removes it **from helm only**, which is honest here in a way
-/// it was not before, because a list of runs you have not cleared never claimed to be history.
+/// **What is still deliberately absent.** This is the successor of a rail the operator cut back
+/// as *"too much bloat"*: no counts or tallies (a number cannot be acted on, and under
+/// `scopeFallback` it can be wrong by two orders of magnitude), no liveness word, no run pane.
+/// Depth is a keystroke away instead: a run's log in a terminal, its pull request, or Archon's
+/// own web UI.
 ///
-/// **A gate is the one thing here that is blocked on you, so it is the one thing above the
-/// live work.** `paused` lost its number with the counts and never reached the inbox, and #147
-/// had already taken the row Archon's approve/reject verbs hung on — two subtractions of the
-/// same capability, put back as one line rather than two answers. The rail is now three lists:
-/// gates, running, finished. A gate has verbs; the other two do not.
+/// **Finished runs are an inbox, not a ledger.** Clearing one hides it in helm only; Archon's
+/// record is untouched.
 ///
-/// **Typed input retargets the one field rather than growing a second one.** The rail has
-/// exactly one input and that stays true — arming a gate swaps what the composer is *for*, and
-/// the launch draft is held aside untouched rather than overwritten, because losing a
-/// half-written instruction to answer a gate is the version of this that gets sworn at. Which
-/// decisions collect text is not a UI preference: Archon says which gates read it (see
-/// `ArchonGate.needsText(for:)`), and the two that do would otherwise be answered blind.
+/// **One input with two jobs.** Arming a gate retargets the composer; the launch draft is held
+/// aside, because losing a half-written instruction to answer a gate is the version of this
+/// that gets sworn at. Which decisions collect text is Archon's rule
+/// (`ArchonGate.needsText(for:)`), not a UI preference.
 ///
-/// **A gate is still invisible while the rail is hidden, and that is the rail's problem rather
-/// than the gate's.** The inbox #153 shipped has exactly the same property, and the poll only
-/// runs while `ArchonRailView` is on screen — so an always-visible gate means giving the poll a
-/// lifetime independent of the view, which changes what helm costs when idle for every user
-/// including those who never touch Archon. Solving it here would answer for gates a question
-/// the whole rail asks, which is the second answer #150 warns against.
+/// **Nothing polls while the drawer is hidden**, so a gate is only seen when the drawer is
+/// open. The operator ruled that acceptable for now (2026-09-27, D2 of the plan).
 @MainActor
-final class ArchonRailModel: ObservableObject {
-    static let visibilityKey = "archonRailVisible"
+final class ArchonModel: ObservableObject {
     static let configKey = "archonLaunchConfig"
     /// One string, one guard. It was written out twice and the copies were already drifting.
     static let noWorkspace = "Open a workspace before starting an Archon workflow."
 
-    @Published private(set) var isVisible: Bool
     /// What the operator is typing. Owned by the view's field, so not `private(set)`.
     ///
     /// Editing it clears the last rejection. Every rejection is about the draft or the
@@ -77,8 +63,9 @@ final class ArchonRailModel: ObservableObject {
     /// Finished runs the operator has not cleared, newest first. Bounded by what Archon
     /// returns — its `runs` array is capped at 20 — so this is the recent post, not an archive.
     @Published private(set) var finished: [ArchonRun] = []
-    /// Run id → the stage its subline names. Absent for a run whose detail call failed.
-    @Published private(set) var stages: [String: String] = [:]
+    /// Run id → the per-node fold `workflow status --verbose` gave for that live run. Absent
+    /// for a run that call did not answer; its dots then show only where it is.
+    @Published private(set) var liveNodes: [String: [ArchonNode]] = [:]
     @Published private(set) var isRefreshing = false
     @Published private(set) var isLaunching = false
     /// **The one piece of text here that is not in the rail's list, and it is deliberate.**
@@ -98,8 +85,6 @@ final class ArchonRailModel: ObservableObject {
     @Published private(set) var workflows: [ArchonWorkflow] = []
     @Published private(set) var workflowLoadErrors: [ArchonWorkflowLoadError] = []
     @Published private(set) var isLoadingWorkflows = false
-    let worktrees: WorktreesRailModel
-
     private let client: any ArchonClient
     private let defaults: UserDefaults
     private let opener: ArchonRunOpener
@@ -109,12 +94,10 @@ final class ArchonRailModel: ObservableObject {
 
     init(
         client: any ArchonClient = ArchonCLI(),
-        worktreeClient: any WorktreeClient = WorktreeCLI(),
         defaults: UserDefaults = DefaultsDomain.store,
         opener: ArchonRunOpener = .live
     ) {
         self.client = client
-        worktrees = WorktreesRailModel(worktreeClient: worktreeClient, archonClient: client)
         self.defaults = defaults
         self.opener = opener
         // Pruned on the way in rather than on a timer: it is the only moment the store is
@@ -124,18 +107,10 @@ final class ArchonRailModel: ObservableObject {
         loaded.prune(now: Date())
         dismissals = loaded
         loaded.save(to: defaults)
-        isVisible = defaults.bool(forKey: Self.visibilityKey)
         config =
             defaults.data(forKey: Self.configKey)
             .flatMap { try? JSONDecoder().decode(ArchonLaunchConfig.self, from: $0) }
             ?? .empty
-    }
-
-    /// ⇧⌘R, and the reason it lives on the model: the rail is hidden by default, so the view
-    /// that would otherwise own it does not exist in the one state the shortcut has to work in.
-    func toggleVisibility() {
-        isVisible.toggle()
-        defaults.set(isVisible, forKey: Self.visibilityKey)
     }
 
     func poll(
@@ -149,7 +124,7 @@ final class ArchonRailModel: ObservableObject {
             gated = []
             running = []
             finished = []
-            stages = [:]
+            liveNodes = [:]
             disarm()
             return
         }
@@ -163,14 +138,12 @@ final class ArchonRailModel: ObservableObject {
         do {
             let response = try await client.runs(in: workspacePath)
             apply(response, in: workspacePath)
-            await refreshStages(in: workspacePath)
+            await refreshLiveNodes(in: workspacePath)
         } catch is CancellationError {
             return
         } catch {
             // The last known runs are kept and the failure is swallowed. A single failed poll
-            // is usually a hiccup, and blanking the rail for it would make the lines flap —
-            // but there is deliberately nothing on screen that says so any more, which is the
-            // price of the rail rendering five things (see the type's note).
+            // is usually a hiccup, and blanking the drawer for it would make the rows flap.
             return
         }
     }
@@ -353,35 +326,68 @@ final class ArchonRailModel: ObservableObject {
         }
     }
 
-    /// One extra `archon` per running run, per poll — issued concurrently, so they cost latency
-    /// once rather than N times (measured: two calls in parallel finish in 0.59s, one alone in
-    /// 0.56s). Only runs that have a line are asked about, so the cost is bounded by what is on
-    /// screen, and in practice that is nought or one.
-    private func refreshStages(in workspacePath: WorkspacePath) async {
-        let ids = running.map(\.id)
-        guard !ids.isEmpty else {
-            stages = [:]
+    /// The per-node fold for every live run, from one `workflow status --verbose`. Skipped when
+    /// nothing is live, which is the common case, so an idle refresh is one process.
+    private func refreshLiveNodes(in workspacePath: WorkspacePath) async {
+        guard !gated.isEmpty || !running.isEmpty else {
+            liveNodes = [:]
             return
         }
-        let client = self.client
-        var fetched: [String: String] = [:]
-        await withTaskGroup(of: (String, String?).self) { group in
-            for id in ids {
-                group.addTask {
-                    // A detail call that fails costs that run its subline and nothing else.
-                    // The run itself is already on screen from the list call; failing the
-                    // whole refresh here would trade a missing line for a missing rail.
-                    guard let run = try? await client.run(id: id, in: workspacePath) else {
-                        return (id, nil)
-                    }
-                    return (id, run.currentNode?.nodeId)
-                }
-            }
-            for await (id, stage) in group {
-                if let stage { fetched[id] = stage }
-            }
+        // A failed call costs the dots their colours and nothing else: the rows are already on
+        // screen from `runs`, and each still shows where it is from `active_nodes`.
+        guard let status = try? await client.status(in: workspacePath) else { return }
+        liveNodes = Dictionary(
+            status.runs.compactMap { run in run.nodes.map { (run.id, $0) } },
+            uniquingKeysWith: { _, last in last })
+    }
+
+    /// Stop a running run. Reported like a gate decision, on the same line.
+    func cancel(_ run: ArchonRun, in workspacePath: WorkspacePath?) async {
+        guard let workspacePath else {
+            actionFailure = Self.noWorkspace
+            return
         }
-        stages = fetched
+        guard run.isRunning, !busyRuns.contains(run.id) else { return }
+        busyRuns.insert(run.id)
+        actionFailure = nil
+        defer { busyRuns.remove(run.id) }
+        var failure: String?
+        do {
+            let acknowledgement = try await client.cancel(runID: run.id, in: workspacePath)
+            if !acknowledgement.ok {
+                failure =
+                    "Archon refused to cancel this run: "
+                    + (acknowledgement.error ?? "no reason given")
+            }
+        } catch {
+            failure = error.localizedDescription
+        }
+        await refresh(in: workspacePath)
+        actionFailure = failure
+    }
+
+    /// Resume a failed or paused run from its completed nodes.
+    func resume(_ run: ArchonRun, in workspacePath: WorkspacePath?) async {
+        guard let workspacePath else {
+            actionFailure = Self.noWorkspace
+            return
+        }
+        guard run.status == ArchonRunStatus.failed || run.isPaused,
+            !busyRuns.contains(run.id)
+        else { return }
+        busyRuns.insert(run.id)
+        actionFailure = nil
+        defer { busyRuns.remove(run.id) }
+        let failure: String?
+        do {
+            let resumed = try await client.resume(run)
+            failure =
+                resumed.ok && resumed.detached ? nil : "Archon did not restart the run."
+        } catch {
+            failure = error.localizedDescription
+        }
+        await refresh(in: workspacePath)
+        actionFailure = failure
     }
 
     /// Opening the settings is what loads the workflow list — the rail does not need it to
@@ -403,6 +409,19 @@ final class ArchonRailModel: ObservableObject {
         } catch {
             launchFailure = error.localizedDescription
         }
+    }
+
+    /// ⌥↑ / ⌥↓ in the composer: the previous or next workflow becomes what a launch runs. The list
+    /// is loaded the first time it is asked for, as opening the settings does.
+    func cycleWorkflow(by step: Int, in workspacePath: WorkspacePath?) async {
+        if workflows.isEmpty {
+            await loadWorkflows(in: workspacePath)
+            isConfigOpen = false
+        }
+        let names = workflows.map(\.name)
+        guard !names.isEmpty else { return }
+        let current = names.firstIndex(of: config.workflow) ?? (step > 0 ? -1 : 0)
+        config.workflow = names[(current + step + names.count) % names.count]
     }
 
     /// Enter in the field, or the send button. Everything except the message comes from the

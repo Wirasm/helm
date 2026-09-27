@@ -258,7 +258,9 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
         let defaults = try isolatedDefaults("focus-menu-route")
         let actions = LocalActions(
             workbench: bench.workbench, workspaces: WorkspaceModel(),
-            rail: ArchonRailModel(client: FakeArchonClient(), defaults: defaults),
+            rail: WorktreesRailModel(
+                worktreeClient: FakeWorktreeClient(), archonClient: FakeArchonClient(),
+                defaults: defaults),
             terminals: bench.terminals)
         Actions.performer = actions
         defer { Actions.performer = nil }

@@ -166,14 +166,15 @@ struct KeymapFile: Equatable {
         #         manage+ keys arrange the bench, release it and the keyboard types again
         # when:   anywhere (the default), terminal, away-from-terminal
         # action: one of the names below; index is 1-based. `drawer` takes name and, optionally,
-        #         surface = "browser", "sessions" or "file:<path>" for a drawer that holds nothing.
+        #         surface = "browser", "sessions", "archon" or "file:<path>" for a drawer that holds nothing.
         #         `just` takes recipe: a recipe in <bench root>/rules/justfile, run by benchd as you
         #
         # A drawer's place is a table of its own, e.g.
         #   [drawer.notes]
         #   edge = "left"             # left, right or bottom
         #   size = 0.3                # 0.1 to 0.9 of the window's width, or height on the bottom
-        # Built in: sessions on the left at 0.28, every other drawer on the right at 0.5.
+        # Built in: sessions on the left at 0.28, archon on the bottom at 0.42, every other
+        #   drawer on the right at 0.5.
 
 
         """
