@@ -9,6 +9,7 @@ dependencies = [
  "bench-doc",
  "bench-sessions",
  "bench-wire",
+ "libc",
  "rustix",
  "serde_json",
 ]

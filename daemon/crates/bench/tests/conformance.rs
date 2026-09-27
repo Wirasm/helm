@@ -21,6 +21,8 @@ use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
+use bench_wire::attach::AttachFrame;
+
 fn bench_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_bench"))
 }
@@ -656,6 +658,79 @@ fn raw_request(
     )
 }
 
+/// Read `stream` until `done` says what arrived is enough, or `limit` passes. The stream's own
+/// read timeout decides how often `done` is asked.
+fn read_until(stream: &UnixStream, limit: Duration, done: impl Fn(&[u8]) -> bool) -> Vec<u8> {
+    let deadline = Instant::now() + limit;
+    let mut seen = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while Instant::now() < deadline && !done(&seen) {
+        match (&*stream).read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => seen.extend_from_slice(&chunk[..n]),
+            Err(_) => {}
+        }
+    }
+    seen
+}
+
+/// `bench attach <session> <extra…>` with a pty of its own as its terminal and controlling
+/// terminal, the way a helm pane runs it: the pty is the size given, and resizing the returned
+/// master is what a pane being dragged does. Answers the master and the child.
+fn attach_on_pty(
+    home: &Path,
+    session: &str,
+    extra: &[&str],
+    rows: u16,
+    cols: u16,
+) -> (fs::File, Child) {
+    use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+    use std::os::unix::process::CommandExt;
+    let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).unwrap();
+    grantpt(&master).unwrap();
+    unlockpt(&master).unwrap();
+    let name = ptsname(&master, Vec::new()).unwrap();
+    let slave = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(name.to_str().unwrap())
+        .unwrap();
+    let master = fs::File::from(master);
+    set_size(&master, rows, cols);
+    let mut cmd = isolated(bench_bin());
+    cmd.arg("attach")
+        .arg(session)
+        .args(extra)
+        .env("HOME", home)
+        .stdin(slave.try_clone().unwrap())
+        .stdout(slave.try_clone().unwrap())
+        .stderr(slave);
+    // SAFETY: setsid and the TIOCSCTTY ioctl are async-signal-safe and allocate nothing.
+    unsafe {
+        cmd.pre_exec(|| {
+            rustix::process::setsid()?;
+            rustix::process::ioctl_tiocsctty(rustix::fd::BorrowedFd::borrow_raw(0))?;
+            Ok(())
+        });
+    }
+    let child = cmd.spawn().unwrap();
+    (master, child)
+}
+
+/// Resize a pty from its master: the kernel sends SIGWINCH to its foreground process group.
+fn set_size(master: &fs::File, rows: u16, cols: u16) {
+    rustix::termios::tcsetwinsize(
+        master,
+        rustix::termios::Winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .unwrap();
+}
+
 #[test]
 fn spawn_refuses_an_agent_off_the_allowlist() {
     let home = TestHome::claim("allow");
@@ -702,30 +777,41 @@ fn a_session_relays_bytes_faithfully_including_an_osc_sequence() {
     );
     assert_eq!(resp["status"], "ok", "{resp}");
 
-    // cat echoes what the pty carries; the OSC must come back intact.
-    let osc = "\u{1b}]777;notify;helm.canvas;/tmp/proof.html\u{7}";
-    let payload = format!("before {osc} after\n");
-    (&stream).write_all(payload.as_bytes()).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut seen = Vec::new();
-    let mut chunk = [0u8; 4096];
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
-    while Instant::now() < deadline {
-        match (&stream).read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => seen.extend_from_slice(&chunk[..n]),
-            Err(_) => {}
-        }
-        if seen.windows(osc.len()).any(|w| w == osc.as_bytes()) {
-            break;
-        }
+    // cat echoes what the pty carries; every sequence helm reads off a terminal must come back
+    // intact, because the Ghostty hosting `bench attach` is what parses them. Each is its own
+    // line: the pty's line discipline is cooked, and a line is what `cat` echoes.
+    let sequences = [
+        "\u{1b}]777;notify;helm.canvas;/tmp/proof.html\u{7}", // notification (OSC 777)
+        "\u{1b}]0;a title\u{7}",                              // title
+        "\u{1b}]2;another title\u{1b}\\",                     // title, ST-terminated
+        "\u{1b}]7;file://host/tmp/work\u{7}",                 // working directory
+        "\u{1b}]8;;https://example.com\u{7}link\u{1b}]8;;\u{7}", // hyperlink
+        "\u{1b}]9;4;1;42\u{7}",                               // progress
+        "\u{1b}]52;c;aGVsbG8=\u{7}",                          // clipboard write
+        "\u{1b}]133;A\u{7}",                                  // prompt mark
+        "\u{1b}]133;D;0\u{7}",                                // command finished
+        "\u{1b}[?2004h",                                      // bracketed paste on
+        "\u{1b}[200~pasted\u{1b}[201~",                       // a bracketed paste
+    ];
+    for seq in sequences {
+        let payload = format!("before {seq} after\n");
+        (&stream)
+            .write_all(&AttachFrame::Input(payload.into_bytes()).encode())
+            .unwrap();
     }
-    assert!(
-        seen.windows(osc.len()).any(|w| w == osc.as_bytes()),
-        "the OSC must survive the relay byte-for-byte; got {} bytes: {:?}",
-        seen.len(),
-        String::from_utf8_lossy(&seen)
-    );
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    let has = |seen: &[u8], seq: &str| seen.windows(seq.len()).any(|w| w == seq.as_bytes());
+    let seen = read_until(&stream, Duration::from_secs(5), |seen| {
+        sequences.iter().all(|seq| has(seen, seq))
+    });
+    for seq in sequences {
+        assert!(
+            has(&seen, seq),
+            "{seq:?} must survive the relay byte-for-byte; got {} bytes: {:?}",
+            seen.len(),
+            String::from_utf8_lossy(&seen)
+        );
+    }
 
     let close = bench(&home.dir, &["close", &sid]);
     assert_eq!(close.code, 0, "stderr: {}", close.stderr);
@@ -5095,10 +5181,79 @@ fn a_refused_spawn_leaves_no_process_and_no_pane() {
 }
 
 #[test]
-fn an_attached_viewer_resizes_the_session_and_ends_when_it_does() {
-    let home = TestHome::claim("m3-attach");
-    // The agent reports its size whenever the pty's changes.
-    let bin = home.dir.join("bin");
+fn ctrl_backslash_detaches_a_terminal_viewer_and_reaches_the_session_from_a_pane() {
+    // In a shell Ctrl-\ is SIGQUIT, so a helm pane (`--in-pane`) must pass it on; a viewer in
+    // the operator's own terminal keeps it as the detach key.
+    let home = TestHome::claim("m5b-detach");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let wait_exit = |child: &mut Child| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if child.try_wait().unwrap().is_some() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        false
+    };
+    let live = |sid: &str| {
+        json_of(&bench(&home.dir, &["sessions"]))["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["session"] == sid)
+            .is_some_and(|s| s["live"] == true)
+    };
+    for (extra, session_survives) in [(&[][..], true), (&["--in-pane"][..], false)] {
+        let run = bench(
+            &home.dir,
+            &["spawn", "--agent", "test-echo", "--cwd", "/tmp"],
+        );
+        let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+        let (mut master, mut viewer) = attach_on_pty(&home.dir, &sid, extra, 24, 80);
+        std::thread::sleep(Duration::from_millis(500));
+        master.write_all(b"\x1c").unwrap();
+        assert!(wait_exit(&mut viewer), "{extra:?}: the viewer ends");
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            live(&sid),
+            session_survives,
+            "{extra:?}: detaching leaves the session; a forwarded Ctrl-\\ quits `cat`"
+        );
+    }
+}
+
+#[test]
+fn a_malformed_attach_stream_ends_the_attachment_and_not_the_session() {
+    let home = TestHome::claim("m5b-garbage");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let run = bench(
+        &home.dir,
+        &["spawn", "--agent", "test-echo", "--cwd", "/tmp"],
+    );
+    let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(resp["status"], "ok", "{resp}");
+    // Unframed keys, as a client from before framing would send them.
+    (&stream).write_all(b"ls\n").unwrap();
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut rest = Vec::new();
+    let _ = (&stream).read_to_end(&mut rest);
+    let listed = json_of(&bench(&home.dir, &["sessions"]));
+    assert_eq!(listed["sessions"][0]["live"], true, "{listed}");
+    assert_eq!(listed["sessions"][0]["attached"], false, "{listed}");
+}
+
+/// A daemon whose `pi` prints its size (`stty size`) whenever its pty's size changes, once it
+/// has said `ready`.
+fn size_reporting_daemon(home: &Path) -> DaemonGuard {
+    let bin = home.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let agent = bin.join("pi");
     fs::write(
@@ -5111,7 +5266,67 @@ fn an_attached_viewer_resizes_the_session_and_ends_when_it_does() {
     let path = std::env::var("PATH").unwrap_or_default();
     let mut cmd = isolated(benchd_bin());
     cmd.env("PATH", format!("{}:{path}", bin.display()));
-    let daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    DaemonGuard::start_with(home, None, cmd)
+}
+
+#[test]
+fn a_viewer_terminal_being_dragged_resizes_the_session_to_its_last_size() {
+    let home = TestHome::claim("m5b-drag");
+    let _daemon = size_reporting_daemon(&home.dir);
+    let ws = workspace(&home.dir).display().to_string();
+    let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+    // `bench attach` on a terminal of its own: resizing that terminal, as dragging a pane
+    // does, reaches the agent, and the last size of a burst is the one it keeps.
+    let (master, mut viewer) = attach_on_pty(&home.dir, &sid, &["--in-pane"], 24, 80);
+    let mut screen = master.try_clone().unwrap();
+    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    {
+        let output = std::sync::Arc::clone(&output);
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = screen.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                output.lock().unwrap().extend_from_slice(&chunk[..n]);
+            }
+        });
+    }
+    // The agent must be listening before the drag starts, or its signals land first.
+    let shown_now = || String::from_utf8_lossy(&output.lock().unwrap()).into_owned();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && !shown_now().contains("ready") {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for cols in 81..=100 {
+        set_size(&master, 30, cols);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline
+        && !String::from_utf8_lossy(&output.lock().unwrap()).contains("30 100")
+    {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let shown = String::from_utf8_lossy(&output.lock().unwrap()).into_owned();
+    let _ = viewer.kill();
+    let _ = viewer.wait();
+    assert!(
+        shown.contains("30 100"),
+        "the last size of a drag reaches the agent: {shown:?}"
+    );
+    assert!(
+        !shown.contains("bench:"),
+        "--in-pane prints nothing of its own: {shown:?}"
+    );
+}
+
+#[test]
+fn an_attached_viewer_resizes_the_session_and_ends_when_it_does() {
+    let home = TestHome::claim("m3-attach");
+    let daemon = size_reporting_daemon(&home.dir);
     let ws = workspace(&home.dir).display().to_string();
     let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
     assert_eq!(run.code, 0, "{}", run.stderr);
@@ -5133,19 +5348,13 @@ fn an_attached_viewer_resizes_the_session_and_ends_when_it_does() {
             seen.extend_from_slice(&chunk[..n]);
         }
     }
-    seen.clear();
-    let (resized, _) = raw_request(
-        &daemon.socket,
-        "resize",
-        serde_json::json!({"session": sid, "rows": 33, "cols": 77}),
-    );
-    assert_eq!(resized["status"], "ok", "{resized}");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && !String::from_utf8_lossy(&seen).contains("33 77") {
-        if let Ok(n) = (&stream).read(&mut chunk) {
-            seen.extend_from_slice(&chunk[..n]);
-        }
-    }
+    // The size rides the attach stream, in order with the keys (#359).
+    (&stream)
+        .write_all(&AttachFrame::Size { rows: 33, cols: 77 }.encode())
+        .unwrap();
+    let seen = read_until(&stream, Duration::from_secs(5), |seen| {
+        String::from_utf8_lossy(seen).contains("33 77")
+    });
     assert!(
         String::from_utf8_lossy(&seen).contains("33 77"),
         "the agent sees the viewer's size: {:?}",
