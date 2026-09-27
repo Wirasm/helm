@@ -78,6 +78,12 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
                 "conversation {} is already live in another session",
                 a.session
             ))),
+            // Claude reports its id at start, before anything is said: a conversation nobody
+            // wrote in has no transcript, and `claude --resume` of it exits at once.
+            Some(a) if a.command == "claude" && !has_transcript(&a.session) => Err(Some(format!(
+                "claude conversation {} was never written in: nothing to resume",
+                a.session
+            ))),
             Some(a) => resume(&mut c, pane, &a).map_err(Some),
             None => Err(None),
         };
@@ -112,6 +118,13 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         crate::layout::Committed::Failed(why) => Err(why),
         _ => Ok(json!({ "restored": list })),
     }
+}
+
+/// Whether Claude has written a transcript for conversation `id`.
+fn has_transcript(id: &str) -> bool {
+    std::env::var_os("HOME").is_some_and(|home| {
+        bench_sessions::transcript::locate(std::path::Path::new(&home), id).is_ok()
+    })
 }
 
 /// Whether a live session already holds conversation `runtime`.

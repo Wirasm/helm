@@ -6149,11 +6149,25 @@ fn stopping_benchd_keeps_the_records_its_ending_agents_report_on_their_way_out()
         log.contains("agent/ended"),
         "the fake claude reported its end during the stop, so this test sees the case: {log}"
     );
-    let _daemon = DaemonGuard::start(&home.dir, None);
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("PATH", format!("{}:{path}", bin.display()));
+    let _daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    let recorded = pane_agent(&home.dir, &pane);
     assert_eq!(
-        pane_agent(&home.dir, &pane)["command"],
-        "claude",
+        recorded["command"], "claude",
         "the record survived the stop"
+    );
+
+    // Nobody said anything to that claude, so it wrote no transcript, and `claude --resume` of
+    // it would exit at once: the pane gets a shell, and the answer says why.
+    let restored = json_of(&bench(&home.dir, &["restore", &pane]));
+    let row = &restored["restored"][0];
+    assert_eq!(row["how"], "shell", "{restored}");
+    assert!(
+        row["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("never written in")),
+        "{restored}"
     );
 }
 
@@ -6263,4 +6277,38 @@ fn a_codex_its_hook_recorded_in_a_pane_is_resumed_by_its_own_id() {
         args.contains(&"--dangerously-bypass-approvals-and-sandbox"),
         "{args:?}"
     );
+}
+
+#[test]
+fn a_claude_conversation_with_a_transcript_is_resumed_after_a_restart() {
+    // The other half of `restore`'s transcript check: a conversation Claude wrote is resumed.
+    let home = TestHome::claim("m5b-claudeback");
+    let ws = workspace(&home.dir).display().to_string();
+    let pane = {
+        let daemon = DaemonGuard::start(&home.dir, None);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let pane = json_of(&bench(&home.dir, &["open", "terminal"]))["pane"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (_, pid) = terminal_process(&home.dir, "holder");
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "claude", "event": "SessionStart", "session": "c-7e2d",
+                "cwd": ws, "pid": pid, "pane": pane}),
+        );
+        pane
+    };
+    let projects = home.dir.join(".claude/projects/ws");
+    fs::create_dir_all(&projects).unwrap();
+    fs::write(projects.join("c-7e2d.jsonl"), "{}\n").unwrap();
+    let _daemon = DaemonGuard::start_with_fake(&home.dir, "claude");
+    let restored = json_of(&bench(&home.dir, &["restore", &pane]));
+    assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
 }
