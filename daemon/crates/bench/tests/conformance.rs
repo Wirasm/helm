@@ -6673,3 +6673,83 @@ fn watch_prints_each_finished_frame_and_never_one_inside_an_update() {
         "a frame from inside the update: {frames:?}"
     );
 }
+
+#[test]
+fn a_viewer_that_stops_reading_is_dropped_and_the_session_still_answers() {
+    // Every connection writes under DAEMON_IO_TIMEOUT, the relay included: a viewer that stops
+    // reading holds the engine thread, and with it the session's resizes and screen reads, for
+    // that long and then is dropped.
+    let home = TestHome::claim("m5b-stuck");
+    let daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\ntouch {}/written\nsleep 2\nexec yes 'a line of output that fills the socket'\n",
+            home.dir.display()
+        ),
+    );
+    let sid = spawn_scripted(&home.dir);
+    // A viewer that reads for a while, then never again.
+    let (seen, stream) = attach_and_read(&daemon.socket, &sid, |b| b.len() > 100_000);
+    assert!(seen.len() > 100_000, "the flood reached the viewer");
+    let started = Instant::now();
+    let first = bench(&home.dir, &["get", "screen", &sid]);
+    assert_eq!(first.code, 0, "{}", first.stderr);
+    assert!(
+        started.elapsed() < Duration::from_secs(9),
+        "{:?}",
+        started.elapsed()
+    );
+    let started = Instant::now();
+    let again = bench(&home.dir, &["get", "screen", &sid]);
+    assert_eq!(again.code, 0, "{}", again.stderr);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(session_row(&home.dir, &sid)["attached"], false);
+    drop(stream);
+}
+
+#[test]
+fn a_session_flooding_its_viewer_still_answers_at_once() {
+    // Output and requests share the engine thread; a program that never pauses must not keep a
+    // resize or a screen read waiting behind its output.
+    let home = TestHome::claim("m5b-flood");
+    let daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\ntouch {}/written\nexec yes 'a line of output from a program that never pauses'\n",
+            home.dir.display()
+        ),
+    );
+    let sid = spawn_scripted(&home.dir);
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(resp["status"], "ok", "{resp}");
+    let reading = std::thread::spawn(move || {
+        let mut chunk = [0u8; 65536];
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            if (&stream).read(&mut chunk).map_or(true, |n| n == 0) {
+                break;
+            }
+        }
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    for _ in 0..5 {
+        let started = Instant::now();
+        let screen = bench(&home.dir, &["get", "screen", &sid]);
+        assert_eq!(screen.code, 0, "{}", screen.stderr);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+    let _ = bench(&home.dir, &["close", &sid]);
+    let _ = reading.join();
+}
