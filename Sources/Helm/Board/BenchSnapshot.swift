@@ -377,7 +377,7 @@ struct BenchSnapshot: Codable, Equatable {
             case .exited:
                 status = "exited"
                 failure = nil
-            case let .failed(issue):
+            case let .failed(issue), let .unattachable(issue):
                 status = "failed"
                 failure = issue
             }

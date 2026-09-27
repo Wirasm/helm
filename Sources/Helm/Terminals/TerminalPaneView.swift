@@ -18,6 +18,8 @@ struct TerminalPaneView: View {
                 GhosttyHostView(view: session.hostView, holdsKeyboard: holdsKeyboard)
                     .id(session.id)
             case let .failed(message): fallback(title: "ghostty init failed", detail: message)
+            case let .unattachable(reason):
+                fallback(title: "cannot show this session", detail: reason)
             case .exited:
                 fallback(
                     title: "shell exited", detail: "Close this tab, or open a new terminal with ⌘N."

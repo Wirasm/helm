@@ -45,8 +45,10 @@ final class TerminalManagerTests: XCTestCase {
                         .init(id: shell, surface: .terminal(agent: nil)),
                     ]))
             ], active: firstWorkspace.value)
-        let attaching = document.workspaces[0].bench.attachCommands(bench: "/opt/it's/bench")
-        XCTAssertEqual(attaching, [agent: #"'/opt/it'\''s/bench' 'attach' 's3'"#])
+        let attaching = document.workspaces[0].bench.attachCommands(
+            bench: .success("/opt/it's/bench"))
+        XCTAssertEqual(
+            attaching, [agent: .attach(command: #"'/opt/it'\''s/bench' 'attach' 's3'"#)])
 
         manager.adopt(
             terminals: [agent, shell], in: firstWorkspace, attaching: attaching)
@@ -54,10 +56,36 @@ final class TerminalManagerTests: XCTestCase {
         let sessions = manager.sessions(for: firstWorkspace)
         XCTAssertEqual(
             sessions.first { $0.id == agent }?.hostView.configuration.command,
-            attaching[agent])
+            #"'/opt/it'\''s/bench' 'attach' 's3'"#)
         XCTAssertNil(
             try XCTUnwrap(sessions.first { $0.id == shell }).hostView.configuration.command,
             "every other terminal is the login shell")
+    }
+
+    /// With no `bench` to run, a pane showing a session starts nothing and says why — never a
+    /// bare `bench`, which a no-profile login shell cannot find ("exec: bench: not found").
+    func testAPaneWhoseSessionCannotBeShownStartsNothingAndSaysWhy() throws {
+        let manager = TerminalManager()
+        let agent = UUID()
+        let document = BenchDocument(
+            workspaces: [
+                .init(
+                    path: firstWorkspace.value,
+                    bench: ToyBench.bench([
+                        .init(id: agent, surface: .terminal(agent: nil, session: "s1"))
+                    ]))
+            ], active: firstWorkspace.value)
+        let missing = BenchExecutable.NotFound(
+            asked: "benchd could not be asked (no answer)", looked: ["/nowhere/bench"])
+        let attaching = document.workspaces[0].bench.attachCommands(bench: .failure(missing))
+        XCTAssertEqual(attaching, [agent: .unavailable(reason: missing.description)])
+
+        manager.adopt(terminals: [agent], in: firstWorkspace, attaching: attaching)
+
+        let session = try XCTUnwrap(manager.sessions(for: firstWorkspace).first)
+        XCTAssertEqual(session.status, .unattachable(missing.description))
+        XCTAssertNil(session.hostView.configuration.command, "nothing is run")
+        XCTAssertTrue(missing.description.contains("cargo install"), "the reason names the fix")
     }
 
     func testTheBenchIsAskedForOnlyWhenAPaneShowsASession() {
@@ -70,7 +98,7 @@ final class TerminalManagerTests: XCTestCase {
         var asked = false
         let none = plain.workspaces[0].bench.attachCommands(
             bench: {
-                asked = true; return "bench"
+                asked = true; return .success("/usr/local/bin/bench")
             }())
         XCTAssertTrue(none.isEmpty)
         XCTAssertFalse(asked, "no round trip to benchd for a bench of plain terminals")

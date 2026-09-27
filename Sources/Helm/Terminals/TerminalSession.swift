@@ -46,6 +46,9 @@ final class TerminalSession: ObservableObject, Identifiable {
         case exited
         /// Ghostty config/app init failed; the placeholder pane shows this.
         case failed(String)
+        /// The pane shows a benchd session and helm has no `bench` to show it with; nothing was
+        /// started, and the placeholder says why and how to fix it.
+        case unattachable(String)
     }
 
     /// Injectable so a relaunch can rebuild a workspace's tab row under the ids
@@ -136,7 +139,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     init(
         id: UUID = UUID(), ordinal: Int, workspacePath: WorkspacePath,
         controller: TerminalController,
-        command: String? = nil
+        command: String? = nil,
+        unattachable: String? = nil
     ) {
         self.id = id
         self.ordinal = ordinal
@@ -167,6 +171,9 @@ final class TerminalSession: ObservableObject, Identifiable {
         // one opened.
         if let issue = controller.lastConfigurationIssue {
             status = .failed(issue)
+        }
+        if let unattachable {
+            status = .unattachable(unattachable)
         }
     }
 

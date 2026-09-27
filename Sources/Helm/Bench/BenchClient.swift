@@ -125,17 +125,25 @@ final class BenchClient: ObservableObject {
         }
     }
 
-    /// The `bench` beside the benchd this client follows: what a pane runs to show a session
-    /// (`SessionAttach`). Asked once per connection, since a restarted benchd may be a new build
-    /// somewhere else; falls back to `bench` on the pane's PATH when benchd does not say.
-    var benchBinary: String {
-        if let known = benchBinaryCache { return known }
-        let reply = try? request(
-            BenchStatusRequest(id: "helm-status-\(UUID().uuidString)"),
-            answering: BenchStatusReply.self)
-        let bench = reply?.data?.bench ?? "bench"
-        benchBinaryCache = bench
-        return bench
+    /// The `bench` a pane runs to show a session (`SessionAttach`), as an absolute path: the one
+    /// beside the benchd this client follows, else an installed one (`BenchExecutable`). Asked
+    /// once per connection, since a restarted benchd may be a new build somewhere else. Only a
+    /// found one is kept: a failure is asked again at the next drawing.
+    var benchExecutable: Result<String, BenchExecutable.NotFound> {
+        if let known = benchBinaryCache { return .success(known) }
+        var why: String?
+        let reply: BenchResponse<BenchStatusReply>?
+        do {
+            reply = try request(
+                BenchStatusRequest(id: "helm-status-\(UUID().uuidString)"),
+                answering: BenchStatusReply.self)
+        } catch {
+            why = String(describing: error)
+            reply = nil
+        }
+        let found = BenchExecutable.resolve(named: reply?.data?.bench, why: why)
+        if case let .success(bench) = found { benchBinaryCache = bench }
+        return found
     }
 
     private var benchBinaryCache: String?

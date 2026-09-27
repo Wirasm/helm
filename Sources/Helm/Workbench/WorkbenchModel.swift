@@ -709,7 +709,7 @@ extension WorkbenchModel {
             terminals.adopt(
                 terminals: bench.terminalPaneIDs, in: active,
                 attaching: document.workspace(at: active)?.bench
-                    .attachCommands(bench: client.benchBinary) ?? [:])
+                    .attachCommands(bench: client.benchExecutable) ?? [:])
             if offered.insert(active).inserted { resumeOffers = offers(in: bench) }
         } else if drawing.workspace == nil {
             terminals.deactivate()
