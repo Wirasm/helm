@@ -10,8 +10,9 @@
 //!
 //! A session has one viewer, and a second attach takes it over. A pane must not end for that:
 //! its session is still running, and a pane whose process has exited has no way back to it. So
-//! an `--in-pane` client whose stream closes asks benchd what happened. The session ended: it
-//! ends too. Nobody holds the session: it attaches again. Another viewer holds it: it says so in
+//! an `--in-pane` client whose stream closes asks benchd what happened. The session ended, or
+//! benchd is gone: it ends too, and leaves the pane a line saying which and how to start it
+//! again. Nobody holds the session: it attaches again. Another viewer holds it: it says so in
 //! the pane and waits, and attaches again on a key or once that viewer lets go.
 //!
 //! A pane dragged across the screen resizes its terminal many times a second, and every size the
@@ -58,8 +59,8 @@ type Current = Arc<Mutex<Option<Attachment>>>;
 /// Who holds the session, asked after its stream closed.
 #[derive(Debug, PartialEq)]
 enum Holder {
-    /// It ended, or benchd is gone and took it along.
-    Gone,
+    /// It ended, or benchd is gone and took it along: the words the pane is left with.
+    Gone(String),
     /// It runs and nobody views it.
     Nobody,
     /// It runs and another viewer has it.
@@ -133,9 +134,12 @@ pub fn run(mut cli: Cli, in_pane: bool) -> i32 {
             restore(saved);
             return 0;
         }
-        // The replay repaints the session on a clean terminal, as on the first attach.
+        // The replay redraws the session on a fresh terminal, as on the first attach. A reset
+        // (RIS), not a clear: the pane still has the modes the program set before it was
+        // displaced, and the replay sets only the ones on now; and the scrollback goes too, or
+        // the replay's history would be painted under the old copy of itself.
         let mut out = std::io::stdout();
-        let _ = out.write_all(b"\x1b[H\x1b[2J\x1b[3J");
+        let _ = out.write_all(b"\x1bc\x1b[3J");
         let _ = out.flush();
         if let Some((rows, cols)) = terminal_size() {
             request.rows = Some(rows);
@@ -185,7 +189,13 @@ fn wait_to_retake(cli: &Cli, session: &str, heard: &mpsc::Receiver<Heard>) -> bo
     let mut said = false;
     loop {
         match holder(cli, session) {
-            Holder::Gone => return false,
+            Holder::Gone(why) => {
+                // The last thing in the pane, above Ghostty's own "Process exited".
+                let mut out = std::io::stdout();
+                let _ = write!(out, "\r\n\x1b[7m bench: {why} \x1b[0m\r\n");
+                let _ = out.flush();
+                return false;
+            }
             Holder::Nobody => {
                 // A stream that drops by itself on a session nobody else holds is attached again
                 // at once, but not in a hot loop, and not once the pane's own input has closed:
@@ -228,17 +238,26 @@ fn holder(cli: &Cli, session: &str) -> Holder {
         asked: false,
     };
     let Ok(response) = exchange(&ask) else {
-        return Holder::Gone;
+        return Holder::Gone(format!(
+            "benchd is not running, and {session} ended with it. `just resume-all` brings every pane back once it runs."
+        ));
+    };
+    let ended = || {
+        // helm declares the pane a viewer runs in; restore takes the pane, not the session.
+        let pane = std::env::var("HELM_PANE").unwrap_or_else(|_| "<pane>".to_string());
+        Holder::Gone(format!(
+            "{session} has ended. `bench restore {pane}` starts this pane again."
+        ))
     };
     let listed = response
         .data
         .and_then(|data| serde_json::from_value::<LiveSessions>(data).ok());
     let Some(entry) = listed.and_then(|l| l.sessions.into_iter().find(|s| s.session == session))
     else {
-        return Holder::Gone;
+        return ended();
     };
     match (entry.live, entry.attached) {
-        (false, _) => Holder::Gone,
+        (false, _) => ended(),
         (true, false) => Holder::Nobody,
         (true, true) => Holder::Another,
     }

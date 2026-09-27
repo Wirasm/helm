@@ -5380,6 +5380,44 @@ fn a_viewer_terminal_being_dragged_resizes_the_session_to_its_last_size() {
     );
 }
 
+/// Everything a pane's terminal is sent, from its master, as it arrives.
+fn record_pane(master: &fs::File) -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = std::sync::Arc::clone(&output);
+    let mut screen = master.try_clone().unwrap();
+    std::thread::spawn(move || {
+        let mut chunk = [0u8; 4096];
+        while let Ok(n) = screen.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            recorded.lock().unwrap().extend_from_slice(&chunk[..n]);
+        }
+    });
+    output
+}
+
+/// Whether `done` holds within `secs`, asked every 50 ms.
+fn within(secs: u64, done: &dyn Fn() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while Instant::now() < deadline && !done() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    done()
+}
+
+/// The lines of a screen, with trailing blanks and blank rows at the end dropped.
+fn trimmed(lines: Vec<String>) -> Vec<String> {
+    let mut lines: Vec<String> = lines
+        .into_iter()
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines
+}
+
 #[test]
 fn a_pane_whose_session_another_viewer_takes_waits_for_it_and_takes_it_back() {
     // A helm pane's viewer lost its session to a second attach (a test run reaching the
@@ -5393,29 +5431,9 @@ fn a_pane_whose_session_another_viewer_takes_waits_for_it_and_takes_it_back() {
     );
     let sid = json_of(&run)["session"].as_str().unwrap().to_string();
     let (mut master, mut viewer) = attach_on_pty(&home.dir, &sid, &["--in-pane"], 24, 80);
-    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    {
-        let output = std::sync::Arc::clone(&output);
-        let mut screen = master.try_clone().unwrap();
-        std::thread::spawn(move || {
-            let mut chunk = [0u8; 4096];
-            while let Ok(n) = screen.read(&mut chunk) {
-                if n == 0 {
-                    break;
-                }
-                output.lock().unwrap().extend_from_slice(&chunk[..n]);
-            }
-        });
-    }
+    let output = record_pane(&master);
     let shown = || String::from_utf8_lossy(&output.lock().unwrap()).into_owned();
     let attached = || json_of(&bench(&home.dir, &["sessions"]))["sessions"][0]["attached"] == true;
-    let within = |secs: u64, done: &dyn Fn() -> bool| {
-        let deadline = Instant::now() + Duration::from_secs(secs);
-        while Instant::now() < deadline && !done() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        done()
-    };
     const NOTICE: &str = "another viewer took it over";
     assert!(within(5, &attached), "the pane's viewer attaches");
 
@@ -5482,6 +5500,121 @@ fn a_pane_whose_session_another_viewer_takes_waits_for_it_and_takes_it_back() {
         "the viewer ends with its session: {:?}",
         shown()
     );
+    assert!(
+        within(5, &|| shown()
+            .contains(&format!("{sid} has ended. `bench restore"))),
+        "and leaves the pane saying so, not a bare dead terminal: {:?}",
+        shown()
+    );
+}
+
+/// A program that leaves history, a title and an alternate screen with a hidden cursor and
+/// bracketed paste on, then on `go` undoes all of it and prints more. Written for a pane that is
+/// displaced in between, so the retake has state to get right in both directions.
+const REHYDRATES: &str = "#!/bin/sh
+printf '\\033]2;before\\033\\\\'
+i=1; while [ $i -le 60 ]; do echo \"line-$i\"; i=$((i+1)); done
+printf '\\033[?1049h\\033[?25l\\033[?2004h\\033[5;3HALT-SCREEN'
+while read l; do
+  if [ \"$l\" = go ]; then
+    printf '\\033[?2004l\\033[?25h\\033[?1049l\\033]2;after\\033\\\\'
+    i=1; while [ $i -le 30 ]; do echo \"after-$i\"; i=$((i+1)); done
+    echo ready-after
+  fi
+done
+";
+
+#[test]
+fn a_retaken_pane_shows_the_session_as_it_is_and_paints_nothing_twice() {
+    // The rehydration checklist (tuios's REHYDRATION.md, adopted for #494): after a reattach the
+    // pane's screen, scrollback, cursor and modes are the session's, and no line appears twice.
+    let home = TestHome::claim("m5b-rehydrate");
+    let daemon = scripted_pi_daemon(&home.dir, REHYDRATES);
+    let ws = workspace(&home.dir).display().to_string();
+    let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+    let (master, mut viewer) = attach_on_pty(&home.dir, &sid, &["--in-pane"], 24, 80);
+    let output = record_pane(&master);
+    let shown = || output.lock().unwrap().clone();
+    assert!(within(10, &|| contains(&shown(), b"ALT-SCREEN")));
+
+    // Displaced; the other viewer drives the program out of every mode it set, then lets go.
+    let (answer, other) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(answer["status"], "ok", "{answer}");
+    assert!(within(5, &|| contains(&shown(), b"another viewer")));
+    (&other)
+        .write_all(&AttachFrame::Input(b"go\n".to_vec()).encode())
+        .unwrap();
+    let seen = read_until(&other, Duration::from_secs(5), |b| {
+        contains(b, b"ready-after")
+    });
+    assert!(contains(&seen, b"ready-after"));
+    let retake_from = shown().len();
+    drop(other);
+    assert!(
+        within(10, &|| contains(&shown()[retake_from..], b"ready-after")),
+        "the pane attached again"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Everything the pane's terminal was sent, read by a terminal of the pane's size.
+    let mut pane = bench_vt::Terminal::new(80, 24, 1 << 20).unwrap();
+    pane.write(&shown());
+    let run = bench(&home.dir, &["get", "screen", &sid, "--history"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let session = json_of(&run);
+    let pane_lines = trimmed(pane.lines(true).unwrap());
+    let session_lines = trimmed(
+        session["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l.as_str().unwrap().to_string())
+            .collect(),
+    );
+    assert_eq!(pane_lines, session_lines, "screen and scrollback");
+    for marker in ["line-1", "line-60", "after-1", "after-30"] {
+        assert_eq!(
+            pane_lines.iter().filter(|l| l.as_str() == marker).count(),
+            1,
+            "{marker} is painted once: {pane_lines:#?}"
+        );
+    }
+    let (col, row) = pane.cursor();
+    assert_eq!(
+        (u64::from(col), u64::from(row)),
+        (
+            session["cursor"][0].as_u64().unwrap(),
+            session["cursor"][1].as_u64().unwrap()
+        ),
+        "cursor"
+    );
+    assert_eq!(
+        pane.alt_screen(),
+        session["alt_screen"] == true,
+        "alternate screen"
+    );
+    assert!(!pane.alt_screen());
+    assert_eq!(
+        pane.cursor_visible(),
+        session["cursor_visible"] == true,
+        "cursor visibility"
+    );
+    assert!(pane.cursor_visible());
+    assert_eq!(
+        pane.mode(bench_vt::Mode::BRACKETED_PASTE),
+        session["bracketed_paste"] == true,
+        "bracketed paste"
+    );
+    assert!(!pane.mode(bench_vt::Mode::BRACKETED_PASTE));
+    assert_eq!(pane.title(), "after");
+    let _ = viewer.kill();
+    let _ = viewer.wait();
 }
 
 #[test]
