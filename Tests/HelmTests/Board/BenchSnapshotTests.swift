@@ -257,6 +257,35 @@ final class BenchSnapshotTests: XCTestCase {
                 + "this build has never heard of")
     }
 
+    /// benchd's `waiting` (M1, #357) fills in a record the registry cannot give — a codex or
+    /// pi at a prompt has no registry row at all, and #283's row said `busy` under a prompt —
+    /// and never replaces a registry that already says `waiting` in Claude Code's own words.
+    func testBenchdsWaitFillsTheRecordTheRegistryCannotGive() {
+        let since = Date(timeIntervalSince1970: 1_790_000_000)
+        let screen = BenchLiveSessions.Waiting(
+            waitingFor: "trust prompt", since: since, source: "screen")
+        let busy = BenchSnapshot.AgentRecord(
+            status: "busy", waitingFor: nil, statusUpdatedAt: Date(timeIntervalSince1970: 5))
+        let claudeWaiting = BenchSnapshot.AgentRecord(
+            status: "waiting", waitingFor: "permission prompt",
+            statusUpdatedAt: Date(timeIntervalSince1970: 7))
+        let fromBenchd = BenchSnapshot.AgentRecord(
+            status: "waiting", waitingFor: "trust prompt", statusUpdatedAt: since)
+
+        XCTAssertEqual(BenchSnapshot.AgentRecord.of(registry: nil, waiting: screen), fromBenchd)
+        XCTAssertEqual(BenchSnapshot.AgentRecord.of(registry: busy, waiting: screen), fromBenchd)
+        XCTAssertEqual(
+            BenchSnapshot.AgentRecord.of(registry: claudeWaiting, waiting: screen), claudeWaiting)
+        XCTAssertEqual(BenchSnapshot.AgentRecord.of(registry: busy, waiting: nil), busy)
+        let bare = BenchSnapshot.AgentRecord(
+            status: "waiting", waitingFor: nil, statusUpdatedAt: Date(timeIntervalSince1970: 9))
+        XCTAssertEqual(
+            BenchSnapshot.AgentRecord.of(registry: bare, waiting: screen), fromBenchd,
+            "a bare waiting names no wait; benchd's does")
+        XCTAssertEqual(BenchSnapshot.AgentRecord.of(registry: bare, waiting: nil), bare)
+        XCTAssertNil(BenchSnapshot.AgentRecord.of(registry: nil, waiting: nil))
+    }
+
     /// The wire obligation `testWorkspaceRecordPathEncodesAsABareStringUnchangedByWorkspacePath`
     /// and `testOwnerRecordHandleEncodesAsABareStringUnchangedByHandle` carry for their fields,
     /// for the one #283 adds. `statusUpdatedAt` is the field a reader does arithmetic on, so its

@@ -475,3 +475,45 @@ fn a_stored_drawer_loses_only_the_pane_this_build_cannot_read() {
         );
     }
 }
+
+// MARK: - Going to a pane (M1's jump to a waiting agent)
+
+/// `go_to` puts the operator at a pane wherever it lives: a pane of a workspace in the
+/// background makes that workspace active and closes the drawer over the bench; a drawer's pane
+/// opens its drawer. The `Leave` form is refused, and it has the `Take` control beside it.
+#[test]
+fn going_to_a_pane_crosses_workspaces_and_drawers_and_only_as_the_operator() {
+    let mut doc = working_document();
+    doc.toggle_drawer(&name("browser"), Some(Surface::Browser), Focus::Take)
+        .unwrap();
+    let in_drawer = doc.drawer(&name("browser")).unwrap().selected;
+    let kild = StandardPath::new("/tmp/kild").unwrap();
+    let background = doc
+        .workspaces()
+        .iter()
+        .find(|w| w.path == kild)
+        .and_then(|w| w.bench.panes().next())
+        .unwrap()
+        .id;
+
+    assert_eq!(
+        doc.go_to(background, Focus::Leave),
+        Err(Refusal::WouldMoveFocus)
+    );
+
+    doc.go_to(background, Focus::Take).unwrap();
+    assert_eq!(
+        doc.active_workspace().unwrap().path,
+        kild,
+        "its workspace is the active one"
+    );
+    assert!(
+        doc.open_drawer().is_none(),
+        "the drawer over the bench is closed"
+    );
+    assert_eq!(doc.focused_pane(), Some(background));
+
+    doc.go_to(in_drawer, Focus::Take).unwrap();
+    assert_eq!(doc.open_drawer().unwrap().name, name("browser"));
+    assert_eq!(doc.focused_pane(), Some(in_drawer));
+}

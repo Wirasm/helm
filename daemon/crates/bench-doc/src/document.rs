@@ -414,6 +414,26 @@ impl Document {
         })
     }
 
+    /// Put the operator at a pane wherever it lives: a drawer's opens its drawer; a bench's
+    /// closes any open drawer, makes its workspace the active one and gives its slot the focus.
+    /// `focus/waiting` is the one caller; with `Leave` the focus rule refuses it.
+    pub fn go_to(&mut self, pane: PaneId, focus: Focus) -> Result<(), Refusal> {
+        if self.drawer_address(pane).is_some() {
+            return self.show_pane(pane, focus);
+        }
+        self.commit(focus, |doc| {
+            let path = doc
+                .workspace_of(pane)
+                .ok_or(Refusal::UnknownPane(pane))?
+                .path
+                .clone();
+            doc.open_drawer = None;
+            doc.active = Some(path.clone());
+            let index = doc.index_of(&path)?;
+            doc.workspaces[index].bench.show(pane, Focus::Take)
+        })
+    }
+
     /// Call a pane something, wherever it lives, and answer what it was called before.
     pub fn name_pane(
         &mut self,
