@@ -213,6 +213,13 @@ file that does not parse changes nothing. helm reads it; nothing writes it. It s
 `placement.toml`, which benchd reads and helm does not.
 _Avoid_: keybindings.json, config, shortcuts file
 
+**manage key**:
+The held modifier the bench's own keys ride on, ⌘⌥ unless the keymap file says `manage = "…"`.
+Every row on it, alone or with ⇧, is the **manage layer**: focus, move, workspace, close. It is a
+modifier set, not a mode, so its keys are ordinary chords and releasing it just means typing
+again. It always includes ⌘, so it never takes a key a terminal types.
+_Avoid_: leader, prefix, hyper, super, mod key
+
 **bench justfile**:
 `<bench root>/rules/justfile`, the operator's recipes: compositions of `bench` verbs (#356). A
 key bound to `action = "just"` or an agent's `bench just <recipe>` asks benchd to run one
