@@ -113,7 +113,7 @@ pane can show can live in one, and it exists only while it holds at least one. W
 is the operator's focus: an agent never opens one without *asked*; its pane lands in the drawer
 and **badges** it. Lives in benchd's document; helm draws the open one over the bench
 (`Sources/Helm/Drawers/`), where and how wide from `[drawer.<name>]` in the keymap file.
-_Avoid_: panel, sidebar, rail (the rail is helm's own and is not a drawer), scratchpad, overlay
+_Avoid_: panel, sidebar, rail (retired with #382), scratchpad, overlay
 
 **sessions drawer**:
 The drawer on the left (⌘⇧S) listing every agent session in the active workspace, as benchd's
@@ -121,6 +121,16 @@ The drawer on the left (⌘⇧S) listing every agent session in the active works
 benchd computed for it — show its pane, attach, resume or read its transcript — and a finished
 row can be dismissed. helm adds no rule of its own about which sessions belong.
 _Avoid_: agent list, sidebar, session browser
+
+**Archon drawer**:
+The drawer along the bottom (⌘⇧R) showing what Archon is doing in the active workspace's project
+(#382): runs **waiting on you** (paused at a gate), **running** runs, and **finished** runs not
+cleared, each as a row of **stage** dots that fill in as it advances. Read from Archon's own CLI
+(`workflow runs --json`, and `workflow status --json --verbose` while a run is live); helm keeps no
+record of a run. Keyboard first: a gate is answered with `a`/`x`/`1-9`, a run resumed with `r`,
+cancelled with `c c`, its log followed in a terminal with `l`; `/` starts work. It polls only while
+open. Painted on Archon's own console surfaces. Agents do not use it: Archon's CLI is theirs.
+_Avoid_: Archon pane, run list, monitor, Archon rail (retired)
 
 **badge**:
 A drawer's mark that something arrived in it the operator has not seen: an agent put a pane
@@ -146,36 +156,32 @@ pane, and nothing in the **board** above knows it exists. Owned by the `helm-boa
 where the colliding word comes from — no Swift in `Sources/Helm/Board/` is about this at all.
 _Avoid_: board unqualified (that word is the workspace marks), whiteboard, sketch pane, diagram
 
-**rail**:
-The remembered, default-hidden strip to the right of the workbench: **somewhere to start work
-that is not your current work**. It holds the Archon and Worktrees tenants. Archon renders a
-title, a field, a send button, one line per **running run**, and a count per other status.
-Worktrees is one collapsed line until requested, then becomes a per-repository ledger of every
-record from `git worktree list --porcelain`: branch and owner kind, local disk size and directory
-activity, and reachability from the resolved remote default branch. It does not poll. Cleanup is
-confirmed and owner-routed through `archon complete` or guarded `git worktree remove`, never force.
-Nothing opens from the rail; run detail is read in Archon's own web UI. It is not another place
-panes can dock, a file tree, or a cross-repository inventory.
-_Avoid_: sidebar, pane dock, monitor rail, calling it a run list
-
-**Worktrees**:
-The rail's on-demand, per-repository ledger of linked Git worktrees. Git porcelain is the shared
-discovery source for hand-made and Archon-owned trees. “Merged” means Git reachability from an
-explicit resolved remote default branch, not pull-request state; an unknown base is never
-cleanable. helm does not read Archon's database or HTTP API, call global `archon isolation
-cleanup`, inventory unrelated repositories, or automatically force deletion.
-_Avoid_: worktree pane, worktree sidebar, file tree, disk dashboard
+**Worktrees drawer**:
+The drawer on the right (⌘⇧G) listing **every git worktree on the machine**, grouped by
+repository (#382): the bench's workspaces' repositories, those under `~/Projects`, and those
+Archon's worktrees were made from. Each worktree shows its branch, dirty or clean, ahead and
+behind its upstream, **merged** (Git reachability from the resolved remote default branch, never
+pull-request state; unknown when there is none), the age of its last commit, and the bench panes
+working in it. Read from git alone when the drawer is shown and on `r`; it never polls. From the
+keyboard it opens a worktree as a workspace or a terminal, creates one (`n`) at the repository's
+conventional place, and deletes one (`d`) after a confirmation that names what is lost — uncommitted
+files, commits the default branch lacks. A branch goes only when merged; an Archon worktree goes
+through `archon complete` in its own Archon home, never forced. It replaced the **rail**, a remembered strip right of the bench that held Worktrees
+(and Archon before its drawer) and was deleted with #382.
+_Avoid_: rail, worktree pane, worktree sidebar, file tree, disk dashboard
 
 **running run**:
-The one status the rail gives a line to, with a subline naming the **stage** it is on. Every
-other status — including `paused` — is history or a gate, and collapses to a count.
-_Avoid_: active run (the word the rail used when `paused` had a row too), open run, live run
+A run with status `running`, listed in the Archon drawer between the runs waiting on you
+(`paused`) and the finished ones. A live run is either of the first two.
+_Avoid_: active run, open run
 
 **stage**:
-One node of a workflow run, named the way Archon names it — `parse-request`, `implement`,
-`validate`. What the rail's subline says, because it is the thing that advances.
+One top-level node of a workflow run, named the way Archon names it — `parse-request`,
+`implement`, `validate` — and one dot in the Archon drawer. The full list is Archon's
+`terminal_graph`, so a stage not reached yet is still a dot; its state (pending, running, waiting,
+done, failed, skipped) is the fold of the run's events. A loop's body is inside its stage.
 _Avoid_: step (that word is `current_step_name`'s, which Archon never populates for a DAG),
-node (right in Archon's own model, but the rail shows one at a time and not the fold)
+node (Archon's word, which also covers the nodes inside a stage)
 
 **palette**:
 helm's one table of colours, as values (`Palette.helm`). There is exactly one, and every
@@ -291,8 +297,9 @@ _Avoid_: callback, event, message (nothing is delivered — the agent reads a fi
 Closing a pane with `bench close` — the inverse of a spawn, and it stops at the **pane**. benchd
 refuses an agent's close of a terminal unless it says `--force`, and the pane the operator is
 working in unless it says `--asked`. Worktrees and branches are not teardown's:
-that is #141's rail, which confirms with the operator and never deletes unmerged work.
-_Avoid_: kill, destroy, cleanup (cleanup is the worktree rail's word)
+that is the Worktrees drawer's (#141), which confirms with the operator and never deletes
+unmerged work.
+_Avoid_: kill, destroy, cleanup (cleanup is the Worktrees drawer's word)
 
 ### Not levels in helm
 

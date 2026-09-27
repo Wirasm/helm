@@ -30,8 +30,11 @@ use std::time::{Duration, Instant};
 /// An agent with a mailbox, as its hook last reported it.
 pub struct Agent {
     pub handle: String,
-    /// `None` until an event says what it is doing.
+    /// `None` until an event says what it is doing. Changed only by [`Agent::set_activity`].
     pub activity: Option<Activity>,
+    /// When `activity` last changed, in epoch ms: how long a waiting agent has waited, and
+    /// whether its report is older than what its screen shows (`waiting`).
+    pub activity_since_ms: u64,
     /// It has been given the standing rule. Once per session in this daemon's life, by the
     /// first reply or push that reached it.
     pub told: bool,
@@ -80,6 +83,7 @@ impl Agent {
             pane,
             handle,
             activity: None,
+            activity_since_ms: sessions::now_ms(),
             told: false,
             push: Push::Ready,
             seen: Instant::now(),
@@ -112,9 +116,15 @@ impl Agent {
             return None;
         };
         (self.activity.as_ref() != Some(&now)).then(|| {
-            self.activity = Some(now.clone());
+            self.set_activity(now.clone());
             now
         })
+    }
+
+    /// The one way `activity` changes, so `activity_since_ms` always says when it did.
+    pub fn set_activity(&mut self, now: Activity) {
+        self.activity = Some(now);
+        self.activity_since_ms = sessions::now_ms();
     }
 }
 
@@ -586,7 +596,7 @@ fn push(core: &Arc<Mutex<Core>>, root: &Path, key: &SessionKey, handle: &str, ch
             // codex answered with the turn it started, so the agent is busy now, before any
             // hook says so, and is not pushed to again on the next tick.
             _ => {
-                agent.activity = Some(Activity::Busy);
+                agent.set_activity(Activity::Busy);
                 started = true;
             }
         }
@@ -678,12 +688,13 @@ fn settle_unanswered(core: &Arc<Mutex<Core>>, root: &Path) {
 }
 
 /// Agents the hooks last saw busy or waiting, quiet for [`RECONCILE_AFTER`], with mail
-/// waiting: the harness's own record says whether they went idle without a hook saying so.
+/// waiting or waiting on the operator (a wait nobody ends would send him to a pane that is not
+/// waiting, M1): the harness's own record says whether they went idle without a hook saying so.
 /// Claude's registry row, for Esc on a prompt (sensor research, run B). A served codex's thread
 /// status, for a turn that failed: a turn refused by a usage limit fires no `Stop` (measured on
 /// codex 0.157.0), so without this the agent looks busy until its next prompt.
 fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
-    let quiet: Vec<(SessionKey, String, Option<Channel>)> = {
+    let quiet: Vec<(SessionKey, String, Option<Channel>, bool)> = {
         let c = core.lock().unwrap();
         c.agents
             .iter()
@@ -697,12 +708,16 @@ fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
                     && a.activity.as_ref().is_some_and(|x| *x != Activity::Idle)
                     && a.seen.elapsed() > RECONCILE_AFTER
             })
-            .map(|(key, a)| (key.clone(), a.handle.clone(), a.channel.clone()))
+            .map(|(key, a)| {
+                let waiting = matches!(a.activity, Some(Activity::Waiting { .. }));
+                (key.clone(), a.handle.clone(), a.channel.clone(), waiting)
+            })
             .collect()
     };
     let stale: Vec<_> = quiet
         .into_iter()
-        .filter(|(_, handle, _)| bench_mail::unread(root, handle) > 0)
+        .filter(|(_, handle, _, waiting)| *waiting || bench_mail::unread(root, handle) > 0)
+        .map(|(key, handle, channel, _)| (key, handle, channel))
         .collect();
     if stale.is_empty() {
         return;
@@ -715,7 +730,7 @@ fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
         };
         agent.seen = Instant::now();
         if let Some(record) = idle {
-            agent.activity = Some(Activity::Idle);
+            agent.set_activity(Activity::Idle);
             let _ = c.append(
                 "agent/state",
                 json!({ "harness": key.harness.name(), "session": key.id, "handle": handle, "activity": Activity::Idle, "event": record }),

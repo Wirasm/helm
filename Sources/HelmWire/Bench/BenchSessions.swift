@@ -201,24 +201,64 @@ package struct BenchLiveSessions: Decodable, Equatable, Sendable {
         /// What has the terminal: the session's own process, or the job its shell runs. nil once
         /// the session has ended.
         package var foregroundPid: Int32?
+        /// The agent in it is waiting on the operator (M1, #357); nil when it is not.
+        package var waiting: Waiting?
 
         private enum CodingKeys: String, CodingKey {
-            case session, pane
+            case session, pane, waiting
             case foregroundPid = "foreground_pid"
         }
 
-        package init(session: String, pane: UUID?, foregroundPid: Int32?) {
+        package init(
+            session: String, pane: UUID?, foregroundPid: Int32?, waiting: Waiting? = nil
+        ) {
             self.session = session
             self.pane = pane
             self.foregroundPid = foregroundPid
+            self.waiting = waiting
+        }
+    }
+
+    /// `bench_wire::Waiting`: what for, since when, and who said so — the agent's hook, or a
+    /// prompt benchd read off its screen.
+    package struct Waiting: Decodable, Equatable, Sendable {
+        package var waitingFor: String
+        package var since: Date
+        package var source: String
+
+        private enum CodingKeys: String, CodingKey {
+            case source
+            case waitingFor = "waiting_for"
+            case sinceMs = "since_ms"
+        }
+
+        package init(waitingFor: String, since: Date, source: String) {
+            self.waitingFor = waitingFor
+            self.since = since
+            self.source = source
+        }
+
+        package init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            waitingFor = try c.decode(String.self, forKey: .waitingFor)
+            since = Date(
+                timeIntervalSince1970: Double(try c.decode(UInt64.self, forKey: .sinceMs)) / 1000)
+            source = try c.decode(String.self, forKey: .source)
         }
     }
 
     /// The foreground pid of each pane that shows a live session.
-    package var foregroundByPane: [UUID: Int32] {
+    package var foregroundByPane: [UUID: Int32] { byPane.compactMapValues(\.foregroundPid) }
+
+    /// The agent waiting on the operator in each pane that shows one.
+    package var waitingByPane: [UUID: Waiting] { byPane.compactMapValues(\.waiting) }
+
+    /// Each pane's live session: one with a foreground process. A pane can also be listed
+    /// against a session that ended before it got a new one, and that one says nothing.
+    private var byPane: [UUID: Entry] {
         Dictionary(
-            sessions.compactMap { entry in
-                entry.pane.flatMap { pane in entry.foregroundPid.map { (pane, $0) } }
+            sessions.filter { $0.foregroundPid != nil }.compactMap { entry in
+                entry.pane.map { ($0, entry) }
             },
             uniquingKeysWith: { first, _ in first })
     }

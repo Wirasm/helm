@@ -91,8 +91,15 @@ final class BindingTableTests: XCTestCase {
                 + "applied, so this arrives uppercase")
     }
 
-    func testShiftCommandRTogglesTheArchonRail() {
-        XCTAssertEqual(match("r", [.command, .shift]), .local(.toggleRail))
+    /// ⌘⇧R and ⌘⇧G are drawers now (#382): Archon along the bottom, Worktrees on the right.
+    /// The rail both used to toggle is gone.
+    func testShiftCommandROpensTheArchonDrawerAndGTheWorktreesDrawer() {
+        XCTAssertEqual(
+            match("r", [.command, .shift]),
+            .verb(.toggleDrawer(name: "archon", surface: .archon)))
+        XCTAssertEqual(
+            match("g", [.command, .shift]),
+            .verb(.toggleDrawer(name: "worktrees", surface: .worktrees)))
     }
 
     /// ⌘W is unavailable — SwiftUI's `WindowGroup` binds it to close-window — so the pane
@@ -268,6 +275,7 @@ final class BindingTableTests: XCTestCase {
             resolve(.toggleDrawer(name: "browser", surface: .browser)),
             .drawerToggle(name: "browser", surface: .browser))
         XCTAssertEqual(resolve(.activateWorkspace(index: 2)), .workspaceActivate(path: "/w/c"))
+        XCTAssertEqual(resolve(.focusWaiting), .focusWaiting, "benchd decides who waits")
     }
 
     func testCyclingWrapsBothWays() {

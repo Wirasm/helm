@@ -161,6 +161,14 @@
     }
   },
   {
+    "id": "v-20w",
+    "verb": "focus/waiting",
+    "args": {},
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
     "id": "v-21",
     "verb": "layout/resize",
     "args": {
@@ -239,6 +247,32 @@
       "drawer": "sessions",
       "surface": {
         "kind": "sessions"
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-26",
+    "verb": "drawer/toggle",
+    "args": {
+      "drawer": "archon",
+      "surface": {
+        "kind": "archon"
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-27",
+    "verb": "drawer/toggle",
+    "args": {
+      "drawer": "worktrees",
+      "surface": {
+        "kind": "worktrees"
       }
     },
     "by": {

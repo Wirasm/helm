@@ -31,6 +31,15 @@ struct ArchonGate: Equatable, Sendable {
     let captureResponse: Bool
     /// `approved`, `rejected`, or nil while the gate is still waiting for a person.
     let resolved: String?
+    /// The decisions the workflow's author declared (`approval.decisions`), in order. Empty for
+    /// a plain approve/reject gate. Each is answered with `workflow respond`, and the drawer
+    /// offers them on the number keys.
+    var decisions: [Declared] = []
+
+    struct Declared: Codable, Equatable, Sendable {
+        let id: String
+        let label: String?
+    }
 
     /// Open, for the reason `ArchonNode.State` is open and `ArchonRun.status` is a raw string:
     /// this vocabulary lives in a repo with zero knowledge of helm and has grown twice already
@@ -119,6 +128,9 @@ struct ArchonGate: Equatable, Sendable {
             if captureResponse { return true }
             if case .interactiveLoop = type { return true }
             return false
+        case .declared:
+            // A declared decision's text is the node's output only when it captures one.
+            return captureResponse
         }
     }
 }
@@ -139,6 +151,7 @@ extension ArchonGate: Codable {
         captureResponse =
             try container.decodeIfPresent(Bool.self, forKey: .captureResponse) ?? false
         resolved = try container.decodeIfPresent(String.self, forKey: .resolved)
+        decisions = (try? container.decodeIfPresent([Declared].self, forKey: .decisions)) ?? []
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -149,44 +162,62 @@ extension ArchonGate: Codable {
         try container.encodeIfPresent(childRunId, forKey: .childRunId)
         try container.encode(captureResponse, forKey: .captureResponse)
         try container.encodeIfPresent(resolved, forKey: .resolved)
+        if !decisions.isEmpty { try container.encode(decisions, forKey: .decisions) }
     }
 
     /// camelCase, unlike the run's own snake_case keys. That asymmetry is real in Archon's
     /// output — `ApprovalContext` is a TypeScript interface serialised as-is, where the run row
     /// is a database record — and it is the same split `ArchonNode` documents.
     private enum CodingKeys: String, CodingKey {
-        case nodeId, message, type, childRunId, captureResponse, resolved
+        case nodeId, message, type, childRunId, captureResponse, resolved, decisions
     }
 }
 
 // MARK: - Acting on one
 
-/// The two verbs helm offers on a gate.
+/// How the operator answers a gate: Archon's `approve` and `reject`, or one of the decisions the
+/// workflow declared, sent with `respond`.
 ///
-/// **Two of Archon's four run-scoped verbs, and the other two are absent on purpose.**
-/// `abandon` ends a run rather than answering a gate, and #147 removed it along with the row it
-/// lived on; `resume` is not this shape of call at all (see `ArchonClient.resume(_:)`). This
-/// enum is the gate's vocabulary, not Archon's whole surface.
-enum ArchonGateDecision: String, Equatable, Sendable {
+/// **The gate's vocabulary, not Archon's whole surface.** `resume` and `cancel` act on a run
+/// rather than answer a gate, so they are `ArchonClient` calls of their own.
+enum ArchonGateDecision: Equatable, Sendable {
     case approve, reject
+    /// A decision id the gate declared (`ArchonGate.decisions`).
+    case declared(String)
 
     /// What Archon calls it, and what the operator reads. The same word deliberately: a control
     /// named for something other than the CLI verb it runs is a translation nobody asked for.
-    var verb: String { rawValue }
+    var verb: String {
+        switch self {
+        case .approve: "approve"
+        case .reject: "reject"
+        case let .declared(id): id
+        }
+    }
 
     /// **The flag form, not the positional one.** Archon takes the text either way — `values.comment
     /// || positionals.slice(3).join(' ')` — but a positional loses a reason that begins with a
     /// dash and joins a multi-word one back together on spaces. The flag passes the operator's
     /// sentence through whole.
     func arguments(for runID: String, text: String?) -> [String] {
-        let command = ["workflow", verb, runID, "--json"]
+        let command =
+            switch self {
+            case .approve, .reject: ["workflow", verb, runID, "--json"]
+            case let .declared(id): ["workflow", "respond", runID, id, "--json"]
+            }
         // **Whitespace-only is no comment, and the difference is load-bearing.** Archon converts
         // an empty comment to `undefined` explicitly so a signal-bearing loop gate finalizes
         // instead of running another iteration; passing `--comment "   "` would record blanks as
         // feedback and iterate. Its own CLI trims for the same reason.
         guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
         else { return command }
-        return command + [self == .approve ? "--comment" : "--reason", text]
+        let flag =
+            switch self {
+            case .approve: "--comment"
+            case .reject: "--reason"
+            case .declared: "--text"
+            }
+        return command + [flag, text]
     }
 }
 

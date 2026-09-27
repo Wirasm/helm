@@ -10,6 +10,12 @@
 //!   does not answer them again into the program.
 //! - **Queries are answered by whoever the program is talking to.** While a viewer is attached,
 //!   its Ghostty answers; while none is, the engine does, as Ghostty would.
+//! - **The daemon hears when output settles** (M1, #357): [`Notice::Settled`] once the program
+//!   has written nothing for [`SETTLE`], or [`SETTLE_AT_MOST`] after the first byte nobody has
+//!   been told about, whichever is sooner. An agent at a prompt is not always silent: measured on
+//!   a real permission prompt, Claude Code 2.1.283 kept writing ~100 bytes a second and codex
+//!   0.157.1 ~65, so silence alone would never arrive for either of them. pi 0.84.4 at its trust
+//!   prompt wrote nothing at all.
 //! - **A frame is never cut.** An attach or a screen read inside a synchronized update (mode
 //!   2026) waits for the update to end, for at most a second, as Ghostty's own renderer does.
 
@@ -34,6 +40,10 @@ const HOLD_LIMIT: Duration = Duration::from_secs(1);
 /// engine reads waits on its pty, as it would on any terminal: the VT-engine spike measured
 /// unbounded queues at 4-6 GB.
 pub const QUEUE: usize = 64;
+/// Output that stops for this long has settled.
+pub const SETTLE: Duration = Duration::from_millis(500);
+/// Output that never stops is still reported as settled this long after it began.
+pub const SETTLE_AT_MOST: Duration = Duration::from_secs(2);
 
 /// What a viewer needs to know about a session's terminal, read at a settled frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +121,7 @@ pub(crate) fn start(shared: Shared, rows: u16, cols: u16, rx: Receiver<Msg>) -> 
                     shared,
                     waiting: Vec::new(),
                     deadline: None,
+                    unsettled: None,
                 }
                 .run(&rx);
             }
@@ -130,12 +141,18 @@ struct Engine {
     /// Served, in order, once the screen is a finished frame or `deadline` passes.
     waiting: Vec<Waiter>,
     deadline: Option<Instant>,
+    /// Output not yet reported as settled: when the first of it came, and when the last did.
+    unsettled: Option<(Instant, Instant)>,
 }
 
 impl Engine {
     fn run(mut self, rx: &Receiver<Msg>) {
         loop {
-            let msg = match self.deadline {
+            let wake = [self.deadline, self.settles_at()]
+                .into_iter()
+                .flatten()
+                .min();
+            let msg = match wake {
                 Some(deadline) => {
                     match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                         Ok(m) => Some(m),
@@ -152,6 +169,21 @@ impl Engine {
                 self.handle(msg);
             }
             self.serve_waiting();
+            self.tell_settled();
+        }
+    }
+
+    fn settles_at(&self) -> Option<Instant> {
+        self.unsettled
+            .map(|(first, last)| (last + SETTLE).min(first + SETTLE_AT_MOST))
+    }
+
+    fn tell_settled(&mut self) {
+        if self.settles_at().is_some_and(|at| at <= Instant::now()) {
+            self.unsettled = None;
+            let _ = self.shared.notices.send(Notice::Settled {
+                session: self.shared.id.clone(),
+            });
         }
     }
 
@@ -194,6 +226,8 @@ impl Engine {
 
     /// The engine first, then the viewer: what is relayed is what the engine has seen.
     fn output(&mut self, bytes: &[u8]) {
+        let now = Instant::now();
+        self.unsettled = Some((self.unsettled.map_or(now, |(first, _)| first), now));
         self.term.write(bytes);
         let replies = self.term.take_replies();
         let mut guard = self.shared.attached.lock().unwrap();

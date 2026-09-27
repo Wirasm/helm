@@ -132,12 +132,23 @@ enum KeyBindings {
         ]
 
     private static let chrome: [KeyBinding] = [
+        // ⌘K — the command palette (#500): anything a key can do, found by typing its name.
+        KeyBinding(
+            .character("k"), .command, .local(.toggleCommandPalette), hint: "commands",
+            menu: "Command Palette"),
         KeyBinding(
             .character("o"), [.command, .shift], .local(.openWorkspacePanel), hint: "folder",
             menu: "Open Workspace…"),
+        // ⌘⇧R — Archon's runs, gates and stage dots in a drawer along the bottom (#382).
         KeyBinding(
-            .character("r"), [.command, .shift], .local(.toggleRail), hint: "archon",
-            menu: "Toggle Archon Rail"),
+            .character("r"), [.command, .shift],
+            .verb(.toggleDrawer(name: "archon", surface: .archon)), hint: "archon",
+            menu: "Archon"),
+        // ⌘⇧G — every git worktree on the machine, grouped by repository, on the right (#382).
+        KeyBinding(
+            .character("g"), [.command, .shift],
+            .verb(.toggleDrawer(name: "worktrees", surface: .worktrees)), hint: "worktrees",
+            menu: "Worktrees"),
         // ⌘J — the camera on the focused slot (`BenchCamera`): the bench laid out larger and
         // panned to it, the neighbours peeking in at the edges. ⌘J again returns. `.anywhere`,
         // because the pane you want to look at is usually the terminal holding the keyboard.
@@ -159,6 +170,11 @@ enum KeyBindings {
         KeyBinding(
             .character("a"), [.command, .shift], .local(.toggleKeepAwake), hint: "awake",
             menu: "Keep Awake"),
+        // ⌘⇧J — jump to the agent waiting on you longest; again for the next (M1, #357).
+        // benchd decides who waits, from each agent's own report and what its screen shows.
+        KeyBinding(
+            .character("j"), [.command, .shift], .verb(.focusWaiting), hint: "waiting",
+            menu: "Go to Waiting Agent"),
     ]
 
     /// No hint (`KeyHint`'s header says why), but every one keeps a menu item or a key.

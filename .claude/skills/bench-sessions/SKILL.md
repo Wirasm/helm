@@ -29,6 +29,11 @@ for r in json.load(sys.stdin)["rows"]:
   and finished sessions helm or benchd hosted. Running rows come first.
 - It needs benchd running (exit 2 when it is not). The `bench-mail` skill covers each row's
   `mail` field.
+- **A running row whose agent waits on the operator** says `"activity": {"kind": "waiting",
+  "waiting_for": "permission prompt"}` (or `trust prompt`, `question`, …): the agent's own
+  report, or a prompt benchd read off its screen, which is how a codex or pi prompt, or a Claude
+  trust prompt, shows up at all. `bench sessions` (without `--all`) gives each benchd session's
+  `waiting` with `since_ms` and its `source`, `hook` or `screen`.
 
 ## What did it do
 

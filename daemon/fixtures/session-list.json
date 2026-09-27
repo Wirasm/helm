@@ -17,7 +17,12 @@
         "attached": true,
         "output_bytes": 20480,
         "runtime_session": null,
-        "uptime_secs": 312
+        "uptime_secs": 312,
+        "waiting": {
+          "waiting_for": "permission prompt",
+          "since_ms": 1790540771295,
+          "source": "screen"
+        }
       },
       {
         "session": "s5",

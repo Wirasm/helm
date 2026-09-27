@@ -41,6 +41,7 @@ extension VerbTemplate {
         case let .cycleWorkspace(delta): ("cycle-workspace", .init(delta: delta))
         case let .toggleDrawer(name, surface):
             ("drawer", .init(name: name, surface: surface?.keymapSpelling))
+        case .focusWaiting: ("focus-waiting", .none)
         }
     }
 
@@ -58,6 +59,7 @@ extension VerbTemplate {
         case "drawer":
             let drawer = try a.drawer(name)
             self = .toggleDrawer(name: drawer.name, surface: drawer.surface)
+        case "focus-waiting": try a.none(name); self = .focusWaiting
         default: return nil
         }
     }
@@ -70,10 +72,10 @@ extension LocalAction {
         case let .jumpToPrompt(offset): ("jump-to-prompt", .init(offset: offset))
         case .openWorkspacePanel: ("open-workspace-panel", .none)
         case .openArtifactPanel: ("open-artifact-panel", .none)
-        case .toggleRail: ("toggle-rail", .none)
         case .toggleZoom: ("toggle-zoom", .none)
         case .newNote: ("new-note", .none)
         case .toggleKeepAwake: ("keep-awake", .none)
+        case .toggleCommandPalette: ("command-palette", .none)
         }
     }
 
@@ -83,10 +85,10 @@ extension LocalAction {
         case "jump-to-prompt": self = .jumpToPrompt(offset: try a.offset(name))
         case "open-workspace-panel": try a.none(name); self = .openWorkspacePanel
         case "open-artifact-panel": try a.none(name); self = .openArtifactPanel
-        case "toggle-rail": try a.none(name); self = .toggleRail
         case "toggle-zoom": try a.none(name); self = .toggleZoom
         case "new-note": try a.none(name); self = .newNote
         case "keep-awake": try a.none(name); self = .toggleKeepAwake
+        case "command-palette": try a.none(name); self = .toggleCommandPalette
         default: return nil
         }
     }
@@ -99,6 +101,10 @@ extension Surface {
             self = .browser
         } else if text == "sessions" {
             self = .sessions
+        } else if text == "archon" {
+            self = .archon
+        } else if text == "worktrees" {
+            self = .worktrees
         } else if text.hasPrefix("file:"), text.count > "file:".count {
             self = .canvas(
                 path: (String(text.dropFirst("file:".count)) as NSString)
@@ -114,6 +120,8 @@ extension Surface {
         switch self {
         case .browser: "browser"
         case .sessions: "sessions"
+        case .archon: "archon"
+        case .worktrees: "worktrees"
         case let .canvas(path): "file:" + path
         case .terminal: "terminal"
         case let .unsupported(kind): kind
@@ -207,7 +215,8 @@ struct KeymapArguments: Equatable {
             throw KeymapProblem(
                 line: nil,
                 reason:
-                    "'\(action)' surface is browser, sessions or file:<path>, not '\(surface)'")
+                    "'\(action)' surface is browser, sessions, archon, worktrees or file:<path>, not '\(surface)'"
+            )
         }
         return (name, parsed)
     }

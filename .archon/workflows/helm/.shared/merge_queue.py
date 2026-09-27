@@ -11,6 +11,10 @@ The invariant: a PR merges only at the exact head SHA every required check passe
 merge commit's parents are exactly [the development tip before the merge, that head]. Anything
 else stops the batch.
 
+A verdict is only taken on a head that is up to date with `development`. A check that went red
+on a head behind it ran against an older base and says nothing about the PR today, so the
+queue updates first and judges the new head's own checks.
+
 State is one file, queue.json under $ARTIFACTS_DIR, rewritten after every transition. Across
 runs the record is $STATE_DIR/merge-queue/ledger.jsonl, one appended line per transition.
 
@@ -55,6 +59,8 @@ class Refusal(Exception):
 class Checks:
     state: Literal["green", "pending", "missing", "red"]
     names: tuple[str, ...] = ()  # the red, pending or missing ones
+    red_ids: tuple[int, ...] = ()  # the red runs; on GitHub Actions a check run's id is its job's
+    running: bool = False  # a red verdict while another required check is still running
 
 
 def checks_at(required: list[str], runs: list[dict[str, Any]]) -> Checks:
@@ -69,7 +75,7 @@ def checks_at(required: list[str], runs: list[dict[str, Any]]) -> Checks:
         name = run["name"]
         if name not in latest or run["id"] > latest[name]["id"]:
             latest[name] = run
-    red, pending, missing = [], [], []
+    red, red_ids, pending, missing = [], [], [], []
     for name in required:
         run = latest.get(name)
         if run is None:
@@ -78,8 +84,9 @@ def checks_at(required: list[str], runs: list[dict[str, Any]]) -> Checks:
             pending.append(name)
         elif run.get("conclusion") not in PASSING:
             red.append(name)
+            red_ids.append(run["id"])
     if red:
-        return Checks("red", tuple(red))
+        return Checks("red", tuple(red), tuple(red_ids), running=bool(pending))
     if pending:
         return Checks("pending", tuple(pending))
     if missing:
@@ -93,6 +100,7 @@ class Facts:
     is_draft: bool
     base: str
     head_in_base: bool  # the head is already an ancestor of development
+    behind: bool  # development has commits the head lacks (from compare, never lazy)
     base_pr_merged: bool  # for a stacked PR: the PR its base branch belongs to has merged
     merge_state: str  # GitHub's mergeStateStatus
     checks: Checks
@@ -107,6 +115,7 @@ Move = Literal[
     "conflict",
     "update",
     "red",
+    "rerun",  # red on an up-to-date head, and this PR has not had its one re-run yet
     "wait",
     "kick",
     "tested",  # preview: up to date and green, stop here
@@ -114,7 +123,7 @@ Move = Literal[
 ]
 
 
-def next_move(f: Facts, *, preview: bool, may_kick: bool) -> Move:
+def next_move(f: Facts, *, preview: bool, may_kick: bool, may_rerun: bool = False) -> Move:
     if f.state == "MERGED" or f.head_in_base:
         return "landed"
     if f.state != "OPEN":
@@ -125,10 +134,18 @@ def next_move(f: Facts, *, preview: bool, may_kick: bool) -> Move:
         return "retarget" if f.base_pr_merged else "stacked"
     if f.merge_state == "DIRTY":
         return "conflict"
-    if f.merge_state == "BEHIND":
-        return "update"
+    # Behind comes from the compare API as well as mergeStateStatus, because GitHub computes
+    # that lazily: right after development moves it reads UNKNOWN, and a check that went red
+    # against the old base looked final (#507, 2026-09-27). Nothing is judged on a stale head.
+    if f.behind or f.merge_state == "BEHIND":
+        # UNKNOWN can also hide DIRTY, and update-branch on a conflict is a failed gh call
+        # that would stop the batch. The next poll has GitHub's answer.
+        return "wait" if f.merge_state == "UNKNOWN" else "update"
     if f.checks.state == "red":
-        return "red"
+        if not may_rerun:
+            return "red"
+        # Actions refuses to re-run a job while its workflow run is still going.
+        return "wait" if f.checks.running else "rerun"
     if f.checks.state == "missing":
         return "kick" if may_kick else "wait"
     if f.checks.state == "pending":
@@ -330,6 +347,7 @@ class Queue:
                 is_draft=view["isDraft"],
                 base=view["baseRefName"],
                 head_in_base=compare in ("behind", "identical"),
+                behind=compare == "diverged",
                 base_pr_merged=base_pr_merged,
                 merge_state=view["mergeStateStatus"],
                 checks=checks_at(self.state["required"], runs),
@@ -349,7 +367,8 @@ class Queue:
             item["head_sha"] = head
             head_since.setdefault(head, now())
             may_kick = head not in kicked and now() - head_since[head] > KICK_GRACE_SECONDS
-            move = next_move(f, preview=preview, may_kick=may_kick)
+            may_rerun = not item.get("reran")
+            move = next_move(f, preview=preview, may_kick=may_kick, may_rerun=may_rerun)
             if move != last_move:
                 say(f"#{number} at {head[:8]}: {move} ({f.merge_state}, checks {f.checks.state})")
                 last_move = move
@@ -368,9 +387,18 @@ class Queue:
             if move == "stacked":
                 return self.settle(item, "held", f"stacked on {f.base}, whose PR has not merged")
             if move == "conflict":
-                return self.settle(item, "held", f"conflicts with {BASE}")
+                return self.settle(
+                    item, "held",
+                    f"conflicts with {BASE}: merge {BASE} into the branch, resolve, push, "
+                    "and queue it again",
+                )
             if move == "red":
-                return self.settle(item, "held", "red: " + ", ".join(f.checks.names))
+                again = " (also after one re-run)" if item.get("reran") else ""
+                return self.settle(
+                    item, "held",
+                    f"red on {head[:8]}, up to date with {BASE}{again}: "
+                    + ", ".join(f.checks.names),
+                )
             if move == "tested":
                 return self.settle(item, "tested")
             if move == "merge":
@@ -386,6 +414,14 @@ class Queue:
                 run(["gh", "pr", "update-branch", str(number)])
                 self.await_new_head(number, head)
                 continue
+            if move == "rerun":
+                refused = self.rerun(item, head, f.checks)
+                if refused:
+                    # A re-run never moves development, so the batch goes on; the PR is held.
+                    return self.settle(
+                        item, "held", f"red on {head[:8]}: {', '.join(f.checks.names)}; {refused}"
+                    )
+                continue
             if move == "kick":
                 kicked.add(head)
                 run(["gh", "pr", "close", str(number)])
@@ -399,6 +435,39 @@ class Queue:
             if view["headRefOid"] != old:
                 return
         raise Refusal(f"#{number}: update-branch reported success but the head stayed {old[:8]}")
+
+    def rerun(self, item: dict[str, Any], head: str, checks: Checks) -> str:
+        """Re-run the red required jobs once per PR per batch: a flaky test cost three holds
+        on 2026-09-27. A second red holds the PR, and the report lists every PR that needed
+        the re-run, so a flake stays visible rather than absorbed.
+
+        Returns "" once the new runs exist, else why not, for the PR's held reason."""
+        number = item["number"]
+        item["reran"] = list(checks.names)
+        self.save()
+        self.ledger("rerun", item)
+        say(f"#{number} at {head[:8]}: re-running {', '.join(checks.names)} once")
+        try:
+            for job in checks.red_ids:
+                run(["gh", "api", "-X", "POST", f"repos/{self.repo}/actions/jobs/{job}/rerun"])
+        except Refusal as refusal:
+            del item["reran"]  # nothing re-ran; the report must not say it did
+            self.save()
+            return f"the one re-run was refused ({refusal})"
+        # Until the new runs exist, the old red is still the latest run for its name.
+        try:
+            for _ in range(12):
+                time.sleep(10)
+                runs = gh_json(
+                    "api", f"repos/{self.repo}/commits/{head}/check-runs?per_page=100",
+                    "--jq", "[.check_runs[] | {id, name}]",
+                )
+                newest = {r["name"]: r["id"] for r in sorted(runs, key=lambda r: r["id"])}
+                if all(newest.get(n, 0) > old for n, old in zip(checks.names, checks.red_ids)):
+                    return ""
+        except Refusal as refusal:
+            return f"re-ran once, then could not read the new runs ({refusal})"
+        return "re-ran once, but no new run appeared in 2 min"
 
     def merge(self, item: dict[str, Any], head: str) -> None:
         number = item["number"]
@@ -451,7 +520,7 @@ class Queue:
         if not self.state:
             # Intake refused (its reason is on that node); there is nothing to report on.
             return {"mode": "", "base_sha": "", "merged": [], "tested": [], "landed_through": [],
-                    "held": [], "unverified": [], "queued": [], "reasons": {},
+                    "held": [], "unverified": [], "queued": [], "reran": [], "reasons": {},
                     "stopped": "intake refused",
                     "summary": "intake refused; nothing ran"}
 
@@ -469,6 +538,8 @@ class Queue:
             # Merged, or maybe merged, with parents nobody verified: development changed.
             "unverified": by("merged_unverified"),
             "queued": by("queued"),
+            # Went red on an up-to-date head and had its one re-run: a flake, or a real red.
+            "reran": [i["number"] for i in self.items if i.get("reran")],
             "reasons": reasons,
             "stopped": self.state["stopped"],
         }
@@ -477,6 +548,7 @@ class Queue:
             f"tested {out['tested']}; landed through {out['landed_through']}; held {out['held']}"
             + (f"; UNVERIFIED {out['unverified']}" if out["unverified"] else "")
             + (f"; not reached {out['queued']}" if out["queued"] else "")
+            + (f"; re-ran a red check once for {out['reran']}" if out["reran"] else "")
             + (f"; stopped: {out['stopped']}" if out["stopped"] else "")
         )
         return out
