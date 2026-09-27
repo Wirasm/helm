@@ -7061,7 +7061,7 @@ fn an_agent_parked_at_a_prompt_is_seen_waiting_from_its_screen() {
 }
 
 /// A prompt left on a shell's screen by a program that exited is history, not a wait: a
-/// claude that stopped at its trust prompt and was answered "No, exit" leaves exactly this.
+/// claude that stopped at a prompt and was quit leaves exactly this.
 #[test]
 fn a_prompt_on_a_shell_at_its_prompt_is_not_waiting() {
     let home = TestHome::claim("m1-shell");
@@ -7077,10 +7077,10 @@ fn a_prompt_on_a_shell_at_its_prompt_is_not_waiting() {
     let opened = bench(&home.dir, &["open", "terminal"]);
     assert_eq!(opened.code, 0, "{}", opened.stderr);
     let pane = json_of(&opened)["pane"].as_str().unwrap().to_string();
-    let line = format!("cat '{}'", capture("claude-trust").display());
+    let line = format!("cat '{}'", capture("claude-permission").display());
     let sent = bench(&home.dir, &["send", &pane, &line, "--enter"]);
     assert_eq!(sent.code, 0, "{}", sent.stderr);
-    let screen = screen_until(&home.dir, &pane, |l| l.contains("Yes, I trust this folder"));
+    let screen = screen_until(&home.dir, &pane, |l| l.contains("Esc to cancel"));
     let sid = screen["session"].as_str().unwrap().to_string();
     // Longer than output takes to settle, however it trickles in.
     std::thread::sleep(Duration::from_secs(3));

@@ -7,6 +7,8 @@
 //! idle and working capture to no rule at all. A rule names several strings together, because a
 //! rule that matches something it should not is the expensive direction, and it reads only the
 //! bottom of the screen, where a live prompt is drawn and an answered one has scrolled away from.
+//! The strings are short: an agent draws its prompt at the pane's width, and a long sentence
+//! wraps onto two rows in a narrow pane.
 //!
 //! To add one: capture the screen (`bench get screen <pane>` while it is up), save its lines to
 //! `screens/<harness>-<what>.txt`, add the rule and a row to `CAPTURES`.
@@ -40,10 +42,7 @@ pub static RULES: &[Rule] = &[
     Rule {
         harness: "claude",
         waiting_for: TRUST,
-        all: &[
-            "Is this a project you created or one you trust?",
-            "Yes, I trust this folder",
-        ],
+        all: &["Quick safety check", "Yes, I trust this folder"],
     },
     Rule {
         harness: "codex",
