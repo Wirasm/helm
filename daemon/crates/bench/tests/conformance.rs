@@ -6935,12 +6935,15 @@ fn a_viewer_that_stops_reading_is_dropped_and_the_session_still_answers() {
     // A viewer that reads for a while, then never again.
     let (seen, stream) = attach_and_read(&daemon.socket, &sid, |b| b.len() > 100_000);
     assert!(seen.len() > 100_000, "the flood reached the viewer");
+    // Dropped once one write has waited the limit out; the deadline only says "never", and
+    // bounds the reader too, so a failed assertion below does not leave it running.
+    let deadline = Instant::now() + 3 * limit;
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reads = {
         let (home, sid, stop) = (home.dir.clone(), sid.clone(), std::sync::Arc::clone(&stop));
         std::thread::spawn(move || {
             let mut reads = Vec::new();
-            while !stop.load(Ordering::SeqCst) {
+            while !stop.load(Ordering::SeqCst) && Instant::now() < deadline {
                 let started = Instant::now();
                 let screen = bench(&home, &["get", "screen", &sid]);
                 reads.push((screen.code, screen.stderr, started.elapsed()));
@@ -6948,8 +6951,6 @@ fn a_viewer_that_stops_reading_is_dropped_and_the_session_still_answers() {
             reads
         })
     };
-    // Dropped once one write has waited the limit out; the deadline only says "never".
-    let deadline = Instant::now() + 3 * limit;
     while session_row(&home.dir, &sid)["attached"] != false {
         assert!(
             Instant::now() < deadline,
