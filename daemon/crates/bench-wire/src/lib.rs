@@ -495,6 +495,9 @@ pub struct Waiting {
 pub enum WaitingSource {
     /// Its hook (`bench hook`).
     Hook,
+    /// Claude Code's own registry row for the process in the foreground, read when its output
+    /// settled: the agent's own words even when its hooks are not wired.
+    Registry,
     /// A prompt rule matched its screen.
     Screen,
 }

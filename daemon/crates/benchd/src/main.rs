@@ -297,7 +297,8 @@ struct Core {
     /// Every session whose hook has reported (#358): its agent when it has a mailbox, `None`
     /// when it was asked once and gets none, so the claim rule is not re-run per event.
     agents: HashMap<bench_wire::SessionKey, Option<hook::Agent>>,
-    /// The prompt each live session's screen showed when its output last settled (`waiting`).
+    /// What each live session showed waiting when its output last settled (`waiting`): its
+    /// Claude registry row, or a prompt on its screen.
     screen_waits: HashMap<String, waiting::Seen>,
     /// Asks of helm waiting for its answer (`helm/ask`).
     asks: ask::Waiting,

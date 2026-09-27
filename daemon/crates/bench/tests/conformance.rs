@@ -7156,3 +7156,32 @@ fn focus_waiting_walks_the_waiting_panes_longest_first() {
         [spawned[0].clone(), spawned[1].clone(), spawned[0].clone()]
     );
 }
+
+/// A Claude whose hooks are not wired still says it waits, in its own registry row: benchd reads
+/// the row of the process in a session's foreground when its output settles, so a prompt no
+/// screen rule describes is still one the operator is taken to.
+#[test]
+fn a_registry_row_saying_waiting_is_a_wait_without_a_hook_or_a_rule() {
+    let home = TestHome::claim("m1-registry");
+    let sessions = home.dir.join(".claude/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let _daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\nprintf '{{\"pid\":%s,\"sessionId\":\"s-1\",\"cwd\":\"/tmp\",\"startedAt\":%s000,\"status\":\"waiting\",\"waitingFor\":\"dialog open\",\"statusUpdatedAt\":1000}}' $$ $(date +%s) > {}/$$.json\nprintf 'a screen no rule reads\\n'\ntouch {}/written\nexec sleep 60\n",
+            sessions.display(),
+            home.dir.display()
+        ),
+    );
+    let sid = spawn_scripted(&home.dir);
+    let mut entry = serde_json::Value::Null;
+    wait_until("the row is read", Duration::from_secs(10), || {
+        entry = live_entry(&home.dir, &sid);
+        !entry["waiting"].is_null()
+    });
+    assert_eq!(
+        entry["waiting"],
+        serde_json::json!({ "waiting_for": "dialog open", "since_ms": 1000, "source": "registry" }),
+        "{entry}"
+    );
+}
