@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The button style for helm's chrome: tabs, the tab ×, the `+` buttons. Its whole label is the
+/// The button style for helm's chrome: tabs, the ×s, the glyph buttons. Its whole label is the
 /// click target.
 ///
 /// `.plain` hit-tests only what the label draws. A tab whose background is `.clear` (every tab
