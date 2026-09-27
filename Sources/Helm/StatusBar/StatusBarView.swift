@@ -74,6 +74,7 @@ struct StatusBarView: View {
                 workbench.send(.paneOpen(surface: .canvas(path: log)), by: .operatorGesture)
             }
             DrawerCapsules(model: workbench)
+            WaitingCapsule(foregrounds: TerminalManager.shared.foregrounds, workbench: workbench)
             BenchStatusBadge(client: workbench.client, workbench: workbench)
             isolationBadge
             keepAwakeCapsule

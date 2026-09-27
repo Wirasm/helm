@@ -7089,3 +7089,70 @@ fn a_prompt_on_a_shell_at_its_prompt_is_not_waiting() {
     let entry = live_entry(&home.dir, &sid);
     assert!(entry["waiting"].is_null(), "{entry}");
 }
+
+/// ⌘⇧J's verb: the operator goes to the agent waiting on him longest, and each press after that
+/// to the next, round again. An agent may not take him there unasked.
+#[test]
+fn focus_waiting_walks_the_waiting_panes_longest_first() {
+    let home = TestHome::claim("m1-jump");
+    let daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\ncat '{}'\nexec sleep 60\n",
+            capture("pi-trust").display()
+        ),
+    );
+    let ws = workspace(&home.dir).display().to_string();
+    let nothing = layout(
+        &daemon.socket,
+        "focus/waiting",
+        serde_json::json!({}),
+        operator(),
+        false,
+    );
+    assert_eq!(nothing["status"], "refused", "{nothing}");
+    assert!(
+        nothing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("waiting on you"),
+        "{nothing}"
+    );
+
+    let mut spawned = Vec::new();
+    for _ in 0..2 {
+        let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        let answer = json_of(&run);
+        let (sid, pane) = (
+            answer["session"].as_str().unwrap().to_string(),
+            answer["pane"].as_str().unwrap().to_string(),
+        );
+        wait_until("the prompt is seen", Duration::from_secs(10), || {
+            !live_entry(&home.dir, &sid)["waiting"].is_null()
+        });
+        spawned.push(pane);
+    }
+    let jump = |by: Option<serde_json::Value>, asked: bool| {
+        layout(
+            &daemon.socket,
+            "focus/waiting",
+            serde_json::json!({}),
+            by,
+            asked,
+        )
+    };
+    let refused = jump(None, false);
+    assert_eq!(refused["status"], "refused", "an agent, unasked: {refused}");
+
+    let mut visited = Vec::new();
+    for _ in 0..3 {
+        let data = ok_data(jump(operator(), false));
+        assert_eq!(data["focused_pane_after"], data["pane"], "{data}");
+        visited.push(data["pane"].as_str().unwrap().to_string());
+    }
+    assert_eq!(
+        visited,
+        [spawned[0].clone(), spawned[1].clone(), spawned[0].clone()]
+    );
+}
