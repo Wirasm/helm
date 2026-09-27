@@ -168,6 +168,11 @@ enum KeyBindings {
         KeyBinding(
             .character("a"), [.command, .shift], .local(.toggleKeepAwake), hint: "awake",
             menu: "Keep Awake"),
+        // ⌘⇧J — jump to the agent waiting on you longest; again for the next (M1, #357).
+        // benchd decides who waits, from each agent's own report and what its screen shows.
+        KeyBinding(
+            .character("j"), [.command, .shift], .verb(.focusWaiting), hint: "waiting",
+            menu: "Go to Waiting Agent"),
     ]
 
     /// No hint (`KeyHint`'s header says why), but every one keeps a menu item or a key.

@@ -161,6 +161,14 @@
     }
   },
   {
+    "id": "v-20w",
+    "verb": "focus/waiting",
+    "args": {},
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
     "id": "v-21",
     "verb": "layout/resize",
     "args": {

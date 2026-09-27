@@ -10,7 +10,7 @@
 
 use crate::{Core, now_rfc3339};
 use bench_doc::{PaneId, StandardPath};
-use bench_sessions::{BenchSession, Cache, Inputs};
+use bench_sessions::{BenchSession, Cache, Inputs, Waits};
 use bench_wire::{
     DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
     HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, HostedRecord, HostedSession, HostedVia,
@@ -78,6 +78,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
             crate::hook::hooked(&c),
         )
     };
+    let waits = waits(&core.lock().unwrap());
     // Read during the build, outside the core mutex, like the harness files. `wakeable` is
     // `mail/send`'s own test for queueing a wake, taken from the same snapshot.
     let mailbox = |handle: &str| MailAddress {
@@ -103,6 +104,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
                 hooked: &hooked,
                 dismissed: &dismissed,
                 mailbox: &mailbox,
+                waits: &waits,
                 now_ms: now_ms(),
                 now: &now,
                 alive: &bench_sessions::process::alive,
@@ -117,6 +119,21 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
         report(&mut c, u).map_err(Refusal::Failed)?;
     }
     Ok(json!(built.list))
+}
+
+/// Every live session benchd sees waiting on the operator, by id and by the pane showing it.
+fn waits(c: &Core) -> Waits {
+    let mut waits = Waits::default();
+    for id in c.sessions.keys() {
+        let Some(w) = crate::waiting::of_session(c, id) else {
+            continue;
+        };
+        if let Some(pane) = c.bench.document.pane_showing_session(id) {
+            waits.by_pane.insert(pane, w.clone());
+        }
+        waits.by_session.insert(id.clone(), w);
+    }
+    waits
 }
 
 pub fn answer_dismiss(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
@@ -273,7 +290,7 @@ fn helm_bench_dir(home: &Path, suite: Option<&str>, explicit: Option<String>) ->
     }
 }
 
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)

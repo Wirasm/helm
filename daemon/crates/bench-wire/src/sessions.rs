@@ -62,7 +62,8 @@ pub struct SessionRow {
     /// one whose hook claimed a mailbox through `bench hook` (#358). `null` otherwise, and
     /// always sent.
     pub mail: Option<MailAddress>,
-    /// Claude's `statusUpdatedAt` for a live registry session; a file's mtime otherwise.
+    /// Claude's `statusUpdatedAt` for a live registry session; when its wait began for a row
+    /// benchd sees waiting on the operator (M1, #357); a file's mtime otherwise.
     pub updated_at_ms: u64,
 }
 

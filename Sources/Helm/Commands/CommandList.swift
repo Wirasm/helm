@@ -155,6 +155,7 @@ extension VerbTemplate {
         case let .activateWorkspace(index): "Workspace \(index + 1)"
         case let .cycleWorkspace(delta): delta < 0 ? "Previous Workspace" : "Next Workspace"
         case let .toggleDrawer(name, _): "Drawer \(name)"
+        case .focusWaiting: "Go to Waiting Agent"
         }
     }
 }

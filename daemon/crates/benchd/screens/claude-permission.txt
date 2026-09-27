@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.283
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   /…/claude-501/-Users-rasmus-Projects-mine-sild-helm/19281c67-097c-4aec-ae6d-8eab6a7b7915/scratchpad/m1/ws/claude-untrusted
+
+
+❯ Run the shell command: ls -la /private/tmp > /dev/null && echo done. Use the Bash tool.
+
+⏺ Listing /private/tmp and printing done
+  ⎿  $ ls -la /private/tmp > /dev/null && echo done
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+
+   ls -la /private/tmp > /dev/null && echo done
+   List /private/tmp and print done
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, allow reading from /private/tmp from this project
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
