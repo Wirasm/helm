@@ -5964,6 +5964,48 @@ fn after_a_restart_restore_resumes_the_recorded_agent_and_gives_other_panes_a_sh
 }
 
 #[test]
+fn an_id_bench_resume_took_is_not_reused_after_a_restart() {
+    // `bench resume` takes its id from the same counter as a spawn but logs `session/resumed`;
+    // the next daemon must count those ids too.
+    let home = TestHome::claim("m5b-resumeid");
+    let ws = workspace(&home.dir).display().to_string();
+    let used = {
+        let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let spawned = json_of(&bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]));
+        let sid = spawned["session"].as_str().unwrap().to_string();
+        libc_kill(spawned["pid"].as_i64().unwrap() as i32);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while session_row(&home.dir, &sid)["live"] != false {
+            assert!(
+                Instant::now() < deadline,
+                "the killed agent's session stayed live"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let resumed = bench(&home.dir, &["resume", &sid]);
+        assert_eq!(resumed.code, 0, "{}", resumed.stderr);
+        let resumed = json_of(&resumed)["session"].as_str().unwrap().to_string();
+        vec![sid, resumed]
+    };
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let opened = bench(&home.dir, &["open", "terminal"]);
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+    let pane = json_of(&opened)["pane"].as_str().unwrap().to_string();
+    let id = pane_session(&home.dir, &pane).expect("a new terminal pane has a session");
+    assert!(
+        !used.contains(&id),
+        "{id} was used before the restart: {used:?}"
+    );
+}
+
+#[test]
 fn restore_never_resumes_a_conversation_a_live_session_already_holds() {
     // `just release-resume` resumes its caller's conversation in a pane of its own, then restores
     // the rest: the caller's old pane must not resume it a second time, which would fork it.
@@ -6000,6 +6042,12 @@ fn restore_never_resumes_a_conversation_a_live_session_already_holds() {
         .cloned()
         .unwrap_or_else(|| panic!("{restored}"));
     assert_eq!(old["how"], "shell", "{restored}");
+    assert!(
+        old["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("already live")),
+        "the answer says why it was not resumed: {restored}"
+    );
     let holders = json_of(&bench(&home.dir, &["sessions"]))["sessions"]
         .as_array()
         .unwrap()

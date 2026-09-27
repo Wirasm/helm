@@ -379,10 +379,15 @@ detached_run() {
 
   # 7. Every other pane back (M5b): benchd's restart ended every session, and each pane keeps
   # its record. After step 6, so the pane that held this session does not resume it a second
-  # time (benchd refuses a conversation a live session holds, and gives that pane a shell).
+  # time (`bench restore` never resumes a conversation a live session holds; that pane gets a
+  # shell). `bench spawn --resume` and `bench resume` make no such check.
   log "step 7: bench restore --all"
-  restore_panes "$bin" || warn "bench restore --all failed; run \`just resume-all\` to bring the panes back"
-  finish "resumed-in-helm — session $session, pid $resumed, helm pid $new_pid, build $sha$(rc_state)"
+  local panes=""
+  if ! restore_panes "$bin"; then
+    warn "bench restore --all failed; run \`just resume-all\` to bring the panes back"
+    panes=", other panes not restored (run just resume-all)"
+  fi
+  finish "resumed-in-helm — session $session, pid $resumed, helm pid $new_pid, build $sha$panes$(rc_state)"
 }
 
 warn() { log "WARNING: $*"; }

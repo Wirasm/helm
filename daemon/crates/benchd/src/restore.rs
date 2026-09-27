@@ -64,15 +64,19 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         // A conversation a live session already holds is not resumed a second time: two
         // processes on one conversation fork it. `just release-resume` resumes its caller's
         // session in a pane of its own before it restores the rest.
-        let agent = agent.filter(|a| !held(&c, &a.session));
-        let one = match agent {
-            Some(agent) => match resume(&mut c, pane, &agent) {
-                Ok(session) => Some((session, "resumed", None)),
-                Err(why) => {
-                    shells::start(&mut c, pane, workspace.as_ref()).map(|s| (s, "shell", Some(why)))
-                }
-            },
-            None => shells::start(&mut c, pane, workspace.as_ref()).map(|s| (s, "shell", None)),
+        let resumed = match agent {
+            Some(a) if held(&c, &a.session) => Err(Some(format!(
+                "conversation {} is already live in another session",
+                a.session
+            ))),
+            Some(a) => resume(&mut c, pane, &a).map_err(Some),
+            None => Err(None),
+        };
+        let one = match resumed {
+            Ok(session) => Some((session, "resumed", None)),
+            Err(note) => {
+                shells::start(&mut c, pane, workspace.as_ref()).map(|s| (s, "shell", note))
+            }
         };
         if let Some((session, how, note)) = one {
             next.show_session(pane, &session.id);

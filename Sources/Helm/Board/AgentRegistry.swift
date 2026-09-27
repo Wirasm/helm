@@ -32,8 +32,7 @@ struct AgentSession: Equatable {
     let cwd: String?
     let status: AgentStatus?
     /// Claude Code's own id for the conversation. The board does not use it; the
-    /// resume record (#63) does, and `sessionId` + `cwd` are
-    /// what locate the transcript on disk (`TranscriptLocator`).
+    /// resume record (#63) does.
     ///
     /// It lives here rather than in a second reader by #28's ruling — one registry
     /// row type, split only if the two consumers genuinely diverge. `var` with a

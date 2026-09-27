@@ -164,9 +164,10 @@ struct Scanned {
     next_session: u64,
 }
 
-/// The number in a `session/spawned` event's `s<N>`, if it is one.
-fn spawned_session_number(ev: &Event) -> Option<u64> {
-    if ev.kind != "session/spawned" {
+/// The number in the `s<N>` a `session/spawned` or `session/resumed` event started, if it
+/// is one. Both take their id from `next_session`.
+fn started_session_number(ev: &Event) -> Option<u64> {
+    if ev.kind != "session/spawned" && ev.kind != "session/resumed" {
         return None;
     }
     ev.data
@@ -208,7 +209,7 @@ fn scan_log(events: &PathBuf) -> Result<Scanned, StartError> {
                 if ev.kind == DOCUMENT_CHANGED {
                     last_document_change = Some(ev.seq);
                 }
-                if let Some(n) = spawned_session_number(&ev) {
+                if let Some(n) = started_session_number(&ev) {
                     next_session = next_session.max(n + 1);
                 }
             }
