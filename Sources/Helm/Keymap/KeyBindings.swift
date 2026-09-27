@@ -9,8 +9,7 @@ import SwiftUI
 /// is its rendering, pinned by `KeymapFileTests`. A bundled default file would add the one
 /// failure this must not have: a packaging mistake leaving helm with no keys at all.
 ///
-/// **⌘T and ⌘J are unbound.** ⌘T left with the chat face (#375); ⌘J is reserved for terminal
-/// maximize. Muscle memory lives here.
+/// **⌘T is unbound.** It left with the chat face (#375). Muscle memory lives here.
 enum KeyBindings {
     /// In hint order: the status bar shows hints in the order their label first appears here,
     /// and the menu lists items in this order. Match order would only matter where two rows
@@ -117,6 +116,11 @@ enum KeyBindings {
         KeyBinding(
             .character("r"), [.command, .shift], .local(.toggleRail), hint: "archon",
             menu: "Toggle Archon Rail"),
+        // ⌘J — the camera on the focused slot (`BenchCamera`): the bench laid out larger and
+        // panned to it, the neighbours peeking in at the edges. ⌘J again returns. `.anywhere`,
+        // because the pane you want to look at is usually the terminal holding the keyboard.
+        KeyBinding(
+            .character("j"), .command, .local(.toggleZoom), hint: "zoom", menu: "Zoom Pane"),
         // ⌘⇧B — the shared browser (#350) in its drawer (#356): shown over the bench and hidden
         // again, and the bench under it never narrows. An empty drawer starts with the browser.
         KeyBinding(

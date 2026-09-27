@@ -151,6 +151,8 @@ enum LocalAction: Equatable {
     /// The artifact popover; the file chosen becomes a `pane/open`.
     case openArtifactPanel
     case toggleRail
+    /// ⌘J: the camera on the focused slot, and back (`BenchCamera`). helm's view, not the bench's.
+    case toggleZoom
     /// Writes a dated note file, then opens it with a `pane/open`.
     case newNote
     /// Holds or lets go of helm's power assertions (`KeepAwake`).

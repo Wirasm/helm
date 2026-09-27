@@ -17,6 +17,7 @@ struct WorkbenchView: View {
     @ObserveInjection private var inject
     @ObservedObject var model: WorkbenchModel
     let workspaceRoot: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The smallest a column may be dragged to, and a slot below it. Held here rather than
     /// in `SplitStack` because they are this bench's judgement about its own tenants: a
@@ -32,7 +33,8 @@ struct WorkbenchView: View {
             // write to is the mounted one's. A strip inside a pane could say neither, because the
             // whole failure is that no pane was made (#289).
             if let failure = model.noteFailure {
-                noteFailureStrip(failure)
+                // Above the bench for the workspace bar's reason (`RootView`).
+                noteFailureStrip(failure).zIndex(1)
             }
             bench
         }
@@ -70,20 +72,8 @@ struct WorkbenchView: View {
                 // a slot can do the same one level down. The only measurement left in the
                 // file, and it drives the layout rather than being written back into it.
                 GeometryReader { geo in
-                    SplitStack(
-                        axis: .horizontal, extent: geo.size.width, members: bench.columns,
-                        fraction: { $0.width }, minimumExtent: Self.minimumColumnWidth,
-                        resize: {
-                            model.send(
-                                .layoutResize(.columns(member: $0, against: $2), fraction: $1),
-                                by: .operatorGesture)
-                        }
-                    ) { column in
-                        ColumnView(
-                            model: model, bench: bench, column: column, height: geo.size.height,
-                            workspaceRoot: workspaceRoot)
-                    }
-                    .frame(width: geo.size.width, height: geo.size.height)
+                    camera(on: bench, in: geo.size)
+                        .environment(\.benchViewport, geo.frame(in: .global))
                 }
             } else {
                 // No workspace open, so there is no bench — `Workbench`'s first invariant
@@ -91,6 +81,49 @@ struct WorkbenchView: View {
                 EmptyBench()
             }
         }
+    }
+}
+
+// MARK: - The camera
+
+extension WorkbenchView {
+    /// The bench laid out in the camera's canvas and panned over the window (⌘J, `BenchCamera`).
+    /// Unzoomed, the canvas is the window and the pan is zero, so this is the plain layout.
+    ///
+    /// **The layout itself animates, not a transform over it.** Each pane really is laid out at
+    /// the size it is drawn at, so a terminal resizes with it and its session hears the sizes as
+    /// SIGWINCH to `bench attach`, coalesced to one per 16 ms with the last one always sent
+    /// (#479). Measured on an isolated suite: one zoom sent each terminal four to six sizes over
+    /// about 170 ms, and the last was the size drawn. Reduce Motion makes the change a cut.
+    /// Zooming, returning and moving focus while zoomed animate; nothing else does.
+    ///
+    /// Clipped, because a zoomed canvas runs past the bench on every side and must not paint
+    /// over the rail, the workspace bar or the status bar.
+    fileprivate func camera(on bench: Workbench, in viewport: CGSize) -> some View {
+        let camera =
+            model.isZoomed ? BenchCamera.framing(bench, in: viewport) : .identity(viewport)
+        return SplitStack(
+            axis: .horizontal, extent: camera.canvas.width, members: bench.columns,
+            fraction: { $0.width }, minimumExtent: Self.minimumColumnWidth,
+            resize: {
+                model.send(
+                    .layoutResize(.columns(member: $0, against: $2), fraction: $1),
+                    by: .operatorGesture)
+            }
+        ) { column in
+            ColumnView(
+                model: model, bench: bench, column: column, height: camera.canvas.height,
+                workspaceRoot: workspaceRoot)
+        }
+        .frame(width: camera.canvas.width, height: camera.canvas.height)
+        .offset(x: -camera.pan.x, y: -camera.pan.y)
+        .frame(width: viewport.width, height: viewport.height, alignment: .topLeading)
+        .clipped()
+        // Keyed on the move, not on the camera: a window being resized changes the camera
+        // every frame and must follow the pointer, not ease after it.
+        .animation(
+            reduceMotion ? nil : .snappy(duration: 0.22),
+            value: model.isZoomed ? bench.focusedSlot : nil)
     }
 }
 

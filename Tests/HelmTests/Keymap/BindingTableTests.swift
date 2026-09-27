@@ -131,8 +131,14 @@ final class BindingTableTests: XCTestCase {
             .verb(.toggleDrawer(name: "sessions", surface: .sessions)))
     }
 
+    /// ⌘J zooms from inside a terminal too: the pane you want a closer look at is usually the
+    /// one holding the keyboard.
+    func testCommandJTogglesTheZoomFromAnywhere() {
+        XCTAssertEqual(match("j", .command), .local(.toggleZoom))
+        XCTAssertEqual(match("j", .command, terminalFocused: true), .local(.toggleZoom))
+    }
+
     func testUnboundCombinationsPassThrough() {
-        XCTAssertNil(match("j", .command), "⌘J is deliberately unbound — reserved for maximize")
         XCTAssertNil(match("t", .command), "⌘T left with the chat face (#375)")
         XCTAssertNil(match("q", .command), "unclaimed keys must reach the system")
         XCTAssertNil(match("n", []), "a bare letter must reach the pty")
