@@ -9,10 +9,11 @@ import TOMLDecoder
 /// and chords to unbind.
 ///
 /// ```toml
+/// manage = "cmd+alt"        # the manage key (`ManageKey`); `manage` in a key stands for it
 /// unbind = ["cmd+shift+r"]
 ///
 /// [[bind]]
-/// key = "cmd+shift+b"       # cmd ctrl alt shift + a character, plus, left/right/up/down, keycode:N
+/// key = "cmd+shift+b"       # manage cmd ctrl alt shift + a character, plus, arrow, keycode:N
 /// when = "anywhere"         # anywhere (the default) | terminal | away-from-terminal
 /// action = "drawer"         # a name from docs/keymap.default.toml, with its arguments
 /// name = "browser"
@@ -35,6 +36,9 @@ struct KeymapFile: Equatable {
 
     let rows: [Row]
     let unbind: [KeyChord]
+    /// `manage = "cmd+alt"`: the modifier the manage layer rides on (`ManageKey`). The built-in
+    /// one when the file does not say.
+    var manage: ManageKey = .builtIn
     /// `[drawer.<name>]`: where a drawer sits and how wide it is. A drawer not named here uses
     /// `DrawerStyle.builtIn(for:)`.
     var drawers: [String: DrawerStyle] = [:]
@@ -51,19 +55,20 @@ struct KeymapFile: Equatable {
         } catch {
             throw KeymapProblem(line: nil, reason: describe(error))
         }
+        let manage = try raw.manage.map(ManageKey.init(parsing:)) ?? .builtIn
         let lines = bindHeaderLines(in: text)
         var rows: [Row] = []
         for (index, row) in raw.bind.enumerated() {
             let line = lines[safe: index]
             do {
-                rows.append(Row(binding: try row.binding(), line: line))
+                rows.append(Row(binding: try row.binding(manage: manage), line: line))
             } catch {
                 throw KeymapProblem(line: line, reason: error.reason)
             }
         }
         var unbind: [KeyChord] = []
         for chord in raw.unbind {
-            do { unbind.append(try KeyChord(parsing: chord)) } catch {
+            do { unbind.append(try KeyChord(parsing: chord, manage: manage)) } catch {
                 throw KeymapProblem(line: nil, reason: "unbind: \(error.reason)")
             }
         }
@@ -76,7 +81,7 @@ struct KeymapFile: Equatable {
                 throw KeymapProblem(line: nil, reason: "[drawer.\(name)]: \(error.reason)")
             }
         }
-        return KeymapFile(rows: rows, unbind: unbind, drawers: drawers)
+        return KeymapFile(rows: rows, unbind: unbind, manage: manage, drawers: drawers)
     }
 
     /// The table this file makes of `defaults`.
@@ -86,10 +91,16 @@ struct KeymapFile: Equatable {
     /// defaults with that chord, in any `when`. Unbinding a chord nothing has is not an error:
     /// the file should not start failing because a built-in key was retired.
     ///
+    /// `defaults` are written against the built-in manage key; a file naming another one moves
+    /// their manage layer onto it first (`ManageKey.rebase`), so `unbind` and the rows meet the
+    /// defaults where they now are.
+    ///
     /// The result can never claim one chord twice in overlapping `when`s — the rule
-    /// `BindingTableTests` holds the defaults to — because the defaults already cannot, a
-    /// default a row overlaps is dropped, and two rows that overlap refuse the file.
-    func overlay(on defaults: [KeyBinding]) throws(KeymapProblem) -> [KeyBinding] {
+    /// `BindingTableTests` holds the defaults to: a default a row overlaps is dropped, two rows
+    /// that overlap refuse the file, and so does a manage key that lands the layer on a chord
+    /// another row already has.
+    func overlay(on builtIn: [KeyBinding]) throws(KeymapProblem) -> [KeyBinding] {
+        let defaults = builtIn.map { manage.rebase($0, from: .builtIn) }
         for (index, row) in rows.enumerated() {
             if let earlier = rows[..<index].first(where: { $0.binding.collides(with: row.binding) })
             {
@@ -108,14 +119,24 @@ struct KeymapFile: Equatable {
             }
             if placed.insert(index).inserted { table.append(rows[index].binding) }
         }
-        return table + rows.indices.filter { !placed.contains($0) }.map { rows[$0].binding }
+        table += rows.indices.filter { !placed.contains($0) }.map { rows[$0].binding }
+        for (index, row) in table.enumerated()
+        where table[..<index].contains(where: { $0.collides(with: row) }) {
+            throw KeymapProblem(
+                line: nil,
+                reason: "manage \(manage.spelled) puts \(row.chord.spelled) on two rows")
+        }
+        return table
     }
 
-    /// `table` as a keymap file. `docs/keymap.default.toml` is this of `KeyBindings.all`.
-    static func render(_ table: [KeyBinding]) -> String {
+    /// `table` as a keymap file, its manage layer spelled `manage+`. `docs/keymap.default.toml`
+    /// is this of `KeyBindings.all`.
+    static func render(_ table: [KeyBinding], manage: ManageKey = .builtIn) -> String {
         let rows = table.map { binding in
             let (name, arguments) = binding.action.spelled
-            var lines = ["[[bind]]", "key = \(quoted(binding.chord.spelled))"]
+            var lines = [
+                "[[bind]]", "key = \(quoted(binding.chord.spelled(manage: manage)))",
+            ]
             if binding.when != .anywhere { lines.append("when = \(quoted(binding.when.spelled))") }
             lines.append("action = \(quoted(name))")
             lines += arguments.rendered
@@ -123,7 +144,8 @@ struct KeymapFile: Equatable {
             if let menu = binding.menu { lines.append("menu = \(quoted(menu))") }
             return lines.joined(separator: "\n")
         }
-        return header + rows.joined(separator: "\n\n") + "\n"
+        return header + "manage = \(quoted(manage.spelled))\n\n" + rows.joined(separator: "\n\n")
+            + "\n"
     }
 
     private static let header = """
@@ -134,11 +156,14 @@ struct KeymapFile: Equatable {
         #   - a [[bind]] row replaces the built-in rows with the same key in an overlapping `when`,
         #     or adds a key;
         #   - unbind = ["cmd+shift+r"] removes a built-in key;
+        #   - manage = "cmd+ctrl" moves every manage+ key below onto another modifier. It must
+        #     include cmd, so it never takes a key a terminal types, and cannot include shift;
         #   - a file that does not parse changes nothing, and the status bar says why.
         # Copying this whole file in is valid and changes nothing.
         #
-        # key:    cmd, ctrl, alt, shift joined by + before one character, plus, left, right, up,
-        #         down or keycode:N
+        # key:    manage, cmd, ctrl, alt, shift joined by + before one character, plus, left,
+        #         right, up, down or keycode:N. manage is the manage key: hold it and the
+        #         manage+ keys arrange the bench, release it and the keyboard types again
         # when:   anywhere (the default), terminal, away-from-terminal
         # action: one of the names below; index is 1-based. `drawer` takes name and, optionally,
         #         surface = "browser", "sessions" or "file:<path>" for a drawer that holds nothing.
@@ -194,13 +219,15 @@ struct KeymapFile: Equatable {
     private struct RawFile: Decodable {
         let bind: [RawRow]
         let unbind: [String]
+        let manage: String?
         let drawer: [String: RawDrawer]
 
         init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: FieldKey.self)
             try FieldKey.refuseUnknown(
-                container.allKeys, allowed: ["bind", "unbind", "drawer"], in: nil)
+                container.allKeys, allowed: ["bind", "unbind", "manage", "drawer"], in: nil)
             unbind = try container.decodeIfPresent([String].self, forKey: "unbind") ?? []
+            manage = try container.decodeIfPresent(String.self, forKey: "manage")
             drawer =
                 try container.decodeIfPresent([String: RawDrawer].self, forKey: "drawer") ?? [:]
             var rows: [RawRow] = []
@@ -276,8 +303,8 @@ private struct RawRow: Decodable {
         menu = try c.decodeIfPresent(String.self, forKey: "menu")
     }
 
-    func binding() throws(KeymapProblem) -> KeyBinding {
-        let chord = try KeyChord(parsing: key)
+    func binding(manage: ManageKey) throws(KeymapProblem) -> KeyBinding {
+        let chord = try KeyChord(parsing: key, manage: manage)
         let when = try when.map(KeyBinding.When.init(parsing:)) ?? .anywhere
         let action = try KeyBinding.Action(name: action, arguments: arguments)
         return KeyBinding(
@@ -352,21 +379,33 @@ struct KeyChord: Equatable {
         ("cmd", .command), ("ctrl", .control), ("alt", .option), ("shift", .shift),
     ]
 
-    init(parsing text: String) throws(KeymapProblem) {
+    static func modifier(named name: String) -> NSEvent.ModifierFlags? {
+        modifierNames.first { $0.0 == name }?.1
+    }
+
+    /// The names of `modifiers`, in the file's order.
+    static func names(of modifiers: NSEvent.ModifierFlags) -> [String] {
+        modifierNames.filter { modifiers.contains($0.1) }.map(\.0)
+    }
+
+    /// `manage` stands for the manage key's modifiers (`ManageKey`): `manage+shift+h`.
+    init(parsing text: String, manage: ManageKey = .builtIn) throws(KeymapProblem) {
         let parts = text.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
         guard let key = parts.last, !parts.contains(where: \.isEmpty) else {
             throw KeymapProblem(line: nil, reason: "key '\(text)': write the + key as 'plus'")
         }
         var modifiers: NSEvent.ModifierFlags = []
         for name in parts.dropLast() {
-            guard let flag = Self.modifierNames.first(where: { $0.0 == name })?.1 else {
+            guard let flag = name == "manage" ? manage.modifiers : Self.modifier(named: name)
+            else {
                 throw KeymapProblem(
-                    line: nil, reason: "key '\(text)': '\(name)' is not cmd, ctrl, alt or shift")
+                    line: nil,
+                    reason: "key '\(text)': '\(name)' is not manage, cmd, ctrl, alt or shift")
             }
-            guard !modifiers.contains(flag) else {
+            guard modifiers.isDisjoint(with: flag) else {
                 throw KeymapProblem(line: nil, reason: "key '\(text)': '\(name)' twice")
             }
-            modifiers.insert(flag)
+            modifiers.formUnion(flag)
         }
         self.init(try Self.trigger(key, in: text), modifiers)
     }
@@ -394,14 +433,22 @@ struct KeyChord: Equatable {
         return .character(key.lowercased())
     }
 
-    var spelled: String {
+    var spelled: String { spelled(manage: nil) }
+
+    /// As the file writes it, with `manage+` for a chord in `manage`'s layer.
+    func spelled(manage: ManageKey?) -> String {
         let key: String =
             switch trigger {
             case .character("+"): "plus"
             case let .character(character): character
             case let .keyCode(code): ArrowKey(trigger)?.name ?? "keycode:\(code)"
             }
-        let names = Self.modifierNames.filter { modifiers.contains($0.1) }.map(\.0)
+        let names =
+            if let manage, manage.holds(modifiers) {
+                ["manage"] + Self.names(of: modifiers.intersection(.shift))
+            } else {
+                Self.names(of: modifiers)
+            }
         return (names + [key]).joined(separator: "+")
     }
 }

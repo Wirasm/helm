@@ -66,7 +66,18 @@ enum KeyHints {
         let prefix = KeyGlyph.modifiers(modifiers)
         if let run = digitRun(glyphs) { return prefix + run }
         if let arrows = arrows(glyphs) { return prefix + arrows }
+        if let keys = arrowsAndLetters(glyphs) { return prefix + keys }
         return glyphs.map { prefix + $0 }.joined(separator: " ")
+    }
+
+    /// The manage layer's focus and move rows: four arrows and the four home-row letters that
+    /// mean the same, as "↑↓←→ HJKL". nil unless there is an arrow cluster and every other glyph
+    /// is a single letter.
+    private static func arrowsAndLetters(_ glyphs: [String]) -> String? {
+        let letters = glyphs.filter { $0.count == 1 && $0.first!.isLetter }
+        let rest = glyphs.filter { !letters.contains($0) }
+        guard !letters.isEmpty, let arrows = arrows(rest) else { return nil }
+        return arrows + " " + letters.joined()
     }
 
     /// "1–9" for a consecutive run of at least three digits, else nil. Two is not a run —
