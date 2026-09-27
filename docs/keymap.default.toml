@@ -370,6 +370,12 @@ delta = 1
 hint = "cycle"
 
 [[bind]]
+key = "cmd+k"
+action = "command-palette"
+hint = "commands"
+menu = "Command Palette"
+
+[[bind]]
 key = "cmd+shift+o"
 action = "open-workspace-panel"
 hint = "folder"

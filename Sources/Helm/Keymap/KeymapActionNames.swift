@@ -76,6 +76,7 @@ extension LocalAction {
         case .toggleZoom: ("toggle-zoom", .none)
         case .newNote: ("new-note", .none)
         case .toggleKeepAwake: ("keep-awake", .none)
+        case .toggleCommandPalette: ("command-palette", .none)
         }
     }
 
@@ -89,6 +90,7 @@ extension LocalAction {
         case "toggle-zoom": try a.none(name); self = .toggleZoom
         case "new-note": try a.none(name); self = .newNote
         case "keep-awake": try a.none(name); self = .toggleKeepAwake
+        case "command-palette": try a.none(name); self = .toggleCommandPalette
         default: return nil
         }
     }

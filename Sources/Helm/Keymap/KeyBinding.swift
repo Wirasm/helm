@@ -161,4 +161,7 @@ enum LocalAction: Equatable {
     case newNote
     /// Holds or lets go of helm's power assertions (`KeepAwake`).
     case toggleKeepAwake
+    /// The command palette (#500): every action in the table, every workspace and pane, and the
+    /// bench justfile's recipes, searchable.
+    case toggleCommandPalette
 }

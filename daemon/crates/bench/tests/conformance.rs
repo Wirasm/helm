@@ -6916,6 +6916,13 @@ fn a_viewer_that_stops_reading_is_dropped_and_the_session_still_answers() {
     // Every connection writes under DAEMON_IO_TIMEOUT, the relay included: a viewer that stops
     // reading holds the engine thread, and with it the session's resizes and screen reads, for
     // that long and then is dropped.
+    //
+    // When the stall begins is the kernel's business: the relay blocks once the viewer's socket
+    // is full, which this side cannot see. So no single read is known to land inside it, and a
+    // read timed against a fixed bound flakes whenever the stall starts just after the read
+    // before it (#487's version did, on CI). Reads run back to back on their own thread instead,
+    // so some read overlaps the stall whenever it starts, and each is bounded by the write limit.
+    let limit = bench_wire::DAEMON_IO_TIMEOUT;
     let home = TestHome::claim("m5b-stuck");
     let daemon = scripted_pi_daemon(
         &home.dir,
@@ -6928,23 +6935,40 @@ fn a_viewer_that_stops_reading_is_dropped_and_the_session_still_answers() {
     // A viewer that reads for a while, then never again.
     let (seen, stream) = attach_and_read(&daemon.socket, &sid, |b| b.len() > 100_000);
     assert!(seen.len() > 100_000, "the flood reached the viewer");
+    // Dropped once one write has waited the limit out; the deadline only says "never", and
+    // bounds the reader too, so a failed assertion below does not leave it running.
+    let deadline = Instant::now() + 3 * limit;
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reads = {
+        let (home, sid, stop) = (home.dir.clone(), sid.clone(), std::sync::Arc::clone(&stop));
+        std::thread::spawn(move || {
+            let mut reads = Vec::new();
+            while !stop.load(Ordering::SeqCst) && Instant::now() < deadline {
+                let started = Instant::now();
+                let screen = bench(&home, &["get", "screen", &sid]);
+                reads.push((screen.code, screen.stderr, started.elapsed()));
+            }
+            reads
+        })
+    };
+    while session_row(&home.dir, &sid)["attached"] != false {
+        assert!(
+            Instant::now() < deadline,
+            "a viewer that stopped reading was never dropped"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    stop.store(true, Ordering::SeqCst);
+    for (code, stderr, waited) in reads.join().unwrap() {
+        assert_eq!(code, 0, "a read while the viewer was stuck: {stderr}");
+        // One stalled write is the most a read may wait behind, not one per chunk of output.
+        assert!(waited < 2 * limit, "a read waited {waited:?}");
+    }
+    // With the viewer gone nothing is left to wait on: no read waits out a write limit.
     let started = Instant::now();
-    let first = bench(&home.dir, &["get", "screen", &sid]);
-    assert_eq!(first.code, 0, "{}", first.stderr);
-    assert!(
-        started.elapsed() < Duration::from_secs(9),
-        "{:?}",
-        started.elapsed()
-    );
-    let started = Instant::now();
-    let again = bench(&home.dir, &["get", "screen", &sid]);
-    assert_eq!(again.code, 0, "{}", again.stderr);
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "{:?}",
-        started.elapsed()
-    );
-    assert_eq!(session_row(&home.dir, &sid)["attached"], false);
+    let after = bench(&home.dir, &["get", "screen", &sid]);
+    assert_eq!(after.code, 0, "{}", after.stderr);
+    assert!(started.elapsed() < limit, "{:?}", started.elapsed());
     drop(stream);
 }
 

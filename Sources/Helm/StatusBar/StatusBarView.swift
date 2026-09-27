@@ -4,7 +4,8 @@ import SwiftUI
 /// The bar along the bottom: how to find the keys, and where you are.
 ///
 /// **Two jobs, and both are reading.** On the left, one line saying how to see every key:
-/// hold the manage key and the key pop-up lists what can be pressed right now (#499). It used
+/// hold the manage key and the key pop-up lists what can be pressed right now (#499), or open
+/// the command palette and search everything (#500). It used
 /// to be the whole hint row, which spent most of the bar on a dozen chords the operator
 /// already knows; the pop-up shows the same hints from the same table, when he asks. On the
 /// right, the three facts helm already knows: which workspace, which branch, and whether an
@@ -49,13 +50,20 @@ struct StatusBarView: View {
         .enableInjection()
     }
 
-    /// The way into the keys, named from the manage key in force so a `manage = "…"` in the
-    /// keymap file renames it.
+    /// The two ways in: the keys, named from the manage key in force so a `manage = "…"` in the
+    /// keymap file renames it, and the command palette, named from whatever key opens it (none
+    /// when the operator unbound it).
     private var hints: some View {
         HStack(spacing: 4) {
             Text("hold").foregroundStyle(Color.textFaint)
             Text(KeyGlyph.modifiers(keymap.manage.modifiers)).foregroundStyle(Color.textMuted)
             Text("for keys").foregroundStyle(Color.textFaint)
+            if let palette = KeyGlyph.binding(
+                for: .local(.toggleCommandPalette), in: keymap.table)
+            {
+                Text(palette).foregroundStyle(Color.textMuted).padding(.leading, 9)
+                Text("commands").foregroundStyle(Color.textFaint)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
