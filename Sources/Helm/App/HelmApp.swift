@@ -68,7 +68,7 @@ struct HelmApp: App {
         // window titles, and `AGENTS.md` records that two helms are otherwise identical
         // by name. Unset, this is the literal "helm" it has always been.
         WindowGroup(DefaultsDomain.windowTitle) {
-            RootView()
+            RootView(client: .live())
                 .frame(minWidth: 900, minHeight: 600)
                 // The override is applied at the AppKit level so it also
                 // reaches sheets and any future windows; re-applied whenever
