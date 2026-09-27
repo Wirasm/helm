@@ -40,7 +40,6 @@ final class BenchWireConformanceTests: XCTestCase {
 
         XCTAssertEqual(document.workspaces.count, 3)
         XCTAssertNotNil(document.active)
-        XCTAssertTrue(document.workspaces.contains { $0.shelved != nil })
         let surfaces = document.workspaces.flatMap { $0.bench.columns }.flatMap(\.slots)
             .flatMap(\.panes).map(\.surface)
         XCTAssertTrue(surfaces.contains(.browser))
@@ -85,7 +84,7 @@ final class BenchWireConformanceTests: XCTestCase {
         let sampled = Set(requests.map(\.verb.name))
         let helmSends: Set<String> = [
             "bench/get", "workspace/open", "workspace/close", "workspace/activate",
-            "workspace/reset", "workspace/unshelve", "pane/open",
+            "pane/open",
             "pane/split", "pane/close", "pane/show", "pane/move", "pane/name", "pane/record",
             "focus/slot", "focus/step", "layout/resize", "drawer/toggle",
         ]
@@ -112,6 +111,22 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertFalse(change.verb.isEmpty)
         XCTAssertEqual(frame.event.kind, "bench/changed")
         XCTAssertNotNil(frame.document)
+    }
+
+    /// `sessions` (M5b): what helm sends and the part of the answer it reads — which pane shows
+    /// each session and what has its terminal, the pid helm joins against Claude's registry.
+    func testTheSessionListRequestMatchesTheDaemonsSampleAndTheAnswerDecodes() throws {
+        let samples =
+            try JSONSerialization.jsonObject(with: fixture("session-list.json")) as! [String: Any]
+        let request = try normalized(JSONEncoder().encode(BenchLiveSessionsRequest(id: "helm-3")))
+        XCTAssertEqual(
+            request,
+            try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples["request"]))))
+        let reply = try JSONDecoder().decode(
+            BenchLiveSessions.self,
+            from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["reply"])))
+        let pane = UUID(uuidString: "0e8e8cc6-159b-45d8-bc02-485120975998")!
+        XCTAssertEqual(reply.foregroundByPane, [pane: 51377], "an ended session has no foreground")
     }
 
     /// The two mail verbs helm sends benchd (#358), and the answer to `who` — the canvas note's

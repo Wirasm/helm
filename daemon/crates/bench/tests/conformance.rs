@@ -119,7 +119,10 @@ impl DaemonGuard {
     }
 
     fn start_with(home: &Path, suite: Option<&str>, mut cmd: std::process::Command) -> DaemonGuard {
+        // Every terminal pane runs a login shell (M5b): a known one, reading nothing of the
+        // operator's configuration.
         cmd.env("BENCH_SESSION_TEST_AGENT", "1")
+            .env("SHELL", "/bin/sh")
             .env("HOME", home)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -2329,15 +2332,19 @@ fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
         false,
     ));
     assert_eq!(
-        after, before,
-        "bench.json brought the whole document back, seq and all"
+        after,
+        forget_sessions(before.clone()),
+        "bench.json brought the whole document back, seq and all, less the sessions that ended with the daemon"
     );
 
     // Files are the record: the file and the log, read with no daemon in the loop.
     let record: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(root.join("bench.json")).unwrap()).unwrap();
     assert_eq!(record["format"], "bench.document");
-    assert_eq!(record["document"], before["document"]);
+    assert_eq!(
+        record["document"],
+        forget_sessions(before["document"].clone())
+    );
     let changes: Vec<_> = log_of(&root)
         .into_iter()
         .filter(|e| e["kind"] == "bench/changed")
@@ -2548,6 +2555,37 @@ fn read_frame(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
     serde_json::from_str(&line).unwrap_or_else(|e| panic!("{e}: {line:?}"))
 }
 
+/// The next frame that changed the document, past the session events a change may log first (a
+/// new terminal pane's shell is logged before the change that shows it).
+fn read_change(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
+    loop {
+        let frame = read_frame(reader);
+        let kind = frame["event"]["kind"].as_str().unwrap_or_default();
+        if !kind.starts_with("session/") {
+            return frame;
+        }
+    }
+}
+
+/// `doc` as a restarted daemon has it: every terminal pane's session forgotten, since no session
+/// outlives the daemon that ran it (M5b; `bench restore` brings them back).
+fn forget_sessions(mut doc: serde_json::Value) -> serde_json::Value {
+    fn walk(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(map) => {
+                if map.get("kind").and_then(|k| k.as_str()) == Some("terminal") {
+                    map.remove("session");
+                }
+                map.values_mut().for_each(walk);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(walk),
+            _ => {}
+        }
+    }
+    walk(&mut doc);
+    doc
+}
+
 fn follow(socket: &Path) -> BufReader<UnixStream> {
     let stream = UnixStream::connect(socket).expect("connect");
     stream
@@ -2578,7 +2616,7 @@ fn a_follower_gets_the_document_then_every_change_with_the_document_attached() {
         operator(),
         false,
     ));
-    let frame = read_frame(&mut reader);
+    let frame = read_change(&mut reader);
     assert_eq!(frame["event"]["kind"], "bench/changed");
     assert_eq!(frame["event"]["seq"], opened["seq"]);
     assert_eq!(
@@ -2593,7 +2631,7 @@ fn a_follower_gets_the_document_then_every_change_with_the_document_attached() {
         &["mail", "send", "--to", "operator", "--body", "hi"],
     );
     assert_eq!(mail.code, 0, "{}", mail.stderr);
-    let frame = read_frame(&mut reader);
+    let frame = read_change(&mut reader);
     assert_eq!(frame["event"]["kind"], "mail/sent");
     assert!(frame.get("document").is_none(), "{frame}");
 }
@@ -2673,7 +2711,7 @@ fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
     };
     let workspaces = get(&daemon.socket)["workspaces"].clone();
     let mut reader = follow(&daemon.socket);
-    read_frame(&mut reader);
+    read_change(&mut reader);
 
     let pushed = ok_data(layout(
         &daemon.socket,
@@ -2689,7 +2727,7 @@ fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
         held.as_str(),
         "the keyboard stayed"
     );
-    let frame = read_frame(&mut reader);
+    let frame = read_change(&mut reader);
     assert_eq!(frame["event"]["kind"], "bench/changed");
     let drawer = &frame["document"]["drawers"][0];
     assert_eq!(drawer["name"], "notes");
@@ -2729,7 +2767,7 @@ fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
     let daemon = DaemonGuard::start(&home.dir, None);
     assert_eq!(
         get(&daemon.socket),
-        document,
+        forget_sessions(document.clone()),
         "the drawer came back from bench.json"
     );
     let record: serde_json::Value = serde_json::from_str(
@@ -2964,7 +3002,17 @@ fn the_cli_follows_the_bench_line_by_line() {
         operator(),
         false,
     ));
-    let frame: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    // Past the new terminal pane's `session/spawned`.
+    let frame = lines
+        .by_ref()
+        .map(|l| serde_json::from_str::<serde_json::Value>(&l.unwrap()).unwrap())
+        .find(|f| {
+            !f["event"]["kind"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("session/")
+        })
+        .unwrap();
     let _ = child.kill();
     let _ = child.wait();
     assert_eq!(frame["event"]["kind"], "bench/changed");
@@ -4969,13 +5017,10 @@ fn an_agents_pane_verbs_leave_the_operators_focus_until_it_says_he_asked() {
     assert_eq!(asked.code, 0, "{}", asked.stderr);
     assert_eq!(focused(&daemon.socket), first.as_str());
 
-    // A terminal ends what runs in it: --force, and the pane holding the keyboard also needs
-    // --asked, whatever --force says.
-    let refused = bench(&home.dir, &["close", &right]);
-    assert_eq!(refused.code, 3);
-    assert!(refused.stderr.contains("--force"), "{}", refused.stderr);
-    let forced = bench(&home.dir, &["close", &right, "--force"]);
-    assert_eq!(forced.code, 0, "{}", forced.stderr);
+    // A shell at its prompt closes without --force (nothing runs there to lose), and the pane
+    // holding the keyboard needs --asked, whatever --force says.
+    let idle = bench(&home.dir, &["close", &right]);
+    assert_eq!(idle.code, 0, "{}", idle.stderr);
     let keyboard = bench(&home.dir, &["close", &first, "--force"]);
     assert_eq!(keyboard.code, 3);
     assert!(keyboard.stderr.contains("--asked"), "{}", keyboard.stderr);
@@ -5174,9 +5219,14 @@ fn a_refused_spawn_leaves_no_process_and_no_pane() {
     );
     assert_eq!(codex.code, 3, "{}", codex.stderr);
     assert_eq!(document(&daemon.socket), before);
+    // The bench's own terminal panes run shells; no agent was started.
     let listed = json_of(&bench(&home.dir, &["sessions"]));
     assert!(
-        listed["sessions"].as_array().unwrap().is_empty(),
+        listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["agent"] == "shell"),
         "{listed}"
     );
 }
@@ -5664,4 +5714,345 @@ fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
         3,
         "the canvas was closed"
     );
+}
+
+// ---------------------------------------------------------------------------
+// M5b: every terminal pane is a benchd session (#359)
+// ---------------------------------------------------------------------------
+
+/// The session a pane shows, from the document.
+fn pane_session(home: &Path, pane: &str) -> Option<String> {
+    let found = json_of(&bench(home, &["get", "pane", pane]));
+    found["pane"]["surface"]["session"]
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Type `line` into session `sid` and read what comes back until `done` says it is enough.
+fn type_into(socket: &Path, sid: &str, line: &str, done: impl Fn(&str) -> bool) -> String {
+    let (resp, stream) = raw_request(socket, "attach", serde_json::json!({"session": sid}));
+    assert_eq!(resp["status"], "ok", "{resp}");
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+    (&stream)
+        .write_all(&AttachFrame::Input(line.as_bytes().to_vec()).encode())
+        .unwrap();
+    let seen = read_until(&stream, Duration::from_secs(10), |seen| {
+        done(&String::from_utf8_lossy(seen))
+    });
+    String::from_utf8_lossy(&seen).into_owned()
+}
+
+fn session_row(home: &Path, sid: &str) -> serde_json::Value {
+    json_of(&bench(home, &["sessions"]))["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["session"] == sid)
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
+}
+
+#[test]
+fn a_new_terminal_pane_is_a_login_shell_with_the_panes_environment() {
+    let home = TestHome::claim("m5b-shell");
+    let ws = workspace(&home.dir).display().to_string();
+    // What an agent that started benchd would leak into every pane (#139).
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("CLAUDECODE", "1").env("PI_CODING_AGENT", "true");
+    let daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let opened = bench(&home.dir, &["open", "terminal"]);
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+    let pane = json_of(&opened)["pane"].as_str().unwrap().to_string();
+    let sid = pane_session(&home.dir, &pane).expect("the new pane names a session");
+    // What a live daemon answers decodes as the type helm's copy is pinned against.
+    serde_json::from_value::<bench_wire::LiveSessions>(json_of(&bench(&home.dir, &["sessions"])))
+        .expect("`sessions` answers LiveSessions");
+    let row = session_row(&home.dir, &sid);
+    assert_eq!(row["agent"], "shell", "{row}");
+    assert_eq!(row["live"], true, "{row}");
+    assert_eq!(row["pane"], pane.as_str(), "{row}");
+    assert_eq!(row["cwd"], ws.as_str(), "{row}");
+
+    let out = type_into(
+        &daemon.socket,
+        &sid,
+        "printf 'E%s|%s|%s|%s|%s|%s\\n' \"$HELM_PANE\" \"$COLORTERM\" \"$TERM_PROGRAM\" \"${BENCH_SESSION:-none}\" \"${CLAUDECODE:-none}\" \"${PI_CODING_AGENT:-none}\"\n",
+        |seen| seen.contains(&format!("E{pane}|")),
+    );
+    let line = out
+        .lines()
+        .find(|l| l.starts_with(&format!("E{pane}|")))
+        .unwrap_or_else(|| panic!("no answer: {out:?}"));
+    assert_eq!(
+        line.trim(),
+        format!("E{pane}|truecolor|ghostty|none|none|none"),
+        "the pane's identity, truecolor, and nobody else's session"
+    );
+}
+
+#[test]
+fn an_idle_shell_closes_without_force_and_a_busy_one_names_what_runs() {
+    let home = TestHome::claim("m5b-busy");
+    let ws = workspace(&home.dir).display().to_string();
+    let daemon = DaemonGuard::start(&home.dir, None);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let mut panes = Vec::new();
+    for _ in 0..2 {
+        let run = bench(&home.dir, &["open", "terminal"]);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        panes.push(json_of(&run)["pane"].as_str().unwrap().to_string());
+    }
+    let sid = pane_session(&home.dir, &panes[1]).unwrap();
+    let pid = session_row(&home.dir, &sid)["pid"].as_i64().unwrap();
+    // An interactive shell runs a job in a group of its own, which takes the terminal.
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(resp["status"], "ok");
+    (&stream)
+        .write_all(&AttachFrame::Input(b"sleep 30\n".to_vec()).encode())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while session_row(&home.dir, &sid)["foreground_pid"].as_i64() == Some(pid) {
+        assert!(Instant::now() < deadline, "sleep never took the terminal");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let refused = bench(&home.dir, &["close", &panes[1]]);
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(
+        refused.stderr.contains("running sleep") && refused.stderr.contains("--force"),
+        "{}",
+        refused.stderr
+    );
+    let idle = bench(&home.dir, &["close", &panes[0]]);
+    assert_eq!(idle.code, 0, "{}", idle.stderr);
+    let forced = bench(&home.dir, &["close", &panes[1], "--force"]);
+    assert_eq!(forced.code, 0, "{}", forced.stderr);
+    // The shell went with its pane.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while libc_alive(pid as i32) {
+        assert!(Instant::now() < deadline, "the shell outlived its pane");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn closing_a_workspace_ends_the_shells_its_panes_ran() {
+    let home = TestHome::claim("m5b-sweep");
+    let ws = workspace(&home.dir).display().to_string();
+    let daemon = DaemonGuard::start(&home.dir, None);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let pane = json_of(&bench(&home.dir, &["open", "terminal"]))["pane"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let sid = pane_session(&home.dir, &pane).unwrap();
+    let pid = session_row(&home.dir, &sid)["pid"].as_i64().unwrap() as i32;
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/close",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while libc_alive(pid) {
+        assert!(Instant::now() < deadline, "a shell outlived its workspace");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(session_row(&home.dir, &sid).is_null());
+}
+
+#[test]
+fn after_a_restart_restore_resumes_the_recorded_agent_and_gives_other_panes_a_shell() {
+    let home = TestHome::claim("m5b-restore");
+    let ws = workspace(&home.dir).display().to_string();
+    let (agent_pane, shell_pane, runtime, old_ids) = {
+        let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let spawned = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+        assert_eq!(spawned.code, 0, "{}", spawned.stderr);
+        let spawned = json_of(&spawned);
+        let shell = bench(&home.dir, &["open", "terminal"]);
+        assert_eq!(shell.code, 0, "{}", shell.stderr);
+        let before: Vec<String> = json_of(&bench(&home.dir, &["sessions"]))["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["session"].as_str().unwrap().to_string())
+            .collect();
+        (
+            spawned["pane"].as_str().unwrap().to_string(),
+            json_of(&shell)["pane"].as_str().unwrap().to_string(),
+            spawned["runtime_session"].as_str().unwrap().to_string(),
+            before,
+        )
+    };
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    assert_eq!(
+        pane_session(&home.dir, &agent_pane),
+        None,
+        "no session outlives its daemon"
+    );
+    assert_eq!(pane_session(&home.dir, &shell_pane), None);
+
+    let run = bench(&home.dir, &["restore", "--all"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let restored = json_of(&run)["restored"].as_array().unwrap().clone();
+    let how = |pane: &str| {
+        restored
+            .iter()
+            .find(|r| r["pane"] == pane)
+            .map(|r| r["how"].as_str().unwrap().to_string())
+    };
+    assert_eq!(how(&agent_pane).as_deref(), Some("resumed"), "{restored:?}");
+    assert_eq!(how(&shell_pane).as_deref(), Some("shell"), "{restored:?}");
+    // A session id never repeats across restarts: helm keeps a pane's surface while its session
+    // id is unchanged, so a reused id would leave the pane showing the ended session.
+    for r in &restored {
+        let id = r["session"].as_str().unwrap();
+        assert!(
+            !old_ids.iter().any(|o| o == id),
+            "{id} was used before the restart: {old_ids:?}"
+        );
+    }
+    let agent = session_row(&home.dir, &pane_session(&home.dir, &agent_pane).unwrap());
+    assert_eq!(agent["agent"], "pi");
+    assert_eq!(
+        agent["runtime_session"],
+        runtime.as_str(),
+        "the same conversation"
+    );
+    assert_eq!(agent["live"], true);
+    let shell = session_row(&home.dir, &pane_session(&home.dir, &shell_pane).unwrap());
+    assert_eq!(shell["agent"], "shell");
+    assert_eq!(shell["live"], true);
+
+    let again = json_of(&bench(&home.dir, &["restore", "--all"]));
+    assert_eq!(
+        again["restored"],
+        serde_json::json!([]),
+        "live panes are left alone"
+    );
+}
+
+#[test]
+fn an_id_bench_resume_took_is_not_reused_after_a_restart() {
+    // `bench resume` takes its id from the same counter as a spawn but logs `session/resumed`;
+    // the next daemon must count those ids too.
+    let home = TestHome::claim("m5b-resumeid");
+    let ws = workspace(&home.dir).display().to_string();
+    let used = {
+        let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let spawned = json_of(&bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]));
+        let sid = spawned["session"].as_str().unwrap().to_string();
+        libc_kill(spawned["pid"].as_i64().unwrap() as i32);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while session_row(&home.dir, &sid)["live"] != false {
+            assert!(
+                Instant::now() < deadline,
+                "the killed agent's session stayed live"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let resumed = bench(&home.dir, &["resume", &sid]);
+        assert_eq!(resumed.code, 0, "{}", resumed.stderr);
+        let resumed = json_of(&resumed)["session"].as_str().unwrap().to_string();
+        vec![sid, resumed]
+    };
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let opened = bench(&home.dir, &["open", "terminal"]);
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+    let pane = json_of(&opened)["pane"].as_str().unwrap().to_string();
+    let id = pane_session(&home.dir, &pane).expect("a new terminal pane has a session");
+    assert!(
+        !used.contains(&id),
+        "{id} was used before the restart: {used:?}"
+    );
+}
+
+#[test]
+fn restore_never_resumes_a_conversation_a_live_session_already_holds() {
+    // `just release-resume` resumes its caller's conversation in a pane of its own, then restores
+    // the rest: the caller's old pane must not resume it a second time, which would fork it.
+    let home = TestHome::claim("m5b-nofork");
+    let ws = workspace(&home.dir).display().to_string();
+    let (old_pane, runtime) = {
+        let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let spawned = json_of(&bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]));
+        (
+            spawned["pane"].as_str().unwrap().to_string(),
+            spawned["runtime_session"].as_str().unwrap().to_string(),
+        )
+    };
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let resumed = bench(
+        &home.dir,
+        &["spawn", "--agent", "pi", "--cwd", &ws, "--resume", &runtime],
+    );
+    assert_eq!(resumed.code, 0, "{}", resumed.stderr);
+
+    let restored = json_of(&bench(&home.dir, &["restore", "--all"]));
+    let old = restored["restored"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["pane"] == old_pane.as_str())
+        .cloned()
+        .unwrap_or_else(|| panic!("{restored}"));
+    assert_eq!(old["how"], "shell", "{restored}");
+    assert!(
+        old["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("already live")),
+        "the answer says why it was not resumed: {restored}"
+    );
+    let holders = json_of(&bench(&home.dir, &["sessions"]))["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["runtime_session"] == runtime.as_str() && s["live"] == true)
+        .count();
+    assert_eq!(holders, 1, "one process on the conversation");
 }

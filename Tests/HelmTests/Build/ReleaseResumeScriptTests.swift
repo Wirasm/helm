@@ -230,6 +230,44 @@ final class ReleaseResumeScriptTests: XCTestCase {
             ])
     }
 
+    /// Step 7 (M5b): the benchd restart ended every session, so every other pane comes back with
+    /// `bench restore --all` — what `just resume-all` runs — under the bench suite.
+    func testEveryOtherPaneIsRestoredUnderTheBenchSuite() throws {
+        let bin = scratch.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let record = scratch.appendingPathComponent("argv")
+        let stub = bin.appendingPathComponent("bench")
+        try Data(
+            "#!/bin/sh\necho \"suite=$BENCH_SUITE\" > \"\(record.path)\"\nfor a in \"$@\"; do echo \"$a\" >> \"\(record.path)\"; done\n"
+                .utf8
+        ).write(to: stub)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+        let timeout = bin.appendingPathComponent("timeout")
+        try Data("#!/bin/sh\nshift\nexec \"$@\"\n".utf8).write(to: timeout)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: timeout.path)
+
+        let result = try bash(
+            [
+                "-c", "source \"$1\"; bench_suite=trial; restore_panes \"$2\"", "test", script.path,
+                bin.path,
+            ],
+            environment: [
+                "PATH": bin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            ])
+        XCTAssertEqual(result.status, 0, result.stderr)
+
+        let asked = try String(contentsOf: record, encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+        XCTAssertEqual(asked, ["suite=trial", "restore", "--all"])
+        let source = try String(contentsOf: script, encoding: .utf8)
+        let resume = try XCTUnwrap(source.range(of: "resume_in_bench \"$bin\""))
+        let restore = try XCTUnwrap(source.range(of: "restore_panes \"$bin\""))
+        XCTAssertLessThan(
+            resume.lowerBound, restore.lowerBound,
+            "restore runs after the caller's own resume, so its old pane does not fork it")
+    }
+
     /// The caller is normally an agent inside a benchd session or a helm pane, so its identity
     /// is in the environment the detached run inherits. After the scrub, the resuming `bench`
     /// must carry none of it: `BENCH_HANDLE` would make the spawn the dead agent's verb, and

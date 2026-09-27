@@ -117,14 +117,22 @@ canvas note through `mail/send`.
 pane verbs — `open`, `split`, `show`, `focus`, `move`, `name`, `close <pane>`, `get pane` — as
 the socket's own layout verbs, carrying who asked (`HELM_PANE`, `BENCH_HANDLE`) and `asked` only
 from `--asked`. benchd adds the rules the spool kept at the verb boundary: an agent's close of a
-terminal needs `force` (a live session's name is in the refusal; a helm-hosted terminal is opaque
-until M5b), a chosen name needs `rename`, and an agent's pane opens in its own workspace. `spawn`
+terminal where something runs needs `force` (the refusal names the live session, or the job a
+shell is running), a chosen name needs `rename`, and an agent's pane opens in its own workspace. `spawn`
 now puts the agent in a pane: the document's terminal surface names the session
 (`term:<session>`), and helm shows it by running `bench attach` in that pane, which follows the
 pane's size and ends when the session does. After the attach answer the viewer's side of the
 stream is framed (`bench_wire::attach`): keys and sizes in one ordered stream, sizes coalesced to
 one per 16 ms plus a trailing one, because each is a SIGWINCH and a redraw (M5b, #359). No session outlives its daemon, so boot
-clears every pane's `session` (`bench/sessions-ended`). What only helm can do — drawing its window
+clears every pane's `session` (`bench/sessions-ended`).
+
+**Every terminal pane is a session (M5b, #359).** Where every change is committed
+(`layout::commit`), a terminal pane that is new and names no session gets the operator's login
+shell (`shells.rs`), with the environment helm's panes gave their shells and Ghostty's shell
+integration built in (`shell_env.rs`); and a session no pane shows any more ends. After a restart
+the panes keep their `agent` records, and `restore` (`bench restore --all`, `just resume-all`)
+gives each a session again from that record alone: the agent's conversation resumed, else a
+shell. Sessions do not outlive benchd: ruled 2026-09-27, resume instead. What only helm can do — drawing its window
 — benchd asks for: `helm/ask` logs `helm/asked` to the followers, helm answers with `helm/answer`,
 and the caller waits at most `HELM_ASK_WAIT`. The `bench-panes` skill is the agent's guide.
 

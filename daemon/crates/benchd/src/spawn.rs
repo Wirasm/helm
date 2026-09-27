@@ -141,21 +141,29 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
     if plan.agent == AgentKind::Codex {
         spec.codex_server = Some(codex_server_socket(&root, id)?);
     }
-    let extra_env = [
-        ("BENCH_SESSION".to_string(), id.to_string()),
-        ("BENCH_HANDLE".to_string(), handle.to_string()),
-        ("BENCH_DIR".to_string(), root.display().to_string()),
-    ];
     Session::spawn(
         id.to_string(),
         handle.to_string(),
         &spec,
         plan.rows,
         plan.cols,
-        &extra_env,
+        &agent_env(&root, id, handle),
         notices,
     )
     .map_err(|why| (Status::Error, why))
+}
+
+/// What an agent benchd starts learns about itself: its session, its address and this root, so
+/// `bench mail send` inside it needs no flags and lands in the right mailroom.
+pub fn agent_env(root: &std::path::Path, id: &str, handle: &str) -> bench_session::Env {
+    bench_session::Env {
+        set: vec![
+            ("BENCH_SESSION".to_string(), id.to_string()),
+            ("BENCH_HANDLE".to_string(), handle.to_string()),
+            ("BENCH_DIR".to_string(), root.display().to_string()),
+        ],
+        remove: Vec::new(),
+    }
 }
 
 /// The session joins the registry and the record, logged before the pane that shows it.

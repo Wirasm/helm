@@ -1,6 +1,4 @@
-//! The document: workspaces, the #85 shelf, and the focus rule enforced once for
-//! every operation. The shelf tests mirror the data half of
-//! `Tests/HelmTests/Workbench/BenchMountTests.swift`; *when* to ask the operator stays helm's.
+//! The document: workspaces, and the focus rule enforced once for every operation.
 
 mod common;
 
@@ -296,58 +294,6 @@ fn opening_an_open_workspace_only_activates_it() {
         doc.workspace(&path("/work/a")).unwrap(),
         &before,
         "its bench is untouched"
-    );
-}
-
-// MARK: - The shelf (helm #85), data half of BenchMountTests
-
-#[test]
-fn fresh_yields_one_shell_and_shelves_what_it_declined() {
-    let (mut doc, _, _) = one_workspace();
-    let declined = doc.workspace(&path("/work/a")).unwrap().bench.clone();
-    let fresh = terminal();
-    let fresh_id = fresh.id;
-
-    doc.reset(&path("/work/a"), fresh, Focus::Take).unwrap();
-
-    let workspace = doc.workspace(&path("/work/a")).unwrap();
-    assert_eq!(
-        workspace.bench.panes().map(|p| p.id).collect::<Vec<_>>(),
-        vec![fresh_id]
-    );
-    assert_eq!(
-        workspace.shelved.as_ref(),
-        Some(&declined),
-        "one wrong click destroys nothing"
-    );
-}
-
-#[test]
-fn restoring_the_shelf_is_what_stops_it_being_shelved() {
-    let (mut doc, _, _) = one_workspace();
-    let declined = doc.workspace(&path("/work/a")).unwrap().bench.clone();
-    doc.reset(&path("/work/a"), terminal(), Focus::Take)
-        .unwrap();
-
-    doc.unshelve(&path("/work/a"), Focus::Take).unwrap();
-
-    let workspace = doc.workspace(&path("/work/a")).unwrap();
-    assert_eq!(workspace.bench, declined);
-    assert_eq!(workspace.shelved, None);
-    assert_eq!(
-        doc.unshelve(&path("/work/a"), Focus::Take),
-        Err(Refusal::NothingShelved(path("/work/a")))
-    );
-}
-
-#[test]
-fn an_agent_cannot_answer_the_restore_question_for_the_operator() {
-    let (mut doc, _, _) = one_workspace();
-
-    assert_eq!(
-        doc.reset(&path("/work/a"), terminal(), Focus::Leave),
-        Err(Refusal::WouldMoveFocus),
-        "replacing the bench the operator is looking at moves the keyboard"
     );
 }
 

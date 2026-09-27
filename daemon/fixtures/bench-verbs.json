@@ -35,26 +35,6 @@
     }
   },
   {
-    "id": "v-05",
-    "verb": "workspace/reset",
-    "args": {
-      "path": "/Users/operator/Projects/prp"
-    },
-    "by": {
-      "kind": "operator"
-    }
-  },
-  {
-    "id": "v-06",
-    "verb": "workspace/unshelve",
-    "args": {
-      "path": "/Users/operator/Projects/prp"
-    },
-    "by": {
-      "kind": "operator"
-    }
-  },
-  {
     "id": "v-08",
     "verb": "pane/open",
     "args": {

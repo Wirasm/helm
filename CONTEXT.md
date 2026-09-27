@@ -18,7 +18,8 @@ and renders what it writes; it never builds or hosts an agent of its own.
 _Avoid_: assistant, bot, participant
 
 **terminal**:
-helm's shell — one libghostty surface with its own pty.
+A pane showing one benchd session — the operator's login shell, or an agent — drawn by a
+libghostty surface that runs `bench attach` (M5b). The pty, and what runs in it, are benchd's.
 _Avoid_: terminal session, tab, console
 
 ### What helm has open

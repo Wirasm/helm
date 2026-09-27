@@ -1,0 +1,38 @@
+{
+  "request": {
+    "id": "helm-3",
+    "verb": "sessions"
+  },
+  "reply": {
+    "sessions": [
+      {
+        "session": "s4",
+        "handle": "s4",
+        "agent": "shell",
+        "cwd": "/Users/rasmus/Projects/mine/sild/helm",
+        "pid": 51200,
+        "pane": "0e8e8cc6-159b-45d8-bc02-485120975998",
+        "foreground_pid": 51377,
+        "live": true,
+        "attached": true,
+        "output_bytes": 20480,
+        "runtime_session": null,
+        "uptime_secs": 312
+      },
+      {
+        "session": "s5",
+        "handle": "planner",
+        "agent": "claude",
+        "cwd": "/Users/rasmus/Projects/mine/sild/helm",
+        "pid": 51450,
+        "pane": null,
+        "foreground_pid": null,
+        "live": false,
+        "attached": false,
+        "output_bytes": 90112,
+        "runtime_session": "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2",
+        "uptime_secs": 40
+      }
+    ]
+  }
+}

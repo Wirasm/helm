@@ -47,16 +47,15 @@ final class TerminalManagerTests: XCTestCase {
             ], active: firstWorkspace.value)
         let attaching = document.workspaces[0].bench.attachCommands(
             bench: .success("/opt/it's/bench"))
-        XCTAssertEqual(
-            attaching, [agent: .attach(command: #"'/opt/it'\''s/bench' 'attach' 's3'"#)])
+        let attach = #"'/opt/it'\''s/bench' 'attach' 's3' '--in-pane'"#
+        XCTAssertEqual(attaching, [agent: .attach(command: attach)])
 
         manager.adopt(
             terminals: [agent, shell], in: firstWorkspace, attaching: attaching)
 
         let sessions = manager.sessions(for: firstWorkspace)
         XCTAssertEqual(
-            sessions.first { $0.id == agent }?.hostView.configuration.command,
-            #"'/opt/it'\''s/bench' 'attach' 's3'"#)
+            sessions.first { $0.id == agent }?.hostView.configuration.command, attach)
         XCTAssertNil(
             try XCTUnwrap(sessions.first { $0.id == shell }).hostView.configuration.command,
             "every other terminal is the login shell")
@@ -116,6 +115,28 @@ final class TerminalManagerTests: XCTestCase {
             "a live session is kept, not restarted over")
         XCTAssertTrue(
             manager.sessions(for: firstWorkspace).first === live, "the same session object")
+    }
+
+    /// `bench restore` gives a pane a session after benchd restarted, or after its own ended
+    /// (M5b): the pane's surface must show the new one, not keep what it had.
+    func testAPaneWhoseSessionChangesOrGoesGetsANewSurfaceAndOnlyThen() {
+        let manager = TerminalManager()
+        let pane = manager.adoptShell(in: firstWorkspace).id
+        let s7: [UUID: SessionLaunch] = [pane: .attach(command: "bench attach s7 --in-pane")]
+
+        manager.adopt(terminals: [pane], in: firstWorkspace, attaching: s7)
+        let restored = manager.sessions(for: firstWorkspace).first
+        XCTAssertEqual(restored?.hostView.configuration.command, "bench attach s7 --in-pane")
+
+        manager.adopt(terminals: [pane], in: firstWorkspace, attaching: s7)
+        XCTAssertTrue(
+            manager.sessions(for: firstWorkspace).first === restored, "the same session is kept")
+
+        manager.adopt(terminals: [pane], in: firstWorkspace, attaching: [:])
+        XCTAssertEqual(
+            manager.sessions(for: firstWorkspace).first?.status,
+            .unattachable(SessionAttach.noSession),
+            "benchd restarted: the pane says it has no session, and starts nothing")
     }
 
     func testSessionsGroupByWorkspaceAndShareOneController() {

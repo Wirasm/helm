@@ -76,11 +76,6 @@ pub enum LayoutVerb {
     WorkspaceClose { path: StandardPath },
     #[serde(rename = "workspace/activate")]
     WorkspaceActivate { path: StandardPath },
-    /// helm #85's "fresh": the bench is shelved and replaced by one new terminal.
-    #[serde(rename = "workspace/reset")]
-    WorkspaceReset { path: StandardPath },
-    #[serde(rename = "workspace/unshelve")]
-    WorkspaceUnshelve { path: StandardPath },
     /// A new pane showing `surface`. A terminal gets a fresh id; a canvas or the browser
     /// already showing is brought forward (or, for an agent, left where it is).
     #[serde(rename = "pane/open")]
@@ -235,8 +230,6 @@ pub const LAYOUT_VERBS: &[&str] = &[
     "workspace/open",
     "workspace/close",
     "workspace/activate",
-    "workspace/reset",
-    "workspace/unshelve",
     "pane/open",
     "pane/split",
     "pane/close",

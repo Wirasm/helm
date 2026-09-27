@@ -35,7 +35,8 @@ echo "$PANE"
   and it reuses the pane already showing that file. Write the file again and helm re-renders it.
 - A mark he makes on it is mailed to you (the `bench-mail` skill reads it).
 - `bench open browser` shows the shared browser (the `bench-browser` skill drives it);
-  `bench open terminal` opens a shell. `--drawer <name>` puts it in a drawer instead.
+  `bench open terminal` opens a shell. `--drawer <name>` puts it in a drawer instead. Every
+  terminal pane is a benchd session, his own shells included (`bench sessions` lists them).
 
 ## Where is a pane, and can he see it
 
@@ -86,10 +87,13 @@ BENCH="${BENCH:-bench}"
   A split still halves the column he is in; that is a layout change, not a focus change.
 - `bench name` names a pane nobody has named, or one only the bench named. A name he chose needs
   `--rename`, which says he asked.
-- `bench close` closes a canvas or the browser outright. A terminal needs `--force`, because
-  closing it ends what runs there: a spawned agent's session ends with its pane. The pane holding
-  his keyboard also needs `--asked`, and a workspace's last pane is never closed. Closing a canvas
-  destroys nothing: the file and his notes beside it stay.
+- `bench close` closes a canvas or the browser outright, and a shell sitting at its prompt. A
+  terminal where something runs needs `--force`, because closing it ends what runs there: a
+  spawned agent's session, or the command a shell is running (the refusal names it). The pane
+  holding his keyboard also needs `--asked`, and a workspace's last pane is never closed. Closing
+  a canvas destroys nothing: the file and his notes beside it stay.
+- A benchd restart ends every session. The panes stay; `just resume-all` (`bench restore --all`)
+  gives each a session again: the agent recorded there resumed, a shell anywhere else.
 
 ## See what he sees
 

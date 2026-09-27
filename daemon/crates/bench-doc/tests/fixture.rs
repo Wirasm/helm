@@ -4,8 +4,8 @@
 //! (`browser-endpoint.json`), so neither gate needs the other's toolchain and a renamed field
 //! fails the gate that renamed it.
 //!
-//! The fixture is meant to be hand-read, so it holds one of everything: three workspaces, a
-//! shelved bench, every surface kind, both kinds of name, a recorded agent, and two drawers —
+//! The fixture is meant to be hand-read, so it holds one of everything: three workspaces,
+//! every surface kind, both kinds of name, a recorded agent, and two drawers —
 //! one open, one closed and badged.
 
 use bench_doc::{CanvasSource, Document, PaneName, Surface};
@@ -37,19 +37,12 @@ fn the_fixture_reads_and_writes_back_byte_for_byte() {
 fn the_fixture_holds_one_of_everything() {
     let (_, text) = fixture();
     let doc: Document = serde_json::from_str(&text).unwrap();
-    let benches = doc
-        .workspaces()
-        .iter()
-        .flat_map(|w| std::iter::once(&w.bench).chain(w.shelved.as_ref()));
+    let benches = doc.workspaces().iter().map(|w| &w.bench);
     let panes: Vec<_> = benches.flat_map(|b| b.panes()).collect();
     let has = |f: &dyn Fn(&Surface) -> bool| panes.iter().any(|p| f(&p.surface));
 
     assert_eq!(doc.workspaces().len(), 3);
     assert!(doc.active().is_some());
-    assert!(
-        doc.workspaces().iter().any(|w| w.shelved.is_some()),
-        "a shelved bench"
-    );
     assert!(
         has(&|s| matches!(s, Surface::Terminal { agent: None, .. })),
         "a plain terminal"

@@ -24,7 +24,6 @@ pub enum Refusal {
     /// A resize names two members a divider does not sit between.
     NotADivider,
     NotATerminal(PaneId),
-    NothingShelved(StandardPath),
     /// Opening a drawer that holds nothing, with nothing named to put in it.
     EmptyDrawer(DrawerName),
     /// Drawer names are one namespace across the document.
@@ -62,7 +61,6 @@ impl fmt::Display for Refusal {
                 "those two are not either side of one divider — a resize trades between adjacent members only"
             ),
             Refusal::NotATerminal(id) => write!(f, "pane {id} is not a terminal"),
-            Refusal::NothingShelved(path) => write!(f, "workspace {path} has no shelved bench"),
             Refusal::EmptyDrawer(name) => write!(
                 f,
                 "drawer {name} holds nothing — name a surface to open it with"

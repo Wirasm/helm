@@ -32,10 +32,6 @@ use std::collections::HashSet;
 pub struct Workspace {
     pub path: StandardPath,
     pub bench: Bench,
-    /// A bench the operator declined to restore (helm #85), kept so one wrong click cannot
-    /// destroy a layout, and offered back while the live bench is still the fresh shell.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shelved: Option<Bench>,
 }
 
 /// Which bench an edit applies to.
@@ -127,8 +123,7 @@ impl Document {
         self.drawers.iter().find(|d| d.pane(pane).is_some())
     }
 
-    /// A pane wherever it lives: a workspace's live bench or a drawer. (A shelved bench is not
-    /// on screen and answers no verb, so it is not searched.)
+    /// A pane wherever it lives: a workspace's bench or a drawer.
     pub fn pane(&self, id: PaneId) -> Option<&Pane> {
         self.workspaces
             .iter()
@@ -146,16 +141,70 @@ impl Document {
             .map(|p| p.id)
     }
 
+    /// Every pane on a live bench or in a drawer.
+    fn live_panes(&self) -> impl Iterator<Item = &Pane> {
+        let benches = self.workspaces.iter().flat_map(|w| w.bench.panes());
+        benches.chain(self.drawers.iter().flat_map(|d| d.panes.iter()))
+    }
+
+    /// Every benchd session a pane on a live bench or in a drawer shows. A session none of them
+    /// shows has lost its pane, and benchd ends it.
+    pub fn sessions_shown(&self) -> HashSet<String> {
+        self.live_panes()
+            .filter_map(|p| p.surface.session().map(str::to_string))
+            .collect()
+    }
+
+    /// Every terminal pane on a live bench or in a drawer: its id, the workspace it is on (`None`
+    /// in a drawer) and the session it shows. What benchd starts a shell for when a pane is new,
+    /// and what `restore` fills.
+    pub fn terminals(&self) -> Vec<(PaneId, Option<StandardPath>, Option<String>)> {
+        let benches = self
+            .workspaces
+            .iter()
+            .flat_map(|w| w.bench.panes().map(move |p| (p, Some(w.path.clone()))));
+        let drawers = self
+            .drawers
+            .iter()
+            .flat_map(|d| d.panes.iter().map(|p| (p, None)));
+        benches
+            .chain(drawers)
+            .filter_map(|(p, path)| match &p.surface {
+                Surface::Terminal { session, .. } => Some((p.id, path, session.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every pane id on a live bench or in a drawer.
+    pub fn pane_ids(&self) -> HashSet<PaneId> {
+        self.live_panes().map(|p| p.id).collect()
+    }
+
+    /// Show benchd session `session` in terminal pane `pane`, keeping its agent record. Answers
+    /// whether `pane` is a terminal here. Not a verb: benchd calls it for a session it started
+    /// for the pane, and the change is committed like any other.
+    pub fn show_session(&mut self, pane: PaneId, session: &str) -> bool {
+        let benches = self.workspaces.iter_mut().flat_map(|w| w.bench.panes_mut());
+        let drawers = self.drawers.iter_mut().flat_map(|d| d.panes.iter_mut());
+        for p in benches.chain(drawers) {
+            if p.id == pane
+                && let Surface::Terminal { session: shown, .. } = &mut p.surface
+            {
+                *shown = Some(session.to_string());
+                return true;
+            }
+        }
+        false
+    }
+
     /// Forget every benchd session a terminal pane names, answering the panes that named one.
     /// benchd calls this when it boots: no session outlives the daemon that ran it, and session
     /// ids restart with each daemon, so a name kept across a restart would attach a pane to
     /// somebody else's agent. The pane stays, with its `agent` record for the resume offer.
     pub fn end_sessions(&mut self) -> Vec<PaneId> {
         let mut ended = Vec::new();
-        let benches = self.workspaces.iter_mut().flat_map(|w| {
-            let shelf = w.shelved.as_mut().into_iter().flat_map(Bench::panes_mut);
-            w.bench.panes_mut().chain(shelf)
-        });
+        let benches = self.workspaces.iter_mut().flat_map(|w| w.bench.panes_mut());
         let drawers = self.drawers.iter_mut().flat_map(|d| d.panes.iter_mut());
         for pane in benches.chain(drawers) {
             if let Surface::Terminal { session, .. } = &mut pane.surface
@@ -195,7 +244,6 @@ impl Document {
                 doc.workspaces.push(Workspace {
                     path: path.clone(),
                     bench,
-                    shelved: None,
                 });
             }
             if focus == Focus::Take {
@@ -225,31 +273,6 @@ impl Document {
         self.commit(focus, |doc| {
             doc.index_of(path)?;
             doc.active = Some(path.clone());
-            Ok(())
-        })
-    }
-
-    /// helm #85's "fresh": the bench is shelved and replaced by `fresh` alone.
-    pub fn reset(&mut self, path: &StandardPath, fresh: Pane, focus: Focus) -> Result<(), Refusal> {
-        self.commit(focus, |doc| {
-            let index = doc.index_of(path)?;
-            let bench = Bench::of(vec![fresh], None).expect("one pane is a bench");
-            let workspace = &mut doc.workspaces[index];
-            workspace.shelved = Some(std::mem::replace(&mut workspace.bench, bench));
-            Ok(())
-        })
-    }
-
-    /// Bring a shelved bench back. Restoring the shelf is what stops it being shelved.
-    pub fn unshelve(&mut self, path: &StandardPath, focus: Focus) -> Result<(), Refusal> {
-        self.commit(focus, |doc| {
-            let index = doc.index_of(path)?;
-            let workspace = &mut doc.workspaces[index];
-            let shelved = workspace
-                .shelved
-                .take()
-                .ok_or_else(|| Refusal::NothingShelved(path.clone()))?;
-            workspace.bench = shelved;
             Ok(())
         })
     }
@@ -453,15 +476,12 @@ impl Document {
         )
     }
 
-    /// The rules an operation could break: pane ids are one namespace across every bench,
-    /// shelf and drawer, and drawer names are one namespace too. (A drawer's own shape — never
+    /// The rules an operation could break: pane ids are one namespace across every bench and
+    /// drawer, and drawer names are one namespace too. (A drawer's own shape — never
     /// empty, its selection held — is kept by construction; only decoding has to check it.)
     fn check(&self) -> Result<(), Refusal> {
         let mut seen = HashSet::new();
-        let benches = self
-            .workspaces
-            .iter()
-            .flat_map(|w| std::iter::once(&w.bench).chain(w.shelved.as_ref()));
+        let benches = self.workspaces.iter().map(|w| &w.bench);
         let drawer_panes = self.drawers.iter().flat_map(|d| d.panes.iter());
         for pane in benches.flat_map(|b| b.panes()).chain(drawer_panes) {
             if !seen.insert(pane.id) {

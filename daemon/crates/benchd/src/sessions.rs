@@ -49,7 +49,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
     let workspace = StandardPath::new(&args.workspace)
         .map_err(|why| Refusal::Refused(format!("workspace: {why}")))?;
 
-    let (home, root, pushable, bench, hosted, dismissed, hooked) = {
+    let (home, suite, root, pushable, bench, hosted, dismissed, hooked) = {
         let c = core.lock().unwrap();
         let bench: Vec<BenchSession> = c
             .sessions
@@ -69,6 +69,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
             .collect();
         (
             c.home.clone(),
+            c.suite.as_ref().map(|s| s.as_str().to_string()),
             c.root.clone(),
             c.pushable_handles(),
             bench,
@@ -84,7 +85,11 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
         wakeable: pushable.contains(handle),
         unread: bench_mail::unread(&root, handle),
     };
-    let helm_bench_dir = helm_bench_dir(&home);
+    let helm_bench_dir = helm_bench_dir(
+        &home,
+        suite.as_deref(),
+        std::env::var("HELM_BENCH_DIR").ok(),
+    );
     let now = now_rfc3339();
     let built = {
         let mut cache = CACHE.lock().unwrap();
@@ -255,11 +260,17 @@ fn report(core: &mut Core, u: &Unreadable) -> Result<(), String> {
 }
 
 /// helm's bench directory: `HELM_BENCH_DIR` when set (helm's own override), else
-/// `~/.helm/bench`.
-fn helm_bench_dir(home: &Path) -> PathBuf {
-    std::env::var("HELM_BENCH_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home.join(".helm/bench"))
+/// `~/.helm/bench`, or `~/.helm/bench-<suite>` for a benchd on a suite, which is where the helm
+/// on the same suite writes its snapshot. Without the suite an isolated benchd read the
+/// operator's own helm's snapshot.
+fn helm_bench_dir(home: &Path, suite: Option<&str>, explicit: Option<String>) -> PathBuf {
+    if let Some(dir) = explicit {
+        return PathBuf::from(dir);
+    }
+    match suite {
+        Some(suite) => home.join(format!(".helm/bench-{suite}")),
+        None => home.join(".helm/bench"),
+    }
 }
 
 fn now_ms() -> u64 {
@@ -393,4 +404,27 @@ fn quarantine(path: &Path, why: &str) -> (&'static str, Value) {
             "why": why,
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_benchd_on_a_suite_reads_the_snapshot_of_the_helm_on_that_suite() {
+        let home = Path::new("/Users/op");
+        assert_eq!(
+            helm_bench_dir(home, Some("m5b"), None),
+            PathBuf::from("/Users/op/.helm/bench-m5b"),
+            "never the operator's own helm's"
+        );
+        assert_eq!(
+            helm_bench_dir(home, None, None),
+            PathBuf::from("/Users/op/.helm/bench")
+        );
+        assert_eq!(
+            helm_bench_dir(home, Some("m5b"), Some("/tmp/x".into())),
+            PathBuf::from("/tmp/x")
+        );
+    }
 }

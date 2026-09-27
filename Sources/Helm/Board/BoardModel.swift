@@ -78,7 +78,7 @@ final class BoardModel: ObservableObject {
     private func hostedPids() -> [String: Set<pid_t>] {
         var pids: [String: Set<pid_t>] = [:]
         for session in manager.sessions {
-            guard let pid = session.hostView.foregroundPid else { continue }
+            guard let pid = session.foregroundPid else { continue }
             pids[session.workspacePath.value, default: []].insert(pid)
         }
         return pids

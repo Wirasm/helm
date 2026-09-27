@@ -35,7 +35,6 @@ final class DrawerTests: XCTestCase {
             server.stop()
         }
         XCTAssertTrue(Eventually.holds { model.document != nil }, "the first document never came")
-        if model.restoreOffer != nil { model.answer(.restore) }
         return Rig(server: server, model: model, terminals: terminals)
     }
 
