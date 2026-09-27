@@ -9,7 +9,7 @@ import XCTest
 /// `BuildStamp` decodes. Neither script can `import Helm` — one runs inside an Xcode build
 /// phase and the other from a Makefile, both outside any Swift target — so the format is
 /// spelled twice, in Swift and in shell. That is the same runtime-boundary carve-out AGENTS.md
-/// grants the spool scripts, and it comes with the same obligation: the
+/// grants benchd's wire, and it comes with the same obligation: the
 /// duplication must be **detectable** rather than trusted.
 ///
 /// So this runs the real scripts as subprocesses and decodes their output with the real types.
@@ -128,7 +128,7 @@ final class BuildStampScriptTests: XCTestCase {
             .available(try XCTUnwrap(waiting)))
     }
 
-    /// The permissions the stamp inherits from the spool and the bench snapshot: a 0700
+    /// The permissions the stamp shares with the bench snapshot: a 0700
     /// directory and a 0600 file.
     func testAnnouncedStampIsPrivate() throws {
         let bundle = try makeBundle(sha: "abc1234")

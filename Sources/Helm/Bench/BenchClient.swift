@@ -158,8 +158,7 @@ final class BenchClient: ObservableObject {
 
     /// One verb, one answer, at a socket path: for a caller that holds no client (the mail
     /// seam). Blocking and bounded by `requestTimeout`, like the instance form: a canvas note
-    /// calls it on the main actor as `WorkbenchModel.send` does, and the spool's repeated ask moves it
-    /// off.
+    /// calls it on the main actor as `WorkbenchModel.send` does.
     nonisolated static func request<Payload: Decodable & Sendable>(
         _ request: some Encodable, at socketPath: String, answering _: Payload.Type = Payload.self
     ) throws -> BenchResponse<Payload> {
@@ -173,7 +172,7 @@ final class BenchClient: ObservableObject {
     }
 
     /// The document at `seq` or later, as soon as the follower has it — for a caller that sent a
-    /// verb and must read what it did before returning (the spool reports it). benchd hands the
+    /// verb and reads the bench straight after (`WorkbenchModel.send`). benchd hands the
     /// frame to its followers before it answers, so this is normally already here. nil when the
     /// follower is down or slower than `within`.
     ///

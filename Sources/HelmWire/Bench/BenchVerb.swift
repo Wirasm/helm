@@ -10,7 +10,7 @@ package enum BenchActor: Codable, Equatable, Sendable {
     /// An agent. `pane` is where it runs, when it is known; `handle` is its mailbox. Both are
     /// for the record only.
     case agent(pane: String? = nil, handle: String? = nil)
-    /// helm acting on its own observation: recording an agent, importing its saved benches.
+    /// helm acting on its own observation: recording which agent is in a pane.
     case helm
 
     private enum CodingKeys: String, CodingKey { case kind, pane, handle }
@@ -79,7 +79,6 @@ package enum BenchVerb: Equatable, Sendable {
     case workspaceActivate(path: String)
     case workspaceReset(path: String)
     case workspaceUnshelve(path: String)
-    case workspaceImport(BenchDocument)
     /// A new pane showing `surface`, placed by benchd's rules; `workspace` nil means the active
     /// one.
     case paneOpen(workspace: String? = nil, surface: Surface)
@@ -111,7 +110,6 @@ package enum BenchVerb: Equatable, Sendable {
         case .workspaceActivate: "workspace/activate"
         case .workspaceReset: "workspace/reset"
         case .workspaceUnshelve: "workspace/unshelve"
-        case .workspaceImport: "workspace/import"
         case .paneOpen, .paneOpenInDrawer: "pane/open"
         case .paneSplit: "pane/split"
         case .paneClose: "pane/close"
@@ -146,13 +144,13 @@ package struct BenchRequest: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case id, verb, args, by, asked }
     private enum ArgKeys: String, CodingKey {
-        case path, document, workspace, surface, direction, pane, to, name, agent, slot, divider,
+        case path, workspace, surface, direction, pane, to, name, agent, slot, divider,
             fraction, drawer
     }
     private enum StepKeys: String, CodingKey { case step }
     private enum DividerKeys: String, CodingKey { case between, member, against }
 
-    // swiftlint:disable:next cyclomatic_complexity function_body_length - legacy (#418): 18 (limit 15), 61 lines (limit 60)
+    // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 18 (limit 15)
     package func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
@@ -169,8 +167,6 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case let .workspaceOpen(path), let .workspaceClose(path), let .workspaceActivate(path),
             let .workspaceReset(path), let .workspaceUnshelve(path):
             try a.encode(path, forKey: .path)
-        case let .workspaceImport(document):
-            try a.encode(document, forKey: .document)
         case let .paneOpen(workspace, surface):
             try a.encodeIfPresent(workspace, forKey: .workspace)
             try a.encode(surface, forKey: .surface)
@@ -240,8 +236,6 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case "workspace/activate": verb = .workspaceActivate(path: try path())
         case "workspace/reset": verb = .workspaceReset(path: try path())
         case "workspace/unshelve": verb = .workspaceUnshelve(path: try path())
-        case "workspace/import":
-            verb = .workspaceImport(try a.decode(BenchDocument.self, forKey: .document))
         case "pane/open":
             let surface = try a.decode(Surface.self, forKey: .surface)
             if let drawer = try a.decodeIfPresent(String.self, forKey: .drawer) {

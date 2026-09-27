@@ -35,8 +35,8 @@ enum WindowCapture {
     /// matters. helm knows its own panes (`TerminalManager.sessions`), so it is asked instead
     /// of guessed at.
     ///
-    /// A `Result` rather than a throw so the refusal reason travels the same path every other
-    /// spool answer does, and reaches `results/<id>.json` as prose a caller can act on.
+    /// A `Result` rather than a throw so the refusal reason reaches the asker as prose it can act
+    /// on: `HelmAsks` sends it back as the `reason` of benchd's `helm/answer`.
     @MainActor
     static func png(
         of view: NSView, terminals: [NSView], window title: String,

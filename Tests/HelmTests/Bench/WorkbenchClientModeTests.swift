@@ -229,13 +229,10 @@ final class WorkbenchClientModeTests: XCTestCase {
             rig.model.surfaceView(of: pane, in: rig.model.surfaceSlot(for: pane, in: slot)))
     }
 
-    /// The placeholder keeps its kind's name everywhere it is written down: in a saved bench,
-    /// and in `snapshot.json`, which is how an agent without a display reads the bench.
-    func testAPlaceholderKeepsItsKindInTheSnapshotAndThroughCodable() throws {
+    /// The placeholder keeps its kind's name in `snapshot.json`, which is how an agent without a
+    /// display reads the bench.
+    func testAPlaceholderKeepsItsKindInTheSnapshot() throws {
         let pane = Pane(content: .unsupported("whiteboard"))
-        let decoded = try JSONDecoder().decode(Pane.self, from: JSONEncoder().encode(pane))
-        XCTAssertEqual(decoded, pane)
-
         let record = BenchSnapshot.PaneRecord(
             pane: pane, selected: true, visible: true, focused: false, live: nil,
             foregroundPid: { _ in nil }, agents: [:])

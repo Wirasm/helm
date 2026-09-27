@@ -357,22 +357,6 @@ fn pane_ids_are_one_namespace_across_benches_and_drawers() {
     assert!(doc.drawers().is_empty());
 }
 
-#[test]
-fn an_import_keeps_the_drawers_already_here() {
-    let mut doc = Document::default();
-    let id = doc
-        .place_in_drawer(&name("notes"), canvas("/tmp/n.md"), Focus::Leave)
-        .unwrap();
-
-    doc.import(working_document()).unwrap();
-
-    assert_eq!(doc.workspaces().len(), 2);
-    assert!(
-        doc.drawer(&name("notes")).unwrap().pane(id).is_some(),
-        "an agent's drawer made before helm's one-time import survives it"
-    );
-}
-
 // MARK: - Decoding
 
 fn stored(extra: serde_json::Value) -> serde_json::Value {

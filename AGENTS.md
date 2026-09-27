@@ -671,7 +671,7 @@ document surface; `Workbench/` (2.6k) is drawing benchd's bench — columns, slo
 the door every change goes out through;
 `Surfaces/` is `SurfaceKind` and the one registry every pane kind's live object is kept in;
 `Keymap/` is the key table and its readers (below); `Bench/` is helm as benchd's client —
-the socket, the follower and the one-time import (below);
+the socket and the follower (below);
 `Archon/` + `Worktrees/` (2.5k + 0.8k) are the **rail's two tenants**; `Terminals/` (2.1k) is the
 libghostty seam — sessions, the host view, the pane environment, and `SessionAttach` (a pane
 that shows a benchd session); then `App/`, `Board/`, `Browser/`, `Workspaces/`, `Design/`, `Artifacts/`,
@@ -690,8 +690,8 @@ above and are the easiest to be surprised by:
 - **`Board/` is agent presence and the bench snapshot — it is not the drawable board.** The
   collision is real and worth knowing before a grep sends you to the wrong one. `Sources/Helm/Board/`
   is `BoardModel`, `AgentDot` and `BenchSnapshot`: which workspace tab has an agent that has
-  stopped, plus the JSON report an agent reads the bench from. `AgentLocator` (a process's
-  ancestors, up to helm) and `TranscriptLocator` (a session's transcript on disk) live here too. On the presence half helm holds
+  stopped, plus the JSON report an agent reads the bench from. `TranscriptLocator` (a session's
+  transcript on disk) lives here too. On the presence half helm holds
   **no state of its own** — the registry file's lifecycle *is* the mark's lifecycle, so nothing
   acknowledges, decays or expires, which is what makes it safe to poll and republish rather than
   accumulate. The **drawable** board is
@@ -714,8 +714,8 @@ bench: nothing is drawn until benchd's follower delivers the document the verb m
 (`WorkbenchModel.apply`).
 
 - **helm keeps no bench.** The workspace list follows the document, and nothing about the bench
-  is in defaults. The benches helm used to save there go into benchd's first empty document
-  once, as `workspace/import` (`BenchImport`), and are left where they were.
+  is in defaults. The one-time import of the benches helm used to save there ran and was
+  deleted in #470; the old keys are left on disk, read by nothing.
 - **#85's question stays helm's** until M5b: its answer goes back as `workspace/reset` or
   `workspace/unshelve`. A pane showing a running benchd session is never asked about: the agent
   is right there. **The question is invisible to benchd**, so an agent's `bench` verb into a
