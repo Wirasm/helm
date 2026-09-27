@@ -55,6 +55,8 @@ final class LocalActions: ActionPerformer {
             workbench.isBrowserOpen.toggle()
         case .toggleRail:
             rail.toggleVisibility()
+        case .toggleZoom:
+            workbench.isZoomed.toggle()
         case .newNote:
             Task { await workbench.newNote() }
         case .toggleKeepAwake:

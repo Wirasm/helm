@@ -382,6 +382,12 @@ hint = "archon"
 menu = "Toggle Archon Rail"
 
 [[bind]]
+key = "cmd+j"
+action = "toggle-zoom"
+hint = "zoom"
+menu = "Zoom Pane"
+
+[[bind]]
 key = "cmd+shift+b"
 action = "drawer"
 name = "browser"

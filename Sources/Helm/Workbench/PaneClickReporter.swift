@@ -40,9 +40,21 @@ struct PaneClickReporter: NSViewRepresentable {
     /// The closure is rebuilt on every render and captures the slot id, so it is pushed each
     /// time rather than captured once at `makeNSView` — the same shape `GhosttyHostView` uses
     /// for `claimsKeyboard`.
-    func updateNSView(_ view: ClickWatchingView, context _: Context) {
+    func updateNSView(_ view: ClickWatchingView, context: Context) {
         view.onClick = onClick
+        view.benchViewport = context.environment.benchViewport
     }
+}
+
+extension EnvironmentValues {
+    /// The part of the window the bench is seen through, in window coordinates
+    /// (SwiftUI's `.global`: the window's space, top-left origin). nil where no bench sets it.
+    ///
+    /// A zoomed bench (⌘J, `BenchCamera`) is laid out past this rectangle on every side, and
+    /// the slots out there are clipped from the screen but not from AppKit's geometry: their
+    /// rectangles lie under the workspace bar, the status bar and the rail. Only a click inside
+    /// this rectangle can be a click on a slot.
+    @Entry var benchViewport: CGRect?
 }
 
 // MARK: - ClickWatchingView
@@ -60,6 +72,8 @@ struct PaneClickReporter: NSViewRepresentable {
 /// anyway: the view stops watching when it stops being on screen, not when ARC gets to it.
 final class ClickWatchingView: NSView {
     var onClick: (() -> Void)?
+    /// See `EnvironmentValues.benchViewport`.
+    var benchViewport: CGRect?
     private var monitor: Any?
 
     override func viewDidMoveToWindow() {
@@ -100,7 +114,18 @@ final class ClickWatchingView: NSView {
     private func report(_ event: NSEvent) {
         guard let window, event.windowNumber == window.windowNumber else { return }
         guard focusable.contains(convert(event.locationInWindow, from: nil)) else { return }
+        guard isInBenchViewport(event.locationInWindow) else { return }
         onClick?()
+    }
+
+    /// Whether a click lands where the bench can be seen, rather than on chrome that covers a
+    /// zoomed slot's off-screen part (`EnvironmentValues.benchViewport`). SwiftUI's `.global`
+    /// is the window's own space with the origin at the top, title bar included, so it is the
+    /// event's window location flipped.
+    private func isInBenchViewport(_ locationInWindow: NSPoint) -> Bool {
+        guard let benchViewport, let window else { return true }
+        return benchViewport.contains(
+            NSPoint(x: locationInWindow.x, y: window.frame.height - locationInWindow.y))
     }
 
     /// This slot's rectangle, less the band a divider can be grabbed by.
