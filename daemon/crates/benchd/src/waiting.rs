@@ -17,6 +17,7 @@
 //! behind by a claude that exited reads exactly like a live one).
 
 use crate::{Core, prompts, sessions::now_ms};
+use bench_doc::PaneId;
 use bench_session::AgentKind;
 use bench_wire::{Activity, Waiting, WaitingSource};
 use serde_json::json;
@@ -112,6 +113,29 @@ fn decide(reported: Option<(&Activity, u64)>, seen: Option<(&str, u64)>) -> Opti
     })
 }
 
+/// Where `focus/waiting` goes: every pane showing a session whose agent waits on the operator,
+/// the longest wait first, and of those the one after the focused pane, so pressing again walks
+/// them and comes round. `None` when nothing waits.
+pub fn next_pane(c: &Core) -> Option<PaneId> {
+    let doc = &c.bench.document;
+    let waiting = c
+        .sessions
+        .keys()
+        .filter_map(|id| Some((of_session(c, id)?.since_ms, doc.pane_showing_session(id)?)))
+        .collect();
+    next_after(waiting, doc.focused_pane())
+}
+
+/// The ordering on its own: the longest wait first (ties by pane id, so it is stable), and the
+/// one after `focused` when it is one of them.
+fn next_after(mut waiting: Vec<(u64, PaneId)>, focused: Option<PaneId>) -> Option<PaneId> {
+    waiting.sort_by_key(|(since, pane)| (*since, pane.to_string()));
+    let after = focused
+        .and_then(|f| waiting.iter().position(|(_, p)| *p == f))
+        .map_or(0, |at| at + 1);
+    waiting.get(after % waiting.len().max(1)).map(|(_, p)| *p)
+}
+
 /// What the live agent running in a session last reported, and since when: the agent in the
 /// pane showing it (an agent the operator started in a shell), or the one benchd spawned there,
 /// which shares the session's handle.
@@ -163,6 +187,20 @@ mod tests {
     #[test]
     fn a_report_newer_than_the_screen_says_the_prompt_is_gone() {
         assert!(decide(Some((&Activity::Busy, 30)), Some(("permission prompt", 20))).is_none());
+    }
+
+    #[test]
+    fn the_jump_starts_at_the_longest_wait_and_walks_round() {
+        let [a, b, c] = [PaneId::mint(), PaneId::mint(), PaneId::mint()];
+        let waiting = vec![(30, c), (10, a), (20, b)];
+        let other = PaneId::mint();
+        assert_eq!(next_after(waiting.clone(), None), Some(a));
+        assert_eq!(next_after(waiting.clone(), Some(other)), Some(a));
+        assert_eq!(next_after(waiting.clone(), Some(a)), Some(b));
+        assert_eq!(next_after(waiting.clone(), Some(b)), Some(c));
+        assert_eq!(next_after(waiting, Some(c)), Some(a));
+        assert_eq!(next_after(vec![(10, a)], Some(a)), Some(a));
+        assert_eq!(next_after(Vec::new(), Some(a)), None);
     }
 
     #[test]

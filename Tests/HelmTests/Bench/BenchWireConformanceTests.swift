@@ -86,7 +86,7 @@ final class BenchWireConformanceTests: XCTestCase {
             "bench/get", "workspace/open", "workspace/close", "workspace/activate",
             "pane/open",
             "pane/split", "pane/close", "pane/show", "pane/move", "pane/name",
-            "focus/slot", "focus/step", "layout/resize", "drawer/toggle",
+            "focus/slot", "focus/step", "focus/waiting", "layout/resize", "drawer/toggle",
         ]
         XCTAssertEqual(sampled, helmSends)
     }

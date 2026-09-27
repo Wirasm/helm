@@ -187,6 +187,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "pane/name",
     "focus/slot",
     "focus/step",
+    "focus/waiting",
     "layout/resize",
     "drawer/toggle",
     // M3: benchd asks helm for what only helm can do.
