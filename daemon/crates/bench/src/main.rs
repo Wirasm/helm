@@ -75,7 +75,9 @@ fn usage() -> &'static str {
      \x20     log <session id | transcript path>  a Claude or pi session's prompts, replies, tool\n\
      \x20         [-n N] [--since 30m|2h|1d|<time>] calls and errors, read from its transcript with no\n\
      \x20         [--json]                        daemon; the last 40 unless -n says otherwise\n\
-     \x20     attach <session>                    raw relay to a session's pty (Ctrl-\\ detaches)\n\
+     \x20     attach <session> [--in-pane]        relay to a session's pty (Ctrl-\\ detaches); the\n\
+     \x20                                         pty follows this terminal's size. --in-pane:\n\
+     \x20                                         what a helm pane runs (quiet, no detach key)\n\
      \x20     close <session>                     drain-then-die the session (a pane id closes\n\
      \x20                                         the pane, above)\n\
      \x20     resume <session>                    re-enter an exited session's runtime state\n\
@@ -127,6 +129,7 @@ fn run() -> i32 {
     let mut follow = false;
     let mut all = false;
     let mut json_out = false;
+    let mut in_pane = false;
 
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -144,6 +147,7 @@ fn run() -> i32 {
                 None => return refuse("-n needs a count"),
             },
             "--json" => json_out = true,
+            "--in-pane" => in_pane = true,
             "--follow" => follow = true,
             "--all" => all = true,
             "--to" | "--from" | "--subject" | "--body" | "--body-file" | "--handle"
@@ -177,6 +181,9 @@ fn run() -> i32 {
     }
     if verb == "get" {
         verb = "bench/get".into();
+    }
+    if in_pane && verb != "attach" {
+        return refuse("--in-pane is for `attach`");
     }
     if follow && verb != "events" {
         return refuse("--follow is for `events`");
@@ -377,7 +384,7 @@ fn run() -> i32 {
         asked: false,
     };
     if verb == "attach" {
-        attach::run(cli)
+        attach::run(cli, in_pane)
     } else if follow {
         follow_events(cli)
     } else {
