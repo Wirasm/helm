@@ -17,14 +17,14 @@ import WebKit
 // script and handler with every webview.
 //
 // "OPENED EXPLICITLY BY THE USER" IS NO LONGER TRUE, and that is deliberate
-// (#125). An agent can push an artifact by printing OSC 777, and if the bench has
-// no canvas slot yet that push lands in a new column — where the slot's only pane
-// is its selection, so the page renders, and an .html artifact runs its JS, with
-// no click. A push into an EXISTING canvas slot stays inert until the operator
-// selects the tab; only the first one renders unattended.
+// (#125). An agent puts an artifact on the bench with `bench open`, and when
+// benchd's placement gives it a new slot, it is that slot's only pane and so its
+// selection: the page renders, and an .html artifact runs its JS, with no click.
+// One added as a tab to an EXISTING slot stays inert until the operator selects
+// it.
 //
-// Weighed rather than inherited: any program writing to the pty can trigger it,
-// including a remote ssh session — but it can only name a path that already
+// Weighed rather than inherited: any local process that can reach benchd's
+// socket can trigger it — but it can only name a path that already
 // exists on this machine, which the operator could already open with ⌘O, and
 // helm's threat model is a single-operator local app with no attacker. The bridge
 // is not reachable from that page either: it lives in a named content world

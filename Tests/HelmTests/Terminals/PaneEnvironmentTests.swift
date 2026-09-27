@@ -61,8 +61,8 @@ final class PaneEnvironmentTests: XCTestCase {
 
     // MARK: - Which instance the child belongs to (#285)
 
-    /// **The half of #285 that is helm's.** The spool scripts an agent runs, and `bench` through
-    /// `BENCH_SUITE`, are processes helm does not run and that cannot ask it anything — so the
+    /// **The half of #285 that is helm's.** `bench`, reading `BENCH_SUITE`, is a process helm
+    /// does not run and that cannot ask it anything — so the
     /// only way an isolated instance's agents reach its state rather than the operator's is for
     /// helm to say which instance they are in. Declared rather than inherited, for the
     /// reason `terminalDeclaration` gives about `COLORTERM`.

@@ -690,8 +690,8 @@ above and are the easiest to be surprised by:
 - **`Board/` is agent presence and the bench snapshot — it is not the drawable board.** The
   collision is real and worth knowing before a grep sends you to the wrong one. `Sources/Helm/Board/`
   is `BoardModel`, `AgentDot` and `BenchSnapshot`: which workspace tab has an agent that has
-  stopped, plus the JSON report an agent reads the bench from. `AgentLocator` (a process's
-  ancestors, up to helm) and `TranscriptLocator` (a session's transcript on disk) live here too. On the presence half helm holds
+  stopped, plus the JSON report an agent reads the bench from. `TranscriptLocator` (a session's
+  transcript on disk) lives here too. On the presence half helm holds
   **no state of its own** — the registry file's lifecycle *is* the mark's lifecycle, so nothing
   acknowledges, decays or expires, which is what makes it safe to poll and republish rather than
   accumulate. The **drawable** board is

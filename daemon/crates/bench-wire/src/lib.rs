@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+pub mod attach;
 mod layout;
 pub use layout::{
     Actor, DOCUMENT_CHANGED, DOCUMENT_RECORD_FORMAT, DOCUMENT_RECORD_VERSION, Divider, DocumentAt,
@@ -186,8 +187,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "focus/step",
     "layout/resize",
     "drawer/toggle",
-    // M3: the pty follows its viewer, and benchd asks helm for what only helm can do.
-    "resize",
+    // M3: benchd asks helm for what only helm can do.
     "helm/ask",
     "helm/answer",
 ];
@@ -221,8 +221,6 @@ pub enum Verb {
     JustRun,
     /// Every verb in `LAYOUT_VERBS`; `LayoutVerb` decodes which one and its arguments.
     Layout,
-    /// An attached viewer's terminal changed size (`SessionArgs` with `rows`/`cols`).
-    Resize,
     /// Something only helm can do, asked of whichever helm follows the bench (`HelmAsk`).
     HelmAsk,
     /// helm's answer to one (`HelmAnswer`).
@@ -252,7 +250,6 @@ impl Verb {
             "browser/status" => Some(Verb::BrowserStatus),
             "browser/stop" => Some(Verb::BrowserStop),
             "browser/setup" => Some(Verb::BrowserSetup),
-            "resize" => Some(Verb::Resize),
             "helm/ask" => Some(Verb::HelmAsk),
             "helm/answer" => Some(Verb::HelmAnswer),
             "just/run" => Some(Verb::JustRun),
@@ -843,6 +840,8 @@ mod tests {
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
+        // Resize rides the attach stream (`attach::AttachFrame::Size`) since #359.
+        assert!(Verb::parse("resize").is_none());
     }
 
     #[test]

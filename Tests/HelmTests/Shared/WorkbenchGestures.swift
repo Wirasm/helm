@@ -62,7 +62,7 @@ extension WorkbenchModel {
         send(.paneShow(pane), by: .operatorGesture)
     }
 
-    /// Whether the pane is on screen afterwards, which is what the spool reports.
+    /// An agent's `pane/show`, and whether the pane is on screen afterwards.
     @discardableResult
     func offerSelect(_ pane: Pane.ID) -> Bool {
         send(.paneShow(pane), by: .agent())

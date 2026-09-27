@@ -121,7 +121,9 @@ terminal needs `force` (a live session's name is in the refusal; a helm-hosted t
 until M5b), a chosen name needs `rename`, and an agent's pane opens in its own workspace. `spawn`
 now puts the agent in a pane: the document's terminal surface names the session
 (`term:<session>`), and helm shows it by running `bench attach` in that pane, which follows the
-pane's size (`resize`) and ends when the session does. No session outlives its daemon, so boot
+pane's size and ends when the session does. After the attach answer the viewer's side of the
+stream is framed (`bench_wire::attach`): keys and sizes in one ordered stream, sizes coalesced to
+one per 16 ms plus a trailing one, because each is a SIGWINCH and a redraw (M5b, #359). No session outlives its daemon, so boot
 clears every pane's `session` (`bench/sessions-ended`). What only helm can do — drawing its window
 — benchd asks for: `helm/ask` logs `helm/asked` to the followers, helm answers with `helm/answer`,
 and the caller waits at most `HELM_ASK_WAIT`. The `bench-panes` skill is the agent's guide.

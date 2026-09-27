@@ -32,7 +32,7 @@ struct AgentSession: Equatable {
     let cwd: String?
     let status: AgentStatus?
     /// Claude Code's own id for the conversation. The board does not use it; the
-    /// resume record (#63) and the spool's owner join do, and `sessionId` + `cwd` are
+    /// resume record (#63) does, and `sessionId` + `cwd` are
     /// what locate the transcript on disk (`TranscriptLocator`).
     ///
     /// It lives here rather than in a second reader by #28's ruling — one registry
@@ -48,8 +48,8 @@ struct AgentSession: Equatable {
     /// board collapses `waiting` and `idle` into one answer on purpose — see `AgentStatus` —
     /// because both mean *it is your turn*. For a coordinator reading `snapshot.json` they are
     /// opposites: `idle` is an agent that finished, `waiting` on a **permission prompt** is an
-    /// agent that cannot finish and that nobody is going to answer, because the spool's whole
-    /// premise is that nobody is at the pane.
+    /// agent that cannot finish and that nobody is going to answer, because nobody is at a
+    /// spawned agent's pane.
     ///
     /// A bare `String` rather than an enum, for `BenchSnapshot.ResumableRecord.blockedReason`'s
     /// reason: this is a free-form label Claude Code composes, and a reason this build has never
