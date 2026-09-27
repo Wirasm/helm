@@ -4765,8 +4765,7 @@ fn await_event(root: &Path, kind: &str, run: &str) -> serde_json::Value {
 /// verbs reach this daemon, and it is logged as `just/started` (before the answer) and
 /// `just/finished`. Run by the operator its verbs are his and may open a drawer; run by an
 /// agent (`bench just`) the same verb is refused and the run fails. A missing justfile and a
-/// name that is not a recipe are refused. `just/list` names the recipes in the justfile's own
-/// order, and none while there is no justfile (#500).
+/// name that is not a recipe are refused.
 #[test]
 fn a_recipe_runs_as_whoever_asked_and_is_logged() {
     if !just_available() {
@@ -4783,18 +4782,6 @@ fn a_recipe_runs_as_whoever_asked_and_is_logged() {
         false,
     ));
 
-    let list = || {
-        ok_data(layout(
-            &daemon.socket,
-            "just/list",
-            serde_json::json!({}),
-            operator(),
-            false,
-        ))["recipes"]
-            .clone()
-    };
-    assert_eq!(list(), serde_json::json!([]), "no justfile is no recipes");
-
     let missing = bench(&home.dir, &["just", "open"]);
     assert_eq!(missing.code, 3, "{}", missing.stderr);
     assert!(
@@ -4807,12 +4794,11 @@ fn a_recipe_runs_as_whoever_asked_and_is_logged() {
     fs::write(
         root.join("rules").join("justfile"),
         format!(
-            "zed:\n    true\n\nopen:\n    pwd\n    {} drawer toggle x --surface sessions\n",
+            "open:\n    pwd\n    {} drawer toggle x --surface sessions\n",
             bench_bin().display()
         ),
     )
     .unwrap();
-    assert_eq!(list(), serde_json::json!(["zed", "open"]), "in the justfile's order");
     let not_a_recipe = layout(
         &daemon.socket,
         "just/run",
@@ -4871,6 +4857,49 @@ fn a_recipe_runs_as_whoever_asked_and_is_logged() {
         output.contains("--asked"),
         "the refusal is in its log: {output}"
     );
+}
+
+/// #500: `just/list` names the recipes `just/run` would run, in the justfile's own order, for
+/// helm's command palette. No justfile is no recipes rather than a refusal, because the palette
+/// asks every time it opens; a justfile `just` cannot parse is refused in `just`'s words.
+#[test]
+fn the_recipes_are_listed_in_the_justfiles_order() {
+    if !just_available() {
+        return;
+    }
+    let home = TestHome::claim("justlist");
+    let rules = home.dir.join(".bench").join("rules");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let list = || {
+        layout(
+            &daemon.socket,
+            "just/list",
+            serde_json::json!({}),
+            None,
+            false,
+        )
+    };
+    assert_eq!(
+        ok_data(list())["recipes"],
+        serde_json::json!([]),
+        "no justfile"
+    );
+
+    fs::create_dir_all(&rules).unwrap();
+    fs::write(
+        rules.join("justfile"),
+        "zed:\n    true\n\nopen:\n    true\n\n_helper:\n    true\n",
+    )
+    .unwrap();
+    assert_eq!(
+        ok_data(list())["recipes"],
+        serde_json::json!(["zed", "open"]),
+        "in the file's order, and a private recipe is not offered"
+    );
+
+    fs::write(rules.join("justfile"), "open\n    true\n").unwrap();
+    let broken = list();
+    assert_eq!(broken["status"], "refused", "{broken}");
 }
 
 /// A session claimed in a pane and resumed outside helm (`claude --resume` in another terminal

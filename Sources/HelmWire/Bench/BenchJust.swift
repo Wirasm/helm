@@ -30,6 +30,31 @@ package struct BenchJustRequest: Encodable, Equatable, Sendable {
     }
 }
 
+/// `just/list` (#500): the recipes in the operator's bench justfile, for the command palette.
+package struct BenchJustListRequest: Encodable, Equatable, Sendable {
+    package var id: String
+
+    package init(id: String) {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, verb, args }
+    private struct NoArgs: Encodable {}
+
+    package func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode("just/list", forKey: .verb)
+        try c.encode(NoArgs(), forKey: .args)
+    }
+}
+
+/// `just/list`'s answer (`bench_wire::JustList`): recipe names in the justfile's order, none
+/// when there is no justfile.
+package struct BenchJustList: Decodable, Equatable, Sendable {
+    package var recipes: [String]
+}
+
 /// `just/run`'s answer: the run started, and where its output goes.
 package struct BenchJustStarted: Decodable, Equatable, Sendable {
     package var run: String

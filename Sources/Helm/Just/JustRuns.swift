@@ -98,6 +98,25 @@ final class JustRuns: ObservableObject {
         }
     }
 
+    /// `just/list` against benchd at this helm's bench root: the recipes the palette offers
+    /// (#500). Blocking; called off the main actor.
+    nonisolated static func liveRecipes(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> @Sendable () throws -> [String] {
+        let socket = BenchRoot.resolve(environment: environment)
+            .map { $0.appendingPathComponent("benchd.sock").path }
+        return {
+            let path = try socket.mapError { Refused(description: $0.sentence) }.get()
+            let answer = try BenchClient.request(
+                BenchJustListRequest(id: "helm-\(UUID().uuidString.lowercased())"),
+                at: path, answering: BenchJustList.self)
+            guard answer.status == .ok, let list = answer.data else {
+                throw Refused(description: answer.reason ?? "benchd \(answer.status.rawValue)")
+            }
+            return list.recipes
+        }
+    }
+
     struct Refused: Error, CustomStringConvertible {
         let description: String
     }

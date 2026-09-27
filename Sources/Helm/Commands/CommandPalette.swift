@@ -4,11 +4,20 @@ import SwiftUI
 /// Whether the command palette is open, what is typed in it and which line is picked (#500).
 ///
 /// The model outlives the panel, so ⌘K toggles it from `LocalActions` whether or not the panel
-/// is drawn. It holds no list: the lines are derived each time the panel draws
-/// (`CommandList.of`), so nothing here can go stale.
+/// is drawn. It holds no list but the recipes: the lines are derived each time the panel draws
+/// (`CommandList.of`). The recipes are benchd's to name (`just/list`), asked afresh every time
+/// the palette opens, so a recipe added to the justfile is there the next time.
 @MainActor
 final class CommandPalette: ObservableObject {
     @Published private(set) var isOpen = false
+    /// The bench justfile's recipes, as benchd named them when the palette last opened. Empty
+    /// while benchd has not answered, or could not: the rest of the palette works without them.
+    @Published private(set) var recipes: [String] = []
+    private let listRecipes: @Sendable () throws -> [String]
+
+    init(listRecipes: @escaping @Sendable () throws -> [String] = JustRuns.liveRecipes()) {
+        self.listRecipes = listRecipes
+    }
     @Published var query = "" {
         didSet { selection = 0 }
     }
@@ -21,6 +30,14 @@ final class CommandPalette: ObservableObject {
     func open() {
         query = ""
         isOpen = true
+        let list = listRecipes
+        Task {
+            switch await Task.detached(operation: { Result { try list() } }).value {
+            case let .success(names): recipes = names
+            case let .failure(why):
+                NSLog("helm: the palette lists no recipes: %@", String(describing: why))
+            }
+        }
     }
 
     func close() {

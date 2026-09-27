@@ -73,7 +73,8 @@ struct RootView: View {
                 CommandPaletteView(
                     palette: palette,
                     commands: CommandList.of(
-                        table: keymap.table, document: workbench.document, recipes: [],
+                        table: keymap.table, document: workbench.document,
+                        recipes: palette.recipes,
                         liveTitle: { CommandList.liveTitle(of: $0, in: workbench) }),
                     run: runCommand)
             }

@@ -13,8 +13,8 @@
 
 use crate::Core;
 use bench_wire::{
-    Actor, JUST_FINISHED, JUST_STARTED, JustFinished, JustList, JustRunArgs, JustStarted,
-    Request, is_recipe_name, just_logs_dir, justfile_path,
+    Actor, JUST_FINISHED, JUST_STARTED, JustFinished, JustList, JustRunArgs, JustStarted, Request,
+    is_recipe_name, just_logs_dir, justfile_path,
 };
 use serde_json::json;
 use std::fs::{self, File};

@@ -754,7 +754,9 @@ without *asked* is refused. The keymap's `drawer` action and the capsule are the
 **A key can run a recipe from the operator's bench justfile** (#356, `Sources/Helm/Just/`):
 `action = "just"`, `recipe = "<name>"` in the keymap file sends `just/run` to benchd as the
 operator. benchd runs it (see `daemon/direction.md`); helm only hears `just/finished` on the
-follower and shows a run of his that failed as a status-bar capsule that opens its log.
+follower and shows a run of his that failed as a status-bar capsule that opens its log. The
+command palette (⌘K, `Sources/Helm/Commands/`) offers every recipe benchd's `just/list` names,
+beside every key-table action, workspace and pane (#500).
 
 **Put a command handler where its lifetime is right, not where it looks tidy.** A subscription
 that has to work while its view is closed belongs on the model, which outlives the
