@@ -170,6 +170,9 @@ pub const KNOWN_VERBS: &[&str] = &[
     "just/run",
     // M5b: give terminal panes whose session ended a session again (`just resume-all`).
     "restore",
+    // M5b: read and type into any terminal, through its session's VT engine.
+    "screen/get",
+    "screen/send",
     // The layout verbs (M4) — `LAYOUT_VERBS`, spelled again here so this one list stays the
     // whole surface; `every_layout_verb_is_known_and_routes_to_layout` keeps the two in step.
     "bench/get",
@@ -222,6 +225,10 @@ pub enum Verb {
     Layout,
     /// Terminal panes whose session ended get one again (`RestoreArgs`).
     Restore,
+    /// A terminal's screen, read off its session's VT engine (`ScreenGetArgs`).
+    ScreenGet,
+    /// Text typed into a terminal (`ScreenSendArgs`).
+    ScreenSend,
     /// Something only helm can do, asked of whichever helm follows the bench (`HelmAsk`).
     HelmAsk,
     /// helm's answer to one (`HelmAnswer`).
@@ -255,6 +262,8 @@ impl Verb {
             "helm/answer" => Some(Verb::HelmAnswer),
             "just/run" => Some(Verb::JustRun),
             "restore" => Some(Verb::Restore),
+            "screen/get" => Some(Verb::ScreenGet),
+            "screen/send" => Some(Verb::ScreenSend),
             layout if LAYOUT_VERBS.contains(&layout) => Some(Verb::Layout),
             _ => None,
         }
@@ -477,6 +486,43 @@ pub struct LiveSessions {
 pub struct RestoreArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<String>,
+}
+
+/// `screen/get`: the terminal a pane shows (`target` a pane id) or a session's (a session id).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenGetArgs {
+    pub target: String,
+    /// The rows above the screen too.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub history: bool,
+}
+
+/// `screen/send`: `text` typed into a terminal, pasted as one piece (bracketed when the program
+/// asked for bracketed paste), then Return on its own when `enter`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenSendArgs {
+    pub target: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enter: bool,
+}
+
+/// A terminal's screen at a finished frame: `screen/get`'s answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenAnswer {
+    pub session: String,
+    pub rows: u16,
+    pub cols: u16,
+    /// `[column, row]` from zero.
+    pub cursor: [u16; 2],
+    pub cursor_visible: bool,
+    pub title: String,
+    pub pwd: String,
+    /// A full-screen program has the alternate screen.
+    pub alt_screen: bool,
+    pub bracketed_paste: bool,
+    /// One string per row, trailing blanks trimmed; with history, the rows above come first.
+    pub lines: Vec<String>,
 }
 
 /// The payload shared by `attach`, `close` and `resume`: a session id, plus the
@@ -894,7 +940,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            37,
+            39,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

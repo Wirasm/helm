@@ -1,5 +1,6 @@
 //! The verbs an agent drives the bench with (M3): open, split, show, focus, move, name and
-//! close a pane, spawn an agent into one, and read a pane or helm's window.
+//! close a pane, spawn an agent into one, read a pane or helm's window, and read, follow and
+//! type into any terminal (M5b).
 //!
 //! Every one of them is the socket's own verb with its arguments built from the wire's types
 //! (`LayoutVerb`, `SpawnArgs`, `HelmAsk`), so the CLI cannot spell what benchd does not read.
@@ -10,13 +11,18 @@
 
 use crate::{Cli, exchange, print_response, record_root, refuse};
 use bench_doc::{Direction, Document, DrawerName, PaneId, PaneName, Split, Surface};
-use bench_wire::{DocumentAt, HelmAsk, LayoutVerb, OpenInto, PaneOpen, SpawnArgs, Status};
+use bench_wire::{
+    DocumentAt, HelmAsk, LayoutVerb, OpenInto, PaneOpen, ScreenGetArgs, ScreenSendArgs, SpawnArgs,
+    Status,
+};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 /// The verbs this module answers, by their first word. `close` and `get` are shared with the
 /// session and document verbs; [`owns`] decides by the word after them.
-const VERBS: &[&str] = &["open", "split", "show", "focus", "move", "name", "spawn"];
+const VERBS: &[&str] = &[
+    "open", "split", "show", "focus", "move", "name", "spawn", "send", "watch",
+];
 
 /// Flags that take a value. The rest (`--asked`, `--force`, `--rename`) are switches.
 const VALUED: &[&str] = &[
@@ -39,7 +45,8 @@ const VALUED: &[&str] = &[
 ];
 
 /// Whether `raw` (the arguments after `bench`) is one of these verbs. `close <pane uuid>` is,
-/// `close <session>` is the session verb; `get pane|screenshot` is, bare `get` is the document.
+/// `close <session>` is the session verb; `get pane|screenshot|screen` is, bare `get` is the
+/// document.
 pub fn owns(raw: &[String]) -> bool {
     if raw.iter().any(|a| a == "--help" || a == "-h") {
         return false;
@@ -50,7 +57,7 @@ pub fn owns(raw: &[String]) -> bool {
         Some("close") => words.get(1).is_some_and(|w| PaneId::parse(w).is_ok()),
         Some("get") => matches!(
             words.get(1).map(String::as_str),
-            Some("pane" | "screenshot")
+            Some("pane" | "screenshot" | "screen")
         ),
         _ => false,
     }
@@ -76,6 +83,8 @@ struct Parsed {
     asked: bool,
     force: bool,
     rename: bool,
+    history: bool,
+    enter: bool,
 }
 
 impl Parsed {
@@ -102,6 +111,8 @@ fn parse(raw: &[String]) -> Result<Parsed, String> {
         asked: false,
         force: false,
         rename: false,
+        history: false,
+        enter: false,
     };
     let mut it = raw.iter();
     while let Some(arg) = it.next() {
@@ -109,6 +120,8 @@ fn parse(raw: &[String]) -> Result<Parsed, String> {
             "--asked" => parsed.asked = true,
             "--force" => parsed.force = true,
             "--rename" => parsed.rename = true,
+            "--history" => parsed.history = true,
+            "--enter" => parsed.enter = true,
             flag if VALUED.contains(&flag) => match it.next() {
                 Some(v) => parsed.values.push((flag.to_string(), v.clone())),
                 None => return Err(format!("{flag} needs a value")),
@@ -134,7 +147,10 @@ pub fn run(raw: &[String]) -> i32 {
         "get" if parsed.words.get(1).map(String::as_str) == Some("pane") => {
             return get_pane(&parsed, root);
         }
+        "get" if parsed.words.get(1).map(String::as_str) == Some("screen") => screen_get(&parsed),
+        "watch" => return watch(&parsed, root),
         "get" => screenshot(&parsed, &root),
+        "send" => send(&parsed),
         "spawn" => spawn(&parsed),
         _ => layout(&verb, &parsed),
     };
@@ -313,6 +329,75 @@ fn spawn(p: &Parsed) -> Result<(String, Value), String> {
         args: p.all("--arg"),
     };
     Ok(("spawn".into(), json!(args)))
+}
+
+/// `get screen <pane|session> [--history]`: the terminal as its viewer shows it.
+fn screen_get(p: &Parsed) -> Result<(String, Value), String> {
+    let target = p.words.get(2).ok_or(
+        "get screen needs a pane id or a session id — `bench get` and `bench sessions` list them",
+    )?;
+    Ok((
+        "screen/get".into(),
+        json!(ScreenGetArgs {
+            target: target.clone(),
+            history: p.history,
+        }),
+    ))
+}
+
+/// `send <pane|session> <text> [--enter]`: typed into the terminal, Return after it on its own.
+fn send(p: &Parsed) -> Result<(String, Value), String> {
+    let target = p
+        .words
+        .get(1)
+        .ok_or("send needs a pane id or a session id, then the text")?;
+    let text = p.words.get(2..).unwrap_or_default().join(" ");
+    if text.is_empty() && !p.enter {
+        return Err("send needs the text to type, or --enter for Return alone".into());
+    }
+    Ok((
+        "screen/send".into(),
+        json!(ScreenSendArgs {
+            target: target.clone(),
+            text,
+            enter: p.enter,
+        }),
+    ))
+}
+
+/// `watch screen <pane|session>`: one JSON line per change of the screen, read at a finished
+/// frame and at most ten times a second, until the session ends (exit 3) or benchd goes.
+fn watch(p: &Parsed, root: PathBuf) -> i32 {
+    let target = match (p.words.get(1).map(String::as_str), p.words.get(2)) {
+        (Some("screen"), Some(t)) => t.clone(),
+        _ => return refuse("watch needs `screen <pane|session>`"),
+    };
+    let cli = Cli {
+        verb: "screen/get".into(),
+        args: json!(ScreenGetArgs {
+            target,
+            history: false,
+        }),
+        root,
+        asked: false,
+    };
+    let mut last: Option<Value> = None;
+    loop {
+        let response = match exchange(&cli) {
+            Ok(r) => r,
+            Err(code) => return code,
+        };
+        if response.status != Status::Ok {
+            return print_response(&response);
+        }
+        if response.data != last {
+            if let Some(data) = &response.data {
+                println!("{data}");
+            }
+            last = response.data;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 /// `get screenshot`: helm draws its window. benchd asks helm and hands back its report.

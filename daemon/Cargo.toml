@@ -4,6 +4,7 @@
 resolver = "2"
 members = [
     "crates/bench-wire",
+    "crates/bench-vt",
     "crates/bench-session",
     "crates/bench-mail",
     "crates/bench-browser",

@@ -21,9 +21,9 @@ pub enum Surface {
     ///
     /// `session` names the benchd session the pane shows (`term:<session>` in
     /// bench-architecture.md): helm runs `bench attach <session>` in it instead of a login
-    /// shell. Without one the pty is helm's own until M5b, keyed by the pane's id. No session
-    /// outlives the daemon that ran it, so benchd clears every `session` when it boots
-    /// ([`crate::Document::end_sessions`]).
+    /// shell. Without one the pane shows no session: none outlives the daemon that ran it, so
+    /// benchd clears every `session` when it boots ([`crate::Document::end_sessions`]), and
+    /// `bench restore` gives the pane one again.
     Terminal {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent: Option<ResumableAgent>,

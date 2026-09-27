@@ -88,7 +88,7 @@ helm's terminal is official Ghostty, built by us, plus the Swift wrapper that ho
 `ghosttyCommit` (a full `ghostty-org/ghostty` sha) and `ghosttyKitChecksum`. Nothing else
 records the commit; everything below follows from it.
 
-Three things must come from that one commit, and `scripts/bump-ghostty.sh` moves the first two
+Three things must come from that one commit, and `scripts/bump-ghostty.sh` moves all three
 together:
 
 1. **GhosttyKit.xcframework** — Ghostty's own
@@ -103,10 +103,17 @@ together:
    Bundled as a directory in both manifests (SPM `.copy("Resources/ghostty")`; xcodegen
    `type: folder`) so zsh's hidden `.zshenv` survives into the app bundle. git holds the
    bytes; there is no second hash list to keep.
-3. **benchd's libghostty-vt** — not in the tree yet (M5b, `docs/future-planning/bench-roadmap.md`).
-   helm and benchd must parse terminal bytes identically, so when it lands it is built from the
-   same checkout `bump-ghostty.sh` makes (`zig build -Demit-lib-vt` in
-   `.build/ghostty/<commit12>`), and this section is where that coupling stays written down.
+3. **benchd's libghostty-vt** — `daemon/vendor/libghostty-vt/`: `libghostty-vt.a` for
+   `aarch64-apple-darwin` (developers) and `x86_64-unknown-linux-gnu` (the daemon CI job), its
+   headers, `SHA256SUMS` and `GHOSTTY_COMMIT`, in plain git. helm and benchd must parse terminal
+   bytes identically, so the script builds it from the same checkout (`zig build
+   -Demit-lib-vt=true` per target) and strips debug info with `rust-objcopy` (`rustup component
+   add llvm-tools`). `daemon/test.sh` checks the hashes and that `GHOSTTY_COMMIT` is
+   `ghosttyCommit`. The Rust declarations in `daemon/crates/bench-vt/src/ffi.rs` are written by
+   hand; `abi.c` beside them restates each against the vendored header and `build.rs` compiles it,
+   so a header that moved a struct or a signature fails the daemon build. Fix `ffi.rs` and
+   `abi.c` together. The archives are the same bytes only from the same checkout directory:
+   zig's cache paths stay in the object names, so the pin is on the committed bytes.
 
 **The wrapper** (`Packages/GhosttyTerminal/Sources/GhosttyTerminal`, about 7.1k lines) is the
 macOS slice of [Lakr233/libghostty-spm](https://github.com/Lakr233/libghostty-spm)'s
@@ -157,7 +164,8 @@ The script needs zig at the commit's `minimum_zig_version` (0.16.0 as of `630181
 Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`) and `gh`. It builds, publishes
 the release, rewrites the two pin lines and refreshes the shell integration.
 `--no-publish` builds and repins without the release, for a dry run. A changed `ghostty.h` shows
-up as a compile error in the wrapper; fix it there. Then look at a live isolated helm (text,
+up as a compile error in the wrapper, a changed `vt.h` as a failed `abi.c` in the daemon build;
+fix them there. Then look at a live isolated helm (text,
 colours, keys, clipboard, a ⌘-click, several panes redrawing) before opening the PR, because no
 gate draws a frame.
 

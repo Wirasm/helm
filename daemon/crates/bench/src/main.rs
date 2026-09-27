@@ -65,6 +65,12 @@ fn usage() -> &'static str {
      \x20     get pane <pane>                     where a pane is, and whether it is seen\n\
      \x20     get screenshot [--out <p.png>]      helm draws its window (helm must follow the\n\
      \x20           [--window <title>]            bench)\n\
+     \x20     get screen <pane|session>           a terminal's screen as text, cursor, title and\n\
+     \x20           [--history]                   modes, at a finished frame; --history adds the\n\
+     \x20                                         rows above it\n\
+     \x20     watch screen <pane|session>         one JSON line per change of that screen\n\
+     \x20     send <pane|session> <text>          type into a terminal (a bracketed paste when the\n\
+     \x20           [--enter]                     program asked for one); --enter adds Return\n\
      \x20     (every pane verb lands in the background; --asked says the operator asked, and\n\
      \x20      only then may it bring something forward or move his focus)\n\
      \x20     sessions                            list bench sessions\n\

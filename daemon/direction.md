@@ -134,7 +134,18 @@ the panes keep their records, and `restore` (`bench restore --all`, `just resume
 each a session again from that record alone: the agent's conversation resumed, else a shell in the
 pane's last directory. benchd writes both: which agent is in a pane from that agent's own hook
 (claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),
-and the shell's directory read off its process (`Surface::Terminal::cwd`). Sessions do not outlive benchd: ruled 2026-09-27, resume instead. What only helm can do — drawing its window
+and the shell's directory read off its process (`Surface::Terminal::cwd`). Sessions do not outlive benchd: ruled 2026-09-27, resume instead.
+
+**The terminal state is benchd's (M5b PR 4).** Each session runs libghostty-vt, built from the
+Ghostty commit helm's GhosttyKit is (`bench-vt`, archives vendored per target in
+`daemon/vendor/libghostty-vt/`), on a thread of its own (`bench-session/src/engine.rs`) that sees
+every byte before the viewer does. A viewer that attaches is shown the screen formatted as the
+sequences that redraw it, plus any sequence the program left half-written; the terminal queries
+in its history are not replayed into the new Ghostty. While no viewer is attached the engine
+answers queries as Ghostty would; while one is, the viewer's Ghostty does. An attach or a screen
+read inside a synchronized update (mode 2026) waits for it to end, at most a second. The same
+engine answers `screen/get` and takes `screen/send`, so an agent reads and types into any
+terminal (`bench get screen`, `bench watch screen`, `bench send`). What only helm can do — drawing its window
 — benchd asks for: `helm/ask` logs `helm/asked` to the followers, helm answers with `helm/answer`,
 and the caller waits at most `HELM_ASK_WAIT`. The `bench-panes` skill is the agent's guide.
 

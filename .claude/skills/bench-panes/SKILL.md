@@ -107,3 +107,31 @@ answer is helm's report: read `terminalContent` (`included`, `excluded`, `partia
 rather than assuming terminals are in the picture, and `windowVisible: false` means web content
 may be blank. With two helms running, `--window` names one. No helm following this bench is exit 4
 after ten seconds, naming the cause.
+
+## Read and type into any terminal
+
+```bash
+BENCH="${BENCH:-bench}"
+SHELL_PANE=$("$BENCH" open terminal | python3 -c 'import json,sys; print(json.load(sys.stdin)["pane"])')
+"$BENCH" send "$SHELL_PANE" 'echo ready' --enter
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  "$BENCH" get screen "$SHELL_PANE" | grep -q '"ready"' && break
+  sleep 0.5
+done
+"$BENCH" get screen "$SHELL_PANE" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["lines"]).rstrip())'
+```
+
+Every terminal pane is a benchd session, so any of them can be read and typed into by pane id or
+session id: his shells, a spawned agent's pane, one you opened.
+
+- `bench get screen <pane|session>` answers what his Ghostty shows there: `lines` (one per row),
+  `cursor` as `[column, row]`, `title`, `pwd`, `alt_screen` (a full-screen program is running)
+  and `bracketed_paste`. It waits for a frame the program has finished drawing, at most a
+  second. `--history` puts the rows above the screen first.
+- `bench send <pane|session> <text> --enter` types the text as one paste (bracketed when the
+  program asked for that), then Return on its own. Without `--enter` it only types. The log
+  records who sent how many bytes, never the text.
+- `bench watch screen <pane|session>` prints one JSON line, the same shape, each time the screen
+  changes, at most ten a second and never from inside a frame being drawn. It runs until the
+  session ends or you stop it.
+- Typing into his shell is typing at his prompt. Do it when he asked, or into a pane you opened.

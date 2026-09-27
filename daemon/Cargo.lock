@@ -41,6 +41,7 @@ version = "0.0.1"
 name = "bench-session"
 version = "0.0.1"
 dependencies = [
+ "bench-vt",
  "libc",
  "rustix",
 ]
@@ -58,6 +59,10 @@ dependencies = [
  "serde_json",
  "time",
 ]
+
+[[package]]
+name = "bench-vt"
+version = "0.0.1"
 
 [[package]]
 name = "bench-wire"

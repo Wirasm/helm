@@ -395,9 +395,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   operator's other terminal.
 - **Drive the bench with `bench …`** (M3, #355). One CLI is an agent's whole surface onto the
   bench, the same door the operator's keys go through: `bench open <file|browser|terminal>`,
-  `split`, `show`, `focus`, `move`, `name`, `close <pane>`, `get pane`, `get screenshot`, and
-  `spawn`. The `bench-panes` skill is the guide; `daemon/direction.md` has the design. What an
-  agent needs to hold in its head:
+  `split`, `show`, `focus`, `move`, `name`, `close <pane>`, `get pane`, `get screenshot`,
+  `spawn`, and `get screen`, `watch screen` and `send`, which read and type into any terminal.
+  The `bench-panes` skill is the guide; `daemon/direction.md` has the design. What an agent needs
+  to hold in its head:
   - **Appear, don't seize (#125).** Every verb lands in the background: a tab, a column, a badge.
     `--asked` means the operator asked, and only then may a verb bring something forward or move
     his keyboard. benchd cannot know what he said, so "only when asked" is the agent's rule; the
@@ -423,7 +424,10 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     resume-all`** (`bench restore --all`) is the one way back: a recorded agent is resumed, every
     other pane gets a fresh shell in the directory its shell was last in. benchd writes the record
     itself: the agent from each harness's own hook (`bench hook`), the directory read off the
-    shell's process every two seconds.
+    shell's process every two seconds. The terminal state is benchd's too: each session runs
+    libghostty-vt at helm's Ghostty commit (`daemon/crates/bench-vt`), so a pane that attaches
+    again, after a helm relaunch, is shown its screen and scrollback rather than a replay of
+    bytes, and `bench get screen` answers what the pane shows.
   - **Unattended postures (#179): a posture removes a prompt; it never withholds capability.**
     `claude` → `--dangerously-skip-permissions` (what `cls` is), `codex` →
     `--dangerously-bypass-approvals-and-sandbox`, `pi` → `--approve`, spelled once in

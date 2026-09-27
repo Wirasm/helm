@@ -9,14 +9,15 @@
 # (`xcodebuild -downloadComponent MetalToolchain`), and `gh` logged in to Wirasm/helm.
 # The gate needs none of this: it downloads the published zip by URL and checksum.
 #
-# One commit, three consumers, and this script moves the first two together
+# One commit, three consumers, and this script moves all three together
 # (docs/VENDORED.md, "Ghostty"):
 #   1. GhosttyKit.xcframework  -> release ghostty-<commit12> on Wirasm/helm, pinned in
 #                                 Packages/GhosttyTerminal/Package.swift
 #   2. shell integration       -> Sources/Helm/Resources/ghostty/shell-integration/
-#   3. benchd's libghostty-vt  -> not in the tree yet (M5b). When it is, it is built from
-#                                 the same source tree this script checks out:
-#                                 `zig build -Demit-lib-vt` in "$src".
+#   3. benchd's libghostty-vt  -> daemon/vendor/libghostty-vt/: an archive per target (macOS
+#                                 arm64 for developers, x86_64 Linux for the daemon CI job),
+#                                 its headers, SHA256SUMS and GHOSTTY_COMMIT. Stripping needs
+#                                 `rustup component add llvm-tools` (for rust-objcopy).
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -108,10 +109,32 @@ grep -q "\"$commit\"" "$manifest" && grep -q "\"$checksum\"" "$manifest" || {
   exit 1
 }
 
+# benchd's VT engine, from the same checkout. Stripped of debug info, which carries the build's
+# absolute paths, so the same commit gives the same bytes and the pin can be re-derived.
+vt="$root/daemon/vendor/libghostty-vt"
+objcopy=$(ls "$(rustc --print sysroot)"/lib/rustlib/*/bin/rust-objcopy 2>/dev/null | head -1)
+[ -x "$objcopy" ] || { echo "bump-ghostty: no rust-objcopy; rustup component add llvm-tools" >&2; exit 1; }
+for target in aarch64-apple-darwin:aarch64-macos x86_64-unknown-linux-gnu:x86_64-linux-gnu; do
+  triple=${target%%:*}
+  zig_target=${target##*:}
+  out="$src/vt-$triple"
+  echo "--> building libghostty-vt for $triple"
+  rm -rf "$out"
+  (cd "$src" && zig build -Demit-lib-vt=true -Doptimize=ReleaseFast -Demit-xcframework=false \
+    -Dapp-runtime=none -Dtarget="$zig_target" --prefix "$out")
+  mkdir -p "$vt/$triple"
+  "$objcopy" --strip-debug "$out/lib/libghostty-vt.a" "$vt/$triple/libghostty-vt.a"
+done
+rm -rf "$vt/include"
+cp -R "$src/vt-aarch64-apple-darwin/include" "$vt/include"
+(cd "$vt" && shasum -a 256 */libghostty-vt.a >SHA256SUMS)
+echo "$commit" >"$vt/GHOSTTY_COMMIT"
+
 # Copied verbatim: helm points GHOSTTY_RESOURCES_DIR at this tree, and the scripts must be
 # the ones the binary above was built with.
 rsync -a --delete "$src/src/shell-integration/" "$integration/"
 
 echo "--> pinned Ghostty $commit"
-echo "Next: just check  (a changed ghostty.h fails the build in Packages/GhosttyTerminal),"
+echo "Next: just check  (a changed ghostty.h fails the build in Packages/GhosttyTerminal, and a"
+echo "      changed vt header fails daemon/crates/bench-vt's abi.c: fix ffi.rs and abi.c together),"
 echo "      then look at a live isolated helm before trusting it (docs/VENDORED.md)."
