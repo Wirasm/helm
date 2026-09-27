@@ -21,7 +21,7 @@
 
 use crate::{Cli, EXIT_NO_DAEMON, exchange, fail, open, read_response_line};
 use bench_wire::attach::AttachFrame;
-use bench_wire::{LiveSessions, Response, Status};
+use bench_wire::{LiveSessions, Response, SessionArgs, Status};
 use rustix::termios::tcgetwinsize;
 use serde_json::json;
 use std::io::{IsTerminal, Read, Write};
@@ -68,7 +68,12 @@ enum Holder {
 
 pub fn run(mut cli: Cli, in_pane: bool) -> i32 {
     let size_changes = hear_size_changes();
-    let session = cli.args["session"].as_str().unwrap_or_default().to_string();
+    // The request `main` built, read back as its type: a retake sends the same one, resized.
+    let mut request: SessionArgs = match serde_json::from_value(cli.args.clone()) {
+        Ok(args) => args,
+        Err(e) => return fail(&format!("attach args: {e}")),
+    };
+    let session = request.session.clone();
     let current: Current = Arc::new(Mutex::new(None));
     let (tell, heard) = mpsc::channel();
     let mut saved = None;
@@ -90,7 +95,7 @@ pub fn run(mut cli: Cli, in_pane: bool) -> i32 {
         };
         *current.lock().unwrap() = Some(Attachment {
             stream,
-            size: requested_size(&cli),
+            size: request.rows.zip(request.cols),
         });
         if !started {
             started = true;
@@ -133,8 +138,9 @@ pub fn run(mut cli: Cli, in_pane: bool) -> i32 {
         let _ = out.write_all(b"\x1b[H\x1b[2J\x1b[3J");
         let _ = out.flush();
         if let Some((rows, cols)) = terminal_size() {
-            cli.args["rows"] = json!(rows);
-            cli.args["cols"] = json!(cols);
+            request.rows = Some(rows);
+            request.cols = Some(cols);
+            cli.args = json!(request);
         }
     }
 }
@@ -172,13 +178,6 @@ fn attach(cli: &Cli) -> Result<UnixStream, i32> {
     Ok(stream)
 }
 
-fn requested_size(cli: &Cli) -> Option<(u16, u16)> {
-    match (cli.args["rows"].as_u64(), cli.args["cols"].as_u64()) {
-        (Some(r), Some(c)) => Some((r as u16, c as u16)),
-        _ => None,
-    }
-}
-
 /// A displaced pane: whether to attach again. Waits while another viewer holds the session,
 /// saying so once, and answers true on a key or once nobody holds it; false once it has ended
 /// or the pane's input closed.
@@ -189,9 +188,14 @@ fn wait_to_retake(cli: &Cli, session: &str, heard: &mpsc::Receiver<Heard>) -> bo
             Holder::Gone => return false,
             Holder::Nobody => {
                 // A stream that drops by itself on a session nobody else holds is attached again
-                // at once, but not in a hot loop.
+                // at once, but not in a hot loop, and not once the pane's own input has closed:
+                // nothing would be left to notice that, and the session's one viewer slot would
+                // be held by a client with no terminal.
                 std::thread::sleep(Duration::from_millis(200));
-                return true;
+                return !matches!(
+                    heard.try_recv(),
+                    Ok(Heard::Detached) | Err(mpsc::TryRecvError::Disconnected)
+                );
             }
             Holder::Another => {
                 if !said {
