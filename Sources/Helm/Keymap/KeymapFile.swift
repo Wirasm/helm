@@ -171,8 +171,8 @@ struct KeymapFile: Equatable {
         #
         # A drawer's place is a table of its own, e.g.
         #   [drawer.notes]
-        #   edge = "left"             # left or right
-        #   size = 0.3                # a fraction of the window's width, 0.1 to 0.9
+        #   edge = "left"             # left, right or bottom
+        #   size = 0.3                # 0.1 to 0.9 of the window's width, or height on the bottom
         # Built in: sessions on the left at 0.28, every other drawer on the right at 0.5.
 
 
@@ -330,7 +330,8 @@ private struct RawDrawer: Decodable {
         var style = DrawerStyle.builtIn(for: name)
         if let edge {
             guard let parsed = DrawerStyle.Edge(rawValue: edge) else {
-                throw KeymapProblem(line: nil, reason: "edge is left or right, not '\(edge)'")
+                throw KeymapProblem(
+                    line: nil, reason: "edge is left, right or bottom, not '\(edge)'")
             }
             style.edge = parsed
         }

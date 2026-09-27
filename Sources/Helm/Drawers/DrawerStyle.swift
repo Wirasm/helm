@@ -5,11 +5,12 @@
 /// nothing about how it is drawn.
 struct DrawerStyle: Equatable {
     enum Edge: String {
-        case left, right
+        case left, right, bottom
     }
 
     var edge: Edge
-    /// A fraction of the window's width.
+    /// A fraction of the window: of its height for a drawer on the bottom edge, of its width
+    /// for one on a side.
     var size: Double
 
     static let sizes = 0.1...0.9

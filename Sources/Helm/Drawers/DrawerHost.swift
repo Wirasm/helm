@@ -20,13 +20,18 @@ struct DrawerHost: View {
         GeometryReader { geo in
             if let drawer = model.openDrawer {
                 let style = keymap.style(for: drawer.name)
-                DrawerPanel(model: model, drawer: drawer, edge: style.edge)
-                    .frame(width: geo.size.width * style.size)
-                    .frame(
-                        maxWidth: .infinity, maxHeight: .infinity,
-                        alignment: style.edge == .left ? .leading : .trailing
-                    )
-                    .transition(.move(edge: style.edge == .left ? .leading : .trailing))
+                let panel = DrawerPanel(model: model, drawer: drawer, edge: style.edge)
+                Group {
+                    if style.edge == .bottom {
+                        panel.frame(height: geo.size.height * style.size)
+                    } else {
+                        panel.frame(width: geo.size.width * style.size)
+                    }
+                }
+                .frame(
+                    maxWidth: .infinity, maxHeight: .infinity, alignment: style.edge.alignment
+                )
+                .transition(.move(edge: style.edge.slidesFrom))
             }
         }
         .animation(.easeOut(duration: 0.12), value: model.openDrawer?.name)
@@ -45,17 +50,32 @@ private struct DrawerPanel: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if edge == .right { Color.border.frame(width: 1) }
-            VStack(spacing: 0) {
-                header
-                Color.border.frame(height: 1)
-                content
+        Group {
+            switch edge {
+            case .left:
+                HStack(spacing: 0) {
+                    page; Color.border.frame(width: 1)
+                }
+            case .right:
+                HStack(spacing: 0) {
+                    Color.border.frame(width: 1); page
+                }
+            case .bottom:
+                VStack(spacing: 0) {
+                    Color.border.frame(height: 1); page
+                }
             }
-            if edge == .left { Color.border.frame(width: 1) }
         }
         .background(Color.surface)
         .shadow(color: .black.opacity(0.25), radius: 8)
+    }
+
+    private var page: some View {
+        VStack(spacing: 0) {
+            header
+            Color.border.frame(height: 1)
+            content
+        }
     }
 
     private var header: some View {
@@ -76,7 +96,7 @@ private struct DrawerPanel: View {
             Button {
                 model.send(.drawerToggle(name: drawer.name), by: .operatorGesture)
             } label: {
-                Image(systemName: edge == .left ? "sidebar.left" : "sidebar.right")
+                Image(systemName: edge.hideSymbol)
                     .frame(width: 18, height: 18)
             }
             .buttonStyle(.chrome)
@@ -118,5 +138,33 @@ private struct DrawerPanel: View {
             canClose: true,
             select: { model.send(.paneShow(pane.id), by: .operatorGesture) },
             close: { model.send(.paneClose(pane.id), by: .operatorGesture) })
+    }
+}
+
+extension DrawerStyle.Edge {
+    /// Where in the window a drawer on this edge sits.
+    fileprivate var alignment: Alignment {
+        switch self {
+        case .left: .leading
+        case .right: .trailing
+        case .bottom: .bottom
+        }
+    }
+
+    /// The window edge it slides in from.
+    fileprivate var slidesFrom: SwiftUI.Edge {
+        switch self {
+        case .left: .leading
+        case .right: .trailing
+        case .bottom: .bottom
+        }
+    }
+
+    fileprivate var hideSymbol: String {
+        switch self {
+        case .left: "sidebar.left"
+        case .right: "sidebar.right"
+        case .bottom: "rectangle.bottomthird.inset.filled"
+        }
     }
 }
