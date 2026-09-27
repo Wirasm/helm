@@ -165,6 +165,38 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
                 + "would carry the keyboard out of the pane being typed in")
     }
 
+    /// **A zoomed bench is laid out past its own edges (⌘J, `BenchCamera`), and a slot out
+    /// there still has its rectangle under the chrome.** Zoomed on the upper slot, the lower one
+    /// runs on under the bar below the bench; a click on that bar is a click on the bar, and
+    /// moving the keyboard to a slot the operator cannot see would also pan the camera away from
+    /// the one he is looking at.
+    func testAClickOnChromeOverAZoomedBenchsHiddenSlotDoesNotMoveFocus() throws {
+        let bench = try Bench(terminals: 2, chromeBelow: 40)
+        defer { bench.close() }
+
+        let upper = try XCTUnwrap(bench.workbench.bench?.slots.first?.id)
+        let lower = try XCTUnwrap(bench.workbench.bench?.slots.last?.id)
+        XCTAssertEqual(bench.workbench.bench?.focusedSlot, upper)
+        bench.workbench.isZoomed = true
+        bench.settle()
+
+        // The bar is the bottom 40pt of the window; window coordinates start at the bottom.
+        let hidden = try bench.paneRect(inSlot: lower)
+        XCTAssertLessThan(hidden.minY, 0, "the lower slot should run on past the bench when zoomed")
+        bench.click(at: NSPoint(x: hidden.midX, y: 20), windowNumber: bench.window.windowNumber)
+        XCTAssertEqual(
+            bench.workbench.bench?.focusedSlot, upper,
+            "a click on the bar under a zoomed bench focused the slot hidden beneath it")
+
+        // The control, which fails if the guard overshoots: the lower slot's visible sliver
+        // is still the lower slot's, and a click there focuses it.
+        bench.click(at: NSPoint(x: hidden.midX, y: 60), windowNumber: bench.window.windowNumber)
+        Eventually.holds { bench.workbench.bench?.focusedSlot == lower }
+        XCTAssertEqual(
+            bench.workbench.bench?.focusedSlot, lower,
+            "a click on the part of the lower slot that shows did not focus it")
+    }
+
     // MARK: - The menu's route
 
     /// View ▸ Focus Left/Right/Up/Down were silent no-ops: the menu posted `payload`, which was
@@ -243,7 +275,9 @@ private final class Bench {
     private let server: FakeBenchd
     private let client: BenchClient
 
-    init(terminals count: Int) throws {
+    /// `chromeBelow` puts a bar of that height under the bench, as the status bar sits under it
+    /// in the app: somewhere a zoomed bench's off-screen slots lie under but cannot be clicked.
+    init(terminals count: Int, chromeBelow: CGFloat = 0) throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
 
@@ -262,7 +296,10 @@ private final class Bench {
         window.isReleasedWhenClosed = false
 
         let hosting = NSHostingView(
-            rootView: WorkbenchView(model: workbench, workspaceRoot: workspacePath))
+            rootView: VStack(spacing: 0) {
+                WorkbenchView(model: workbench, workspaceRoot: workspacePath)
+                Color.surfaceRaised.frame(height: chromeBelow)
+            })
         hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
         window.contentView = hosting
         settle()

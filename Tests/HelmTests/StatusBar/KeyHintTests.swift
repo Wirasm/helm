@@ -153,8 +153,8 @@ final class KeyHintTests: XCTestCase {
             KeyHints.visible(terminalFocused: true, in: KeyBindings.all).map(\.label),
             [
                 "new", "note", "split", "split down", "close", "pane", "focus", "move",
-                "artifact", "turn", "workspace", "folder", "archon", "browser", "sessions",
-                "awake",
+                "artifact", "turn", "workspace", "folder", "archon", "zoom", "browser",
+                "sessions", "awake",
             ])
     }
 

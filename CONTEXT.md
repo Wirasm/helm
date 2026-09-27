@@ -78,6 +78,14 @@ apart, which is #96: a bench where three panes were visible, one was focused, an
 keyboard was held by none of them.
 _Avoid_: active, current, selected, first responder (that word is AppKit's, one level down)
 
+**zoom**:
+⌘J: helm lays the bench out larger than the window and pans to the **focused** slot, so it takes
+most of the window and its neighbours show at the edges; ⌘J again returns (`BenchCamera`). A
+camera, not a layout change: benchd's document, the fractions and **visible** are the same zoomed
+or not, and moving focus while zoomed pans to the new slot. helm's own view, so no agent can zoom
+and a relaunch starts unzoomed.
+_Avoid_: maximize (that hides the other panes; this keeps them in place)
+
 **canvas**:
 The pane type that renders a file — markdown or HTML — and accepts annotation on it. Modular by
 source; extendable to further formats. A web page is not a canvas: it is a tab of the shared

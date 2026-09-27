@@ -47,7 +47,11 @@ struct RootView: View {
                 },
                 close: {
                     workbench.send(.workspaceClose(path: $0.path.value), by: .operatorGesture)
-                })
+                }
+            )
+            // Above the bench, which it precedes: a zoomed bench (⌘J, `BenchCamera`) is laid out
+            // past its own top edge, and a terminal there would otherwise take the bar's clicks.
+            .zIndex(1)
             HStack(spacing: 0) {
                 WorkbenchView(
                     model: workbench, workspaceRoot: model.selectedWorkspaceRoot?.value)
