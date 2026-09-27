@@ -12,16 +12,19 @@ final class LocalActions: ActionPerformer {
     private let rail: ArchonRailModel
     private let terminals: TerminalManager
     private let just: JustRuns
+    private let palette: CommandPalette
 
     init(
         workbench: WorkbenchModel, workspaces: WorkspaceModel, rail: ArchonRailModel,
-        terminals: TerminalManager, just: JustRuns = JustRuns()
+        terminals: TerminalManager, just: JustRuns = JustRuns(),
+        palette: CommandPalette = CommandPalette()
     ) {
         self.workbench = workbench
         self.workspaces = workspaces
         self.rail = rail
         self.terminals = terminals
         self.just = just
+        self.palette = palette
     }
 
     func perform(_ action: KeyBinding.Action) {
@@ -61,6 +64,8 @@ final class LocalActions: ActionPerformer {
             Task { await workbench.newNote() }
         case .toggleKeepAwake:
             KeepAwake.shared.toggle()
+        case .toggleCommandPalette:
+            palette.toggle()
         }
     }
 }
