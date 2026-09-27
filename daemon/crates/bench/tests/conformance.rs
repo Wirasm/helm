@@ -5381,6 +5381,110 @@ fn a_viewer_terminal_being_dragged_resizes_the_session_to_its_last_size() {
 }
 
 #[test]
+fn a_pane_whose_session_another_viewer_takes_waits_for_it_and_takes_it_back() {
+    // A helm pane's viewer lost its session to a second attach (a test run reaching the
+    // operator's benchd did exactly this) and exited, so the pane showed "Process exited" with
+    // its agent still running and no way back to it. Now it says so, waits, and attaches again.
+    let home = TestHome::claim("m5b-retake");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let run = bench(
+        &home.dir,
+        &["spawn", "--agent", "test-echo", "--cwd", "/tmp"],
+    );
+    let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+    let (mut master, mut viewer) = attach_on_pty(&home.dir, &sid, &["--in-pane"], 24, 80);
+    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    {
+        let output = std::sync::Arc::clone(&output);
+        let mut screen = master.try_clone().unwrap();
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = screen.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                output.lock().unwrap().extend_from_slice(&chunk[..n]);
+            }
+        });
+    }
+    let shown = || String::from_utf8_lossy(&output.lock().unwrap()).into_owned();
+    let attached = || json_of(&bench(&home.dir, &["sessions"]))["sessions"][0]["attached"] == true;
+    let within = |secs: u64, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline && !done() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        done()
+    };
+    const NOTICE: &str = "another viewer took it over";
+    assert!(within(5, &attached), "the pane's viewer attaches");
+
+    let (answer, other) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(answer["status"], "ok", "{answer}");
+    assert!(
+        within(5, &|| shown().contains(NOTICE)),
+        "the displaced pane says why: {:?}",
+        shown()
+    );
+    assert!(
+        viewer.try_wait().unwrap().is_none(),
+        "the displaced pane's viewer keeps running"
+    );
+
+    // The other viewer lets go: the pane attaches again by itself, and its keys reach the
+    // session again.
+    drop(other);
+    let notices = || shown().matches(NOTICE).count();
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(within(5, &attached), "the pane took its session back");
+    master.write_all(b"back-in-the-pane\n").unwrap();
+    assert!(
+        within(5, &|| shown()
+            .rsplit(NOTICE)
+            .next()
+            .is_some_and(|after| after.contains("back-in-the-pane"))),
+        "keys reach the session after the retake: {:?}",
+        shown()
+    );
+
+    // Held again, a key takes it back at once: the other viewer's stream is closed.
+    let (answer, other) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(answer["status"], "ok", "{answer}");
+    assert!(within(5, &|| notices() == 2), "{:?}", shown());
+    master.write_all(b"x").unwrap();
+    let _ = other.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut rest = Vec::new();
+    let _ = (&other).read_to_end(&mut rest);
+    assert!(within(5, &attached), "the key took the session back");
+
+    // Control, which passes either way: when the session ends, the pane's viewer still ends.
+    master.write_all(b"\n\x04").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && viewer.try_wait().unwrap().is_none() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let ended = viewer.try_wait().unwrap();
+    if ended.is_none() {
+        let _ = viewer.kill();
+        let _ = viewer.wait();
+    }
+    assert_eq!(
+        ended.and_then(|s| s.code()),
+        Some(0),
+        "the viewer ends with its session: {:?}",
+        shown()
+    );
+}
+
+#[test]
 fn an_attached_viewer_resizes_the_session_and_ends_when_it_does() {
     let home = TestHome::claim("m3-attach");
     let daemon = size_reporting_daemon(&home.dir);

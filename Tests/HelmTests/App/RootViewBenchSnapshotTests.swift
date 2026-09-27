@@ -19,7 +19,11 @@ final class RootViewBenchSnapshotTests: XCTestCase {
                 writes += 1
                 return true
             })
-        let hosting = NSHostingView(rootView: RootView(benchSnapshot: snapshot))
+        // Never the live client: this process's environment names the operator's benchd.
+        let hosting = NSHostingView(
+            rootView: RootView(
+                client: BenchClient(unreachable: "a test draws no real bench"),
+                benchSnapshot: snapshot))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
             styleMask: [.titled], backing: .buffered, defer: false)
