@@ -6,7 +6,7 @@ import AppKit
 /// **The layer is a property of a modifier set, not a kind of row.** A row whose modifiers are
 /// exactly this set, or this set plus ⇧, is in the manage layer. A native app gets the chord with
 /// its modifiers, so "while ⌘⌥ is held, H steps focus" *is* the chord ⌘⌥H, and `Keymap.table`
-/// keeps concrete modifiers: the monitor, the menu and the status bar never learn the word.
+/// keeps concrete modifiers: the monitor and the menu never learn the word.
 ///
 /// **⌘⌥ by default**, because that is the family helm already bound (focus, move, workspace,
 /// close), and because of what the other modifiers do in a terminal: ⌥ types characters on many

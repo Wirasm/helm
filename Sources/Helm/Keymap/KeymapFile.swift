@@ -87,7 +87,7 @@ struct KeymapFile: Equatable {
     /// The table this file makes of `defaults`.
     ///
     /// Each row replaces every default with its chord in an overlapping `when`, in that default's
-    /// place, so the status bar keeps its order; the rest are appended. `unbind` removes the
+    /// place, so the key pop-up keeps its order; the rest are appended. `unbind` removes the
     /// defaults with that chord, in any `when`. Unbinding a chord nothing has is not an error:
     /// the file should not start failing because a built-in key was retired.
     ///

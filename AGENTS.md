@@ -715,7 +715,7 @@ above and are the easiest to be surprised by:
 
 **benchd owns the bench; helm draws it** (#354). Every change is a `BenchVerb` sent through
 one door, `WorkbenchModel.send(_:by:asked:)` — a key, a click, a drag, a ⌘-clicked link —
-and an agent's verbs come straight to benchd through `bench`; either way it says who asked, which is what benchd's focus rule reads. Keys are rows of one table, read by the key monitor, the menu and the status bar's hints;
+and an agent's verbs come straight to benchd through `bench`; either way it says who asked, which is what benchd's focus rule reads. Keys are rows of one table, read by the key monitor, the menu and the key pop-up (hold the manage key, #499);
 a row's action is data, a `VerbTemplate` resolved against the bench when the key fires or a
 `LocalAction` that never reaches the document. The table in force is `Keymap.table`
 (`Sources/Helm/Keymap/`): the built-in `KeyBindings.all` overlaid by the operator's
