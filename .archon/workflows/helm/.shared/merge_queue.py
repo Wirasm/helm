@@ -354,6 +354,7 @@ class Queue:
                 # 2026-09-27 was the second: its head merged development into the branch, #510
                 # then carried both parents in, and GitHub, merging from one of the two merge
                 # bases, called it DIRTY. A list cut short (over 250) is never judged landed.
+                # Parent counts cannot see a merge edited by hand, so the report says to check.
                 head_in_base=len(compare["parents"]) == compare["ahead_by"]
                 and all(n > 1 for n in compare["parents"]),
                 behind=compare["status"] == "diverged",
@@ -386,8 +387,8 @@ class Queue:
                 # Not closed here: ancestry alone cannot tell a PR carried in by the PR above
                 # it from a branch reset to an older commit. Whoever reads the report closes it.
                 why = "already merged" if f.state == "MERGED" else (
-                    f"every commit on {head[:8]} but merges is already in {BASE}; "
-                    "close it if another PR carried it"
+                    f"every commit on {head[:8]} but merges is already in {BASE}; close it if "
+                    "another PR carried it and no merge on it carries an edit of its own"
                 )
                 return self.settle(item, "landed_through", why)
             if move == "closed":

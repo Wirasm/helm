@@ -13,8 +13,9 @@ It takes the PR numbers in the order given. The orchestrator owns the order. For
    as `landed_through` and do nothing else. That covers a head that is an ancestor of
    `development`, and one whose only new commits are merges of `development` into the branch
    (an earlier `update-branch`), which GitHub can report as conflicting. Usually the PR above
-   it in a stack carried it in, but a branch reset to an older commit looks the same, so the
-   queue never closes it. Whoever reads the report does.
+   it in a stack carried it in, but a branch reset to an older commit looks the same, and a
+   merge edited by hand looks like a plain one, so the queue never closes it. Whoever reads
+   the report checks and does.
 2. If the PR is stacked on a branch whose PR has merged, retarget it to `development`. If
    that PR is still open, hold it.
 3. If it conflicts with `development`, hold it; the reason says to merge `development` in,
