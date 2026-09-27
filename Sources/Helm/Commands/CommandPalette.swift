@@ -14,6 +14,9 @@ final class CommandPalette: ObservableObject {
     /// while benchd has not answered, or could not: the rest of the palette works without them.
     @Published private(set) var recipes: [String] = []
     private let listRecipes: @Sendable () throws -> [String]
+    /// Which open an answer belongs to: only the latest open's answer lands, so a slow answer
+    /// from an earlier open cannot overwrite a newer list.
+    private var opened = 0
 
     init(listRecipes: @escaping @Sendable () throws -> [String] = JustRuns.liveRecipes()) {
         self.listRecipes = listRecipes
@@ -30,9 +33,13 @@ final class CommandPalette: ObservableObject {
     func open() {
         query = ""
         isOpen = true
+        opened += 1
+        let this = opened
         let list = listRecipes
         Task {
-            switch await Task.detached(operation: { Result { try list() } }).value {
+            let answer = await Task.detached(operation: { Result { try list() } }).value
+            guard this == opened else { return }
+            switch answer {
             case let .success(names): recipes = names
             case let .failure(why):
                 NSLog("helm: the palette lists no recipes: %@", String(describing: why))

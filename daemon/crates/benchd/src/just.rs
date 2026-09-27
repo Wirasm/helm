@@ -64,12 +64,7 @@ pub fn run(core: &Arc<Mutex<Core>>, req: &Request) -> Result<JustStarted, NotSta
             justfile.display()
         )));
     }
-    let just = find_just().ok_or_else(|| {
-        NotStarted::Refused(format!(
-            "just is not installed: looked on PATH, then in {}",
-            FALLBACK_BINS.join(", ")
-        ))
-    })?;
+    let just = find_just().ok_or_else(|| NotStarted::Refused(not_installed()))?;
     let cwd = working_directory(&c, &args, asked)?;
 
     let run = format!("run-{}", c.next_seq);
@@ -137,12 +132,7 @@ pub fn list(core: &Arc<Mutex<Core>>) -> Result<JustList, String> {
     if !justfile.is_file() {
         return Ok(JustList { recipes: vec![] });
     }
-    let just = find_just().ok_or_else(|| {
-        format!(
-            "just is not installed: looked on PATH, then in {}",
-            FALLBACK_BINS.join(", ")
-        )
-    })?;
+    let just = find_just().ok_or_else(not_installed)?;
     let output = Command::new(&just)
         .arg("--justfile")
         .arg(&justfile)
@@ -208,6 +198,13 @@ fn working_directory(c: &Core, args: &JustRunArgs, asked: bool) -> Result<PathBu
         )));
     }
     Ok(cwd)
+}
+
+fn not_installed() -> String {
+    format!(
+        "just is not installed: looked on PATH, then in {}",
+        FALLBACK_BINS.join(", ")
+    )
 }
 
 fn find_just() -> Option<PathBuf> {

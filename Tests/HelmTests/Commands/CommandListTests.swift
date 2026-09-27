@@ -215,6 +215,23 @@ final class CommandListTests: XCTestCase {
         palette.open()
         try await until { palette.recipes == ["day", "deploy"] }
 
+        // A slow answer to an earlier open does not overwrite the latest open's list.
+        let gate = DispatchSemaphore(value: 0)
+        let calls = Answers([["old"], ["new"]])
+        let slow = CommandPalette(listRecipes: {
+            let answer = try calls.next()
+            if answer == ["old"] { gate.wait() }
+            return answer
+        })
+        slow.open()
+        try await until { calls.taken == 1 }  // the first open's answer is on its way, held
+        slow.close()
+        slow.open()
+        try await until { slow.recipes == ["new"] }
+        gate.signal()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(slow.recipes, ["new"], "the earlier open's answer came last and was dropped")
+
         let broken = CommandPalette(listRecipes: { throw JustRuns.Refused(description: "gone") })
         broken.open()
         try await Task.sleep(for: .milliseconds(100))
@@ -234,9 +251,16 @@ private final class Answers: @unchecked Sendable {
     private var queue: [[String]]
     private let lock = NSLock()
     init(_ queue: [[String]]) { self.queue = queue }
+    private var count = 0
+    var taken: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
     func next() throws -> [String] {
         lock.lock()
         defer { lock.unlock() }
+        count += 1
         return queue.removeFirst()
     }
 }
