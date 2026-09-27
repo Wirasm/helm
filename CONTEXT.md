@@ -82,9 +82,9 @@ _Avoid_: active, current, selected, first responder (that word is AppKit's, one 
 ⌘J: helm lays the bench out larger than the window and pans to the **focused** slot, so it takes
 most of the window and its neighbours show at the edges; ⌘J again returns (`BenchCamera`). A
 camera, not a layout change: benchd's document, the fractions and **visible** are the same zoomed
-or not, and moving focus while zoomed pans to the new slot. It belongs to the window rather than
-to a workspace, so switching workspace keeps it on, framing that workspace's focused slot. helm's
-own view, so no agent can zoom and a relaunch starts unzoomed.
+or not, and moving focus while zoomed pans to the new slot. Switching workspace turns it off: the
+next workspace is drawn whole. helm's own view, so no agent can zoom and a relaunch starts
+unzoomed.
 _Avoid_: maximize (that hides the other panes; this keeps them in place)
 
 **canvas**:
