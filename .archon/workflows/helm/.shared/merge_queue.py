@@ -417,11 +417,9 @@ class Queue:
             if move == "rerun":
                 refused = self.rerun(item, head, f.checks)
                 if refused:
-                    # Nothing moved, so the batch goes on; the PR is held on its red.
+                    # A re-run never moves development, so the batch goes on; the PR is held.
                     return self.settle(
-                        item, "held",
-                        f"red on {head[:8]}: {', '.join(f.checks.names)}; "
-                        f"the one re-run was refused ({refused})",
+                        item, "held", f"red on {head[:8]}: {', '.join(f.checks.names)}; {refused}"
                     )
                 continue
             if move == "kick":
@@ -441,7 +439,9 @@ class Queue:
     def rerun(self, item: dict[str, Any], head: str, checks: Checks) -> str:
         """Re-run the red required jobs once per PR per batch: a flaky test cost three holds
         on 2026-09-27. A second red holds the PR, and the report lists every PR that needed
-        the re-run, so a flake stays visible rather than absorbed."""
+        the re-run, so a flake stays visible rather than absorbed.
+
+        Returns "" once the new runs exist, else why not, for the PR's held reason."""
         number = item["number"]
         item["reran"] = list(checks.names)
         self.save()
@@ -453,18 +453,21 @@ class Queue:
         except Refusal as refusal:
             del item["reran"]  # nothing re-ran; the report must not say it did
             self.save()
-            return str(refusal)
+            return f"the one re-run was refused ({refusal})"
         # Until the new runs exist, the old red is still the latest run for its name.
-        for _ in range(12):
-            time.sleep(10)
-            runs = gh_json(
-                "api", f"repos/{self.repo}/commits/{head}/check-runs?per_page=100",
-                "--jq", "[.check_runs[] | {id, name}]",
-            )
-            newest = {r["name"]: r["id"] for r in sorted(runs, key=lambda r: r["id"])}
-            if all(newest.get(n, 0) > old for n, old in zip(checks.names, checks.red_ids)):
-                return ""
-        raise Refusal(f"#{number}: re-ran {list(checks.names)} but no new run appeared in 2 min")
+        try:
+            for _ in range(12):
+                time.sleep(10)
+                runs = gh_json(
+                    "api", f"repos/{self.repo}/commits/{head}/check-runs?per_page=100",
+                    "--jq", "[.check_runs[] | {id, name}]",
+                )
+                newest = {r["name"]: r["id"] for r in sorted(runs, key=lambda r: r["id"])}
+                if all(newest.get(n, 0) > old for n, old in zip(checks.names, checks.red_ids)):
+                    return ""
+        except Refusal as refusal:
+            return f"re-ran once, then could not read the new runs ({refusal})"
+        return "re-ran once, but no new run appeared in 2 min"
 
     def merge(self, item: dict[str, Any], head: str) -> None:
         number = item["number"]

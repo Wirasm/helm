@@ -193,6 +193,17 @@ class Landing(unittest.TestCase):
         self.assertIn("also after one re-run", item["reason"])
         self.assertEqual(report["reran"], [507])
 
+    def test_a_rerun_that_never_starts_holds_only_that_pr(self):
+        self.queue.state["items"].append({"number": 508, "status": "queued", "reason": ""})
+        gh = FakeGitHub(
+            polls=[("new", "BLOCKED", "ahead")],
+            runs={"new": [run(2, FMT, conclusion="failure")]}, on_rerun=lambda runs: None,
+        )
+        item, report = self.land(gh)
+        self.assertEqual((item["status"], report["stopped"]), ("held", ""))
+        self.assertIn("no new run appeared", item["reason"])
+        self.assertEqual((report["queued"], report["reran"]), ([508], [507]))
+
     def test_a_flake_that_passes_its_rerun_goes_on_and_is_reported(self):
         def passes(runs):
             runs["new"].append(run(3, FMT))
