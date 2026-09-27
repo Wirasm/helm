@@ -57,6 +57,8 @@ final class LocalActions: ActionPerformer {
             rail.toggleVisibility()
         case .newNote:
             Task { await workbench.newNote() }
+        case .toggleKeepAwake:
+            KeepAwake.shared.toggle()
         }
     }
 }

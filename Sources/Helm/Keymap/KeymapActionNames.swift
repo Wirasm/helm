@@ -72,6 +72,7 @@ extension LocalAction {
         case .openArtifactPanel: ("open-artifact-panel", .none)
         case .toggleRail: ("toggle-rail", .none)
         case .newNote: ("new-note", .none)
+        case .toggleKeepAwake: ("keep-awake", .none)
         }
     }
 
@@ -83,6 +84,7 @@ extension LocalAction {
         case "open-artifact-panel": try a.none(name); self = .openArtifactPanel
         case "toggle-rail": try a.none(name); self = .toggleRail
         case "new-note": try a.none(name); self = .newNote
+        case "keep-awake": try a.none(name); self = .toggleKeepAwake
         default: return nil
         }
     }

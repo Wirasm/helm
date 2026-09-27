@@ -32,6 +32,7 @@ struct StatusBarView: View {
     @StateObject private var builds = BuildUpdateModel()
     /// The keys in force, and why the operator's keymap file was refused, if it was.
     @ObservedObject private var keymap = Keymap.shared
+    @ObservedObject private var keepAwake = KeepAwake.shared
 
     var body: some View {
         HStack(spacing: 12) {
@@ -85,6 +86,7 @@ struct StatusBarView: View {
             DrawerCapsules(model: workbench)
             BenchStatusBadge(client: workbench.client, workbench: workbench)
             isolationBadge
+            keepAwakeCapsule
             keymapBadge
             buildBadge
             if let label = summary.agentLabel {
@@ -120,6 +122,28 @@ struct StatusBarView: View {
                 .padding(.vertical, 1)
                 .background(Color.accent, in: Capsule())
                 .help("Isolated instance — persisting to the \(DefaultsDomain.activeDomain) suite")
+        }
+    }
+
+    /// helm is holding the Mac and its displays awake (`KeepAwake`). Lit like an open drawer,
+    /// because it is a state he chose rather than something asking for him; clicking lets go.
+    /// Absent while off: the key and the menu item are how it starts.
+    @ViewBuilder
+    private var keepAwakeCapsule: some View {
+        if keepAwake.isOn {
+            Button {
+                keepAwake.toggle()
+            } label: {
+                Text("awake")
+                    .foregroundStyle(Color.textPrimary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.selection, in: Capsule())
+            }
+            .buttonStyle(.chrome)
+            .help(
+                "Keeping the Mac and its displays awake while helm runs. "
+                    + "Click to let them sleep again.")
         }
     }
 

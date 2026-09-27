@@ -56,6 +56,9 @@ struct HelmApp: App {
             NSApplication.shared.activate(ignoringOtherApps: true)
         }
         KeymapMonitor.install()
+        // Restores keep-awake if the operator left it on: at launch, not at the status bar's
+        // first render, so the Mac is held from the moment helm runs.
+        _ = KeepAwake.shared
         Task { await Keymap.shared.watch() }
     }
 

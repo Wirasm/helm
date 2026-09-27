@@ -128,6 +128,11 @@ enum KeyBindings {
             .character("s"), [.command, .shift],
             .verb(.toggleDrawer(name: "sessions", surface: .sessions)), hint: "sessions",
             menu: "Sessions"),
+        // ⌘⇧A — keep the Mac and its displays awake while agents work (#496). The status bar
+        // says when it is on.
+        KeyBinding(
+            .character("a"), [.command, .shift], .local(.toggleKeepAwake), hint: "awake",
+            menu: "Keep Awake"),
     ]
 
     /// No hint (`KeyHint`'s header says why), but every one keeps a menu item or a key.
