@@ -110,8 +110,9 @@ private struct SessionRowView: View {
             if !SessionLine.isRunning(row) {
                 Button(action: dismiss) {
                     Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                        .frame(width: 14, height: 14)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.chrome)
                 .foregroundStyle(Color.textMuted)
                 .help("Take this finished session off the list")
             }

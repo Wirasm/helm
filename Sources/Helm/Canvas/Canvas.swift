@@ -1229,7 +1229,7 @@ struct CanvasView: View {
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(model.markTool == tool ? Color.selection : .clear))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.chrome)
                 .foregroundStyle(model.markTool == tool ? Color.accent : Color.textMuted)
                 .help(tool.help)
             }
