@@ -124,8 +124,8 @@ enum AgentRegistry {
         }
     }
 
-    /// The registry keyed by pid, for the callers that need a pane's agent: `AgentObserver`,
-    /// which wants `cwd` (#63), and `BenchSnapshotModel`, which publishes its status (#283).
+    /// The registry keyed by pid, for `BenchSnapshotModel`, which publishes a pane's agent status
+    /// (#283).
     ///
     /// **It exists so there is exactly one rule for a duplicate pid**: two readers that built
     /// their own dictionaries once reached opposite answers for it, and `snapshot.json` named a

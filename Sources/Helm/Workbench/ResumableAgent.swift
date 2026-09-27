@@ -14,7 +14,7 @@ import HelmWire
 struct ResumableAgent: Codable, Equatable {
     /// The program — a bare agent name (`claude`, `codex`, `pi`), the set benchd spawns.
     let command: String
-    /// The agent's own id for the conversation — `AgentSession.sessionId`, the value its resume
+    /// The agent's own id for the conversation, as its hook reported it: the value its resume
     /// flag takes.
     let session: String
     /// Where it was working: an agent started in a subdirectory resumes there, not in the
