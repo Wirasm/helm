@@ -192,7 +192,7 @@ private struct EmptyBench: View {
             )
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.chrome)
         .help(keys.map { "Open a folder as a workspace (\($0))" } ?? "Open a folder as a workspace")
     }
 }

@@ -143,7 +143,7 @@ struct StatusBarView: View {
                     .padding(.vertical, 1)
                     .background(Color.attention, in: Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             .help(
                 "\(file.path) was not loaded, so the last good keys are in force. "
                     + "\(problem.sentence). Click to open it.")
@@ -175,7 +175,7 @@ struct StatusBarView: View {
                     .padding(.vertical, 1)
                     .background(Color.attention, in: Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             // Says what it will cost before it costs it. Every terminal pane is a benchd session
             // (M5b), so quitting helm ends none of them: the new helm shows the same panes. The
             // sha is what tells the operator which build they are being offered.

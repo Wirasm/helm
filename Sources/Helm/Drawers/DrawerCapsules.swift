@@ -27,7 +27,7 @@ struct DrawerCapsules: View {
                 .background(
                     capsule.isOpen ? Color.selection : Color.surfaceRaised, in: Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             .help(capsule.help)
         }
     }

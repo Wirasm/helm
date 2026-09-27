@@ -77,8 +77,9 @@ private struct DrawerPanel: View {
                 model.send(.drawerToggle(name: drawer.name), by: .operatorGesture)
             } label: {
                 Image(systemName: edge == .left ? "sidebar.left" : "sidebar.right")
+                    .frame(width: 18, height: 18)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             .foregroundStyle(Color.textMuted)
             .help("Hide the \(drawer.name) drawer")
         }

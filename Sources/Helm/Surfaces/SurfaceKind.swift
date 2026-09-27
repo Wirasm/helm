@@ -196,8 +196,9 @@ struct PaneTab<Mark: View>: View {
             Button(action: slot.close) {
                 Image(systemName: "xmark")
                     .font(.system(size: 8, weight: .bold))
+                    .frame(width: 14, height: 14)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             .foregroundStyle(Color.textMuted)
             .disabled(!slot.canClose)
             .opacity(slot.canClose ? 1 : 0.3)

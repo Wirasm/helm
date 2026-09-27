@@ -33,8 +33,9 @@ struct CanvasCommentField: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 12))
+                        .frame(width: 18, height: 18)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.chrome)
                 .foregroundStyle(Color.textMuted)
                 .help("Dismiss without writing a note (esc)")
             }
@@ -55,8 +56,9 @@ struct CanvasCommentField: View {
                 Button(action: submit) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 16))
+                        .frame(width: 22, height: 22)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.chrome)
                 .disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help("Write this note to the sidecar")
             }
@@ -189,8 +191,9 @@ struct CanvasNotesDrawer: View {
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 12))
+                    .frame(width: 18, height: 18)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.chrome)
             .foregroundStyle(Color.textMuted)
             .help("Close the notes (esc)")
         }
@@ -244,7 +247,7 @@ struct CanvasNotesDrawer: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Button("Reveal in Finder") { model.revealNotes() }
-                .buttonStyle(.plain)
+                .buttonStyle(.chrome)
                 .font(.system(size: 11))
                 .foregroundStyle(Color.textMuted)
                 .disabled(!model.hasNotes)

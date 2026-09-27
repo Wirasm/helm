@@ -137,7 +137,7 @@ struct JustCapsules: View {
                 .padding(.vertical, 1)
                 .background(Color.danger, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.chrome)
         .help(help)
     }
 }
