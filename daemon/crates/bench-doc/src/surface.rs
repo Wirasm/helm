@@ -29,6 +29,10 @@ pub enum Surface {
         agent: Option<ResumableAgent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<String>,
+        /// Where the pane's shell was last seen working (M5b): the directory `bench restore`
+        /// starts a fresh shell in after a restart. benchd writes it; helm does not read it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
     },
     /// A document surface — markdown, HTML, a board, a page.
     Canvas { source: CanvasSource },
@@ -46,6 +50,7 @@ impl Surface {
         Surface::Terminal {
             agent: None,
             session: None,
+            cwd: None,
         }
     }
 
@@ -260,6 +265,7 @@ mod tests {
         let s3 = Surface::Terminal {
             agent: None,
             session: Some("s3".into()),
+            cwd: None,
         };
         let encoded = json!({"kind": "terminal", "session": "s3"});
         assert_eq!(serde_json::to_value(&s3).unwrap(), encoded);
@@ -268,6 +274,7 @@ mod tests {
         let s4 = Surface::Terminal {
             agent: None,
             session: Some("s4".into()),
+            cwd: None,
         };
         assert!(s3.already_shows(&s3.clone()));
         assert!(!s3.already_shows(&s4));

@@ -45,9 +45,6 @@ struct ToyBench {
         case let .paneName(pane, name):
             try changePane(pane) { $0.name = name }
             return Answer(changed: true, pane: pane)
-        case let .paneRecord(pane, agent):
-            try changePane(pane) { $0.surface = .terminal(agent: agent) }
-            return Answer(changed: true, pane: pane)
         case let .focusSlot(slot):
             guard let path = document.active else { return Answer() }
             try change(path) { $0.bench.focusedSlot = slot }
@@ -399,7 +396,7 @@ extension XCTestCase {
         let (server, client) = try toyBenchd(document)
         let model =
             make?(terminals, client)
-            ?? WorkbenchModel(terminals: terminals, agents: .blind, client: client)
+            ?? WorkbenchModel(terminals: terminals, client: client)
         // Waited for on the follower's own condition rather than by pumping the run loop: an
         // `async` test runs on the main queue, which a nested run loop cannot drain.
         XCTAssertNotNil(

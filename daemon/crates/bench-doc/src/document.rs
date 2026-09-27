@@ -198,6 +198,25 @@ impl Document {
         false
     }
 
+    /// Record where terminal pane `pane`'s shell is working. Answers whether that changed
+    /// anything. Not a verb: benchd calls it from what it reads off the shell's process.
+    pub fn record_cwd(&mut self, pane: PaneId, cwd: &str) -> bool {
+        let benches = self.workspaces.iter_mut().flat_map(|w| w.bench.panes_mut());
+        let drawers = self.drawers.iter_mut().flat_map(|d| d.panes.iter_mut());
+        for p in benches.chain(drawers) {
+            if p.id == pane
+                && let Surface::Terminal { cwd: held, .. } = &mut p.surface
+            {
+                if held.as_deref() == Some(cwd) {
+                    return false;
+                }
+                *held = Some(cwd.to_string());
+                return true;
+            }
+        }
+        false
+    }
+
     /// Forget every benchd session a terminal pane names, answering the panes that named one.
     /// benchd calls this when it boots: no session outlives the daemon that ran it, and session
     /// ids restart with each daemon, so a name kept across a restart would attach a pane to

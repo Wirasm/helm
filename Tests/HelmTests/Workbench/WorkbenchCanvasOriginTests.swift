@@ -66,7 +66,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
                             }
                         },
                         send: { to, _, _, _ in bench.sent.append(to) })),
-                agents: .blind, client: client)
+                client: client)
         }
         return (rig.model, rig.terminals)
     }

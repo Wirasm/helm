@@ -12,11 +12,14 @@
 //! daemon restart. What is logged: the claim, each change of activity (never every tool
 //! call), each hand-out and push, and an event name this build does not know, once.
 
+use crate::layout::{Change, Committed, commit};
 use crate::sessions::{self, Refusal};
 use crate::{Core, now_rfc3339};
-use bench_doc::PaneId;
+use bench_doc::{Focus, PaneId, ResumableAgent, Surface};
 use bench_wire::hook::{self, Transition};
-use bench_wire::{Activity, Harness, HookArgs, HookReply, HostedSession, HostedVia, SessionKey};
+use bench_wire::{
+    Activity, Actor, Harness, HookArgs, HookReply, HostedSession, HostedVia, SessionKey,
+};
 use serde_json::{Value, json};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
@@ -146,6 +149,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             .map_err(Refusal::Failed)?;
         }
         if transition == Some(Transition::Ended) {
+            forget_in_pane(&mut c, &args, &key).map_err(Refusal::Failed)?;
             if let Some(Some(agent)) = c.agents.remove(&key) {
                 c.append(
                     "agent/ended",
@@ -163,6 +167,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             c.agents.insert(key.clone(), agent);
         }
         locate(&mut c, &args, &key).map_err(Refusal::Failed)?;
+        record_in_pane(&mut c, &args, &key).map_err(Refusal::Failed)?;
         let Some(Some(agent)) = c.agents.get_mut(&key) else {
             return Ok(json!(HookReply::default()));
         };
@@ -299,6 +304,96 @@ fn locate(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<(), String>
     }
     match now {
         Some(pane) if recorded_pane(c, key) != Some(pane) => sessions::record_move(c, key, pane),
+        _ => Ok(()),
+    }
+}
+
+/// The pane an agent with a mailbox runs in: the one showing the benchd session it declares, else
+/// the helm pane its last report on a terminal named ([`locate`]).
+fn agent_pane(c: &Core, args: &HookArgs, key: &SessionKey) -> Option<PaneId> {
+    let Some(Some(agent)) = c.agents.get(key) else {
+        return None;
+    };
+    match args
+        .bench_session
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(session) => c.bench.document.pane_showing_session(session),
+        None => agent.pane,
+    }
+}
+
+/// Write down which conversation runs in a pane (M5b): what `bench restore` resumes there after
+/// a benchd restart. Every harness reports through its hook, so this covers claude, codex and pi
+/// alike, and an agent the operator started himself in a shell pane. Written only when it changed.
+fn record_in_pane(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<(), String> {
+    let Some(pane) = agent_pane(c, args, key) else {
+        return Ok(());
+    };
+    let record = ResumableAgent {
+        command: key.harness.name().to_string(),
+        session: key.id.clone(),
+        cwd: args.cwd.clone(),
+    };
+    set_record(c, pane, Some(record), args, key)
+}
+
+/// The agent's session ended: its pane no longer holds it. Not while benchd is stopping, when the
+/// ends are benchd's own doing and the record is what brings the pane back.
+fn forget_in_pane(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<(), String> {
+    if c.stopping {
+        return Ok(());
+    }
+    let Some(pane) = agent_pane(c, args, key) else {
+        return Ok(());
+    };
+    let holds = matches!(
+        c.bench.document.pane(pane).map(|p| &p.surface),
+        Some(Surface::Terminal { agent: Some(a), .. }) if a.session == key.id
+    );
+    if !holds {
+        return Ok(());
+    }
+    set_record(c, pane, None, args, key)
+}
+
+fn set_record(
+    c: &mut Core,
+    pane: PaneId,
+    record: Option<ResumableAgent>,
+    args: &HookArgs,
+    key: &SessionKey,
+) -> Result<(), String> {
+    let current = match c.bench.document.pane(pane).map(|p| &p.surface) {
+        Some(Surface::Terminal { agent, .. }) => agent.clone(),
+        _ => return Ok(()),
+    };
+    if current == record {
+        return Ok(());
+    }
+    let mut next = c.bench.document.clone();
+    next.record_agent(pane, record.clone(), Focus::Leave)
+        .map_err(|r| r.to_string())?;
+    let handle = c
+        .agents
+        .get(key)
+        .and_then(|a| a.as_ref())
+        .map(|a| a.handle.clone());
+    let change = Change {
+        verb: "pane/agent".into(),
+        args: json!({ "pane": pane, "agent": record, "event": args.event }),
+        by: Actor::Agent {
+            pane: Some(pane.to_string()),
+            handle,
+        },
+        asked: false,
+        next,
+        created: None,
+        pane: Some(pane),
+    };
+    match commit(c, change) {
+        Committed::Failed(why) => Err(why),
         _ => Ok(()),
     }
 }

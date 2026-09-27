@@ -19,7 +19,7 @@ final class BrowserPaneBenchTests: XCTestCase {
         let root = benchRoot
         return try toyRig(workspace.value) { terminals, client in
             WorkbenchModel(
-                terminals: terminals, agents: .blind,
+                terminals: terminals,
                 makeBrowser: {
                     BrowserPaneModel(environment: ["BENCH_DIR": root.path], home: root)
                 },

@@ -8,13 +8,9 @@ import HelmWire
 ///
 /// **On `Pane.Content.terminal`, not beside it.** A canvas has no agent, and asking one for its
 /// agent must not compile. The record is benchd's document's (`Surface::Terminal::agent`); helm
-/// writes it with `pane/record` from what it observes (`WorkbenchModel.observeAgents`).
+/// reads it; benchd writes it from each agent's own hook (M5b).
 ///
-/// **What helm can see, and therefore what may be here.** `AgentRegistry` — Claude Code's own
-/// `~/.claude/sessions/<pid>.json` — is the one runtime that publishes a pid→session mapping,
-/// which is what lets helm say *this pane held that conversation*. So today helm writes only
-/// `claude` here; benchd writes the others for the agents it spawns. `command` is stored rather
-/// than assumed, for `AGENTS.md`'s discriminator rule.
+/// Every harness reports through its own hook, so this holds claude, codex or pi alike.
 struct ResumableAgent: Codable, Equatable {
     /// The program — a bare agent name (`claude`, `codex`, `pi`), the set benchd spawns.
     let command: String
@@ -30,9 +26,4 @@ struct ResumableAgent: Codable, Equatable {
         self.session = session
         self.cwd = cwd
     }
-}
-
-enum AgentResume {
-    /// The one runtime helm observes in a pane. See `ResumableAgent`'s header.
-    static let claude = "claude"
 }

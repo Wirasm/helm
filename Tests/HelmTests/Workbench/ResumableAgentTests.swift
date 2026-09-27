@@ -4,8 +4,8 @@ import XCTest
 @testable import Helm
 
 /// #63: the agent a pane held is recorded on the bench, which is what `bench restore` resumes
-/// there after benchd restarts (M5b, `just resume-all`). The offer to resume it in helm is gone
-/// with #85's question.
+/// there after benchd restarts (M5b, `just resume-all`). benchd writes it from the agents' own
+/// hooks (its conformance suite pins that); helm reads it and reports it in the snapshot.
 @MainActor
 final class ResumableAgentTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/helm-resume")
@@ -16,21 +16,6 @@ final class ResumableAgentTests: XCTestCase {
         cwd: String = "/tmp/helm-resume"
     ) -> ResumableAgent {
         ResumableAgent(command: command, session: session, cwd: cwd)
-    }
-
-    private func row(pid: pid_t, session: String, cwd: String?) -> AgentSession {
-        AgentSession(pid: pid, cwd: cwd, status: .busy, sessionId: session)
-    }
-
-    /// helm drawn from a toy benchd holding one workspace with `panes` as tabs.
-    private func rig(_ panes: [BenchDocument.Pane], agents: AgentObserver) throws -> ToyRig {
-        try toyRig(
-            document: BenchDocument(
-                workspaces: [.init(path: workspace.value, bench: ToyBench.bench(panes))],
-                active: workspace.value)
-        ) { terminals, client in
-            WorkbenchModel(terminals: terminals, agents: agents, client: client)
-        }
     }
 
     private func holding(_ agent: ResumableAgent?, id: UUID = UUID()) -> BenchDocument.Pane {
@@ -49,61 +34,6 @@ final class ResumableAgentTests: XCTestCase {
         XCTAssertEqual(
             restored.pane(pane)?.content, .terminal(agent: agent()),
             "the pty died with the process; the id of the conversation it held did not")
-    }
-
-    // MARK: - Watching the panes
-
-    func testAnAgentSeenInAPaneIsSentToBenchdAsHelmsRecord() throws {
-        let pane = UUID()
-        let rig = try rig(
-            [holding(nil, id: pane)],
-            agents: .fixture(
-                foreground: [pane: 4242],
-                rows: [4242: row(pid: 4242, session: "abc", cwd: "/tmp/sub")]))
-
-        rig.model.observeAgents()
-
-        let sent = try XCTUnwrap(rig.server.verbs.last)
-        XCTAssertEqual(sent["verb"] as? String, "pane/record")
-        XCTAssertEqual((sent["by"] as? [String: Any])?["kind"] as? String, "helm")
-        XCTAssertEqual(
-            rig.model.bench?.pane(pane)?.content,
-            .terminal(
-                agent: ResumableAgent(command: "claude", session: "abc", cwd: "/tmp/sub")),
-            "the registry's own cwd, because an agent started in a subdirectory is not "
-                + "working in the workspace root")
-    }
-
-    /// **The record is sticky**, and this is the case that decides it: a `claude` running a
-    /// bash command hands the pty's foreground to a child, so a record cleared on absence
-    /// would be erased and rewritten several times a minute — and would be *absent* if helm
-    /// died inside one of those windows, which is the crash #63 exists for.
-    func testARecordIsNotErasedWhenTheAgentStopsBeingTheForegroundProcess() throws {
-        let pane = UUID()
-        let rig = try rig([holding(agent("abc"), id: pane)], agents: .blind)
-        let before = rig.server.verbs.count
-
-        rig.model.observeAgents()
-
-        XCTAssertEqual(rig.server.verbs.count, before, "nothing is sent about an agent not seen")
-        XCTAssertEqual(
-            rig.model.bench?.resumableAgents.map(\.agent.session), ["abc"],
-            "what was running here is still what was running here")
-    }
-
-    /// Only a change is sent: the same record every two seconds would be an event per tick in
-    /// benchd's log for the life of the process.
-    func testAnAgentAlreadyRecordedIsNotSentAgain() throws {
-        let pane = UUID()
-        let rig = try rig(
-            [holding(agent("abc", cwd: "/tmp/sub"), id: pane)],
-            agents: .fixture(
-                foreground: [pane: 4242],
-                rows: [4242: row(pid: 4242, session: "abc", cwd: "/tmp/sub")]))
-
-        rig.model.observeAgents()
-
-        XCTAssertTrue(rig.server.verbs.isEmpty)
     }
 
     // MARK: - What a reader outside the process sees
@@ -137,11 +67,7 @@ final class ResumableAgentTests: XCTestCase {
                     .init(path: parked.path.value, bench: ToyBench.bench([holding(agent())])),
                     .init(path: mounted.path.value, bench: ToyBench.bench([ToyBench.terminal()])),
                 ], active: mounted.path.value)
-        ) { terminals, client in
-            WorkbenchModel(
-                terminals: terminals, agents: .fixture(foreground: [:], rows: [:]),
-                client: client)
-        }
+        )
         let workspaces = WorkspaceModel()
         workspaces.follow(try XCTUnwrap(rig.model.document))
 
@@ -165,11 +91,7 @@ final class ResumableAgentTests: XCTestCase {
             document: BenchDocument(
                 workspaces: [.init(path: workspace.value, bench: bench)],
                 active: workspace.value)
-        ) { terminals, client in
-            WorkbenchModel(
-                terminals: terminals,
-                agents: .fixture(foreground: [:], rows: [:]), client: client)
-        }
+        )
         let workspaces = WorkspaceModel()
         workspaces.follow(try XCTUnwrap(rig.model.document))
         return BenchSnapshot.project(

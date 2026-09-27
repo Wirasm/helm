@@ -13,6 +13,7 @@ fn session_pane(session: &str) -> Pane {
             cwd: "/tmp/w".into(),
         }),
         session: Some(session.into()),
+        cwd: None,
     })
 }
 
@@ -39,7 +40,7 @@ fn a_session_pane_is_found_wherever_it_lives_and_forgotten_at_boot() {
     assert_eq!(doc.pane_showing_session("s1"), None);
     // The pane stays, and keeps what it needs for the resume offer.
     match &doc.pane(bench_id).unwrap().surface {
-        Surface::Terminal { agent, session } => {
+        Surface::Terminal { agent, session, .. } => {
             assert!(agent.is_some());
             assert!(session.is_none());
         }

@@ -130,9 +130,11 @@ clears every pane's `session` (`bench/sessions-ended`).
 (`layout::commit`), a terminal pane that is new and names no session gets the operator's login
 shell (`shells.rs`), with the environment helm's panes gave their shells and Ghostty's shell
 integration built in (`shell_env.rs`); and a session no pane shows any more ends. After a restart
-the panes keep their `agent` records, and `restore` (`bench restore --all`, `just resume-all`)
-gives each a session again from that record alone: the agent's conversation resumed, else a
-shell. Sessions do not outlive benchd: ruled 2026-09-27, resume instead. What only helm can do — drawing its window
+the panes keep their records, and `restore` (`bench restore --all`, `just resume-all`) gives
+each a session again from that record alone: the agent's conversation resumed, else a shell in the
+pane's last directory. benchd writes both: which agent is in a pane from that agent's own hook
+(claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),
+and the shell's directory read off its process (`Surface::Terminal::cwd`). Sessions do not outlive benchd: ruled 2026-09-27, resume instead. What only helm can do — drawing its window
 — benchd asks for: `helm/ask` logs `helm/asked` to the followers, helm answers with `helm/answer`,
 and the caller waits at most `HELM_ASK_WAIT`. The `bench-panes` skill is the agent's guide.
 

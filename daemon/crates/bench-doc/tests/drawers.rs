@@ -320,7 +320,8 @@ fn a_drawer_pane_is_named_and_recorded_like_any_other() {
         pane.surface,
         Surface::Terminal {
             agent: Some(agent),
-            session: None
+            session: None,
+            cwd: None
         }
     );
 }

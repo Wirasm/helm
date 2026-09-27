@@ -276,7 +276,7 @@ private final class HelmWindow {
         // anything mounts — which is also the launch path, and one of the three cases #96 lists.
         let ids = (0..<count).map { _ in UUID() }
         (server, client) = try startToyBenchd(.only(workspacePath, Self.bench(ids, layout)))
-        let workbench = WorkbenchModel(terminals: terminals, agents: .blind, client: client)
+        let workbench = WorkbenchModel(terminals: terminals, client: client)
         self.workbench = workbench
         XCTAssertNotNil(client.document(atLeast: 1, within: 5), "benchd never answered")
         XCTAssertNotNil(workbench.bench, "no bench was drawn")

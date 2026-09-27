@@ -21,7 +21,7 @@ final class WorkbenchClientModeTests: XCTestCase {
         let server = try FakeBenchd(document: first)
         let client = BenchClient(socketPath: server.path)
         let terminals = TerminalManager()
-        let model = WorkbenchModel(terminals: terminals, agents: .blind, client: client)
+        let model = WorkbenchModel(terminals: terminals, client: client)
         addTeardownBlock { @MainActor in
             client.stop()
             server.stop()

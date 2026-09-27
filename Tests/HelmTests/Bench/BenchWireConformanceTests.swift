@@ -85,7 +85,7 @@ final class BenchWireConformanceTests: XCTestCase {
         let helmSends: Set<String> = [
             "bench/get", "workspace/open", "workspace/close", "workspace/activate",
             "pane/open",
-            "pane/split", "pane/close", "pane/show", "pane/move", "pane/name", "pane/record",
+            "pane/split", "pane/close", "pane/show", "pane/move", "pane/name",
             "focus/slot", "focus/step", "layout/resize", "drawer/toggle",
         ]
         XCTAssertEqual(sampled, helmSends)

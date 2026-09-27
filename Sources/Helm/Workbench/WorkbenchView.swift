@@ -36,10 +36,10 @@ struct WorkbenchView: View {
             }
             bench
         }
-        // Which agent is in which pane (#63). Driven from a `.task` for `BoardModel.poll`'s
-        // reason: SwiftUI cancels it on teardown, so the loop's lifetime is the window's. The
-        // state it writes lives on the model, which outlives any single render.
-        .task { await model.watchAgents() }
+        // What has each pane's terminal in benchd (M5b). Driven from a `.task` for
+        // `BoardModel.poll`'s reason: SwiftUI cancels it on teardown, so the loop's lifetime is
+        // the window's. The state it writes lives on the manager, which outlives any render.
+        .task { await model.watchForegrounds() }
         .enableInjection()
     }
 

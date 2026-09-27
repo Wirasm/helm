@@ -422,9 +422,6 @@ pub fn apply(
         LayoutVerb::PaneName { pane, name, .. } => doc
             .name_pane(*pane, name.clone(), focus)
             .map(|_| Outcome::default()),
-        LayoutVerb::PaneRecord { pane, agent } => doc
-            .record_agent(*pane, agent.clone(), focus)
-            .map(|()| Outcome::default()),
         LayoutVerb::FocusSlot { slot } => doc
             .edit(Target::Slot(*slot), focus, |b| b.focus_slot(*slot))
             .map(|()| Outcome::default()),

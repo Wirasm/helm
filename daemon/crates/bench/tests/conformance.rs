@@ -6056,3 +6056,211 @@ fn restore_never_resumes_a_conversation_a_live_session_already_holds() {
         .count();
     assert_eq!(holders, 1, "one process on the conversation");
 }
+
+/// The agent recorded in a pane, from the document.
+fn pane_agent(home: &Path, pane: &str) -> serde_json::Value {
+    json_of(&bench(home, &["get", "pane", pane]))["pane"]["surface"]["agent"].clone()
+}
+
+#[test]
+fn an_agent_started_in_a_shell_pane_is_recorded_there_until_it_ends() {
+    // What `bench restore` resumes after a restart is benchd's record, fed by every harness's
+    // own hook: here a claude the operator started himself in a shell pane.
+    let home = TestHome::claim("m5b-record");
+    let ws = workspace(&home.dir).display().to_string();
+    let daemon = DaemonGuard::start(&home.dir, None);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let pane = json_of(&bench(&home.dir, &["open", "terminal"]))["pane"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (_, pid) = terminal_process(&home.dir, "holder");
+    let event = |event: &str| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "claude", "event": event, "session": "c-4b1c",
+                "cwd": "/tmp/work", "pid": pid, "pane": pane}),
+        )
+    };
+
+    event("SessionStart");
+    assert_eq!(
+        pane_agent(&home.dir, &pane),
+        serde_json::json!({"command": "claude", "session": "c-4b1c", "cwd": "/tmp/work"})
+    );
+    event("SessionEnd");
+    assert!(
+        pane_agent(&home.dir, &pane).is_null(),
+        "an agent that ended is not resumed there"
+    );
+}
+
+#[test]
+fn stopping_benchd_keeps_the_records_its_ending_agents_report_on_their_way_out() {
+    // `bench stop` hangs up every session, and a claude reports `SessionEnd` as it goes. That end
+    // is benchd's own doing: the record must survive it, or `just resume-all` finds nothing.
+    let home = TestHome::claim("m5b-stopkeeps");
+    let ws = workspace(&home.dir).display().to_string();
+    let bin = home.dir.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let claude = bin.join("claude");
+    fs::write(
+        &claude,
+        format!(
+            "#!/bin/sh\nsid=\nwhile [ $# -gt 0 ]; do [ \"$1\" = --session-id ] && sid=$2; shift; done\n\
+             end() {{ printf '{{\"hook_event_name\":\"SessionEnd\",\"session_id\":\"%s\",\"cwd\":\"%s\"}}' \"$sid\" \"$PWD\" | {bench} hook claude >/dev/null; exit 0; }}\n\
+             trap end HUP\n\
+             printf '{{\"hook_event_name\":\"SessionStart\",\"session_id\":\"%s\",\"cwd\":\"%s\"}}' \"$sid\" \"$PWD\" | {bench} hook claude >/dev/null\n\
+             echo ready\nwhile :; do sleep 0.02; done\n",
+            bench = bench_bin().display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::var("PATH").unwrap_or_default();
+    let pane = {
+        let mut cmd = isolated(benchd_bin());
+        cmd.env("PATH", format!("{}:{path}", bin.display()));
+        let _daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+        let spawned = json_of(&bench(
+            &home.dir,
+            &["spawn", "--agent", "claude", "--cwd", &ws],
+        ));
+        let pane = spawned["pane"].as_str().unwrap().to_string();
+        std::thread::sleep(Duration::from_millis(800));
+        let stop = bench(&home.dir, &["stop"]);
+        assert_eq!(stop.code, 0, "{}", stop.stderr);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while home.dir.join(".bench/benchd.sock").exists() {
+            assert!(Instant::now() < deadline, "benchd did not stop");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        pane
+    };
+    let log = fs::read_to_string(home.dir.join(".bench/events.jsonl")).unwrap();
+    assert!(
+        log.contains("agent/ended"),
+        "the fake claude reported its end during the stop, so this test sees the case: {log}"
+    );
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    assert_eq!(
+        pane_agent(&home.dir, &pane)["command"],
+        "claude",
+        "the record survived the stop"
+    );
+}
+
+#[test]
+fn a_shell_comes_back_in_the_directory_it_was_last_working_in() {
+    let home = TestHome::claim("m5b-cwd");
+    let ws = workspace(&home.dir).display().to_string();
+    let elsewhere = home.dir.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    let elsewhere = elsewhere.canonicalize().unwrap().display().to_string();
+    let pane = {
+        let daemon = DaemonGuard::start(&home.dir, None);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let pane = json_of(&bench(&home.dir, &["open", "terminal"]))["pane"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let sid = pane_session(&home.dir, &pane).unwrap();
+        type_into(
+            &daemon.socket,
+            &sid,
+            &format!("cd '{elsewhere}' && echo MOVED\n"),
+            |seen| seen.contains("MOVED\r"),
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let doc = json_of(&bench(&home.dir, &["get", "pane", &pane]));
+            if doc["pane"]["surface"]["cwd"] == elsewhere.as_str() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the cwd was never recorded: {doc}"
+            );
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        pane
+    };
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let run = bench(&home.dir, &["restore", &pane]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let sid = pane_session(&home.dir, &pane).unwrap();
+    assert_eq!(session_row(&home.dir, &sid)["cwd"], elsewhere.as_str());
+}
+
+#[test]
+fn a_codex_its_hook_recorded_in_a_pane_is_resumed_by_its_own_id() {
+    let home = TestHome::claim("m5b-codex");
+    let ws = workspace(&home.dir).display().to_string();
+    let bin = home.dir.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let argv = home.dir.join("codex-argv");
+    fs::write(
+        bin.join("codex"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\nexec cat\n",
+            argv.display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(bin.join("codex"), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::var("PATH").unwrap_or_default();
+    let with_codex = || {
+        let mut cmd = isolated(benchd_bin());
+        cmd.env("PATH", format!("{}:{path}", bin.display()));
+        cmd
+    };
+    let pane = {
+        let daemon = DaemonGuard::start_with(&home.dir, None, with_codex());
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let pane = json_of(&bench(&home.dir, &["open", "terminal"]))["pane"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (_, pid) = terminal_process(&home.dir, "holder");
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "codex", "event": "SessionStart", "session": "019a-thread",
+                "cwd": ws, "pid": pid, "pane": pane}),
+        );
+        pane
+    };
+    let _daemon = DaemonGuard::start_with(&home.dir, None, with_codex());
+    let run = json_of(&bench(&home.dir, &["restore", &pane]));
+    assert_eq!(run["restored"][0]["how"], "resumed", "{run}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !argv.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let args = fs::read_to_string(&argv).unwrap();
+    let args: Vec<&str> = args.lines().collect();
+    assert_eq!(args[..2], ["resume", "019a-thread"], "{args:?}");
+    assert!(
+        args.contains(&"--dangerously-bypass-approvals-and-sandbox"),
+        "{args:?}"
+    );
+}
