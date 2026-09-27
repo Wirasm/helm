@@ -14,7 +14,7 @@ struct RootView: View {
     /// A `@StateObject` rather than a `.shared`: `TerminalManager.shared` and
     /// `BoardModel.shared` are singletons because other slices reach them, and nothing
     /// outside the workbench reaches this one. Drawn from benchd's document (#354).
-    @StateObject private var workbench = WorkbenchModel(terminals: .shared, client: .live())
+    @StateObject private var workbench: WorkbenchModel
     @StateObject private var archonRail = ArchonRailModel()
     /// The operator's just runs (#356): started by his keys, failures shown on the status bar.
     @StateObject private var justRuns = JustRuns()
@@ -24,7 +24,15 @@ struct RootView: View {
     /// `Actions.performer`, which is weak, has something to point at.
     @State private var actions: LocalActions?
 
-    init(benchSnapshot: BenchSnapshotModel = BenchSnapshotModel()) {
+    /// `client` is the benchd this window draws, and has no default: a window drawn from the
+    /// operator's benchd starts `bench attach` for every visible terminal pane, and each attach
+    /// takes that session from the pane showing it. A test that built this view with the live
+    /// client did exactly that to the operator's panes.
+    init(
+        client: @escaping @autoclosure () -> BenchClient,
+        benchSnapshot: BenchSnapshotModel = BenchSnapshotModel()
+    ) {
+        _workbench = StateObject(wrappedValue: WorkbenchModel(terminals: .shared, client: client()))
         _benchSnapshot = StateObject(wrappedValue: benchSnapshot)
     }
 

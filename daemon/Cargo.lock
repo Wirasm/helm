@@ -8,6 +8,7 @@ version = "0.0.1"
 dependencies = [
  "bench-doc",
  "bench-sessions",
+ "bench-vt",
  "bench-wire",
  "libc",
  "rustix",

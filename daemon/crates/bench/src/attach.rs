@@ -8,15 +8,23 @@
 //! client ends too, which is what tells helm the pane's process exited. `--in-pane` is that use:
 //! nothing printed of its own, and no detach key, because in a shell Ctrl-\ is SIGQUIT.
 //!
+//! A session has one viewer, and a second attach takes it over. A pane must not end for that:
+//! its session is still running, and a pane whose process has exited has no way back to it. So
+//! an `--in-pane` client whose stream closes asks benchd what happened. The session ended, or
+//! benchd is gone: it ends too, and leaves the pane a line saying which and how to start it
+//! again. Nobody holds the session: it attaches again. Another viewer holds it: it says so in
+//! the pane and waits, and attaches again on a key or once that viewer lets go.
+//!
 //! A pane dragged across the screen resizes its terminal many times a second, and every size the
 //! session's pty takes is a SIGWINCH and a full redraw of whatever runs there. So sizes are
 //! coalesced: at most one per [`SIZE_EVERY`], plus a trailing one when the changes stop, and the
 //! size sent is the one the terminal has when it is sent (#359's resize note).
 
-use crate::{Cli, EXIT_NO_DAEMON, fail, open, read_response_line};
+use crate::{Cli, EXIT_NO_DAEMON, exchange, fail, open, read_response_line};
 use bench_wire::attach::AttachFrame;
-use bench_wire::{Response, Status};
+use bench_wire::{LiveSessions, Response, SessionArgs, Status};
 use rustix::termios::tcgetwinsize;
+use serde_json::json;
 use std::io::{IsTerminal, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -26,80 +34,238 @@ use std::time::{Duration, Instant};
 /// The shortest gap between two sizes sent to the session: one frame at 60 Hz.
 pub const SIZE_EVERY: Duration = Duration::from_millis(16);
 
-/// Why the relay stopped.
-enum Ended {
+/// How often a displaced pane asks whether the other viewer has let go.
+const RECHECK_EVERY: Duration = Duration::from_secs(2);
+
+/// What the relay heard.
+enum Heard {
     /// The viewer pressed Ctrl-\ or closed its input.
     Detached,
     /// The daemon closed the stream: the session ended, was closed, or another viewer took it.
     StreamClosed,
+    /// A key while displaced: the viewer wants the session back. Never sent to the session.
+    Key,
 }
 
-pub fn run(cli: Cli, in_pane: bool) -> i32 {
+/// One attachment: its stream, and the size its pty was last given through it.
+struct Attachment {
+    stream: UnixStream,
+    size: Option<(u16, u16)>,
+}
+
+/// Where keys and sizes go: the attachment, or nowhere while the pane is displaced.
+type Current = Arc<Mutex<Option<Attachment>>>;
+
+/// Who holds the session, asked after its stream closed.
+#[derive(Debug, PartialEq)]
+enum Holder {
+    /// It ended, or benchd is gone and took it along: the words the pane is left with.
+    Gone(String),
+    /// It runs and nobody views it.
+    Nobody,
+    /// It runs and another viewer has it.
+    Another,
+}
+
+pub fn run(mut cli: Cli, in_pane: bool) -> i32 {
     let size_changes = hear_size_changes();
-    let sent_size = match (cli.args["rows"].as_u64(), cli.args["cols"].as_u64()) {
-        (Some(r), Some(c)) => Some((r as u16, c as u16)),
-        _ => None,
+    // The request `main` built, read back as its type: a retake sends the same one, resized.
+    let mut request: SessionArgs = match serde_json::from_value(cli.args.clone()) {
+        Ok(args) => args,
+        Err(e) => return fail(&format!("attach args: {e}")),
     };
-    let (stream, request_line) = match open(&cli) {
-        Ok(pair) => pair,
-        Err(code) => return code,
-    };
+    let session = request.session.clone();
+    let current: Current = Arc::new(Mutex::new(None));
+    let (tell, heard) = mpsc::channel();
+    let mut saved = None;
+    let mut started = false;
+    loop {
+        let stream = match attach(&cli) {
+            Ok(stream) => stream,
+            Err(code) => {
+                restore(saved);
+                return code;
+            }
+        };
+        let down = match stream.try_clone() {
+            Ok(sock) => sock,
+            Err(_) => {
+                restore(saved);
+                return fail("cannot clone stream");
+            }
+        };
+        *current.lock().unwrap() = Some(Attachment {
+            stream,
+            size: request.rows.zip(request.cols),
+        });
+        if !started {
+            started = true;
+            if !in_pane {
+                eprintln!("bench: attached — Ctrl-\\ detaches");
+            }
+            saved = raw_mode();
+            // Once per client: stdin and the size signal outlive any one attachment.
+            relay_up(Arc::clone(&current), !in_pane, tell.clone());
+            if let Some(changes) = size_changes {
+                follow_size(Arc::clone(&current), changes);
+            }
+        }
+        relay_down(down, tell.clone());
+
+        let ended = loop {
+            match heard.recv() {
+                Ok(Heard::Key) => continue,
+                Ok(ended) => break ended,
+                Err(_) => break Heard::Detached,
+            }
+        };
+        current.lock().unwrap().take();
+        if !in_pane {
+            restore(saved);
+            match ended {
+                Heard::StreamClosed => eprintln!(
+                    "\nbench: the session's stream closed — it ended, was closed, or another attach took it over"
+                ),
+                _ => eprintln!("\nbench: detached"),
+            }
+            return 0;
+        }
+        if !matches!(ended, Heard::StreamClosed) || !wait_to_retake(&cli, &session, &heard) {
+            restore(saved);
+            return 0;
+        }
+        // The replay redraws the session on a fresh terminal, as on the first attach. A reset
+        // (RIS), not a clear: the pane still has the modes the program set before it was
+        // displaced, and the replay sets only the ones on now; and the scrollback goes too, or
+        // the replay's history would be painted under the old copy of itself.
+        let mut out = std::io::stdout();
+        let _ = out.write_all(b"\x1bc\x1b[3J");
+        let _ = out.flush();
+        if let Some((rows, cols)) = terminal_size() {
+            request.rows = Some(rows);
+            request.cols = Some(cols);
+            cli.args = json!(request);
+        }
+    }
+}
+
+/// Send the attach request and read its answer. `Ok` is a stream the replay follows on.
+fn attach(cli: &Cli) -> Result<UnixStream, i32> {
+    let (stream, request_line) = open(cli)?;
     if let Err(e) = (&stream).write_all(request_line.as_bytes()) {
         eprintln!("bench: write failed ({e})");
-        return EXIT_NO_DAEMON;
+        return Err(EXIT_NO_DAEMON);
     }
     let Some(reply) = read_response_line(&stream) else {
         eprintln!(
             "bench: no answer within {}s",
             bench_wire::CLIENT_READ_TIMEOUT.as_secs()
         );
-        return EXIT_NO_DAEMON;
+        return Err(EXIT_NO_DAEMON);
     };
     let response: Response = match serde_json::from_str(&reply) {
         Ok(r) => r,
-        Err(e) => return fail(&format!("unreadable response ({e}): {}", reply.trim())),
+        Err(e) => {
+            return Err(fail(&format!(
+                "unreadable response ({e}): {}",
+                reply.trim()
+            )));
+        }
     };
     if response.status != Status::Ok {
         if let Some(reason) = &response.reason {
             eprintln!("bench: {reason}");
         }
-        return response.status.exit_code();
-    }
-    if !in_pane {
-        eprintln!("bench: attached — Ctrl-\\ detaches");
+        return Err(response.status.exit_code());
     }
     let _ = stream.set_read_timeout(None);
+    Ok(stream)
+}
 
-    let saved = raw_mode();
-    let (done, ended) = mpsc::channel();
-    let down = match stream.try_clone() {
-        Ok(sock) => sock,
-        Err(_) => return fail("cannot clone stream"),
-    };
-    // Two threads send frames (keys, sizes); one frame is written whole under this lock.
-    let up = Arc::new(Mutex::new(stream));
-    relay_down(down, done.clone());
-    relay_up(Arc::clone(&up), !in_pane, done);
-    if let (Some(changes), Some(sent)) = (size_changes, sent_size) {
-        follow_size(up, changes, sent);
-    }
-
-    let ended = ended.recv().unwrap_or(Ended::Detached);
-    restore(saved);
-    if !in_pane {
-        match ended {
-            Ended::Detached => eprintln!("\nbench: detached"),
-            Ended::StreamClosed => eprintln!(
-                "\nbench: the session's stream closed — it ended, was closed, or another attach took it over"
-            ),
+/// A displaced pane: whether to attach again. Waits while another viewer holds the session,
+/// saying so once, and answers true on a key or once nobody holds it; false once it has ended
+/// or the pane's input closed.
+fn wait_to_retake(cli: &Cli, session: &str, heard: &mpsc::Receiver<Heard>) -> bool {
+    let mut said = false;
+    loop {
+        match holder(cli, session) {
+            Holder::Gone(why) => {
+                // The last thing in the pane, above Ghostty's own "Process exited".
+                let mut out = std::io::stdout();
+                let _ = write!(out, "\r\n\x1b[7m bench: {why} \x1b[0m\r\n");
+                let _ = out.flush();
+                return false;
+            }
+            Holder::Nobody => {
+                // A stream that drops by itself on a session nobody else holds is attached again
+                // at once, but not in a hot loop, and not once the pane's own input has closed:
+                // nothing would be left to notice that, and the session's one viewer slot would
+                // be held by a client with no terminal.
+                std::thread::sleep(Duration::from_millis(200));
+                return !matches!(
+                    heard.try_recv(),
+                    Ok(Heard::Detached) | Err(mpsc::TryRecvError::Disconnected)
+                );
+            }
+            Holder::Another => {
+                if !said {
+                    said = true;
+                    let mut out = std::io::stdout();
+                    let _ = write!(
+                        out,
+                        "\r\n\x1b[7m bench: {session} is still running, but another viewer took it over. Press any key to show it here. \x1b[0m\r\n"
+                    );
+                    let _ = out.flush();
+                }
+                match heard.recv_timeout(RECHECK_EVERY) {
+                    Ok(Heard::Key) => return true,
+                    Ok(Heard::Detached) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return false;
+                    }
+                    Ok(Heard::StreamClosed) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
         }
     }
-    0
+}
+
+/// Ask benchd who holds `session` now. No answer means benchd is gone, and its sessions with it.
+fn holder(cli: &Cli, session: &str) -> Holder {
+    let ask = Cli {
+        verb: "sessions".to_string(),
+        args: json!({}),
+        root: cli.root.clone(),
+        asked: false,
+    };
+    let Ok(response) = exchange(&ask) else {
+        return Holder::Gone(format!(
+            "benchd is not running, and {session} ended with it. `just resume-all` brings every pane back once it runs."
+        ));
+    };
+    let ended = || {
+        // helm declares the pane a viewer runs in; restore takes the pane, not the session.
+        let pane = std::env::var("HELM_PANE").unwrap_or_else(|_| "<pane>".to_string());
+        Holder::Gone(format!(
+            "{session} has ended. `bench restore {pane}` starts this pane again."
+        ))
+    };
+    let listed = response
+        .data
+        .and_then(|data| serde_json::from_value::<LiveSessions>(data).ok());
+    let Some(entry) = listed.and_then(|l| l.sessions.into_iter().find(|s| s.session == session))
+    else {
+        return ended();
+    };
+    match (entry.live, entry.attached) {
+        (false, _) => ended(),
+        (true, false) => Holder::Nobody,
+        (true, true) => Holder::Another,
+    }
 }
 
 /// Socket → stdout, byte for byte: escape sequences ride through, which is what lets an OSC
 /// from the agent reach whatever terminal hosts this client.
-fn relay_down(mut sock: UnixStream, done: mpsc::Sender<Ended>) {
+fn relay_down(mut sock: UnixStream, tell: mpsc::Sender<Heard>) {
     std::thread::spawn(move || {
         let mut out = std::io::stdout();
         let mut chunk = [0u8; 8192];
@@ -114,18 +280,26 @@ fn relay_down(mut sock: UnixStream, done: mpsc::Sender<Ended>) {
                 }
             }
         }
-        let _ = done.send(Ended::StreamClosed);
+        let _ = tell.send(Heard::StreamClosed);
     });
 }
 
-fn send(up: &Mutex<UnixStream>, frame: &AttachFrame) -> std::io::Result<()> {
-    let sock = up.lock().unwrap();
-    (&*sock).write_all(&frame.encode())
+/// Write one frame whole to the current attachment. With none, the frame goes nowhere, and
+/// `Ok(false)` says so.
+fn send(current: &Current, frame: &AttachFrame) -> std::io::Result<bool> {
+    let guard = current.lock().unwrap();
+    let Some(attachment) = guard.as_ref() else {
+        return Ok(false);
+    };
+    (&attachment.stream)
+        .write_all(&frame.encode())
+        .map(|()| true)
 }
 
-/// Stdin → socket as input frames, until EOF or, when `detach_key` is set, Ctrl-\ (0x1C), which
-/// is never forwarded.
-fn relay_up(up: Arc<Mutex<UnixStream>>, detach_key: bool, done: mpsc::Sender<Ended>) {
+/// Stdin → the current attachment as input frames, until EOF or, when `detach_key` is set,
+/// Ctrl-\ (0x1C), which is never forwarded. Keys pressed while displaced go nowhere: they are
+/// the viewer asking for the session back.
+fn relay_up(current: Current, detach_key: bool, tell: mpsc::Sender<Heard>) {
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin();
         let mut chunk = [0u8; 4096];
@@ -136,15 +310,20 @@ fn relay_up(up: Arc<Mutex<UnixStream>>, detach_key: bool, done: mpsc::Sender<End
             };
             let detach_at = chunk[..n].iter().position(|&b| detach_key && b == 0x1c);
             let keys = &chunk[..detach_at.unwrap_or(n)];
-            if !keys.is_empty() && send(&up, &AttachFrame::Input(keys.to_vec())).is_err() {
-                break;
+            // A write to a stream the daemon closed fails here; relay_down reports the close.
+            if !keys.is_empty()
+                && let Ok(false) = send(&current, &AttachFrame::Input(keys.to_vec()))
+            {
+                let _ = tell.send(Heard::Key);
             }
             if detach_at.is_some() {
                 break;
             }
         }
-        let _ = up.lock().unwrap().shutdown(std::net::Shutdown::Both);
-        let _ = done.send(Ended::Detached);
+        if let Some(attachment) = current.lock().unwrap().take() {
+            let _ = attachment.stream.shutdown(std::net::Shutdown::Both);
+        }
+        let _ = tell.send(Heard::Detached);
     });
 }
 
@@ -236,10 +415,10 @@ fn hear_size_changes() -> Option<libc::c_int> {
     Some(fds[0])
 }
 
-/// Keep the session's pty the size of this terminal, starting from `sent`, the size the attach
-/// request carried. The [`Coalescer`] decides when a size goes out. A failed send ends nothing:
-/// the relay's own threads notice a dead stream.
-fn follow_size(up: Arc<Mutex<UnixStream>>, changes: libc::c_int, mut sent: (u16, u16)) {
+/// Keep the session's pty the size of this terminal, through whichever attachment is current;
+/// each starts from the size its attach request carried. The [`Coalescer`] decides when a size
+/// goes out. A failed send ends nothing: the relay's own threads notice a dead stream.
+fn follow_size(current: Current, changes: libc::c_int) {
     let read_end = changes;
     std::thread::spawn(move || {
         let mut sizes = Coalescer::new(SIZE_EVERY);
@@ -262,16 +441,15 @@ fn follow_size(up: Arc<Mutex<UnixStream>>, changes: libc::c_int, mut sent: (u16,
             }
             if sizes.due(Instant::now())
                 && let Some(now) = terminal_size()
-                && now != sent
+                && let Some(attachment) = current.lock().unwrap().as_mut()
+                && attachment.size != Some(now)
             {
-                sent = now;
-                let _ = send(
-                    &up,
-                    &AttachFrame::Size {
-                        rows: now.0,
-                        cols: now.1,
-                    },
-                );
+                attachment.size = Some(now);
+                let frame = AttachFrame::Size {
+                    rows: now.0,
+                    cols: now.1,
+                };
+                let _ = (&attachment.stream).write_all(&frame.encode());
             }
         }
     });

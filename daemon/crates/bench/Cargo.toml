@@ -17,7 +17,9 @@ libc = "0.2"
 rustix = { version = "1.1.5", features = ["termios"] }
 
 [dev-dependencies]
-# The conformance suite runs `bench attach` on a pty of its own, as a helm pane does.
+# The conformance suite runs `bench attach` on a pty of its own, as a helm pane does, and reads
+# what reached that pty back through the same VT engine benchd runs.
+bench-vt = { path = "../bench-vt" }
 libc = "0.2"
 rustix = { version = "1.1.5", features = ["pty", "process", "termios"] }
 

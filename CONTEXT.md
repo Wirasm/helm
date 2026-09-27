@@ -198,6 +198,14 @@ force (`Keymap.table`), whose rows carry the word as well as the key, so neither
 twice; which rows get one is a choice, what they are bound to is not.
 _Avoid_: tooltip, help, cheatsheet
 
+**keep awake**:
+The operator's switch (⌘⇧A, `action = "keep-awake"`) that stops the Mac and its displays from
+idle-sleeping while helm runs, shown as an `awake` capsule on the status bar while it is on. The
+displays are included because a new terminal pane cannot start with every display asleep. helm
+remembers the choice across relaunches; quitting helm lets the Mac sleep again. Agents cannot
+set it.
+_Avoid_: caffeinate (the command-line tool), insomnia, no-sleep
+
 **keymap file**:
 `<bench root>/rules/keymap.toml`, the operator's keys. Its rows overlay helm's built-in table
 (`KeyBindings.all`): a row replaces the built-in keys with its chord, `unbind` removes one, and a
