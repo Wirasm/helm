@@ -9,7 +9,7 @@
 # (`xcodebuild -downloadComponent MetalToolchain`), and `gh` logged in to Wirasm/helm.
 # The gate needs none of this: it downloads the published zip by URL and checksum.
 #
-# One commit, three consumers, and this script moves the first two together
+# One commit, three consumers, and this script moves all three together
 # (docs/VENDORED.md, "Ghostty"):
 #   1. GhosttyKit.xcframework  -> release ghostty-<commit12> on Wirasm/helm, pinned in
 #                                 Packages/GhosttyTerminal/Package.swift
