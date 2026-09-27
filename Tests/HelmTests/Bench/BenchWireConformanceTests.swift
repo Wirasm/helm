@@ -89,7 +89,7 @@ final class BenchWireConformanceTests: XCTestCase {
             "bench/get", "workspace/open", "workspace/close", "workspace/activate",
             "pane/open",
             "pane/split", "pane/close", "pane/show", "pane/move", "pane/name",
-            "focus/slot", "focus/step", "layout/resize", "drawer/toggle",
+            "focus/slot", "focus/step", "focus/waiting", "layout/resize", "drawer/toggle",
         ]
         XCTAssertEqual(sampled, helmSends)
     }
@@ -130,6 +130,13 @@ final class BenchWireConformanceTests: XCTestCase {
             from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["reply"])))
         let pane = UUID(uuidString: "0e8e8cc6-159b-45d8-bc02-485120975998")!
         XCTAssertEqual(reply.foregroundByPane, [pane: 51377], "an ended session has no foreground")
+        XCTAssertEqual(
+            reply.waitingByPane,
+            [
+                pane: BenchLiveSessions.Waiting(
+                    waitingFor: "permission prompt",
+                    since: Date(timeIntervalSince1970: 1_790_540_771.295), source: "screen")
+            ])
     }
 
     /// The two mail verbs helm sends benchd (#358), and the answer to `who` — the canvas note's

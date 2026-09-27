@@ -28,7 +28,7 @@ use bench_doc::StandardPath;
 use bench_session::{AgentKind, SpawnSpec};
 use bench_wire::{
     Activity, Dismissal, Harness, Host, HostedSession, HostedVia, MailAddress, OPERATOR_HANDLE,
-    OpenAction, SessionKey, SessionList, SessionRow, SessionState, Unreadable,
+    OpenAction, SessionKey, SessionList, SessionRow, SessionState, Unreadable, Waiting,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -88,12 +88,50 @@ pub struct Inputs<'a> {
     /// with it. benchd answers from its mailroom and the same rule `mail/send` uses to queue a
     /// wake; this crate only decides which rows have a mailbox.
     pub mailbox: &'a dyn Fn(&str) -> MailAddress,
+    /// Which live benchd sessions benchd sees waiting on the operator (M1, #357).
+    pub waits: &'a Waits,
     pub now_ms: u64,
     /// Stamped on sessions this build adds to the record.
     pub now: &'a str,
     /// Whether a pid is alive and started at the given epoch ms. [`process::alive`] in the
     /// daemon; a parameter so a test can say which pids are live.
     pub alive: &'a dyn Fn(u32, Option<u64>) -> bool,
+}
+
+/// benchd's `waiting`, by where a row runs: a benchd session's id, or the helm pane showing it.
+#[derive(Debug, Default)]
+pub struct Waits {
+    pub by_session: HashMap<String, Waiting>,
+    pub by_pane: HashMap<bench_doc::PaneId, Waiting>,
+}
+
+impl Waits {
+    fn of(&self, host: &Host) -> Option<&Waiting> {
+        match host {
+            Host::Bench { session } => self.by_session.get(session),
+            Host::Pane { pane } => self.by_pane.get(pane),
+            _ => None,
+        }
+    }
+}
+
+/// A running row whose session benchd sees waiting says so, and dates it from when the wait
+/// began, unless its harness already says `waiting` in its own words (Claude's registry, a hook).
+fn show_waiting(rows: &mut [SessionRow], waits: &Waits) {
+    for row in rows {
+        let SessionState::Running { activity } = &mut row.state else {
+            continue;
+        };
+        if matches!(activity, Activity::Waiting { .. }) {
+            continue;
+        }
+        if let Some(w) = waits.of(&row.host) {
+            *activity = Activity::Waiting {
+                waiting_for: Some(w.waiting_for.clone()),
+            };
+            row.updated_at_ms = w.since_ms;
+        }
+    }
 }
 
 pub struct Built {
@@ -510,6 +548,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
         unreadable,
         ..
     } = out;
+    show_waiting(&mut rows, inputs.waits);
     rows.sort_by(|a, b| {
         b.state
             .is_running()

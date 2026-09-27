@@ -1,0 +1,40 @@
+    ✓ user ~/.claude/skills/hyperframes-studio/SKILL.md
+    ✗ ~/.agents/skills/hyperframes-studio/SKILL.md (skipped)
+  "media-use" collision:
+    ✓ user ~/.claude/skills/media-use/SKILL.md
+    ✗ ~/.agents/skills/media-use/SKILL.md (skipped)
+  "prp-deliver" collision:
+    ✓ user ~/.claude/skills/prp-deliver/SKILL.md
+    ✗ ~/.agents/skills/prp-deliver/SKILL.md (skipped)
+  "prp-worklist" collision:
+    ✓ user ~/.claude/skills/prp-worklist/SKILL.md
+    ✗ ~/.agents/skills/prp-worklist/SKILL.md (skipped)
+  "talking-head-recut" collision:
+    ✓ user ~/.claude/skills/talking-head-recut/SKILL.md
+    ✗ ~/.agents/skills/talking-head-recut/SKILL.md (skipped)
+
+[Extension issues]
+  auto (user) ~/.pi/agent/extensions/archon-runs.ts
+    Extension shortcut conflict: 'alt+up' is built-in shortcut for app.models.reorderUp and
+/Users/rasmus/.pi/agent/extensions/archon-runs.ts. Using /Users/rasmus/.pi/agent/extensions/archon-runs.ts.
+  auto (user) ~/.pi/agent/extensions/archon-runs.ts
+    Extension shortcut conflict: 'alt+down' is built-in shortcut for app.models.reorderDown and
+/Users/rasmus/.pi/agent/extensions/archon-runs.ts. Using /Users/rasmus/.pi/agent/extensions/archon-runs.ts.
+
+
+ bench v1: you are pi-project-d70b on the bench
+
+ This project is not trusted. Project .pi resources and packages are ignored. Use /trust to save a trust decision, then restart pi.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 0.87.1 is available. Run pi update
+ Changelog: https://pi.dev/changelog
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Archon status unavailable
+/private/tmp/claude-501/-Users-rasmus-Projects-mine-sild-helm/19281c67-097c-4aec-ae6d-8eab6a7b7915/scratchpad/m1/ws/pi-project
+$0.000 (sub) 0.0%/1.1M (auto)                                                                            (openai-codex) gpt-5.6-sol • medium

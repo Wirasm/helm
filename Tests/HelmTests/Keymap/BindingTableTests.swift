@@ -275,6 +275,7 @@ final class BindingTableTests: XCTestCase {
             resolve(.toggleDrawer(name: "browser", surface: .browser)),
             .drawerToggle(name: "browser", surface: .browser))
         XCTAssertEqual(resolve(.activateWorkspace(index: 2)), .workspaceActivate(path: "/w/c"))
+        XCTAssertEqual(resolve(.focusWaiting), .focusWaiting, "benchd decides who waits")
     }
 
     func testCyclingWrapsBothWays() {

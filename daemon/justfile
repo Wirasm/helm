@@ -119,7 +119,7 @@ spec:
                 sessions/all sessions/dismiss browser/start browser/status browser/stop browser/setup \
                 bench/get workspace/open workspace/close workspace/activate \
                 pane/open pane/split pane/close pane/show \
-                pane/move pane/name focus/slot focus/step \
+                pane/move pane/name focus/slot focus/step focus/waiting \
                 layout/resize drawer/toggle just/run restore screen/get screen/send; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then

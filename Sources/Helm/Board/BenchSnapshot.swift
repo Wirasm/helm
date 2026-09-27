@@ -315,7 +315,10 @@ struct BenchSnapshot: Codable, Equatable {
             // The registry about the pid helm is watching right now: the caller supplies a live
             // foreground pid, so a row that matches carries that same live number. Which agent
             // is in the pane and its mailbox are benchd's to answer (`bench mail who`, #358).
-            agent = pid.flatMap { agents[$0] }.flatMap(AgentRecord.init)
+            // benchd's `waiting` fills in what the registry does not say (M1, #357).
+            agent = AgentRecord.of(
+                registry: pid.flatMap { agents[$0] }.flatMap(AgentRecord.init),
+                waiting: session.waiting)
         }
     }
 
@@ -355,8 +358,10 @@ struct BenchSnapshot: Codable, Equatable {
     ///
     /// # The honest limits, because a reader has to know them
     ///
-    /// - **Claude Code only.** pi and codex publish no registry, so their panes carry no record
-    ///   at all — absence, never a false `idle`, which is `AgentRegistry`'s standing rule.
+    /// - **Claude Code's registry, plus benchd's `waiting` (M1, #357).** pi and codex publish no
+    ///   registry, so their panes carry a record only while benchd sees them waiting on the
+    ///   operator (their hooks, or a prompt on their screen) — otherwise absence, never a false
+    ///   `idle`, which is `AgentRegistry`'s standing rule.
     /// - **`status` is one of the four names helm models**, and absent when the registry said
     ///   something this build does not. `waitingFor` still comes through in that case, and it is
     ///   the field that names the stall.
@@ -408,6 +413,30 @@ struct BenchSnapshot: Codable, Equatable {
             status = session.status?.rawValue
             waitingFor = session.waitingFor
             statusUpdatedAt = session.statusUpdatedAt
+        }
+
+        init(status: String?, waitingFor: String?, statusUpdatedAt: Date?) {
+            self.status = status
+            self.waitingFor = waitingFor
+            self.statusUpdatedAt = statusUpdatedAt
+        }
+
+        /// The pane's record from Claude's registry and benchd's `waiting` (M1, #357). The
+        /// registry keeps its own words when it already says what it waits for; otherwise
+        /// benchd's wait stands, which is how a codex or pi at a prompt, a Claude trust prompt
+        /// before the session registers, or a Claude registry row left saying `busy` (or a bare
+        /// `waiting`) under a prompt (#283) gets a record that names the wait. With no wait from
+        /// benchd the registry's record is reported as it is: a bare `waiting` is a finished
+        /// turn, which is not a stall, and benchd does not count it either.
+        static func of(
+            registry: AgentRecord?, waiting: BenchLiveSessions.Waiting?
+        ) -> AgentRecord? {
+            guard let waiting,
+                registry?.status != AgentStatus.waiting.rawValue || registry?.waitingFor == nil
+            else { return registry }
+            return AgentRecord(
+                status: AgentStatus.waiting.rawValue, waitingFor: waiting.waitingFor,
+                statusUpdatedAt: waiting.since)
         }
     }
 

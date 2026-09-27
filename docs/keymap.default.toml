@@ -428,6 +428,12 @@ hint = "awake"
 menu = "Keep Awake"
 
 [[bind]]
+key = "cmd+shift+j"
+action = "focus-waiting"
+hint = "waiting"
+menu = "Go to Waiting Agent"
+
+[[bind]]
 key = "cmd+="
 action = "font-size"
 step = "increase"

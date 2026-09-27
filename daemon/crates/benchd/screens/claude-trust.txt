@@ -1,0 +1,40 @@
+th) rules are. Use Edit(~/.claude/**) instead (Edit rules cover all file-editing tools).
+➜  claude-untrusted claude --permission-mode default
+Permission allow rule (/Users/rasmus/.claude/settings.json): Write(.claude/**) is not matched by file permission checks — only Edit(path) ru
+les are. Use Edit(.claude/**) instead (Edit rules cover all file-editing tools).
+Permission allow rule (/Users/rasmus/.claude/settings.json): MultiEdit(.claude/**) is not matched by file permission checks — only Edit(path
+) rules are. Use Edit(.claude/**) instead (Edit rules cover all file-editing tools).
+Permission allow rule (/Users/rasmus/.claude/settings.json): Write(~/.claude/**) is not matched by file permission checks — only Edit(path)
+rules are. Use Edit(~/.claude/**) instead (Edit rules cover all file-editing tools).
+Permission allow rule (/Users/rasmus/.claude/settings.json): MultiEdit(~/.claude/**) is not matched by file permission checks — only Edit(pa
+th) rules are. Use Edit(~/.claude/**) instead (Edit rules cover all file-editing tools).
+
+Resume this session with:
+claude --resume 72d5def6-d45c-4d56-b3e1-cc19b1685cf3
+➜  claude-untrusted cd /private/var/tmp/m1att-untrusted && claude --permission-mode default
+Permission allow rule (/Users/rasmus/.claude/settings.json): Write(.claude/**) is not matched by file permission checks — only Edit(path) ru
+les are. Use Edit(.claude/**) instead (Edit rules cover all file-editing tools).
+Permission allow rule (/Users/rasmus/.claude/settings.json): MultiEdit(.claude/**) is not matched by file permission checks — only Edit(path
+) rules are. Use Edit(.claude/**) instead (Edit rules cover all file-editing tools).
+Permission allow rule (/Users/rasmus/.claude/settings.json): Write(~/.claude/**) is not matched by file permission checks — only Edit(path)
+rules are. Use Edit(~/.claude/**) instead (Edit rules cover all file-editing tools).
+Permission allow rule (/Users/rasmus/.claude/settings.json): MultiEdit(~/.claude/**) is not matched by file permission checks — only Edit(pa
+th) rules are. Use Edit(~/.claude/**) instead (Edit rules cover all file-editing tools).
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /private/var/tmp/m1att-untrusted
+
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from
+ your team). If not, take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+
