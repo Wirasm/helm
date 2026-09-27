@@ -29,7 +29,7 @@ pub enum Actor {
         handle: Option<String>,
     },
     /// helm acting on its own observation, never on a person's behalf — recording which
-    /// agent is in a pane, importing its saved benches.
+    /// agent is in a pane.
     Helm,
 }
 
@@ -81,9 +81,6 @@ pub enum LayoutVerb {
     WorkspaceReset { path: StandardPath },
     #[serde(rename = "workspace/unshelve")]
     WorkspaceUnshelve { path: StandardPath },
-    /// The one-time import of helm's saved benches, into an empty document only.
-    #[serde(rename = "workspace/import")]
-    WorkspaceImport { document: Document },
     /// A new pane showing `surface`. A terminal gets a fresh id; a canvas or the browser
     /// already showing is brought forward (or, for an agent, left where it is).
     #[serde(rename = "pane/open")]
@@ -240,7 +237,6 @@ pub const LAYOUT_VERBS: &[&str] = &[
     "workspace/activate",
     "workspace/reset",
     "workspace/unshelve",
-    "workspace/import",
     "pane/open",
     "pane/split",
     "pane/close",

@@ -64,10 +64,8 @@ struct RootView: View {
         // catch because AppKit makes it rather than helm.
         .isolatedInstanceWindow()
         .task {
-            // benchd holds the workspaces and their benches; helm follows the document, after
-            // moving the benches it used to save into an empty one once (`BenchImport`).
-            workbench.followDocuments(
-                BenchImport.follower(workspaces: model, workbench: workbench))
+            // benchd holds the workspaces and their benches; helm follows the document.
+            workbench.followDocuments { [weak model] in model?.follow($0) }
             // benchd's follower hears how a `just` run ended, and what benchd asks helm to do
             // (`bench get screenshot`, M3): helm draws its own window and answers.
             let asks = HelmAsks.answering(through: workbench.client, capturer: AppWindowCapturer())

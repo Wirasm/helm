@@ -6,8 +6,7 @@ import HelmWire
 ///
 /// **A follower, and nothing else.** benchd owns which workspaces are open and which is on
 /// screen (#354); every change to that is a `workspace/*` verb through `WorkbenchModel.send`,
-/// and this list moves when the document does (`follow`). Nothing here is saved: the list used
-/// to live in helm's defaults, and `BenchImport` reads it there once.
+/// and this list moves when the document does (`follow`). Nothing here is saved.
 @MainActor
 final class WorkspaceModel: ObservableObject {
     @Published private(set) var workspaces: [Workspace] = []

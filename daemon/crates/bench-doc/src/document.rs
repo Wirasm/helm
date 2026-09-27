@@ -254,26 +254,6 @@ impl Document {
         })
     }
 
-    /// Adopt a whole document — the one-time import of helm's saved benches. Only into a
-    /// document with no workspaces: an import over live state would be a second source of truth
-    /// deciding which of two arrangements wins, and nobody asked it to. Drawers already here are
-    /// kept: an agent can fill one before helm's import runs, and the import is about benches.
-    pub fn import(&mut self, other: Document) -> Result<(), Refusal> {
-        if !self.workspaces.is_empty() {
-            return Err(Refusal::DocumentNotEmpty {
-                workspaces: self.workspaces.len(),
-            });
-        }
-        let mut next = other;
-        next.drawers.splice(0..0, self.drawers.iter().cloned());
-        if self.open_drawer.is_some() {
-            next.open_drawer = self.open_drawer.clone();
-        }
-        next.check()?;
-        *self = next;
-        Ok(())
-    }
-
     // MARK: drawer operations
 
     /// Open a drawer over the bench, or close it if it is the one open. Opening one closes any
