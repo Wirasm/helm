@@ -5,15 +5,15 @@ import Foundation
 actor FakeArchonClient: ArchonClient {
     var runsResponse: ArchonRunsResponse
     var workflowList: ArchonWorkflowListResponse
-    var detail: ArchonRun
+    /// What `workflow status --verbose` answers: the live runs with their nodes.
+    var statusRuns: [ArchonRun] = []
+    var cancellation: ArchonActionAcknowledgement = .fixture(action: "cancel", resumable: nil)
     /// Per-id detail, for the rail's stage fan-out. Falls back to `detail`.
-    var details: [String: ArchonRun] = [:]
     var acknowledgement: ArchonLaunchAcknowledgement
     var failure: ArchonCLIError?
     /// Fails only the per-run detail call, which is how a run keeps its line and loses its
     /// subline.
     var detailFailure: ArchonCLIError?
-    var completeFailure: ArchonCLIError?
     var delay: Duration?
     var decision: ArchonActionAcknowledgement = .fixture()
     var decisionFailure: ArchonCLIError?
@@ -23,10 +23,10 @@ actor FakeArchonClient: ArchonClient {
     private(set) var listCalls = 0
     private(set) var currentListCalls = 0
     private(set) var maximumListCalls = 0
-    private(set) var detailRequests: [String] = []
+    private(set) var statusCalls = 0
+    private(set) var cancelRequests: [String] = []
     private(set) var workspacePaths: [WorkspacePath] = []
     private(set) var launchRequests: [ArchonLaunchRequest] = []
-    private(set) var completeRequests: [(branch: String, workspacePath: WorkspacePath)] = []
     private(set) var decisions:
         [(
             decision: ArchonGateDecision, text: String?, runID: String,
@@ -37,34 +37,34 @@ actor FakeArchonClient: ArchonClient {
     init(
         runsResponse: ArchonRunsResponse = .fixture(),
         workflowList: ArchonWorkflowListResponse = .init(workflows: [], errors: []),
-        detail: ArchonRun = .fixture(),
         acknowledgement: ArchonLaunchAcknowledgement = .fixture()
     ) {
         self.runsResponse = runsResponse
         self.workflowList = workflowList
-        self.detail = detail
         self.acknowledgement = acknowledgement
     }
 
     func setFailure(_ failure: ArchonCLIError?) { self.failure = failure }
     func setDetailFailure(_ failure: ArchonCLIError?) { detailFailure = failure }
-    func setCompleteFailure(_ failure: ArchonCLIError?) { completeFailure = failure }
     func setDelay(_ delay: Duration?) { self.delay = delay }
     func setRuns(_ response: ArchonRunsResponse) { runsResponse = response }
-    func setDetails(_ details: [String: ArchonRun]) { self.details = details }
+    func setStatusRuns(_ runs: [ArchonRun]) { statusRuns = runs }
+    func setCancellation(_ acknowledgement: ArchonActionAcknowledgement) {
+        cancellation = acknowledgement
+    }
+    func cancels() -> [String] { cancelRequests }
     func setAcknowledgement(_ acknowledgement: ArchonLaunchAcknowledgement) {
         self.acknowledgement = acknowledgement
     }
 
     func metrics() -> (
-        listCalls: Int, maximumListCalls: Int, launchRequests: Int, detailRequests: [String],
+        listCalls: Int, maximumListCalls: Int, launchRequests: Int, statusCalls: Int,
         workspacePaths: [WorkspacePath]
     ) {
-        (listCalls, maximumListCalls, launchRequests.count, detailRequests, workspacePaths)
+        (listCalls, maximumListCalls, launchRequests.count, statusCalls, workspacePaths)
     }
 
     func lastLaunch() -> ArchonLaunchRequest? { launchRequests.last }
-    func completions() -> [(branch: String, workspacePath: WorkspacePath)] { completeRequests }
 
     func runs(in workspacePath: WorkspacePath) async throws -> ArchonRunsResponse {
         listCalls += 1
@@ -83,24 +83,28 @@ actor FakeArchonClient: ArchonClient {
         return workflowList
     }
 
-    func run(id: String, in workspacePath: WorkspacePath) async throws -> ArchonRun {
-        detailRequests.append(id)
+    func status(in workspacePath: WorkspacePath) async throws -> ArchonStatusResponse {
+        statusCalls += 1
         workspacePaths.append(workspacePath)
         if let detailFailure { throw detailFailure }
         if let failure { throw failure }
-        return details[id] ?? detail
+        return ArchonStatusResponse(runs: statusRuns)
+    }
+
+    func cancel(
+        runID: String, in workspacePath: WorkspacePath
+    ) async throws
+        -> ArchonActionAcknowledgement
+    {
+        cancelRequests.append(runID)
+        if let failure { throw failure }
+        return cancellation
     }
 
     func launch(_ request: ArchonLaunchRequest) async throws -> ArchonLaunchAcknowledgement {
         launchRequests.append(request)
         if let failure { throw failure }
         return acknowledgement
-    }
-
-    func complete(branch: String, in workspacePath: WorkspacePath) async throws {
-        completeRequests.append((branch, workspacePath))
-        if let completeFailure { throw completeFailure }
-        if let failure { throw failure }
     }
 
     func decide(
@@ -140,12 +144,19 @@ extension ArchonRun {
     static func fixture(
         id: String = "run-1", workflowName: String = "implement", status: String = "running",
         workingPath: String? = "/tmp/project", userMessage: String? = "do the thing",
-        completedAt: Date? = nil, nodes: [ArchonNode]? = [], gate: ArchonGate? = nil
+        completedAt: Date? = nil, nodes: [ArchonNode]? = [], gate: ArchonGate? = nil,
+        graph: [String]? = nil, active: [String]? = nil
     ) -> ArchonRun {
-        ArchonRun(
+        let metadata: Metadata? =
+            gate == nil && graph == nil
+            ? nil
+            : Metadata(
+                error: nil, approval: gate,
+                terminalGraph: graph.map { Metadata.TerminalGraph(nodeIds: $0) })
+        return ArchonRun(
             id: id, workflowName: workflowName, status: status, workingPath: workingPath,
             userMessage: userMessage, startedAt: nil, completedAt: completedAt,
-            metadata: gate.map { Metadata(error: nil, approval: $0) }, nodes: nodes)
+            metadata: metadata, nodes: nodes, activeNodes: active)
     }
 
     /// A run stopped at a gate that is waiting for the operator.
@@ -160,11 +171,11 @@ extension ArchonGate {
     static func fixture(
         nodeId: String = "review", message: String = "Ship the migration?",
         type: Kind = .approval, childRunId: String? = nil, captureResponse: Bool = false,
-        resolved: String? = nil
+        resolved: String? = nil, decisions: [Declared] = []
     ) -> ArchonGate {
         ArchonGate(
             nodeId: nodeId, message: message, type: type, childRunId: childRunId,
-            captureResponse: captureResponse, resolved: resolved)
+            captureResponse: captureResponse, resolved: resolved, decisions: decisions)
     }
 }
 

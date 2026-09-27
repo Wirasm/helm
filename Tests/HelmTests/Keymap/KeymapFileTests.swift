@@ -327,7 +327,10 @@ final class KeymapFileTests: XCTestCase {
             problem(
                 "[[bind]]\nkey = \"cmd+k\"\naction = \"drawer\"\nname = \"x\"\nsurface = \"tv\"\n"),
             KeymapProblem(
-                line: 1, reason: "'drawer' surface is browser, sessions or file:<path>, not 'tv'"))
+                line: 1,
+                reason:
+                    "'drawer' surface is browser, sessions, archon, worktrees or file:<path>, not 'tv'"
+            ))
         XCTAssertEqual(
             problem("[[bind]]\nkey = \"cmd+k\"\naction = \"drawer\"\n"),
             KeymapProblem(line: 1, reason: "'drawer' needs name"))
@@ -335,6 +338,17 @@ final class KeymapFileTests: XCTestCase {
             problem("[[bind]]\nkey = \"cmd+k\"\naction = \"drawer\"\nname = \"Notes\"\n"),
             KeymapProblem(
                 line: 1, reason: "'drawer' name 'Notes': a drawer name is 1-32 of [a-z0-9-]"))
+    }
+
+    /// A drawer can sit along the bottom of the window (#382); `size` is then its height. An
+    /// edge helm cannot draw is refused when the file loads, naming the ones it can.
+    func testADrawerCanSitOnTheBottomEdgeAndNoOtherNewOne() throws {
+        let file = try parse("[drawer.archon]\nedge = \"bottom\"\nsize = 0.34\n")
+        XCTAssertEqual(file.drawers["archon"], DrawerStyle(edge: .bottom, size: 0.34))
+        XCTAssertEqual(
+            problem("[drawer.x]\nedge = \"top\"\n"),
+            KeymapProblem(line: nil, reason: "[drawer.x]: edge is left, right or bottom, not 'top'")
+        )
     }
 
     /// `[drawer.<name>]` sets where a drawer sits; what it leaves out is the drawer's built-in.

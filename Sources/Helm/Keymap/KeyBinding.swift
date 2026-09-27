@@ -108,6 +108,9 @@ enum VerbTemplate: Equatable {
     /// Show a drawer over the bench, or hide it (#356). `surface` is what an empty drawer
     /// starts with; benchd refuses to open an empty drawer without one.
     case toggleDrawer(name: String, surface: Surface?)
+    /// The agent waiting on the operator longest, then the next (M1, #357). benchd knows who
+    /// waits, so this resolves to the same verb every time.
+    case focusWaiting
 
     /// The verb this gesture means on `bench`, with `workspaces` open and `active` on screen.
     /// nil when it means nothing right now: no focused pane, no tab at that index, one workspace
@@ -137,6 +140,7 @@ enum VerbTemplate: Equatable {
             let next = (current + delta + workspaces.count) % workspaces.count
             return .workspaceActivate(path: workspaces[next].value)
         case let .toggleDrawer(name, surface): return .drawerToggle(name: name, surface: surface)
+        case .focusWaiting: return .focusWaiting
         }
     }
 }
@@ -150,7 +154,6 @@ enum LocalAction: Equatable {
     case openWorkspacePanel
     /// The artifact popover; the file chosen becomes a `pane/open`.
     case openArtifactPanel
-    case toggleRail
     /// ⌘J: the camera on the focused slot, and back (`BenchCamera`). helm's view, not the bench's.
     case toggleZoom
     /// Writes a dated note file, then opens it with a `pane/open`.

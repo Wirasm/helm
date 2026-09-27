@@ -45,10 +45,13 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertTrue(surfaces.contains(.browser))
         XCTAssertTrue(surfaces.contains { if case .canvas = $0 { true } else { false } })
         XCTAssertTrue(
-            surfaces.contains { if case .terminal(.some, _) = $0 { true } else { false } })
+            surfaces.contains { if case .terminal(.some, _, _) = $0 { true } else { false } })
         XCTAssertTrue(
-            surfaces.contains { if case .terminal(_, .some) = $0 { true } else { false } },
+            surfaces.contains { if case .terminal(_, .some, _) = $0 { true } else { false } },
             "a terminal showing a benchd session (M3)")
+        XCTAssertTrue(
+            surfaces.contains { if case .terminal(_, _, .some) = $0 { true } else { false } },
+            "a terminal whose shell's directory benchd read (M5b), which Worktrees reads")
         XCTAssertFalse(
             surfaces.contains { if case .unsupported = $0 { true } else { false } },
             "every kind in the daemon's own sample is one helm knows")
@@ -86,7 +89,7 @@ final class BenchWireConformanceTests: XCTestCase {
             "bench/get", "workspace/open", "workspace/close", "workspace/activate",
             "pane/open",
             "pane/split", "pane/close", "pane/show", "pane/move", "pane/name",
-            "focus/slot", "focus/step", "layout/resize", "drawer/toggle",
+            "focus/slot", "focus/step", "focus/waiting", "layout/resize", "drawer/toggle",
         ]
         XCTAssertEqual(sampled, helmSends)
     }
@@ -127,6 +130,13 @@ final class BenchWireConformanceTests: XCTestCase {
             from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["reply"])))
         let pane = UUID(uuidString: "0e8e8cc6-159b-45d8-bc02-485120975998")!
         XCTAssertEqual(reply.foregroundByPane, [pane: 51377], "an ended session has no foreground")
+        XCTAssertEqual(
+            reply.waitingByPane,
+            [
+                pane: BenchLiveSessions.Waiting(
+                    waitingFor: "permission prompt",
+                    since: Date(timeIntervalSince1970: 1_790_540_771.295), source: "screen")
+            ])
     }
 
     /// The two mail verbs helm sends benchd (#358), and the answer to `who` — the canvas note's

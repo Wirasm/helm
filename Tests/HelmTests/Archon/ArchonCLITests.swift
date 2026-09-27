@@ -81,7 +81,9 @@ final class ArchonCLITests: XCTestCase {
         try install(
             "printf '%s\\n' \"$@\" > \"$ARGS_RECORD\"\ncase \"$2\" in "
                 + "list) printf '{\"workflows\":[],\"errors\":[]}' ;; "
-                + "get) printf '{\"id\":\"r1\",\"workflow_name\":\"ship\",\"status\":\"running\"}' ;; "
+                + "status) printf '{\"runs\":[]}' ;; "
+                + "cancel) printf '{\"ok\":true,\"runId\":\"r1\",\"action\":\"cancel\"}' ;; "
+                + "respond) printf '{\"ok\":true,\"runId\":\"r1\",\"action\":\"respond\",\"resumable\":true}' ;; "
                 + "runs) printf '{\"runs\":[],\"total\":0,\"counts\":{},\"scopeFallback\":false}' ;; "
                 + "run) printf '{\"ok\":true,\"action\":\"run\",\"detached\":true,\"workflow\":"
                 + "\"ship\",\"branch\":\"b\",\"conversationId\":\"c\",\"logPath\":null}' ;; esac\n")
@@ -90,8 +92,17 @@ final class ArchonCLITests: XCTestCase {
         _ = try await client.workflows(in: WorkspacePath(workspace))
         XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nlist\n--json\n")
 
-        _ = try await client.run(id: "r1", in: WorkspacePath(workspace))
-        XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nget\nr1\n--json\n--verbose\n")
+        _ = try await client.status(in: WorkspacePath(workspace))
+        XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nstatus\n--json\n--verbose\n")
+
+        _ = try await client.cancel(runID: "r1", in: WorkspacePath(workspace))
+        XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\ncancel\nr1\n--json\n")
+
+        _ = try await client.decide(
+            .declared("ship-it"), text: "looks right", on: "r1", in: WorkspacePath(workspace))
+        XCTAssertEqual(
+            try String(contentsOf: argsRecord),
+            "workflow\nrespond\nr1\nship-it\n--json\n--text\nlooks right\n")
 
         _ = try await client.runs(in: WorkspacePath(workspace))
         XCTAssertEqual(try String(contentsOf: argsRecord), "workflow\nruns\n--json\n")
@@ -202,34 +213,6 @@ final class ArchonCLITests: XCTestCase {
             try String(contentsOf: argsRecord),
             "workflow\nreject\nr1\n--json\n--reason\n--tests are red\n",
             "one argv element, so a leading dash is the reason's text and not a flag helm invented")
-    }
-
-    func testCompleteUsesTheWorkspaceAndExactUnforcedArguments() async throws {
-        let argsRecord = root.appendingPathComponent("complete-args")
-        try install(
-            "printf '%s\\n' \"$@\" > \"$ARGS_RECORD\"\n"
-                + "printf 'Completed archon/task-141\\n'\n")
-
-        try await cli(extraEnvironment: ["ARGS_RECORD": argsRecord.path])
-            .complete(branch: "archon/task-141", in: WorkspacePath(workspace))
-
-        XCTAssertEqual(
-            try String(contentsOf: argsRecord, encoding: .utf8),
-            "complete\narchon/task-141\n")
-        XCTAssertFalse(try String(contentsOf: argsRecord).contains("force"))
-    }
-
-    func testCompleteTreatsNotFoundTextAsARefusal() async throws {
-        try install("printf 'Not found: archon/task-missing\\n'\n")
-
-        do {
-            try await cli().complete(branch: "archon/task-missing", in: WorkspacePath(workspace))
-            XCTFail("expected refusal")
-        } catch let error as ArchonCLIError {
-            XCTAssertEqual(
-                error.reason, .actionRejected("Not found: archon/task-missing"))
-            XCTAssertEqual(error.command, "archon complete archon/task-missing")
-        }
     }
 
     // MARK: - What a failure carries

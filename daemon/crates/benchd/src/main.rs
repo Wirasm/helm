@@ -31,6 +31,7 @@ mod codex;
 mod hook;
 mod just;
 mod layout;
+mod prompts;
 mod restore;
 mod rules;
 mod screen;
@@ -38,6 +39,7 @@ mod sessions;
 mod shell_env;
 mod shells;
 mod spawn;
+mod waiting;
 
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
 use bench_session::{Notice, Session};
@@ -295,6 +297,9 @@ struct Core {
     /// Every session whose hook has reported (#358): its agent when it has a mailbox, `None`
     /// when it was asked once and gets none, so the claim rule is not re-run per event.
     agents: HashMap<bench_wire::SessionKey, Option<hook::Agent>>,
+    /// What each live session showed waiting when its output last settled (`waiting`): its
+    /// Claude registry row, or a prompt on its screen.
+    screen_waits: HashMap<String, waiting::Seen>,
     /// Asks of helm waiting for its answer (`helm/ask`).
     asks: ask::Waiting,
     /// Hook event names this build does not know, already logged once.
@@ -563,6 +568,7 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         placement,
         session_records,
         agents: HashMap::new(),
+        screen_waits: HashMap::new(),
         unknown_hook_events: HashSet::new(),
         followers: Vec::new(),
         asks: ask::Waiting::default(),
@@ -636,19 +642,22 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
 
     // Session notices — exits and forced detaches — become events. The reader threads
     // send; this thread logs. Bench-visible means logged, including facts nobody asked
-    // a verb for.
+    // a verb for. A session whose output settled has its screen read for a prompt (`waiting`).
     {
         let core = Arc::clone(&core);
         std::thread::spawn(move || {
             while let Ok(notice) = notice_rx.recv() {
-                let mut c = core.lock().unwrap();
                 match notice {
                     Notice::Exited { session } => {
+                        let mut c = core.lock().unwrap();
+                        c.screen_waits.remove(&session);
                         let _ = c.append("session/exited", json!({ "session": session }));
                     }
                     Notice::Detached { session } => {
+                        let mut c = core.lock().unwrap();
                         let _ = c.append("session/detached", json!({ "session": session }));
                     }
+                    Notice::Settled { session } => waiting::settled(&core, &session),
                 }
             }
         });
@@ -1017,16 +1026,21 @@ fn dispatch(
             // Copied out under the core lock, read outside it (#517): a session's own locks can
             // be held across a blocking write (a viewer that stopped reading holds its relay for
             // up to DAEMON_IO_TIMEOUT), and every verb waits while the core lock does.
+            // `waiting` is read here too: it takes no session lock, only benchd's own records
+            // and each reporting agent's liveness from the kernel.
             let shown: Vec<_> = {
                 let c = core.lock().unwrap();
                 c.sessions
                     .values()
-                    .map(|s| (Arc::clone(s), c.bench.document.pane_showing_session(&s.id)))
+                    .map(|s| {
+                        let pane = c.bench.document.pane_showing_session(&s.id);
+                        (Arc::clone(s), pane, waiting::of_session(&c, &s.id))
+                    })
                     .collect()
             };
             let sessions = shown
                 .into_iter()
-                .map(|(s, pane)| bench_wire::SessionEntry {
+                .map(|(s, pane, waiting)| bench_wire::SessionEntry {
                     session: s.id.clone(),
                     handle: s.handle.clone(),
                     agent: s.agent.name().to_string(),
@@ -1039,6 +1053,7 @@ fn dispatch(
                     output_bytes: s.output_bytes(),
                     runtime_session: s.runtime_session.clone(),
                     uptime_secs: s.spawned_at.elapsed().as_secs(),
+                    waiting,
                 })
                 .collect();
             (

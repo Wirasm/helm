@@ -327,8 +327,17 @@ pub fn mint_session_id() -> String {
 /// logged, and the exit of a session is exactly the kind of fact the log exists for.
 #[derive(Debug)]
 pub enum Notice {
-    Exited { session: String },
-    Detached { session: String },
+    Exited {
+        session: String,
+    },
+    Detached {
+        session: String,
+    },
+    /// The program's output has settled (`engine::SETTLE`): the moment its screen is worth
+    /// reading for a prompt it may be waiting at (M1, #357).
+    Settled {
+        session: String,
+    },
 }
 
 pub struct Session {

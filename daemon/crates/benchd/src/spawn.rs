@@ -342,7 +342,7 @@ fn place(
             into: OpenInto::Workspace(workspace.clone()),
             surface,
         });
-        layout::apply(doc, rules, &open, focus, Caller::Agent)?
+        layout::apply(doc, rules, &open, focus, Caller::Agent, None)?
             .created
             .expect("a terminal naming a new session is always a new pane")
     };
