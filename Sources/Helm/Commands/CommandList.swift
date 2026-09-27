@@ -118,6 +118,7 @@ enum CommandList {
         case let .canvas(path): return (path as NSString).lastPathComponent
         case .browser: return "browser"
         case .sessions: return "sessions"
+        case .archon: return "archon"
         case let .unsupported(kind): return kind
         }
     }
@@ -168,7 +169,7 @@ extension LocalAction {
         case let .jumpToPrompt(offset): offset < 0 ? "Previous Prompt" : "Next Prompt"
         case .openWorkspacePanel: "Open Workspace…"
         case .openArtifactPanel: "Open Artifact…"
-        case .toggleRail: "Toggle Archon Rail"
+        case .toggleRail: "Toggle Worktrees Rail"
         case .newNote: "New Note"
         case .toggleKeepAwake: "Keep Awake"
         case .toggleZoom: "Zoom Pane"

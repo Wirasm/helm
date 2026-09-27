@@ -37,6 +37,7 @@ extension Pane.Content {
         case let .canvas(path): self = .canvas(.file(path))
         case .browser: self = .browser
         case .sessions: self = .sessions
+        case .archon: self = .archon
         case let .unsupported(kind): self = .unsupported(kind)
         }
     }

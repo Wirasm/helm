@@ -162,6 +162,7 @@ final class WorkbenchModel: ObservableObject {
         terminals.surfaces.register(BrowserPaneKind(make: makeBrowser))
         terminals.surfaces.register(UnsupportedPaneKind())
         terminals.surfaces.register(SessionsPaneKind(workbench: self, terminals: terminals))
+        terminals.surfaces.register(ArchonPaneKind(workbench: self, terminals: terminals))
         // The same rewiring for the manager's sessions: a ⌘-clicked link is a verb, and this is
         // the bench it is sent to.
         terminals.bench = self

@@ -15,6 +15,10 @@ final class WorktreesRailModel: ObservableObject {
         }
     }
 
+    /// Whether the rail is shown (⇧⌘G). Worktrees is the rail's only tenant since Archon moved
+    /// to its drawer (#382), so the rail's remembered visibility is this model's. The key is the
+    /// one the rail always used, so a rail that was open stays open.
+    @Published private(set) var isVisible: Bool
     @Published private(set) var isExpanded = false
     @Published private(set) var rows: [Worktree] = []
     @Published private(set) var isRefreshing = false
@@ -32,9 +36,25 @@ final class WorktreesRailModel: ObservableObject {
     private var workspaceGeneration = 0
     private var refreshesInFlight: Set<WorkspacePath> = []
 
-    init(worktreeClient: any WorktreeClient, archonClient: any ArchonClient) {
+    static let visibilityKey = "archonRailVisible"
+    private let defaults: UserDefaults
+
+    init(
+        worktreeClient: any WorktreeClient = WorktreeCLI(),
+        archonClient: any ArchonClient = ArchonCLI(),
+        defaults: UserDefaults = DefaultsDomain.store
+    ) {
         self.worktreeClient = worktreeClient
         self.archonClient = archonClient
+        self.defaults = defaults
+        isVisible = defaults.bool(forKey: Self.visibilityKey)
+    }
+
+    /// Lives on the model because the rail is hidden by default, so the view that would
+    /// otherwise own it does not exist in the one state the key has to work in.
+    func toggleVisibility() {
+        isVisible.toggle()
+        defaults.set(isVisible, forKey: Self.visibilityKey)
     }
 
     func setExpanded(_ expanded: Bool, in workspacePath: WorkspacePath?) async {

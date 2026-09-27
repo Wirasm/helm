@@ -15,7 +15,8 @@ struct RootView: View {
     /// `BoardModel.shared` are singletons because other slices reach them, and nothing
     /// outside the workbench reaches this one. Drawn from benchd's document (#354).
     @StateObject private var workbench: WorkbenchModel
-    @StateObject private var archonRail = ArchonRailModel()
+    /// The rail, whose one tenant is Worktrees since Archon became a drawer (#382).
+    @StateObject private var worktreesRail = WorktreesRailModel()
     /// The operator's just runs (#356): started by his keys, failures shown on the status bar.
     @StateObject private var justRuns = JustRuns()
     /// The command palette (#500): ⌘K opens it through `LocalActions`, the overlay draws it.
@@ -58,10 +59,14 @@ struct RootView: View {
             HStack(spacing: 0) {
                 WorkbenchView(
                     model: workbench, workspaceRoot: model.selectedWorkspaceRoot?.value)
-                if archonRail.isVisible {
+                if worktreesRail.isVisible {
                     Color.border.frame(width: 1)
-                    ArchonRailView(
-                        model: archonRail, workspacePath: model.selectedWorkspaceRoot)
+                    WorktreesRailView(
+                        model: worktreesRail, workspacePath: model.selectedWorkspaceRoot
+                    )
+                    .frame(width: 300)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .background(ChromeBackground())
                 }
             }
             // Over the bench and the rail, never beside them: a drawer changes nothing under it.
@@ -101,7 +106,7 @@ struct RootView: View {
                 asks.receive($0)
             }
             let actions = LocalActions(
-                workbench: workbench, workspaces: model, rail: archonRail,
+                workbench: workbench, workspaces: model, rail: worktreesRail,
                 terminals: terminalManager, just: justRuns, palette: palette)
             self.actions = actions
             Actions.performer = actions

@@ -57,6 +57,9 @@ extension Color {
     static let archonRunning = Palette.helm.archonRunning.color
     static let attention = Palette.helm.attention.color
     static let danger = Palette.helm.danger.color
+    static let archonSurface = Palette.helm.archonSurface.color
+    static let archonSurfaceRaised = Palette.helm.archonSurfaceRaised.color
+    static let archonBorder = Palette.helm.archonBorder.color
 }
 
 extension ShapeStyle where Self == LinearGradient {

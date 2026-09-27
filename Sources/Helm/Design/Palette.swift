@@ -156,6 +156,21 @@ struct Palette: Equatable, Sendable {
     /// rail and the terminal tab spend it too.
     let danger: Token
 
+    // MARK: - Archon's ground
+
+    /// **The Archon drawer's own chrome, and only that drawer's** (#382): Archon's console
+    /// surfaces, so the drawer reads as Archon's panel rather than as helm with Archon's colours
+    /// sprinkled on. The operator asked for it (2026-09-27), which is why this no longer follows
+    /// the older rule against Archon's charcoal chrome: that was written for a rail beside the
+    /// bench, and a drawer is its own panel. The dark values are Archon's
+    /// (`packages/web/src/experiments/console/theme.css`: `--surface oklch(0.175 0.007 265)`,
+    /// `--surface-elevated oklch(0.205 0.009 265)`, `--border oklch(0.275 0.012 265)`). Archon's
+    /// console has no light appearance, so the light values are helm's: the same cool hue at a
+    /// light lightness, held to the same text floors as helm's own surface by `PaletteTests`.
+    let archonSurface: Token
+    let archonSurfaceRaised: Token
+    let archonBorder: Token
+
     /// **Private, which is what makes "helm's one palette" a fact rather than a habit.**
     /// `PaletteTests` proves the contrast ratios of `helm`; a second palette built elsewhere
     /// in the module would carry none of that and nothing would ask. `RGB` and `Token` are
@@ -164,6 +179,7 @@ struct Palette: Equatable, Sendable {
         surface: Token, surfaceRaised: Token, textPrimary: Token, textMuted: Token,
         textFaint: Token, border: Token, accent: Token, selection: Token, archonMagenta: Token,
         archonViolet: Token, archonTeal: Token, archonRunning: Token, attention: Token,
+        archonSurface: Token, archonSurfaceRaised: Token, archonBorder: Token,
         danger: Token
     ) {
         self.surface = surface
@@ -180,6 +196,9 @@ struct Palette: Equatable, Sendable {
         self.archonRunning = archonRunning
         self.attention = attention
         self.danger = danger
+        self.archonSurface = archonSurface
+        self.archonSurfaceRaised = archonSurfaceRaised
+        self.archonBorder = archonBorder
     }
 
     /// helm's one palette.
@@ -205,6 +224,9 @@ struct Palette: Equatable, Sendable {
         archonTeal: Token(light: 0x04_79_5B, dark: 0x06_CE_94),
         archonRunning: Token(light: 0x01_70_B3, dark: 0x3D_AC_FE),
         attention: Token(light: 0x9D_5F_00, dark: 0xE1_A0_35),
+        archonSurface: Token(light: 0xF6_F7_FA, dark: 0x0F_10_14),
+        archonSurfaceRaised: Token(light: 0xF0_F2_F6, dark: 0x15_17_1B),
+        archonBorder: Token(light: 0xD9_DC_E4, dark: 0x25_28_2E),
         danger: Token(light: 0xC9_1F_3F, dark: 0xFF_51_66)
     )
 }

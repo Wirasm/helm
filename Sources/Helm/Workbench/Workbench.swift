@@ -186,6 +186,8 @@ struct Pane: Equatable, Identifiable {
         case browser
         /// The active workspace's agent sessions (#384), in the `sessions` drawer.
         case sessions
+        /// The active workspace's Archon runs (#382), in the `archon` drawer.
+        case archon
         /// A kind benchd's document holds and this build does not know, named. Kept rather than
         /// dropped: the daemon owns the pane, so helm shows a placeholder where it is.
         case unsupported(String)
@@ -197,7 +199,7 @@ struct Pane: Equatable, Identifiable {
 extension Pane.Content {
     /// Which kind of pane this is, without its payload: what `SurfaceRegistry` looks a kind up
     /// by — the one switch over pane kinds that the rest of the app is spared.
-    enum Kind: String, Hashable { case terminal, canvas, browser, sessions, unsupported }
+    enum Kind: String, Hashable { case terminal, canvas, browser, sessions, archon, unsupported }
 
     var kind: Kind {
         switch self {
@@ -205,6 +207,7 @@ extension Pane.Content {
         case .canvas: .canvas
         case .browser: .browser
         case .sessions: .sessions
+        case .archon: .archon
         case .unsupported: .unsupported
         }
     }

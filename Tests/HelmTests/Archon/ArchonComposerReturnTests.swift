@@ -4,15 +4,15 @@ import XCTest
 
 @testable import Helm
 
-/// **What a Return in the Archon rail does — asked of a real key event, not of a function.**
+/// **What a Return in the Archon drawer's composer does — asked of a real key event, not of a function.**
 ///
-/// The rail's field is the same `TextField(axis: .vertical)` + `.onSubmit` shape the chat
+/// The composer's field is the same `TextField(axis: .vertical)` + `.onSubmit` shape the chat
 /// composer had before #275, and it had the same defect for the same reason: AppKit's
 /// `StandardKeyBinding.dict` maps `\r` to `insertNewline:` and `~\r` to
 /// `insertNewlineIgnoringFieldEditor:` and **has no entry for Shift-Return at all**, so a
 /// shifted Return is an ordinary one and `.onSubmit` fires. That distinction cannot be made by
 /// any function this suite could call directly — it is AppKit that decides what a Return means
-/// — so these build a real `NSWindow` around the real `ArchonRailView` and push real `NSEvent`s
+/// — so these build a real `NSWindow` around the real `ArchonComposer` and push real `NSEvent`s
 /// through `NSWindow.sendEvent`.
 ///
 /// **It matters more here than it did in the chat composer.** There a stray submit sent a
@@ -20,11 +20,11 @@ import XCTest
 /// to notice and unwind (#278). So the assertions are about what reached the Archon client, not
 /// about a flag.
 ///
-/// **No ghostty surface is involved**, which is deliberate: a rail needs a text field and a
+/// **No ghostty surface is involved**, which is deliberate: the composer needs a text field and a
 /// window, not a terminal, so this suite keeps working on a machine where every display is
 /// asleep and `ghostty_surface_new` refuses (#253).
 @MainActor
-final class ArchonRailReturnTests: XCTestCase {
+final class ArchonComposerReturnTests: XCTestCase {
     /// **A control: it passes either way.** It cannot fail unless the fix overshoots and takes
     /// plain Return with it — which is the one way this change could break the rail outright,
     /// and the reason a test that only proves Shift+Return stopped launching would be satisfied
@@ -108,7 +108,7 @@ final class ArchonRailReturnTests: XCTestCase {
     /// **A control: it passes either way**, and it is the one that would catch the fix
     /// overshooting into `.repeat`. A held plain Enter still launches on its first tick — the
     /// draft is empty after that, so the repeats that follow are refused by
-    /// `ArchonRailModel.launch` rather than becoming a burst of empty workflows.
+    /// `ArchonModel.launch` rather than becoming a burst of empty workflows.
     func testHoldingPlainReturnStillLaunchesOnceAndNoMore() async throws {
         let rail = try RailWindow(defaults: isolatedDefaults("archon-rail-held-plain"))
         defer { rail.close() }
@@ -133,7 +133,7 @@ final class ArchonRailReturnTests: XCTestCase {
 /// The real rail in a real window, with the Archon client it launches through.
 @MainActor
 private final class RailWindow {
-    let model: ArchonRailModel
+    let model: ArchonModel
     let client = FakeArchonClient()
     private let window: NSWindow
     private let field: NSTextField
@@ -145,8 +145,7 @@ private final class RailWindow {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
 
-        model = ArchonRailModel(
-            client: client, worktreeClient: FakeWorktreeClient(), defaults: defaults)
+        model = ArchonModel(client: client, defaults: defaults)
         // **A workflow has to be chosen or nothing below measures anything.** `launch` refuses
         // an unconfigured rail before it ever reaches the client — "Choose a workflow in the
         // settings before launching." — and every "nothing was launched" assertion here would
@@ -158,7 +157,7 @@ private final class RailWindow {
             styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let hosting = NSHostingView(
-            rootView: ArchonRailView(model: model, workspacePath: WorkspacePath("/tmp/project")))
+            rootView: ComposerHost(model: model, workspacePath: WorkspacePath("/tmp/project")))
         hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 600)
         window.contentView = hosting
 
@@ -321,5 +320,18 @@ private final class RailWindow {
             if let found = textField(in: child) { return found }
         }
         return nil
+    }
+}
+
+/// `ArchonComposer` takes its focus from the drawer that holds it; this is that drawer, reduced
+/// to the focus state.
+private struct ComposerHost: View {
+    @ObservedObject var model: ArchonModel
+    let workspacePath: WorkspacePath?
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        ArchonComposer(
+            model: model, workspacePath: workspacePath, focus: $focused, isFocused: focused)
     }
 }

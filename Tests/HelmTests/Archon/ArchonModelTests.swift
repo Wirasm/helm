@@ -3,56 +3,14 @@ import XCTest
 
 @testable import Helm
 
-/// The rail, after the reduction.
+/// The Archon drawer's model (#382): three lists from `workflow runs`, the live runs' nodes
+/// from one `workflow status`, gates answered through the composer, and the finished inbox.
 ///
-/// **A lot of this suite's subjects genuinely no longer exist**, and the ones that were merely
-/// *renamed* are rewritten to the property that replaced them rather than dropped:
-/// "running and paused both get lines" became "only running does", and "the subline is the
-/// current node's output preview" became "the subline is the current node's stage". What is
-/// gone entirely is the liveness state, the `abandon` verb and the run pane — see the commit
-/// message. `approve`/`reject` came back with #150 and are exercised below.
+/// The rail's visibility tests left with the rail: the drawer is shown by benchd's document
+/// (`DrawerTests`), and the rail's own flag is Worktrees' now (`WorktreesRailModelTests`).
 // swiftlint:disable:next type_body_length - legacy (#418): 521 lines, limit 350
-final class ArchonRailModelTests: XCTestCase {
+final class ArchonModelTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/project")
-
-    // MARK: - Visibility
-
-    @MainActor
-    func testVisibilityDefaultsHiddenAndPersists() throws {
-        let defaults = try isolatedDefaults("archon-rail-visibility")
-        let model = ArchonRailModel(client: FakeArchonClient(), defaults: defaults)
-        XCTAssertFalse(model.isVisible)
-
-        model.toggleVisibility()
-
-        XCTAssertTrue(model.isVisible)
-        XCTAssertTrue(defaults.bool(forKey: ArchonRailModel.visibilityKey))
-    }
-
-    /// ⇧⌘R end to end: the key table's row, carried out by the performer `RootView` composes.
-    /// It was once tested in two halves that never met — one proving the shortcut maps to the
-    /// action, one proving `toggleVisibility()` flips a flag — so the route in between, which is
-    /// the part that can actually be deleted by accident, was never exercised at all.
-    @MainActor
-    func testTheToggleKeyReachesTheModel() throws {
-        let defaults = try isolatedDefaults("archon-rail-notification")
-        let model = ArchonRailModel(client: FakeArchonClient(), defaults: defaults)
-        let terminals = TerminalManager()
-        let actions = LocalActions(
-            workbench: try toyRig(terminals: terminals).model,
-            workspaces: WorkspaceModel(), rail: model, terminals: terminals)
-        let row = try XCTUnwrap(
-            KeyBindings.match(
-                characters: "R", keyCode: 15, modifiers: [.command, .shift],
-                terminalFocused: true, in: KeyBindings.all))
-
-        actions.perform(row.action)
-
-        XCTAssertTrue(model.isVisible)
-        XCTAssertTrue(
-            defaults.bool(forKey: ArchonRailModel.visibilityKey),
-            "the rail is hidden by default, so the key has to work with no rail view alive")
-    }
 
     // MARK: - Polling
 
@@ -73,7 +31,7 @@ final class ArchonRailModelTests: XCTestCase {
                     .fixture(id: "e", status: "cancelled"),
                 ],
                 counts: ["all": 9, "running": 1, "completed": 5, "paused": 1, "failed": 2]))
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-running"))
 
         await model.refresh(in: workspace)
@@ -96,7 +54,7 @@ final class ArchonRailModelTests: XCTestCase {
             runsResponse: .fixture(
                 runs: [.fixture(id: "a", status: "running")],
                 counts: ["all": 128, "running": 3, "completed": 97, "failed": 28]))
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-remainder"))
 
         await model.refresh(in: workspace)
@@ -120,7 +78,7 @@ final class ArchonRailModelTests: XCTestCase {
                     .fixture(
                         id: "new", status: "completed", completedAt: base.addingTimeInterval(600)),
                 ]))
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-inbox-order"))
 
         await model.refresh(in: workspace)
@@ -139,7 +97,7 @@ final class ArchonRailModelTests: XCTestCase {
                     .fixture(id: "d", status: "failed"),
                 ]))
         let defaults = try isolatedDefaults("archon-rail-dismiss")
-        let model = ArchonRailModel(client: client, defaults: defaults)
+        let model = ArchonModel(client: client, defaults: defaults)
         await model.refresh(in: workspace)
 
         model.dismiss(try XCTUnwrap(model.finished.first { $0.id == "b" }), in: workspace)
@@ -157,11 +115,11 @@ final class ArchonRailModelTests: XCTestCase {
         let client = FakeArchonClient(
             runsResponse: .fixture(runs: [.fixture(id: "b", status: "completed")]))
         let defaults = try isolatedDefaults("archon-rail-dismiss-relaunch")
-        let first = ArchonRailModel(client: client, defaults: defaults)
+        let first = ArchonModel(client: client, defaults: defaults)
         await first.refresh(in: workspace)
         first.dismiss(try XCTUnwrap(first.finished.first), in: workspace)
 
-        let second = ArchonRailModel(client: client, defaults: defaults)
+        let second = ArchonModel(client: client, defaults: defaults)
         await second.refresh(in: workspace)
 
         XCTAssertEqual(second.finished, [])
@@ -173,7 +131,7 @@ final class ArchonRailModelTests: XCTestCase {
     func testClearingIsScopedToTheWorkspace() async throws {
         let client = FakeArchonClient(
             runsResponse: .fixture(runs: [.fixture(id: "b", status: "completed")]))
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-dismiss-scope"))
         await model.refresh(in: workspace)
         model.dismiss(try XCTUnwrap(model.finished.first), in: workspace)
@@ -189,7 +147,7 @@ final class ArchonRailModelTests: XCTestCase {
         let opened = OpenedRuns()
         let client = FakeArchonClient(
             runsResponse: .fixture(runs: [.fixture(id: "b", status: "completed")]))
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-open"),
             opener: ArchonRunOpener { run in await opened.record(run.id) })
 
@@ -204,54 +162,12 @@ final class ArchonRailModelTests: XCTestCase {
         XCTAssertEqual(afterClick, ["b"])
     }
 
-    /// **Rewritten from `testTheSublineIsTheCurrentNodesPreview`.** The subline names the
-    /// *stage* now — `implement` — rather than an excerpt of what that stage wrote: the stage
-    /// is the thing that advances, and the writing is read in Archon's own UI.
-    @MainActor
-    func testTheSublineIsTheCurrentNodesStage() async throws {
-        let client = FakeArchonClient(
-            runsResponse: .fixture(runs: [.fixture(id: "a", status: "running")]))
-        await client.setDetails([
-            "a": .fixture(
-                id: "a",
-                nodes: [
-                    .fixture(nodeId: "plan", state: .completed),
-                    .fixture(nodeId: "implement", state: .running),
-                ])
-        ])
-        let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-stage"))
-
-        await model.refresh(in: workspace)
-
-        XCTAssertEqual(model.stages["a"], "implement")
-        let metrics = await client.metrics()
-        XCTAssertEqual(metrics.detailRequests, ["a"], "only running runs cost a second process")
-    }
-
-    /// A detail call that fails costs that run its subline and nothing else — the run is
-    /// already on screen from the list call, and failing the whole refresh would trade a
-    /// missing line for a missing rail.
-    @MainActor
-    func testAFailedDetailCallCostsOnlyTheSubline() async throws {
-        let client = FakeArchonClient(
-            runsResponse: .fixture(runs: [.fixture(id: "a", status: "running")]))
-        await client.setDetailFailure(.notInstalled())
-        let model = ArchonRailModel(
-            client: client, defaults: try isolatedDefaults("archon-rail-detail-failure"))
-
-        await model.refresh(in: workspace)
-
-        XCTAssertEqual(model.running.map(\.id), ["a"])
-        XCTAssertNil(model.stages["a"])
-    }
-
     /// The last known runs survive a failed poll: one hiccup must not make the lines flap.
     @MainActor
     func testAFailedPollKeepsTheLastKnownRuns() async throws {
         let client = FakeArchonClient(
             runsResponse: .fixture(runs: [.fixture(id: "a", status: "running")]))
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-stale"))
         await model.refresh(in: workspace)
 
@@ -265,7 +181,7 @@ final class ArchonRailModelTests: XCTestCase {
     func testWithNoWorkspaceNothingIsAskedAndNothingIsShown() async throws {
         let client = FakeArchonClient(
             runsResponse: .fixture(runs: [.fixture(id: "a", status: "running")]))
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-no-workspace"))
         await model.refresh(in: workspace)
 
@@ -281,7 +197,7 @@ final class ArchonRailModelTests: XCTestCase {
     func testRefreshesNeverOverlap() async throws {
         let client = FakeArchonClient()
         await client.setDelay(.milliseconds(30))
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-overlap"))
 
         let path = workspace
@@ -296,7 +212,7 @@ final class ArchonRailModelTests: XCTestCase {
 
     @MainActor
     func testPollStopsWhenCancelled() async throws {
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: FakeArchonClient(), defaults: try isolatedDefaults("archon-rail-poll"))
         let poll = Task {
             await model.poll(in: WorkspacePath("/tmp/project"), every: .milliseconds(1))
@@ -311,7 +227,7 @@ final class ArchonRailModelTests: XCTestCase {
     @MainActor
     func testSendLaunchesWhatTheSettingsHoldAndClearsTheField() async throws {
         let client = FakeArchonClient()
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-launch"))
         model.config = ArchonLaunchConfig(workflow: "ship", worktree: .branch("issue-40"))
         model.draft = "implement issue 40"
@@ -336,13 +252,13 @@ final class ArchonRailModelTests: XCTestCase {
     @MainActor
     func testEveryRejectionSaysWhyAndLaunchesNothing() async throws {
         let client = FakeArchonClient()
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-rejections"))
 
         model.config = ArchonLaunchConfig(workflow: "ship", worktree: .automatic)
         model.draft = "do it"
         await model.launch(in: nil)
-        XCTAssertEqual(model.launchFailure, ArchonRailModel.noWorkspace)
+        XCTAssertEqual(model.launchFailure, ArchonModel.noWorkspace)
 
         model.config = ArchonLaunchConfig(workflow: "  ", worktree: .automatic)
         await model.launch(in: workspace)
@@ -368,7 +284,7 @@ final class ArchonRailModelTests: XCTestCase {
     /// sentence under the field a statement about a state that no longer exists.
     @MainActor
     func testEditingTheDraftOrTheSettingsClearsTheLastRejection() async throws {
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: FakeArchonClient(), defaults: try isolatedDefaults("archon-rail-clearing"))
         model.config = ArchonLaunchConfig(workflow: "", worktree: .automatic)
         model.draft = "do it"
@@ -387,7 +303,7 @@ final class ArchonRailModelTests: XCTestCase {
     func testARejectedAcknowledgementIsReportedAndKeepsTheDraft() async throws {
         let client = FakeArchonClient()
         await client.setAcknowledgement(.fixture(ok: true, detached: false))
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-ack"))
         model.config = ArchonLaunchConfig(workflow: "ship", worktree: .automatic)
         model.draft = "do it"
@@ -404,7 +320,7 @@ final class ArchonRailModelTests: XCTestCase {
     func testAFailedLaunchSurfacesArchonsOwnReason() async throws {
         let client = FakeArchonClient()
         await client.setFailure(.notInstalled())
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-launch-failure"))
         model.config = ArchonLaunchConfig(workflow: "ship", worktree: .automatic)
         model.draft = "do it"
@@ -420,11 +336,11 @@ final class ArchonRailModelTests: XCTestCase {
     @MainActor
     func testTheSettingsRememberTheirConfigAcrossARelaunch() throws {
         let defaults = try isolatedDefaults("archon-rail-config")
-        let first = ArchonRailModel(client: FakeArchonClient(), defaults: defaults)
+        let first = ArchonModel(client: FakeArchonClient(), defaults: defaults)
 
         first.config = ArchonLaunchConfig(workflow: "ship", worktree: .branch("issue-40"))
 
-        let second = ArchonRailModel(client: FakeArchonClient(), defaults: defaults)
+        let second = ArchonModel(client: FakeArchonClient(), defaults: defaults)
         XCTAssertEqual(
             second.config, ArchonLaunchConfig(workflow: "ship", worktree: .branch("issue-40")),
             "a popover dismissed by clicking away fires nothing to save on, so every change saves")
@@ -436,7 +352,7 @@ final class ArchonRailModelTests: XCTestCase {
             workflowList: .init(
                 workflows: [.init(name: "ship", description: "Ship it", provider: nil, model: nil)],
                 errors: []))
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: client, defaults: try isolatedDefaults("archon-rail-settings"))
 
         await model.loadWorkflows(in: workspace)
@@ -448,13 +364,13 @@ final class ArchonRailModelTests: XCTestCase {
 
     @MainActor
     func testOpeningTheSettingsWithNoWorkspaceSaysSoRatherThanShowingNothing() async throws {
-        let model = ArchonRailModel(
+        let model = ArchonModel(
             client: FakeArchonClient(),
             defaults: try isolatedDefaults("archon-rail-settings-empty"))
 
         await model.loadWorkflows(in: nil)
 
-        XCTAssertEqual(model.launchFailure, ArchonRailModel.noWorkspace)
+        XCTAssertEqual(model.launchFailure, ArchonModel.noWorkspace)
     }
 
     // MARK: - Answering a gate
@@ -462,10 +378,10 @@ final class ArchonRailModelTests: XCTestCase {
     @MainActor
     private func gatedModel(
         _ name: String, gate: ArchonGate = .fixture(), client: FakeArchonClient? = nil
-    ) async throws -> (ArchonRailModel, FakeArchonClient) {
+    ) async throws -> (ArchonModel, FakeArchonClient) {
         let client =
             client ?? FakeArchonClient(runsResponse: .fixture(runs: [.paused(gate: gate)]))
-        let model = ArchonRailModel(client: client, defaults: try isolatedDefaults(name))
+        let model = ArchonModel(client: client, defaults: try isolatedDefaults(name))
         await model.refresh(in: workspace)
         return (model, client)
     }
@@ -748,7 +664,7 @@ final class ArchonRailModelTests: XCTestCase {
 
         await model.choose(.approve, on: run, in: nil)
 
-        XCTAssertEqual(model.actionFailure, ArchonRailModel.noWorkspace)
+        XCTAssertEqual(model.actionFailure, ArchonModel.noWorkspace)
         XCTAssertNil(model.launchFailure)
     }
 }

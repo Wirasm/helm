@@ -327,7 +327,8 @@ final class KeymapFileTests: XCTestCase {
             problem(
                 "[[bind]]\nkey = \"cmd+k\"\naction = \"drawer\"\nname = \"x\"\nsurface = \"tv\"\n"),
             KeymapProblem(
-                line: 1, reason: "'drawer' surface is browser, sessions or file:<path>, not 'tv'"))
+                line: 1,
+                reason: "'drawer' surface is browser, sessions, archon or file:<path>, not 'tv'"))
         XCTAssertEqual(
             problem("[[bind]]\nkey = \"cmd+k\"\naction = \"drawer\"\n"),
             KeymapProblem(line: 1, reason: "'drawer' needs name"))

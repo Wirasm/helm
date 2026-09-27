@@ -122,6 +122,16 @@ benchd computed for it — show its pane, attach, resume or read its transcript 
 row can be dismissed. helm adds no rule of its own about which sessions belong.
 _Avoid_: agent list, sidebar, session browser
 
+**Archon drawer**:
+The drawer along the bottom (⌘⇧R) showing what Archon is doing in the active workspace's project
+(#382): runs **waiting on you** (paused at a gate), **running** runs, and **finished** runs not
+cleared, each as a row of **stage** dots that fill in as it advances. Read from Archon's own CLI
+(`workflow runs --json`, and `workflow status --json --verbose` while a run is live); helm keeps no
+record of a run. Keyboard first: a gate is answered with `a`/`x`/`1-9`, a run resumed with `r`,
+cancelled with `c c`, its log followed in a terminal with `l`; `/` starts work. It polls only while
+open. Painted on Archon's own console surfaces. Agents do not use it: Archon's CLI is theirs.
+_Avoid_: Archon pane, run list, monitor, Archon rail (retired)
+
 **badge**:
 A drawer's mark that something arrived in it the operator has not seen: an agent put a pane
 there or offered one it already held. Opening the drawer clears it.
@@ -147,15 +157,14 @@ where the colliding word comes from — no Swift in `Sources/Helm/Board/` is abo
 _Avoid_: board unqualified (that word is the workspace marks), whiteboard, sketch pane, diagram
 
 **rail**:
-The remembered, default-hidden strip to the right of the workbench: **somewhere to start work
-that is not your current work**. It holds the Archon and Worktrees tenants. Archon renders a
-title, a field, a send button, one line per **running run**, and a count per other status.
-Worktrees is one collapsed line until requested, then becomes a per-repository ledger of every
+The remembered, default-hidden strip to the right of the workbench (⌘⇧G): **somewhere to start
+work that is not your current work**. Its one tenant is Worktrees; Archon moved to the **Archon
+drawer** (#382). Worktrees is one collapsed line until requested, then becomes a per-repository ledger of every
 record from `git worktree list --porcelain`: branch and owner kind, local disk size and directory
 activity, and reachability from the resolved remote default branch. It does not poll. Cleanup is
 confirmed and owner-routed through `archon complete` or guarded `git worktree remove`, never force.
-Nothing opens from the rail; run detail is read in Archon's own web UI. It is not another place
-panes can dock, a file tree, or a cross-repository inventory.
+Nothing opens from the rail. It is not another place panes can dock, a file tree, or a
+cross-repository inventory.
 _Avoid_: sidebar, pane dock, monitor rail, calling it a run list
 
 **Worktrees**:
@@ -167,15 +176,17 @@ cleanup`, inventory unrelated repositories, or automatically force deletion.
 _Avoid_: worktree pane, worktree sidebar, file tree, disk dashboard
 
 **running run**:
-The one status the rail gives a line to, with a subline naming the **stage** it is on. Every
-other status — including `paused` — is history or a gate, and collapses to a count.
-_Avoid_: active run (the word the rail used when `paused` had a row too), open run, live run
+A run with status `running`, listed in the Archon drawer between the runs waiting on you
+(`paused`) and the finished ones. A live run is either of the first two.
+_Avoid_: active run, open run
 
 **stage**:
-One node of a workflow run, named the way Archon names it — `parse-request`, `implement`,
-`validate`. What the rail's subline says, because it is the thing that advances.
+One top-level node of a workflow run, named the way Archon names it — `parse-request`,
+`implement`, `validate` — and one dot in the Archon drawer. The full list is Archon's
+`terminal_graph`, so a stage not reached yet is still a dot; its state (pending, running, waiting,
+done, failed, skipped) is the fold of the run's events. A loop's body is inside its stage.
 _Avoid_: step (that word is `current_step_name`'s, which Archon never populates for a DAG),
-node (right in Archon's own model, but the rail shows one at a time and not the fold)
+node (Archon's word, which also covers the nodes inside a stage)
 
 **palette**:
 helm's one table of colours, as values (`Palette.helm`). There is exactly one, and every

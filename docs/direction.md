@@ -32,7 +32,8 @@ arrives last, with Archon.
 - **Workbench** — the middle. Where panes are organised. **Panes live here, full stop** — the
   bar is not a second place one can dock.
 - **Right bar** — a rail of **quick actions on things that are not your current work**.
-  Operating Archon, operating on worktrees, and whatever earns a line later. Toggleable,
+  Operating on worktrees, and whatever earns a line later. Archon was its first tenant and moved
+  to a drawer along the bottom (#382), where a row of stage dots per run has the width it needs. Toggleable,
   remembered, **default hidden**; Archon is ranked last, so helm has nothing either side of
   the bench for the whole early route.
 
@@ -41,7 +42,7 @@ arrives last, with Archon.
   **start, approve and cancel** runs, and the second tenant to arrive is worktree cleanup,
   which is nothing but a verb. Monitoring is what the rail shows you *so that* you can act.
 
-  **A tenant is one collapsed line that expands** — `Worktrees`, `Archon` — not a panel. That
+  **A tenant is one collapsed line that expands** — `Worktrees` — not a panel. That
   shape is what makes a tenant nearly free when it is not in use, and it is why the rail can
   hold things consulted rarely without earning its keep every minute. Build the rail that way
   first; a run list that merely sits on the right is not one.
@@ -58,7 +59,7 @@ There is **no left bar**. Every job proposed for one is taken — workspaces by 
 bar, terminals by the tab strip, the file tree by the right bar — so it leaves the early
 route rather than being designed. The two ideas parked here for later — *a list of open
 worktrees, running Archon workflows* — waited on dogfooding to prove a need, and it did:
-both are now tenants of the **right** rail, which is the shape that fits them.
+the worktrees are a tenant of the **right** rail, and Archon's runs are a drawer (#382).
 
 ## Primitives
 
@@ -89,33 +90,36 @@ push**. A pane appearing unbidden is helm rearranging the bench on the agent's w
 
 ## Archon surface
 
-Not an API client — the `archon` CLI's `--json`, captured through a temporary file. No HTTP
-and no direct SQLite reads. **Input first**, which is the correction #40 made after the
-list-first version was built and run: the same workflow is started over and over, so that has
-to cost zero clicks, and reading a finished run is rare and belongs on the bench.
+A drawer along the bottom of the window (⌘⇧R, #382), over the bench like every drawer. Not an API
+client — the `archon` CLI's `--json`, captured through a temporary file. No HTTP and no direct
+SQLite reads. **Input first** (#40): the same workflow is started over and over, so the composer
+is always at the drawer's foot, ⌥↑/⌥↓ picks the workflow, and Enter runs it detached.
 
-**Minimal on purpose, and that is the second correction.** The full version of this was built,
-used, and cut back — *"too much bloat, I want to start simple"*. What is gone: run panes,
-finished-run rows, Archon's `approve`/`reject`/`abandon` verbs, helm's own dismissal filter,
-and the liveness mark. Run detail is read in Archon's own web UI, which is better at it than
-helm will ever be.
+**What it shows**, for the active workspace's project: runs **waiting on you** (paused at a gate),
+**running** runs, and **finished** runs not yet cleared — each a row with **a dot per stage**,
+filling in as the run advances, where it is or how it ended, and what it was asked to do. The
+selected row expands to its stage names and durations. It reads `workflow runs --json`, plus one
+`workflow status --json --verbose` while anything is live, every two seconds while the drawer is
+open, and nothing while it is hidden. A gate is therefore only seen with the drawer open, which the
+operator accepted for now (2026-09-27).
 
-The rail renders five things, and nothing else:
+**What it does, from the keyboard**: answer a gate (`a`, `x`, or `1-9` for a decision the workflow
+declared), resume (`r`), cancel (`c c`), follow the run's log in a terminal pane (`l`), open a
+finished run's pull request (Enter) or clear it (⌫). Depth beyond that — transcripts, the graph —
+is Archon's own web UI.
 
-- A **prompt field**, always present. Type, press Enter, the workflow runs detached.
-- A **send button** doing the same thing for the mouse.
-- **Settings** behind an icon, holding what a launch composes — the workflow and how it
-  isolates. Built to grow as the CLI does; ships without a model control.
-- **One line per running run**, with a subline naming the **stage** it is on and changing as
-  its nodes advance.
-- **One collapsed count per other status**, `paused` included. Clicking one does nothing: it
-  is a number, not a way in.
-- **It carries Archon's brand and Archon's status colours, and keeps them apart.** The brand is
-  the console's duotone — magenta → violet → teal, painted on the title and the send button,
-  because that gradient *is* the mark. Status is deliberately not brand: a running run is
-  Archon's electric blue, a failure its red, a completed run the brand teal. All of it is
-  governed tokens held at helm's contrast floors, never hex in a view, and never Archon's
-  charcoal chrome wholesale: *distinctly Archon's*, not *foreign*.
+**What it still does not have**, because the rail it replaced was cut back as *"too much bloat"*:
+no counts or tallies, no liveness word, no run pane. **Agents do not use it**: Archon's CLI
+(`workflow status/get/wait --json`) is their view. benchd and `bench` know only the drawer's
+surface kind, `archon`, as they know `sessions`: an agent can put nothing in it and read nothing
+from it.
+
+- **It is painted as Archon's panel.** The drawer's ground, raised surfaces and rules are Archon's
+  console surfaces (dark from Archon's own tokens; light values chosen by helm, since Archon has no
+  light appearance). The brand is the console's duotone — magenta → violet → teal — on the title.
+  Status is deliberately not brand: a running stage is Archon's electric blue, a stage waiting on
+  you amber, a failure its red, a done stage the brand teal. All of it is governed tokens held at
+  helm's contrast floors, never hex in a view.
 - **Worktrees.** A second, collapsed tenant reads `git worktree list --porcelain` only when
   expanded, then shows every record with owner kind, local disk size, directory activity and
   reachability from the repository's resolved remote default branch. That reachability is Git's

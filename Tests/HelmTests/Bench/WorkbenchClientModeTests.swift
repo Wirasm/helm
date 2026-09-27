@@ -49,7 +49,9 @@ final class WorkbenchClientModeTests: XCTestCase {
         workspaces.follow(try XCTUnwrap(rig.model.document))
         let actions = LocalActions(
             workbench: rig.model, workspaces: workspaces,
-            rail: ArchonRailModel(client: FakeArchonClient(), defaults: defaults),
+            rail: WorktreesRailModel(
+                worktreeClient: FakeWorktreeClient(), archonClient: FakeArchonClient(),
+                defaults: defaults),
             terminals: rig.terminals)
         let gestures = KeyBindings.all.compactMap { row -> KeyBinding.Action? in
             guard case .verb(let template) = row.action else { return nil }

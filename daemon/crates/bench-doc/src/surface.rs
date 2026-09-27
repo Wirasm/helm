@@ -42,6 +42,9 @@ pub enum Surface {
     /// The list of agent sessions in the active workspace (#384), from `sessions/all`. No
     /// payload: which workspace it lists is where the operator is, not arrangement.
     Sessions,
+    /// The Archon runs of the active workspace (helm #382), read by helm from Archon's own CLI.
+    /// No payload, for the same reason as `Sessions`, and nothing about a run is kept here.
+    Archon,
 }
 
 impl Surface {
@@ -79,7 +82,9 @@ impl Surface {
     pub fn already_shows(&self, wanted: &Surface) -> bool {
         match (wanted, self) {
             (Surface::Canvas { source: a }, Surface::Canvas { source: b }) => a == b,
-            (Surface::Browser, Surface::Browser) | (Surface::Sessions, Surface::Sessions) => true,
+            (Surface::Browser, Surface::Browser)
+            | (Surface::Sessions, Surface::Sessions)
+            | (Surface::Archon, Surface::Archon) => true,
             (
                 Surface::Terminal {
                     session: Some(a), ..
@@ -99,6 +104,7 @@ impl Surface {
             Surface::Canvas { .. } => SurfaceClass::Canvas,
             Surface::Browser => SurfaceClass::Browser,
             Surface::Sessions => SurfaceClass::Sessions,
+            Surface::Archon => SurfaceClass::Archon,
         }
     }
 }
@@ -124,6 +130,7 @@ pub enum SurfaceClass {
     Canvas,
     Browser,
     Sessions,
+    Archon,
 }
 
 /// The agent a terminal pane held (helm `ResumableAgent`), recorded so a restart can offer
@@ -226,6 +233,7 @@ mod tests {
             ),
             (Surface::Browser, json!({"kind": "browser"})),
             (Surface::Sessions, json!({"kind": "sessions"})),
+            (Surface::Archon, json!({"kind": "archon"})),
         ] {
             assert_eq!(serde_json::to_value(&surface).unwrap(), encoded);
             assert_eq!(serde_json::from_value::<Surface>(encoded).unwrap(), surface);

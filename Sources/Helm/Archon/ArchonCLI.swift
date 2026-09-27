@@ -10,7 +10,7 @@ import Foundation
 protocol ArchonClient: Sendable {
     func runs(in workspacePath: WorkspacePath) async throws -> ArchonRunsResponse
     func workflows(in workspacePath: WorkspacePath) async throws -> ArchonWorkflowListResponse
-    func run(id: String, in workspacePath: WorkspacePath) async throws -> ArchonRun
+    func status(in workspacePath: WorkspacePath) async throws -> ArchonStatusResponse
     func launch(_ request: ArchonLaunchRequest) async throws -> ArchonLaunchAcknowledgement
     func complete(branch: String, in workspacePath: WorkspacePath) async throws
     func decide(
@@ -18,6 +18,10 @@ protocol ArchonClient: Sendable {
         in workspacePath: WorkspacePath
     ) async throws -> ArchonActionAcknowledgement
     func resume(_ run: ArchonRun) async throws -> ArchonLaunchAcknowledgement
+    func cancel(
+        runID: String, in workspacePath: WorkspacePath
+    ) async throws
+        -> ArchonActionAcknowledgement
 }
 
 /// A failed `archon` call, with enough in it to act on.
@@ -96,14 +100,9 @@ struct ArchonCLI: ArchonClient, Sendable {
         self.timeout = timeout
     }
 
-    /// Recent runs for this workspace, plus the per-status totals the rail collapses to one
-    /// line each. One command for both, which is why the rail no longer calls `workflow
-    /// status`: that one is global, carries no counts, and answers a question the rail stopped
-    /// asking.
-    ///
-    /// The row list is capped by the CLI at 20 whatever is asked; `counts` is over the whole
-    /// project, which is why the rail's collapsed lines subtract what is already a line above
-    /// them rather than trusting either number alone.
+    /// The newest runs of this workspace's project, every status, capped by the CLI at 20. Each
+    /// carries its stage list (`terminal_graph`) and the nodes it is in (`active_nodes`), which
+    /// is what the drawer's rows and dots are drawn from. `counts` is decoded and not read.
     func runs(in workspacePath: WorkspacePath) async throws -> ArchonRunsResponse {
         try await decode(
             ArchonRunsResponse.self, arguments: ["workflow", "runs", "--json"],
@@ -116,10 +115,24 @@ struct ArchonCLI: ArchonClient, Sendable {
             in: workspacePath.value)
     }
 
-    func run(id: String, in workspacePath: WorkspacePath) async throws -> ArchonRun {
+    /// The running and paused runs of this workspace's project, each with the per-node fold of
+    /// its events (`nodes`): which stages completed, failed or were skipped. One call for every
+    /// live run, so a refresh costs the same with one run as with ten.
+    func status(in workspacePath: WorkspacePath) async throws -> ArchonStatusResponse {
         try await decode(
-            ArchonRun.self, arguments: ["workflow", "get", id, "--json", "--verbose"],
+            ArchonStatusResponse.self, arguments: ["workflow", "status", "--json", "--verbose"],
             in: workspacePath.value)
+    }
+
+    /// Stop a running run. `ok` is the contract, as for every `--json` verb.
+    func cancel(
+        runID: String, in workspacePath: WorkspacePath
+    ) async throws
+        -> ArchonActionAcknowledgement
+    {
+        try await decode(
+            ArchonActionAcknowledgement.self,
+            arguments: ["workflow", "cancel", runID, "--json"], in: workspacePath.value)
     }
 
     func launch(_ request: ArchonLaunchRequest) async throws -> ArchonLaunchAcknowledgement {
