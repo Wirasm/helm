@@ -6425,7 +6425,7 @@ fn stopping_benchd_keeps_the_records_its_ending_agents_report_on_their_way_out()
 }
 
 #[test]
-fn text_a_program_never_reads_never_holds_up_a_verb_on_another_session() {
+fn typing_a_program_never_reads_never_holds_up_a_verb_on_another_session() {
     // Typing into a terminal whose program does not read waits for as long as it does not: the
     // pty's input queue is full. An agent's close of that pane asks the shell what it runs, and
     // if that question waited on the typing under benchd's core lock, every verb for every pane
