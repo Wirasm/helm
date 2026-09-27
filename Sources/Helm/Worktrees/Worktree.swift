@@ -30,12 +30,16 @@ enum WorktreeOwner: Codable, Equatable, Sendable {
         "archon/task-", "archon/issue-", "archon/pr-", "archon/review-", "archon/thread-",
     ]
 
-    /// Archon's by where it lives (`<home>/.archon*/workspaces/…`), or by a branch name only
-    /// Archon gives out.
+    /// Archon's by where it lives — `<home>/.archon*/workspaces/<owner>/<repo>/worktrees/…`,
+    /// the layout Archon makes and `WorktreeDiscovery` reads — or by a branch name only Archon
+    /// gives out. Anything else under an Archon home, such as a worktree made beside Archon's
+    /// own clone in `…/<repo>/source`, is git's: Archon has no record of it.
     static func of(path: String, branch: String?) -> WorktreeOwner {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
-        for index in parts.indices.dropLast()
-        where parts[index].hasPrefix(".archon") && parts[index + 1] == "workspaces" {
+        for index in parts.indices
+        where index + 5 < parts.count && parts[index].hasPrefix(".archon")
+            && parts[index + 1] == "workspaces" && parts[index + 4] == "worktrees"
+        {
             return .archon(home: parts[...index].joined(separator: "/"))
         }
         if let branch, archonBranchPrefixes.contains(where: branch.hasPrefix) {

@@ -220,8 +220,17 @@ final class WorktreesModel: ObservableObject {
         self.confirmation = nil
         switch confirmation {
         case let .delete(path, loss):
-            guard let repo = repo(containing: path) else { return }
-            await remove(path: path, knowing: loss)
+            guard let repo = repo(containing: path),
+                let row = repo.worktrees.first(where: { $0.id == path })
+            else { return }
+            // Read again: an agent may have written into the worktree while the dialog was open,
+            // and nothing the operator was not told about may go. A different loss is asked again.
+            let now = await worktreeClient.loss(of: row, in: repo.id)
+            guard now == loss else {
+                self.confirmation = .delete(path: path, loss: now)
+                return
+            }
+            await remove(path: path, knowing: now)
             await reread(repo.id)
         case let .cleanMerged(repo, paths):
             for path in paths {
@@ -265,7 +274,7 @@ final class WorktreesModel: ObservableObject {
                 await reread(repo.id)
                 // `archon complete` exits 0 when it refuses, so git is asked whether it went.
                 if self.repo(containing: path) != nil {
-                    actionFailures[path] = "Archon kept it: " + Self.lastLines(of: said)
+                    actionFailures[path] = "Archon kept it: " + Self.refusal(in: said)
                 }
             case .git:
                 try await worktreeClient.remove(row, in: repo.id, knowing: loss)
@@ -275,9 +284,13 @@ final class WorktreesModel: ObservableObject {
         }
     }
 
-    /// Archon's refusal is its last few lines; the rest is its progress.
-    private static func lastLines(of text: String) -> String {
+    /// Archon's refusal: its `Blocked`, `✗`, `Not found`, `Failed` and `Partial` lines, every
+    /// one of them. Its "Use --force" advice is left out, since helm never offers force.
+    static func refusal(in text: String) -> String {
         let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-        return lines.suffix(4).joined(separator: " ")
+        let reasons = lines.filter { line in
+            ["Blocked", "✗", "Not found", "Failed", "Partial", "⚠"].contains { line.hasPrefix($0) }
+        }
+        return (reasons.isEmpty ? Array(lines.suffix(2)) : reasons).joined(separator: " ")
     }
 }

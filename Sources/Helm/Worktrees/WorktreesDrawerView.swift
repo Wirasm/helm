@@ -66,7 +66,7 @@ struct WorktreesDrawerView: View {
             Alert(
                 title: Text(WorktreesConfirmText.title(target, in: model)),
                 message: Text(WorktreesConfirmText.message(target, in: model)),
-                primaryButton: .destructive(Text(WorktreesConfirmText.button(target))) {
+                primaryButton: .destructive(Text(WorktreesConfirmText.button(target, in: model))) {
                     Task { await model.confirm() }
                 },
                 secondaryButton: .cancel { model.cancelConfirmation() })

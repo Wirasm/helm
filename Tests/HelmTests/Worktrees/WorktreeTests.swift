@@ -72,6 +72,14 @@ final class WorktreeTests: XCTestCase {
         XCTAssertEqual(
             WorktreeOwner.of(path: "/Users/o/Projects/.archon-notes/x", branch: "main"), .git,
             "an .archon folder without workspaces under it is not an Archon home")
+        XCTAssertEqual(
+            WorktreeOwner.of(
+                path: "/Users/o/.archon/workspaces/a/b/source-feat-x", branch: "feat/x"),
+            .git, "beside Archon's own clone: Archon has no record of it")
+        XCTAssertEqual(
+            WorktreeOwner.of(
+                path: "/Users/o/.archon/workspaces/a/b/source/.worktrees/feat-x", branch: "feat/x"),
+            .git, "inside Archon's clone, likewise")
     }
 
     /// Removable is about whether git or Archon can take it at all, not about what it loses:

@@ -141,8 +141,8 @@ struct WorktreeCLI: WorktreeClient, Sendable {
     }
 
     /// `git worktree remove`, with `--force` only when the operator confirmed losing
-    /// uncommitted files; then `prune`, which is also all a worktree whose folder is gone needs;
-    /// then the branch, only when the default branch still reaches every commit on it —
+    /// uncommitted files; or, for a worktree whose folder is already gone, `prune`, which is all
+    /// git's record of it needs (and clears any other missing worktree's record too); then the branch, only when the default branch still reaches every commit on it —
     /// checked again here, not trusted from the confirmation.
     func remove(
         _ worktree: Worktree, in repository: GitCommonDir, knowing loss: WorktreeLoss
@@ -152,8 +152,9 @@ struct WorktreeCLI: WorktreeClient, Sendable {
             let force = (loss.uncommittedFiles ?? 0) > 0 ? ["--force"] : []
             _ = try await runGit(
                 ["-C", commonDir, "worktree", "remove"] + force + [worktree.record.path])
+        } else {
+            _ = try await runGit(["-C", commonDir, "worktree", "prune"])
         }
-        _ = try await runGit(["-C", commonDir, "worktree", "prune"])
         guard loss.deletesBranch, let branch = worktree.record.branch,
             let defaultBranch = await resolveDefaultBranch(in: commonDir)
         else { return }

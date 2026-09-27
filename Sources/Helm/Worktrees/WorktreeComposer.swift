@@ -73,7 +73,9 @@ enum WorktreesConfirmText {
         case let .delete(path, loss):
             let row = model.repo(containing: path)?.worktrees.first { $0.id == path }
             let how: String? = row.flatMap { howSentence($0, loss) }
-            return ([path, lossSentence(loss)] + (how.map { [$0] } ?? []))
+            var archon = false
+            if case .archon = row?.owner { archon = true }
+            return ([path, lossSentence(loss, archon: archon)] + (how.map { [$0] } ?? []))
                 .joined(separator: "\n\n")
         case .cleanMerged:
             return "Each is clean and its branch is on the default branch, so nothing is lost; "
@@ -81,18 +83,25 @@ enum WorktreesConfirmText {
         }
     }
 
-    static func button(_ target: WorktreesModel.Confirmation) -> String {
-        if case let .delete(_, loss) = target, !loss.losesNothing { return "Delete and lose it" }
-        return "Delete"
+    @MainActor
+    static func button(_ target: WorktreesModel.Confirmation, in model: WorktreesModel) -> String {
+        guard case let .delete(path, loss) = target, !loss.losesNothing else { return "Delete" }
+        // Archon refuses to lose work itself, so its button promises no loss.
+        let row = model.repo(containing: path)?.worktrees.first { $0.id == path }
+        if case .archon = row?.owner { return "Ask Archon" }
+        return "Delete and lose it"
     }
 
-    static func lossSentence(_ loss: WorktreeLoss) -> String {
+    static func lossSentence(_ loss: WorktreeLoss, archon: Bool = false) -> String {
         guard !loss.losesNothing else {
             let branch = loss.branch.map { " The branch \($0) goes too." } ?? ""
             return "Nothing is lost: it is clean and the default branch has every commit."
                 + branch
         }
-        return "This loses " + loss.clauses.joined(separator: ", and ") + "."
+        let what = loss.clauses.joined(separator: ", and ")
+        return archon
+            ? "It has \(what). Archon will refuse to remove it while that is so."
+            : "This loses " + what + "."
     }
 
     static func howSentence(_ row: Worktree, _ loss: WorktreeLoss) -> String? {

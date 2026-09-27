@@ -154,8 +154,11 @@ stays on screen while the next one is read.
   confirmation names it. Uncommitted files are removed only with `--force` after that
   confirmation. The branch goes with its worktree only when the default branch has every commit
   on it, checked again just before; an unmerged branch is kept, so no commit is lost with the
-  worktree. `git worktree prune` follows, which is also all a worktree whose folder is gone needs.
-  An Archon worktree (under an Archon home, or on an Archon branch) goes through `archon complete`
+  worktree. What the worktree loses is read again at the click; if an agent changed it while the
+  dialog was open, the operator is asked again with the new loss. A worktree whose folder is
+  already gone is cleared with `git worktree prune`.
+  An Archon worktree (in Archon's `<home>/workspaces/<owner>/<repo>/worktrees/`, or on an Archon
+  branch) goes through `archon complete`
   in its own Archon home instead, which removes the branch and its remote branch too and refuses
   what it will not remove; helm never forces it, and since `archon complete` exits 0 when it
   refuses, helm reads git afterwards and shows Archon's words when the worktree is still there.

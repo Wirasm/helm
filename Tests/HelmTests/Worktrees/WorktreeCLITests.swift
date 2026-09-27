@@ -138,10 +138,8 @@ final class WorktreeCLITests: XCTestCase {
             try String(contentsOf: calls, encoding: .utf8),
             """
             -C \(workspace.path) worktree remove \(linked.path) \n\
-            -C \(workspace.path) worktree prune \n\
-            -C \(workspace.path) worktree remove --force \(linked.path) \n\
-            -C \(workspace.path) worktree prune \n
-            """)
+            -C \(workspace.path) worktree remove --force \(linked.path) \n
+            """, "no prune for a worktree that exists: it would clear other records unasked")
     }
 
     /// Archon's own cleanup, in the worktree's Archon home, from the main checkout, never

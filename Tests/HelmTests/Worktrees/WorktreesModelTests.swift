@@ -224,6 +224,46 @@ final class WorktreesModelTests: XCTestCase {
         XCTAssertEqual(model.repos.first { $0.id == app }?.worktrees.count, 1)
     }
 
+    /// An agent writing into the worktree while the dialog is open changes the loss; nothing the
+    /// operator was not told about goes, and he is asked again with what is there now.
+    func testALossThatChangedWhileAskingIsAskedAgainNotRemoved() async {
+        let row = Worktree.fixture(path: "/work/app-busy", mergedState: .unmerged)
+        func loss(_ files: Int) -> WorktreeLoss {
+            WorktreeLoss(
+                uncommittedFiles: files, unmergedCommits: 1, branch: "feature/one",
+                defaultBranch: "refs/remotes/origin/main")
+        }
+        let client = FakeWorktreeClient()
+        await client.setResponse([main("/work/app"), row], for: app)
+        await client.setLoss(loss(1), for: row.id)
+        let model = model(client)
+        await model.refresh(workspaces: [])
+
+        await model.requestDelete(of: row)
+        await client.setLoss(loss(6), for: row.id)
+        await model.confirm()
+
+        let removed = await client.removeRequests
+        XCTAssertTrue(removed.isEmpty)
+        XCTAssertEqual(model.confirmation, .delete(path: row.id, loss: loss(6)))
+    }
+
+    func testArchonsRefusalKeepsEveryReasonAndDropsItsForceAdvice() {
+        let said = """
+              Blocked: archon/task-2
+                ✗ uncommitted changes in worktree
+                ✗ 2 commit(s) not pushed to remote
+                ✗ open PR #12 — "x"
+              Use --force to override.
+
+            Complete: 0 completed, 1 failed, 0 not found
+            """
+        XCTAssertEqual(
+            WorktreesModel.refusal(in: said),
+            "Blocked: archon/task-2 ✗ uncommitted changes in worktree ✗ 2 commit(s) not pushed "
+                + "to remote ✗ open PR #12 — \"x\"")
+    }
+
     func testCancellingRemovesNothing() async {
         let row = Worktree.fixture(path: "/work/app-x")
         let client = FakeWorktreeClient()
