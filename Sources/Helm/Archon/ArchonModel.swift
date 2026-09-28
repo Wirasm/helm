@@ -66,6 +66,11 @@ final class ArchonModel: ObservableObject {
     /// Run id → the per-node fold `workflow status --verbose` gave for that live run. Absent
     /// for a run that call did not answer; its dots then show only where it is.
     @Published private(set) var liveNodes: [String: [ArchonNode]] = [:]
+    /// Why the runs could not be listed (#523), or nil. Without it a drawer that cannot reach
+    /// Archon at all reads "No Archon runs here yet.", the same as one where Archon never ran.
+    @Published private(set) var refreshFailure: String?
+    /// Failed `runs` calls in a row, so one hiccup can be told from a failure that persists.
+    private var failedPolls = 0
     @Published private(set) var isRefreshing = false
     @Published private(set) var isLaunching = false
     /// **The one piece of text here that is not in the rail's list, and it is deliberate.**
@@ -125,6 +130,8 @@ final class ArchonModel: ObservableObject {
             running = []
             finished = []
             liveNodes = [:]
+            failedPolls = 0
+            refreshFailure = nil
             disarm()
             return
         }
@@ -137,14 +144,22 @@ final class ArchonModel: ObservableObject {
         defer { isRefreshing = false }
         do {
             let response = try await client.runs(in: workspacePath)
+            failedPolls = 0
+            refreshFailure = nil
             apply(response, in: workspacePath)
             await refreshLiveNodes(in: workspacePath)
         } catch is CancellationError {
             return
         } catch {
-            // The last known runs are kept and the failure is swallowed. A single failed poll
-            // is usually a hiccup, and blanking the drawer for it would make the rows flap.
-            return
+            // The last known runs are always kept: blanking the drawer on a hiccup would make
+            // the rows flap. One failure after a good poll says nothing either. With no rows
+            // to keep, or a second failure in a row, it is not a hiccup and the reason shows.
+            failedPolls += 1
+            if failedPolls > 1 || (gated.isEmpty && running.isEmpty && finished.isEmpty) {
+                refreshFailure =
+                    "Could not list Archon runs in \(workspacePath.value): "
+                    + error.localizedDescription
+            }
         }
     }
 
