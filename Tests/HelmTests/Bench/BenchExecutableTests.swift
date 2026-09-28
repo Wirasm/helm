@@ -1,3 +1,4 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -49,7 +50,7 @@ final class BenchExecutableTests: XCTestCase {
     /// End to end through the client: a benchd that is not there never yields a bare `bench`.
     @MainActor
     func testAClientWithNoBenchdNeverAnswersABareName() {
-        let client = BenchClient(socketPath: "/nonexistent/benchd.sock")
+        let client = BenchClient(endpoint: .unix(path: "/nonexistent/benchd.sock"))
         switch client.benchExecutable {
         case let .success(path): XCTAssertTrue(path.hasPrefix("/"), path)
         case let .failure(missing): XCTAssertTrue(missing.asked.contains("could not be asked"))

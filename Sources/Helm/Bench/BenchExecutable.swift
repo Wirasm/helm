@@ -10,7 +10,8 @@ import Foundation
 /// used to fall back to.
 ///
 /// In order: the `bench` benchd names in `status` (the one beside it, so its own build), then the
-/// places a `bench` is installed, then helm's own PATH. When none exists the answer is the reason,
+/// places a `bench` is installed, then helm's own PATH. A benchd reached over TCP is not asked:
+/// its `bench` is on its own machine (`local`). When none exists the answer is the reason,
 /// which the pane shows instead of starting anything.
 enum BenchExecutable {
     /// Where `cargo install` and Homebrew put binaries, before helm's own PATH.
@@ -41,6 +42,20 @@ enum BenchExecutable {
             named.map { "benchd named \($0), which is not an executable here" }
             ?? "benchd could not be asked (\(why ?? "no answer"))"
         return .failure(NotFound(asked: asked, looked: looked))
+    }
+
+    /// An installed `bench`, for a benchd reached over TCP (M5c): the one beside it is a path on
+    /// its own machine, so benchd is not asked.
+    static func local(
+        home: String = NSHomeDirectory(),
+        path: String? = ProcessInfo.processInfo.environment["PATH"],
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> Result<String, NotFound> {
+        let looked = candidates(home: home, path: path)
+        if let found = looked.first(where: isExecutable) { return .success(found) }
+        return .failure(
+            NotFound(
+                asked: "benchd is reached over TCP, so its own bench is not here", looked: looked))
     }
 
     /// No `bench` to run: what was tried, and the fix.

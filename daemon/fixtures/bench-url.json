@@ -1,0 +1,20 @@
+{
+  "home": "/Users/op",
+  "rows": [
+    { "env": {}, "endpoint": "/Users/op/.bench/benchd.sock" },
+    { "env": { "BENCH_URL": "" }, "endpoint": "/Users/op/.bench/benchd.sock" },
+    { "env": { "BENCH_URL": "", "BENCH_DIR": "/r" }, "endpoint": "/r/benchd.sock" },
+    { "env": { "BENCH_URL": "tcp://100.64.0.7:4518" }, "endpoint": "tcp://100.64.0.7:4518" },
+    { "env": { "BENCH_URL": "tcp://forge:4518", "BENCH_DIR": "/r" }, "endpoint": "tcp://forge:4518" },
+    { "env": { "BENCH_URL": "tcp://[fd7a:115c::7]:4518" }, "endpoint": "tcp://[fd7a:115c::7]:4518" },
+    { "env": { "BENCH_URL": "tcp://forge:4518", "BENCH_SUITE": "a/b" }, "refused": "BENCH_SUITE" },
+    { "env": { "BENCH_URL": "unix:/r/benchd.sock" }, "refused": "BENCH_URL" },
+    { "env": { "BENCH_URL": "forge:4518" }, "refused": "BENCH_URL" },
+    { "env": { "BENCH_URL": "tcp://forge" }, "refused": "BENCH_URL" },
+    { "env": { "BENCH_URL": "tcp://:4518" }, "refused": "BENCH_URL" },
+    { "env": { "BENCH_URL": "tcp://forge:0" }, "refused": "BENCH_URL" },
+    { "env": { "BENCH_URL": "tcp://forge:65536" }, "refused": "BENCH_URL" },
+    { "env": { "BENCH_URL": "tcp://forge:4518/" }, "refused": "BENCH_URL" },
+    { "env": { "BENCH_URL": "tcp://fd7a::7:4518" }, "refused": "BENCH_URL" }
+  ]
+}

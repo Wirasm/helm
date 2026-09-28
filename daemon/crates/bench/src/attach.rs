@@ -10,17 +10,22 @@
 //!
 //! A session has one viewer, and a second attach takes it over. A pane must not end for that:
 //! its session is still running, and a pane whose process has exited has no way back to it. So
-//! an `--in-pane` client whose stream closes asks benchd what happened. The session ended, or
-//! benchd is gone: it ends too, and leaves the pane a line saying which and how to start it
-//! again. Nobody holds the session: it attaches again. Another viewer holds it: it says so in
-//! the pane and waits, and attaches again on a key or once that viewer lets go.
+//! an `--in-pane` client whose stream closes asks benchd what happened. The session ended: it
+//! ends too, and leaves the pane a line saying so and how to start it again. Nobody holds the
+//! session: it attaches again. Another viewer holds it: it says so in the pane and waits, and
+//! attaches again on a key or once that viewer lets go.
+//!
+//! No answer at all is not an ending (M5c, #459). A dropped link, a sleeping Mac or a benchd
+//! restarting all look the same from here, and only benchd knows whether the session outlived
+//! it. So the pane says it cannot reach benchd and asks again, after [`RETRY_AFTER`]'s waits, at
+//! once on a key, until benchd answers or the pane closes; benchd's answer then decides as above.
 //!
 //! A pane dragged across the screen resizes its terminal many times a second, and every size the
 //! session's pty takes is a SIGWINCH and a full redraw of whatever runs there. So sizes are
 //! coalesced: at most one per [`SIZE_EVERY`], plus a trailing one when the changes stop, and the
 //! size sent is the one the terminal has when it is sent (#359's resize note).
 
-use crate::{Cli, EXIT_NO_DAEMON, exchange, fail, open, read_response_line};
+use crate::{Cli, EXIT_NO_DAEMON, Failed, dial, fail, read_response_line, request, say};
 use bench_wire::attach::AttachFrame;
 use bench_wire::{LiveSessions, Response, SessionArgs, Status};
 use rustix::termios::tcgetwinsize;
@@ -36,6 +41,16 @@ pub const SIZE_EVERY: Duration = Duration::from_millis(16);
 
 /// How often a displaced pane asks whether the other viewer has let go.
 const RECHECK_EVERY: Duration = Duration::from_secs(2);
+
+/// The waits between asks while benchd cannot be reached: a restart is a blink, and a benchd
+/// gone for longer costs one connection attempt every few seconds.
+const RETRY_AFTER: [Duration; 5] = [
+    Duration::from_millis(200),
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+];
 
 /// What the relay heard.
 enum Heard {
@@ -59,8 +74,10 @@ type Current = Arc<Mutex<Option<Attachment>>>;
 /// Who holds the session, asked after its stream closed.
 #[derive(Debug, PartialEq)]
 enum Holder {
-    /// It ended, or benchd is gone and took it along: the words the pane is left with.
+    /// It ended: the words the pane is left with.
     Gone(String),
+    /// benchd did not answer, and why: it may be restarting, or the link down.
+    Unreachable(String),
     /// It runs and nobody views it.
     Nobody,
     /// It runs and another viewer has it.
@@ -82,11 +99,30 @@ pub fn run(mut cli: Cli, in_pane: bool) -> i32 {
     loop {
         let stream = match attach(&cli) {
             Ok(stream) => stream,
-            Err(code) => {
+            // A retake that lost benchd again between its ask and its attach: wait again.
+            Err((EXIT_NO_DAEMON, _)) if started => {
+                if wait_to_retake(&cli, &session, &heard) {
+                    resize_request(&mut cli, &mut request);
+                    continue;
+                }
                 restore(saved);
-                return code;
+                return 0;
+            }
+            Err(failed) => {
+                restore(saved);
+                return say(failed);
             }
         };
+        if started {
+            // The replay redraws the session on a fresh terminal, as on the first attach. A
+            // reset (RIS), not a clear: the pane still has the modes the program set before the
+            // stream dropped, and the replay sets only the ones on now; and the scrollback goes
+            // too, or the replay's history would be painted under the old copy of itself. Only
+            // now, once attached: until then the pane keeps saying why it waits.
+            let mut out = std::io::stdout();
+            let _ = out.write_all(b"\x1bc\x1b[3J");
+            let _ = out.flush();
+        }
         let down = match stream.try_clone() {
             Ok(sock) => sock,
             Err(_) => {
@@ -134,61 +170,76 @@ pub fn run(mut cli: Cli, in_pane: bool) -> i32 {
             restore(saved);
             return 0;
         }
-        // The replay redraws the session on a fresh terminal, as on the first attach. A reset
-        // (RIS), not a clear: the pane still has the modes the program set before it was
-        // displaced, and the replay sets only the ones on now; and the scrollback goes too, or
-        // the replay's history would be painted under the old copy of itself.
-        let mut out = std::io::stdout();
-        let _ = out.write_all(b"\x1bc\x1b[3J");
-        let _ = out.flush();
-        if let Some((rows, cols)) = terminal_size() {
-            request.rows = Some(rows);
-            request.cols = Some(cols);
-            cli.args = json!(request);
-        }
+        resize_request(&mut cli, &mut request);
     }
 }
 
-/// Send the attach request and read its answer. `Ok` is a stream the replay follows on.
-fn attach(cli: &Cli) -> Result<UnixStream, i32> {
-    let (stream, request_line) = open(cli)?;
-    if let Err(e) = (&stream).write_all(request_line.as_bytes()) {
-        eprintln!("bench: write failed ({e})");
-        return Err(EXIT_NO_DAEMON);
+/// The attach request again, at the size this terminal is now.
+fn resize_request(cli: &mut Cli, request: &mut SessionArgs) {
+    if let Some((rows, cols)) = terminal_size() {
+        request.rows = Some(rows);
+        request.cols = Some(cols);
+        cli.args = json!(request);
     }
-    let Some(reply) = read_response_line(&stream) else {
-        eprintln!(
-            "bench: no answer within {}s",
-            bench_wire::CLIENT_READ_TIMEOUT.as_secs()
-        );
-        return Err(EXIT_NO_DAEMON);
-    };
-    let response: Response = match serde_json::from_str(&reply) {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(fail(&format!(
-                "unreadable response ({e}): {}",
-                reply.trim()
-            )));
-        }
-    };
+}
+
+/// Send the attach request and read its answer. `Ok` is a stream the replay follows on; a
+/// failure is not yet said, and `EXIT_NO_DAEMON` is one where benchd was not reached.
+fn attach(cli: &Cli) -> Result<UnixStream, Failed> {
+    let (stream, request_line) = dial(cli)?;
+    (&stream)
+        .write_all(request_line.as_bytes())
+        .map_err(|e| (EXIT_NO_DAEMON, format!("write failed ({e})")))?;
+    let reply = read_response_line(&stream).ok_or_else(|| {
+        let secs = bench_wire::CLIENT_READ_TIMEOUT.as_secs();
+        (EXIT_NO_DAEMON, format!("no answer within {secs}s"))
+    })?;
+    let response: Response = serde_json::from_str(&reply).map_err(|e| {
+        let why = format!("unreadable response ({e}): {}", reply.trim());
+        (Status::Error.exit_code(), why)
+    })?;
     if response.status != Status::Ok {
-        if let Some(reason) = &response.reason {
-            eprintln!("bench: {reason}");
-        }
-        return Err(response.status.exit_code());
+        let why = response
+            .reason
+            .unwrap_or_else(|| "benchd refused the attach".into());
+        return Err((response.status.exit_code(), why));
     }
     let _ = stream.set_read_timeout(None);
     Ok(stream)
 }
 
-/// A displaced pane: whether to attach again. Waits while another viewer holds the session,
-/// saying so once, and answers true on a key or once nobody holds it; false once it has ended
-/// or the pane's input closed.
+/// A pane whose stream closed: whether to attach again. Waits while another viewer holds the
+/// session or benchd cannot be reached, saying so once each, and answers true on a key or once
+/// nobody holds it; false once it has ended or the pane's input closed.
 fn wait_to_retake(cli: &Cli, session: &str, heard: &mpsc::Receiver<Heard>) -> bool {
     let mut said = false;
+    let mut unreachable = 0;
     loop {
-        match holder(cli, session) {
+        let found = holder(cli, session);
+        if !matches!(found, Holder::Unreachable(_)) {
+            unreachable = 0;
+        }
+        match found {
+            Holder::Unreachable(why) => {
+                if unreachable == 0 {
+                    let mut out = std::io::stdout();
+                    let _ = write!(
+                        out,
+                        "\r\n\x1b[7m bench: cannot reach benchd ({why}). {session} may still be running there; trying again. \x1b[0m\r\n"
+                    );
+                    let _ = out.flush();
+                }
+                let wait = RETRY_AFTER[unreachable.min(RETRY_AFTER.len() - 1)];
+                unreachable += 1;
+                match heard.recv_timeout(wait) {
+                    Ok(Heard::Detached) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return false;
+                    }
+                    // A key asks again now; a timeout asks again after the wait.
+                    Ok(Heard::Key | Heard::StreamClosed) | Err(mpsc::RecvTimeoutError::Timeout) => {
+                    }
+                }
+            }
             Holder::Gone(why) => {
                 // The last thing in the pane, above Ghostty's own "Process exited".
                 let mut out = std::io::stdout();
@@ -229,7 +280,7 @@ fn wait_to_retake(cli: &Cli, session: &str, heard: &mpsc::Receiver<Heard>) -> bo
     }
 }
 
-/// Ask benchd who holds `session` now. No answer means benchd is gone, and its sessions with it.
+/// Ask benchd who holds `session` now. No answer says nothing about the session: see the module.
 fn holder(cli: &Cli, session: &str) -> Holder {
     let ask = Cli {
         verb: "sessions".to_string(),
@@ -237,10 +288,10 @@ fn holder(cli: &Cli, session: &str) -> Holder {
         root: cli.root.clone(),
         asked: false,
     };
-    let Ok(response) = exchange(&ask) else {
-        return Holder::Gone(format!(
-            "benchd is not running, and {session} ended with it. `just resume-all` brings every pane back once it runs."
-        ));
+    let response = match request(&ask) {
+        Ok(response) => response,
+        Err((EXIT_NO_DAEMON, why)) => return Holder::Unreachable(why),
+        Err((_, why)) => return Holder::Gone(format!("{session}: {why}")),
     };
     let ended = || {
         // helm declares the pane a viewer runs in; restore takes the pane, not the session.

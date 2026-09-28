@@ -21,7 +21,7 @@ final class DrawerTests: XCTestCase {
         _ first: DocumentAt, makeBrowser: (@MainActor @Sendable () -> BrowserPaneModel)? = nil
     ) throws -> Rig {
         let server = try FakeBenchd(document: first)
-        let client = BenchClient(socketPath: server.path)
+        let client = BenchClient(endpoint: .unix(path: server.path))
         let terminals = TerminalManager()
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("helm-drawers-\(UUID().uuidString)")

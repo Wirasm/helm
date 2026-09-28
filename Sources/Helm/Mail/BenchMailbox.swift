@@ -21,18 +21,17 @@ struct BenchMailbox: Sendable {
         var errorDescription: String? { description }
     }
 
-    /// benchd at this helm's bench root. With no root benchd would accept, nobody is reachable
+    /// This helm's benchd (`BenchRoot.endpoint`). With no root or URL benchd would accept, nobody is reachable
     /// and every send says why.
     static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> BenchMailbox {
-        switch BenchRoot.resolve(environment: environment) {
+        switch BenchRoot.endpoint(environment: environment) {
         case let .failure(why):
             return BenchMailbox(
                 who: { _ in nil },
                 send: { _, _, _, _ in throw Refused(description: String(describing: why)) })
-        case let .success(root):
-            let socket = root.appendingPathComponent("benchd.sock").path
+        case let .success(socket):
             return BenchMailbox(
                 who: { pane in
                     let answer = try? BenchClient.request(

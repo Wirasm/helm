@@ -71,6 +71,9 @@ fn usage() -> &'static str {
     "usage: benchd [--suite <name>]\n\
      env:   BENCH_SUITE   suite name (the --suite flag wins)\n\
      \x20      BENCH_DIR     record root override (wins over suite; what tests claim into)\n\
+     \x20      BENCH_LISTEN  <host>:<port>: also listen on TCP there, for a helm or bench on\n\
+     \x20                    another machine (BENCH_URL=tcp://<host>:<port> on theirs). No auth:\n\
+     \x20                    bind a tailnet address, never a public one\n\
      exit:  0 clean stop · 3 refused to start · 4 failed"
 }
 
@@ -108,8 +111,9 @@ fn run() -> i32 {
     };
     let bench_dir = std::env::var("BENCH_DIR").ok();
     let root = resolve_root(bench_dir.as_deref(), suite.as_ref(), &home);
+    let listen = std::env::var("BENCH_LISTEN").ok().filter(|a| !a.is_empty());
 
-    match boot(root, suite, home) {
+    match boot(root, suite, home, listen) {
         Ok(code) => code,
         Err(StartError::Refused(why)) => refuse_start(&why),
         Err(StartError::Failed(why)) => fail_start(&why),
@@ -486,7 +490,12 @@ fn spawn_flusher(log: &File, unflushed: Arc<AtomicBool>) -> Result<(), String> {
 }
 
 #[expect(clippy::too_many_lines, reason = "legacy (#418): 150 lines, limit 100")]
-fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, StartError> {
+fn boot(
+    root: PathBuf,
+    suite: Option<SuiteName>,
+    home: PathBuf,
+    listen: Option<String>,
+) -> Result<i32, StartError> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true).mode(0o700);
     builder.create(&root).map_err(|e| {
@@ -629,6 +638,9 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         .map_err(StartError::Failed)?;
         // Bound only now, after the boot events: a client that can connect can read them
         // (the socket used to come first, and a fast reader found an empty log).
+        if let Some(address) = &listen {
+            serve_tcp(address, &core)?;
+        }
         let listener = UnixListener::bind(&sock)
             .map_err(|e| StartError::Failed(format!("cannot bind {}: {e}", sock.display())))?;
         eprintln!(
@@ -708,6 +720,27 @@ fn boot(root: PathBuf, suite: Option<SuiteName>, home: PathBuf) -> Result<i32, S
         std::thread::spawn(move || handle(core, stream));
     }
     Ok(0)
+}
+
+/// `BENCH_LISTEN`: the same socket protocol on TCP, for a helm or `bench` on another machine
+/// (M5c, #459). Each connection goes to [`handle`] as the stream every verb already speaks
+/// (`bench_wire::tcp_stream`). An address that cannot be bound stops the start: a benchd told to
+/// listen that silently does not is a remote helm that can never connect, and says only that.
+fn serve_tcp(address: &str, core: &Arc<Mutex<Core>>) -> Result<(), StartError> {
+    let listener = std::net::TcpListener::bind(address)
+        .map_err(|e| StartError::Failed(format!("cannot listen on tcp {address}: {e}")))?;
+    eprintln!("benchd also listening on tcp {address}");
+    let core = Arc::clone(core);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream.and_then(bench_wire::tcp_stream) else {
+                continue;
+            };
+            let core = Arc::clone(&core);
+            std::thread::spawn(move || handle(core, stream));
+        }
+    });
+    Ok(())
 }
 
 /// `close <session>`: drain-then-die a session by its id. Naming the session is the explicit

@@ -70,6 +70,7 @@ name = "bench-wire"
 version = "0.0.1"
 dependencies = [
  "bench-doc",
+ "libc",
  "serde",
  "serde_json",
 ]

@@ -153,6 +153,20 @@ terminal (`bench get screen`, `bench watch screen`, `bench send`). What only hel
 — benchd asks for: `helm/ask` logs `helm/asked` to the followers, helm answers with `helm/answer`,
 and the caller waits at most `HELM_ASK_WAIT`. The `bench-panes` skill is the agent's guide.
 
+**A benchd by address (M5c, #459, first slice).** `BENCH_LISTEN=<host>:<port>` makes benchd
+listen on TCP beside its unix socket, and each connection goes to the same handler: the protocol
+is bytes on a stream and reads no peer credentials. `BENCH_URL=tcp://<host>:<port>` points
+`bench` and helm at it instead of `<root>/benchd.sock` (`bench_wire::Endpoint`, helm's
+`BenchEndpoint`, one table for both in `fixtures/bench-url.json`); unset or empty is the socket.
+Both clients set `TCP_NODELAY` and a short keepalive, so a link that died in a sleep is noticed
+in seconds. There is no auth: bind a tailnet address, never a public one. With `BENCH_URL` set
+helm runs its own `bench` for a pane, since the one `status` names is on benchd's machine. And
+`bench attach --in-pane` no longer reads "no answer" as "the session ended": it says it cannot
+reach benchd and asks again with a capped backoff until benchd answers, then attaches and
+redraws from benchd's screen, or ends if benchd says the session did. That holds on one machine
+too, across a benchd restart. Canvases, screenshots, the browser and the drawers still reach
+around the socket; they are the next slices.
+
 **And benchd sees an agent waiting on the operator (M1, #357).** #283's failure was an agent
 parked at a prompt its hooks never reported, and nobody knew for hours. Each session's engine
 says when its output settles (500 ms of quiet, or 2 s into output that never stops: at a real
