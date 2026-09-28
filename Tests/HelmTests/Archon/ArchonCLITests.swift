@@ -236,6 +236,23 @@ final class ArchonCLITests: XCTestCase {
         }
     }
 
+    /// #523, end to end: a workspace folder that is gone means `archon` cannot start there, and
+    /// the drawer used to show that as "No Archon runs here yet." The stub would answer with an
+    /// empty list if it ever ran, so a green result here cannot come from the stub.
+    @MainActor
+    func testAWorkspaceThatIsGoneShowsWhyInTheDrawer() async throws {
+        try install("printf '{\"runs\":[],\"total\":0,\"counts\":{}}\\n'\n")
+        try FileManager.default.removeItem(at: workspace)
+        let model = ArchonModel(
+            client: cli(), defaults: try isolatedDefaults("archon-cli-missing-workspace"))
+
+        await model.refresh(in: WorkspacePath(workspace))
+
+        let failure = try XCTUnwrap(model.refreshFailure, "the drawer would read as empty")
+        XCTAssertTrue(failure.contains(workspace.path), failure)
+        XCTAssertTrue(failure.contains("could not be started"), failure)
+    }
+
     func testTheStderrSnippetIsBounded() async throws {
         try install(
             "i=0\nwhile [ $i -lt 200 ]\ndo printf 'noise noise noise\\n' >&2\ni=$((i+1))\ndone\nexit 3\n"
