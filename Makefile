@@ -49,9 +49,9 @@ install:
 # polls that and offers the swap on a badge in the status bar. Nothing here touches the
 # installed app, so it is safe to run mid-session.
 #
-# `codesign --verify` is not ceremony: the stamping build phase edits Info.plist inside the
-# product, and it is only safe because that phase runs before Xcode signs. This is what would
-# catch it if that ordering ever changed.
+# `codesign --verify` is not ceremony: the bundle's Info.plist carries the stamp, and a plist
+# changed behind CodeSign's back leaves a signature that no longer matches (#526). This is what
+# would catch it. announce-build.sh then fails on a product with no HelmBuildSHA.
 release:
 	xcodegen generate
 	xcodebuild -project Helm.xcodeproj -scheme Helm -configuration Release \

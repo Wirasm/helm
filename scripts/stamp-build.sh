@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Write the commit a bundle was built from into its own Info.plist.
+# Write the commit a bundle is built from into the Info.plist Xcode builds it from.
 #
-# Runs as the Helm target's last build phase (project.yml `postBuildScripts`), which is
-# before Xcode's implicit code-signing task rather than after it — the ordering the whole
-# approach depends on, since a plist edited after signing invalidates the signature.
-# `make release` proves it: it runs `codesign --verify` on the product afterwards.
+# Runs as the Helm target's first build phase (project.yml `preBuildScripts`) and writes the
+# *source* Info.plist, the file xcodegen generates and ProcessInfoPlistFile reads. That keeps
+# processing the only writer of the bundle's Info.plist, so the stamp can neither be
+# overwritten by it nor be invisible to the CodeSign task after it (#526). The phase declares
+# this file as its output, which is what orders processing after it.
 #
 # WHY BAKE IT AT ALL. An installed helm in /Applications has no checkout to ask which commit
 # it came from, and the tempting proxy — compare the bundle's mtime against the stamp's
@@ -16,8 +17,11 @@
 # fails a test instead of silently producing a helm that can never see an update.
 set -euo pipefail
 
-plist="${TARGET_BUILD_DIR:?}/${INFOPLIST_PATH:?}"
-root="${SRCROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+root="${SRCROOT:?}"
+case "${INFOPLIST_FILE:?}" in
+  /*) plist="$INFOPLIST_FILE" ;;
+  *) plist="$root/$INFOPLIST_FILE" ;;
+esac
 
 # A build from an export, a tarball, or a tree with no git at all still has to produce a
 # working app — it just produces one that never offers an update, which is exactly what
@@ -35,6 +39,13 @@ fi
 # what anyone is actually using.
 if ! git -C "$root" diff --quiet HEAD 2>/dev/null; then
   sha="${sha}-dirty"
+fi
+
+# Leave the file alone when it already says this: a rewrite would make Xcode reprocess and
+# re-sign an unchanged bundle.
+if [ "$(/usr/libexec/PlistBuddy -c "Print :HelmBuildSHA" "$plist" 2>/dev/null)" = "$sha" ]; then
+  echo "$plist already carries HelmBuildSHA=$sha"
+  exit 0
 fi
 
 /usr/libexec/PlistBuddy -c "Add :HelmBuildSHA string $sha" "$plist" 2>/dev/null \

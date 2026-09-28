@@ -162,15 +162,17 @@ final class BuildStampScriptTests: XCTestCase {
     }
 
     /// An unstamped bundle announces nothing rather than announcing an empty sha — which
-    /// `BuildUpdate` would then compare against and offer.
-    func testUnstampedBundleAnnouncesNothing() throws {
+    /// `BuildUpdate` would then compare against and offer — and it fails, so `make release`
+    /// fails with it. Exiting 0 here is how an unstamped release went unnoticed (#526).
+    func testUnstampedBundleFailsAndAnnouncesNothing() throws {
         let bundle = try makeBundle(sha: nil)
         let stampDirectory = scratch.appendingPathComponent("stamps")
         let result = try run(
             "announce-build.sh",
             arguments: [bundle.path],
             environment: [BuildStampDirectory.directoryVariable: stampDirectory.path])
-        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.status, 1)
+        XCTAssertTrue(result.stderr.contains(RunningBuild.shaKey), result.stderr)
         XCTAssertNil(BuildStampDirectory(root: stampDirectory).read())
     }
 
@@ -191,11 +193,7 @@ final class BuildStampScriptTests: XCTestCase {
     /// `stamp-build.sh` are the two halves of one name; this is what makes renaming either of
     /// them fail loudly.
     func testStampWritesTheKeyRunningBuildReads() throws {
-        let buildDirectory = scratch.appendingPathComponent("Build")
-        let plistPath = "Helm.app/Contents/Info.plist"
-        let plist = buildDirectory.appendingPathComponent(plistPath)
-        try FileManager.default.createDirectory(
-            at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let plist = scratch.appendingPathComponent("Info.plist")
         try Data(
             """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -207,11 +205,7 @@ final class BuildStampScriptTests: XCTestCase {
 
         let result = try run(
             "stamp-build.sh",
-            environment: [
-                "TARGET_BUILD_DIR": buildDirectory.path,
-                "INFOPLIST_PATH": plistPath,
-                "SRCROOT": repositoryRoot.path,
-            ])
+            environment: ["INFOPLIST_FILE": plist.path, "SRCROOT": repositoryRoot.path])
         XCTAssertEqual(result.status, 0, "stamp-build.sh failed: \(result.stderr)")
 
         let written = try XCTUnwrap(
@@ -229,11 +223,7 @@ final class BuildStampScriptTests: XCTestCase {
     /// Stamping twice must land on one value, not append a second key — the second build of a
     /// commit has to carry that commit's identity, not the previous one's.
     func testStampingIsIdempotent() throws {
-        let buildDirectory = scratch.appendingPathComponent("Build")
-        let plistPath = "Helm.app/Contents/Info.plist"
-        let plist = buildDirectory.appendingPathComponent(plistPath)
-        try FileManager.default.createDirectory(
-            at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let plist = scratch.appendingPathComponent("Info.plist")
         try Data(
             """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -244,11 +234,7 @@ final class BuildStampScriptTests: XCTestCase {
             """.utf8
         ).write(to: plist)
 
-        let environment = [
-            "TARGET_BUILD_DIR": buildDirectory.path,
-            "INFOPLIST_PATH": plistPath,
-            "SRCROOT": repositoryRoot.path,
-        ]
+        let environment = ["INFOPLIST_FILE": plist.path, "SRCROOT": repositoryRoot.path]
         try run("stamp-build.sh", environment: environment)
         try run("stamp-build.sh", environment: environment)
 
@@ -261,11 +247,7 @@ final class BuildStampScriptTests: XCTestCase {
     /// A tree with no git still has to build — it just produces an app that never offers an
     /// update, which is what `BuildUpdate.decide` does with a nil sha.
     func testNoRepositoryStampsNothingAndSucceeds() throws {
-        let buildDirectory = scratch.appendingPathComponent("Build")
-        let plistPath = "Helm.app/Contents/Info.plist"
-        let plist = buildDirectory.appendingPathComponent(plistPath)
-        try FileManager.default.createDirectory(
-            at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let plist = scratch.appendingPathComponent("Info.plist")
         try Data(
             """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -281,8 +263,7 @@ final class BuildStampScriptTests: XCTestCase {
         let result = try run(
             "stamp-build.sh",
             environment: [
-                "TARGET_BUILD_DIR": buildDirectory.path,
-                "INFOPLIST_PATH": plistPath,
+                "INFOPLIST_FILE": plist.path,
                 "SRCROOT": notARepository.path,
                 // `git` walks upward, and the scratch directory may sit under one. This is the
                 // supported way to say "stop here" and is what makes the negative reachable.
