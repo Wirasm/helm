@@ -86,7 +86,7 @@ targets:
       # Edit Assets/icon/helm.svg and run Assets/icon/build-icon.sh to change it.
       - path: Assets/helm.icns
         buildPhase: resources
-    # Writes the commit into the Info.plist Xcode builds the bundle's from, so an installed
+    # Writes the commit into the Info.plist Xcode builds the bundle from, so an installed
     # helm can tell whether the build waiting on disk is a different one (see
     # scripts/stamp-build.sh, and `RunningBuild` for what reads it back).
     #
