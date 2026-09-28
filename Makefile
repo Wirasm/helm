@@ -51,7 +51,8 @@ install:
 #
 # `codesign --verify` is not ceremony: the stamping build phase edits Info.plist inside the
 # product, and it is only safe because that phase runs before Xcode signs. This is what would
-# catch it if that ordering ever changed.
+# catch it if that ordering ever changed. The other ordering, stamp after Xcode writes
+# Info.plist, is checked by announce-build.sh, which fails on a product with no HelmBuildSHA.
 release:
 	xcodegen generate
 	xcodebuild -project Helm.xcodeproj -scheme Helm -configuration Release \

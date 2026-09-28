@@ -92,12 +92,19 @@ targets:
     # code-signing task, which is what makes editing the plist here safe — `make release`
     # verifies the signature afterwards rather than trusting that.
     #
-    # `basedOnDependencyAnalysis: false` because this phase declares no inputs or outputs: with
-    # it left on, Xcode considers the phase up to date and skips it, and the second build of a
-    # new commit ships the previous commit's identity.
+    # The input is the processed Info.plist, and it is there for ordering (#526). Xcode's
+    # ProcessInfoPlistFile writes that same file, and without this edge nothing orders the two:
+    # a build with nothing to compile ran the stamp first and shipped the plist without it.
+    # Naming the file as an input makes the phase wait for the task that produces it.
+    #
+    # `basedOnDependencyAnalysis: false` because the commit is not a file Xcode can see: with it
+    # left on, Xcode considers the phase up to date and skips it, and the second build of a new
+    # commit ships the previous commit's identity.
     postBuildScripts:
       - name: Stamp build identity
         script: bash "$SRCROOT/scripts/stamp-build.sh"
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
         basedOnDependencyAnalysis: false
     dependencies:
       - target: HelmWire

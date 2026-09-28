@@ -26,10 +26,14 @@ fi
 # announcement then agree by construction: there is one derivation (stamp-build.sh) and this
 # reports it. Two independent `git rev-parse` calls would be two spellings of one fact, free
 # to drift the moment either grows a rule the other lacks — a dirty-tree suffix, say.
+#
+# A product without the key fails, rather than announcing nothing and exiting 0: `make release`
+# is this script's only caller, and a release build that cannot see an update is a broken one.
+# That was silent once, when Xcode's Info.plist processing overwrote the stamp (#526).
 plist="$product/Contents/Info.plist"
 if ! sha=$(/usr/libexec/PlistBuddy -c "Print :HelmBuildSHA" "$plist" 2>/dev/null); then
-  echo "announce-build: $product carries no HelmBuildSHA — nothing to announce" >&2
-  exit 0
+  echo "announce-build: error: $product carries no HelmBuildSHA, so no helm can offer it" >&2
+  exit 1
 fi
 
 dir="${HELM_BUILD_DIR:-$HOME/.helm/build}"

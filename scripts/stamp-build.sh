@@ -6,6 +6,10 @@
 # approach depends on, since a plist edited after signing invalidates the signature.
 # `make release` proves it: it runs `codesign --verify` on the product afterwards.
 #
+# It must also run after Xcode writes the processed Info.plist, or that write replaces the
+# stamp. Being the last phase does not order it against that task; the phase's declared input
+# does (#526), and `announce-build.sh` fails `make release` on a product without the key.
+#
 # WHY BAKE IT AT ALL. An installed helm in /Applications has no checkout to ask which commit
 # it came from, and the tempting proxy — compare the bundle's mtime against the stamp's
 # builtAt — measures when it was *copied*, not when it was built. `cp -R` does not preserve

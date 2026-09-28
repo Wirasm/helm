@@ -604,7 +604,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   - **Identity is baked, not derived.** `scripts/stamp-build.sh` writes the commit into the
     built Info.plist as `HelmBuildSHA`, from a build phase that runs **before** Xcode's
     implicit codesign — `make release` runs `codesign --verify` afterwards rather than trusting
-    that ordering holds. An installed helm has no checkout to ask, and the tempting proxy —
+    that ordering holds — and **after** Xcode writes that Info.plist, which the phase's declared
+    input enforces (#526). `make release` fails on a product without the key. An installed helm has no checkout to ask, and the tempting proxy —
     bundle mtime against the stamp's `builtAt` — measures when it was **copied**, because
     `cp -R` does not preserve mtimes.
   - **The comparison is "different", never "newer".** helm cannot order two shas without the

@@ -162,15 +162,17 @@ final class BuildStampScriptTests: XCTestCase {
     }
 
     /// An unstamped bundle announces nothing rather than announcing an empty sha — which
-    /// `BuildUpdate` would then compare against and offer.
-    func testUnstampedBundleAnnouncesNothing() throws {
+    /// `BuildUpdate` would then compare against and offer — and it fails, so `make release`
+    /// fails with it. Exiting 0 here is how an unstamped release went unnoticed (#526).
+    func testUnstampedBundleFailsAndAnnouncesNothing() throws {
         let bundle = try makeBundle(sha: nil)
         let stampDirectory = scratch.appendingPathComponent("stamps")
         let result = try run(
             "announce-build.sh",
             arguments: [bundle.path],
             environment: [BuildStampDirectory.directoryVariable: stampDirectory.path])
-        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.status, 1)
+        XCTAssertTrue(result.stderr.contains(RunningBuild.shaKey), result.stderr)
         XCTAssertNil(BuildStampDirectory(root: stampDirectory).read())
     }
 
