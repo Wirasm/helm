@@ -25,8 +25,8 @@ final class BenchClient: ObservableObject {
 
     @Published private(set) var state: State = .connecting
 
-    /// The socket this client speaks to: `<bench root>/benchd.sock`.
-    let socketPath: String
+    /// Where this client reaches benchd (`BenchRoot.endpoint`); nil when there is nowhere to try.
+    let endpoint: BenchEndpoint?
 
     /// Each document the follower delivers, on the main actor, in order. The first after a
     /// (re)connect is the whole state and is delivered unless a newer one already was; after that
@@ -52,27 +52,25 @@ final class BenchClient: ObservableObject {
     /// client never connects, and says why for as long as it lives.
     private let refused: String?
 
-    init(socketPath: String) {
-        self.socketPath = socketPath
+    init(endpoint: BenchEndpoint) {
+        self.endpoint = endpoint
         refused = nil
     }
 
     init(unreachable why: String) {
-        socketPath = ""
+        endpoint = nil
         refused = why
         state = .disconnected(why)
     }
 
-    /// The client for this helm's bench root (`BenchRoot`), or why there is none.
+    /// The client for this helm's benchd (`BenchRoot.endpoint`), or why there is none.
     static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Result<BenchClient, BenchRootError> {
-        BenchRoot.resolve(environment: environment).map {
-            BenchClient(socketPath: $0.appendingPathComponent("benchd.sock").path)
-        }
+        BenchRoot.endpoint(environment: environment).map { BenchClient(endpoint: $0) }
     }
 
-    /// This helm's client: the bench root's socket, or — for a root benchd would refuse — a
+    /// This helm's client: its benchd, or — for a root or URL benchd would refuse — a
     /// client that never connects and says why. Refused rather than falling back to anything
     /// local: helm has no bench of its own to fall back to.
     static func live(
@@ -85,8 +83,8 @@ final class BenchClient: ObservableObject {
     }
 
     func start() {
-        guard follower == nil, refused == nil else { return }
-        let follower = BenchFollower(path: socketPath, latest: latest) { [weak self] event in
+        guard follower == nil, let endpoint else { return }
+        let follower = BenchFollower(endpoint: endpoint, latest: latest) { [weak self] event in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.receive(event) }
             }
@@ -129,8 +127,16 @@ final class BenchClient: ObservableObject {
     /// beside the benchd this client follows, else an installed one (`BenchExecutable`). Asked
     /// once per connection, since a restarted benchd may be a new build somewhere else. Only a
     /// found one is kept: a failure is asked again at the next drawing.
+    ///
+    /// A benchd reached over TCP names a path on its own machine, so helm runs its own `bench`
+    /// instead (M5c), which reaches benchd through the `BENCH_URL` the pane inherits from helm.
     var benchExecutable: Result<String, BenchExecutable.NotFound> {
         if let known = benchBinaryCache { return .success(known) }
+        if case .tcp = endpoint {
+            let found = BenchExecutable.local()
+            if case let .success(bench) = found { benchBinaryCache = bench }
+            return found
+        }
         var why: String?
         let reply: BenchResponse<BenchStatusReply>?
         do {
@@ -152,17 +158,20 @@ final class BenchClient: ObservableObject {
     nonisolated func request<Payload: Decodable & Sendable>(
         _ request: some Encodable, answering _: Payload.Type = Payload.self
     ) throws -> BenchResponse<Payload> {
-        if let refused { throw BenchSocket.Failure(description: refused) }
-        return try Self.request(request, at: socketPath)
+        guard let endpoint else {
+            throw BenchSocket.Failure(description: refused ?? "no benchd to ask")
+        }
+        return try Self.request(request, at: endpoint)
     }
 
-    /// One verb, one answer, at a socket path: for a caller that holds no client (the mail
+    /// One verb, one answer, at an endpoint: for a caller that holds no client (the mail
     /// seam). Blocking and bounded by `requestTimeout`, like the instance form: a canvas note
     /// calls it on the main actor as `WorkbenchModel.send` does.
     nonisolated static func request<Payload: Decodable & Sendable>(
-        _ request: some Encodable, at socketPath: String, answering _: Payload.Type = Payload.self
+        _ request: some Encodable, at endpoint: BenchEndpoint,
+        answering _: Payload.Type = Payload.self
     ) throws -> BenchResponse<Payload> {
-        let socket = try BenchSocket(path: socketPath, timeout: requestTimeout)
+        let socket = try BenchSocket(endpoint: endpoint, timeout: requestTimeout)
         defer { socket.close() }
         try socket.writeLine(JSONEncoder().encode(request))
         guard let line = try socket.readLine() else {
@@ -226,15 +235,18 @@ final class BenchFollower: @unchecked Sendable {
     /// benchd that is gone for good costs one attempt every few seconds.
     static let backoff: [TimeInterval] = [0.1, 0.25, 0.5, 1, 2, 4]
 
-    private let path: String
+    private let endpoint: BenchEndpoint
     private let latest: LatestDocument
     private let emit: @Sendable (Event) -> Void
     private let lock = NSLock()
     private var stopped = false
     private var socket: BenchSocket?
 
-    init(path: String, latest: LatestDocument, emit: @escaping @Sendable (Event) -> Void) {
-        self.path = path
+    init(
+        endpoint: BenchEndpoint, latest: LatestDocument,
+        emit: @escaping @Sendable (Event) -> Void
+    ) {
+        self.endpoint = endpoint
         self.latest = latest
         self.emit = emit
     }
@@ -274,7 +286,7 @@ final class BenchFollower: @unchecked Sendable {
     private func follow(onConnected: () -> Void) -> String {
         let socket: BenchSocket
         do {
-            socket = try BenchSocket(path: path, timeout: nil)
+            socket = try BenchSocket(endpoint: endpoint, timeout: nil)
         } catch {
             return "\(error)"
         }
@@ -296,7 +308,7 @@ final class BenchFollower: @unchecked Sendable {
             try socket.writeLine(
                 JSONEncoder().encode(BenchFollowRequest(id: "helm-follow-\(UUID().uuidString)")))
             guard let first = try socket.readLine() else {
-                return "benchd closed the connection at \(path)"
+                return "benchd closed the connection at \(endpoint)"
             }
             let answer = try decoder.decode(BenchResponse<DocumentAt>.self, from: first)
             guard answer.status == .ok, let at = answer.data else {
@@ -321,7 +333,7 @@ final class BenchFollower: @unchecked Sendable {
                     emit(.changed(change.event.data))
                 }
             }
-            return "benchd closed the connection at \(path)"
+            return "benchd closed the connection at \(endpoint)"
         } catch {
             return "\(error)"
         }

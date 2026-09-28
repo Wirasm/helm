@@ -14,15 +14,15 @@
 
 use bench_doc::{DrawerName, Surface};
 use bench_wire::{
-    Actor, CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Harness, HookArgs, HookReply,
-    JustRunArgs, LayoutVerb, MailListArgs, MailReadArgs, MailSendArgs, OPERATOR_HANDLE, Request,
-    RequestId, Response, SessionArgs, SessionKey, SessionsArgs, Status, SuiteName, resolve_root,
-    socket_path,
+    Actor, BENCH_URL, CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Endpoint, Harness,
+    HookArgs, HookReply, JustRunArgs, LayoutVerb, MailListArgs, MailReadArgs, MailSendArgs,
+    OPERATOR_HANDLE, Request, RequestId, Response, SessionArgs, SessionKey, SessionsArgs, Status,
+    SuiteName, resolve_root,
 };
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -115,6 +115,8 @@ fn usage() -> &'static str {
      \x20                                         answers {run, log}, and just/finished says how\n\
      \x20                                         it ended\n\
      env:   BENCH_SUITE (flag wins) · BENCH_DIR (root override, wins over suite) ·\n\
+     \x20     BENCH_URL=tcp://<host>:<port> (a benchd on another machine, started with\n\
+     \x20     BENCH_LISTEN; unset, the root's benchd.sock) ·\n\
      \x20     BENCH_ASKED=1 (the operator asked: set by benchd on his own just runs)\n\
      exit:  0 ok · 2 no daemon · 3 refused · 4 daemon failed"
 }
@@ -704,7 +706,7 @@ fn hook(harness: Option<&str>) -> i32 {
 /// daemon at all.
 fn hook_request(args: &HookArgs) -> Option<HookReply> {
     let root = record_root(None).ok()?;
-    let stream = UnixStream::connect(socket_path(&root)).ok()?;
+    let stream = endpoint(&root).ok()?.connect().ok()?;
     let _ = stream.set_write_timeout(Some(HOOK_TIMEOUT));
     let _ = stream.set_read_timeout(Some(HOOK_TIMEOUT));
     let request = Request {
@@ -748,17 +750,33 @@ fn simple(cli: Cli) -> i32 {
 
 /// One request, one response. `Err` is the exit code of a transport failure, already said.
 fn exchange(cli: &Cli) -> Result<Response, i32> {
-    let (stream, request_line) = open(cli)?;
-    if let Err(e) = (&stream).write_all(request_line.as_bytes()) {
-        eprintln!("bench: write failed ({e})");
-        return Err(EXIT_NO_DAEMON);
-    }
-    let Some(reply) = read_response_line(&stream) else {
-        eprintln!("bench: no answer within {}s", CLIENT_READ_TIMEOUT.as_secs());
-        return Err(EXIT_NO_DAEMON);
-    };
-    serde_json::from_str(&reply)
-        .map_err(|e| fail(&format!("unreadable response ({e}): {}", reply.trim())))
+    request(cli).map_err(say)
+}
+
+/// A failure's exit code and why, not yet said: [`request`] and [`dial`] stay quiet, so a caller
+/// with a pane of its own (the attach client) decides what reaches the screen.
+type Failed = (i32, String);
+
+/// Say why on stderr, answer the exit code.
+fn say((code, why): Failed) -> i32 {
+    eprintln!("bench: {why}");
+    code
+}
+
+/// [`exchange`] without a word on stderr.
+fn request(cli: &Cli) -> Result<Response, Failed> {
+    let (stream, request_line) = dial(cli)?;
+    (&stream)
+        .write_all(request_line.as_bytes())
+        .map_err(|e| (EXIT_NO_DAEMON, format!("write failed ({e})")))?;
+    let reply = read_response_line(&stream).ok_or_else(|| {
+        let secs = CLIENT_READ_TIMEOUT.as_secs();
+        (EXIT_NO_DAEMON, format!("no answer within {secs}s"))
+    })?;
+    serde_json::from_str(&reply).map_err(|e| {
+        let why = format!("unreadable response ({e}): {}", reply.trim());
+        (Status::Error.exit_code(), why)
+    })
 }
 
 /// The reason on stderr, the data as pretty JSON on stdout, the status as the exit code.
@@ -827,14 +845,20 @@ fn follow_events(cli: Cli) -> i32 {
 }
 
 fn open(cli: &Cli) -> Result<(UnixStream, String), i32> {
-    let sock = socket_path(&cli.root);
-    let stream = match UnixStream::connect(&sock) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("bench: no daemon at {} ({e})", sock.display());
-            return Err(EXIT_NO_DAEMON);
-        }
-    };
+    dial(cli).map_err(say)
+}
+
+/// Where benchd answers for this caller: `BENCH_URL`, else the root's socket.
+fn endpoint(root: &Path) -> Result<Endpoint, String> {
+    Endpoint::resolve(std::env::var(BENCH_URL).ok().as_deref(), root)
+}
+
+/// Connect, and the request line to send. Says nothing: see [`Failed`].
+fn dial(cli: &Cli) -> Result<(UnixStream, String), Failed> {
+    let endpoint = endpoint(&cli.root).map_err(|why| (Status::Refused.exit_code(), why))?;
+    let stream = endpoint
+        .connect()
+        .map_err(|e| (EXIT_NO_DAEMON, format!("no daemon at {endpoint} ({e})")))?;
     // Bounded on both directions (R2): a hung caller has no exit code, which is the one
     // failure an unattended agent cannot act on.
     let _ = stream.set_write_timeout(Some(DAEMON_IO_TIMEOUT));
@@ -848,10 +872,12 @@ fn open(cli: &Cli) -> Result<(UnixStream, String), i32> {
         // (#356): he asked, so its verbs may move his focus.
         asked: cli.asked || std::env::var("BENCH_ASKED").is_ok_and(|v| v == "1"),
     };
-    let mut line = match serde_json::to_string(&request) {
-        Ok(l) => l,
-        Err(_) => return Err(4),
-    };
+    let mut line = serde_json::to_string(&request).map_err(|e| {
+        (
+            Status::Error.exit_code(),
+            format!("cannot encode the request ({e})"),
+        )
+    })?;
     line.push('\n');
     Ok((stream, line))
 }

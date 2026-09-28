@@ -355,7 +355,7 @@ struct ToyRig {
 func startToyBenchd(_ document: BenchDocument) throws -> (FakeBenchd, BenchClient) {
     let server = try FakeBenchd(document: DocumentAt(seq: 1, document: document))
     server.playToyBench()
-    return (server, BenchClient(socketPath: server.path))
+    return (server, BenchClient(endpoint: .unix(path: server.path)))
 }
 
 extension BenchDocument {

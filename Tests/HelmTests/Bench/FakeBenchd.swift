@@ -5,7 +5,7 @@ import XCTest
 
 @testable import Helm
 
-/// A benchd stand-in on a real unix socket, speaking benchd's framing: one request line per
+/// A benchd stand-in on a real unix socket (or, with `tcp`, a loopback TCP port), speaking benchd's framing: one request line per
 /// connection and one answer line back, except `events --follow`, which stays open for frames.
 ///
 /// **It holds no bench logic.** A test says what each verb answers (`answer`) and pushes the
@@ -14,6 +14,8 @@ import XCTest
 /// is the daemon gate's business, pinned by the same fixtures.
 final class FakeBenchd: @unchecked Sendable {
     let path: String
+    /// Where a client reaches it: `path`, or the TCP port it listens on.
+    let endpoint: BenchEndpoint
     private let listener: Int32
     private let lock = NSLock()
     private var followers: [Int32] = []
@@ -26,7 +28,7 @@ final class FakeBenchd: @unchecked Sendable {
     /// at the next seq — with the frame pushed first, as benchd does, when `frame` gives one.
     var answer: @Sendable ([String: Any]) -> [String: Any]
 
-    init(document: DocumentAt) throws {
+    init(document: DocumentAt, tcp: Bool = false) throws {
         // Short on purpose: a sockaddr_un path caps near 104 bytes, and the temporary directory
         // alone is half of that.
         path = "/tmp/hb-\(UUID().uuidString.prefix(8)).sock"
@@ -34,7 +36,20 @@ final class FakeBenchd: @unchecked Sendable {
         answer = { request in
             ["id": request["id"] ?? "", "status": "ok", "data": ["seq": 0, "changed": false]]
         }
-        listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        if tcp {
+            (listener, endpoint) = try Self.listenTCP()
+        } else {
+            listener = try Self.listenUnix(path)
+            endpoint = .unix(path: path)
+        }
+        let thread = Thread { [self] in acceptLoop() }
+        thread.start()
+    }
+
+    deinit { stop() }
+
+    private static func listenUnix(_ path: String) throws -> Int32 {
+        let listener = socket(AF_UNIX, SOCK_STREAM, 0)
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let bytes = Array(path.utf8)
@@ -51,11 +66,27 @@ final class FakeBenchd: @unchecked Sendable {
             throw XCTSkip(
                 "cannot bind a unix socket at \(path): \(String(cString: strerror(errno)))")
         }
-        let thread = Thread { [self] in acceptLoop() }
-        thread.start()
+        return listener
     }
 
-    deinit { stop() }
+    /// 127.0.0.1 on a port the kernel picks.
+    private static func listenTCP() throws -> (Int32, BenchEndpoint) {
+        let listener = socket(AF_INET, SOCK_STREAM, 0)
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        address.sin_port = 0
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(listener, $0, length) == 0 && getsockname(listener, $0, &length) == 0
+            }
+        }
+        guard bound, listen(listener, 16) == 0 else {
+            throw XCTSkip("cannot listen on loopback TCP: \(String(cString: strerror(errno)))")
+        }
+        return (listener, .tcp(host: "127.0.0.1", port: UInt16(bigEndian: address.sin_port)))
+    }
 
     /// Every request helm sent, oldest first, as decoded JSON.
     var requests: [[String: Any]] {

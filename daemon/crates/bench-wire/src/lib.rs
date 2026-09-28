@@ -15,6 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 pub mod attach;
@@ -796,6 +797,116 @@ pub fn socket_path(root: &Path) -> PathBuf {
     root.join("benchd.sock")
 }
 
+/// Where a client reaches benchd: the root's unix socket, or a benchd on another machine named
+/// by `BENCH_URL=tcp://<host>:<port>` (M5c, #459). benchd listens on both when it runs with
+/// `BENCH_LISTEN=<host>:<port>`. `fixtures/bench-url.json` is the table helm's `BenchEndpoint`
+/// is checked against too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Endpoint {
+    Unix(PathBuf),
+    /// `host:port`, as `TcpStream::connect` takes it (an IPv6 host in brackets).
+    Tcp(String),
+}
+
+/// The variable naming a benchd by address.
+pub const BENCH_URL: &str = "BENCH_URL";
+
+/// How long a client's TCP link may be silent before the kernel probes it, how often it probes,
+/// and how many unanswered probes end it: a link that died while the Mac slept is noticed in
+/// about 25 s instead of after hours, so an attached pane gets to reconnect.
+const KEEPALIVE_IDLE_SECS: libc::c_int = 10;
+const KEEPALIVE_EVERY_SECS: libc::c_int = 5;
+const KEEPALIVE_PROBES: libc::c_int = 3;
+
+/// Keepalive on, with [`KEEPALIVE_IDLE_SECS`] and the rest instead of the kernel's two hours.
+fn keep_alive(tcp: &std::net::TcpStream) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    #[cfg(target_vendor = "apple")]
+    const IDLE: libc::c_int = libc::TCP_KEEPALIVE;
+    #[cfg(not(target_vendor = "apple"))]
+    const IDLE: libc::c_int = libc::TCP_KEEPIDLE;
+    let options = [
+        (libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1),
+        (libc::IPPROTO_TCP, IDLE, KEEPALIVE_IDLE_SECS),
+        (libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, KEEPALIVE_EVERY_SECS),
+        (libc::IPPROTO_TCP, libc::TCP_KEEPCNT, KEEPALIVE_PROBES),
+    ];
+    for (level, name, value) in options {
+        // SAFETY: setsockopt reads one c_int from a live local, on a descriptor `tcp` owns.
+        let set = unsafe {
+            libc::setsockopt(
+                tcp.as_raw_fd(),
+                level,
+                name,
+                (&raw const value).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        if set != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+impl Endpoint {
+    /// `BENCH_URL` when set: `tcp://<host>:<port>` and nothing else. Unset or empty is the root's
+    /// socket, as an empty `BENCH_DIR` is unset (#395).
+    pub fn resolve(url: Option<&str>, root: &Path) -> Result<Endpoint, String> {
+        let Some(url) = url.filter(|u| !u.is_empty()) else {
+            return Ok(Endpoint::Unix(socket_path(root)));
+        };
+        let refused = || format!("{BENCH_URL}={url} is not tcp://<host>:<port>");
+        let address = url.strip_prefix("tcp://").ok_or_else(refused)?;
+        let (host, port) = address.rsplit_once(':').ok_or_else(refused)?;
+        // An IPv6 host is bracketed, so the last `:` is the port's; any other host has none.
+        let (bare, colon_ok) = match host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+            Some(v6) => (v6, true),
+            None => (host, false),
+        };
+        let port_ok = port.parse::<u16>().is_ok_and(|p| p > 0);
+        let host_ok = !bare.is_empty()
+            && !bare.contains(['[', ']', '/'])
+            && (colon_ok || !bare.contains(':'));
+        if !host_ok || !port_ok {
+            return Err(refused());
+        }
+        Ok(Endpoint::Tcp(address.to_string()))
+    }
+
+    /// Connect. A TCP link gets `TCP_NODELAY` (a keystroke is one small write) and keepalive,
+    /// and comes back as a [`UnixStream`] over its fd: see [`tcp_stream`].
+    pub fn connect(&self) -> std::io::Result<UnixStream> {
+        match self {
+            Endpoint::Unix(path) => UnixStream::connect(path),
+            Endpoint::Tcp(address) => {
+                let tcp = std::net::TcpStream::connect(address.as_str())?;
+                keep_alive(&tcp)?;
+                tcp_stream(tcp)
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Endpoint::Unix(path) => write!(f, "{}", path.display()),
+            Endpoint::Tcp(address) => write!(f, "tcp://{address}"),
+        }
+    }
+}
+
+/// A TCP connection as the [`UnixStream`] every bench path already speaks, with `TCP_NODELAY`
+/// on. The protocol is bytes on a stream, and nothing on either side reads peer credentials or
+/// socket addresses, which are the only calls that would answer differently for a TCP fd; read,
+/// write, timeouts, `try_clone` and `shutdown` are the same syscalls. So benchd's handler and the
+/// CLI stay one code path for both transports.
+pub fn tcp_stream(tcp: std::net::TcpStream) -> std::io::Result<UnixStream> {
+    tcp.set_nodelay(true)?;
+    Ok(UnixStream::from(std::os::fd::OwnedFd::from(tcp)))
+}
+
 pub fn events_path(root: &Path) -> PathBuf {
     root.join("events.jsonl")
 }
@@ -901,6 +1012,34 @@ mod tests {
             };
             let expected = match row["root"].as_str() {
                 Some(root) => Ok(PathBuf::from(root)),
+                None => Err(row["refused"].as_str().unwrap()),
+            };
+            assert_eq!(resolved, expected, "{}", row["env"]);
+        }
+    }
+
+    /// `fixtures/bench-url.json` is the table helm's `BenchRoot.endpoint` is checked against
+    /// too: which benchd a client reaches for each environment, resolved as `bench` resolves it
+    /// (the suite judged first, then the root, then `BENCH_URL`).
+    #[test]
+    fn the_bench_url_fixture_resolves_as_the_binaries_resolve_it() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bench-url.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let table: Value = serde_json::from_str(&text).unwrap();
+        let home = Path::new(table["home"].as_str().unwrap());
+        for row in table["rows"].as_array().unwrap() {
+            let var = |name: &str| row["env"][name].as_str();
+            let resolved = match var("BENCH_SUITE").map(SuiteName::validate).transpose() {
+                Err(_) => Err("BENCH_SUITE"),
+                Ok(suite) => {
+                    let root = resolve_root(var("BENCH_DIR"), suite.as_ref(), home);
+                    Endpoint::resolve(var(BENCH_URL), &root)
+                        .map(|e| e.to_string())
+                        .map_err(|_| BENCH_URL)
+                }
+            };
+            let expected = match row["endpoint"].as_str() {
+                Some(endpoint) => Ok(endpoint.to_string()),
                 None => Err(row["refused"].as_str().unwrap()),
             };
             assert_eq!(resolved, expected, "{}", row["env"]);

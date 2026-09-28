@@ -48,6 +48,10 @@ const INHERITED: &[&str] = &[
     "BENCH_SESSION",
     "BENCH_HANDLE",
     "BENCH_ASKED",
+    // A benchd by address (M5c): a test run from a pane of a remote helm inherits BENCH_URL,
+    // which outranks every root the test claims.
+    "BENCH_URL",
+    "BENCH_LISTEN",
     "HELM_PANE",
     "HELM_BENCH_DIR",
     "PLAYWRIGHT_BROWSERS_PATH",
@@ -730,6 +734,18 @@ fn attach_on_pty(
     rows: u16,
     cols: u16,
 ) -> (fs::File, Child) {
+    attach_on_pty_with(home, session, extra, rows, cols, &[])
+}
+
+/// [`attach_on_pty`], with `env` set on the client.
+fn attach_on_pty_with(
+    home: &Path,
+    session: &str,
+    extra: &[&str],
+    rows: u16,
+    cols: u16,
+    env: &[(&str, &str)],
+) -> (fs::File, Child) {
     use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
     use std::os::unix::process::CommandExt;
     let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).unwrap();
@@ -744,6 +760,7 @@ fn attach_on_pty(
     let master = fs::File::from(master);
     set_size(&master, rows, cols);
     let mut cmd = isolated(bench_bin());
+    cmd.envs(env.iter().copied());
     cmd.arg("attach")
         .arg(session)
         .args(extra)
@@ -7452,5 +7469,291 @@ fn a_registry_row_saying_waiting_is_a_wait_without_a_hook_or_a_rule() {
         entry["waiting"],
         serde_json::json!({ "waiting_for": "dialog open", "since_ms": 1000, "source": "registry" }),
         "{entry}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M5c (#459): a benchd reached by address, and a pane that outlives a dropped link
+// ---------------------------------------------------------------------------
+
+/// A loopback port nobody holds right now, for `BENCH_LISTEN`.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// A daemon that also listens on TCP at `port`.
+fn tcp_daemon(home: &Path, port: u16) -> DaemonGuard {
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("BENCH_LISTEN", format!("127.0.0.1:{port}"));
+    DaemonGuard::start_with(home, None, cmd)
+}
+
+/// A TCP link between clients and benchd's listener that the test can cut, the way a Wi-Fi
+/// change or a sleeping Mac cuts one: `cut` closes every connection it carries and stops
+/// accepting, so a client that tries again is refused; `restore` accepts again on the same port.
+/// Its threads end with the test binary.
+struct Link {
+    port: u16,
+    up: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Link {
+    fn start(target: u16) -> Link {
+        use std::net::{Shutdown, TcpListener, TcpStream};
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = first.local_addr().unwrap().port();
+        let up = Arc::new(AtomicBool::new(true));
+        let carried: Arc<Mutex<Vec<TcpStream>>> = Arc::default();
+        let flag = Arc::clone(&up);
+        std::thread::spawn(move || {
+            let mut listener = Some(first);
+            loop {
+                if !flag.load(Ordering::SeqCst) {
+                    listener = None;
+                    for stream in carried.lock().unwrap().drain(..) {
+                        let _ = stream.shutdown(Shutdown::Both);
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
+                if listener.is_none() {
+                    listener = TcpListener::bind(("127.0.0.1", port)).ok();
+                }
+                let Some(l) = &listener else {
+                    std::thread::sleep(Duration::from_millis(20));
+                    continue;
+                };
+                l.set_nonblocking(true).unwrap();
+                let Ok((client, _)) = l.accept() else {
+                    std::thread::sleep(Duration::from_millis(20));
+                    continue;
+                };
+                client.set_nonblocking(false).unwrap();
+                let Ok(server) = TcpStream::connect(("127.0.0.1", target)) else {
+                    continue;
+                };
+                for (from, to) in [(&client, &server), (&server, &client)] {
+                    let (mut from, mut to) = (from.try_clone().unwrap(), to.try_clone().unwrap());
+                    std::thread::spawn(move || {
+                        let _ = std::io::copy(&mut from, &mut to);
+                        let _ = to.shutdown(Shutdown::Both);
+                    });
+                }
+                carried.lock().unwrap().extend([client, server]);
+            }
+        });
+        Link { port, up }
+    }
+
+    fn url(&self) -> String {
+        format!("tcp://127.0.0.1:{}", self.port)
+    }
+
+    fn cut(&self) {
+        self.up.store(false, Ordering::SeqCst);
+    }
+
+    fn restore(&self) {
+        self.up.store(true, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_client_with_only_a_url_reaches_benchd_over_tcp() {
+    let home = TestHome::claim("m5c-tcp");
+    let port = free_port();
+    let _daemon = tcp_daemon(&home.dir, port);
+    let url = format!("tcp://127.0.0.1:{port}");
+    // A root of its own with no socket in it: whatever answers came over TCP.
+    let elsewhere = home.dir.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    let remote = [
+        ("BENCH_URL", url.as_str()),
+        ("BENCH_DIR", elsewhere.to_str().unwrap()),
+    ];
+
+    let status = bench_as(&home.dir, &["status"], &remote);
+    assert_eq!(status.code, 0, "{}", status.stderr);
+    assert_eq!(
+        json_of(&status)["root"],
+        home.dir.join(".bench").display().to_string(),
+        "the benchd that answered is the one listening"
+    );
+    let spawned = bench_as(
+        &home.dir,
+        &["spawn", "--agent", "test-echo", "--cwd", "/tmp"],
+        &remote,
+    );
+    assert_eq!(spawned.code, 0, "{}", spawned.stderr);
+    let sessions = bench(&home.dir, &["sessions"]);
+    assert_eq!(
+        json_of(&sessions)["sessions"][0]["live"],
+        true,
+        "{}",
+        sessions.stdout
+    );
+
+    // The follower: the document first, as over the unix socket.
+    let mut follow = isolated(bench_bin());
+    follow
+        .envs(remote)
+        .env("HOME", &home.dir)
+        .args(["events", "--follow"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = follow.spawn().unwrap();
+    let mut first = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut first)
+        .unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    let first: serde_json::Value = serde_json::from_str(&first).expect("the document line");
+    assert!(first["document"].is_object(), "{first}");
+
+    assert!(
+        !elsewhere.join("benchd.sock").exists() && fs::read_dir(&elsewhere).unwrap().count() == 0,
+        "nothing was made in the client's own root"
+    );
+}
+
+#[test]
+fn a_url_that_is_wrong_or_unanswered_is_named_and_a_listen_that_cannot_bind_stops_benchd() {
+    let home = TestHome::claim("m5c-bad");
+    let malformed = bench_as(&home.dir, &["status"], &[("BENCH_URL", "forge:4518")]);
+    assert_eq!(malformed.code, 3, "{}", malformed.stderr);
+    assert!(
+        malformed.stderr.contains("BENCH_URL=forge:4518"),
+        "{}",
+        malformed.stderr
+    );
+
+    let port = free_port();
+    let url = format!("tcp://127.0.0.1:{port}");
+    let unanswered = bench_as(&home.dir, &["status"], &[("BENCH_URL", &url)]);
+    assert_eq!(unanswered.code, 2, "{}", unanswered.stderr);
+    assert!(unanswered.stderr.contains(&url), "{}", unanswered.stderr);
+
+    // Two benchds, one address: the second is told why, and does not start.
+    let _first = tcp_daemon(&home.dir, port);
+    let other = TestHome::claim("m5c-bad-2");
+    let mut second = isolated(benchd_bin());
+    second
+        .env("HOME", &other.dir)
+        .env("BENCH_LISTEN", format!("127.0.0.1:{port}"))
+        .stdout(Stdio::null());
+    let out = run_bounded(&mut second, Duration::from_secs(10)).expect("benchd gave up at once");
+    assert_ne!(out.code, 0);
+    assert!(
+        out.stderr
+            .contains(&format!("cannot listen on tcp 127.0.0.1:{port}")),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn a_pane_whose_link_drops_reconnects_and_shows_the_session_as_it_is() {
+    // A helm pane on a remote benchd read a dropped link as "benchd is not running" and ended,
+    // with its session still live (the M5c spike, attach.rs:240). Sleep, a Wi-Fi change and a
+    // benchd restart all drop the link; only benchd saying the session ended may end the pane.
+    let home = TestHome::claim("m5c-drop");
+    let port = free_port();
+    let _daemon = tcp_daemon(&home.dir, port);
+    let link = Link::start(port);
+    let run = bench(
+        &home.dir,
+        &["spawn", "--agent", "test-echo", "--cwd", "/tmp"],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+    let elsewhere = home.dir.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    let url = link.url();
+    let (mut master, mut viewer) = attach_on_pty_with(
+        &home.dir,
+        &sid,
+        &["--in-pane"],
+        24,
+        80,
+        &[
+            ("BENCH_URL", &url),
+            ("BENCH_DIR", elsewhere.to_str().unwrap()),
+        ],
+    );
+    let output = record_pane(&master);
+    let shown = || String::from_utf8_lossy(&output.lock().unwrap()).into_owned();
+    let attached = || json_of(&bench(&home.dir, &["sessions"]))["sessions"][0]["attached"] == true;
+    assert!(within(10, &attached), "the pane attaches over TCP");
+    master.write_all(b"before-the-drop\n").unwrap();
+    assert!(within(5, &|| shown().contains("before-the-drop")));
+
+    link.cut();
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        viewer.try_wait().unwrap().is_none(),
+        "the pane's viewer keeps running while benchd is out of reach: {:?}",
+        shown()
+    );
+    assert!(!shown().contains("ended"), "{:?}", shown());
+    assert!(
+        shown().contains("cannot reach benchd"),
+        "the pane says why it is waiting: {:?}",
+        shown()
+    );
+
+    link.restore();
+    assert!(
+        within(15, &attached),
+        "the pane attached again: {:?}",
+        shown()
+    );
+    master.write_all(b"after-the-drop\n").unwrap();
+    assert!(
+        within(5, &|| shown()
+            .rsplit("cannot reach benchd")
+            .next()
+            .is_some_and(|after| after.contains("after-the-drop"))),
+        "keys reach the session after the reconnect: {:?}",
+        shown()
+    );
+
+    // The pane's terminal, replayed, is the session's screen: redrawn from benchd, nothing twice.
+    std::thread::sleep(Duration::from_millis(300));
+    let mut pane = bench_vt::Terminal::new(80, 24, 1 << 20).unwrap();
+    pane.write(&output.lock().unwrap());
+    let screen = json_of(&bench(&home.dir, &["get", "screen", &sid, "--history"]));
+    let session_lines = trimmed(
+        screen["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l.as_str().unwrap().to_string())
+            .collect(),
+    );
+    assert_eq!(trimmed(pane.lines(true).unwrap()), session_lines);
+
+    // Control, which passes either way: the session ending still ends the pane, over TCP too.
+    master.write_all(b"\n\x04").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && viewer.try_wait().unwrap().is_none() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let ended = viewer.try_wait().unwrap();
+    if ended.is_none() {
+        let _ = viewer.kill();
+        let _ = viewer.wait();
+    }
+    assert_eq!(ended.and_then(|s| s.code()), Some(0), "{:?}", shown());
+    assert!(
+        within(5, &|| shown().contains(&format!("{sid} has ended"))),
+        "{:?}",
+        shown()
     );
 }

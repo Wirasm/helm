@@ -23,7 +23,7 @@ final class BenchClientTests: XCTestCase {
                 "data": ["seq": 7, "changed": true, "pane_created": pane.uuidString.lowercased()],
             ]
         }
-        let client = BenchClient(socketPath: server.path)
+        let client = BenchClient(endpoint: .unix(path: server.path))
 
         let answer = try client.request(
             BenchRequest(id: "r1", verb: .paneSplit(direction: .right), by: .operatorGesture),
@@ -37,6 +37,47 @@ final class BenchClientTests: XCTestCase {
         XCTAssertEqual((sent["args"] as? [String: Any])?["direction"] as? String, "right")
     }
 
+    /// A benchd on another machine (M5c): the same verb and the same follower over TCP, with
+    /// nothing but the endpoint changed.
+    func testAVerbAndTheFollowerWorkOverTCP() throws {
+        let server = try FakeBenchd(
+            document: BenchFixture.document(
+                path, BenchFixture.bench([BenchFixture.terminal()]), seq: 5),
+            tcp: true)
+        defer { server.stop() }
+        guard case .tcp = server.endpoint else { return XCTFail("\(server.endpoint)") }
+        let client = BenchClient(endpoint: server.endpoint)
+        var seen: [UInt64] = []
+        client.onDocument = { seen.append($0.seq) }
+        client.start()
+        defer { client.stop() }
+        XCTAssertTrue(Eventually.holds { seen == [5] }, "\(seen)")
+
+        let answer = try client.request(
+            BenchRequest(id: "r1", verb: .paneSplit(direction: .right), by: .operatorGesture),
+            answering: LayoutReport.self)
+        XCTAssertEqual(answer.status, .ok)
+        XCTAssertEqual(server.verbs.first?["verb"] as? String, "pane/split")
+    }
+
+    /// A benchd reached over TCP names a `bench` on its own machine; helm runs its own.
+    func testAClientOverTCPNeverRunsTheBenchBenchdNames() throws {
+        let server = try FakeBenchd(
+            document: BenchFixture.document(
+                path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1),
+            tcp: true)
+        defer { server.stop() }
+        server.answer = { request in
+            ["id": request["id"] ?? "", "status": "ok", "data": ["bench": "/forge/only/bench"]]
+        }
+        let client = BenchClient(endpoint: server.endpoint)
+        switch client.benchExecutable {
+        case let .success(bench): XCTAssertNotEqual(bench, "/forge/only/bench")
+        case let .failure(missing): XCTAssertTrue(missing.asked.contains("over TCP"), missing.asked)
+        }
+        XCTAssertTrue(server.verbs.isEmpty, "benchd is not asked: \(server.verbs)")
+    }
+
     /// The follower delivers the whole document, then each frame's document, in order; a frame
     /// no newer than what was delivered is not delivered again.
     func testTheFollowerDeliversTheDocumentThenFrames() throws {
@@ -44,7 +85,7 @@ final class BenchClientTests: XCTestCase {
             path, BenchFixture.bench([BenchFixture.terminal()]), seq: 3)
         let server = try FakeBenchd(document: first)
         defer { server.stop() }
-        let client = BenchClient(socketPath: server.path)
+        let client = BenchClient(endpoint: .unix(path: server.path))
         var seen: [UInt64] = []
         client.onDocument = { seen.append($0.seq) }
         client.start()
@@ -70,7 +111,7 @@ final class BenchClientTests: XCTestCase {
             document: BenchFixture.document(
                 path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
         defer { server.stop() }
-        let client = BenchClient(socketPath: server.path)
+        let client = BenchClient(endpoint: .unix(path: server.path))
         var seen: [UInt64] = []
         client.onDocument = { seen.append($0.seq) }
         client.start()
@@ -93,7 +134,7 @@ final class BenchClientTests: XCTestCase {
             document: BenchFixture.document(
                 path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
         defer { server.stop() }
-        let client = BenchClient(socketPath: server.path)
+        let client = BenchClient(endpoint: .unix(path: server.path))
         var seen: [UInt64] = []
         client.onDocument = { seen.append($0.seq) }
         client.start()
@@ -114,7 +155,8 @@ final class BenchClientTests: XCTestCase {
     /// No daemon at all: the state names the socket's failure, and a verb throws rather than
     /// hanging.
     func testNoDaemonIsDisconnectedAndAVerbFails() throws {
-        let client = BenchClient(socketPath: "/tmp/hb-nobody-\(UUID().uuidString.prefix(6)).sock")
+        let client = BenchClient(
+            endpoint: .unix(path: "/tmp/hb-nobody-\(UUID().uuidString.prefix(6)).sock"))
         client.start()
         defer { client.stop() }
 
@@ -136,7 +178,7 @@ final class BenchClientTests: XCTestCase {
         server.answer = { request in
             ["id": request["id"] ?? "", "status": "refused", "reason": "no pane 1234 on the bench"]
         }
-        let client = BenchClient(socketPath: server.path)
+        let client = BenchClient(endpoint: .unix(path: server.path))
         let model = WorkbenchModel(
             terminals: TerminalManager(), client: client)
         defer { client.stop() }

@@ -59,6 +59,27 @@ package enum BenchRoot {
         }
     }
 
+    /// Where this helm reaches benchd: the root's `benchd.sock`, or `BENCH_URL`. The root is
+    /// judged first, as `bench` judges it, so a suite that cannot isolate is refused even with a
+    /// URL set. The one place the socket is derived: every caller asks here.
+    package static func endpoint(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> Result<BenchEndpoint, BenchRootError> {
+        resolve(environment: environment, home: home).flatMap { root in
+            let url = environment[BenchEndpoint.urlVariable]
+            let socket = root.appendingPathComponent("benchd.sock").path
+            guard let endpoint = BenchEndpoint.parse(url: url, socket: socket) else {
+                return .failure(
+                    BenchRootError(
+                        variable: BenchEndpoint.urlVariable, value: url ?? "",
+                        sentence: "\(BenchEndpoint.urlVariable)=\(url ?? "") is not "
+                            + "tcp://<host>:<port>, so helm will not guess which benchd you meant"))
+            }
+            return .success(endpoint)
+        }
+    }
+
     private static func root(suite: String, home: URL) -> URL {
         home.appendingPathComponent(".bench-\(suite)", isDirectory: true)
     }
@@ -72,7 +93,8 @@ package enum BenchRoot {
 }
 
 package struct BenchRootError: Error, Equatable {
-    /// The variable that named the suite: `BENCH_SUITE` or `HELM_DEFAULTS_SUITE`.
+    /// The variable that was refused: `BENCH_SUITE` or `HELM_DEFAULTS_SUITE` naming a suite, or
+    /// `BENCH_URL`.
     package let variable: String
     package let value: String
     /// Why, for the pane to show.

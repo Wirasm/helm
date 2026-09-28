@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// benchd's side of the status bar (#354): a capsule when the follower cannot
-/// reach benchd, naming the socket, and the reason the last verb did not happen.
+/// reach benchd, naming where it looked, and the reason the last verb did not happen.
 ///
 /// **Visible failure is the whole job** (AC8). While benchd is down the last document stays on
 /// screen and nothing changes locally — so without this, a key that did nothing would look
@@ -18,7 +18,7 @@ struct BenchStatusBadge: View {
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
                     .background(Color.danger, in: Capsule())
-                    .help("\(client.socketPath.isEmpty ? "no socket" : client.socketPath) — \(why)")
+                    .help("\(client.endpoint.map(\.description) ?? "no socket") — \(why)")
             }
             if let failure = workbench.verbFailure {
                 Text(failure).foregroundStyle(Color.attention).lineLimit(1).truncationMode(.middle)

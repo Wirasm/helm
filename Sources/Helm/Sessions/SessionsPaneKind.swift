@@ -42,14 +42,13 @@ final class SessionsPaneKind: SurfaceKind {
 }
 
 extension SessionsActions {
-    /// benchd at this helm's bench root, and the bench `workbench` draws.
+    /// This helm's benchd (`BenchRoot.endpoint`), and the bench `workbench` draws.
     @MainActor
     static func live(
         workbench: WorkbenchModel, terminals: TerminalManager,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> SessionsActions {
-        let socket = BenchRoot.resolve(environment: environment)
-            .map { $0.appendingPathComponent("benchd.sock").path }
+        let socket = BenchRoot.endpoint(environment: environment)
             .mapError { Refused($0.sentence) }
         return SessionsActions(
             list: { workspace in

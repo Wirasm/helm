@@ -8,6 +8,8 @@ description = "Every bench wire type and shared resolution rule, spelled once."
 bench-doc = { path = "../bench-doc" }
 serde.workspace = true
 serde_json.workspace = true
+# TCP keepalive on a client's link to a benchd on another machine (`Endpoint::connect`).
+libc = "0.2"
 
 [lints]
 workspace = true

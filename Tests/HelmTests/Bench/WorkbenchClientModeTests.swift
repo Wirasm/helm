@@ -19,7 +19,7 @@ final class WorkbenchClientModeTests: XCTestCase {
 
     private func rig(_ first: DocumentAt) throws -> Rig {
         let server = try FakeBenchd(document: first)
-        let client = BenchClient(socketPath: server.path)
+        let client = BenchClient(endpoint: .unix(path: server.path))
         let terminals = TerminalManager()
         let model = WorkbenchModel(terminals: terminals, client: client)
         addTeardownBlock { @MainActor in

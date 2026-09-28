@@ -97,17 +97,16 @@ final class JustRuns: ObservableObject {
         return { try ask { BenchJustListRequest(id: $0) }.recipes }
     }
 
-    /// One request to benchd at the bench root resolved once, its `ok` answer or a `Refused`
+    /// One request to this helm's benchd (`BenchRoot.endpoint`), resolved once, its `ok` answer or a `Refused`
     /// saying why not: the shape both just verbs share.
     private nonisolated static func asker<Payload: Decodable & Sendable>(
         _ environment: [String: String], answering _: Payload.Type
     ) -> @Sendable (_ request: (String) -> any Encodable) throws -> Payload {
-        let socket = BenchRoot.resolve(environment: environment)
-            .map { $0.appendingPathComponent("benchd.sock").path }
+        let socket = BenchRoot.endpoint(environment: environment)
         return { request in
-            let path = try socket.mapError { Refused(description: $0.sentence) }.get()
+            let endpoint = try socket.mapError { Refused(description: $0.sentence) }.get()
             let answer = try BenchClient.request(
-                request("helm-\(UUID().uuidString.lowercased())"), at: path,
+                request("helm-\(UUID().uuidString.lowercased())"), at: endpoint,
                 answering: Payload.self)
             guard answer.status == .ok, let data = answer.data else {
                 throw Refused(description: answer.reason ?? "benchd \(answer.status.rawValue)")

@@ -330,4 +330,29 @@ final class BenchWireConformanceTests: XCTestCase {
             }
         }
     }
+
+    /// `bench-url.json` is the table `bench_wire::Endpoint::resolve` is checked against in the
+    /// daemon gate: for each environment, the benchd helm reaches is the one `bench` reaches, and
+    /// a `BENCH_URL` one side refuses the other refuses too.
+    func testTheBenchURLTableResolvesAsTheDaemonResolvesIt() throws {
+        struct Table: Decodable {
+            struct Row: Decodable {
+                let env: [String: String]
+                let endpoint: String?
+                let refused: String?
+            }
+            let home: String
+            let rows: [Row]
+        }
+        let table = try JSONDecoder().decode(Table.self, from: fixture("bench-url.json"))
+        let home = URL(fileURLWithPath: table.home, isDirectory: true)
+        for row in table.rows {
+            switch BenchRoot.endpoint(environment: row.env, home: home) {
+            case .success(let endpoint):
+                XCTAssertEqual(endpoint.description, row.endpoint, "\(row.env)")
+            case .failure(let error):
+                XCTAssertEqual(error.variable, row.refused, "\(row.env)")
+            }
+        }
+    }
 }
