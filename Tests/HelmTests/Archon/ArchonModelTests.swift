@@ -175,6 +175,44 @@ final class ArchonModelTests: XCTestCase {
         await model.refresh(in: workspace)
 
         XCTAssertEqual(model.running.map(\.id), ["a"])
+        XCTAssertNil(model.refreshFailure, "one hiccup after a good poll says nothing")
+    }
+
+    /// #523: with no rows to keep, a failed poll must not read as "no runs here yet".
+    @MainActor
+    func testAPollThatFailsWithNothingToShowSaysWhy() async throws {
+        let client = FakeArchonClient()
+        await client.setFailure(.notInstalled())
+        let model = ArchonModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-first-failure"))
+
+        await model.refresh(in: workspace)
+
+        let failure = try XCTUnwrap(model.refreshFailure)
+        XCTAssertTrue(failure.contains("/tmp/project"), failure)
+        XCTAssertTrue(failure.contains("No such file or directory"), failure)
+    }
+
+    /// #523: a second failure in a row is not a hiccup. The rows stay, the reason joins them,
+    /// and the next good poll takes it away.
+    @MainActor
+    func testFailuresThatKeepHappeningSayWhyUntilAPollSucceeds() async throws {
+        let client = FakeArchonClient(
+            runsResponse: .fixture(runs: [.fixture(id: "a", status: "running")]))
+        let model = ArchonModel(
+            client: client, defaults: try isolatedDefaults("archon-rail-repeated-failure"))
+        await model.refresh(in: workspace)
+
+        await client.setFailure(.notInstalled())
+        await model.refresh(in: workspace)
+        await model.refresh(in: workspace)
+
+        XCTAssertEqual(model.running.map(\.id), ["a"])
+        XCTAssertNotNil(model.refreshFailure)
+
+        await client.setFailure(nil)
+        await model.refresh(in: workspace)
+        XCTAssertNil(model.refreshFailure)
     }
 
     @MainActor

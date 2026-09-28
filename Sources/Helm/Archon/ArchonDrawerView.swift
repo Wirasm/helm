@@ -65,7 +65,15 @@ struct ArchonDrawerView: View {
                     section("WAITING ON YOU", model.gated)
                     section("RUNNING", model.running)
                     section("FINISHED", model.finished)
-                    if runs.isEmpty {
+                    // A failure to list sits under the rows it may have made stale, and replaces
+                    // the empty line: "no runs here" is a claim helm cannot make then (#523).
+                    if let failure = model.refreshFailure {
+                        Text(failure)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Color.danger)
+                            .textSelection(.enabled)
+                            .padding(12)
+                    } else if runs.isEmpty {
                         Text(
                             workspace == nil ? ArchonModel.noWorkspace : "No Archon runs here yet."
                         )
