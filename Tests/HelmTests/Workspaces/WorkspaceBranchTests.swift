@@ -92,16 +92,18 @@ final class WorkspaceBranchTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let path = WorkspacePath(dir.path)
+        let host = LocalBenchHost(
+            environment: ProcessInfo.processInfo.environment, homeDirectory: dir.path)
 
-        let notARepository = await WorkspaceModel.currentBranch(in: path)
+        let notARepository = await WorkspaceModel.currentBranch(in: path, host: host)
         XCTAssertNil(notARepository)
 
         try git(["init", "-q", "-b", "main", dir.path])
-        let first = await WorkspaceModel.currentBranch(in: path)
+        let first = await WorkspaceModel.currentBranch(in: path, host: host)
         XCTAssertEqual(first, "main")
 
         try git(["-C", dir.path, "checkout", "-q", "-b", "feat/x"])
-        let second = await WorkspaceModel.currentBranch(in: path)
+        let second = await WorkspaceModel.currentBranch(in: path, host: host)
         XCTAssertEqual(second, "feat/x")
     }
 

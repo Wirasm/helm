@@ -21,8 +21,13 @@ final class WorkspaceModel: ObservableObject {
 
     private let readBranch: @Sendable (WorkspacePath) async -> String?
 
-    init(readBranch: @escaping @Sendable (WorkspacePath) async -> String? = currentBranch(in:)) {
+    init(readBranch: @escaping @Sendable (WorkspacePath) async -> String?) {
         self.readBranch = readBranch
+    }
+
+    /// Branches read on benchd's machine (`currentBranch(in:host:)`).
+    convenience init(host: any BenchHost) {
+        self.init { await Self.currentBranch(in: $0, host: host) }
     }
 
     /// The workspaces and the selection benchd's document names.
@@ -52,14 +57,16 @@ final class WorkspaceModel: ObservableObject {
 }
 
 extension WorkspaceModel {
-    /// `git branch --show-current`, through `Subprocess`, so the wait holds no thread. Nil when
-    /// git fails, times out or prints nothing: not a repository, or a detached HEAD. A cancelled
-    /// ask is nil too, and `refreshBranch` drops it.
-    nonisolated static func currentBranch(in path: WorkspacePath) async -> String? {
+    /// `git branch --show-current` on benchd's machine (`BenchHost`, M5c), where the workspace
+    /// is. Nil when git fails, times out or prints nothing — not a repository, or a detached
+    /// HEAD — and when benchd cannot be asked: the tab then shows no label, as for a folder with
+    /// no branch. A cancelled ask is nil too, and `refreshBranch` drops it.
+    nonisolated static func currentBranch(
+        in path: WorkspacePath, host: any BenchHost
+    ) async -> String? {
         guard
-            let result = try? await Subprocess.run(
-                ["git", "-C", path.value, "branch", "--show-current"],
-                environment: ProcessInfo.processInfo.environment,
+            let result = try? await host.run(
+                .git(args: ["-C", path.value, "branch", "--show-current"]),
                 timeout: .seconds(10)),
             result.status == 0
         else { return nil }

@@ -28,6 +28,7 @@
 
 mod ask;
 mod codex;
+mod commands;
 mod files;
 mod hook;
 mod just;
@@ -1063,6 +1064,11 @@ fn dispatch(
         Some(Verb::FileRead) => answered(req, files::read(&req.args)),
         Some(Verb::FileWrite) => answered(req, files::write(&req.args)),
         Some(Verb::FileAppend) => answered(req, files::append(&req.args)),
+        // Off the core lock: a command can take as long as its deadline, and only this
+        // connection waits for it.
+        Some(Verb::CommandRun) => answered(req, commands::run(&req.args)),
+        Some(Verb::PathExists) => answered(req, commands::exists(&req.args)),
+        Some(Verb::GitRepositories) => answered(req, commands::repositories(&req.args)),
         Some(Verb::Layout) => {
             let response = layout::answer(&mut core.lock().unwrap(), req);
             (response, AfterResponse::Done)

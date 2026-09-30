@@ -37,8 +37,9 @@ final class WorktreeCLITests: XCTestCase {
         ]
         environment.merge(extraEnvironment) { _, new in new }
         return WorktreeCLI(
-            environment: environment, gitExecutable: git.path, timeout: timeout,
-            homeDirectory: root.path)
+            host: LocalBenchHost(
+                environment: environment, gitExecutable: git.path, homeDirectory: root.path),
+            timeout: timeout)
     }
 
     /// The repository-wide reads are one call each whatever the number of worktrees, and the

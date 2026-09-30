@@ -15,7 +15,7 @@ final class BenchSnapshotTests: XCTestCase {
             document: BenchDocument(
                 workspaces: [.init(path: workspace.path.value, bench: bench)],
                 active: workspace.path.value))
-        let workspaces = WorkspaceModel()
+        let workspaces = WorkspaceModel(readBranch: { _ in nil })
         rig.model.followDocuments { workspaces.follow($0) }
         return (workspaces, rig.model, rig.terminals)
     }

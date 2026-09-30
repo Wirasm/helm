@@ -8623,3 +8623,289 @@ fn a_fork_helm_asks_for_gets_its_prompt_as_a_file_and_leaves_focus_alone() {
         assert_eq!(reply["status"], "refused", "{reply}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// M5c: helm's git and archon, run on benchd's machine (`command/run`, `path/exists`,
+// `git/repositories`)
+// ---------------------------------------------------------------------------
+
+/// A TCP daemon whose PATH holds only the system's and Homebrew's folders: never the operator's
+/// `~/.bun/bin`, so the only `archon` it can find is a test's stub in its own `HOME`.
+fn tcp_daemon_with_system_path(home: &Path, port: u16) -> DaemonGuard {
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("BENCH_LISTEN", format!("127.0.0.1:{port}"))
+        .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin");
+    DaemonGuard::start_with(home, None, cmd)
+}
+
+fn command_run(port: u16, command: serde_json::Value, timeout_ms: u64) -> serde_json::Value {
+    tcp_verb(
+        port,
+        "command/run",
+        serde_json::json!({ "command": command, "timeout_ms": timeout_ms }),
+    )
+}
+
+/// An `exited` answer's (status, stdout, stderr).
+fn exited(answer: &serde_json::Value) -> (i64, String, String) {
+    let data = ok(answer);
+    assert_eq!(data["kind"], "exited", "{answer}");
+    let text = |key: &str| {
+        String::from_utf8(bench_wire::unbase64(data[key].as_str().unwrap()).unwrap()).unwrap()
+    };
+    (
+        data["status"].as_i64().unwrap(),
+        text("stdout"),
+        text("stderr"),
+    )
+}
+
+fn test_git(args: &[&str], dir: &Path) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `<home>/Projects/app` on `main`, with a worktree `merged-one` at main's tip and a worktree
+/// `feature` one commit ahead of it.
+fn repo_with_worktrees(home: &Path) -> PathBuf {
+    let app = home.join("Projects/app");
+    fs::create_dir_all(&app).unwrap();
+    let app = app.canonicalize().unwrap();
+    test_git(&["init", "-q", "-b", "main"], &app);
+    fs::write(app.join("a.txt"), "a").unwrap();
+    test_git(&["add", "."], &app);
+    test_git(&["commit", "-q", "-m", "first"], &app);
+    test_git(
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "merged-one",
+            ".worktrees/merged-one",
+        ],
+        &app,
+    );
+    test_git(
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            ".worktrees/feature",
+        ],
+        &app,
+    );
+    let feature = app.join(".worktrees/feature");
+    fs::write(feature.join("b.txt"), "b").unwrap();
+    test_git(&["add", "."], &feature);
+    test_git(&["commit", "-q", "-m", "unmerged"], &feature);
+    app
+}
+
+/// What the Worktrees drawer's delete leans on, through benchd over TCP: git's own answers come
+/// back exactly, a "no" included. `merge-base --is-ancestor` says an unmerged branch is not in
+/// main with status 1 — an answer, not a refusal — and helm stops before `branch -D` on it; a
+/// merged one says 0. Uncommitted work shows in `status --porcelain`, and `worktree remove`
+/// without `--force` refuses a dirty worktree with git's words.
+#[test]
+fn command_run_over_tcp_answers_gits_own_status_and_output() {
+    let home = TestHome::claim("m5c-git");
+    let port = free_port();
+    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let app = repo_with_worktrees(&home.dir);
+    let common = app.join(".git").display().to_string();
+    let git = |args: &[&str]| {
+        exited(&command_run(
+            port,
+            serde_json::json!({ "program": "git", "args": args }),
+            20_000,
+        ))
+    };
+
+    let (status, listing, _) = git(&["-C", &common, "worktree", "list", "--porcelain"]);
+    assert_eq!(status, 0);
+    assert!(listing.contains("branch refs/heads/feature"), "{listing}");
+    assert_eq!(
+        git(&[
+            "-C",
+            &common,
+            "merge-base",
+            "--is-ancestor",
+            "feature",
+            "main"
+        ])
+        .0,
+        1
+    );
+    assert_eq!(
+        git(&[
+            "-C",
+            &common,
+            "merge-base",
+            "--is-ancestor",
+            "merged-one",
+            "main"
+        ])
+        .0,
+        0
+    );
+
+    let feature = app.join(".worktrees/feature");
+    fs::write(feature.join("new.txt"), "work").unwrap();
+    let path = feature.display().to_string();
+    let (_, dirty, _) = git(&["--no-optional-locks", "-C", &path, "status", "--porcelain"]);
+    assert_eq!(dirty.lines().count(), 1, "{dirty}");
+    let (status, _, stderr) = git(&["-C", &common, "worktree", "remove", &path]);
+    assert_ne!(status, 0, "a dirty worktree is not removed without --force");
+    assert!(
+        stderr.contains("untracked"),
+        "git's own words come back: {stderr}"
+    );
+    assert!(feature.join("new.txt").exists());
+
+    // A working directory and a failure that is git's, not benchd's.
+    let (status, branch, _) = exited(&command_run(
+        port,
+        serde_json::json!({ "program": "git", "args": ["branch", "--show-current"], "cwd": app }),
+        10_000,
+    ));
+    assert_eq!((status, branch.as_str()), (0, "main\n"));
+    let (status, _, stderr) = git(&["-C", &home.dir.display().to_string(), "status"]);
+    assert_eq!(status, 128);
+    assert!(stderr.contains("not a git repository"), "{stderr}");
+}
+
+/// `archon` is found in benchd's own `~/.bun/bin`, runs in the named directory with that folder
+/// first on its PATH (it is a bun script), and gets `ARCHON_HOME` when asked. What benchd cannot
+/// start is a refusal naming why; a slow run is killed at its deadline; and a run that leaves a
+/// background child holding its stdout (`--detach`) is still answered at once.
+#[test]
+fn command_run_over_tcp_finds_archon_in_benchds_home_and_keeps_its_deadline() {
+    let home = TestHome::claim("m5c-archon");
+    let port = free_port();
+    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let work = home.dir.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let work = work.canonicalize().unwrap();
+    let archon = |args: &[&str], extra: serde_json::Value, timeout_ms| {
+        let mut command = serde_json::json!({ "program": "archon", "args": args, "cwd": work });
+        if let Some(home) = extra.get("home") {
+            command["home"] = home.clone();
+        }
+        command_run(port, command, timeout_ms)
+    };
+
+    // Not installed on benchd's machine: refused, naming where it looked.
+    let missing = archon(
+        &["workflow", "runs", "--json"],
+        serde_json::json!({}),
+        5_000,
+    );
+    assert_eq!(missing["status"], "refused", "{missing}");
+    let why = missing["reason"].as_str().unwrap();
+    assert!(
+        why.contains("archon is not installed") && why.contains(".bun/bin"),
+        "{why}"
+    );
+
+    let bun = home.dir.join(".bun/bin");
+    fs::create_dir_all(&bun).unwrap();
+    let stub = bun.join("archon");
+    fs::write(
+        &stub,
+        "#!/bin/sh\ncase \"$1\" in\n  slow) exec sleep 5 ;;\n  detach) sleep 2 & echo started; exit 0 ;;\nesac\n\
+         printf '%s|%s|%s|%s\\n' \"$PWD\" \"${ARCHON_HOME:-none}\" \"${PATH%%:*}\" \"$*\"\nexit 3\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let (status, out, _) = exited(&archon(
+        &["complete", "archon/task-x"],
+        serde_json::json!({ "home": "/archon/home" }),
+        5_000,
+    ));
+    assert_eq!(status, 3, "a nonzero exit is an answer");
+    assert_eq!(
+        out,
+        format!(
+            "{}|/archon/home|{}|complete archon/task-x\n",
+            work.display(),
+            bun.display()
+        )
+    );
+
+    let started = Instant::now();
+    let slow = archon(&["slow"], serde_json::json!({}), 300);
+    assert_eq!(ok(&slow)["kind"], "timed_out", "{slow}");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "killed at its deadline"
+    );
+
+    let started = Instant::now();
+    let (status, out, _) = exited(&archon(&["detach"], serde_json::json!({}), 5_000));
+    assert_eq!((status, out.as_str()), (0, "started\n"));
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "a background child holding stdout does not hold the answer"
+    );
+
+    // Refused before anything runs: a directory that is not one, a program that is not allowed.
+    let nowhere = command_run(
+        port,
+        serde_json::json!({ "program": "git", "args": ["status"], "cwd": work.join("gone") }),
+        5_000,
+    );
+    assert_eq!(nowhere["status"], "refused", "{nowhere}");
+    let shell = command_run(
+        port,
+        serde_json::json!({ "program": "sh", "args": ["-c", "true"] }),
+        5_000,
+    );
+    assert_eq!(shell["status"], "refused", "{shell}");
+}
+
+/// `path/exists` and `git/repositories` read benchd's disk and benchd's home, over TCP.
+#[test]
+fn path_exists_and_git_repositories_over_tcp_read_benchds_disk() {
+    let home = TestHome::claim("m5c-repos");
+    let port = free_port();
+    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let app = repo_with_worktrees(&home.dir);
+    let feature = app.join(".worktrees/feature").display().to_string();
+    let gone = app.join(".worktrees/gone").display().to_string();
+
+    let answer = tcp_verb(
+        port,
+        "path/exists",
+        serde_json::json!({ "paths": [feature, gone] }),
+    );
+    assert_eq!(ok(&answer)["existing"], serde_json::json!([feature]));
+
+    let found = tcp_verb(
+        port,
+        "git/repositories",
+        serde_json::json!({ "workspaces": [feature] }),
+    );
+    assert_eq!(
+        ok(&found)["repositories"],
+        serde_json::json!([{ "common_dir": app.join(".git"), "is_workspace": true }])
+    );
+}

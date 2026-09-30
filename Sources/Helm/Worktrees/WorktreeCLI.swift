@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 /// Reads and changes one repository's worktrees through git. The repository is named by its
 /// common git directory (`WorktreeRepo.commonDir`); git runs there, so a bare repository and one
@@ -51,27 +52,21 @@ struct WorktreeCLIError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
+/// The Worktrees drawer's git and `archon complete`, run on benchd's machine (`BenchHost`, M5c):
+/// the repositories are there, whether that is this Mac or another. Every rule below — what a
+/// delete loses, the merged re-check before a branch goes — is decided here from what those
+/// commands answer; only the process runs elsewhere.
 struct WorktreeCLI: WorktreeClient, Sendable {
     static let defaultTimeout: Duration = .seconds(20)
+    static let archonTimeout: Duration = .seconds(120)
     static let errorSnippetLimit = 1_000
 
-    let environment: [String: String]
-    let gitExecutable: String
+    let host: any BenchHost
     let timeout: Duration
-    /// Where `~/.bun/bin` is looked for when `archon` is run, as `ArchonCLI` does. A test
-    /// points it at a scratch folder so its fake `archon` is the one found, never the real one.
-    let homeDirectory: String
 
-    init(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        gitExecutable: String = "/usr/bin/env",
-        timeout: Duration = WorktreeCLI.defaultTimeout,
-        homeDirectory: String = NSHomeDirectory()
-    ) {
-        self.environment = environment
-        self.gitExecutable = gitExecutable
+    init(host: any BenchHost, timeout: Duration = WorktreeCLI.defaultTimeout) {
+        self.host = host
         self.timeout = timeout
-        self.homeDirectory = homeDirectory
     }
 
     /// Every worktree of one repository, with its status. A repository-wide call each for the
@@ -89,10 +84,13 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         let defaultBranch = await resolveDefaultBranch(in: commonDir)
         let branches = await branchFacts(in: commonDir)
         let merged = await mergedBranches(into: defaultBranch, in: commonDir)
+        // Asked, never assumed: a worktree read as missing is removed with `git worktree prune`,
+        // so a failure to look fails the listing rather than marking every row gone.
+        let existing = try await host.existing(records.map(\.path))
 
         var worktrees: [Worktree] = []
         for (index, record) in records.enumerated() {
-            let exists = FileManager.default.fileExists(atPath: record.path)
+            let exists = existing.contains(record.path)
             let facts = record.branch.flatMap { branches[$0] }
             let readsStatus =
                 exists && !record.isBare && (records.count > 1 || statusOfALoneCheckout)
@@ -170,25 +168,21 @@ struct WorktreeCLI: WorktreeClient, Sendable {
     /// exits 0 whether it removed the worktree, refused, or found nothing, so its words are
     /// answered for the caller to show when git says the worktree is still there.
     func archonComplete(branch: String, home: String?, main: String) async throws -> String {
-        var environment = ArchonCLI.developmentEnvironment(
-            inherited: self.environment, homeDirectory: homeDirectory)
-        if let home { environment["ARCHON_HOME"] = home }
-        let command = "archon complete \(branch)"
+        let command = BenchCommand.archon(args: ["complete", branch], cwd: main, home: home)
         let result: Subprocess.Result
         do {
-            result = try await Subprocess.run(
-                ["archon", "complete", branch], cwd: main, environment: environment,
-                timeout: .seconds(120))
+            result = try await host.run(command, timeout: Self.archonTimeout)
         } catch let failure as Subprocess.Failure {
             throw WorktreeCLIError(
-                command: command, reason: Self.reason(for: failure, timeout: .seconds(120)))
+                command: command.line,
+                reason: Self.reason(for: failure, timeout: Self.archonTimeout))
         }
         let text = [result.stdout, result.stderr]
             .map { String(decoding: $0, as: UTF8.self) }
             .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         guard result.status == 0 else {
             throw WorktreeCLIError(
-                command: command,
+                command: command.line,
                 reason: .nonzeroExit(
                     status: result.status,
                     stderr: result.stderrSnippet(limit: Self.errorSnippetLimit)))
@@ -204,8 +198,8 @@ struct WorktreeCLI: WorktreeClient, Sendable {
         _ = try await runGit(["check-ref-format", "--branch", branch])
         let path = WorktreePlace.path(
             for: branch, main: main,
-            keepsWorktreesInside: await keepsWorktreesInside(main))
-        guard !FileManager.default.fileExists(atPath: path) else {
+            keepsWorktreesInside: try await keepsWorktreesInside(main))
+        guard try await !host.existing([path]).contains(path) else {
             throw WorktreeCLIError(
                 command: "git worktree add \(path)",
                 reason: .malformedOutput("\(path) already exists"))
@@ -234,9 +228,9 @@ struct WorktreeCLI: WorktreeClient, Sendable {
     }
 
     /// The repository keeps worktrees in `.worktrees` when that folder exists or git ignores it.
-    private func keepsWorktreesInside(_ main: String) async -> Bool {
+    private func keepsWorktreesInside(_ main: String) async throws -> Bool {
         let folder = URL(fileURLWithPath: main).appendingPathComponent(".worktrees").path
-        if FileManager.default.fileExists(atPath: folder) { return true }
+        if try await host.existing([folder]).contains(folder) { return true }
         return (try? await runGit(["-C", main, "check-ignore", "-q", ".worktrees/"])) != nil
     }
 
@@ -367,25 +361,17 @@ struct WorktreeCLI: WorktreeClient, Sendable {
     }
 
     private func runGit(_ arguments: [String]) async throws -> String {
-        let executableArguments =
-            gitExecutable == "/usr/bin/env" ? ["git"] + arguments : [gitExecutable] + arguments
-        return try await run(
-            arguments: executableArguments,
-            commandName: (["git"] + arguments).joined(separator: " "))
-    }
-
-    private func run(arguments: [String], commandName: String) async throws -> String {
+        let command = BenchCommand.git(args: arguments)
         let result: Subprocess.Result
         do {
-            result = try await Subprocess.run(
-                arguments, environment: environment, timeout: timeout)
+            result = try await host.run(command, timeout: timeout)
         } catch let failure as Subprocess.Failure {
             throw WorktreeCLIError(
-                command: commandName, reason: Self.reason(for: failure, timeout: timeout))
+                command: command.line, reason: Self.reason(for: failure, timeout: timeout))
         }
         guard result.status == 0 else {
             throw WorktreeCLIError(
-                command: commandName,
+                command: command.line,
                 reason: .nonzeroExit(
                     status: result.status,
                     stderr: result.stderrSnippet(limit: Self.errorSnippetLimit)))

@@ -137,7 +137,7 @@ final class DrawerTests: XCTestCase {
     func testTheDrawerKeySendsDrawerToggleAsTheOperator() throws {
         let rig = try rig(document(BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
         let actions = LocalActions(
-            workbench: rig.model, workspaces: WorkspaceModel(),
+            workbench: rig.model, workspaces: WorkspaceModel(readBranch: { _ in nil }),
             terminals: rig.terminals)
 
         actions.perform(.verb(.toggleDrawer(name: "browser", surface: .browser)))

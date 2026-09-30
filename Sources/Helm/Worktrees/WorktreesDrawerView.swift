@@ -79,6 +79,13 @@ struct WorktreesDrawerView: View {
         return ScrollViewReader { scroller in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    if let failure = model.discoveryFailure {
+                        Text("Could not look for repositories: \(failure)")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Color.danger)
+                            .textSelection(.enabled)
+                            .padding(12)
+                    }
                     ForEach(repos) { repo in
                         WorktreesRepoHeader(repo: repo, failure: model.refreshFailures[repo.id])
                         ForEach(repo.worktrees) { row in
@@ -95,7 +102,7 @@ struct WorktreesDrawerView: View {
                             .id(row.id)
                         }
                     }
-                    if repos.isEmpty {
+                    if repos.isEmpty && model.discoveryFailure == nil {
                         Text(model.isRefreshing ? "Looking for worktrees…" : "No worktrees found.")
                             .font(.system(size: 11.5))
                             .foregroundStyle(Color.textFaint)

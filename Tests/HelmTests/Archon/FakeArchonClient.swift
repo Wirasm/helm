@@ -234,3 +234,10 @@ extension ArchonCLIError {
             reason: .nonzeroExit(status: 127, stderr: "env: archon: No such file or directory"))
     }
 }
+
+extension ArchonModel {
+    /// A model whose finished rows open nothing: a test that clicks one passes its own opener.
+    convenience init(client: any ArchonClient, defaults: UserDefaults) {
+        self.init(client: client, defaults: defaults, opener: ArchonRunOpener { _ in })
+    }
+}

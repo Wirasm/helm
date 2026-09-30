@@ -31,7 +31,7 @@ enum WorktreeOwner: Codable, Equatable, Sendable {
     ]
 
     /// Archon's by where it lives — `<home>/.archon*/workspaces/<owner>/<repo>/worktrees/…`,
-    /// the layout Archon makes and `WorktreeDiscovery` reads — or by a branch name only Archon
+    /// the layout Archon makes and benchd's `git/repositories` reads — or by a branch name only Archon
     /// gives out. Anything else under an Archon home, such as a worktree made beside Archon's
     /// own clone in `…/<repo>/source`, is git's: Archon has no record of it.
     static func of(path: String, branch: String?) -> WorktreeOwner {
