@@ -845,7 +845,10 @@ final class CanvasModel: ObservableObject {
     func refreshIfChanged() {
         guard let previous = showing else { return }
         let read = files.read(previous.url.path, within: nil)
-        if case let .bytes(now) = read, now == loadedBytes { return }
+        // Not while writing: then the question is the draft's, and bytes equal to what was last
+        // *rendered* can still differ from what helm last *saved* — an agent putting back the
+        // version the operator started from is a conflict `reconcile` must see.
+        if draft == nil, case let .bytes(now) = read, now == loadedBytes { return }
         render(previous, from: read)
     }
 

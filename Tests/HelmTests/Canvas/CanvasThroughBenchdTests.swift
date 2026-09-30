@@ -193,6 +193,22 @@ final class CanvasThroughBenchdTests: XCTestCase {
         XCTAssertEqual(model.showing?.generation, first + 2)
     }
 
+    /// With the editor open the skip does not apply: the canvas rendered A, helm saved B, and an
+    /// agent writing A back is a change to the file helm saved, so the strip goes up.
+    func testAnAgentPuttingBackWhatWasRenderedIsStillAConflict() throws {
+        let plan = try file("plan.md", "A\n")
+        let model = CanvasModel(source: .file(plan), saveDebounce: .seconds(30))
+        model.write()
+        model.edit("B\n")
+        model.saveDraft()
+        model.edit("B, and more\n")
+
+        _ = try file("plan.md", "A\n")
+        model.fileChanged(plan.path)
+
+        XCTAssertNotNil(model.draft?.conflict, "their A is not helm's B")
+    }
+
     /// The draft keeps a byte-order mark; the page does not show it, or a first-line heading
     /// would render as text.
     func testTheRenderedPageDoesNotSeeTheByteOrderMark() {
