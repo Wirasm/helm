@@ -143,8 +143,8 @@ extension WorkbenchView {
 /// one click; the key is still shown beside it, rendered from the table in force through
 /// `KeyGlyph.binding` so the two can no longer disagree.
 ///
-/// **It asks for the table's own action rather than opening a panel itself**, so the button,
-/// the bar's `+` and ⇧⌘O are one path with one behaviour (`WorkspacePanel`). A second panel
+/// **It asks for the table's own action rather than opening a picker itself**, so the button,
+/// the bar's `+` and ⇧⌘O are one path with one behaviour (`WorkspacePicker`). A second picker
 /// here would be a second answer to "what does opening a workspace do".
 ///
 /// **`ViewThatFits` because the bench is not always a pane.** With the rail open and a short

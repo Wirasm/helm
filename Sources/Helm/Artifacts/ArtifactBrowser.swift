@@ -1,24 +1,26 @@
 import AppKit
+import HelmWire
 import SwiftUI
 
 // MARK: - View
 
 /// The artifact browser popover: pick a project, see its artifacts flat and
-/// newest-first, click one to open it. One "Browse…" escape hatch into the
-/// NSOpenPanel for anything outside the stores. Anchored to the strip's
-/// artifact button; ⌘O opens this. The listing refreshes on every open.
+/// newest-first, click one to open it. A path field below opens any other file benchd can
+/// see. Anchored to the strip's artifact button; ⌘O opens this. The listing refreshes on
+/// every open. Everything in it is benchd's answer (`PrpStores`): the stores live on the
+/// agents' machine (M5c, #459).
 struct ArtifactBrowser: View {
     /// What to do with a chosen file — a closure rather than the workbench, so the
-    /// browser stays a pure view over the filesystem and never learns what a bench is.
+    /// browser stays a view over the stores and never learns what a bench is.
     /// *Where* the chosen file lands is benchd's placement, not this view's.
     private let onOpen: (URL) -> Void
     /// The open workspace's repo root (`WorkspaceModel.selectedWorkspaceRoot`), which
     /// preselects ITS store instead of whatever was picked last. A plain value, not the
-    /// whole model — the browser stays a pure view over the filesystem.
+    /// whole model.
     private let workspaceRoot: String?
     private let onDismiss: () -> Void
-    /// Overridable so previews/tests could point elsewhere; production uses ~/.prp.
-    private let root: URL
+    /// benchd, asked about its stores and about a typed path.
+    private let prp: PrpStores
 
     /// Stores, selection and files together, resolved by `ArtifactListing`.
     ///
@@ -32,24 +34,24 @@ struct ArtifactBrowser: View {
 
     init(
         workspaceRoot: String?,
-        root: URL = ArtifactStoreDiscovery.defaultRoot,
+        prp: PrpStores,
         onOpen: @escaping (URL) -> Void,
         onDismiss: @escaping () -> Void
     ) {
         self.onOpen = onOpen
         self.workspaceRoot = workspaceRoot
-        self.root = root
+        self.prp = prp
         self.onDismiss = onDismiss
         _listing = State(
-            initialValue: .load(
-                root: root, workspaceRoot: workspaceRoot, remembered: Self.rememberedKey
-            )
+            initialValue: .load(prp, workspace: workspaceRoot, remembered: Self.rememberedKey)
         )
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if listing.stores.isEmpty {
+            if let failure = listing.failure, listing.stores.isEmpty {
+                message("Could not list the artifact stores: \(failure)")
+            } else if listing.stores.isEmpty {
                 emptyState
             } else {
                 Picker("Project", selection: selection) {
@@ -64,10 +66,12 @@ struct ArtifactBrowser: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(listing.files, id: \.url) { file in
+                        ForEach(listing.files, id: \.path) { file in
                             fileRow(file)
                         }
-                        if listing.files.isEmpty {
+                        if let failure = listing.failure {
+                            message("Could not list this project: \(failure)")
+                        } else if listing.files.isEmpty {
                             Text("No artifacts in this project yet.")
                                 .font(.system(size: 11))
                                 .foregroundStyle(Color.textMuted)
@@ -80,7 +84,13 @@ struct ArtifactBrowser: View {
             }
 
             Divider()
-            browseRow
+            BenchPathField(
+                prompt: "Open a file by path…", wants: .file, prp: prp
+            ) { path in
+                onDismiss()
+                onOpen(URL(fileURLWithPath: path))
+            }
+            .padding(10)
         }
         .frame(width: 380)
         .onAppear(perform: refresh)
@@ -92,7 +102,7 @@ struct ArtifactBrowser: View {
         Binding(
             get: { listing.selectedKey },
             set: { key in
-                listing = listing.selecting(key)
+                listing = listing.selecting(key, from: prp)
                 Self.rememberedKey = key
             }
         )
@@ -102,7 +112,7 @@ struct ArtifactBrowser: View {
     /// listed the next time it is opened. The initialiser has already done this once for
     /// the sizing pass; this is what keeps a reopened popover current.
     private func refresh() {
-        listing = .load(root: root, workspaceRoot: workspaceRoot, remembered: Self.rememberedKey)
+        listing = .load(prp, workspace: workspaceRoot, remembered: Self.rememberedKey)
         Self.rememberedKey = listing.selectedKey
     }
 
@@ -121,9 +131,10 @@ struct ArtifactBrowser: View {
 
     // MARK: Rows
 
-    private func fileRow(_ file: ArtifactFile) -> some View {
-        Button {
-            onOpen(file.url)
+    private func fileRow(_ file: BenchPrpArtifact) -> some View {
+        let url = URL(fileURLWithPath: file.path)
+        return Button {
+            onOpen(url)
             onDismiss()
         } label: {
             HStack(spacing: 6) {
@@ -131,7 +142,7 @@ struct ArtifactBrowser: View {
                     .font(.system(size: 10))
                     .foregroundStyle(Color.textMuted)
                     .frame(width: 14)
-                Text(file.relativePath)
+                Text(file.relative)
                     .font(.system(size: 12))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -153,7 +164,7 @@ struct ArtifactBrowser: View {
         // the reasoning.
         .contextMenu {
             Button("Copy Path") {
-                Pasteboard.copy(Pasteboard.path(of: file.url))
+                Pasteboard.copy(Pasteboard.path(of: url))
             }
             // The other half of the same problem. ~/.prp is outside every repo, so an
             // artifact is not reachable from an editor's file tree either — reading one
@@ -162,43 +173,23 @@ struct ArtifactBrowser: View {
             // difference between "look at this next to its siblings" and "launch whatever
             // is registered for .md".
             Button("Show in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([file.url])
+                NSWorkspace.shared.activateFileViewerSelecting([url])
             }
         }
-    }
-
-    private var browseRow: some View {
-        Button {
-            onDismiss()
-            if let url = CanvasModel.chooseFile(startingAt: listing.selectedStore?.root) {
-                onOpen(url)
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "folder")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.textMuted)
-                    .frame(width: 14)
-                Text("Browse…")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.textMuted)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(BrowserRowButtonStyle())
     }
 
     private var emptyState: some View {
-        Text(
+        message(
             "No artifact stores found — agents write artifacts to ~/.prp/<project>/ (plans, research, reviews) and they show up here."
         )
-        .font(.system(size: 11))
-        .foregroundStyle(Color.textMuted)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(12)
+    }
+
+    private func message(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(Color.textMuted)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
     }
 }
 

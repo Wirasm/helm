@@ -99,12 +99,13 @@ final class FakeBenchd: @unchecked Sendable {
         return recorded
     }
 
-    /// The layout verbs among them — not the follower's own `events` line, nor a canvas reading
-    /// or writing its file (`file/*`).
+    /// The layout verbs among them — not the follower's own `events` line, a canvas reading or
+    /// writing its file (`file/*`), nor a question about prp's stores or a typed path.
     var verbs: [[String: Any]] {
         requests.filter {
             let verb = $0["verb"] as? String ?? ""
-            return verb != "events" && !verb.hasPrefix("file/")
+            return verb != "events" && !verb.hasPrefix("file/") && !verb.hasPrefix("prp/")
+                && verb != "path/resolve"
         }
     }
 

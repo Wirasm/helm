@@ -36,6 +36,7 @@ mod just;
 mod layout;
 mod live;
 mod prompts;
+mod prp;
 mod restore;
 mod rules;
 mod screen;
@@ -1088,6 +1089,10 @@ fn dispatch(
         Some(Verb::CommandRun) => answered(req, commands::run(&req.args)),
         Some(Verb::PathExists) => answered(req, commands::exists(&req.args)),
         Some(Verb::GitRepositories) => answered(req, commands::repositories(&req.args)),
+        Some(Verb::PrpNote) => answered(req, prp::note(&req.args)),
+        Some(Verb::PrpStores) => answered(req, prp::stores(&req.args)),
+        Some(Verb::PrpArtifacts) => answered(req, prp::artifacts(&req.args)),
+        Some(Verb::PathResolve) => answered(req, prp::resolve_path(&req.args)),
         Some(Verb::Layout) => {
             let response = layout::answer(&mut core.lock().unwrap(), req);
             (response, AfterResponse::Done)

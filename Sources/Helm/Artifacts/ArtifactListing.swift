@@ -1,7 +1,8 @@
 import Foundation
+import HelmWire
 
-/// What the artifact browser shows: the stores it found, which one of them is picked,
-/// and that store's artifacts — resolved in one pass, as a value.
+/// What the artifact browser shows: the stores benchd found, which one of them is picked, and
+/// that store's artifacts — resolved in one pass, as a value.
 ///
 /// **This is deliberately not view state.** It used to be three `@State`/`@AppStorage`
 /// properties on `ArtifactBrowser` mutated by two private view methods, and that had two
@@ -23,22 +24,29 @@ import Foundation
 /// A value fixes both at once: `ArtifactBrowser` holds it from its initialiser, so the
 /// sizing pass already has the real content, and the rule is exercised here without a
 /// window.
+///
+/// **benchd answers both questions** (M5c, #459): the stores live on its machine, and which one
+/// a workspace belongs to is prp's own resolver's answer there (`prp/stores`), so a worktree
+/// preselects its main checkout's store.
 struct ArtifactListing: Equatable {
-    /// Every store under the artifact root, sorted by display name.
-    let stores: [ArtifactStore]
+    /// Every store, sorted by display name.
+    let stores: [BenchPrpStore]
     /// The picked store's key — `""` when there are no stores to pick from.
     let selectedKey: String
     /// The picked store's artifacts, newest first. Empty when the store has none, and
     /// also empty when nothing is picked; the browser tells those apart by `stores`.
-    let files: [ArtifactFile]
+    let files: [BenchPrpArtifact]
+    /// Why benchd could not be asked, or refused: said in place of the list, so an unreachable
+    /// benchd never reads as "no stores".
+    let failure: String?
 
     /// Nothing discovered yet. Distinct from "a store with no artifacts" — that one has a
     /// `selectedKey` and is what the *"No artifacts in this project yet."* line is for.
-    static let none = ArtifactListing(stores: [], selecting: "")
+    static let none = ArtifactListing(stores: [], selectedKey: "", files: [], failure: nil)
 
-    var selectedStore: ArtifactStore? { stores.first { $0.key == selectedKey } }
+    var selectedStore: BenchPrpStore? { stores.first { $0.key == selectedKey } }
 
-    /// Discover, select, then list — the browser's whole open-time behaviour.
+    /// Ask, select, then list — the browser's whole open-time behaviour.
     ///
     /// The open workspace's store wins over `remembered`: that is the point of the wiring,
     /// the right store preselected instead of whatever was picked last. `remembered` is
@@ -46,32 +54,40 @@ struct ArtifactListing: Equatable {
     /// the first store is the fallback for when that key names nothing — a store the
     /// operator last used and has since deleted must not leave the picker pointing at a
     /// key that no longer exists.
-    static func load(root: URL, workspaceRoot: String?, remembered: String) -> ArtifactListing {
-        let stores = ArtifactStoreDiscovery.discoverStores(under: root)
-        let workspaceKey = workspaceRoot.flatMap {
-            WorkspaceStore.store(forRoot: $0, in: stores)?.key
+    static func load(_ prp: PrpStores, workspace: String?, remembered: String) -> ArtifactListing {
+        switch prp.stores(workspace: workspace) {
+        case let .failure(failure):
+            return ArtifactListing(stores: [], selectedKey: "", files: [], failure: failure.reason)
+        case let .success(found):
+            let rememberedKey = found.stores.contains { $0.key == remembered } ? remembered : nil
+            return listing(
+                found.stores,
+                selecting: found.workspace ?? rememberedKey ?? found.stores.first?.key
+                    ?? "", from: prp)
         }
-        let rememberedKey = stores.contains { $0.key == remembered } ? remembered : nil
-        return ArtifactListing(
-            stores: stores,
-            selecting: workspaceKey ?? rememberedKey ?? stores.first?.key ?? ""
-        )
     }
 
     /// The same stores with a different one picked — what the picker does. Re-lists that
-    /// store's files without re-walking the artifact root, because the operator changing
-    /// the picker is not a reason to re-answer which stores exist.
-    func selecting(_ key: String) -> ArtifactListing {
-        ArtifactListing(stores: stores, selecting: key)
+    /// store's files without asking which stores exist again, because the operator changing
+    /// the picker is not a reason to re-answer that.
+    func selecting(_ key: String, from prp: PrpStores) -> ArtifactListing {
+        Self.listing(stores, selecting: key, from: prp)
     }
 
-    /// The only initialiser: `files` is never passed in, it is always the selected store's
-    /// listing. Selecting a store and listing its files cannot drift apart.
-    private init(stores: [ArtifactStore], selecting key: String) {
-        self.stores = stores
-        selectedKey = key
-        files =
-            stores.first { $0.key == key }
-            .map { ArtifactStoreDiscovery.artifactFiles(in: $0.root) } ?? []
+    /// The only way `files` is filled: always the selected store's listing, so selecting a store
+    /// and listing its files cannot drift apart.
+    private static func listing(
+        _ stores: [BenchPrpStore], selecting key: String, from prp: PrpStores
+    ) -> ArtifactListing {
+        guard stores.contains(where: { $0.key == key }) else {
+            return ArtifactListing(stores: stores, selectedKey: key, files: [], failure: nil)
+        }
+        switch prp.artifacts(store: key) {
+        case let .success(files):
+            return ArtifactListing(stores: stores, selectedKey: key, files: files, failure: nil)
+        case let .failure(failure):
+            return ArtifactListing(
+                stores: stores, selectedKey: key, files: [], failure: failure.reason)
+        }
     }
 }

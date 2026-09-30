@@ -56,6 +56,9 @@ const INHERITED: &[&str] = &[
     "PLAYWRIGHT_BROWSERS_PATH",
     // Where Claude keeps its transcripts, which `restore` reads: the test's HOME decides it.
     "CLAUDE_CONFIG_DIR",
+    // prp's store home, which `prp/*` reads and writes: the test's HOME decides it, never the
+    // operator's `~/.prp`.
+    "PRP_HOME",
 ];
 
 /// The one way this suite starts a child: without any of [`INHERITED`], so a test sets only
@@ -9417,5 +9420,305 @@ fn path_exists_and_git_repositories_over_tcp_read_benchds_disk() {
     assert_eq!(
         ok(&found)["repositories"],
         serde_json::json!([{ "common_dir": app.join(".git"), "is_workspace": true }])
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M5c (#459): prp's stores and typed paths, answered on benchd's machine
+// ---------------------------------------------------------------------------
+
+/// prp's canonical store resolver, copied verbatim from the block every prp skill carries
+/// (`prp-plan/SKILL.md`, "PRP store resolver"), with a `cd` before it and a `printf` after. Run in
+/// `folder` with `home` as HOME and `prp_home` as PRP_HOME, it prints `PRP_DIR`, creating it as the
+/// skills do. A copy, because prp is another repo: when prp changes its block, change this and
+/// `benchd/src/prp.rs` together.
+const CANONICAL_RESOLVER: &str = r#"cd "$1" || exit 1
+_gd="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+case "$_gd" in */.git) _root="${_gd%/.git}" ;; "") _root="$PWD" ;; *) _root="$_gd" ;; esac
+_root="$(cd "$_root" && pwd -P)"
+_name="$(basename "$_root" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//;s/-*$//')"
+_home="${PRP_HOME:-$HOME/.prp}"
+_hit="$(grep -lsF "\"path\": \"$_root\"" "$_home"/*/project.json 2>/dev/null | head -1)"
+PRP_DIR="${_hit%/project.json}"
+[ -n "$PRP_DIR" ] || PRP_DIR="$_home/${_name:-project}-$(printf %s "$_root" | git hash-object --stdin | cut -c1-8)"
+mkdir -p "$PRP_DIR"; [ -f "$PRP_DIR/project.json" ] || printf '{"path": "%s", "name": "%s"}\n' "$_root" "${_name:-project}" > "$PRP_DIR/project.json"
+printf %s "$PRP_DIR""#;
+
+fn canonical_store(folder: &Path, home: &Path, prp_home: Option<&Path>) -> PathBuf {
+    let mut cmd = isolated("/bin/sh");
+    cmd.args(["-c", CANONICAL_RESOLVER, "sh"])
+        .arg(folder)
+        .env("HOME", home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null");
+    if let Some(prp_home) = prp_home {
+        cmd.env("PRP_HOME", prp_home);
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    PathBuf::from(String::from_utf8(out.stdout).unwrap())
+}
+
+fn git_in(dir: &Path, args: &[&str]) {
+    let status = isolated("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?}");
+}
+
+/// A repository `Main Repo` with one commit and a worktree of it, and a folder that is no repo
+/// with a name prp's slug has to work at, all canonical.
+fn prp_folders(home: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let work = home.join("work");
+    let main = work.join("Main Repo");
+    let plain = work.join("-Plain__Ünïcøde-");
+    fs::create_dir_all(&main).unwrap();
+    fs::create_dir_all(&plain).unwrap();
+    git_in(&main, &["init", "-q"]);
+    git_in(
+        &main,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ],
+    );
+    let worktree = work.join("wt");
+    git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "wt",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    let c = |p: PathBuf| p.canonicalize().unwrap();
+    (c(main), c(worktree), c(plain))
+}
+
+fn note(port: u16, workspace: &Path) -> PathBuf {
+    let answer = tcp_verb(
+        port,
+        "prp/note",
+        serde_json::json!({ "workspace": workspace, "day": "2026-09-30" }),
+    );
+    PathBuf::from(ok(&answer)["path"].as_str().unwrap())
+}
+
+/// ⌘⇧N's note lands in the store prp's own resolver picks on benchd's machine: a plain folder is
+/// its own root, a worktree shares its main checkout's store, a new store is registered with
+/// prp's exact bytes, and a second note of the day does not overwrite the first.
+#[test]
+fn prp_note_lands_in_the_store_the_canonical_resolver_picks() {
+    let home = TestHome::claim("m5c-prp-note");
+    let port = free_port();
+    let _daemon = tcp_daemon(&home.dir, port);
+    let (main, worktree, plain) = prp_folders(&home.dir);
+    let prp_home = home.dir.join(".prp");
+    let sub = main.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+
+    for (n, folder) in [&main, &worktree, &plain, &sub].into_iter().enumerate() {
+        // What the block keys this folder as, in a home of its own so nothing is adopted.
+        let reference = home.dir.join(format!("reference-{n}"));
+        let key = canonical_store(folder, &home.dir, Some(&reference));
+        let path = note(port, folder);
+        let store = path.parent().unwrap().parent().unwrap();
+        assert_eq!(store.file_name(), key.file_name(), "{}", folder.display());
+        assert_eq!(store.parent().unwrap(), prp_home);
+        assert_eq!(path.parent().unwrap().file_name().unwrap(), "notes");
+        assert_eq!(fs::read(&path).unwrap(), b"", "a note starts empty");
+        // The block run against benchd's home adopts the store benchd registered.
+        assert_eq!(canonical_store(folder, &home.dir, None), store);
+        assert_eq!(
+            fs::read(store.join("project.json")).unwrap(),
+            fs::read(key.join("project.json")).unwrap(),
+            "registered with prp's own bytes"
+        );
+    }
+    // The main checkout, its worktree and a folder inside it are one project and one store.
+    let main_note = note(port, &main);
+    assert!(
+        main_note.ends_with("notes/2026-09-30-note-4.md"),
+        "{}",
+        main_note.display()
+    );
+    assert!(note(port, &plain).ends_with("notes/2026-09-30-note-2.md"));
+}
+
+#[test]
+fn prp_note_adopts_a_registration_and_refuses_what_it_cannot_key() {
+    let home = TestHome::claim("m5c-prp-adopt");
+    let port = free_port();
+    let _daemon = tcp_daemon(&home.dir, port);
+    let (main, worktree, _) = prp_folders(&home.dir);
+    let custom = home.dir.join(".prp/custom-name");
+    fs::create_dir_all(&custom).unwrap();
+    let registration = format!("{{\"path\": \"{}\", \"name\": \"mine\"}}\n", main.display());
+    fs::write(custom.join("project.json"), &registration).unwrap();
+
+    assert!(note(port, &worktree).starts_with(custom.join("notes")));
+    assert_eq!(
+        fs::read_to_string(custom.join("project.json")).unwrap(),
+        registration
+    );
+
+    let refused = |args| {
+        let answer = tcp_verb(port, "prp/note", args);
+        assert_eq!(answer["status"], "refused", "{answer}");
+        answer["reason"].as_str().unwrap().to_string()
+    };
+    let gone = home.dir.join("gone");
+    assert!(
+        refused(serde_json::json!({ "workspace": gone, "day": "2026-09-30" }))
+            .contains("no folder")
+    );
+    refused(serde_json::json!({ "workspace": main, "day": "../../x" }));
+    refused(serde_json::json!({ "workspace": "relative", "day": "2026-09-30" }));
+    assert!(!gone.exists());
+}
+
+/// ⌘O's listing: the stores under benchd's prp home, the workspace's among them (a worktree
+/// included), and a store's renderable files at every depth, newest first.
+#[test]
+fn prp_stores_and_artifacts_list_benchds_home() {
+    let home = TestHome::claim("m5c-prp-list");
+    let port = free_port();
+    let _daemon = tcp_daemon(&home.dir, port);
+    let (main, worktree, plain) = prp_folders(&home.dir);
+    let prp = home.dir.join(".prp");
+    let store = |key: &str, json: &str| {
+        let dir = prp.join(key);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("project.json"), json).unwrap();
+        dir
+    };
+    let helm = store(
+        "helm-1",
+        &format!("{{\"path\": \"{}\", \"name\": \"Zeta\"}}\n", main.display()),
+    );
+    store("alpha", "{}");
+    store(".hidden", "{}");
+    fs::create_dir_all(prp.join("not-a-store")).unwrap();
+
+    let stores = |args| ok(&tcp_verb(port, "prp/stores", args)).clone();
+    let all = stores(serde_json::json!({}));
+    let names: Vec<_> = all["stores"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].clone())
+        .collect();
+    assert_eq!(names, ["alpha", "Zeta"], "{all}");
+    assert_eq!(all["stores"][1]["path"], main.display().to_string());
+    assert!(all["workspace"].is_null());
+    assert_eq!(
+        stores(serde_json::json!({ "workspace": worktree }))["workspace"],
+        "helm-1"
+    );
+    assert!(stores(serde_json::json!({ "workspace": plain }))["workspace"].is_null());
+    assert_eq!(
+        fs::read_dir(&prp).unwrap().count(),
+        4,
+        "asking created nothing"
+    );
+
+    fs::create_dir_all(helm.join("plans/completed")).unwrap();
+    let file = |rel: &str, age: u64| {
+        let path = helm.join(rel);
+        fs::write(&path, "x").unwrap();
+        let when = std::time::SystemTime::now() - Duration::from_secs(age);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    };
+    file("plans/a.plan.md", 30);
+    file("plans/completed/old.plan.md", 300);
+    file("canvas.html", 10);
+    file("data.json", 1);
+    file("plans/.draft.md", 1);
+    std::os::unix::fs::symlink(prp.join("alpha"), helm.join("linked")).unwrap();
+    fs::write(prp.join("alpha/hidden-by-link.md"), "x").unwrap();
+
+    let listed = ok(&tcp_verb(
+        port,
+        "prp/artifacts",
+        serde_json::json!({ "store": "helm-1" }),
+    ))
+    .clone();
+    let relative: Vec<_> = listed["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["relative"].clone())
+        .collect();
+    assert_eq!(
+        relative,
+        [
+            "canvas.html",
+            "plans/a.plan.md",
+            "plans/completed/old.plan.md"
+        ],
+        "{listed}"
+    );
+    assert_eq!(
+        listed["files"][0]["path"],
+        helm.join("canvas.html").display().to_string()
+    );
+    for store in ["nope", "../helm-1", ".hidden", "not-a-store"] {
+        let answer = tcp_verb(port, "prp/artifacts", serde_json::json!({ "store": store }));
+        assert_eq!(answer["status"], "refused", "{store}: {answer}");
+    }
+}
+
+/// ⇧⌘O's typed path: `~` is benchd's home, not the client's, and nothing there is a refusal.
+#[test]
+fn path_resolve_expands_against_benchds_home() {
+    let home = TestHome::claim("m5c-path");
+    let port = free_port();
+    let _daemon = tcp_daemon(&home.dir, port);
+    fs::create_dir_all(home.dir.join("proj/sub")).unwrap();
+    fs::write(home.dir.join("proj/plan.md"), "x").unwrap();
+    let resolve = |path: &str| tcp_verb(port, "path/resolve", serde_json::json!({ "path": path }));
+    let h = home.dir.display().to_string();
+
+    let dir = ok(&resolve("~/proj/sub/../")).clone();
+    assert_eq!(
+        dir,
+        serde_json::json!({ "path": format!("{h}/proj"), "kind": "directory" })
+    );
+    let file = ok(&resolve(&format!("{h}/proj/plan.md"))).clone();
+    assert_eq!(file["kind"], "file");
+    assert_eq!(ok(&resolve("~"))["path"], h);
+    for bad in ["~/proj/gone", "proj", "~root/x"] {
+        assert_eq!(resolve(bad)["status"], "refused", "{bad}");
+    }
+    assert!(
+        resolve("~/proj/gone")["reason"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("{h}/proj/gone"))
     );
 }

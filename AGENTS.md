@@ -527,11 +527,16 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     page whose own scripts run, so an editor there is a web app rather than a text view; a sidecar
     is excluded because `CanvasNotes.append` only ever appends — it is the memory of every comment
     made on that canvas, and one keystroke through an overwriting editor would replace the lot.
-  - **⌘⇧N still starts a dated note** in `~/.prp/<key>/notes/` of the workspace he is in — matched
-    by `WorkspaceStore` where a store exists, keyed by prp's own derivation where none does yet,
-    and registered with prp's own `project.json` when helm is the first thing to touch the store.
-    `OperatorNote` is now **only** that: where a new note lands and what it is called. It stopped
-    being the editability rule when the rule widened.
+  - **⌘⇧N still starts a dated note** in `~/.prp/<key>/notes/` of the workspace he is in, on
+    **benchd's machine**, where the agents and their `~/.prp` are (M5c, #459). benchd runs prp's
+    own canonical resolver there (`prp/note`, `benchd/src/prp.rs`, checked by the daemon gate
+    against a verbatim copy of the block), registers the store with prp's exact `project.json` bytes when
+    nothing has touched it yet, and creates the note; helm opens it through the file verbs.
+    `OperatorNote` is now only the day it is named for and the sentence when it fails. ⌘O's
+    artifact browser lists benchd's stores the same way (`prp/stores`, `prp/artifacts`), and
+    ⇧⌘O is a typed path benchd resolves, `~` meaning its home, with the project roots its stores
+    record listed underneath (`path/resolve`, `WorkspacePicker`). helm reads no `~/.prp` and opens
+    no Finder panel.
   - **What happens when an agent rewrites a file the operator is editing — the question #307
     deferred, and the reason it could.** helm cannot stop the write: an agent writes the file
     directly and nothing in helm is in that path. What helm guarantees is the other direction —

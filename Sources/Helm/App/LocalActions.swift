@@ -49,8 +49,7 @@ final class LocalActions: ActionPerformer {
             guard terminals.anyTerminalHasFocus else { return }
             workbench.focusedTerminal?.jumpToPrompt(by: offset)
         case .openWorkspacePanel:
-            guard let folder = WorkspacePanel.choose() else { return }
-            workbench.send(.workspaceOpen(path: folder.path.value), by: .operatorGesture)
+            workbench.isWorkspacePickerOpen = true
         case .openArtifactPanel:
             workbench.isBrowserOpen.toggle()
         case .toggleZoom:

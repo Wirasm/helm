@@ -1,38 +1,44 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
 
-/// The browser's selection-then-listing rule, over a fixture artifact root.
+/// The browser's selection-then-listing rule, over benchd's answers (`FakePrp` behind a
+/// `FakeBenchd`).
 ///
 /// This is the part #50 was actually about. The rule used to live in two private methods
 /// on `ArtifactBrowser`, so nothing here could reach it, and a browser that listed nothing
 /// on a store holding 26 artifacts shipped without a single test going red. The display
-/// symptom was a popover-sizing bug; the defect was that this was unreachable.
+/// symptom was a popover-sizing bug; the defect was that this was unreachable. Which store a
+/// workspace belongs to, and the walk, are benchd's (M5c) and the daemon gate's to test.
+@MainActor
 final class ArtifactListingTests: XCTestCase {
-    private var fixtureRoot: URL!
+    private var prp: FakePrp!
+    private var stores: PrpStores!
+    private var server: FakeBenchd!
 
     override func setUpWithError() throws {
-        fixtureRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("helm-artlisting-tests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+        prp = try FakePrp()
+        server = try FakeBenchd(
+            document: DocumentAt(seq: 1, document: .init(workspaces: [], active: nil)))
+        server.answer = server.answeringPrp(prp) { raw in
+            ["id": raw["id"] ?? "", "status": "refused", "reason": "not a prp verb"]
+        }
+        stores = PrpStores(client: BenchClient(endpoint: server.endpoint))
     }
 
     override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: fixtureRoot)
+        server.stop()
+        prp.remove()
     }
 
     // MARK: Fixture helpers
 
-    /// A store whose `project.json` "path" is `/Users/x/<key>` — the field an open
-    /// workspace folder is matched against.
+    /// A store whose `project.json` "path" is `/Users/x/<key>`; the toy names a workspace's store
+    /// by the folder's name.
     @discardableResult
     private func makeStore(_ key: String, name: String) throws -> URL {
-        let dir = fixtureRoot.appendingPathComponent(key)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try "{\"path\": \"/Users/x/\(key)\", \"name\": \"\(name)\"}".write(
-            to: dir.appendingPathComponent("project.json"), atomically: true, encoding: .utf8
-        )
-        return dir
+        try prp.store(key, path: "/Users/x/\(key)", name: name)
     }
 
     private func addFile(_ relativePath: String, in store: URL, modified: Date? = nil) throws {
@@ -48,8 +54,16 @@ final class ArtifactListingTests: XCTestCase {
         }
     }
 
-    private func load(workspaceRoot: String? = nil, remembered: String = "") -> ArtifactListing {
-        .load(root: fixtureRoot, workspaceRoot: workspaceRoot, remembered: remembered)
+    /// benchd's answer, which every test but the unreachable one expects to get: a failure here
+    /// names itself rather than surfacing as an empty selection.
+    private func load(
+        workspaceRoot: String? = nil, remembered: String = "", file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> ArtifactListing {
+        let listing = ArtifactListing.load(
+            stores, workspace: workspaceRoot, remembered: remembered)
+        XCTAssertNil(listing.failure, "benchd did not answer", file: file, line: line)
+        return listing
     }
 
     // MARK: The listing itself
@@ -67,7 +81,7 @@ final class ArtifactListingTests: XCTestCase {
 
         XCTAssertEqual(listing.selectedKey, "helm-bbbbbbbb")
         XCTAssertEqual(
-            listing.files.map(\.relativePath),
+            listing.files.map(\.relative),
             ["issues/completed/issue-44.md", "briefs/issue-50.md", "plans/canvas.html"]
         )
     }
@@ -108,7 +122,7 @@ final class ArtifactListingTests: XCTestCase {
         let listing = load(workspaceRoot: "/Users/x/kild-aaaaaaaa", remembered: "helm-bbbbbbbb")
 
         XCTAssertEqual(listing.selectedKey, "kild-aaaaaaaa")
-        XCTAssertEqual(listing.files.map(\.relativePath), ["plans/rooms.md"])
+        XCTAssertEqual(listing.files.map(\.relative), ["plans/rooms.md"])
     }
 
     /// No workspace open, or one with no store yet: the remembered key is the fallback,
@@ -124,7 +138,7 @@ final class ArtifactListingTests: XCTestCase {
             "zulu-zzzzzzzz"
         )
         XCTAssertEqual(
-            load(remembered: "zulu-zzzzzzzz").files.map(\.relativePath), ["research/notes.md"]
+            load(remembered: "zulu-zzzzzzzz").files.map(\.relative), ["research/notes.md"]
         )
     }
 
@@ -140,17 +154,18 @@ final class ArtifactListingTests: XCTestCase {
 
         // Stores are sorted by display name, so "alpha" is first.
         XCTAssertEqual(listing.selectedKey, "alpha-aaaaaaaa")
-        XCTAssertEqual(listing.files.map(\.relativePath), ["plans/first.md"])
+        XCTAssertEqual(listing.files.map(\.relative), ["plans/first.md"])
     }
 
-    /// Two workspaces on one repo — a checkout and a worktree — report the same repo root
-    /// and so resolve to one store. `WorkspaceStore` owns that rule; this pins that the
-    /// listing goes through it rather than matching on the raw folder.
-    func testAWorkspaceMatchesItsStoreByTheRegisteredPath() throws {
-        try makeStore("helm-bbbbbbbb", name: "helm")
+    /// benchd could not be asked: the browser says why instead of "no stores found", which would
+    /// tell the operator his agents have written nothing.
+    func testAnUnreachableBenchdIsAFailureNotAnEmptyStore() throws {
+        server.stop()
 
-        XCTAssertEqual(load(workspaceRoot: "/Users/x/helm-bbbbbbbb").selectedKey, "helm-bbbbbbbb")
-        XCTAssertEqual(load(workspaceRoot: "/Users/x/unrelated").selectedKey, "helm-bbbbbbbb")
+        let listing = ArtifactListing.load(stores, workspace: "/Users/x/anything", remembered: "")
+
+        XCTAssertTrue(listing.stores.isEmpty)
+        XCTAssertNotNil(listing.failure)
     }
 
     // MARK: Re-selecting from the picker
@@ -166,12 +181,12 @@ final class ArtifactListingTests: XCTestCase {
         try addFile("briefs/issue-50.md", in: helm)
 
         let listing = load(workspaceRoot: "/Users/x/helm-bbbbbbbb")
-        XCTAssertEqual(listing.files.map(\.relativePath), ["briefs/issue-50.md"])
+        XCTAssertEqual(listing.files.map(\.relative), ["briefs/issue-50.md"])
 
-        let switched = listing.selecting("kild-aaaaaaaa")
+        let switched = listing.selecting("kild-aaaaaaaa", from: stores)
 
         XCTAssertEqual(switched.selectedKey, "kild-aaaaaaaa")
-        XCTAssertEqual(switched.files.map(\.relativePath), ["plans/rooms.md"])
+        XCTAssertEqual(switched.files.map(\.relative), ["plans/rooms.md"])
         // Same stores — switching the picker is not a reason to re-answer what exists.
         XCTAssertEqual(switched.stores, listing.stores)
     }
@@ -182,7 +197,8 @@ final class ArtifactListingTests: XCTestCase {
         let helm = try makeStore("helm-bbbbbbbb", name: "helm")
         try addFile("briefs/issue-50.md", in: helm)
 
-        let switched = load(workspaceRoot: "/Users/x/helm-bbbbbbbb").selecting("gone-00000000")
+        let switched = load(workspaceRoot: "/Users/x/helm-bbbbbbbb").selecting(
+            "gone-00000000", from: stores)
 
         XCTAssertEqual(switched.selectedKey, "gone-00000000")
         XCTAssertNil(switched.selectedStore)

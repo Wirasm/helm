@@ -57,7 +57,9 @@ struct SlotTabStrip: View {
                 .foregroundStyle(Color.textMuted)
                 .help("Open artifact (⌘O)")
                 .popover(isPresented: $model.isBrowserOpen, arrowEdge: .bottom) {
-                    ArtifactBrowser(workspaceRoot: workspaceRoot) { url in
+                    ArtifactBrowser(
+                        workspaceRoot: workspaceRoot, prp: PrpStores(client: model.client)
+                    ) { url in
                         model.send(
                             .paneOpen(surface: .canvas(path: url.path)), by: .operatorGesture)
                     } onDismiss: {

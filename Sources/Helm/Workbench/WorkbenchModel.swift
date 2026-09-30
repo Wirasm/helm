@@ -49,8 +49,11 @@ final class WorkbenchModel: ObservableObject {
     /// turns it off (`apply`).
     @Published var isZoomed = false
 
-    /// Why ⌘⇧N did not produce a note (#289) — no workspace open, or a `~/.prp` helm could not
-    /// write to.
+    /// ⇧⌘O's sheet (`WorkspacePicker`): the command that opens it is here, so the state is too,
+    /// as with `isBrowserOpen`.
+    @Published var isWorkspacePickerOpen = false
+
+    /// Why ⌘⇧N did not produce a note (#289) — no workspace open, or benchd could not start one.
     ///
     /// **Here rather than on a canvas, because the failure is that there is no canvas.** Every
     /// other thing helm says about a note is a strip inside its own pane; this one happens before
@@ -75,24 +78,6 @@ final class WorkbenchModel: ObservableObject {
     /// How a mark leaves helm: as mail through benchd. Injected so the routing is reachable from
     /// `swift test` with a benchd the test answers for, and nothing sent to the operator's own.
     private let notes: CanvasNoteCourier
-
-    /// Where the project stores are — `~/.prp` in production (#289).
-    ///
-    /// **One reader now, and that is the widening.** It used to be handed to `CanvasModel` too,
-    /// because editability was a question about where the stores were and a pane that disagreed
-    /// with `newNote` would create a note it then refused to open. `EditableFile` judges the file
-    /// in front of the canvas instead, so the only thing that still needs this is deciding where
-    /// a *new* note lands — and there is no second answer left to disagree with.
-    ///
-    /// Injected for `notes`' reason exactly: every rule below is then reachable
-    /// from `swift test` against a temporary directory, with nothing written near the operator's
-    /// own `~/.prp`.
-    private let artifactRoot: URL
-
-    /// A workspace folder → the repository root its notes are keyed by. `WorkspaceStore`'s
-    /// `git` run in production, which has a deadline; injected so a test can hold the answer
-    /// back or make it time out without a real git that hangs.
-    private let resolveRepository: @Sendable (String) async throws -> String
 
     /// benchd, over its socket: a request per verb, and the follower that delivers documents.
     let client: BenchClient
@@ -128,18 +113,12 @@ final class WorkbenchModel: ObservableObject {
     init(
         terminals: TerminalManager,
         notes: CanvasNoteCourier = CanvasNoteCourier(),
-        artifactRoot: URL = ArtifactStoreDiscovery.defaultRoot,
-        resolveRepository: @escaping @Sendable (String) async throws -> String = {
-            try await WorkspaceStore.repositoryRoot(for: $0)
-        },
         makeBrowser: (@MainActor () -> BrowserPaneModel)? = nil,
         client: BenchClient
     ) {
         self.client = client
         self.terminals = terminals
         self.notes = notes
-        self.artifactRoot = artifactRoot
-        self.resolveRepository = resolveRepository
         // Registered here rather than by the manager because both need the bench: the canvas
         // kind the mark route, the browser kind a factory the caller chose. Re-registering
         // replaces, so a second model on one manager rewires them to itself.
@@ -320,18 +299,18 @@ final class WorkbenchModel: ObservableObject {
     /// reaches it.
     ///
     /// **Three decisions live elsewhere and are only called from here**, which is what keeps this
-    /// method a wiring: where the note goes and what it is called are `OperatorNote.create`'s,
-    /// where the pane lands is benchd's, and whether the file may be
-    /// written into at all is `CanvasModel.write()`'s.
+    /// method a wiring: where the note goes and what it is called are benchd's (`prp/note`, prp's
+    /// own resolver on the agents' machine, M5c), where the pane lands is benchd's too, and
+    /// whether the file may be written into at all is `CanvasModel.write()`'s.
     ///
-    /// - Parameter date: what day the filename says. Injected so the collision rule is testable
-    ///   without waiting for midnight. *Where* the note goes is `artifactRoot`'s, which is one
-    ///   value per model rather than a per-call argument — see its own note above.
+    /// - Parameter date: what day the filename says, on the operator's calendar. Injected so the
+    ///   collision rule is testable without waiting for midnight.
     ///
-    /// **Async because the store is keyed by a `git` answer** (#390). It used to run git on the
-    /// main thread with no deadline, so a hung git froze the whole window. The wait is now
-    /// `Subprocess`'s, holds no thread, and ends in a sentence after ten seconds. Everything
-    /// after it is synchronous on the main actor, as before.
+    /// **Async because benchd may run git to key the store** (#390): the request goes off the main
+    /// actor, bounded by `PrpStores.resolvingTimeout`, and a git that hangs is benchd's sentence. The
+    /// window stays live meanwhile, so the operator can switch workspace before the answer; the
+    /// note is then left unopened in its own project's `notes/` rather than opened on the wrong
+    /// bench.
     @discardableResult
     func newNote(on date: Date = Date()) async -> Pane.ID? {
         // A bench is what a pane goes into, and a workspace is what names the store. Both are nil
@@ -340,39 +319,34 @@ final class WorkbenchModel: ObservableObject {
             announceNoteFailure(OperatorNote.Failure.noWorkspace.sentence)
             return nil
         }
-        let repository: String
-        do {
-            repository = try await resolveRepository(path.value)
-        } catch {
-            announceNoteFailure(OperatorNote.Failure.repositoryUnresolved(path.value).sentence)
+        let prp = PrpStores(client: client)
+        let day = OperatorNote.day(date)
+        let started = await Task.detached { prp.note(workspace: path.value, day: day) }.value
+        guard workspacePath == path, bench != nil else { return nil }
+        let note: String
+        switch started {
+        case let .failure(failure):
+            announceNoteFailure(OperatorNote.Failure.couldNotStart(failure.reason).sentence)
+            return nil
+        case let .success(made):
+            note = made
+        }
+        // Unreachable: benchd names a note `.md` and never a sidecar, which is exactly what
+        // `EditableFile` recognises. Checked rather than assumed so that a later change to either
+        // half is a sentence rather than a note that opens and then refuses a character.
+        guard EditableFile(URL(fileURLWithPath: note)) != nil else {
+            announceNoteFailure(OperatorNote.Failure.notARecognisableNote(note).sentence)
             return nil
         }
-        // The operator switched workspace while git ran. Nothing has been written yet, and a note
-        // for the old project opened on the new one's bench would be in the wrong place.
-        guard workspacePath == path, bench != nil else { return nil }
-        do {
-            let note = try OperatorNote.create(
-                inRepository: repository, under: artifactRoot, on: date)
-            guard
-                let id = send(
-                    .paneOpen(surface: .canvas(path: note.url.path)), by: .operatorGesture),
-                let pane = bench?.pane(id)
-            else { return nil }
-            noteFailure = nil
-            noteFailureTask?.cancel()
-            // Straight into the writing face: the operator asked for somewhere to write, and a
-            // rendered view of an empty file is a blank pane with a button on it.
-            canvas(for: pane).write()
-            return id
-        } catch let failure as OperatorNote.Failure {
-            announceNoteFailure(failure.sentence)
-        } catch {
-            announceNoteFailure(
-                OperatorNote.Failure.couldNotWrite(
-                    error.localizedDescription
-                ).sentence)
-        }
-        return nil
+        guard let id = send(.paneOpen(surface: .canvas(path: note)), by: .operatorGesture),
+            let pane = bench?.pane(id)
+        else { return nil }
+        noteFailure = nil
+        noteFailureTask?.cancel()
+        // Straight into the writing face: the operator asked for somewhere to write, and a
+        // rendered view of an empty file is a blank pane with a button on it.
+        canvas(for: pane).write()
+        return id
     }
 
     /// Say why, and take it away again. The timer is `CanvasModel.announce`'s, for its reason:

@@ -7,36 +7,30 @@ import XCTest
 /// ⌘⇧N end to end on the bench: the file, the pane, the keyboard, and what happens when helm
 /// cannot make one (#289).
 ///
-/// A real `WorkbenchModel` against a toy benchd (`ToyBench`), an isolated `TerminalManager` and a
-/// **temporary artifact root** — nothing here can reach the operator's own `~/.prp`.
+/// A real `WorkbenchModel` against a toy benchd (`ToyBench`) that also answers `prp/note` over a
+/// temporary directory (`FakePrp`), and an isolated `TerminalManager` — nothing here can reach the
+/// operator's own `~/.prp`. Where benchd puts a note (prp's resolver) is the daemon gate's.
 @MainActor
 final class WorkbenchNoteTests: XCTestCase {
-    private var root: URL!
+    private var prp: FakePrp!
     private var folder: URL!
     private var workspace: WorkspacePath!
 
     override func setUpWithError() throws {
-        let base = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("helm-workbench-note-\(UUID().uuidString)")
-        root = base.appendingPathComponent("prp")
-        folder = base.appendingPathComponent("a-project")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        prp = try FakePrp()
+        folder = prp.home.appendingPathComponent("a-project")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         workspace = WorkspacePath(folder.path)
     }
 
     override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: root.deletingLastPathComponent())
+        prp.remove()
     }
 
     private var rig: ToyRig?
 
     /// helm with `workspace` open, or nothing open when `open` is false.
-    private func mounted(
-        open: Bool = true, artifactRoot: URL? = nil,
-        resolveRepository: (@Sendable (String) async throws -> String)? = nil
-    ) throws -> WorkbenchModel {
-        let root = artifactRoot ?? self.root!
+    private func mounted(open: Bool = true) throws -> WorkbenchModel {
         let document =
             open
             ? BenchDocument(
@@ -44,16 +38,8 @@ final class WorkbenchNoteTests: XCTestCase {
                     .init(path: workspace.value, bench: ToyBench.bench([ToyBench.terminal()]))
                 ], active: workspace.value)
             : BenchDocument(workspaces: [], active: nil)
-        let rig = try toyRig(document: document) { terminals, client in
-            if let resolveRepository {
-                WorkbenchModel(
-                    terminals: terminals, artifactRoot: root,
-                    resolveRepository: resolveRepository, client: client)
-            } else {
-                WorkbenchModel(
-                    terminals: terminals, artifactRoot: root, client: client)
-            }
-        }
+        let rig = try toyRig(document: document)
+        rig.server.answer = rig.server.answeringPrp(prp, else: rig.server.answer)
         self.rig = rig
         return rig.model
     }
@@ -79,10 +65,14 @@ final class WorkbenchNoteTests: XCTestCase {
             "the file exists before the pane does — a canvas on nothing is a notice, not a note")
         XCTAssertEqual(
             path.value,
-            root.appendingPathComponent(
-                "\(WorkspaceStore.derivedKey(forRoot: WorkspaceStore.resolved(folder.path)))"
-                    + "/notes/2026-08-07-note.md"
-            ).path)
+            prp.root.appendingPathComponent("a-project/notes/2026-08-07-note.md").path,
+            "the path benchd answered, as it answered it")
+        let asked = try XCTUnwrap(
+            rig?.server.requests.first { $0["verb"] as? String == "prp/note" })
+        XCTAssertEqual(
+            asked["args"] as? [String: String],
+            ["workspace": workspace.value, "day": "2026-08-07"],
+            "benchd is asked for the workspace's store and the operator's day")
         XCTAssertNotNil(
             model.canvas(for: pane).draft,
             "⌘⇧N opens straight into the writing face — a rendered view of an empty file is a "
@@ -239,24 +229,11 @@ final class WorkbenchNoteTests: XCTestCase {
         XCTAssertEqual(model.noteFailure, OperatorNote.Failure.noWorkspace.sentence)
     }
 
-    func testAnArtifactRootHelmCannotWriteIntoIsReportedOnTheBench() async throws {
-        let model = try mounted(
-            artifactRoot: URL(fileURLWithPath: "/System/helm-should-not-write-here"))
-
-        let id = await model.newNote()
-        XCTAssertNil(id)
-
-        let failure = model.noteFailure ?? ""
-        XCTAssertTrue(
-            failure.hasPrefix("Could not start a note"),
-            "the sentence has to name what failed, not merely that something did; got \"\(failure)\""
-        )
-    }
-
-    /// **A git that does not answer is a sentence, not a frozen window or a note in the wrong
-    /// store** (#390). The resolver throws what `Subprocess` throws at its deadline.
-    func testAGitThatDoesNotAnswerIsReportedAndWritesNothing() async throws {
-        let model = try mounted(resolveRepository: { _ in throw Subprocess.Failure.timedOut })
+    /// benchd refused — a git past its wait, an unwritable `~/.prp` on its machine — or could not
+    /// be asked: the operator reads its reason, and nothing is opened.
+    func testARefusalIsReportedOnTheBenchWithBenchdsReason() async throws {
+        let model = try mounted()
+        prp.refusing = "git rev-parse did not answer within 3000 ms in \(workspace.value)"
         let before = model.bench?.panes.count
 
         let id = await model.newNote()
@@ -264,51 +241,55 @@ final class WorkbenchNoteTests: XCTestCase {
         XCTAssertNil(id)
         XCTAssertEqual(
             model.noteFailure,
-            OperatorNote.Failure.repositoryUnresolved(workspace.value).sentence)
-        XCTAssertEqual(model.bench?.panes.count, before)
-        XCTAssertEqual(
-            try FileManager.default.contentsOfDirectory(atPath: root.path), [],
-            "no store is registered for a repository nobody could name")
+            OperatorNote.Failure.couldNotStart(prp.refusing!).sentence)
+        XCTAssertEqual(model.bench?.panes.count, before, "a failure adds no pane")
     }
 
-    /// The window stays live while git runs, so the operator can switch workspace before it
-    /// answers. The note belonged to the workspace he pressed ⌘⇧N in; opening it on the new
-    /// one's bench would be the wrong place, so nothing is created at all.
-    func testSwitchingWorkspaceWhileGitRunsStartsNoNote() async throws {
-        let (entered, enteredSignal) = AsyncStream<Void>.makeStream()
-        let (release, releaseSignal) = AsyncStream<Void>.makeStream()
-        let model = try mounted(resolveRepository: { path in
-            enteredSignal.yield()
-            for await _ in release { break }
-            return WorkspaceStore.resolved(path)
-        })
-        let other = folder.deletingLastPathComponent().appendingPathComponent("other")
+    func testAnUnreachableBenchdIsReportedAndOpensNothing() async throws {
+        let model = try mounted()
+        let before = model.bench?.panes.count
+        rig?.server.stop()
+
+        let id = await model.newNote()
+
+        XCTAssertNil(id)
+        let failure = model.noteFailure ?? ""
+        XCTAssertTrue(
+            failure.hasPrefix("Could not start a note: "),
+            "the sentence has to name what failed, not merely that something did; got \"\(failure)\""
+        )
+        XCTAssertEqual(model.bench?.panes.count, before)
+    }
+
+    /// The window stays live while benchd answers, so the operator can switch workspace before it
+    /// does. The note belonged to the workspace he pressed ⌘⇧N in; opening it on the new one's
+    /// bench would be the wrong place, so no pane opens.
+    func testSwitchingWorkspaceWhileBenchdAnswersOpensNoNote() async throws {
+        let model = try mounted()
+        let other = prp.home.appendingPathComponent("other")
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        let (entered, enteredSignal) = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        let server = try XCTUnwrap(rig?.server)
+        let answer = server.answer
+        server.answer = { raw in
+            if raw["verb"] as? String == "prp/note" {
+                enteredSignal.yield()
+                release.wait()
+            }
+            return answer(raw)
+        }
 
         let pending = Task { await model.newNote() }
         for await _ in entered { break }
         model.send(.workspaceOpen(path: other.path), by: .operatorGesture)
-        releaseSignal.yield()
+        release.signal()
         let id = await pending.value
 
         XCTAssertNil(id)
         XCTAssertEqual(
             model.bench?.panes.filter { if case .canvas = $0.content { true } else { false } }
                 .count, 0)
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [])
-    }
-
-    /// **The control**: a failure must not leave the bench different from how it found it. It
-    /// would pass by doing nothing at all, which is exactly what it is measuring — the two tests
-    /// above are what stop "does nothing" being an acceptable answer overall.
-    func testAFailedNoteAddsNoPane() async throws {
-        let model = try mounted(
-            artifactRoot: URL(fileURLWithPath: "/System/helm-should-not-write-here"))
-        let before = model.bench?.panes.count
-
-        _ = await model.newNote()
-
-        XCTAssertEqual(model.bench?.panes.count, before)
     }
 
     /// `newNote`, required to have made one. `XCTUnwrap`'s autoclosure cannot `await`.

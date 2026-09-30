@@ -220,6 +220,18 @@ answers a capture with the PNG itself (`png`, base64); benchd writes it where th
 under its own `captures/`, and hands back helm's report with `path` in its place, so `helm/answer`
 gets the 16 MiB line too. Both are the route on one machine as well.
 
+**And prp's stores and the paths the operator types (M5c).** `~/.prp` lives on the agents'
+machine, so helm asks benchd about it (`bench_wire::prp`, pinned by `fixtures/prp-verbs.json`).
+`prp/note` starts ⌘⇧N's note: benchd runs prp's canonical store resolver in the workspace
+(`benchd/src/prp.rs`, a port of the block every prp skill carries, checked by a conformance test
+against a verbatim copy of it), registers a store nothing has touched with prp's exact `project.json` bytes,
+and creates `notes/<day>-note[-n].md` without overwriting. A git that has not answered within 3 s
+(`PRP_RESOLVE_WAIT`, for the whole resolve) is a refusal, never a fallback to the folder. `prp/stores` and `prp/artifacts` are the artifact
+browser's listing, and the workspace's store is the resolver's answer, so a worktree finds its
+main checkout's. `path/resolve` turns what the operator typed into benchd's absolute path, `~`
+expanded against benchd's `HOME`, and says whether a file or a folder is there: ⇧⌘O and the
+browser's path field use it where helm used Finder's panel.
+
 **And a canvas's live file (helm #532).** An HTML canvas has one JSON file beside it,
 `<stem>.data.json` (`bench_wire::live_file`), that the page and an agent both edit, and every
 write to it names the bytes its writer saw: `file/write` has no blind kind any more, so `unchanged`

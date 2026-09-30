@@ -1,0 +1,80 @@
+{
+  "artifacts": {
+    "args": {
+      "store": "helm-3ec376fc"
+    },
+    "id": "helm-prp-4",
+    "verb": "prp/artifacts"
+  },
+  "artifacts_answer": {
+    "files": [
+      {
+        "modified_ms": 1790000000000,
+        "path": "/Users/op/.prp/helm-3ec376fc/plans/completed/old.plan.md",
+        "relative": "plans/completed/old.plan.md"
+      },
+      {
+        "modified_ms": 1780000000000,
+        "path": "/Users/op/.prp/helm-3ec376fc/canvas/board.html",
+        "relative": "canvas/board.html"
+      }
+    ]
+  },
+  "note": {
+    "args": {
+      "day": "2026-09-30",
+      "workspace": "/Users/op/Projects/helm/.worktrees/x"
+    },
+    "id": "helm-prp-1",
+    "verb": "prp/note"
+  },
+  "note_answer": {
+    "path": "/Users/op/.prp/helm-3ec376fc/notes/2026-09-30-note-2.md"
+  },
+  "resolve": {
+    "args": {
+      "path": "~/Projects/helm"
+    },
+    "id": "helm-prp-5",
+    "verb": "path/resolve"
+  },
+  "resolve_answers": [
+    {
+      "kind": "directory",
+      "path": "/Users/op/Projects/helm"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/op/.prp/helm-3ec376fc/plans/plan.md"
+    }
+  ],
+  "resolve_wait_ms": 3000,
+  "stores": {
+    "args": {
+      "workspace": "/Users/op/Projects/helm"
+    },
+    "id": "helm-prp-2",
+    "verb": "prp/stores"
+  },
+  "stores_all": {
+    "args": {},
+    "id": "helm-prp-3",
+    "verb": "prp/stores"
+  },
+  "stores_answer": {
+    "stores": [
+      {
+        "dir": "/Users/op/.prp/helm-3ec376fc",
+        "key": "helm-3ec376fc",
+        "name": "helm",
+        "path": "/Users/op/Projects/helm"
+      },
+      {
+        "dir": "/Users/op/.prp/scratch",
+        "key": "scratch",
+        "name": "scratch"
+      }
+    ],
+    "workspace": "helm-3ec376fc"
+  }
+}
