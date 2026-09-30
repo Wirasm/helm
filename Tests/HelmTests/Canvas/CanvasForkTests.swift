@@ -46,8 +46,15 @@ final class CanvasForkTests: XCTestCase {
         let prompt = CanvasForkPrompt.text(
             canvas: URL(fileURLWithPath: "/work/plan.md"), source: "Retry **at most** 4 times.",
             marked: "Retry at most 4 times.", question: "Why?")
-        XCTAssertTrue(prompt.contains("Lines: not found"), prompt)
+        XCTAssertTrue(prompt.contains("Lines: unknown"), prompt)
         XCTAssertEqual(CanvasForkPrompt.lines(of: "Then", in: "one\ntwo\nThen"), 3...3)
+    }
+
+    /// A phrase the file says twice could be either place; naming the first would be a guess
+    /// the fork takes as fact.
+    func testAMarkTheFileRepeatsGetsNoLines() {
+        XCTAssertNil(CanvasForkPrompt.lines(of: "retry", in: "retry once\nthen retry again"))
+        XCTAssertNil(CanvasForkPrompt.lines(of: "aa", in: "aaa"), "overlapping counts too")
     }
 
     func testTheFenceIsLongerThanAnyBacktickRunInTheMark() {

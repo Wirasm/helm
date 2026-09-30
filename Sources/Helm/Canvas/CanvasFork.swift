@@ -86,8 +86,8 @@ enum CanvasForkPrompt {
         case let .some(range): span = "Lines: \(range.lowerBound)-\(range.upperBound)"
         case .none:
             span =
-                "Lines: not found; the marked text is as the page rendered it, "
-                + "not verbatim from the file"
+                "Lines: unknown; the marked text is not in the file verbatim, or is there "
+                + "more than once"
         }
         return """
             You are a fork of the conversation that wrote the file below. The original is still \
@@ -112,11 +112,15 @@ enum CanvasForkPrompt {
             """
     }
 
-    /// The 1-based lines the marked text spans in the file, when it is there verbatim. A rendered
-    /// markdown mark often is not (emphasis and links lose their markup), and then there is no
-    /// range rather than a guessed one.
+    /// The 1-based lines the marked text spans in the file, when it is there verbatim and once. A
+    /// rendered markdown mark often is not (emphasis and links lose their markup), and a phrase
+    /// the file repeats could be any of its places, so either way there is no range rather than a
+    /// guessed one.
     static func lines(of marked: String, in source: String) -> ClosedRange<Int>? {
-        guard !marked.isEmpty, let found = source.range(of: marked) else { return nil }
+        guard !marked.isEmpty, let found = source.range(of: marked),
+            source.range(of: marked, range: source.index(after: found.lowerBound)..<source.endIndex)
+                == nil
+        else { return nil }
         let first = source[..<found.lowerBound].filter { $0 == "\n" }.count + 1
         return first...(first + marked.filter { $0 == "\n" }.count)
     }

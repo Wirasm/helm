@@ -342,8 +342,9 @@ fn claude_flags(spec: &SpawnSpec) -> Vec<String> {
     // Plan mode asks before reading outside the working directories, and the first prompt is
     // usually outside (benchd's `<root>/prompts`, helm #535): measured on 2.1.285, a fork sat at
     // "Read file … Do you want to proceed?" before reading its question. Allowing the prompt's
-    // folder is the whole grant. Here, before any flag it could be mistaken for, because
-    // `--add-dir` takes every argument up to the next flag.
+    // folder is the whole grant: benchd gives each prompt a folder of its own, and a caller's own
+    // `--prompt-file` grants the folder it chose. Here, before any flag it could be mistaken for,
+    // because `--add-dir` takes every argument up to the next flag.
     if let (Posture::ReadOnly, Some(folder)) = (
         spec.posture,
         spec.prompt_file

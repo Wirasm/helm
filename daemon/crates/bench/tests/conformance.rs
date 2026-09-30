@@ -8589,15 +8589,18 @@ fn a_fork_helm_asks_for_gets_its_prompt_as_a_file_and_leaves_focus_alone() {
     let file = pointer
         .strip_prefix("Read and act on the prompt in ")
         .unwrap_or_else(|| panic!("the prompt is a file: {argv:?}"));
-    assert!(
-        file.starts_with(&h.join(".bench/prompts").display().to_string()),
-        "{file}"
+    let folder = Path::new(file).parent().unwrap();
+    assert_eq!(
+        folder.parent().unwrap(),
+        h.join(".bench/prompts"),
+        "a folder of its own under the root: {file}"
     );
     assert_eq!(fs::read_to_string(file).unwrap(), prompt);
     // Plan mode would ask before reading outside the cwd, so the prompt's folder is allowed.
+    // Only that folder: another spawn's prompt stays out of reach.
     assert_eq!(
         argv[pos("--add-dir").unwrap() + 1],
-        h.join(".bench/prompts").display().to_string(),
+        folder.display().to_string(),
         "{argv:?}"
     );
     let log = fs::read_to_string(h.join(".bench/events.jsonl")).unwrap();

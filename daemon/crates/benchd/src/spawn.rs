@@ -294,13 +294,20 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
     })
 }
 
-/// A first prompt sent as text, written where the agent can read it: `<root>/prompts/<uuid>.md`,
-/// inside the root's private directory. Kept, because the agent reads it after the spawn answers
-/// (helm #93), and a file per spawn so two never share one.
+/// A first prompt sent as text, written where the agent can read it:
+/// `<root>/prompts/<uuid>/prompt.md`, inside the root's private directory. Kept, because the agent
+/// reads it after the spawn answers (helm #93). A folder per spawn, because a read-only agent is
+/// granted its prompt's folder (`bench_session::argv`), and that grant must not reach another
+/// spawn's prompt.
 fn write_prompt(core: &Arc<Mutex<Core>>, text: &str) -> Result<String, String> {
-    let dir = core.lock().unwrap().root.join("prompts");
+    let dir = core
+        .lock()
+        .unwrap()
+        .root
+        .join("prompts")
+        .join(mint_session_id());
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let path = dir.join(format!("{}.md", mint_session_id()));
+    let path = dir.join("prompt.md");
     std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path.display().to_string())
 }
