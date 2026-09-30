@@ -61,15 +61,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, req: &Request) -> Response {
 }
 
 fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<String>, Value)> {
-    let mut plan = judge(req).map_err(|why| (Status::Refused, why))?;
-    if let Conversation::Resume(id) = &plan.spec.conversation {
-        // A conversation is re-entered in the posture it was spawned in: a fork's is read-only
-        // (#531), whoever resumes it and by whichever route.
-        let c = core.lock().unwrap();
-        let forked_from =
-            sessions::recorded(&c, plan.agent.name(), id).and_then(|h| h.forked_from.as_deref());
-        plan.spec.posture = Posture::resuming(forked_from);
-    }
+    let plan = judge(core, req).map_err(|why| (Status::Refused, why))?;
     let by = req.by.clone().unwrap_or_else(Actor::agent);
     let focus = Actor::focus(&by, req.asked);
     let (id, handle) = reserve(core, &plan, focus)?;
@@ -213,9 +205,10 @@ fn register(core: &mut Core, plan: &Plan, session: &Arc<Session>, pane: PaneId) 
     .map_err(|why| (Status::Error, why))
 }
 
-/// Judge the arguments before anything is reserved: a missing key refuses naming the field,
-/// and every rule names what it applied.
-fn judge(req: &Request) -> Result<Plan, String> {
+/// Judge the arguments (and the record of a conversation to resume, for its posture) before
+/// anything is reserved, so `argv` checks the spec that will run: a missing key refuses naming
+/// the field, and every rule names what it applied.
+fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
     let args: SpawnArgs =
         serde_json::from_value(req.args.clone()).map_err(|e| format!("spawn args: {e}"))?;
     let test_ok = std::env::var(TEST_AGENT_ENV).is_ok_and(|v| v == "1");
@@ -241,10 +234,17 @@ fn judge(req: &Request) -> Result<Plan, String> {
                 "--resume re-enters a conversation and --fork copies one — pass one of them".into(),
             );
         }
-        (Some(id), None) => (
-            Conversation::Resume(resumable(agent, id)?),
-            Posture::Unattended,
-        ),
+        // A conversation is re-entered in the posture it was spawned in: a fork's is read-only
+        // (#531), whoever resumes it and by whichever route.
+        (Some(id), None) => {
+            let c = core.lock().unwrap();
+            let forked_from =
+                sessions::recorded(&c, agent.name(), id).and_then(|h| h.forked_from.as_deref());
+            (
+                Conversation::Resume(resumable(agent, id)?),
+                Posture::resuming(forked_from),
+            )
+        }
         // A fork answers questions about the original's work in the original's worktree, so it
         // runs read-only: the operator's ruling (#531).
         (None, Some(from)) => (
