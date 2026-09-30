@@ -51,6 +51,7 @@ struct BrowserTabStrip: View {
                         BrowserTabChip(
                             tab: tab, isShown: tab.targetId == model.tabs.showing,
                             isUnseen: model.tabs.unseen.contains(tab.targetId),
+                            isAsking: model.dialogs[tab.targetId] != nil,
                             fromOutside: model.tabs.fromOutside.contains(tab.targetId),
                             loading: tab.targetId == model.tabs.showing && model.loading,
                             select: { model.show(tab: tab.targetId) },
@@ -131,6 +132,8 @@ private struct BrowserTabChip: View {
     let tab: BrowserTab
     let isShown: Bool
     let isUnseen: Bool
+    /// The page raised a dialog nobody has answered (#544).
+    let isAsking: Bool
     let fromOutside: Bool
     let loading: Bool
     let select: () -> Void
@@ -140,7 +143,12 @@ private struct BrowserTabChip: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            if loading {
+            if isAsking {
+                Image(systemName: "exclamationmark.bubble.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Color.attention)
+                    .help("The page is asking something and waits for an answer. Show the tab.")
+            } else if loading {
                 ProgressView().controlSize(.mini).frame(width: 10, height: 10)
             } else if isUnseen {
                 Circle().fill(Color.accent).frame(width: 6, height: 6)

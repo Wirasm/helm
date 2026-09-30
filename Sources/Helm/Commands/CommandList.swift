@@ -195,6 +195,9 @@ extension BrowserCommand {
         case .back: "Back"
         case .forward: "Forward"
         case let .showTab(index): "Browser Tab \(index + 1)"
+        case .zoom(.increase): "Zoom Page In"
+        case .zoom(.decrease): "Zoom Page Out"
+        case .zoom(.reset): "Reset Page Zoom"
         }
     }
 }

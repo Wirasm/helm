@@ -13,7 +13,7 @@ import HelmWire
 ///
 /// Cached per pane by `WorkbenchModel`, like a canvas, so a tab switch keeps the connection.
 @MainActor
-final class BrowserPaneModel: ObservableObject, BrowserInputSink {
+final class BrowserPaneModel: ObservableObject {
     enum Status: Equatable {
         /// Not connected, and why — shown in the pane.
         case waiting(String)
@@ -25,6 +25,11 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
     @Published private(set) var tabs = BrowserTabs()
     /// The shown tab, or one of its frames, is loading.
     @Published private(set) var loading = false
+    /// Dialogs a page raised and nobody has answered yet, by target (#544). The one on show is
+    /// drawn over the page; any other is a badge on its tab.
+    @Published private(set) var dialogs: [String: BrowserDialog] = [:]
+    /// Each tab's page zoom (⌘+, ⌘−, ⌘0; #544), by target. A tab at 100% has no entry.
+    @Published private(set) var zoom: [String: Double] = [:]
     /// Bumped to ask the view to put the keyboard in the address field (⌘L, a new tab).
     @Published private(set) var addressRequests = 0
     /// Links the operator ⌘-clicked before the browser was reachable, oldest first. Each
@@ -42,6 +47,8 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
     private let endpoint: BenchEndpoint?
     private var connection: CDPConnection?
     private var session: String?
+    /// Which tab each attached session is on: the shown tab's, and any held for its dialog.
+    private var sessionTargets: [String: String] = [:]
     private var watch: Task<Void, Never>?
     private var viewport = Viewport(size: CGSize(width: 1280, height: 800), scale: 2)
     private var viewportTask: Task<Void, Never>?
@@ -105,6 +112,8 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
             guard let self, self.connection === connection else { return }
             self.connection = nil
             self.session = nil
+            self.sessionTargets = [:]
+            self.dialogs = [:]
             self.listed = false
             switch ending {
             case let .refused(why):
@@ -171,7 +180,14 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         case "Target.targetInfoChanged" where listed:
             if let info = event.params(TargetEvent.self) { apply(tabs.changed(info.targetInfo)) }
         case "Target.targetDestroyed" where listed:
-            if let gone = event.params(TargetGone.self) { apply(tabs.destroyed(gone.targetId)) }
+            if let gone = event.params(TargetGone.self) {
+                zoom[gone.targetId] = nil
+                dialogs[gone.targetId] = nil
+                sessionTargets = sessionTargets.filter { $0.value != gone.targetId }
+                apply(tabs.destroyed(gone.targetId))
+            }
+        case "Page.javascriptDialogOpening", "Page.javascriptDialogClosed":
+            handleDialog(event)
         case "Page.frameStartedLoading", "Page.frameStoppedLoading":
             guard event.sessionId == session, let frame = event.params(FrameEvent.self) else {
                 return
@@ -184,6 +200,25 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
             if loading != !loadingFrames.isEmpty { loading = !loadingFrames.isEmpty }
         default:
             break
+        }
+    }
+
+    /// A dialog opening or closing in the shown tab, or in one held for its dialog (#544).
+    private func handleDialog(_ event: CDPConnection.Event) {
+        guard let held = event.sessionId, let target = sessionTargets[held] else { return }
+        if event.method == "Page.javascriptDialogOpening" {
+            if let opening = event.params(DialogOpening.self) {
+                dialogs[target] = BrowserDialog(opening, session: held)
+            }
+            return
+        }
+        // Closed, whoever answered: the operator here, or an agent's Playwright on the same tab.
+        dialogs[target] = nil
+        if held == session {
+            // The page runs again; restart its frames.
+            Task { await fit(target: target, session: held) }
+        } else {
+            release(held)
         }
     }
 
@@ -216,9 +251,20 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         loadingFrames.removeAll()
         loading = false
         Task {
-            if let previous {
+            // A session holding a dialog stays attached: it is the only one that can answer,
+            // and detaching it leaves the tab frozen for good (measured, #544).
+            if let previous, !dialogs.values.contains(where: { $0.session == previous }) {
                 connection.send("Page.stopScreencast", session: previous)
-                connection.send("Target.detachFromTarget", Detach(sessionId: previous))
+                release(previous)
+            }
+            if let held = dialogs[target]?.session {
+                // Its page is stopped, so there is nothing to fit or draw until it is answered;
+                // the close event fits it then.
+                session = held
+                connection.send("Page.bringToFront", session: held)
+                lastFrame = nil
+                surface?.clear()
+                return
             }
             do {
                 let attached = try await connection.call(
@@ -231,6 +277,7 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
                     return
                 }
                 session = attached.sessionId
+                sessionTargets[attached.sessionId] = target
                 try await connection.call("Page.enable", session: attached.sessionId)
                 connection.send("Page.bringToFront", session: attached.sessionId)
                 await fit(target: target, session: attached.sessionId)
@@ -238,6 +285,11 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
                 // The tab closed mid-attach; its destroy event decides what to show next.
             }
         }
+    }
+
+    private func release(_ held: String) {
+        sessionTargets[held] = nil
+        connection?.send("Target.detachFromTarget", Detach(sessionId: held))
     }
 
     /// Make the tab the pane's size, at the pane's pixel density, and (re)start its frames.
@@ -249,9 +301,14 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
     /// ignored — so a retina pane is sharp.
     private func fit(target: String, session: String) async {
         guard let connection else { return }
+        // Zoom is Chrome's own kind: the page lays out in pane ÷ zoom CSS pixels, each drawn
+        // zoom times larger, so it reflows and `devicePixelRatio` says so, as it does in Chrome.
+        // Input needs nothing: it maps through the frame's own page size.
+        let factor = zoom[target] ?? 1
         let size = viewport.size
-        let width = max(Int(size.width.rounded()), 200)
-        let height = max(Int(size.height.rounded()), 150)
+        let width = max(Int((size.width / factor).rounded()), 200)
+        let height = max(Int((size.height / factor).rounded()), 150)
+        let scale = viewport.scale * factor
         if let window = try? await connection.call(
             "Browser.getWindowForTarget", WindowFor(targetId: target), returning: WindowId.self)
         {
@@ -276,16 +333,15 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         try? await connection.call(
             "Emulation.setDeviceMetricsOverride",
             Metrics(
-                width: width, height: height, deviceScaleFactor: Double(viewport.scale),
-                mobile: false),
+                width: width, height: height, deviceScaleFactor: Double(scale), mobile: false),
             session: session)
         connection.send("Page.stopScreencast", session: session)
         try? await connection.call(
             "Page.startScreencast",
             Screencast(
                 format: "jpeg", quality: 85,
-                maxWidth: Int(CGFloat(width) * viewport.scale),
-                maxHeight: Int(CGFloat(height) * viewport.scale), everyNthFrame: 1),
+                maxWidth: Int(CGFloat(width) * scale), maxHeight: Int(CGFloat(height) * scale),
+                everyNthFrame: 1),
             session: session)
     }
 
@@ -304,33 +360,6 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
             else { return }
             await self.fit(target: target, session: session)
         }
-    }
-
-    func mouse(_ params: MouseEvent) {
-        connection?.send("Input.dispatchMouseEvent", params, session: session)
-    }
-
-    func key(_ params: KeyEvent) {
-        connection?.send("Input.dispatchKeyEvent", params, session: session)
-    }
-
-    func insertText(_ text: String) {
-        connection?.send("Input.insertText", InsertText(text: text), session: session)
-    }
-
-    /// The page's selection as text: a text field's selected range, else the document's.
-    func selectedText() async -> String? {
-        guard let connection, let session else { return nil }
-        let expression = """
-            (() => { const a = document.activeElement;
-              if (a && typeof a.selectionStart === 'number' && typeof a.value === 'string')
-                return a.value.substring(a.selectionStart, a.selectionEnd);
-              return String(getSelection()); })()
-            """
-        let result = try? await connection.call(
-            "Runtime.evaluate", Evaluate(expression: expression, returnByValue: true),
-            session: session, returning: Evaluated<String>.self)
-        return result?.result.value
     }
 
     func navigate(to typed: String) {
@@ -366,6 +395,26 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
 
     func focusAddress() { addressRequests += 1 }
 
+    /// The operator's answer to the dialog on show: OK or Cancel, and a `prompt`'s text. The
+    /// dialog leaves `dialogs` when Chrome says it closed, not before.
+    func answer(accept: Bool, text: String? = nil) {
+        guard let target = tabs.showing, let dialog = dialogs[target] else { return }
+        connection?.send(
+            "Page.handleJavaScriptDialog",
+            HandleDialog(accept: accept, promptText: dialog.kind == .prompt ? text : nil),
+            session: dialog.session)
+    }
+
+    /// Zoom the tab on show a step in or out, or back to 100%, and lay it out again.
+    func zoom(_ step: FontSizeStep) {
+        guard let target = tabs.showing, let session else { return }
+        let next = BrowserZoom.step(from: zoom[target] ?? 1, step)
+        zoom[target] = next == 1 ? nil : next
+        // A page stopped under a dialog is fitted when the dialog closes.
+        guard dialogs[target] == nil else { return }
+        Task { await fit(target: target, session: session) }
+    }
+
     func toggleFollow() { tabs.follow.toggle() }
 
     /// A browser key (#542), from the pane holding the keyboard (`BrowserKeyboard`).
@@ -378,6 +427,7 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         case .back: goBack()
         case .forward: goForward()
         case let .showTab(index): show(tabAt: index)
+        case let .zoom(step): zoom(step)
         }
     }
 
@@ -400,57 +450,107 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
             "Runtime.evaluate", Evaluate(expression: expression, returnByValue: false),
             session: session)
     }
+}
 
-    // MARK: - Wire shapes
+// MARK: - Input from the surface
 
-    private struct TargetInfos: Decodable { let targetInfos: [BrowserTab] }
-    private struct TargetEvent: Decodable { let targetInfo: BrowserTab }
-    private struct TargetGone: Decodable { let targetId: String }
-    private struct Discover: Encodable { let discover: Bool }
-    private struct CreateTarget: Encodable { let url: String }
-    private struct Created: Decodable { let targetId: String }
-    private struct CloseTarget: Encodable { let targetId: String }
-    private struct FrameEvent: Decodable { let frameId: String }
-    private struct Attach: Encodable {
-        let targetId: String
-        let flatten: Bool
+extension BrowserPaneModel: BrowserInputSink {
+    /// Where the operator's input goes: the shown tab, unless a dialog has stopped it. Chrome
+    /// queues input sent to a stopped page and delivers it once the dialog is answered
+    /// (measured, #544), so text typed at the page under a dialog would land in it afterwards.
+    private var inputSession: String? {
+        guard let shown = tabs.showing, dialogs[shown] == nil else { return nil }
+        return session
     }
-    private struct Attached: Decodable { let sessionId: String }
-    private struct Detach: Encodable { let sessionId: String }
-    private struct WindowFor: Encodable { let targetId: String }
-    private struct WindowId: Decodable { let windowId: Int }
-    private struct SetBounds: Encodable {
-        struct Bounds: Encodable {
-            let width: Int
-            let height: Int
-        }
-        let windowId: Int
-        let bounds: Bounds
+
+    func mouse(_ params: MouseEvent) {
+        guard let inputSession else { return }
+        connection?.send("Input.dispatchMouseEvent", params, session: inputSession)
     }
-    private struct Metrics: Encodable {
+
+    func key(_ params: KeyEvent) {
+        guard let inputSession else { return }
+        connection?.send("Input.dispatchKeyEvent", params, session: inputSession)
+    }
+
+    func insertText(_ text: String) {
+        guard let inputSession else { return }
+        connection?.send("Input.insertText", InsertText(text: text), session: inputSession)
+    }
+
+    /// The page's selection as text: a text field's selected range, else the document's. None
+    /// under a dialog: the evaluate would wait for the answer and then overwrite the clipboard,
+    /// maybe after the operator had copied something else.
+    func selectedText() async -> String? {
+        guard let connection, let session = inputSession else { return nil }
+        let expression = """
+            (() => { const a = document.activeElement;
+              if (a && typeof a.selectionStart === 'number' && typeof a.value === 'string')
+                return a.value.substring(a.selectionStart, a.selectionEnd);
+              return String(getSelection()); })()
+            """
+        let result = try? await connection.call(
+            "Runtime.evaluate", Evaluate(expression: expression, returnByValue: true),
+            session: session, returning: Evaluated<String>.self)
+        return result?.result.value
+    }
+}
+
+// MARK: - Wire shapes
+
+// The CDP shapes the pane sends and reads. File-level rather than nested, so the model's body
+// is its behaviour.
+private struct TargetInfos: Decodable { let targetInfos: [BrowserTab] }
+private struct TargetEvent: Decodable { let targetInfo: BrowserTab }
+private struct TargetGone: Decodable { let targetId: String }
+private struct Discover: Encodable { let discover: Bool }
+private struct CreateTarget: Encodable { let url: String }
+private struct Created: Decodable { let targetId: String }
+private struct CloseTarget: Encodable { let targetId: String }
+private struct FrameEvent: Decodable { let frameId: String }
+private struct HandleDialog: Encodable {
+    let accept: Bool
+    let promptText: String?
+}
+private struct Attach: Encodable {
+    let targetId: String
+    let flatten: Bool
+}
+private struct Attached: Decodable { let sessionId: String }
+private struct Detach: Encodable { let sessionId: String }
+private struct WindowFor: Encodable { let targetId: String }
+private struct WindowId: Decodable { let windowId: Int }
+private struct SetBounds: Encodable {
+    struct Bounds: Encodable {
         let width: Int
         let height: Int
-        let deviceScaleFactor: Double
-        let mobile: Bool
     }
-    private struct Screencast: Encodable {
-        let format: String
-        let quality: Int
-        let maxWidth: Int
-        let maxHeight: Int
-        let everyNthFrame: Int
-    }
-    private struct FrameAck: Encodable { let sessionId: Int }
-    private struct InsertText: Encodable { let text: String }
-    private struct Navigate: Encodable { let url: String }
-    private struct Evaluate: Encodable {
-        let expression: String
-        let returnByValue: Bool
-    }
-    private struct Evaluated<Value: Decodable>: Decodable {
-        struct Remote: Decodable { let value: Value? }
-        let result: Remote
-    }
+    let windowId: Int
+    let bounds: Bounds
+}
+private struct Metrics: Encodable {
+    let width: Int
+    let height: Int
+    let deviceScaleFactor: Double
+    let mobile: Bool
+}
+private struct Screencast: Encodable {
+    let format: String
+    let quality: Int
+    let maxWidth: Int
+    let maxHeight: Int
+    let everyNthFrame: Int
+}
+private struct FrameAck: Encodable { let sessionId: Int }
+private struct InsertText: Encodable { let text: String }
+private struct Navigate: Encodable { let url: String }
+private struct Evaluate: Encodable {
+    let expression: String
+    let returnByValue: Bool
+}
+private struct Evaluated<Value: Decodable>: Decodable {
+    struct Remote: Decodable { let value: Value? }
+    let result: Remote
 }
 
 // MARK: - Input wire shapes
