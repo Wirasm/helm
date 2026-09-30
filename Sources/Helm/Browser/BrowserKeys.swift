@@ -17,7 +17,6 @@ struct BrowserKey: Equatable {
     let code: String
     let key: String
     let windowsVirtualKeyCode: Int
-    let nativeVirtualKeyCode: Int
 
     /// - Parameters:
     ///   - macKeyCode: `NSEvent.keyCode`.
@@ -29,7 +28,6 @@ struct BrowserKey: Equatable {
         let entry = Self.table[macKeyCode]
         code = entry?.code ?? ""
         windowsVirtualKeyCode = entry?.vk ?? 0
-        nativeVirtualKeyCode = Int(macKeyCode)
         if let named = entry?.named {
             key = named
         } else if let text, !text.isEmpty {

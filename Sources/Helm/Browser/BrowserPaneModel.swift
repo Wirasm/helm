@@ -550,13 +550,16 @@ extension BrowserPaneModel {
         var deltaY: Double?
     }
 
+    /// Has no `nativeVirtualKeyCode`, on purpose. With one, Chrome on macOS builds a real
+    /// `NSEvent` for the key, and a key the page leaves unhandled (a `b` on a page body) is
+    /// redispatched through `NSApplication` back into the page, forever: 100% CPU and every tab
+    /// frozen (#545). Playwright and Puppeteer never send it.
     struct KeyEvent: Encodable, Equatable {
         let type: String
         let modifiers: Int
         let key: String
         let code: String
         let windowsVirtualKeyCode: Int
-        let nativeVirtualKeyCode: Int
         var text: String?
         var unmodifiedText: String?
         var autoRepeat: Bool?

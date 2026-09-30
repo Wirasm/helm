@@ -40,14 +40,29 @@ final class BrowserSurfaceTests: XCTestCase {
 
     private func press(
         _ keyCode: UInt16, _ characters: String, ignoring: String? = nil,
-        _ flags: NSEvent.ModifierFlags = []
+        _ flags: NSEvent.ModifierFlags = [], repeating: Bool = false
     ) {
         let event = NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
             windowNumber: window.windowNumber, context: nil, characters: characters,
-            charactersIgnoringModifiers: ignoring ?? characters, isARepeat: false,
+            charactersIgnoringModifiers: ignoring ?? characters, isARepeat: repeating,
             keyCode: keyCode)!
         surface.keyDown(with: event)
+    }
+
+    /// #545: with `nativeVirtualKeyCode` in the event, Chrome on macOS redispatches a key the
+    /// page leaves unhandled back into the page forever, and the shared browser freezes. `b` is
+    /// the key that did it (Mac key code 11; `a` is 0 and so looked safe), held or not.
+    func testAKeyGoesOutWithoutANativeKeyCode() throws {
+        press(0x0B, "b")
+        press(0x0B, "b", repeating: true)
+        XCTAssertEqual(recorder.keys.count, 2)
+        for key in recorder.keys {
+            let json = try JSONEncoder().encode(key)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: json) as? [String: Any])
+            XCTAssertEqual(fields["code"] as? String, "KeyB")
+            XCTAssertNil(fields["nativeVirtualKeyCode"], "Chrome loops on it: #545")
+        }
     }
 
     func testTypingAShiftedDigitSendsItsTextOnThePhysicalKey() throws {
