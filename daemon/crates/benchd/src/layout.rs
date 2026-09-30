@@ -85,9 +85,9 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
         Ok(o) => o,
         Err(refusal) => return reply(Status::Refused, Some(refusal.to_string()), None),
     };
-    // An agent's `pane/open` of a canvas names it the opener: where a mark or a live-file edit
-    // on that canvas is mailed (helm #532). Newest wins, as re-offering a rewritten file is the
-    // ordinary case.
+    // An agent's `pane/open` of a canvas names its pane the opener: where a mark or a live-file
+    // edit on that canvas is mailed (helm #532). The newest agent pane wins, as re-offering a
+    // rewritten file is the ordinary case; an open from no pane leaves the opener as it was.
     if let (
         LayoutVerb::PaneOpen(_),
         Some(pane),

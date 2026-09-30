@@ -289,7 +289,7 @@ _Avoid_: bench API, layout database, restore file
 The one JSON file beside an HTML canvas — `tasks.html` → `tasks.data.json` — that the page and
 the agent both edit. The page writes through helm and an agent through `bench file write
 --expect`, and each names the bytes it saw, so no write replaces a version its writer has not
-seen. benchd tells the open page about the agent's write (`helmCanvasUpdate`) and mails the
+seen (a file deleted meanwhile is simply written). benchd tells the open page about the agent's write (`helmCanvasUpdate`) and mails the
 canvas's opener about the operator's, naming the JSON pointers that changed. A page reporting on
 itself writes with `notify: false` and wakes nobody. Replaced the canvas state latch (#532).
 _Avoid_: state latch, data channel, sync (nothing is merged — a stale writer is refused)

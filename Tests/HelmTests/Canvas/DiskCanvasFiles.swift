@@ -48,6 +48,7 @@ struct DiskCanvasFiles: CanvasFiles {
         case .outside: return .failed("outside")
         case let .failed(why): return .failed(why)
         }
+        if case .bytes(Data(text.utf8)) = read(path, within: nil) { return .written }
         do {
             try Data(text.utf8).write(to: url, options: .atomic)
             return .written

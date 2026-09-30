@@ -340,10 +340,15 @@ enum HTMLCanvasPage {
             return
         }
         let artifact = URL(fileURLWithPath: path.value)
+        // `changed` names the one file behind *this* generation. When the page is offered more
+        // than one generation at once (a reconnect's re-read bumps for the artifact and then for
+        // the live file), it is not the only file that changed, and the artifact is named: a page
+        // told only "your data changed" would keep showing markup that is gone.
+        let one = previous.map { generation == $0.generation + 1 } ?? false
         coordinator.offer(
             CanvasUpdate(
                 artifact: artifact, generation: generation,
-                file: changed ?? artifact.lastPathComponent),
+                file: one ? (changed ?? artifact.lastPathComponent) : artifact.lastPathComponent),
             to: webView
         ) {
             navigate(webView, path: path, theme: theme, coordinator: coordinator)

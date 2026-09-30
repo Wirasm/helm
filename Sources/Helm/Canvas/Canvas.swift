@@ -884,15 +884,11 @@ extension CanvasModel {
     /// saw, and mails the canvas's opener when `notify` says to; helm carries the write and hands
     /// the page what is in the file now.
     ///
-    /// A write of what is already there sends nothing: an unchanged report is not a change, and
-    /// would otherwise mail nobody and rewrite the file for nothing.
+    /// A write of what is already there is benchd's to answer: it compares, and leaves the file
+    /// alone when it holds that text already, so an unchanged report changes nothing.
     func pageWroteData(_ write: CanvasDataWrite) -> Result<CanvasDataAnswer, CanvasFileFailure> {
         guard let live = liveFile else {
             return .failure(CanvasFileFailure(reason: "only an HTML canvas has a live file"))
-        }
-        if write.base == write.text {
-            liveSeen = .bytes(Data(write.text.utf8))
-            return .success(.written(write.text))
         }
         switch files.write(
             write.text, to: live.path, expect: .unchanged(write.base ?? ""), notify: write.notify)

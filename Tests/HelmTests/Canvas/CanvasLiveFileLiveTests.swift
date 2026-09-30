@@ -95,6 +95,24 @@ final class CanvasLiveFileLiveTests: XCTestCase {
         XCTAssertEqual(boot["loads"] as? Int, 1, "applied as data: the page was not reloaded")
     }
 
+    /// **Two changes offered at once name the artifact.** A reconnect's re-read finds both the
+    /// page and its live file changed and bumps twice; a page told only "your data changed" would
+    /// keep showing markup that is gone.
+    func testAPageAndItsLiveFileChangedTogetherAreOfferedAsThePage() async throws {
+        let pane = try Pane(artifact: artifact)
+        try await pane.firstLoad()
+
+        try (Self.page + "<!-- rewritten -->").write(
+            to: artifact, atomically: true, encoding: .utf8)
+        try "{\"done\": false}\n".write(to: data, atomically: true, encoding: .utf8)
+        pane.model.reread()
+        XCTAssertEqual(pane.model.showing?.generation, 2)
+        pane.render()
+
+        let update = try await pane.poll("window.__updates[0]")
+        XCTAssertEqual(update["file"] as? String, "tasks.html")
+    }
+
     // MARK: - The artifact
 
     /// A page that writes through `window.__write`, keeps what it was answered, and takes updates.

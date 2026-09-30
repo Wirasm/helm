@@ -252,9 +252,14 @@ function write(state) {
   return send()
     .then((answer) => {
       dataBase = answer.text;
-      if (answer.kind === "changed") return send().then((again) => (dataBase = again.text));
+      if (answer.kind !== "changed") return;
+      return send().then((again) => {
+        dataBase = again.text;
+        if (again.kind === "changed") warn("the report file keeps changing under the board");
+      });
     })
-    .catch((error) => console.warn(`board: the report was not written: ${error}`));
+    // Into the next report too, so the agent reading the file learns this one did not land.
+    .catch((error) => warn(`the report was not written: ${error}`));
 }
 
 async function readDataBase() {

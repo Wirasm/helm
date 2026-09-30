@@ -575,8 +575,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     helm sends `file/write` with `unchanged: base`, so a page that did not see the newest version
     is answered `changed` with it and replays its change. An agent writes with `bench file write
     <path> --expect <what it read>`, the same compare, and exit 3 means the operator changed it
-    since: **no writer replaces a version it has not seen**, which is what the spike found a plain
-    agent write did. benchd watches the file, and helm offers a change the page has not seen
+    since: **no writer replaces a version it has not seen** (a file deleted meanwhile is simply
+    written), which is what the spike found a plain agent write did. benchd watches the file, and helm offers a change the page has not seen
     through `helmCanvasUpdate` with `file` naming it; the page's own write is not offered back.
     A page write says `notify` (default true), and **benchd, not helm, mails the canvas's opener**
     (`benchd/src/live.rs`): one mail per file per second, naming the changed JSON pointers and

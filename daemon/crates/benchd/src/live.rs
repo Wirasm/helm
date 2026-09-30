@@ -9,6 +9,10 @@
 //! naming the union, because a page that writes on every click would otherwise start a turn per
 //! click (the spike: 50 writes, 26 mails; with the window, 1). The mail names pointers and
 //! nothing else: what the data means is the page's and the agent's, never benchd's.
+//!
+//! **A page can write without the operator doing anything**, on load or on a timer: it is an
+//! agent's own artifact, and `notify` is its choice. So the mail says the page changed the file,
+//! from `operator` because the page is his surface, and the key names it lists are capped.
 
 use crate::{Core, hook};
 use bench_doc::PaneId;
@@ -24,6 +28,10 @@ pub const WINDOW: Duration = Duration::from_secs(1);
 
 /// At most this many pointers are named in one mail; the rest are counted.
 const NAMED: usize = 50;
+
+/// A pointer longer than this is cut: its keys are the page's own, and the mail is the agent's
+/// context.
+const POINTER_CHARS: usize = 120;
 
 /// Where `edited` hands a change to the mailer thread. Unset until `spawn`, so a unit test that
 /// writes a file mails nothing.
@@ -41,11 +49,15 @@ pub fn edited(path: &str, before: Option<&[u8]>, after: &str) {
     if pointers.is_empty() {
         return;
     }
-    if let Some(edits) = EDITS.get() {
-        let _ = edits.send(Edit {
-            path: path.to_string(),
-            pointers,
-        });
+    let edit = Edit {
+        path: path.to_string(),
+        pointers,
+    };
+    if let Some(edits) = EDITS.get()
+        && edits.send(edit).is_err()
+    {
+        // The mailer thread is gone; there is no log to reach from here, so stderr says it.
+        eprintln!("benchd: the live-file mailer has stopped; {path} was not mailed");
     }
 }
 
@@ -204,25 +216,32 @@ fn mail(core: &Arc<Mutex<Core>>, path: &str, pointers: &[String]) {
 }
 
 fn unmailed(core: &Arc<Mutex<Core>>, path: &str, why: String) {
-    let _ = core
+    let logged = core
         .lock()
         .unwrap()
-        .append("live/unmailed", json!({ "path": path, "why": why }));
+        .append("live/unmailed", json!({ "path": path, "why": &why }));
+    if let Err(e) = logged {
+        eprintln!("benchd: {path} was not mailed ({why}), and that could not be logged: {e}");
+    }
 }
 
 /// What the agent reads: the file, the pointers, and how to answer without undoing anything.
 pub fn body(path: &str, canvas: &str, pointers: &[String]) -> String {
-    let shown: Vec<&str> = pointers
+    let shown: Vec<String> = pointers
         .iter()
         .take(NAMED)
-        .map(|p| if p.is_empty() { "(the whole file)" } else { p })
+        .map(|p| match p.chars().count() {
+            0 => "(the whole file)".to_string(),
+            n if n > POINTER_CHARS => p.chars().take(POINTER_CHARS).collect::<String>() + "…",
+            _ => p.clone(),
+        })
         .collect();
     let more = match pointers.len().saturating_sub(NAMED) {
         0 => String::new(),
         n => format!(" (and {n} more)"),
     };
     format!(
-        "The operator changed {path} on the canvas {canvas}.\n\
+        "{path} was changed on the canvas {canvas}, by the operator's page.\n\
          Changed: {}{more}\n\
          Read the file for the current values. To change it, write it with \
          `bench file write {path} --expect <a file holding the bytes you read>`: the page shows \
@@ -326,7 +345,9 @@ mod tests {
     fn the_mail_names_the_file_the_pointers_and_how_to_answer() {
         let many: Vec<String> = (0..52).map(|i| format!("/items/{i}")).collect();
         let text = body("/a/tasks.data.json", "tasks.html", &many);
-        assert!(text.contains("changed /a/tasks.data.json on the canvas tasks.html"));
+        assert!(text.contains("/a/tasks.data.json was changed on the canvas tasks.html"));
+        let long = format!("/{}", "k".repeat(500));
+        assert!(body("/p", "c.html", &[long]).contains(&format!("/{}…", "k".repeat(119))));
         assert!(text.contains("/items/49 (and 2 more)"));
         assert!(text.contains("bench file write /a/tasks.data.json --expect"));
         assert!(body("/p", "c.html", &[String::new()]).contains("(the whole file)"));

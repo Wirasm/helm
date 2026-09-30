@@ -7,7 +7,7 @@
 //! its copy after the operator changed it, is refused instead of silently undoing his edit.
 
 use crate::{Cli, exchange, record_root, refuse};
-use bench_wire::{Expect, FileWriteArgs, Status, unbase64};
+use bench_wire::{Expect, FileWriteArgs, LIVE_SUFFIX, Status, unbase64};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 
@@ -112,6 +112,18 @@ fn write(root: std::path::PathBuf, path: String, expect: &str) -> i32 {
     };
     if let Err(e) = std::io::stdin().read_to_string(&mut text) {
         return refuse(&format!("the new text on stdin is not UTF-8 text: {e}"));
+    }
+    // A failed step before this one in a pipe hands over nothing, or half of something, and the
+    // compare cannot catch it: the agent did read the current bytes. So nothing is written.
+    if text.is_empty() {
+        return refuse(
+            "nothing on stdin, so nothing was written — an empty file is never what a write means",
+        );
+    }
+    if path.ends_with(LIVE_SUFFIX) && serde_json::from_str::<Value>(&text).is_err() {
+        return refuse(&format!(
+            "{path} is a canvas's live file and stdin is not JSON, so nothing was written"
+        ));
     }
     let args = FileWriteArgs {
         path: path.clone(),

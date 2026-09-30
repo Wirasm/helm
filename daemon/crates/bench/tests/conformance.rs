@@ -8138,6 +8138,26 @@ fn an_agents_write_over_a_version_it_has_not_read_is_refused() {
         "{\"done\": true, \"note\": \"mine\"}\n"
     );
 
+    // Writing what is there changes nothing, not even the file's time.
+    let mtime = || fs::metadata(&data).unwrap().modified().unwrap();
+    let was = mtime();
+    let current = fs::read_to_string(&data).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(
+        page_write(&daemon.socket, &data, &current, &current, true),
+        "written"
+    );
+    assert_eq!(mtime(), was, "an unchanged write leaves the file alone");
+
+    // A pipe whose first step failed hands over nothing, or not JSON: refused, file untouched.
+    let before = fs::read_to_string(&data).unwrap();
+    let base = saved(h, "base.json", &before);
+    for broken in ["", "{\"done\": tr"] {
+        let run = bench_stdin(h, &["file", "write", &data, "--expect", &base], broken);
+        assert_eq!(run.code, 3, "{broken:?}: {}", run.stderr);
+        assert_eq!(fs::read_to_string(&data).unwrap(), before, "{broken:?}");
+    }
+
     // No --expect is refused before anything is sent; a new file is --expect /dev/null.
     let blind = bench_stdin(h, &["file", "write", &data], "{}");
     assert_eq!(blind.code, 3, "{}", blind.stderr);
@@ -8198,7 +8218,7 @@ fn a_page_edit_mails_the_canvas_opener_once_per_window_naming_every_pointer() {
     assert_eq!(sent[0]["from"], "operator");
     let body = fs::read_to_string(sent[0]["path"].as_str().unwrap()).unwrap();
     assert!(
-        body.contains(&format!("changed {data} on the canvas tasks.html")),
+        body.contains(&format!("{data} was changed on the canvas tasks.html")),
         "{body}"
     );
     assert!(

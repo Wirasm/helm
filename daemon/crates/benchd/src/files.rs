@@ -90,7 +90,8 @@ fn inside(path: &Path, dir: &Path) -> bool {
 /// `file/write`: temp file and rename, beside the target. The file is compared first, under
 /// `WRITES`: gone or byte-equal to `expect` is written, anything else answers `changed` with what
 /// is there and writes nothing. A file that cannot be read for the compare is refused, never
-/// written: "could not look" is not "unchanged". A write that says `notify` is handed to the
+/// written: "could not look" is not "unchanged". Text that is already there is `written` without
+/// touching the file. A write that says `notify` is handed to the
 /// live-file mailer once it is on disk (`live::edited`).
 pub fn write(args: &Value) -> Result<Value, String> {
     let args: FileWriteArgs =
@@ -122,6 +123,10 @@ pub fn write(args: &Value) -> Result<Value, String> {
             ));
         }
     };
+    // Already there: nothing is rewritten, so the file's time still says when it last changed.
+    if before.as_deref() == Some(args.text.as_bytes()) {
+        return Ok(json!(FileWrite::Written));
+    }
     replace(&path, args.text.as_bytes())
         .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     drop(held);

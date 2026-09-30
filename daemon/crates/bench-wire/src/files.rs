@@ -80,7 +80,7 @@ pub struct FileWriteArgs {
     pub path: String,
     pub text: String,
     pub expect: Expect,
-    /// The operator changed this through a canvas page: once written, benchd mails the agent
+    /// A canvas page, the operator's surface, changed this: once written, benchd mails the agent
     /// that opened each canvas whose live file this is, naming the JSON pointers that changed.
     /// A page reporting its own state says `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

@@ -21,6 +21,10 @@ struct CanvasDataWrite: Equatable {
     /// `window.webkit.messageHandlers.helmCanvasData.postMessage(…)`, which answers with a
     /// promise. Page world, and deliberately not the annotation bridge's name or world: a page
     /// can write its own data, and still cannot forge the operator's mark (#164).
+    ///
+    /// A page may write with nobody clicking, on load or on a timer, and a `notify` write mails
+    /// the canvas's opener. That is the agent's own artifact waking the agent, which is why the
+    /// mail says the *page* changed the file (`benchd/src/live.rs`) and not that he did.
     static let handlerName = "helmCanvasData"
     static let kind = "canvas.data.write"
 

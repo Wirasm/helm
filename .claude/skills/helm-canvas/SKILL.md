@@ -173,7 +173,7 @@ async function change(edit) {
 **What reaches you** is ordinary mail from `operator` (the `bench-mail` skill reads it):
 
 ```
-The operator changed /…/tasks.data.json on the canvas tasks.html.
+/…/tasks.data.json was changed on the canvas tasks.html, by the operator's page.
 Changed: /items/0/done, /items/2/done
 ```
 
@@ -185,18 +185,22 @@ that holds across a helm restart. A canvas nobody opened with `bench open` mails
 
 ```bash
 BENCH="${BENCH:-bench}"
-READ=$(mktemp)
+READ=$(mktemp) NEW=$(mktemp)
 "$BENCH" file read "$LIVE" > "$READ"
-python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); d["reply"] = "on it"; print(json.dumps(d, indent=2))' "$READ" \
-  | "$BENCH" file write "$LIVE" --expect "$READ"
-rm -f "$READ"
+python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); d["reply"] = "on it"; print(json.dumps(d, indent=2))' "$READ" > "$NEW"
+"$BENCH" file write "$LIVE" --expect "$READ" < "$NEW"
+rm -f "$READ" "$NEW"
 ```
 
 - **Exit 3 from `bench file write` means the operator changed the file since you read it**, and
   nothing was written. Read it again and make your change on what is there. A new file is
   `--expect /dev/null`.
+- **Make the new text a file first, as above, rather than piping into `bench file write`.** A
+  pipe whose first step fails still hands over nothing. `bench` refuses an empty write, and for a
+  live file a write that is not JSON, but a file your shell stopped at is the plain version.
 - **Never write the live file any other way.** A plain write of a copy you read a minute ago
-  silently undoes whatever he ticked in between; `--expect` is what refuses it.
+  silently undoes whatever he ticked in between; `--expect` is what refuses it. The one case it
+  lets through: a file deleted since you read it is written, as there is nothing left to protect.
 - **The open page gets your write in about a fifth of a second**, through `helmCanvasUpdate` with
   `file: "tasks.data.json"`; a page that defines no handler is reloaded, which is also how a plain
   page shows your data.

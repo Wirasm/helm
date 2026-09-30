@@ -112,14 +112,15 @@ final class LiveFileTests: XCTestCase {
         XCTAssertEqual(try onDisk(), "{\"done\": false, \"by\": \"agent\"}")
     }
 
-    /// A page that writes what is already there sends nothing: no write, and so no mail.
-    func testWritingWhatIsThereSendsNothing() throws {
-        let files = Recording()
-        let model = CanvasModel(source: .file(page), files: files)
-        let text = try write(["done": true]).text
+    /// A page whose base is stale is told so even when it writes its own base back: helm asks
+    /// benchd rather than answering `written` from the page's say-so.
+    func testWritingBackAStaleBaseIsAnsweredWithTheNewerFile() throws {
+        let model = CanvasModel(source: .file(page), files: DiskCanvasFiles())
+        let mine = try write(["done": true]).text
+        try "{\"done\": false}".write(to: data, atomically: true, encoding: .utf8)
         XCTAssertEqual(
-            model.pageWroteData(try write(["done": true], base: text)), .success(.written(text)))
-        XCTAssertTrue(files.writes.isEmpty)
+            model.pageWroteData(try write(["done": true], base: mine)),
+            .success(.changed("{\"done\": false}")))
     }
 
     func testOnlyAnHTMLCanvasHasALiveFile() throws {

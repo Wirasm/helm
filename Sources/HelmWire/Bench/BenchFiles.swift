@@ -73,7 +73,7 @@ package struct BenchFileWriteRequest: Encodable, Equatable, Sendable {
     package var path: String
     package var text: String
     package var expect: BenchFileExpect
-    /// The operator changed a live file through its page: benchd mails the canvas's opener once
+    /// A canvas page, the operator's surface, changed its live file: benchd mails the canvas's opener once
     /// it is written. Encoded only when true, as on the Rust side.
     package var notify: Bool
 
