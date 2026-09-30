@@ -1217,7 +1217,17 @@ fn dispatch(
                 );
             }
             let mut spec = old.spec.clone();
-            spec.resume = true;
+            // The same conversation, and the same posture: a fork stays read-only (#531).
+            let Some(runtime) = spec.conversation.id() else {
+                return (
+                    refused(format!(
+                        "{} names its own sessions after the fact, so session {sid} cannot be re-entered — spawn fresh, or use claude or pi where the bench mints the id",
+                        spec.agent.name()
+                    )),
+                    AfterResponse::Done,
+                );
+            };
+            spec.conversation = bench_session::Conversation::Resume(runtime.to_string());
             // Re-entering is not a new message: the first prompt was the spawn's.
             spec.prompt_file = None;
             let (id, root, notices) = {

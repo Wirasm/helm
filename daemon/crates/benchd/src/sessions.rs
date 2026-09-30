@@ -176,6 +176,7 @@ pub fn record_spawn(
     cwd: &str,
     session: &str,
     handle: &str,
+    forked_from: Option<&str>,
 ) -> Result<(), String> {
     let (Some(harness), Some(id)) = (harness, id) else {
         return Ok(());
@@ -191,6 +192,7 @@ pub fn record_spawn(
                 handle: Some(handle.to_string()),
             },
             recorded_at: now_rfc3339(),
+            forked_from: forked_from.map(str::to_string),
         }],
     )
 }

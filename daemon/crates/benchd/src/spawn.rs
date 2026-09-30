@@ -21,7 +21,9 @@ use bench_doc::{
     Caller, Document, Focus, PaneId, PaneName, Refusal, ResumableAgent, Rules, StandardPath,
     Surface,
 };
-use bench_session::{AgentKind, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id};
+use bench_session::{
+    AgentKind, Conversation, Posture, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id,
+};
 use bench_wire::{
     Actor, LayoutVerb, OPERATOR_HANDLE, OpenInto, PaneOpen, Request, Response, SpawnArgs, Status,
     validate_handle,
@@ -85,6 +87,7 @@ fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<Stri
             "pid": session.pid,
             "agent": plan.agent.name(),
             "runtime_session": session.runtime_session,
+            "forked_from": plan.spec.conversation.forked_from(),
             "pane": pane,
             "workspace": plan.workspace,
             "focused_pane_before": report.focused_pane_before,
@@ -179,8 +182,9 @@ fn register(core: &mut Core, plan: &Plan, session: &Arc<Session>, pane: PaneId) 
             "agent": plan.agent.name(),
             "cwd": spec.cwd,
             "pid": session.pid,
-            "runtime_session": spec.runtime_session,
-            "resumed": spec.resume,
+            "runtime_session": spec.conversation.id(),
+            "resumed": matches!(spec.conversation, Conversation::Resume(_)),
+            "forked_from": spec.conversation.forked_from(),
             "model": spec.model,
             "effort": spec.effort,
             "pane": pane,
@@ -192,10 +196,11 @@ fn register(core: &mut Core, plan: &Plan, session: &Arc<Session>, pane: PaneId) 
     sessions::record_spawn(
         core,
         bench_wire::Harness::parse(plan.agent.name()),
-        spec.runtime_session.as_deref(),
+        spec.conversation.id(),
         &spec.cwd,
         &session.id,
         &session.handle,
+        spec.conversation.forked_from(),
     )
     .map_err(|why| (Status::Error, why))
 }
@@ -222,33 +227,56 @@ fn judge(req: &Request) -> Result<Plan, String> {
             "prompt_file must be an absolute path to a file the agent can read, got {p:?}"
         ));
     }
-    let runtime_session = match args.resume.as_deref() {
-        Some(id) => Some(resumable(agent, id)?),
-        None => agent.mints_session_id().then(mint_session_id),
+    let (conversation, posture) = match (args.resume.as_deref(), args.fork.as_deref()) {
+        (Some(_), Some(_)) => {
+            return Err(
+                "--resume re-enters a conversation and --fork copies one — pass one of them".into(),
+            );
+        }
+        (Some(id), None) => (
+            Conversation::Resume(resumable(agent, id)?),
+            Posture::Unattended,
+        ),
+        // A fork answers questions about the original's work in the original's worktree, so it
+        // runs read-only: the operator's ruling (#531).
+        (None, Some(from)) => (
+            Conversation::Fork {
+                from: conversation_id("--fork", from)?,
+                id: mint_session_id(),
+            },
+            Posture::ReadOnly,
+        ),
+        (None, None) => (
+            Conversation::New(agent.mints_session_id().then(mint_session_id)),
+            Posture::Unattended,
+        ),
     };
+    let spec = SpawnSpec {
+        agent,
+        cwd: args.cwd.clone(),
+        model: args.model,
+        effort: args.effort,
+        conversation,
+        posture,
+        prompt_file: args.prompt_file,
+        settings: None,
+        extra_args: args.args,
+        codex_server: None,
+    };
+    // `argv` is the one spelling of what each runtime can start as, so it also judges: a fork
+    // codex or pi cannot run is refused here, before anything is reserved.
+    bench_session::argv(&spec)?;
     Ok(Plan {
         agent,
         handle: args.name,
-        spec: SpawnSpec {
-            agent,
-            cwd: args.cwd.clone(),
-            model: args.model,
-            effort: args.effort,
-            runtime_session,
-            resume: args.resume.is_some(),
-            prompt_file: args.prompt_file,
-            settings: None,
-            extra_args: args.args,
-            codex_server: None,
-        },
+        spec,
         workspace,
         rows: args.rows.unwrap_or(40),
         cols: args.cols.unwrap_or(140),
     })
 }
 
-/// A conversation to re-enter: only a runtime that takes its id from the caller, and an id
-/// that cannot be read as a flag.
+/// A conversation to re-enter: only a runtime that takes its id from the caller.
 fn resumable(agent: AgentKind, id: &str) -> Result<String, String> {
     if !agent.mints_session_id() {
         return Err(format!(
@@ -256,6 +284,12 @@ fn resumable(agent: AgentKind, id: &str) -> Result<String, String> {
             agent.name()
         ));
     }
+    conversation_id("--resume", id)
+}
+
+/// A conversation id from the caller (`flag` names where it came from): one that cannot be read
+/// as a flag. Which runtime can fork is `bench_session::argv`'s to say.
+fn conversation_id(flag: &str, id: &str) -> Result<String, String> {
     let valid = (1..=128).contains(&id.len())
         && id.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
         && id
@@ -263,7 +297,7 @@ fn resumable(agent: AgentKind, id: &str) -> Result<String, String> {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
     if !valid {
         return Err(format!(
-            "--resume takes a session id (1-128 of [A-Za-z0-9_-], starting alphanumeric), got {id:?}"
+            "{flag} takes a session id (1-128 of [A-Za-z0-9_-], starting alphanumeric), got {id:?}"
         ));
     }
     Ok(id.to_string())
@@ -290,15 +324,11 @@ fn claimable(core: &Core, handle: &str) -> Result<(), String> {
 /// and carrying the conversation to offer resuming after a restart.
 fn pane_for(plan: &Plan, id: &str) -> Surface {
     Surface::Terminal {
-        agent: plan
-            .spec
-            .runtime_session
-            .as_ref()
-            .map(|session| ResumableAgent {
-                command: plan.agent.name().to_string(),
-                session: session.clone(),
-                cwd: plan.spec.cwd.clone(),
-            }),
+        agent: plan.spec.conversation.id().map(|session| ResumableAgent {
+            command: plan.agent.name().to_string(),
+            session: session.to_string(),
+            cwd: plan.spec.cwd.clone(),
+        }),
         session: Some(id.to_string()),
         cwd: None,
     }

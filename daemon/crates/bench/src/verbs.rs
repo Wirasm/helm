@@ -39,6 +39,7 @@ const VALUED: &[&str] = &[
     "--rows",
     "--cols",
     "--resume",
+    "--fork",
     "--arg",
     "--out",
     "--window",
@@ -326,6 +327,7 @@ fn spawn(p: &Parsed) -> Result<(String, Value), String> {
         rows: number("--rows")?,
         cols: number("--cols")?,
         resume: p.value("--resume"),
+        fork: p.value("--fork"),
         args: p.all("--arg"),
     };
     Ok(("spawn".into(), json!(args)))

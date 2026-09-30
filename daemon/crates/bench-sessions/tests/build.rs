@@ -198,6 +198,7 @@ impl Fixture {
                 handle: None,
             },
             recorded_at: "2026-09-25T10:00:00Z".into(),
+            forked_from: None,
         });
     }
 
@@ -783,6 +784,7 @@ fn a_bench_session_carries_its_mail_address_and_a_pane_agent_carries_the_one_its
             handle: Some("ws-pane".into()),
         },
         recorded_at: "2026-09-26T10:00:00Z".into(),
+        forked_from: None,
     });
     f.unread.insert("ws-pane".into(), 1);
     assert_eq!(
@@ -823,6 +825,7 @@ fn a_finished_row_keeps_the_mailbox_its_session_was_spawned_with() {
                 handle: handle.map(String::from),
             },
             recorded_at: "2026-09-25T10:00:00Z".into(),
+            forked_from: None,
         });
     }
     f.unread.insert("worker".into(), 1);

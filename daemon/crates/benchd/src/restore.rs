@@ -17,7 +17,7 @@
 
 use crate::{Core, claude_settings, shells, spawn};
 use bench_doc::{PaneId, ResumableAgent};
-use bench_session::{AgentKind, Session, SpawnSpec};
+use bench_session::{AgentKind, Conversation, Posture, Session, SpawnSpec};
 use bench_wire::{Actor, Harness, RestoreArgs, SessionKey};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -182,18 +182,17 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
     let kind = AgentKind::parse(&agent.command, false)?;
     let id = format!("s{}", core.next_session);
     core.next_session += 1;
-    let handle = Harness::parse(kind.name())
-        .and_then(|harness| {
-            let key = SessionKey {
-                harness,
-                id: agent.session.clone(),
-            };
-            core.session_records
-                .hosted
-                .iter()
-                .find(|h| h.key() == key)
-                .and_then(|h| h.handle().map(str::to_string))
-        })
+    let hosted = Harness::parse(kind.name()).and_then(|harness| {
+        let key = SessionKey {
+            harness,
+            id: agent.session.clone(),
+        };
+        core.session_records.hosted.iter().find(|h| h.key() == key)
+    });
+    // A fork comes back as it was spawned, read-only (#531).
+    let posture = Posture::resuming(hosted.and_then(|h| h.forked_from.as_deref()));
+    let handle = hosted
+        .and_then(|h| h.handle().map(str::to_string))
         .filter(|h| !core.sessions.values().any(|s| &s.handle == h))
         .unwrap_or_else(|| id.clone());
     let settings = match kind {
@@ -205,8 +204,8 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
         cwd: agent.cwd.clone(),
         model: None,
         effort: None,
-        runtime_session: Some(agent.session.clone()),
-        resume: true,
+        conversation: Conversation::Resume(agent.session.clone()),
+        posture,
         prompt_file: None,
         extra_args: Vec::new(),
         settings,
