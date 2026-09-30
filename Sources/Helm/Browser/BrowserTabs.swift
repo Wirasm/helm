@@ -77,9 +77,10 @@ struct BrowserTabs: Equatable {
         tabs.append(tab)
         if ownPending.remove(tab.targetId) != nil { return show(tab.targetId) }
         if let opener = tab.openerId {
-            // A popup from the page he is looking at is his own click's result.
-            if opener == showing, !fromOutside.contains(opener) { return show(tab.targetId) }
             if fromOutside.contains(opener) { fromOutside.insert(tab.targetId) }
+            // A popup from the page he is looking at comes forward — a sign-in window he
+            // clicked for, even in a tab an agent opened.
+            if opener == showing { return show(tab.targetId) }
         } else {
             // Provisional when it is this pane's own: `ownCreated` clears it on the reply.
             fromOutside.insert(tab.targetId)

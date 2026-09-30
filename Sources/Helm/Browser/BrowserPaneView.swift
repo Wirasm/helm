@@ -26,9 +26,26 @@ struct BrowserPaneView: View {
         }
         .background(Color.surface)
         .onChange(of: model.tabs.current?.url) { _, url in
-            if !addressFocused { address = url ?? "" }
+            // A blank tab's field is empty and waits for typing, as ⌘T's does in Chrome — and
+            // is refilled even while focused, since ⌘T focuses it before the tab exists.
+            if url == "about:blank" {
+                address = ""
+            } else if !addressFocused {
+                address = url ?? ""
+            }
         }
-        .onChange(of: model.addressRequests) { addressFocused = true }
+        .onChange(of: model.addressRequests) {
+            addressFocused = true
+            // ⌘L on a field that already has focus still selects what is in it.
+            // Only to the field editor: sent to the page, select-all would select the page.
+            DispatchQueue.main.async {
+                guard BrowserKeyboard.editingAddress === model,
+                    let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
+                    editor.isFieldEditor
+                else { return }
+                editor.selectAll(nil)
+            }
+        }
         .onChange(of: addressFocused) { _, focused in
             if focused {
                 BrowserKeyboard.editingAddress = model

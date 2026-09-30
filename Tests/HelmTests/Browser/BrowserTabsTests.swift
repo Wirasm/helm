@@ -88,6 +88,15 @@ final class BrowserTabsTests: XCTestCase {
         XCTAssertEqual(tabs.fromOutside, ["agent", "popup"])
     }
 
+    /// He is on a tab an agent opened and presses "Sign in": the popup is his to answer.
+    func testAPopupFromTheTabOnScreenComesForwardEvenInAnAgentsTab() {
+        var tabs = showingMain()
+        _ = tabs.created(page("agent"))
+        _ = tabs.show("agent")
+        XCTAssertEqual(tabs.created(page("signin", opener: "agent")), .show("signin"))
+        XCTAssertEqual(tabs.unseen, [])
+    }
+
     func testClosingTheShownTabShowsTheOneThatTookItsPlace() {
         var tabs = BrowserTabs()
         _ = tabs.replaceAll(with: [page("a"), page("b"), page("c")])
