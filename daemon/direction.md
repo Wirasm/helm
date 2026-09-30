@@ -184,10 +184,10 @@ browser and the drawers still reach around the socket; they are the next slices.
 **And prp's stores and the paths the operator types (M5c).** `~/.prp` lives on the agents'
 machine, so helm asks benchd about it (`bench_wire::prp`, pinned by `fixtures/prp-verbs.json`).
 `prp/note` starts ⌘⇧N's note: benchd runs prp's canonical store resolver in the workspace
-(`benchd/src/prp.rs`, a port of the block every prp skill carries, pinned against the block by a
-conformance test), registers a store nothing has touched with prp's exact `project.json` bytes,
-and creates `notes/<day>-note[-n].md` without overwriting. A git that does not answer within 8 s
-is a refusal, never a fallback to the folder. `prp/stores` and `prp/artifacts` are the artifact
+(`benchd/src/prp.rs`, a port of the block every prp skill carries, checked by a conformance test
+against a verbatim copy of it), registers a store nothing has touched with prp's exact `project.json` bytes,
+and creates `notes/<day>-note[-n].md` without overwriting. A git that has not answered within 3 s
+(`PRP_RESOLVE_WAIT`, for the whole resolve) is a refusal, never a fallback to the folder. `prp/stores` and `prp/artifacts` are the artifact
 browser's listing, and the workspace's store is the resolver's answer, so a worktree finds its
 main checkout's. `path/resolve` turns what the operator typed into benchd's absolute path, `~`
 expanded against benchd's `HOME`, and says whether a file or a folder is there: ⇧⌘O and the

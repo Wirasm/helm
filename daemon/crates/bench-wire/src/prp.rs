@@ -14,6 +14,14 @@
 //! `fixtures/prp-verbs.json`.
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// benchd's whole budget for resolving a workspace's store, both git runs together
+/// (`prp/note`, and `prp/stores` with a workspace). A git that has not answered by then is a
+/// refusal for a note and "no workspace store" for a listing. A client asking either verb waits
+/// longer than this, so it always hears benchd's answer rather than its own timeout: helm's
+/// `PrpStores.resolvingTimeout`, held above this by the fixture's `resolve_wait_ms`.
+pub const PRP_RESOLVE_WAIT: Duration = Duration::from_millis(3000);
 
 /// The extensions helm renders as a canvas: helm's `RenderableFile.isRenderable`, spelled again
 /// because `bench open` refuses before anything reaches helm and `prp/artifacts` lists only
@@ -166,6 +174,7 @@ mod tests {
             "artifacts_answer": back::<PrpArtifacts>(&value["artifacts_answer"]),
             "resolve": request("resolve", "path/resolve", back::<PathResolveArgs>),
             "resolve_answers": back::<Vec<PathResolved>>(&value["resolve_answers"]),
+            "resolve_wait_ms": PRP_RESOLVE_WAIT.as_millis(),
         }))
         .unwrap()
             + "\n";

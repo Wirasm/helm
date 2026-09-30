@@ -233,7 +233,7 @@ final class WorkbenchNoteTests: XCTestCase {
     /// be asked: the operator reads its reason, and nothing is opened.
     func testARefusalIsReportedOnTheBenchWithBenchdsReason() async throws {
         let model = try mounted()
-        prp.refusing = "git rev-parse did not answer within 8 s in \(workspace.value)"
+        prp.refusing = "git rev-parse did not answer within 3000 ms in \(workspace.value)"
         let before = model.bench?.panes.count
 
         let id = await model.newNote()

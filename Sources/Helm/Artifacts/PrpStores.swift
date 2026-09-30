@@ -19,19 +19,26 @@ struct PrpStores: Sendable {
         let reason: String
     }
 
-    /// How long `prp/note` may take: benchd bounds each git run at 8 s, so its refusal arrives
-    /// before this does.
-    static let noteTimeout: TimeInterval = 10
+    /// How long a verb that resolves a workspace's store may take: `prp/note`, and `prp/stores`
+    /// with a workspace. benchd gives the resolver `bench_wire::PRP_RESOLVE_WAIT` in all (3 s, the
+    /// fixture's `resolve_wait_ms`), and `BenchPrpWireTests` holds this above it, so a slow git
+    /// reaches helm as benchd's answer (a refusal, or the list without the workspace's store)
+    /// rather than as helm's own timeout.
+    static let resolvingTimeout: TimeInterval = 5
 
     /// Start a note in `workspace`'s store, named for `day` (`yyyy-MM-dd`). The new file's path.
     func note(workspace: String, day: String) -> Result<String, Failure> {
-        ask(.note(workspace: workspace, day: day), BenchPrpNote.self, timeout: Self.noteTimeout)
-            .map(\.path)
+        ask(
+            .note(workspace: workspace, day: day), BenchPrpNote.self, timeout: Self.resolvingTimeout
+        )
+        .map(\.path)
     }
 
     /// Every store, and `workspace`'s key when its store exists.
     func stores(workspace: String? = nil) -> Result<BenchPrpStores, Failure> {
-        ask(.stores(workspace: workspace), BenchPrpStores.self)
+        ask(
+            .stores(workspace: workspace), BenchPrpStores.self,
+            timeout: workspace == nil ? BenchClient.requestTimeout : Self.resolvingTimeout)
     }
 
     /// One store's renderable files, newest first.

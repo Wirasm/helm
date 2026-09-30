@@ -48,6 +48,7 @@
       "path": "/Users/op/.prp/helm-3ec376fc/plans/plan.md"
     }
   ],
+  "resolve_wait_ms": 3000,
   "stores": {
     "args": {
       "workspace": "/Users/op/Projects/helm"

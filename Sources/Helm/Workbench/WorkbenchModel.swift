@@ -306,7 +306,7 @@ final class WorkbenchModel: ObservableObject {
     ///   collision rule is testable without waiting for midnight.
     ///
     /// **Async because benchd may run git to key the store** (#390): the request goes off the main
-    /// actor, bounded by `PrpStores.noteTimeout`, and a git that hangs is benchd's sentence. The
+    /// actor, bounded by `PrpStores.resolvingTimeout`, and a git that hangs is benchd's sentence. The
     /// window stays live meanwhile, so the operator can switch workspace before the answer; the
     /// note is then left unopened in its own project's `notes/` rather than opened on the wrong
     /// bench.

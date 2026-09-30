@@ -525,8 +525,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     made on that canvas, and one keystroke through an overwriting editor would replace the lot.
   - **⌘⇧N still starts a dated note** in `~/.prp/<key>/notes/` of the workspace he is in, on
     **benchd's machine**, where the agents and their `~/.prp` are (M5c, #459). benchd runs prp's
-    own canonical resolver there (`prp/note`, `benchd/src/prp.rs`, pinned against the block
-    itself by the daemon gate), registers the store with prp's exact `project.json` bytes when
+    own canonical resolver there (`prp/note`, `benchd/src/prp.rs`, checked by the daemon gate
+    against a verbatim copy of the block), registers the store with prp's exact `project.json` bytes when
     nothing has touched it yet, and creates the note; helm opens it through the file verbs.
     `OperatorNote` is now only the day it is named for and the sentence when it fails. ⌘O's
     artifact browser lists benchd's stores the same way (`prp/stores`, `prp/artifacts`), and

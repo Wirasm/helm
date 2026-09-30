@@ -72,4 +72,11 @@ final class BenchPrpWireTests: XCTestCase {
                 BenchPathResolved(path: "/Users/op/.prp/helm-3ec376fc/plans/plan.md", kind: .file),
             ])
     }
+
+    /// benchd resolves a workspace's store within `resolve_wait_ms`; helm waits longer for the
+    /// verbs that do it, or a slow git would read as benchd not answering (#538 review, R1).
+    func testHelmOutwaitsBenchdsResolver() throws {
+        let wait = try XCTUnwrap(samples()["resolve_wait_ms"] as? Double) / 1000
+        XCTAssertGreaterThan(PrpStores.resolvingTimeout, wait + 1)
+    }
 }

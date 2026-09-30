@@ -8631,9 +8631,11 @@ fn a_fork_helm_asks_for_gets_its_prompt_as_a_file_and_leaves_focus_alone() {
 // M5c (#459): prp's stores and typed paths, answered on benchd's machine
 // ---------------------------------------------------------------------------
 
-/// prp's canonical store resolver, the block every prp skill carries byte-identical, run in
-/// `folder` with `home` as HOME and `prp_home` as PRP_HOME. Prints `PRP_DIR`, creating it as the
-/// skills do. The reference `benchd/src/prp.rs` is a port of.
+/// prp's canonical store resolver, copied verbatim from the block every prp skill carries
+/// (`prp-plan/SKILL.md`, "PRP store resolver"), with a `cd` before it and a `printf` after. Run in
+/// `folder` with `home` as HOME and `prp_home` as PRP_HOME, it prints `PRP_DIR`, creating it as the
+/// skills do. A copy, because prp is another repo: when prp changes its block, change this and
+/// `benchd/src/prp.rs` together.
 const CANONICAL_RESOLVER: &str = r#"cd "$1" || exit 1
 _gd="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
 case "$_gd" in */.git) _root="${_gd%/.git}" ;; "") _root="$PWD" ;; *) _root="$_gd" ;; esac

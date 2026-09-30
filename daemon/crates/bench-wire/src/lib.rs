@@ -38,9 +38,9 @@ pub use files::{
 
 mod prp;
 pub use prp::{
-    NOTES_DIRECTORY, PathKind, PathResolveArgs, PathResolved, PrpArtifact, PrpArtifacts,
-    PrpArtifactsArgs, PrpNote, PrpNoteArgs, PrpStore, PrpStores, PrpStoresArgs, RENDERABLE,
-    is_renderable,
+    NOTES_DIRECTORY, PRP_RESOLVE_WAIT, PathKind, PathResolveArgs, PathResolved, PrpArtifact,
+    PrpArtifacts, PrpArtifactsArgs, PrpNote, PrpNoteArgs, PrpStore, PrpStores, PrpStoresArgs,
+    RENDERABLE, is_renderable,
 };
 
 mod just;

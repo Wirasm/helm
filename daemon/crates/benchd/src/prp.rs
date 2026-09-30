@@ -6,7 +6,9 @@
 //!
 //! **The store a workspace belongs to is prp's own resolver's answer**, the block every prp skill
 //! carries byte-identical (`prp-plan/SKILL.md`, "PRP store resolver (canonical …)"), ported here
-//! rule for rule and pinned against the block itself by the conformance suite:
+//! rule for rule. The conformance suite runs a verbatim copy of the block (prp is another repo, so
+//! it is a copy, and a change on prp's side has to be carried here and there by hand) and checks
+//! benchd's answer against it:
 //!
 //! ```sh
 //! _gd="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
@@ -22,13 +24,14 @@
 //!
 //! Two places refuse where the block would carry on: a workspace folder that does not exist (the
 //! block's `cd` fails and it uses its own directory), and a `git` that does not answer within
-//! `GIT_WAIT` or cannot hash (the block would mint `<name>-`). Either would put a note in a
+//! `PRP_RESOLVE_WAIT` or cannot hash (the block would mint `<name>-`). Either would put a note in a
 //! store no agent will ever use.
 
 use bench_doc::StandardPath;
 use bench_wire::{
-    NOTES_DIRECTORY, PathKind, PathResolveArgs, PathResolved, PrpArtifact, PrpArtifacts,
-    PrpArtifactsArgs, PrpNote, PrpNoteArgs, PrpStore, PrpStores, PrpStoresArgs, is_renderable,
+    NOTES_DIRECTORY, PRP_RESOLVE_WAIT, PathKind, PathResolveArgs, PathResolved, PrpArtifact,
+    PrpArtifacts, PrpArtifactsArgs, PrpNote, PrpNoteArgs, PrpStore, PrpStores, PrpStoresArgs,
+    is_renderable,
 };
 use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
@@ -36,10 +39,6 @@ use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, UNIX_EPOCH};
-
-/// How long one `git` run may take. Under helm's patience for `prp/note` (10 s), so a git that
-/// hangs is benchd's sentence rather than helm's timeout.
-const GIT_WAIT: Duration = Duration::from_secs(8);
 
 /// `${PRP_HOME:-$HOME/.prp}`, from benchd's own environment: unset and empty both mean the
 /// default, as `:-` does.
@@ -53,9 +52,14 @@ fn prp_home() -> Result<PathBuf, String> {
         .ok_or_else(|| "benchd has no HOME, so it has no ~/.prp".to_string())
 }
 
-/// `git <args>` in `cwd`, with `input` on stdin, bounded by `GIT_WAIT`. `Ok(None)` when git is
+/// `git <args>` in `cwd`, with `input` on stdin, killed at `deadline`. `Ok(None)` when git is
 /// missing or says no (nonzero exit); `Err` only when it did not answer in time.
-fn git(args: &[&str], cwd: &Path, input: Option<&str>) -> Result<Option<String>, String> {
+fn git(
+    args: &[&str],
+    cwd: &Path,
+    input: Option<&str>,
+    deadline: Instant,
+) -> Result<Option<String>, String> {
     let mut child = match Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -75,7 +79,6 @@ fn git(args: &[&str], cwd: &Path, input: Option<&str>) -> Result<Option<String>,
         // Dropped at the end of this block, which is the EOF `--stdin` waits for.
         let _ = stdin.write_all(text.as_bytes());
     }
-    let deadline = Instant::now() + GIT_WAIT;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -84,9 +87,9 @@ fn git(args: &[&str], cwd: &Path, input: Option<&str>) -> Result<Option<String>,
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(format!(
-                    "git {} did not answer within {} s in {}",
+                    "git {} did not answer within {} ms in {}",
                     args.first().copied().unwrap_or_default(),
-                    GIT_WAIT.as_secs(),
+                    PRP_RESOLVE_WAIT.as_millis(),
                     cwd.display()
                 ));
             }
@@ -154,7 +157,10 @@ struct Resolved {
     dir: PathBuf,
 }
 
+/// The resolver, run within `PRP_RESOLVE_WAIT` in all: one budget for both git runs, so a client
+/// that waits longer always hears benchd's answer.
 fn resolve(workspace: &str) -> Result<Resolved, String> {
+    let deadline = Instant::now() + PRP_RESOLVE_WAIT;
     let workspace = PathBuf::from(StandardPath::new(workspace)?.as_str());
     if !workspace.is_dir() {
         return Err(format!("no folder at {}", workspace.display()));
@@ -163,6 +169,7 @@ fn resolve(workspace: &str) -> Result<Resolved, String> {
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         &workspace,
         None,
+        deadline,
     )?
     .unwrap_or_default();
     let root = match common.strip_suffix("/.git") {
@@ -186,9 +193,14 @@ fn resolve(workspace: &str) -> Result<Resolved, String> {
     let dir = match hit {
         Some(dir) => dir,
         None => {
-            let hash = git(&["hash-object", "--stdin"], &workspace, Some(&root))?
-                .filter(|h| h.len() >= 8)
-                .ok_or_else(|| format!("git could not hash {root}, so no store key"))?;
+            let hash = git(
+                &["hash-object", "--stdin"],
+                &workspace,
+                Some(&root),
+                deadline,
+            )?
+            .filter(|h| h.len() >= 8)
+            .ok_or_else(|| format!("git could not hash {root}, so no store key"))?;
             home.join(format!("{name}-{}", &hash[..8]))
         }
     };
