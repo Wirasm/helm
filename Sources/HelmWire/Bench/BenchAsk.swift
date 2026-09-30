@@ -40,19 +40,19 @@ package struct HelmAsked: Codable, Equatable, Sendable {
 /// What benchd asks. Tagged by `kind`; one this build does not know is `unknown`, answered with a
 /// refusal naming it rather than left to time out.
 package enum HelmAsk: Codable, Equatable, Sendable {
-    /// Draw the window into `path` (an absolute `.png`), the one titled like `window` if named.
-    case capture(path: String, window: String?)
+    /// Draw the window titled like `window` if named, and answer with the PNG itself
+    /// (`CaptureAnswer`). benchd writes the file on its own side (M5c): helm is never told a path,
+    /// since the caller's is on benchd's machine.
+    case capture(window: String?)
     case unknown(kind: String)
 
-    private enum CodingKeys: String, CodingKey { case kind, path, window }
+    private enum CodingKeys: String, CodingKey { case kind, window }
 
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .kind) {
         case "capture":
-            self = .capture(
-                path: try c.decode(String.self, forKey: .path),
-                window: try c.decodeIfPresent(String.self, forKey: .window))
+            self = .capture(window: try c.decodeIfPresent(String.self, forKey: .window))
         case let other:
             self = .unknown(kind: other)
         }
@@ -61,15 +61,19 @@ package enum HelmAsk: Codable, Equatable, Sendable {
     package func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .capture(path, window):
+        case let .capture(window):
             try c.encode("capture", forKey: .kind)
-            try c.encode(path, forKey: .path)
             try c.encodeIfPresent(window, forKey: .window)
         case let .unknown(kind):
             try c.encode(kind, forKey: .kind)
         }
     }
 }
+
+/// The largest request line benchd reads for `helm/answer`, `file/write` and `file/append`
+/// (`bench_wire::FILE_REQUEST_MAX_BYTES`). A capture answer longer than this would be refused
+/// unread and leave the caller waiting, so helm refuses it first and says why.
+package let benchLargeRequestMaxBytes = 16 * 1024 * 1024
 
 /// `helm/answer`: helm's outcome for one ask, sent as helm. benchd hands `status`, `reason` and
 /// `data` to the waiting caller unchanged.

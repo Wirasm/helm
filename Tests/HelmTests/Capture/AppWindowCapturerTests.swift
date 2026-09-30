@@ -101,7 +101,7 @@ final class AppWindowCapturerTests: XCTestCase {
 
     func testACapturerWithNoWindowsFailsWithAReasonRatherThanCrashing() {
         let capturer = AppWindowCapturer(windows: { [] }, keyWindow: { nil })
-        guard case .failure(let refusal) = capturer.capture(to: "/tmp/x.png", window: nil) else {
+        guard case .failure(let refusal) = capturer.capture(window: nil) else {
             return XCTFail("a capture with no window must not succeed")
         }
         XCTAssertTrue(refusal.reason.contains("no visible window"))

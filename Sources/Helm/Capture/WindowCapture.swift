@@ -25,7 +25,8 @@ enum WindowCapture {
     /// border and no label.
     private static let labelFloor: CGFloat = 28
 
-    /// Draw `view` and everything under it into a PNG at `url`.
+    /// Draw `view` and everything under it into a PNG, returned in the report: helm writes no
+    /// file, because the caller's path is on benchd's machine (M5c).
     ///
     /// **`terminals` is passed in rather than discovered, and that is the correction #174's own
     /// scoping needed.** Sniffing the view tree for `CAMetalLayer` looks like the general
@@ -40,7 +41,7 @@ enum WindowCapture {
     @MainActor
     static func png(
         of view: NSView, terminals: [NSView], window title: String,
-        appearance: Palette.Appearance, to url: URL
+        appearance: Palette.Appearance
     ) -> Result<CaptureReport, CaptureRefusal> {
         // Laid out and drawn before it is asked for pixels: a window that has never been
         // displayed has a view tree with no frames, and the capture would be a correct
@@ -75,17 +76,9 @@ enum WindowCapture {
         guard let data = rep.representation(using: .png, properties: [:]) else {
             return .failure(CaptureRefusal("the bitmap could not be encoded as a PNG"))
         }
-        do {
-            try data.write(to: url, options: [.atomic])
-        } catch {
-            return .failure(
-                CaptureRefusal(
-                    "could not write the PNG to \(url.path): \(error.localizedDescription)")
-            )
-        }
         return .success(
             CaptureReport(
-                path: url.path, pixelWidth: rep.pixelsWide, pixelHeight: rep.pixelsHigh,
+                png: data, pixelWidth: rep.pixelsWide, pixelHeight: rep.pixelsHigh,
                 scale: scale, window: title, windowVisible: isInVisibleWindow(view),
                 terminalContent: content(of: present.count, missing: missing.count),
                 terminalSurfaces: present.count, terminalSurfacesExcluded: missing.count))

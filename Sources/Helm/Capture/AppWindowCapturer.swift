@@ -1,10 +1,10 @@
 import AppKit
 
-/// Drawing helm's own window into a PNG at `path`, or saying why not, as a seam: the answering
+/// Drawing helm's own window into a PNG, or saying why not, as a seam: the answering
 /// side (`HelmAsks`) is reached from `swift test` with a capturer that has no window at all.
 @MainActor
 protocol WindowCapturing: AnyObject {
-    func capture(to path: String, window: String?) -> Result<CaptureReport, CaptureRefusal>
+    func capture(window: String?) -> Result<CaptureReport, CaptureRefusal>
 }
 
 /// Why a capture drew nothing, in a sentence the agent that asked can act on.
@@ -43,8 +43,7 @@ final class AppWindowCapturer: WindowCapturing {
         self.terminals = terminals
     }
 
-    func capture(to path: String, window request: String?) -> Result<CaptureReport, CaptureRefusal>
-    {
+    func capture(window request: String?) -> Result<CaptureReport, CaptureRefusal> {
         let all = windows()
         switch Self.target(in: all, key: keyWindow(), named: request) {
         case .failure(let refusal):
@@ -56,8 +55,7 @@ final class AppWindowCapturer: WindowCapturing {
             }
             return WindowCapture.png(
                 of: view, terminals: terminals(), window: window.title,
-                appearance: .resolving(window.effectiveAppearance),
-                to: URL(fileURLWithPath: path))
+                appearance: .resolving(window.effectiveAppearance))
         }
     }
 

@@ -6,9 +6,10 @@
 //! `bench-mail`.
 //!
 //! What the daemon does NOT do with this browser is automate it. Agents drive it with
-//! Playwright (`playwright-cli attach --cdp=<endpoint.cdp>`), helm renders it over its
-//! own CDP websocket, and the daemon is in neither path — it starts, supervises and
-//! publishes. That is the spike's architecture (`spike-shared-browser-cdp.md`).
+//! Playwright (`playwright-cli attach --cdp=<endpoint.cdp>`), and helm's pane speaks CDP
+//! through the daemon (`browser/connect`, which only carries messages, M5c) — it starts,
+//! supervises, publishes and relays. That is the spike's architecture
+//! (`spike-shared-browser-cdp.md`), with the relay added so helm need not share the machine.
 //!
 //! Two mechanisms carry the lifecycle rules:
 //!
@@ -157,7 +158,7 @@ pub fn resolve_binary(
 /// from `--version` rather than typed here to go stale.
 ///
 /// `--remote-allow-origins=*` is kept on the operator's ruling. Neither consumer needs
-/// it today — helm's pane is a native websocket and Playwright's is node's, and neither
+/// it today — helm's pane reaches the browser through benchd's relay (`cdp.rs`) and Playwright's is node's, and neither
 /// sends an `Origin` — but a page-based viewer would, and the spike's did.
 pub fn default_args(version_output: &str) -> Result<Vec<String>, String> {
     let major = version_output

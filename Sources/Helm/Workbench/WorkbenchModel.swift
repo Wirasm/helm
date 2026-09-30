@@ -132,7 +132,7 @@ final class WorkbenchModel: ObservableObject {
         resolveRepository: @escaping @Sendable (String) async throws -> String = {
             try await WorkspaceStore.repositoryRoot(for: $0)
         },
-        makeBrowser: @escaping @MainActor () -> BrowserPaneModel = { BrowserPaneModel() },
+        makeBrowser: (@MainActor () -> BrowserPaneModel)? = nil,
         client: BenchClient
     ) {
         self.client = client
@@ -147,7 +147,8 @@ final class WorkbenchModel: ObservableObject {
             CanvasPaneKind(files: BenchCanvasFiles(client: client)) { [weak self] model, pane in
                 self?.wireMarks(model, in: pane)
             })
-        terminals.surfaces.register(BrowserPaneKind(make: makeBrowser))
+        terminals.surfaces.register(
+            BrowserPaneKind(make: makeBrowser ?? { BrowserPaneModel(endpoint: client.endpoint) }))
         terminals.surfaces.register(UnsupportedPaneKind())
         terminals.surfaces.register(SessionsPaneKind(workbench: self, terminals: terminals))
         terminals.surfaces.register(ArchonPaneKind(workbench: self, terminals: terminals))

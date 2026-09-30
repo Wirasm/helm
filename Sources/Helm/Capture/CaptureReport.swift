@@ -8,10 +8,11 @@ import Foundation
 /// thing.
 ///
 /// The value `WindowCapture` produces and helm hands to benchd as its answer to `bench get
-/// screenshot` (`HelmAsks`), which the agent reads as JSON.
+/// screenshot` (`HelmAsks`). benchd writes `png` to the caller's path on its own machine and hands
+/// the agent this report as JSON with `path` in its place (M5c: helm may not share that disk).
 struct CaptureReport: Codable, Equatable {
-    /// Where the PNG is. Absolute.
-    let path: String
+    /// The image itself, encoded as base64 on the wire (`bench_wire::CAPTURE_PNG_KEY`).
+    let png: Data
     let pixelWidth: Int
     let pixelHeight: Int
     /// Backing scale — 2 on a retina display, so `pixelWidth / scale` is the size in points a
@@ -41,11 +42,11 @@ struct CaptureReport: Codable, Equatable {
     let terminalSurfacesExcluded: Int
 
     init(
-        path: String, pixelWidth: Int, pixelHeight: Int, scale: Double, window: String,
+        png: Data, pixelWidth: Int, pixelHeight: Int, scale: Double, window: String,
         windowVisible: Bool, terminalContent: TerminalContent, terminalSurfaces: Int,
         terminalSurfacesExcluded: Int
     ) {
-        self.path = path
+        self.png = png
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.scale = scale

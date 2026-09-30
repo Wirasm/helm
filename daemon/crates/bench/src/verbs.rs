@@ -12,11 +12,11 @@
 use crate::{Cli, exchange, print_response, record_root, refuse};
 use bench_doc::{Direction, Document, DrawerName, PaneId, PaneName, Split, Surface};
 use bench_wire::{
-    DocumentAt, HelmAsk, LayoutVerb, OpenInto, PaneOpen, ScreenGetArgs, ScreenSendArgs, SpawnArgs,
-    Status,
+    DocumentAt, HelmAsk, HelmAskArgs, LayoutVerb, OpenInto, PaneOpen, ScreenGetArgs,
+    ScreenSendArgs, SpawnArgs, Status,
 };
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The verbs this module answers, by their first word. `close` and `get` are shared with the
 /// session and document verbs; [`owns`] decides by the word after them.
@@ -150,7 +150,7 @@ pub fn run(raw: &[String]) -> i32 {
         }
         "get" if parsed.words.get(1).map(String::as_str) == Some("screen") => screen_get(&parsed),
         "watch" => return watch(&parsed, root),
-        "get" => screenshot(&parsed, &root),
+        "get" => screenshot(&parsed),
         "send" => send(&parsed),
         "spawn" => spawn(&parsed),
         _ => layout(&verb, &parsed),
@@ -401,30 +401,23 @@ fn watch(p: &Parsed, root: PathBuf) -> i32 {
     }
 }
 
-/// `get screenshot`: helm draws its window. benchd asks helm and hands back its report.
-fn screenshot(p: &Parsed, root: &Path) -> Result<(String, Value), String> {
-    let path = match p.value("--out") {
-        Some(out) => std::env::current_dir().unwrap_or_default().join(out),
-        None => {
-            let dir = root.join("captures");
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            dir.join(format!("capture-{stamp}.png"))
-        }
-    };
-    if path.extension().and_then(|e| e.to_str()) != Some("png") {
+/// `get screenshot`: helm draws its window and sends the PNG back; benchd writes it at `--out`
+/// (resolved against this directory) or under its own `captures/`, on benchd's machine, and hands
+/// back helm's report with the path.
+fn screenshot(p: &Parsed) -> Result<(String, Value), String> {
+    let out = p
+        .value("--out")
+        .map(|out| std::env::current_dir().unwrap_or_default().join(out));
+    if let Some(path) = &out
+        && path.extension().and_then(|e| e.to_str()) != Some("png")
+    {
         return Err(format!("--out names a .png, not {}", path.display()));
     }
-    if !path.parent().is_some_and(Path::is_dir) {
-        return Err(format!("no directory to write {} into", path.display()));
-    }
-    let ask = HelmAsk::Capture {
-        path: path.display().to_string(),
-        window: p.value("--window"),
+    let ask = HelmAskArgs {
+        ask: HelmAsk::Capture {
+            window: p.value("--window"),
+        },
+        out: out.map(|path| path.display().to_string()),
     };
     Ok(("helm/ask".into(), json!(ask)))
 }
@@ -532,7 +525,7 @@ mod tests {
     #[test]
     fn the_renderable_extensions_are_helms() {
         let swift = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../../Sources/Helm/Shared/RenderableFile.swift"),
         )
         .expect("helm's RenderableFile.swift is readable from the bench crate");

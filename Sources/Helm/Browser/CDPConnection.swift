@@ -1,10 +1,16 @@
 import Foundation
+import HelmWire
 
-/// One Chrome DevTools Protocol websocket: numbered calls with typed replies, and events.
+/// One Chrome DevTools Protocol connection: numbered calls with typed replies, and events.
 ///
 /// **Only what the pane needs.** CDP is a large protocol, and agents already have a complete
 /// client for it (Playwright). The pane speaks the few methods that show a tab and forward
 /// the operator's hands — and nothing here is meant to grow into browser automation.
+///
+/// **Through benchd, never to the browser directly** (M5c, #459). The browser runs on benchd's
+/// machine, which may not be this one, so this sends `browser/connect` and benchd relays the
+/// messages on that same connection, one JSON object per line each way. helm dials no port but
+/// benchd's own, on one machine as much as across two.
 ///
 /// Sessions are *flat* (`Target.attachToTarget { flatten: true }`): one socket, and each
 /// message to a tab carries that tab's `sessionId`.
@@ -12,6 +18,13 @@ import Foundation
 final class CDPConnection {
     struct Failure: Error, Equatable {
         let message: String
+    }
+
+    /// How a connection ended: never opened (benchd refused, or could not be reached), or lost
+    /// after it was. The pane waits differently for each.
+    enum Ending: Equatable {
+        case refused(String)
+        case lost(String)
     }
 
     /// An event, with its params still undecoded — the receiver decodes the ones it handles.
@@ -30,35 +43,43 @@ final class CDPConnection {
     }
 
     var onEvent: ((Event) -> Void)?
-    /// Called once, when the socket is gone for any reason. The string is for the operator.
-    var onClose: ((String) -> Void)?
+    /// Called once, when the connection is gone for any reason. The string is for the operator.
+    var onClose: ((Ending) -> Void)?
 
-    private let task: URLSessionWebSocketTask
+    private let link: Link
     private var nextID = 0
     private var pending: [Int: CheckedContinuation<Data, Error>] = [:]
+    private var opened = false
     private var closed = false
 
-    init(url: URL) {
-        task = URLSession.shared.webSocketTask(with: url)
-        // A screencast frame is a base64 JPEG of the whole pane at backing scale: several
-        // hundred KB on a retina display, over the 1 MB default on a large one.
-        task.maximumMessageSize = 64 << 20
+    init(endpoint: BenchEndpoint) {
+        link = Link(endpoint: endpoint)
     }
 
     func open() {
-        task.resume()
-        receive()
+        link.open(
+            opened: { [weak self] in self?.opened = true },
+            line: { [weak self] line in self?.dispatch(line) },
+            ended: { [weak self] ending in self?.end(ending) })
     }
 
     func close(_ reason: String = "closed") {
+        end(opened ? .lost(reason) : .refused(reason))
+    }
+
+    private func end(_ ending: Ending) {
         guard !closed else { return }
         closed = true
-        task.cancel(with: .goingAway, reason: nil)
+        link.close()
+        let reason: String
+        switch ending {
+        case let .refused(why), let .lost(why): reason = why
+        }
         for continuation in pending.values {
             continuation.resume(throwing: Failure(message: reason))
         }
         pending.removeAll()
-        onClose?(reason)
+        onClose?(ending)
         onEvent = nil
         onClose = nil
     }
@@ -88,7 +109,7 @@ final class CDPConnection {
             let body = try? JSONEncoder().encode(
                 Outgoing(id: nextID, method: method, params: params, sessionId: session))
         else { return }
-        task.send(.string(String(decoding: body, as: UTF8.self))) { _ in }
+        link.send(body)
     }
 
     private func exchange(
@@ -101,39 +122,12 @@ final class CDPConnection {
             Outgoing(id: id, method: method, params: params, sessionId: session))
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
-            task.send(.string(String(decoding: body, as: UTF8.self))) { [weak self] error in
-                guard let error else { return }
-                Task { @MainActor in self?.fail(id, error) }
-            }
-        }
-    }
-
-    private func fail(_ id: Int, _ error: Error) {
-        pending.removeValue(forKey: id)?.resume(throwing: error)
-    }
-
-    private func receive() {
-        task.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self, !self.closed else { return }
-                switch result {
-                case let .failure(error):
-                    self.close("the browser went away (\(error.localizedDescription))")
-                case let .success(message):
-                    let data: Data
-                    switch message {
-                    case let .string(text): data = Data(text.utf8)
-                    case let .data(bytes): data = bytes
-                    @unknown default: data = Data()
-                    }
-                    self.dispatch(data)
-                    self.receive()
-                }
-            }
+            link.send(body)
         }
     }
 
     private func dispatch(_ data: Data) {
+        guard !closed else { return }
         guard let peek = try? JSONDecoder().decode(Peek.self, from: data) else { return }
         if let id = peek.id {
             pending.removeValue(forKey: id)?.resume(returning: data)
@@ -169,5 +163,106 @@ final class CDPConnection {
 
     private struct ReplyError: Decodable {
         let message: String
+    }
+}
+
+/// The connection's socket side, off the main actor: one queue writes lines in the order they
+/// were sent (the `stopScreencast`/`startScreencast` rule on `send`), and one thread reads.
+/// Everything it hears goes to the main actor in the order it arrived.
+private final class Link: @unchecked Sendable {
+    private let endpoint: BenchEndpoint
+    private let writes = DispatchQueue(label: "helm.browser.cdp")
+    private let lock = NSLock()
+    /// Set on the write queue once `browser/connect` is answered; read under `lock`.
+    private var socket: BenchSocket?
+    private var closed = false
+
+    init(endpoint: BenchEndpoint) {
+        self.endpoint = endpoint
+    }
+
+    /// Connect and ask for the relay on the write queue, so every line sent before the answer
+    /// waits behind it rather than racing it.
+    func open(
+        opened: @escaping @MainActor () -> Void,
+        line: @escaping @MainActor (Data) -> Void,
+        ended: @escaping @MainActor (CDPConnection.Ending) -> Void
+    ) {
+        writes.async { [self] in
+            let socket: BenchSocket
+            do {
+                socket = try BenchSocket(endpoint: endpoint, timeout: nil)
+                try socket.writeLine(
+                    JSONEncoder().encode(BrowserConnectRequest(id: "helm-browser-\(UUID())")))
+                guard let answer = try socket.readLine() else {
+                    throw BenchSocket.Failure(description: "benchd closed the connection")
+                }
+                let response = try JSONDecoder().decode(
+                    BenchResponse<BrowserConnected>.self, from: answer)
+                guard response.status == .ok else {
+                    throw BenchSocket.Failure(
+                        description: response.reason ?? "benchd answered \(response.status)")
+                }
+            } catch {
+                Self.main { ended(.refused("\(error)")) }
+                return
+            }
+            lock.lock()
+            let wasClosed = closed
+            if !wasClosed { self.socket = socket }
+            lock.unlock()
+            guard !wasClosed else { return socket.close() }
+            Self.main { opened() }
+            Thread.detachNewThread { self.read(socket, line: line, ended: ended) }
+        }
+    }
+
+    private func read(
+        _ socket: BenchSocket, line: @escaping @MainActor (Data) -> Void,
+        ended: @escaping @MainActor (CDPConnection.Ending) -> Void
+    ) {
+        let why: String
+        do {
+            while let next = try socket.readLine() {
+                Self.main { line(next) }
+            }
+            why = "benchd ended the relay"
+        } catch {
+            why = "\(error)"
+        }
+        // Closed on the write queue, after any write already queued, and never while one is in
+        // flight: a descriptor closed under a writer can be reused by another file before it
+        // writes.
+        writes.async { [self] in
+            lock.lock()
+            closed = true
+            self.socket = nil
+            lock.unlock()
+            socket.close()
+        }
+        Self.main { ended(.lost(why)) }
+    }
+
+    func send(_ body: Data) {
+        writes.async { [self] in
+            lock.lock()
+            let socket = closed ? nil : self.socket
+            lock.unlock()
+            // A write that fails is followed by the reader seeing the same end.
+            try? socket?.writeLine(body)
+        }
+    }
+
+    /// Ends the reader, which closes the socket. Safe from any thread, before or after `open`.
+    func close() {
+        lock.lock()
+        closed = true
+        let socket = self.socket
+        lock.unlock()
+        socket?.interrupt()
+    }
+
+    private static func main(_ work: @escaping @MainActor () -> Void) {
+        DispatchQueue.main.async { MainActor.assumeIsolated { work() } }
     }
 }

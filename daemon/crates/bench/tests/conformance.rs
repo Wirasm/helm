@@ -1530,23 +1530,25 @@ fn the_bench_mail_skills_snippets_execute_against_a_real_daemon() {
 /// into its `--user-data-dir`. It records its argv there, dies on TERM, and with
 /// `--die-after=<s>` crashes by itself — a profile that takes Chromium down on launch.
 /// `--slow-start=<s>` holds off "listening" that long, so a launch can be caught in flight.
+/// `--fake-port=<n>` names that port in `DevToolsActivePort`, for a test that serves it.
 fn write_fake_browser(home: &Path) -> PathBuf {
     let path = home.join("fake-chromium");
     fs::write(
         &path,
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo "Fake Chromium 142.0.7000.1"; exit 0; fi
-dir=""; die=""
+dir=""; die=""; port=$(( $$ % 40000 + 20000 ))
 for a in "$@"; do
   case "$a" in
     --user-data-dir=*) dir="${a#--user-data-dir=}" ;;
+    --fake-port=*) port="${a#--fake-port=}" ;;
     --die-after=*) die="${a#--die-after=}" ;;
     --slow-start=*) sleep "${a#--slow-start=}" ;;
   esac
 done
 printf '%s\n' "$@" > "$dir/argv"
 trap 'exit 0' TERM
-printf '%s\n/devtools/browser/fake-%s\n' "$(( $$ % 40000 + 20000 ))" "$$" > "$dir/port.tmp"
+printf '%s\n/devtools/browser/fake-%s\n' "$port" "$$" > "$dir/port.tmp"
 mv "$dir/port.tmp" "$dir/DevToolsActivePort"
 if [ -n "$die" ]; then sleep "$die"; exit 1; fi
 while :; do sleep 0.1; done
@@ -1616,9 +1618,8 @@ fn browser_start_publishes_the_endpoint_it_logged_and_a_second_start_finds_it() 
     on_disk["mode"] = serde_json::json!("headless");
     assert_eq!(on_disk, answer);
 
-    // helm reads this file from Swift and cannot import the Rust type, so both sides test
-    // against one checked-in sample: the keys written here are exactly the fixture's, and
-    // helm's BrowserEndpointTests decodes the same file.
+    // Agents and `playwright-cli` read this file outside the workspace, so its keys are pinned to
+    // one checked-in sample. helm no longer reads it (M5c: its pane asks `browser/connect`).
     let fixture: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/browser-endpoint.json"),
@@ -1636,7 +1637,7 @@ fn browser_start_publishes_the_endpoint_it_logged_and_a_second_start_finds_it() 
     assert_eq!(
         keys(&written),
         keys(&fixture),
-        "endpoint.json drifted from the fixture helm reads"
+        "endpoint.json drifted from its pinned fixture"
     );
     serde_json::from_value::<bench_wire::BrowserEndpoint>(fixture)
         .expect("the fixture is a real endpoint");
@@ -6004,47 +6005,111 @@ fn an_attached_viewer_resizes_the_session_and_ends_when_it_does() {
     assert_eq!(closed.code, 0, "{}", closed.stderr);
 }
 
-#[test]
-fn a_screenshot_is_helms_answer_and_no_helm_is_an_error_naming_it() {
-    let home = TestHome::claim("m3-shot");
-    let daemon = DaemonGuard::start(&home.dir, None);
-    let out = home.dir.join("shot.png").display().to_string();
-
-    // A stand-in for helm: follow the bench, answer each ask with what a capture reports.
-    let socket = daemon.socket.clone();
-    let helm = std::thread::spawn(move || {
+/// A stand-in for helm: follow the bench and answer the first ask with `data`, whose `png` is
+/// what a capture draws (M5c: the bytes, never a path). Returns the ask it saw.
+fn answer_one_ask(
+    socket: PathBuf,
+    data: serde_json::Value,
+) -> std::thread::JoinHandle<serde_json::Value> {
+    std::thread::spawn(move || {
         let mut reader = follow(&socket);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
         loop {
             line.clear();
-            if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                return;
-            }
+            assert_ne!(reader.read_line(&mut line).unwrap_or(0), 0, "no ask came");
             let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
             if frame["event"]["kind"] != "helm/asked" {
                 continue;
             }
-            let data = &frame["event"]["data"];
+            let asked = frame["event"]["data"].clone();
             let answer = layout(
                 &socket,
                 "helm/answer",
-                serde_json::json!({
-                    "ask": data["ask"],
-                    "status": "ok",
-                    "data": { "path": data["request"]["path"], "window": "helm — m3" },
-                }),
+                serde_json::json!({ "ask": asked["ask"], "status": "ok", "data": data }),
                 Some(serde_json::json!({ "kind": "helm" })),
                 false,
             );
             assert_eq!(answer["status"], "ok", "{answer}");
-            return;
+            return asked;
         }
-    });
+    })
+}
+
+#[test]
+fn a_screenshot_is_helms_answer_and_no_helm_is_an_error_naming_it() {
+    let home = TestHome::claim("m3-shot");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let out = home.dir.join("shot.png").display().to_string();
+    let png = b"\x89PNG\r\n\x1a\nnot really a picture".to_vec();
+
+    // helm answers with the bytes; benchd writes them where the caller asked, on its own side.
+    let helm = answer_one_ask(
+        daemon.socket.clone(),
+        serde_json::json!({ "png": bench_wire::base64(&png), "window": "helm — m3" }),
+    );
     let shot = bench(&home.dir, &["get", "screenshot", "--out", &out]);
     assert_eq!(shot.code, 0, "{}", shot.stderr);
-    assert_eq!(json_of(&shot)["path"], out.as_str());
+    let report = json_of(&shot);
+    assert_eq!(report["path"], out.as_str());
+    assert_eq!(report["window"], "helm — m3");
+    assert!(
+        report.get("png").is_none(),
+        "the caller gets a path, not the bytes: {report}"
+    );
+    assert_eq!(fs::read(&out).unwrap(), png);
+    let asked = helm.join().unwrap();
+    assert!(
+        asked["request"].get("path").is_none(),
+        "helm is never told a path on benchd's machine: {asked}"
+    );
+
+    // No --out: benchd picks one under its own root, which the CLI's side may not share.
+    let helm = answer_one_ask(
+        daemon.socket.clone(),
+        serde_json::json!({ "png": bench_wire::base64(&png), "window": "helm — m3" }),
+    );
+    let shot = bench(&home.dir, &["get", "screenshot"]);
+    assert_eq!(shot.code, 0, "{}", shot.stderr);
+    let path = PathBuf::from(json_of(&shot)["path"].as_str().unwrap());
+    assert!(
+        path.starts_with(home.dir.join(".bench/captures")),
+        "{}",
+        path.display()
+    );
+    assert_eq!(fs::read(&path).unwrap(), png);
     helm.join().unwrap();
+
+    // An answer with no PNG in it is an error naming that, and writes nothing.
+    let missing = home.dir.join("missing.png").display().to_string();
+    let helm = answer_one_ask(daemon.socket.clone(), serde_json::json!({ "window": "w" }));
+    let shot = bench(&home.dir, &["get", "screenshot", "--out", &missing]);
+    assert_eq!(shot.code, 4, "{}", shot.stderr);
+    assert!(shot.stderr.contains("no PNG"), "{}", shot.stderr);
+    assert!(!Path::new(&missing).exists());
+    helm.join().unwrap();
+
+    // A folder that does not exist on benchd's side is refused before helm is asked.
+    let asks_before = log_of(&home.dir.join(".bench"))
+        .iter()
+        .filter(|e| e["kind"] == "helm/asked")
+        .count();
+    let nowhere = home.dir.join("no/such/dir/x.png").display().to_string();
+    let refused = bench(&home.dir, &["get", "screenshot", "--out", &nowhere]);
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(
+        refused.stderr.contains("no directory"),
+        "{}",
+        refused.stderr
+    );
+    let asks_after = log_of(&home.dir.join(".bench"))
+        .iter()
+        .filter(|e| e["kind"] == "helm/asked")
+        .count();
+    assert_eq!(
+        asks_before, asks_after,
+        "nobody drew a window for a path that cannot be written"
+    );
 
     // An answer nobody waits for is refused, not delivered to the next ask.
     let late = layout(
@@ -6073,6 +6138,32 @@ fn a_screenshot_is_helms_answer_and_no_helm_is_an_error_naming_it() {
     for kind in ["helm/asked", "helm/answered", "helm/unanswered"] {
         assert!(kinds.contains(&kind.to_string()), "{kind}: {kinds:?}");
     }
+}
+
+/// helm's answer carries a whole PNG, so `helm/answer` takes the large request line `file/write`
+/// does; every other verb keeps the small one.
+#[test]
+fn a_capture_answer_may_be_large_and_a_status_may_not() {
+    let home = TestHome::claim("m5c-bigshot");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let out = home.dir.join("big.png").display().to_string();
+    let png = vec![0x89u8; 3 * 1024 * 1024];
+    let helm = answer_one_ask(
+        daemon.socket.clone(),
+        serde_json::json!({ "png": bench_wire::base64(&png), "window": "w" }),
+    );
+    let shot = bench(&home.dir, &["get", "screenshot", "--out", &out]);
+    assert_eq!(shot.code, 0, "{}", shot.stderr);
+    assert_eq!(fs::read(&out).unwrap().len(), png.len());
+    helm.join().unwrap();
+    let big = layout(
+        &daemon.socket,
+        "status",
+        serde_json::json!({ "pad": "x".repeat(100 * 1024) }),
+        None,
+        false,
+    );
+    assert_eq!(big["status"], "refused", "{big}");
 }
 
 #[test]
@@ -8816,6 +8907,231 @@ fn a_fork_helm_asks_for_gets_its_prompt_as_a_file_and_leaves_focus_alone() {
         let reply = layout(&daemon.socket, "spawn", args, None, false);
         assert_eq!(reply["status"], "refused", "{reply}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// M5c (#459): the browser pane's view onto the shared browser, relayed by benchd
+// ---------------------------------------------------------------------------
+
+/// One websocket frame from a server: unmasked, as the browser's debugging server sends them.
+fn ws_frame(fin: bool, opcode: u8, payload: &[u8]) -> Vec<u8> {
+    let mut f = vec![if fin { 0x80 } else { 0 } | opcode];
+    match payload.len() {
+        n if n < 126 => f.push(n as u8),
+        n if n <= 0xFFFF => {
+            f.push(126);
+            f.extend_from_slice(&(n as u16).to_be_bytes());
+        }
+        n => {
+            f.push(127);
+            f.extend_from_slice(&(n as u64).to_be_bytes());
+        }
+    }
+    f.extend_from_slice(payload);
+    f
+}
+
+/// A frame from benchd, which must mask it: `(opcode, unmasked payload)`.
+fn ws_read(stream: &mut std::net::TcpStream) -> std::io::Result<(u8, Vec<u8>)> {
+    let mut head = [0u8; 2];
+    stream.read_exact(&mut head)?;
+    assert_ne!(head[1] & 0x80, 0, "a client's frame is masked");
+    let len = match head[1] & 0x7F {
+        126 => {
+            let mut n = [0u8; 2];
+            stream.read_exact(&mut n)?;
+            u64::from(u16::from_be_bytes(n))
+        }
+        127 => {
+            let mut n = [0u8; 8];
+            stream.read_exact(&mut n)?;
+            u64::from_be_bytes(n)
+        }
+        n => u64::from(n),
+    };
+    let mut mask = [0u8; 4];
+    stream.read_exact(&mut mask)?;
+    let mut payload = vec![0u8; len as usize];
+    stream.read_exact(&mut payload)?;
+    for (i, b) in payload.iter_mut().enumerate() {
+        *b ^= mask[i % 4];
+    }
+    Ok((head[0] & 0x0F, payload))
+}
+
+/// The browser's debugging server, played by the test: accepts one websocket upgrade and hands
+/// the upgraded stream to `serve`, which returns what it saw.
+fn fake_debugger<T: Send + 'static>(
+    serve: impl FnOnce(std::net::TcpStream) -> T + Send + 'static,
+) -> (u16, std::thread::JoinHandle<(String, T)>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            head.push(byte[0]);
+        }
+        stream
+            .write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: x\r\n\r\n")
+            .unwrap();
+        (String::from_utf8_lossy(&head).into_owned(), serve(stream))
+    });
+    (port, handle)
+}
+
+/// A benchd on TCP whose (fake) browser names `debugger` as its debugging port, started.
+fn browser_over_tcp(name: &str, debugger: u16) -> (TestHome, u16, DaemonGuard) {
+    let home = TestHome::claim(name);
+    let fake = write_fake_browser(&home.dir);
+    write_browser_config(
+        &home.dir,
+        serde_json::json!({ "binary": fake, "args": [format!("--fake-port={debugger}")] }),
+    );
+    let port = free_port();
+    let daemon = tcp_daemon(&home.dir, port);
+    let started = bench(&home.dir, &["browser", "start"]);
+    assert_eq!(started.code, 0, "{}", started.stderr);
+    (home, port, daemon)
+}
+
+/// `browser/connect` over TCP, as helm's pane sends it, with `pipelined` written in the same
+/// write right behind it: the answer line, and the connection.
+fn browser_connect(
+    port: u16,
+    pipelined: &[u8],
+) -> (serde_json::Value, BufReader<std::net::TcpStream>) {
+    let stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect over TCP");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut request =
+        b"{\"id\":\"helm-browser-1\",\"verb\":\"browser/connect\",\"by\":{\"kind\":\"helm\"}}\n"
+            .to_vec();
+    request.extend_from_slice(pipelined);
+    (&stream).write_all(&request).unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let answer = serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON ({e}): {line}"));
+    (answer, reader)
+}
+
+#[test]
+fn browser_connect_relays_one_cdp_message_per_line_each_way_over_tcp() {
+    let big = format!(
+        "{{\"id\":2,\"result\":{{\"data\":\"{}\"}}}}",
+        "a".repeat(200_000)
+    );
+    let sent_big = big.clone();
+    let (debugger, server) = fake_debugger(move |mut stream| {
+        let (op, first) = ws_read(&mut stream).unwrap();
+        // A reply in two fragments with a ping between them and a raw newline as whitespace,
+        // then a message too long for a 16-bit length, then the browser goes away.
+        stream
+            .write_all(&ws_frame(false, 0x1, b"{\"id\":1,\n"))
+            .unwrap();
+        stream
+            .write_all(&ws_frame(true, 0x9, b"are you there"))
+            .unwrap();
+        stream
+            .write_all(&ws_frame(true, 0x0, b"\"result\":{}}"))
+            .unwrap();
+        let pong = ws_read(&mut stream).unwrap();
+        stream
+            .write_all(&ws_frame(true, 0x1, sent_big.as_bytes()))
+            .unwrap();
+        stream.write_all(&ws_frame(true, 0x8, &[])).unwrap();
+        (op, first, pong)
+    });
+    let (home, port, _daemon) = browser_over_tcp("m5c-cdp", debugger);
+
+    // The first message rides in the same write as the request: it is relayed, not lost in the
+    // buffer that read the request line.
+    let (answer, mut relay) =
+        browser_connect(port, b"{\"id\":1,\"method\":\"Target.getTargets\"}\n");
+    assert_eq!(answer["status"], "ok", "{answer}");
+    assert!(answer["data"]["pid"].as_u64().is_some(), "{answer}");
+    let mut line = String::new();
+    relay.read_line(&mut line).unwrap();
+    assert_eq!(line, "{\"id\":1, \"result\":{}}\n", "one message, one line");
+    line.clear();
+    relay.read_line(&mut line).unwrap();
+    assert_eq!(line.trim_end(), big);
+    line.clear();
+    assert_eq!(
+        relay.read_line(&mut line).unwrap(),
+        0,
+        "the browser leaving ends the pane's connection"
+    );
+
+    let (head, (op, first, pong)) = server.join().unwrap();
+    assert!(head.starts_with("GET /devtools/browser/fake-"), "{head}");
+    assert!(head.contains("Upgrade: websocket"), "{head}");
+    assert_eq!(op, 0x1, "a line goes to the browser as a text message");
+    assert_eq!(first, b"{\"id\":1,\"method\":\"Target.getTargets\"}");
+    assert_eq!(pong, (0xA, b"are you there".to_vec()), "a ping is answered");
+
+    wait_until("the relay's end is logged", Duration::from_secs(5), || {
+        event_kinds(&home.dir).iter().any(|(k, d)| {
+            k == "browser/viewer-left" && d["why"] == "the browser closed the connection"
+        })
+    });
+    let kinds = event_kinds(&home.dir);
+    assert!(kinds.iter().any(|(k, _)| k == "browser/viewer-connected"));
+    assert!(
+        !fs::read_to_string(home.dir.join(".bench/events.jsonl"))
+            .unwrap()
+            .contains("Target.getTargets"),
+        "what the pane and the browser say is never logged"
+    );
+}
+
+#[test]
+fn a_pane_that_leaves_closes_the_browser_side_and_no_browser_is_refused() {
+    let (debugger, server) = fake_debugger(|mut stream| {
+        let mut frames = Vec::new();
+        while let Ok(frame) = ws_read(&mut stream) {
+            let close = frame.0 == 0x8;
+            frames.push(frame.0);
+            if close {
+                break;
+            }
+        }
+        frames
+    });
+    let (home, port, _daemon) = browser_over_tcp("m5c-cdp-left", debugger);
+    let (answer, relay) = browser_connect(port, b"");
+    assert_eq!(answer["status"], "ok", "{answer}");
+    drop(relay);
+    let (_, frames) = server.join().unwrap();
+    assert_eq!(frames, [0x8], "the browser is told the viewer went");
+    wait_until(
+        "the viewer's leaving is logged",
+        Duration::from_secs(5),
+        || {
+            event_kinds(&home.dir)
+                .iter()
+                .any(|(k, d)| k == "browser/viewer-left" && d["why"] == "the viewer left")
+        },
+    );
+
+    // With the browser stopped there is nothing to connect to, and the refusal says what to do.
+    assert_eq!(bench(&home.dir, &["browser", "stop"]).code, 0);
+    let (answer, _) = browser_connect(port, b"");
+    assert_eq!(answer["status"], "refused", "{answer}");
+    assert!(
+        answer["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("no shared browser is running"),
+        "{answer}"
+    );
 }
 
 // ---------------------------------------------------------------------------

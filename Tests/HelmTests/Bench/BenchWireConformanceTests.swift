@@ -6,8 +6,8 @@ import XCTest
 
 /// helm's copy of benchd's wire types against the daemon's own samples in `daemon/fixtures/`.
 /// The daemon gate pins those same files byte for byte against the Rust types, so a field renamed
-/// on either side turns one gate or the other red. This is the #352/#353 pattern
-/// (`browser-endpoint.json`): neither gate needs the other's toolchain.
+/// on either side turns one gate or the other red. This is the #352/#353 pattern: neither gate
+/// needs the other's toolchain.
 ///
 /// **Compared as values, never as bytes.** Swift writes UUIDs in uppercase and Rust in lowercase,
 /// and key order differs by encoder; neither is a difference the daemon sees.
@@ -284,12 +284,19 @@ final class BenchWireConformanceTests: XCTestCase {
             from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["asked"])))
         XCTAssertEqual(
             asked,
-            HelmAsked(
-                ask: "a1", request: .capture(path: "/tmp/bench-capture.png", window: "helm — m3")))
+            HelmAsked(ask: "a1", request: .capture(window: "helm — m3")))
         let answer = HelmAnswerRequest<CaptureReport>(
             id: "helm-answer-1", ask: "a1", status: .error,
             reason: "no window titled like \"helm — m3\" is open", data: nil)
         XCTAssertEqual(try normalized(JSONEncoder().encode(answer)), try sample("answer"))
+        // A capture: the PNG itself, which benchd writes on its side (M5c).
+        let captured = HelmAnswerRequest<CaptureReport>(
+            id: "helm-answer-2", ask: "a1", status: .ok, reason: nil,
+            data: CaptureReport(
+                png: try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgo=")), pixelWidth: 2400,
+                pixelHeight: 1600, scale: 2, window: "helm — m3", windowVisible: true,
+                terminalContent: .included, terminalSurfaces: 1, terminalSurfacesExcluded: 0))
+        XCTAssertEqual(try normalized(JSONEncoder().encode(captured)), try sample("captured"))
         XCTAssertEqual(
             try normalized(JSONEncoder().encode(BenchStatusRequest(id: "helm-status-1"))),
             try sample("status"))
@@ -299,6 +306,26 @@ final class BenchWireConformanceTests: XCTestCase {
             from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["status_reply"])))
         XCTAssertEqual(
             status, BenchStatusReply(bench: "/Users/rasmus/.cargo/bin/bench", version: "0.0.2"))
+    }
+
+    /// The browser pane's `browser/connect` (M5c): the request is the daemon's sample, and both
+    /// answers decode.
+    func testTheBrowserConnectRequestAndItsAnswersMatchTheDaemonsSample() throws {
+        let data = try fixture("browser-connect.json")
+        let samples = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        func sample(_ key: String) throws -> Data {
+            try JSONSerialization.data(withJSONObject: XCTUnwrap(samples[key]))
+        }
+        XCTAssertEqual(
+            try normalized(JSONEncoder().encode(BrowserConnectRequest(id: "helm-browser-1"))),
+            try normalized(sample("request")))
+        let connected = try JSONDecoder().decode(
+            BenchResponse<BrowserConnected>.self, from: sample("connected"))
+        XCTAssertEqual(connected.data, BrowserConnected(pid: 4242))
+        let none = try JSONDecoder().decode(
+            BenchResponse<BrowserConnected>.self, from: sample("none"))
+        XCTAssertEqual(none.status, .refused)
+        XCTAssertNotNil(none.reason)
     }
 
     /// A document written before drawers existed has none, and helm writes none back.
