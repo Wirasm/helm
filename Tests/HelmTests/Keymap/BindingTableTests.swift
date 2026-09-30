@@ -212,16 +212,35 @@ final class BindingTableTests: XCTestCase {
 
     // MARK: - Font size
 
+    private static let plusChords: [(String, NSEvent.ModifierFlags)] = [
+        ("=", .command), ("+", .command), ("+", [.command, .shift]),
+    ]
+
     func testBothWaysOfTypingPlusIncreaseTheFontSize() {
-        for (characters, modifiers) in [
-            ("=", NSEvent.ModifierFlags.command), ("+", .command), ("+", [.command, .shift]),
-        ] {
+        for focus in [KeyFocus.terminal, .other] {
+            for (characters, modifiers) in Self.plusChords {
+                XCTAssertEqual(
+                    match(characters, modifiers, focus: focus),
+                    .local(.adjustFontSize(.increase)),
+                    "\(modifiers) + \(characters) must increase the font size in \(focus)")
+            }
             XCTAssertEqual(
-                match(characters, modifiers), .local(.adjustFontSize(.increase)),
-                "\(modifiers) + \(characters) must increase the font size")
+                match("-", .command, focus: focus), .local(.adjustFontSize(.decrease)))
+            XCTAssertEqual(match("0", .command, focus: focus), .local(.adjustFontSize(.reset)))
         }
-        XCTAssertEqual(match("-", .command), .local(.adjustFontSize(.decrease)))
-        XCTAssertEqual(match("0", .command), .local(.adjustFontSize(.reset)))
+    }
+
+    /// In a browser pane the same keys zoom the page, as they do in Chrome (#544, F12). They
+    /// used to fire the font-size rows there, which need a terminal and so did nothing.
+    func testTheFontSizeKeysZoomTheBrowserPage() {
+        for (characters, modifiers) in Self.plusChords {
+            XCTAssertEqual(
+                match(characters, modifiers, focus: .browser), .local(.browser(.zoom(.increase))),
+                "\(modifiers) + \(characters) in a browser pane")
+        }
+        XCTAssertEqual(
+            match("-", .command, focus: .browser), .local(.browser(.zoom(.decrease))))
+        XCTAssertEqual(match("0", .command, focus: .browser), .local(.browser(.zoom(.reset))))
     }
 
     // MARK: - Table integrity

@@ -116,4 +116,46 @@ final class BrowserSurfaceTests: XCTestCase {
                 image: CGSize(width: 400, height: 200), page: CGSize(width: 200, height: 100)),
             "the band above the page is not the page")
     }
+
+    // MARK: - Scrolling (#544)
+
+    /// A wheel event at the middle of the pane, as the WindowServer would deliver it: a line
+    /// event for a mouse wheel, a continuous pixel event for a trackpad.
+    private func scroll(_ amount: Int32, precise: Bool) throws {
+        let image = try XCTUnwrap(
+            CGContext(
+                data: nil, width: 800, height: 600, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?.makeImage())
+        surface.show(BrowserFrame(image: image, pageSize: CGSize(width: 400, height: 300)))
+        let cg = try XCTUnwrap(
+            CGEvent(
+                scrollWheelEvent2Source: nil, units: precise ? .pixel : .line, wheelCount: 1,
+                wheel1: amount, wheel2: 0, wheel3: 0))
+        if precise { cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1) }
+        // CGEvent locations are global with a top-left origin; Cocoa's screen points are not.
+        let middle = window.convertPoint(
+            toScreen: surface.convert(NSPoint(x: 200, y: 150), to: nil))
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        cg.location = CGPoint(x: middle.x, y: top - middle.y)
+        let event = try XCTUnwrap(NSEvent(cgEvent: cg))
+        XCTAssertEqual(event.hasPreciseScrollingDeltas, precise, "the event is the kind meant")
+        surface.scrollWheel(with: event)
+    }
+
+    /// One notch of a mouse wheel is a line, not a pixel: it scrolls what one notch scrolls in
+    /// Chrome on a Mac (40 px). It used to go out as 1 px (#544, F4).
+    func testAMouseWheelNotchScrollsTheWayChromeDoes() throws {
+        try scroll(-1, precise: false)
+        let wheel = try XCTUnwrap(recorder.mice.last)
+        XCTAssertEqual(wheel.type, "mouseWheel")
+        XCTAssertEqual(wheel.deltaY, 40, "one notch down scrolls 40 px")
+    }
+
+    /// A trackpad already reports pixels, and must keep scrolling exactly that far.
+    func testATrackpadScrollsTheExactPixels() throws {
+        try scroll(-10, precise: true)
+        let wheel = try XCTUnwrap(recorder.mice.last)
+        XCTAssertEqual(wheel.deltaY, 10, "a precise delta passes through unscaled")
+    }
 }

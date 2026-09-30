@@ -20,7 +20,7 @@ enum KeyBindings {
     /// take in reasonable time.
     static let all: [KeyBinding] =
         panes + tabs + browser + focusSteps + paneMoves + turns + workspaceKeys + chrome
-        + fontSize
+        + fontSize + pageZoom
 
     /// The manage key's modifiers (`ManageKey`, #498): every row on these, alone or with ⇧, is
     /// the manage layer, and moves with `manage = "…"` in the keymap file.
@@ -212,22 +212,41 @@ enum KeyBindings {
     ]
 
     /// No hint (`KeyHint`'s header says why), but every one keeps a menu item or a key.
+    ///
+    /// Not in a browser pane: there the same chords zoom the page (`pageZoom`, #544), since a
+    /// browser pane has no terminal font to change.
     private static let fontSize: [KeyBinding] = [
-        KeyBinding(.character("="), .command, .local(.adjustFontSize(.increase))),
+        KeyBinding(
+            .character("="), .command, .local(.adjustFontSize(.increase)),
+            when: .awayFromBrowser),
         // ⌘+ and ⌘⇧= are the other two ways ⌘+ is typed: `charactersIgnoringModifiers` keeps
         // shift applied. The menu item sits on ⌘+ because a menu prints the row's own chord,
         // and ⌘+ is how every macOS app names this one.
         KeyBinding(
             .character("+"), .command, .local(.adjustFontSize(.increase)),
-            menu: "Increase Font Size"),
-        KeyBinding(.character("+"), [.command, .shift], .local(.adjustFontSize(.increase))),
+            when: .awayFromBrowser, menu: "Increase Font Size"),
+        KeyBinding(
+            .character("+"), [.command, .shift], .local(.adjustFontSize(.increase)),
+            when: .awayFromBrowser),
         KeyBinding(
             .character("-"), .command, .local(.adjustFontSize(.decrease)),
-            menu: "Decrease Font Size"),
+            when: .awayFromBrowser, menu: "Decrease Font Size"),
         KeyBinding(
             .character("0"), .command, .local(.adjustFontSize(.reset)),
-            menu: "Reset Font Size"),
+            when: .awayFromBrowser, menu: "Reset Font Size"),
     ]
+
+    /// The font-size chords in a browser pane: Chrome's zoom. No menu items, for the browser
+    /// keys' reason: a menu item fires wherever the keyboard is.
+    private static let pageZoom: [KeyBinding] = [
+        ("=", NSEvent.ModifierFlags.command, FontSizeStep.increase),
+        ("+", .command, .increase), ("+", [.command, .shift], .increase),
+        ("-", .command, .decrease), ("0", .command, .reset),
+    ].map { key, modifiers, step in
+        KeyBinding(
+            .character(key), modifiers, .local(.browser(.zoom(step))), when: .browserFocused,
+            hint: "zoom")
+    }
 
     /// The row a keystroke fires, if any.
     ///

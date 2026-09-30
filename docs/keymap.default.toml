@@ -544,28 +544,68 @@ menu = "Go to Waiting Agent"
 
 [[bind]]
 key = "cmd+="
+when = "away-from-browser"
 action = "font-size"
 step = "increase"
 
 [[bind]]
 key = "cmd+plus"
+when = "away-from-browser"
 action = "font-size"
 step = "increase"
 menu = "Increase Font Size"
 
 [[bind]]
 key = "cmd+shift+plus"
+when = "away-from-browser"
 action = "font-size"
 step = "increase"
 
 [[bind]]
 key = "cmd+-"
+when = "away-from-browser"
 action = "font-size"
 step = "decrease"
 menu = "Decrease Font Size"
 
 [[bind]]
 key = "cmd+0"
+when = "away-from-browser"
 action = "font-size"
 step = "reset"
 menu = "Reset Font Size"
+
+[[bind]]
+key = "cmd+="
+when = "browser"
+action = "browser-zoom"
+step = "increase"
+hint = "zoom"
+
+[[bind]]
+key = "cmd+plus"
+when = "browser"
+action = "browser-zoom"
+step = "increase"
+hint = "zoom"
+
+[[bind]]
+key = "cmd+shift+plus"
+when = "browser"
+action = "browser-zoom"
+step = "increase"
+hint = "zoom"
+
+[[bind]]
+key = "cmd+-"
+when = "browser"
+action = "browser-zoom"
+step = "decrease"
+hint = "zoom"
+
+[[bind]]
+key = "cmd+0"
+when = "browser"
+action = "browser-zoom"
+step = "reset"
+hint = "zoom"

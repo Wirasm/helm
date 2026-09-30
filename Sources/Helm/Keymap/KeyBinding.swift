@@ -197,4 +197,6 @@ enum BrowserCommand: Equatable {
     case forward
     /// 0-based; ⌘9 is the last tab, as in Chrome.
     case showTab(index: Int)
+    /// ⌘+, ⌘− and ⌘0 on the page, as Chrome's own zoom (#544).
+    case zoom(FontSizeStep)
 }

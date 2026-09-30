@@ -19,6 +19,15 @@ struct BrowserPaneView: View {
             Divider()
             ZStack {
                 BrowserSurface(model: model, holdsKeyboard: holdsKeyboard)
+                if let shown = model.tabs.showing, let dialog = model.dialogs[shown] {
+                    BrowserDialogStrip(dialog: dialog, takesKeyboard: pageHasKeyboard) {
+                        accept, text, hadKeyboard in
+                        model.answer(accept: accept, text: text)
+                        if hadKeyboard { returnKeyboardToPage() }
+                    }
+                    .id(dialog)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
                 if model.status != .connected {
                     notice
                 }
@@ -92,12 +101,23 @@ struct BrowserPaneView: View {
                     address = model.tabs.current?.url ?? ""
                     returnKeyboardToPage()
                 }
+            if let shown = model.tabs.showing, let zoom = model.zoom[shown] {
+                Button("\(Int((zoom * 100).rounded()))%") { model.perform(.zoom(.reset)) }
+                    .font(.system(size: 11).monospacedDigit())
+                    .help("Page zoom. Click, or ⌘0, for 100%.")
+            }
         }
         .buttonStyle(.chrome)
         .foregroundStyle(Color.textMuted)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .disabled(model.status != .connected)
+    }
+
+    /// Whether the operator is typing into this pane's page right now.
+    private var pageHasKeyboard: Bool {
+        guard let surface = model.surface else { return false }
+        return surface.window?.firstResponder === surface
     }
 
     /// Done with the address: the keyboard goes back to the page, as a browser's does.
@@ -200,6 +220,12 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
         layer?.contents = frame.image
     }
 
+    /// Nothing to draw: a tab whose page is stopped under a dialog has sent no frame yet.
+    func clear() {
+        currentFrame = nil
+        layer?.contents = nil
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         claimKeyboard()
@@ -266,13 +292,18 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     override func scrollWheel(with event: NSEvent) {
         guard let point = pagePoint(event) else { return }
         // DOM wheel deltas are positive when content moves up (scrolling down); AppKit's
-        // scrolling deltas are the other sign.
+        // scrolling deltas are the other sign. A trackpad reports pixels; a mouse wheel reports
+        // lines, one per notch, and Chrome on a Mac scrolls 40 px for each (#544).
+        let scale: CGFloat = event.hasPreciseScrollingDeltas ? 1 : Self.pixelsPerWheelNotch
         model?.mouse(
             .init(
                 type: "mouseWheel", x: point.x, y: point.y,
                 modifiers: Self.modifiers(event.modifierFlags).rawValue,
-                deltaX: -event.scrollingDeltaX, deltaY: -event.scrollingDeltaY))
+                deltaX: -event.scrollingDeltaX * scale, deltaY: -event.scrollingDeltaY * scale))
     }
+
+    /// Chromium's `kScrollbarPixelsPerCocoaTick`.
+    private static let pixelsPerWheelNotch: CGFloat = 40
 
     private func send(_ event: NSEvent, type: String, button: String) {
         guard let point = pagePoint(event) else { return }
