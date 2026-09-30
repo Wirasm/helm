@@ -8157,6 +8157,19 @@ fn a_fork_is_its_own_read_only_conversation_so_the_author_restores_beside_it() {
         argv[argv.iter().position(|a| a == "--resume").unwrap() + 1],
         fork_id
     );
+
+    // And by any other route: a caller re-entering the fork by its id gets it read-only too.
+    drop(_daemon);
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", ARGV_CLAUDE);
+    let resumed = bench(
+        &home.dir,
+        &[
+            "spawn", "--agent", "claude", "--cwd", &ws, "--resume", &fork_id,
+        ],
+    );
+    assert_eq!(resumed.code, 0, "{}", resumed.stderr);
+    let argv = stub_argv(&home.dir, json_of(&resumed)["session"].as_str().unwrap());
+    assert_eq!(argv[..2], ["--permission-mode", "plan"], "{argv:?}");
 }
 
 #[test]

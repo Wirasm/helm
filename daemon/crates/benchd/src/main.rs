@@ -981,6 +981,16 @@ fn answered(req: &Request, result: Result<Value, String>) -> (Response, AfterRes
     (response, AfterResponse::Done)
 }
 
+/// Why `bench resume` cannot re-enter session `sid`, which holds no conversation id.
+fn unresumable(agent: bench_session::AgentKind, sid: &str) -> String {
+    match agent {
+        bench_session::AgentKind::Codex => format!(
+            "codex names its own sessions after the fact, so session {sid} cannot be re-entered — spawn fresh, or use claude or pi where the bench mints the id"
+        ),
+        other => format!("{} has no conversation to resume", other.name()),
+    }
+}
+
 #[expect(clippy::too_many_lines, reason = "legacy (#418): 588 lines, limit 100")]
 fn dispatch(
     core: &Arc<Mutex<Core>>,
@@ -1219,13 +1229,7 @@ fn dispatch(
             let mut spec = old.spec.clone();
             // The same conversation, and the same posture: a fork stays read-only (#531).
             let Some(runtime) = spec.conversation.id() else {
-                return (
-                    refused(format!(
-                        "{} names its own sessions after the fact, so session {sid} cannot be re-entered — spawn fresh, or use claude or pi where the bench mints the id",
-                        spec.agent.name()
-                    )),
-                    AfterResponse::Done,
-                );
+                return (refused(unresumable(spec.agent, sid)), AfterResponse::Done);
             };
             spec.conversation = bench_session::Conversation::Resume(runtime.to_string());
             // Re-entering is not a new message: the first prompt was the spawn's.

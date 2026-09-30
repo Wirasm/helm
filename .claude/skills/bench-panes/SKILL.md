@@ -71,8 +71,10 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
   ask about its work while the original carries on untouched. The fork gets its own id (the
   answer's `runtime_session`; `forked_from` names the original) and runs **read-only**, in
   Claude's plan mode rather than the unattended posture: it shares the original's worktree, and
-  an edit there collides with the original's work. Put the question in `--prompt-file`. codex
-  and pi refuse `--fork`.
+  an edit there collides with the original's work. Put the question in `--prompt-file`. A fork
+  resumed later, by `--resume`, `bench resume` or `bench restore`, is read-only too. `--arg`
+  still adds flags after the posture, so a permission flag there is your explicit override of
+  it: do not pass one unless the operator asked. codex and pi refuse `--fork`.
 - Claude Code must already trust `--cwd` (a parent directory it trusts counts), or it stops at
   the trust question before it starts.
 - **A quiet agent may be blocked on a prompt no flag removes.** Claude Code keeps some guardrails

@@ -197,6 +197,15 @@ pub fn record_spawn(
     )
 }
 
+/// The record's entry for conversation `id` of the runtime `agent` names, if it holds one.
+pub fn recorded<'a>(core: &'a Core, agent: &str, id: &str) -> Option<&'a HostedSession> {
+    let key = SessionKey {
+        harness: Harness::parse(agent)?,
+        id: id.to_string(),
+    };
+    core.session_records.hosted.iter().find(|h| h.key() == key)
+}
+
 /// A mailbox claimed through `bench hook` (#358): logged as `mail/claimed`, then written.
 /// A session the record already holds keeps its entry and gains the handle; one it already
 /// has an address for is left alone, so a claim never renames anybody.

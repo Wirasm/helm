@@ -61,7 +61,15 @@ pub fn answer(core: &Arc<Mutex<Core>>, req: &Request) -> Response {
 }
 
 fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<String>, Value)> {
-    let plan = judge(req).map_err(|why| (Status::Refused, why))?;
+    let mut plan = judge(req).map_err(|why| (Status::Refused, why))?;
+    if let Conversation::Resume(id) = &plan.spec.conversation {
+        // A conversation is re-entered in the posture it was spawned in: a fork's is read-only
+        // (#531), whoever resumes it and by whichever route.
+        let c = core.lock().unwrap();
+        let forked_from =
+            sessions::recorded(&c, plan.agent.name(), id).and_then(|h| h.forked_from.as_deref());
+        plan.spec.posture = Posture::resuming(forked_from);
+    }
     let by = req.by.clone().unwrap_or_else(Actor::agent);
     let focus = Actor::focus(&by, req.asked);
     let (id, handle) = reserve(core, &plan, focus)?;

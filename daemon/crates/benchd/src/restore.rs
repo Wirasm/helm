@@ -15,10 +15,10 @@
 //! recorded conversation a live session already holds (resumed elsewhere) gets a shell instead of a
 //! second, forking resume.
 
-use crate::{Core, claude_settings, shells, spawn};
+use crate::{Core, claude_settings, sessions, shells, spawn};
 use bench_doc::{PaneId, ResumableAgent};
 use bench_session::{AgentKind, Conversation, Posture, Session, SpawnSpec};
-use bench_wire::{Actor, Harness, RestoreArgs, SessionKey};
+use bench_wire::{Actor, RestoreArgs};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
@@ -182,13 +182,7 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
     let kind = AgentKind::parse(&agent.command, false)?;
     let id = format!("s{}", core.next_session);
     core.next_session += 1;
-    let hosted = Harness::parse(kind.name()).and_then(|harness| {
-        let key = SessionKey {
-            harness,
-            id: agent.session.clone(),
-        };
-        core.session_records.hosted.iter().find(|h| h.key() == key)
-    });
+    let hosted = sessions::recorded(core, kind.name(), &agent.session);
     // A fork comes back as it was spawned, read-only (#531).
     let posture = Posture::resuming(hosted.and_then(|h| h.forked_from.as_deref()));
     let handle = hosted
