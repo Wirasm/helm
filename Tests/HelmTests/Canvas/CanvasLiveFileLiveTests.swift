@@ -113,6 +113,23 @@ final class CanvasLiveFileLiveTests: XCTestCase {
         XCTAssertEqual(update["file"] as? String, "tasks.html")
     }
 
+    /// **Two data changes one render missed are still named as data**: the page takes them in
+    /// place rather than being offered a reload.
+    func testTwoLiveFileChangesInOneRenderAreOfferedAsTheLiveFile() async throws {
+        let pane = try Pane(artifact: artifact)
+        try await pane.firstLoad()
+
+        for done in ["false", "true"] {
+            try "{\"done\": \(done)}\n".write(to: data, atomically: true, encoding: .utf8)
+            pane.model.fileChanged(data.path)
+        }
+        XCTAssertEqual(pane.model.showing?.generation, 2)
+        pane.render()
+
+        let update = try await pane.poll("window.__updates[0]")
+        XCTAssertEqual(update["file"] as? String, "tasks.data.json")
+    }
+
     // MARK: - The artifact
 
     /// A page that writes through `window.__write`, keeps what it was answered, and takes updates.
@@ -165,7 +182,7 @@ final class CanvasLiveFileLiveTests: XCTestCase {
             let showing = model.showing
             HTMLCanvasPage.load(
                 webView, path: path, generation: showing?.generation ?? 0, theme: .dark,
-                changed: showing?.changed, coordinator: coordinator)
+                changes: showing?.changes ?? [:], coordinator: coordinator)
         }
 
         func firstLoad() async throws {

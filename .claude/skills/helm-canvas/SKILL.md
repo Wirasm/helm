@@ -132,8 +132,8 @@ it and writes it through helm; you read and write it with `bench file`; each sid
 other's change. That is the whole two-way surface — no server, no protocol of your own.
 
 The page reads the file with `fetch` and writes it by posting to `helmCanvasData`, naming the text
-it last saw (`base`). helm writes only if the file still holds exactly that, so nobody's write
-replaces a version its writer has not seen:
+it last saw (`base`). helm writes only if the file still holds exactly that (or is gone), so
+nobody's write replaces a version its writer has not seen:
 
 ```js
 const helm = window.webkit?.messageHandlers?.helmCanvasData;

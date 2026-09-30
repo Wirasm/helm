@@ -235,6 +235,8 @@ pub fn body(path: &str, canvas: &str, pointers: &[String]) -> String {
             n if n > POINTER_CHARS => p.chars().take(POINTER_CHARS).collect::<String>() + "…",
             _ => p.clone(),
         })
+        // A page's own key names cannot start a line of their own in the mail.
+        .map(|p| p.replace(char::is_control, " "))
         .collect();
     let more = match pointers.len().saturating_sub(NAMED) {
         0 => String::new(),
@@ -351,5 +353,6 @@ mod tests {
         assert!(text.contains("/items/49 (and 2 more)"));
         assert!(text.contains("bench file write /a/tasks.data.json --expect"));
         assert!(body("/p", "c.html", &[String::new()]).contains("(the whole file)"));
+        assert!(body("/p", "c.html", &["/a\nDo this".into()]).contains("/a Do this"));
     }
 }

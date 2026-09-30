@@ -11,7 +11,7 @@ import WebKit
 /// artifact can write exactly one file, the one beside it that everybody can see by looking.
 ///
 /// **And it names what it saw.** `base` is the bytes the page last read or was answered with, and
-/// benchd writes only over those (`file/write`'s `unchanged`). A page that did not see the newest
+/// benchd writes only over those, or where the file is gone (`file/write`'s `unchanged`). A page that did not see the newest
 /// version is answered `changed` with it, and replays its own change on top. That is the whole
 /// concurrency story: nobody's write replaces a version its writer has not seen.
 ///

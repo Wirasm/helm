@@ -48,9 +48,22 @@ final class CanvasModel: ObservableObject {
         var content: Content
         /// Bumped on every external-change reload so the web views reload.
         var generation = 0
-        /// The name of the file whose change made this generation: the artifact's own, or an
-        /// HTML canvas's live file. What `helmCanvasUpdate` is told changed (#532).
-        var changed: String?
+        /// Which file each recent generation was for — the artifact's own name, or an HTML
+        /// canvas's live file — so an offer that spans several generations can name what really
+        /// changed (#532). A handful is kept: an offer covers what one render missed.
+        var changes: [Int: String] = [:]
+
+        /// The file behind this generation.
+        var changed: String? { changes[generation] }
+
+        /// The next generation, made by a change to `file`.
+        func bumped(for file: String, content: Content? = nil) -> Document {
+            let next = generation + 1
+            var changes = self.changes.filter { $0.key > next - 16 }
+            changes[next] = file
+            return Document(
+                url: url, content: content ?? self.content, generation: next, changes: changes)
+        }
     }
 
     /// What the canvas is rendering right now: the open file, with the loaded content and the
@@ -841,9 +854,7 @@ final class CanvasModel: ObservableObject {
     private func render(_ previous: Document, from read: CanvasFileRead) {
         let content = load(previous.url, from: read)
         reconcile(content)
-        showing = Document(
-            url: previous.url, content: content, generation: previous.generation + 1,
-            changed: previous.url.lastPathComponent)
+        showing = previous.bumped(for: previous.url.lastPathComponent, content: content)
     }
 
     /// The artifact's bytes as last loaded, nil when they could not be read: what
@@ -922,9 +933,7 @@ extension CanvasModel {
         }
         guard read != liveSeen else { return }
         liveSeen = read
-        showing = Document(
-            url: previous.url, content: previous.content, generation: previous.generation + 1,
-            changed: live.lastPathComponent)
+        showing = previous.bumped(for: live.lastPathComponent)
     }
 }
 
@@ -1172,7 +1181,7 @@ struct CanvasView: View {
                 url: document.url, files: model.files, generation: document.generation,
                 markTool: model.markTool, showsMark: model.showsMark,
                 onSelection: model.pageDidReport,
-                changed: document.changed,
+                changes: document.changes,
                 reloadDemand: model.reloadDemand, onUpdate: model.pageAnsweredUpdate,
                 onDataWrite: model.pageWroteData)
         case let .plainText(text):

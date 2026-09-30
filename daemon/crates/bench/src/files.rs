@@ -2,7 +2,7 @@
 //! the operator edits too, most often an HTML canvas's live file (`<stem>.data.json`).
 //!
 //! A write says what it expects to replace, and benchd writes only if the file still holds those
-//! bytes (`file/write`'s `unchanged`, compared under benchd's lock). That is the whole point of
+//! bytes, or is gone (`file/write`'s `unchanged`, compared under benchd's lock). That is the whole point of
 //! going through benchd rather than the filesystem: an agent that read the file, then writes back
 //! its copy after the operator changed it, is refused instead of silently undoing his edit.
 

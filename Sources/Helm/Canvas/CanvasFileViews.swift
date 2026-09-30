@@ -233,8 +233,8 @@ struct HTMLCanvasView: View {
     let markTool: CanvasMarkTool
     let showsMark: Bool
     let onSelection: (CanvasPageSelection) -> Void
-    /// The file whose change made `generation`: what an update offer names (#532).
-    let changed: String?
+    /// Which file each recent generation was for: what an update offer names (#532).
+    let changes: [Int: String]
     /// The operator pressing Reload on the notice — a counter, not a flag, so pressing it twice
     /// reloads twice and a demand can never be missed by arriving in the same render as the
     /// answer that raised it. The same shape as `generation`.
@@ -257,7 +257,7 @@ struct HTMLCanvasView: View {
             showsMark: showsMark,
             theme: colorScheme == .dark ? .dark : .light,
             onSelection: onSelection,
-            changed: changed,
+            changes: changes,
             reloadDemand: reloadDemand,
             onUpdate: onUpdate,
             onDataWrite: onDataWrite
@@ -327,7 +327,7 @@ enum HTMLCanvasPage {
     /// **update**, and that is the one this offers.
     static func load(
         _ webView: WKWebView, path: StandardizedPath, generation: Int, theme: CanvasTheme,
-        changed: String? = nil, coordinator: CanvasFileCoordinator
+        changes: [Int: String] = [:], coordinator: CanvasFileCoordinator
     ) {
         let key = CanvasReloadKey(theme: theme, generation: generation, document: path.value)
         let previous = coordinator.loadedKey
@@ -340,19 +340,31 @@ enum HTMLCanvasPage {
             return
         }
         let artifact = URL(fileURLWithPath: path.value)
-        // `changed` names the one file behind *this* generation. When the page is offered more
-        // than one generation at once (a reconnect's re-read bumps for the artifact and then for
-        // the live file), it is not the only file that changed, and the artifact is named: a page
-        // told only "your data changed" would keep showing markup that is gone.
-        let one = previous.map { generation == $0.generation + 1 } ?? false
+        let file = previous.flatMap {
+            changedFile(changes, after: $0.generation, through: generation)
+        }
         coordinator.offer(
             CanvasUpdate(
                 artifact: artifact, generation: generation,
-                file: one ? (changed ?? artifact.lastPathComponent) : artifact.lastPathComponent),
+                file: file ?? artifact.lastPathComponent),
             to: webView
         ) {
             navigate(webView, path: path, theme: theme, coordinator: coordinator)
         }
+    }
+
+    /// The file an offer names (#532): the one file behind every generation it covers, since a
+    /// render can miss some. A mix, or a generation no longer remembered, is nil, and the offer
+    /// names the artifact: a page told only "your data changed" would keep showing markup that
+    /// is gone.
+    static func changedFile(
+        _ changes: [Int: String], after offered: Int, through generation: Int
+    )
+        -> String?
+    {
+        guard generation > offered else { return nil }
+        let names = Set((offered + 1...generation).map { changes[$0] })
+        return names.count == 1 ? names.first ?? nil : nil
     }
 
     /// The operator answering the notice: load the artifact again whatever the page said.
@@ -427,7 +439,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     let showsMark: Bool
     let theme: CanvasTheme
     let onSelection: (CanvasPageSelection) -> Void
-    let changed: String?
+    let changes: [Int: String]
     let reloadDemand: Int
     let onUpdate: (CanvasUpdateAnswer) -> Void
     let onDataWrite: CanvasDataChannel.Write
@@ -471,7 +483,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
 
     private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
         HTMLCanvasPage.load(
-            webView, path: path, generation: generation, theme: theme, changed: changed,
+            webView, path: path, generation: generation, theme: theme, changes: changes,
             coordinator: coordinator)
     }
 }
