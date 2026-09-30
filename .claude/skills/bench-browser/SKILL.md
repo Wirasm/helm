@@ -42,8 +42,9 @@ playwright-cli -s=<your-name> detach
 
 - **Attach, never `open`.** `open` launches a separate browser without his logins.
 - **Work in a tab of your own** (`tab-new`), and do not navigate the tab he is looking at unless
-  he asked you to. The pane follows whichever tab opens or navigates, so he sees your work
-  either way.
+  he asked you to. The pane stays on his tab: yours appears in his tab strip with a dot and a
+  mark saying it came from outside, and he looks when he chooses, or turns on Follow to watch.
+  So tell him which tab to look at rather than assuming he sees it.
 - **`detach` when you are done.** It disconnects you and leaves the browser and its tabs running.
   Never stop the browser (`bench browser stop`) unless he asked. Other agents may be using it.
 - Playwright MCP works too, with `--cdp-endpoint "$CDP"`.

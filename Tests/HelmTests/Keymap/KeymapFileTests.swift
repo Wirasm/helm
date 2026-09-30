@@ -58,11 +58,11 @@ final class KeymapFileTests: XCTestCase {
 
     private func match(
         _ characters: String?, keyCode: UInt16 = 0, _ modifiers: NSEvent.ModifierFlags,
-        terminalFocused: Bool = false, in table: [KeyBinding]
+        focus: KeyFocus = .other, in table: [KeyBinding]
     ) -> KeyBinding.Action? {
         KeyBindings.match(
             characters: characters, keyCode: keyCode, modifiers: modifiers,
-            terminalFocused: terminalFocused, in: table)?.action
+            focus: focus, in: table)?.action
     }
 
     func testARowRebindsAKeyInItsPlace() throws {
@@ -114,9 +114,9 @@ final class KeymapFileTests: XCTestCase {
             action = "new-terminal"
             """
         ).overlay(on: KeyBindings.all)
-        XCTAssertEqual(match("3", .control, terminalFocused: true, in: table), .verb(.newTerminal))
+        XCTAssertEqual(match("3", .control, focus: .terminal, in: table), .verb(.newTerminal))
         XCTAssertEqual(
-            match("3", .control, terminalFocused: false, in: table),
+            match("3", .control, focus: .other, in: table),
             .verb(.activateWorkspace(index: 2)))
     }
 
@@ -135,7 +135,7 @@ final class KeymapFileTests: XCTestCase {
                 table[(index + 1)...].contains { $0.collides(with: row) }, row.chord.spelled)
         }
         XCTAssertEqual(
-            match(nil, keyCode: 123, .control, terminalFocused: true, in: table),
+            match(nil, keyCode: 123, .control, focus: .terminal, in: table),
             .verb(.newTerminal))
     }
 
@@ -429,7 +429,7 @@ final class KeymapTests: XCTestCase {
         -> KeyBinding.Action?
     {
         KeyBindings.match(
-            characters: characters, keyCode: 0, modifiers: modifiers, terminalFocused: false,
+            characters: characters, keyCode: 0, modifiers: modifiers, focus: .other,
             in: keymap.table)?.action
     }
 
@@ -525,5 +525,23 @@ final class KeymapTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertEqual(fires(keymap, "d", .command), .verb(.newTerminal))
+    }
+}
+
+extension KeymapFileTests {
+    /// `browser` and `away-from-browser` are opposite halves too (#542): a row for ⌘1 in the
+    /// browser replaces only the browser's ⌘1, and the slot's ⌘1 stays.
+    func testABrowserRowReplacesOnlyTheBrowsersHalf() throws {
+        let table = try parse(
+            """
+            [[bind]]
+            key = "cmd+1"
+            when = "browser"
+            action = "browser-reload"
+            """
+        ).overlay(on: KeyBindings.all)
+        XCTAssertEqual(match("1", .command, focus: .browser, in: table), .local(.browser(.reload)))
+        XCTAssertEqual(match("1", .command, in: table), .verb(.showTab(index: 0)))
+        XCTAssertEqual(table.count, KeyBindings.all.count)
     }
 }

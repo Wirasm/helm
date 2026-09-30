@@ -14,7 +14,8 @@ import TOMLDecoder
 ///
 /// [[bind]]
 /// key = "cmd+shift+b"       # manage cmd ctrl alt shift + a character, plus, arrow, keycode:N
-/// when = "anywhere"         # anywhere (the default) | terminal | away-from-terminal
+/// when = "anywhere"         # anywhere (the default) | terminal | away-from-terminal |
+///                           # browser | away-from-browser
 /// action = "drawer"         # a name from docs/keymap.default.toml, with its arguments
 /// name = "browser"
 /// hint = "browser"          # the status-bar label, optional
@@ -164,7 +165,8 @@ struct KeymapFile: Equatable {
         # key:    manage, cmd, ctrl, alt, shift joined by + before one character, plus, left,
         #         right, up, down or keycode:N. manage is the manage key: hold it and the
         #         manage+ keys arrange the bench, release it and the keyboard types again
-        # when:   anywhere (the default), terminal, away-from-terminal
+        # when:   anywhere (the default), terminal, away-from-terminal, browser (a browser pane's
+        #         page or address field has the keyboard), away-from-browser
         # action: one of the names below; index is 1-based. `drawer` takes name and, optionally,
         #         surface = "browser", "sessions", "archon", "worktrees" or "file:<path>" for a
         #         drawer that holds nothing.
@@ -467,9 +469,11 @@ extension KeyBinding {
 }
 
 extension KeyBinding.When {
-    /// Two `when`s overlap unless they are the two opposite halves; `anywhere` overlaps both.
+    /// Two `when`s overlap when some keyboard focus fires both: `terminal` and
+    /// `away-from-terminal` are opposite halves, `anywhere` overlaps everything, and `browser`
+    /// sits inside `away-from-terminal`.
     func overlaps(_ other: Self) -> Bool {
-        self == other || self == .anywhere || other == .anywhere
+        !fires.isDisjoint(with: other.fires)
     }
 
     var spelled: String {
@@ -477,6 +481,8 @@ extension KeyBinding.When {
         case .anywhere: "anywhere"
         case .terminalFocused: "terminal"
         case .awayFromTerminal: "away-from-terminal"
+        case .browserFocused: "browser"
+        case .awayFromBrowser: "away-from-browser"
         }
     }
 
@@ -485,10 +491,14 @@ extension KeyBinding.When {
         case "anywhere": self = .anywhere
         case "terminal": self = .terminalFocused
         case "away-from-terminal": self = .awayFromTerminal
+        case "browser": self = .browserFocused
+        case "away-from-browser": self = .awayFromBrowser
         default:
             throw KeymapProblem(
                 line: nil,
-                reason: "when '\(text)' is not anywhere, terminal or away-from-terminal")
+                reason:
+                    "when '\(text)' is not anywhere, terminal, away-from-terminal, browser or "
+                    + "away-from-browser")
         }
     }
 }

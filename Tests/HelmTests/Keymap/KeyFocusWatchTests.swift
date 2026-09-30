@@ -4,9 +4,9 @@ import XCTest
 
 @testable import Helm
 
-/// The one rule `TerminalFocusWatch` has, and the reason its design works at all.
+/// The one rule `KeyFocusWatch` has, and the reason its design works at all.
 @MainActor
-final class TerminalFocusWatchTests: XCTestCase {
+final class KeyFocusWatchTests: XCTestCase {
     /// **The dedup is the whole design, so it is worth a test.** `didUpdate` fires freely —
     /// it brackets every event a window handles — and the watch subscribes to it precisely
     /// because it is the only public signal that covers a first-responder change. What keeps
@@ -14,16 +14,16 @@ final class TerminalFocusWatchTests: XCTestCase {
     /// terminal is the guard in `refresh`, and nothing else. Republishing unconditionally
     /// would still be *correct*, which is exactly why the regression would go unnoticed.
     ///
-    /// A manager with no sessions answers `anyTerminalHasFocus` the same way every time, so
+    /// A manager with no sessions answers `KeyFocus.current` the same way every time, so
     /// the value genuinely does not change across the posts below.
     func testUnchangedFocusNeverTouchesThePublisher() {
-        // `anyTerminalHasFocus` reads `NSApp.keyWindow`, and `NSApp` is nil until something
+        // `KeyFocus.current` reads `NSApp.keyWindow`, and `NSApp` is nil until something
         // has asked for the shared application. Headless test runners have not.
         _ = NSApplication.shared
 
-        let watch = TerminalFocusWatch(manager: TerminalManager())
+        let watch = KeyFocusWatch(manager: TerminalManager())
         var publishes = 0
-        let subscription = watch.$terminalFocused.sink { _ in publishes += 1 }
+        let subscription = watch.$focus.sink { _ in publishes += 1 }
         defer { subscription.cancel() }
 
         XCTAssertEqual(publishes, 1, "a @Published sink replays the current value on subscribe")
@@ -41,6 +41,6 @@ final class TerminalFocusWatchTests: XCTestCase {
             publishes, 1,
             "six notifications with no focus change must not publish once"
         )
-        XCTAssertFalse(watch.terminalFocused, "no sessions means no terminal holds the keyboard")
+        XCTAssertEqual(watch.focus, .other, "no terminal and no browser pane holds the keyboard")
     }
 }

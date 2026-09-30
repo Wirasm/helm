@@ -36,14 +36,14 @@ enum KeyHints {
     ///
     /// `rows` is the table in force, passed rather than read so the rules are exercisable
     /// against a two-row table instead of the real one.
-    static func visible(terminalFocused: Bool, in rows: [KeyBinding]) -> [KeyHint] {
+    static func visible(focus: KeyFocus, in rows: [KeyBinding]) -> [KeyHint] {
         var labels: [String] = []
         for label in rows.compactMap(\.hint) where !labels.contains(label) {
             labels.append(label)
         }
         return labels.compactMap { label in
             let live = rows.filter {
-                $0.hint == label && $0.canFire(terminalFocused: terminalFocused)
+                $0.hint == label && $0.canFire(focus)
             }
             // The FIRST row that can fire, and the rows sharing its modifiers — the binding the
             // operator's keystroke would actually hit, not every way to reach the same word.

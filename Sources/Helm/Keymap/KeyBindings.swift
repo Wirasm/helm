@@ -9,7 +9,8 @@ import SwiftUI
 /// is its rendering, pinned by `KeymapFileTests`. A bundled default file would add the one
 /// failure this must not have: a packaging mistake leaving helm with no keys at all.
 ///
-/// **⌘T is unbound.** It left with the chat face (#375). Muscle memory lives here.
+/// **⌘T, ⌘W, ⌘L, ⌘R, ⌘[ and ⌘] are the browser's, and only in a browser pane** (#542). Outside
+/// one, ⌘T stays unbound (it left with the chat face, #375) and ⌘W stays the window's.
 enum KeyBindings {
     /// In hint order: the key pop-up shows hints in the order their label first appears here,
     /// and the menu lists items in this order. Match order would only matter where two rows
@@ -18,7 +19,8 @@ enum KeyBindings {
     /// Built from named groups because one literal this size is more than the type checker will
     /// take in reasonable time.
     static let all: [KeyBinding] =
-        panes + tabs + focusSteps + paneMoves + turns + workspaceKeys + chrome + fontSize
+        panes + tabs + browser + focusSteps + paneMoves + turns + workspaceKeys + chrome
+        + fontSize
 
     /// The manage key's modifiers (`ManageKey`, #498): every row on these, alone or with ⇧, is
     /// the manage layer, and moves with `manage = "…"` in the keymap file.
@@ -47,11 +49,43 @@ enum KeyBindings {
             menu: "Close Pane"),
     ]
 
-    /// ⌘1–⌘9: a tab of the focused slot, by position (1-based keys, 0-based index).
+    /// ⌘1–⌘9: a tab of the focused slot, by position (1-based keys, 0-based index). In a
+    /// browser pane the same keys pick the browser's tab instead, as in any browser.
     private static let tabs: [KeyBinding] = (1...9).map { index in
         KeyBinding(
-            .character("\(index)"), .command, .verb(.showTab(index: index - 1)), hint: "pane")
+            .character("\(index)"), .command, .verb(.showTab(index: index - 1)),
+            when: .awayFromBrowser, hint: "pane")
     }
+
+    /// Chrome's own keys, while a browser pane holds the keyboard (#542). The monitor runs
+    /// before the menu, so ⌘W here closes the tab rather than helm's window. No menu items: a
+    /// menu item fires wherever the keyboard is, and outside the pane there is no tab to act on.
+    private static let browser: [KeyBinding] =
+        [
+            KeyBinding(
+                .character("t"), .command, .local(.browser(.newTab)), when: .browserFocused,
+                hint: "new tab"),
+            KeyBinding(
+                .character("w"), .command, .local(.browser(.closeTab)), when: .browserFocused,
+                hint: "close tab"),
+            KeyBinding(
+                .character("l"), .command, .local(.browser(.focusAddress)),
+                when: .browserFocused, hint: "address"),
+            KeyBinding(
+                .character("r"), .command, .local(.browser(.reload)), when: .browserFocused,
+                hint: "reload"),
+            KeyBinding(
+                .character("["), .command, .local(.browser(.back)), when: .browserFocused,
+                hint: "back · forward"),
+            KeyBinding(
+                .character("]"), .command, .local(.browser(.forward)), when: .browserFocused,
+                hint: "back · forward"),
+        ]
+        + (1...9).map { index in
+            KeyBinding(
+                .character("\(index)"), .command, .local(.browser(.showTab(index: index - 1))),
+                when: .browserFocused, hint: "tab")
+        }
 
     /// Vim's four letters, in vim's order, so the manage layer's focus and move keys sit on the
     /// home row as well as on the arrows (#498).
@@ -197,15 +231,15 @@ enum KeyBindings {
 
     /// The row a keystroke fires, if any.
     ///
-    /// Pure on purpose — `terminalFocused` is passed in rather than read from
-    /// `TerminalManager.shared`, so the whole table is exercisable from `swift test` with no
-    /// window, no ghostty runtime and no focus to simulate.
+    /// Pure on purpose — `focus` is passed in rather than read from the first responder, so
+    /// the whole table is exercisable from `swift test` with no window, no ghostty runtime and
+    /// no focus to simulate.
     static func match(
         characters: String?, keyCode: UInt16, modifiers: NSEvent.ModifierFlags,
-        terminalFocused: Bool, in table: [KeyBinding]
+        focus: KeyFocus, in table: [KeyBinding]
     ) -> KeyBinding? {
         table.first { row in
-            guard row.modifiers == modifiers, row.canFire(terminalFocused: terminalFocused)
+            guard row.modifiers == modifiers, row.canFire(focus)
             else { return false }
             switch row.trigger {
             case let .keyCode(code): return code == keyCode

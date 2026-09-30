@@ -12,41 +12,41 @@ import XCTest
 final class BindingTableTests: XCTestCase {
     private func match(
         _ characters: String?, keyCode: UInt16 = 0, _ modifiers: NSEvent.ModifierFlags,
-        terminalFocused: Bool = false
+        focus: KeyFocus = .other
     ) -> KeyBinding.Action? {
         KeyBindings.match(
             characters: characters, keyCode: keyCode, modifiers: modifiers,
-            terminalFocused: terminalFocused, in: KeyBindings.all)?.action
+            focus: focus, in: KeyBindings.all)?.action
     }
 
     // MARK: - Focus rules (the reason the map cannot be a dictionary)
 
     func testPromptJumpFiresOnlyWhileTheTerminalHasFocus() {
-        let focused = match(nil, keyCode: 126, .command, terminalFocused: true)
+        let focused = match(nil, keyCode: 126, .command, focus: .terminal)
         XCTAssertEqual(focused, .local(.jumpToPrompt(offset: -1)))
 
         XCTAssertNil(
-            match(nil, keyCode: 126, .command, terminalFocused: false),
+            match(nil, keyCode: 126, .command, focus: .other),
             "⌘↑ must keep its text-navigation meaning outside the terminal")
     }
 
     func testControlDigitsAreNeverStolenFromAFocusedShell() {
         XCTAssertEqual(
-            match("3", .control, terminalFocused: false), .verb(.activateWorkspace(index: 2)),
+            match("3", .control, focus: .other), .verb(.activateWorkspace(index: 2)),
             "⌃3 switches workspace when the terminal does not have focus")
         XCTAssertNil(
-            match("3", .control, terminalFocused: true),
+            match("3", .control, focus: .terminal),
             "a focused shell keeps legacy Ctrl+digit control codes")
     }
 
     func testWorkspaceCycleAlsoYieldsToAFocusedShell() {
         XCTAssertEqual(match(nil, keyCode: 123, .control), .verb(.cycleWorkspace(delta: -1)))
-        XCTAssertNil(match(nil, keyCode: 123, .control, terminalFocused: true))
+        XCTAssertNil(match(nil, keyCode: 123, .control, focus: .terminal))
     }
 
     func testCommandOptionDigitsWorkEvenWithTheTerminalFocused() {
         XCTAssertEqual(
-            match("5", [.command, .option], terminalFocused: true),
+            match("5", [.command, .option], focus: .terminal),
             .verb(.activateWorkspace(index: 4)),
             "the ⌘⌥ fallback exists for operators who have not released Mission Control's ⌃1–⌃9")
     }
@@ -103,10 +103,37 @@ final class BindingTableTests: XCTestCase {
     }
 
     /// ⌘W is unavailable — SwiftUI's `WindowGroup` binds it to close-window — so the pane
-    /// close is ⌘⌥W.
+    /// close is ⌘⌥W. The one exception is a browser pane, where ⌘W is the browser's.
     func testClosePaneAvoidsTheWindowClose() {
         XCTAssertEqual(match("w", [.command, .option]), .verb(.closeFocused))
         XCTAssertNil(match("w", .command), "⌘W belongs to the window, and helm must not fight it")
+        XCTAssertNil(match("w", .command, focus: .terminal))
+    }
+
+    // MARK: - Browser keys (#542)
+
+    /// Chrome's keys, while a browser pane holds the keyboard.
+    func testBrowserKeysFireInABrowserPane() {
+        let expected: [(String, BrowserCommand)] = [
+            ("t", .newTab), ("w", .closeTab), ("l", .focusAddress), ("r", .reload),
+            ("[", .back), ("]", .forward), ("3", .showTab(index: 2)), ("9", .showTab(index: 8)),
+        ]
+        for (key, command) in expected {
+            XCTAssertEqual(
+                match(key, .command, focus: .browser), .local(.browser(command)), "⌘\(key)")
+        }
+    }
+
+    /// …and nowhere else: every one of those chords does what it did before #542.
+    func testBrowserKeysLeaveEveryOtherFocusAlone() {
+        for focus in [KeyFocus.terminal, .other] {
+            for key in ["t", "w", "l", "r", "[", "]"] {
+                XCTAssertNil(match(key, .command, focus: focus), "⌘\(key) in \(focus)")
+            }
+            XCTAssertEqual(
+                match("3", .command, focus: focus), .verb(.showTab(index: 2)),
+                "⌘3 is still the slot's third pane in \(focus)")
+        }
     }
 
     /// ⌘⌥1–9 is already the workspace fallback, which is why focus movement is on arrows, and
@@ -120,7 +147,7 @@ final class BindingTableTests: XCTestCase {
                 match(nil, keyCode: keyCode, [.command, .option]), .verb(.stepFocus(direction)),
                 "keyCode \(keyCode)")
             XCTAssertEqual(
-                match(nil, keyCode: keyCode, [.command, .option, .shift], terminalFocused: true),
+                match(nil, keyCode: keyCode, [.command, .option, .shift], focus: .terminal),
                 .verb(.moveFocused(direction)),
                 "keyCode \(keyCode) — and from inside a terminal, which is where panes are moved")
         }
@@ -135,10 +162,10 @@ final class BindingTableTests: XCTestCase {
             ("h", BenchDirection.left), ("j", .down), ("k", .up), ("l", .right),
         ] {
             XCTAssertEqual(
-                match(letter, [.command, .option], terminalFocused: true),
+                match(letter, [.command, .option], focus: .terminal),
                 .verb(.stepFocus(direction)), letter)
             XCTAssertEqual(
-                match(letter.uppercased(), [.command, .option, .shift], terminalFocused: true),
+                match(letter.uppercased(), [.command, .option, .shift], focus: .terminal),
                 .verb(.moveFocused(direction)), "shift + \(letter)")
         }
         XCTAssertNil(match("h", .command), "⌘H without the manage key is not the layer")
@@ -173,11 +200,12 @@ final class BindingTableTests: XCTestCase {
     /// one holding the keyboard.
     func testCommandJTogglesTheZoomFromAnywhere() {
         XCTAssertEqual(match("j", .command), .local(.toggleZoom))
-        XCTAssertEqual(match("j", .command, terminalFocused: true), .local(.toggleZoom))
+        XCTAssertEqual(match("j", .command, focus: .terminal), .local(.toggleZoom))
     }
 
     func testUnboundCombinationsPassThrough() {
-        XCTAssertNil(match("t", .command), "⌘T left with the chat face (#375)")
+        XCTAssertNil(
+            match("t", .command), "⌘T left with the chat face (#375); it is a browser key only")
         XCTAssertNil(match("q", .command), "unclaimed keys must reach the system")
         XCTAssertNil(match("n", []), "a bare letter must reach the pty")
     }
@@ -211,7 +239,7 @@ final class BindingTableTests: XCTestCase {
             XCTAssertEqual(
                 match(
                     characters, keyCode: keyCode, row.modifiers,
-                    terminalFocused: row.when == .terminalFocused),
+                    focus: [KeyFocus.other, .terminal, .browser].first(where: row.canFire)!),
                 row.action,
                 "menu item \(row.menu!) does not fire its own keystroke's action")
         }
