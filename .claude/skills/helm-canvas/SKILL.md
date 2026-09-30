@@ -44,6 +44,9 @@ echo "$PANE"
   not read — #124, #184, #282. It is gone.)
 - A mark the operator makes on the canvas is mailed to you (the `bench-mail` skill reads it), and
   so is his change to an HTML canvas's live file (*A page that holds state*, below).
+- He can also ask a question about a mark without interrupting you: helm starts a read-only fork of
+  the conversation that opened the canvas, in a pane of its own. You get nothing for that, and the
+  fork cannot edit your files. It works for Claude Code only.
 
 The `bench-panes` skill has the rest of the verbs.
 

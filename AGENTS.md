@@ -612,6 +612,14 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     the note goes to the clipboard and the pane says which of the two failures it was** — nobody
     pushed this canvas, or the agent that did is gone. A silent no-op is the worst outcome here,
     because the operator believes the note was sent.
+  - **Or the operator asks a fork instead (#535).** The mark's second action, **Ask a fork**,
+    spawns a read-only fork (#531) of the conversation that opened the canvas, in the background,
+    with the file, the lines, the marked text and his question as its first prompt. It is bound
+    **early**, unlike mail: benchd copies the opener pane's conversation onto the canvas pane as
+    `Pane.author` at the open, so a `/clear`, a restart or an exit in that pane does not change
+    which conversation is forked. A canvas opened by codex or pi, or by an agent with no recorded
+    conversation, shows the action disabled with the reason (`CanvasForkRoute`). Nothing reaches
+    the original agent: the fork answers in its own pane.
 - `swift run helm` to iterate, `make app` for the real bundle.
 - **`make release` builds the real bundle and tells a running helm about it; `make install` is
   that plus the copy.** The split exists because `install` refuses against a live bundle —

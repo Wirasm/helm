@@ -209,16 +209,22 @@ impl Document {
             .collect()
     }
 
-    /// Record that the agent in pane `opener` opened canvas pane `pane`. Answers whether that
-    /// changed anything; a pane that is not a canvas is left alone. Not a verb: benchd calls it
-    /// for an agent's `pane/open`, from the verb's own `by`.
+    /// Record that the agent in pane `opener` opened canvas pane `pane`, and the conversation
+    /// that pane holds now as the canvas's author (helm #535). Answers whether that changed
+    /// anything; a pane that is not a canvas is left alone. Not a verb: benchd calls it for an
+    /// agent's `pane/open`, from the verb's own `by`.
     pub fn record_opener(&mut self, pane: PaneId, opener: PaneId) -> bool {
+        let author = match self.pane(opener).map(|p| &p.surface) {
+            Some(Surface::Terminal { agent, .. }) => agent.clone(),
+            _ => None,
+        };
         let benches = self.workspaces.iter_mut().flat_map(|w| w.bench.panes_mut());
         let drawers = self.drawers.iter_mut().flat_map(|d| d.panes.iter_mut());
         for p in benches.chain(drawers) {
             if p.id == pane && matches!(p.surface, Surface::Canvas { .. }) {
-                let changed = p.opener != Some(opener);
+                let changed = p.opener != Some(opener) || p.author != author;
                 p.opener = Some(opener);
+                p.author = author;
                 return changed;
             }
         }

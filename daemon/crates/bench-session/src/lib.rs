@@ -339,6 +339,20 @@ fn claude_flags(spec: &SpawnSpec) -> Vec<String> {
         Posture::Unattended => vec!["--dangerously-skip-permissions".into()],
         Posture::ReadOnly => vec!["--permission-mode".into(), "plan".into()],
     };
+    // Plan mode asks before reading outside the working directories, and the first prompt is
+    // usually outside (benchd's `<root>/prompts`, helm #535): measured on 2.1.285, a fork sat at
+    // "Read file … Do you want to proceed?" before reading its question. Allowing the prompt's
+    // folder is the whole grant: benchd gives each prompt a folder of its own, and a caller's own
+    // `--prompt-file` grants the folder it chose. Here, before any flag it could be mistaken for,
+    // because `--add-dir` takes every argument up to the next flag.
+    if let (Posture::ReadOnly, Some(folder)) = (
+        spec.posture,
+        spec.prompt_file
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).parent()),
+    ) {
+        args.extend(["--add-dir".into(), folder.display().to_string()]);
+    }
     if let Some(settings) = &spec.settings {
         args.extend(["--settings".into(), settings.clone()]);
     }
@@ -960,6 +974,8 @@ mod tests {
             [
                 "--permission-mode",
                 "plan",
+                "--add-dir",
+                "/tmp",
                 "--resume",
                 "author-1",
                 "--fork-session",
@@ -970,6 +986,7 @@ mod tests {
         );
         // A fork resumed later is still read-only: the posture travels apart from the conversation.
         s.conversation = Conversation::Resume("fork-2".into());
+        s.prompt_file = None;
         let (_, a) = argv(&s).unwrap();
         assert_eq!(a[..4], ["--permission-mode", "plan", "--resume", "fork-2"]);
     }

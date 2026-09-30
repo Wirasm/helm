@@ -28,8 +28,9 @@ pub enum Actor {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         handle: Option<String>,
     },
-    /// helm acting on its own observation, never on a person's behalf — recording which
-    /// agent is in a pane.
+    /// helm acting on its own observation — recording which agent is in a pane — or starting
+    /// something the operator asked to run in the background, such as a fork from a canvas mark
+    /// (helm #535). Never moves focus.
     Helm,
 }
 

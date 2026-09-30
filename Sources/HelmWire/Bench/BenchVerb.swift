@@ -10,7 +10,8 @@ package enum BenchActor: Codable, Equatable, Sendable {
     /// An agent. `pane` is where it runs, when it is known; `handle` is its mailbox. Both are
     /// for the record only.
     case agent(pane: String? = nil, handle: String? = nil)
-    /// helm acting on its own, never on a person's behalf.
+    /// helm acting on its own, or starting something the operator asked to run in the background
+    /// (a fork from a canvas mark, #535). benchd never moves focus for it.
     case helm
 
     private enum CodingKeys: String, CodingKey { case kind, pane, handle }

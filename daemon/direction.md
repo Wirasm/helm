@@ -193,6 +193,12 @@ the route needs no helm and survives its relaunch. Mail is batched per file for 
 changed JSON pointers and nothing else, comes from `operator`, and a mail that cannot go is logged
 as `live/unmailed` with why.
 
+The same open copies the conversation the opener's pane holds onto the canvas pane as `author`
+(helm #535). Mail stays late-bound to whoever is in the pane; a fork is bound to the conversation
+that wrote the file, which a `/clear`, a restart or an exit in that pane would otherwise lose. helm's
+"Ask a fork" sends `spawn` with `fork: author.session` and the prompt as text (`prompt`), which
+benchd writes under `<root>/prompts/` because helm may not share its disk.
+
 **And benchd sees an agent waiting on the operator (M1, #357).** #283's failure was an agent
 parked at a prompt its hooks never reported, and nobody knew for hours. Each session's engine
 says when its output settles (500 ms of quiet, or 2 s into output that never stops: at a real

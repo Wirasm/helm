@@ -8301,8 +8301,9 @@ fn the_opener_is_on_the_pane_in_the_document_and_survives_a_restart() {
 }
 
 /// A claude that writes the argv it was started with to `$HOME/argv-<bench session>`, then
-/// echoes: what a fork was asked to run is a fact the stub can report.
-const ARGV_CLAUDE: &str = "printf '%s\\n' \"$@\" > \"$HOME/argv-$BENCH_SESSION\"\nexec cat";
+/// echoes: what a fork was asked to run is a fact the stub can report. Written aside and renamed,
+/// so [`stub_argv`], which reads as soon as the file exists, never reads half of it.
+const ARGV_CLAUDE: &str = "printf '%s\\n' \"$@\" > \"$HOME/.argv-$BENCH_SESSION\" && mv \"$HOME/.argv-$BENCH_SESSION\" \"$HOME/argv-$BENCH_SESSION\"\nexec cat";
 
 /// The argv the stub claude of session `sid` was started with.
 fn stub_argv(home: &Path, sid: &str) -> Vec<String> {
@@ -8472,4 +8473,153 @@ fn a_fork_is_refused_where_it_cannot_run() {
         serde_json::json!([]),
         "nothing started: {listed}"
     );
+}
+
+#[test]
+fn a_canvas_names_the_conversation_that_opened_it_after_its_pane_moves_on() {
+    // helm #535: a fork asked about a canvas must reach the conversation that wrote it. The
+    // opener's pane record follows the agent: a `/clear` replaces it and an exit clears it.
+    let home = TestHome::claim("author");
+    let h = &home.dir;
+    let ws = workspace(h).display().to_string();
+    let page = artifact(h, "plan.md");
+    let wrote = serde_json::json!({"command": "claude", "session": "c-4b1c", "cwd": "/tmp/work"});
+    {
+        let daemon = DaemonGuard::start(h, None);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let pane = json_of(&bench(h, &["open", "terminal"]))["pane"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (_, pid) = terminal_process(h, "holder");
+        let event = |event: &str, session: &str| {
+            hook_verb(
+                &daemon.socket,
+                serde_json::json!({"harness": "claude", "event": event, "session": session,
+                    "cwd": "/tmp/work", "pid": pid, "pane": pane}),
+            )
+        };
+        event("SessionStart", "c-4b1c");
+        assert_eq!(
+            bench_as(h, &["open", &page], &[("HELM_PANE", &pane)]).code,
+            0
+        );
+        let author = || canvas_pane(&document(&daemon.socket), &page)["author"].clone();
+        assert_eq!(author(), wrote, "recorded with the opener");
+
+        // `/clear`: the pane now holds a new, empty conversation.
+        event("SessionStart", "c-9e0f");
+        assert_eq!(pane_agent(h, &pane)["session"], "c-9e0f");
+        assert_eq!(author(), wrote, "the canvas does not follow the pane");
+        // The agent exits: the pane holds nothing.
+        event("SessionEnd", "c-9e0f");
+        assert!(pane_agent(h, &pane).is_null());
+        assert_eq!(author(), wrote, "nor does an exit take it");
+    }
+    let daemon = DaemonGuard::start(h, None);
+    assert_eq!(
+        canvas_pane(&document(&daemon.socket), &page)["author"],
+        wrote,
+        "read back from bench.json"
+    );
+}
+
+#[test]
+fn a_fork_helm_asks_for_gets_its_prompt_as_a_file_and_leaves_focus_alone() {
+    // helm #535: helm's "Ask a fork" sends the prompt as text, since helm may not share benchd's
+    // disk, and as `helm`, so the fork appears without taking the operator's keyboard.
+    let home = TestHome::claim("ask-fork");
+    let h = &home.dir;
+    let ws = workspace(h).display().to_string();
+    let daemon = DaemonGuard::start_with_script(h, "claude", ARGV_CLAUDE);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let author = json_of(&bench(h, &["spawn", "--agent", "claude", "--cwd", &ws]));
+    let author_id = author["runtime_session"].as_str().unwrap().to_string();
+    let focused = document(&daemon.socket)["workspaces"][0]["bench"]["focused_slot"].clone();
+
+    let prompt = "You are a fork.\n\n```text\nthe marked passage\n```\n\nWhy four retries?";
+    let fork = ok_data(layout(
+        &daemon.socket,
+        "spawn",
+        serde_json::json!({"agent": "claude", "cwd": ws, "fork": author_id, "prompt": prompt}),
+        Some(serde_json::json!({ "kind": "helm" })),
+        false,
+    ));
+    assert_eq!(fork["forked_from"], author_id.as_str());
+    // helm decodes this answer from `fixtures/spawn-verbs.json`'s `fork_reply`: every key it
+    // holds is one benchd answers.
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/spawn-verbs.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for key in fixture["fork_reply"].as_object().unwrap().keys() {
+        assert!(fork.get(key).is_some(), "benchd answers {key}: {fork}");
+    }
+    assert!(
+        !focused.is_null() && !fork["focused_pane_before"].is_null(),
+        "{fork}"
+    );
+    assert_eq!(
+        fork["focused_pane_before"], fork["focused_pane_after"],
+        "appear, don't seize: {fork}"
+    );
+    assert_eq!(
+        document(&daemon.socket)["workspaces"][0]["bench"]["focused_slot"],
+        focused
+    );
+
+    let argv = stub_argv(h, fork["session"].as_str().unwrap());
+    let pos = |flag: &str| argv.iter().position(|a| a == flag);
+    assert_eq!(argv[pos("--resume").unwrap() + 1], author_id, "{argv:?}");
+    let pointer = argv.last().unwrap();
+    let file = pointer
+        .strip_prefix("Read and act on the prompt in ")
+        .unwrap_or_else(|| panic!("the prompt is a file: {argv:?}"));
+    let folder = Path::new(file).parent().unwrap();
+    assert_eq!(
+        folder.parent().unwrap(),
+        h.join(".bench/prompts"),
+        "a folder of its own under the root: {file}"
+    );
+    assert_eq!(fs::read_to_string(file).unwrap(), prompt);
+    // Plan mode would ask before reading outside the cwd, so the prompt's folder is allowed.
+    // Only that folder: another spawn's prompt stays out of reach.
+    assert_eq!(
+        argv[pos("--add-dir").unwrap() + 1],
+        folder.display().to_string(),
+        "{argv:?}"
+    );
+    let log = fs::read_to_string(h.join(".bench/events.jsonl")).unwrap();
+    assert!(
+        !log.contains("Why four retries?"),
+        "the event log names the file, not the operator's words"
+    );
+
+    // Both at once is a refusal naming the rule; an empty prompt too.
+    for extra in [
+        serde_json::json!({"prompt": "x", "prompt_file": file}),
+        serde_json::json!({"prompt": "  "}),
+    ] {
+        let mut args = serde_json::json!({"agent": "claude", "cwd": ws, "fork": author_id});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let reply = layout(&daemon.socket, "spawn", args, None, false);
+        assert_eq!(reply["status"], "refused", "{reply}");
+    }
 }

@@ -72,6 +72,10 @@ fn the_fixture_holds_one_of_everything() {
         "a canvas an agent opened (helm #532)"
     );
     assert!(
+        panes.iter().any(|p| p.author.is_some()),
+        "a canvas that names the conversation that opened it (helm #535)"
+    );
+    assert!(
         panes.iter().any(|p| matches!(p.name, PaneName::Derived(_))),
         "a derived name"
     );

@@ -34,11 +34,19 @@ struct ToyBench {
             return try applyWorkspace(request.verb, focus: focus)
         case let .paneOpen(workspace, surface):
             let answer = try open(surface, in: workspace ?? document.active, focus: focus)
-            // benchd's rule, which helm reads: an agent's open of a canvas names its pane (#532).
+            // benchd's rule, which helm reads: an agent's open of a canvas names its pane (#532),
+            // and the conversation that pane holds as the canvas's author (#535).
             if case let .agent(from?, _) = request.by, case .canvas = surface,
                 let opener = UUID(uuidString: from), let pane = answer.pane ?? answer.created
             {
-                try changePane(pane) { $0.opener = opener }
+                var author: BenchDocument.Agent?
+                if case let .terminal(agent, _, _) = document.pane(opener)?.surface {
+                    author = agent
+                }
+                try changePane(pane) {
+                    $0.opener = opener
+                    $0.author = author
+                }
             }
             return answer
         case let .paneSplit(workspace, direction, surface):

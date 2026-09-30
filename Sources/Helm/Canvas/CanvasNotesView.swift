@@ -53,15 +53,9 @@ struct CanvasCommentField: View {
                     .focused($focused)
                     .submitOnReturnInsertNewlineOnShift(submit: submit, insertNewline: startALine)
 
-                Button(action: submit) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 16))
-                        .frame(width: 22, height: 22)
-                }
-                .buttonStyle(.chrome)
-                .disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .help("Write this note to the sidecar")
             }
+
+            actions
         }
         .padding(10)
         .frame(width: 320)
@@ -85,6 +79,44 @@ struct CanvasCommentField: View {
             // control characters. Said, because a blank quote would hide the refusal.
             return "Nothing here helm can anchor a note to."
         }
+    }
+
+    /// **Two actions on one mark (#535).** Send mails the note to the agent that opened the canvas;
+    /// Ask a fork puts it to a read-only fork of the conversation that wrote the file, which
+    /// answers in a pane of its own without touching the original. Return is Send, as before.
+    /// When there is no conversation to fork the action stays, disabled, with the reason under it:
+    /// a button that is missing or silent says nothing about why.
+    private var actions: some View {
+        let empty = comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let route = model.forkRoute()
+        return VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                Button(action: askFork) {
+                    Label("Ask a fork", systemImage: "arrow.triangle.branch")
+                }
+                .disabled(empty || !route.canFork)
+                .help("Ask a read-only fork of the agent's conversation, in a pane of its own")
+                Button(action: submit) {
+                    Label("Send", systemImage: "arrow.up.circle.fill")
+                }
+                .disabled(empty)
+                .help("Write this note to the sidecar and mail it to the agent that opened it")
+            }
+            .buttonStyle(.chrome)
+            .font(.system(size: 11))
+            if case let .unavailable(why) = route {
+                Text(why)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func askFork() {
+        model.askFork(question: comment)
+        comment = ""
     }
 
     /// Shift+Enter's newline. `@State` reads its own storage rather than a captured value, so

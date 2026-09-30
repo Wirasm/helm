@@ -51,7 +51,12 @@
                       "source": "chosen",
                       "text": "the plan"
                     },
-                    "opener": "00000001-0000-4000-8000-000000000001"
+                    "opener": "00000001-0000-4000-8000-000000000001",
+                    "author": {
+                      "command": "claude",
+                      "session": "4b1c9e0f-2a3d-4c5e-8f60-718293a4b5c6",
+                      "cwd": "/Users/operator/Projects/helm"
+                    }
                   }
                 ],
                 "selected": "00000003-0000-4000-8000-000000000003",
