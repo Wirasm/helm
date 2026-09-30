@@ -478,6 +478,34 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(Keymap.read(file), .text("x = 1"))
     }
 
+    /// M5c: the keymap is helm's own file now, not the bench root's. A keymap at the old path
+    /// comes along once; one already at the new path is never replaced, and the old one is left
+    /// where it is.
+    func testAKeymapAtTheOldPathIsMovedOnceAndNeverOverAnExistingOne() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("keymap-move-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let old = dir.appendingPathComponent("bench/rules/keymap.toml")
+        let new = dir.appendingPathComponent("helm/bench/keymap.toml")
+
+        Keymap.moveOnce(from: old, to: new)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: new.path), "nothing to move")
+
+        try FileManager.default.createDirectory(
+            at: old.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "manage = \"cmd+alt\"\n".write(to: old, atomically: true, encoding: .utf8)
+        Keymap.moveOnce(from: old, to: new)
+        XCTAssertEqual(try String(contentsOf: new, encoding: .utf8), "manage = \"cmd+alt\"\n")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path), "moved, not copied")
+
+        try "stale".write(to: old, atomically: true, encoding: .utf8)
+        Keymap.moveOnce(from: old, to: new)
+        XCTAssertEqual(
+            try String(contentsOf: new, encoding: .utf8), "manage = \"cmd+alt\"\n",
+            "the operator's current keys win")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: old.path))
+    }
+
     /// The live half: a file written while helm runs is in force without a relaunch. It waits
     /// for the change to arrive inside a generous deadline, so a slow machine only makes it
     /// slower, never red.

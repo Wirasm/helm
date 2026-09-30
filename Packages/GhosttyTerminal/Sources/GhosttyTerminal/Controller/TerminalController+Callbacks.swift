@@ -183,7 +183,7 @@ private enum TerminalCallbacks {
         // write files as a side effect; a host paste that finds image or
         // document data materialises it itself
         // (`UITerminalView.pasteFromPasteboard`).
-        let string = TerminalPasteboardContent.text()
+        let string = TerminalPasteboardContent.text(from: TerminalPasteboardContent.readSource)
 
         let hasText = string.map { !$0.isEmpty } ?? false
         let available = listAvailable && hasText ? ["text/plain"] : []

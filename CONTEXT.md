@@ -143,9 +143,10 @@ _Avoid_: notification, unread count, dot (that is how helm will draw it, not wha
 
 **board**:
 The workspace bar's answer to *which workspace has an agent that needs you* — one mark per
-workspace tab, from the agent registry alone. Three renderings and not two: nothing where there is
-no agent, a quiet dot where every agent is working, an attention dot where one has stopped.
-helm holds **no state of its own** here — the registry file's lifecycle is the mark's lifecycle,
+workspace tab, from what each pane's agent reports alone (benchd's `report`, read from Claude
+Code's registry or the agent's hooks on benchd's machine). Three renderings and not two: nothing
+where there is no agent, a quiet dot where every agent is working, an attention dot where one has
+stopped. helm holds **no state of its own** here — the report's lifecycle is the mark's lifecycle,
 so nothing acknowledges, decays or expires, and there is nothing to clear. It never hides,
 including on the workspace being looked at.
 _Avoid_: **drawable board** (a different thing — see below), status bar, badge, notification
@@ -224,10 +225,11 @@ set it.
 _Avoid_: caffeinate (the command-line tool), insomnia, no-sleep
 
 **keymap file**:
-`<bench root>/rules/keymap.toml`, the operator's keys. Its rows overlay helm's built-in table
-(`KeyBindings.all`): a row replaces the built-in keys with its chord, `unbind` removes one, and a
-file that does not parse changes nothing. helm reads it; nothing writes it. It sits beside benchd's
-`placement.toml`, which benchd reads and helm does not.
+`~/.helm/bench/keymap.toml` (helm's own directory, `~/.helm/bench-<suite>` for an isolated
+helm), the operator's keys. Its rows overlay helm's built-in table (`KeyBindings.all`): a row
+replaces the built-in keys with its chord, `unbind` removes one, and a file that does not parse
+changes nothing. helm reads it; nothing writes it. It is helm's, so it stays on helm's machine
+when benchd runs on another; benchd's `placement.toml` stays under the bench root.
 _Avoid_: keybindings.json, config, shortcuts file
 
 **manage key**:

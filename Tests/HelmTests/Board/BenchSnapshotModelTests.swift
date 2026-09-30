@@ -30,10 +30,7 @@ final class BenchSnapshotModelTests: XCTestCase {
         let workspaces = WorkspaceModel(readBranch: { _ in nil })
         workbench.followDocuments { workspaces.follow($0) }
         let model = BenchSnapshotModel(
-            directory: BenchSnapshotDirectory(root: root),
-            // Never the operator's real `~/.claude/sessions`: a test that reads it measures the
-            // machine it runs on, and #247 made this model read a registry at all.
-            registryRoot: root.appendingPathComponent("sessions"),
+            directory: HelmBenchDirectory(root: root),
             refreshInterval: refreshInterval,
             now: now,
             foregroundPid: foregroundPid,
@@ -159,37 +156,37 @@ final class BenchSnapshotModelTests: XCTestCase {
         model.stop()
     }
 
-    /// The registry row a real stall writes, reproduced 2026-08-10 under
+    /// The report benchd hands on for a real stall: the registry row reproduced 2026-08-10 under
     /// `claude --dangerously-skip-permissions` — the spool's unattended posture verbatim — with
-    /// the guardrail that posture cannot remove. Kept beside the working row it is told apart
+    /// the guardrail that posture cannot remove. Kept beside the working one it is told apart
     /// from, because that comparison is the whole point of both.
-    private static let stalledRow =
-        #"{"pid":41436,"sessionId":"s-1","cwd":"/tmp","status":"waiting","#
-        + #""statusUpdatedAt":1786362950614,"waitingFor":"permission prompt"}"#
-    private static let workingRow =
-        #"{"pid":41436,"sessionId":"s-1","cwd":"/tmp","status":"busy","#
-        + #""statusUpdatedAt":1786362900000}"#
+    private static let stalled = BenchLiveSessions.Report(
+        activity: "waiting", waitingFor: "permission prompt",
+        since: Date(timeIntervalSince1970: 1_786_362_950.614))
+    private static let working = BenchLiveSessions.Report(
+        activity: "busy", since: Date(timeIntervalSince1970: 1_786_362_900))
+
+    /// What benchd answers in `sessions` for the rig's one terminal pane.
+    private func benchd(
+        reports report: BenchLiveSessions.Report, in terminals: TerminalManager
+    )
+        throws
+    {
+        let pane = try XCTUnwrap(terminals.sessions.first).id
+        terminals.foregrounds.set([pane: 41436], reports: [pane: report])
+    }
 
     /// **The wiring #283 turns on, end to end through the real model.** `BenchSnapshotTests`
-    /// pins the projection rule; a model that passed `agents: [:]` would satisfy every one of
-    /// those and still publish a file with nothing in it — which is the state helm was already
-    /// in, since it read this very registry every publish and kept only `sessionId`.
-    ///
-    /// The row is the one a real stall writes, reproduced 2026-08-10 under the spool's own
-    /// unattended posture.
+    /// pins the projection rule; a model that dropped the report would satisfy every one of
+    /// those and still publish a file with nothing in it — which is the state helm was once in,
+    /// reading the registry every publish and keeping only `sessionId`.
     func testTheSnapshotCarriesWhatTheAgentInThePaneSaysItIsWaitingFor() throws {
-        let sessions = root.appendingPathComponent("sessions")
-        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
-        try Self.stalledRow.write(
-            to: sessions.appendingPathComponent("41436.json"), atomically: true, encoding: .utf8)
-
         var writes: [BenchSnapshot] = []
-        let (model, workspaces, workbench, terminals) = try fixture(
-            foregroundPid: { _ in 41436 },
-            writer: {
-                writes.append($0)
-                return true
-            })
+        let (model, workspaces, workbench, terminals) = try fixture(writer: {
+            writes.append($0)
+            return true
+        })
+        try benchd(reports: Self.stalled, in: terminals)
         model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
 
         let agent = writes.last?.workspaces[0].columns[0].slots[0].panes[0].terminal?.agent
@@ -210,18 +207,12 @@ final class BenchSnapshotModelTests: XCTestCase {
     /// stall began; after that the record stops changing and `now - statusUpdatedAt` keeps
     /// growing on its own.
     func testAnAgentBlockingOnAPromptIsWrittenEvenThoughNothingOnTheBenchMoved() throws {
-        let sessions = root.appendingPathComponent("sessions")
-        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
-        let row = sessions.appendingPathComponent("41436.json")
-        try Self.workingRow.write(to: row, atomically: true, encoding: .utf8)
-
         var writes: [BenchSnapshot] = []
-        let (model, workspaces, workbench, terminals) = try fixture(
-            foregroundPid: { _ in 41436 },
-            writer: {
-                writes.append($0)
-                return true
-            })
+        let (model, workspaces, workbench, terminals) = try fixture(writer: {
+            writes.append($0)
+            return true
+        })
+        try benchd(reports: Self.working, in: terminals)
         model.start(workspaces: workspaces, workbench: workbench, terminals: terminals)
         XCTAssertEqual(writes.count, 1)
 
@@ -230,7 +221,7 @@ final class BenchSnapshotModelTests: XCTestCase {
         model.refresh()
         XCTAssertEqual(writes.count, 1, "an unchanged bench and an unchanged agent are not news")
 
-        try Self.stalledRow.write(to: row, atomically: true, encoding: .utf8)
+        try benchd(reports: Self.stalled, in: terminals)
         model.refresh()
 
         XCTAssertEqual(

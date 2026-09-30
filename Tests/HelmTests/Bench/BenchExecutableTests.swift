@@ -47,13 +47,50 @@ final class BenchExecutableTests: XCTestCase {
         XCTAssertTrue(missing.description.contains("cargo install"), missing.description)
     }
 
+    /// A benchd over TCP and helm's own `bench` of another version: the pane says both, and the
+    /// fix, rather than attaching (M5c). The same version says nothing.
+    func testAnotherBuildIsAReasonNamingBothVersionsAndTheSameBuildIsNone() throws {
+        XCTAssertNil(BenchExecutable.OtherBuild(bench: "/b/bench", ours: "0.0.1", benchd: "0.0.1"))
+        let other = try XCTUnwrap(
+            BenchExecutable.OtherBuild(bench: "/b/bench", ours: "0.0.1", benchd: "0.0.2"))
+        let reason = BenchExecutable.Unusable.otherBuild(other).description
+        XCTAssertTrue(reason.contains("version 0.0.1"), reason)
+        XCTAssertTrue(reason.contains("version 0.0.2"), reason)
+        XCTAssertTrue(reason.contains("/b/bench"), reason)
+        let old = try XCTUnwrap(
+            BenchExecutable.OtherBuild(bench: "/b/bench", ours: nil, benchd: "0.0.1"))
+        XCTAssertTrue(old.description.contains("version unknown"), old.description)
+    }
+
+    /// `bench --version` read off a real process: a stub script, never a system binary.
+    func testTheVersionIsWhatTheBenchPrintsAndNoneWhenItFails() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("helm-bench-version-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func stub(_ name: String, _ body: String) throws -> String {
+            let path = dir.appendingPathComponent(name).path
+            try "#!/bin/sh\n\(body)\n".write(toFile: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: path)
+            return path
+        }
+        let current = try stub("current", #"[ "$1" = --version ] && echo 0.0.7"#)
+        let old = try stub("old", #"echo "unknown argument \"$1\"" >&2; exit 3"#)
+        XCTAssertEqual(BenchExecutable.version(of: current), "0.0.7")
+        XCTAssertNil(BenchExecutable.version(of: old), "a bench from before the flag")
+        XCTAssertNil(BenchExecutable.version(of: dir.appendingPathComponent("absent").path))
+    }
+
     /// End to end through the client: a benchd that is not there never yields a bare `bench`.
     @MainActor
     func testAClientWithNoBenchdNeverAnswersABareName() {
         let client = BenchClient(endpoint: .unix(path: "/nonexistent/benchd.sock"))
         switch client.benchExecutable {
         case let .success(path): XCTAssertTrue(path.hasPrefix("/"), path)
-        case let .failure(missing): XCTAssertTrue(missing.asked.contains("could not be asked"))
+        case let .failure(.notFound(missing)):
+            XCTAssertTrue(missing.asked.contains("could not be asked"))
+        case let .failure(other): XCTFail("\(other)")
         }
     }
 }

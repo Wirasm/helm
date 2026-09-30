@@ -2,11 +2,11 @@ import XCTest
 
 @testable import Helm
 
-final class BenchSnapshotDirectoryTests: XCTestCase {
-    private var directory: BenchSnapshotDirectory!
+final class HelmBenchDirectoryTests: XCTestCase {
+    private var directory: HelmBenchDirectory!
 
     override func setUpWithError() throws {
-        directory = BenchSnapshotDirectory(
+        directory = HelmBenchDirectory(
             root: FileManager.default.temporaryDirectory
                 .appendingPathComponent("helm-bench-directory-\(UUID().uuidString)"))
         try directory.prepare()
@@ -20,19 +20,31 @@ final class BenchSnapshotDirectoryTests: XCTestCase {
     func testDefaultSuiteAndExplicitPathsDoNotCollide() {
         let home = URL(fileURLWithPath: "/Users/nobody")
         XCTAssertEqual(
-            BenchSnapshotDirectory.resolve(environment: [:], home: home).root.path,
+            HelmBenchDirectory.resolve(environment: [:], home: home).root.path,
             "/Users/nobody/.helm/bench")
         XCTAssertEqual(
-            BenchSnapshotDirectory.resolve(
+            HelmBenchDirectory.resolve(
                 environment: ["HELM_DEFAULTS_SUITE": "helm-test"], home: home
             ).root.path,
             "/Users/nobody/.helm/bench-helm-test")
         XCTAssertEqual(
-            BenchSnapshotDirectory.resolve(
+            HelmBenchDirectory.resolve(
                 environment: ["HELM_BENCH_DIR": "/tmp/target", "HELM_DEFAULTS_SUITE": "x"],
                 home: home
             ).root.path,
             "/tmp/target")
+    }
+
+    /// The keymap sits beside the snapshot, so an isolated helm has its own (M5c).
+    func testTheKeymapIsInTheSameDirectory() {
+        let home = URL(fileURLWithPath: "/Users/nobody")
+        XCTAssertEqual(
+            HelmBenchDirectory.resolve(environment: [:], home: home).keymap.path,
+            "/Users/nobody/.helm/bench/keymap.toml")
+        XCTAssertEqual(
+            HelmBenchDirectory.resolve(environment: ["HELM_DEFAULTS_SUITE": "t"], home: home)
+                .keymap.path,
+            "/Users/nobody/.helm/bench-t/keymap.toml")
     }
 
     func testWriteIsPrivatePrettySortedAndDecodable() throws {

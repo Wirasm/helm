@@ -33,7 +33,8 @@ knows nor needs the Rust toolchain, in either direction.
 - `crates/bench-browser` — the shared browser: find, configure and launch one Chromium
   on a pipe leash. Knows no sockets or events; the daemon supervises it.
 - `crates/bench-sessions` — the session list (#384): reads Claude Code's registry, `--bg` jobs
-  and subagent transcripts, pi's sessions and helm's `snapshot.json`, scopes them to a workspace
+  and subagent transcripts and pi's sessions, places pane agents from benchd's own document
+  (`PaneAgent`, never a file of helm's), scopes them to a workspace
   by its git worktrees, and builds typed `SessionRow`s with the one action that opens each. No
   sockets, events or record files — benchd owns `<root>/sessions/hosted.json` and
   `dismissed.json` and logs `sessions/*`. Every harness file it reads is internal and

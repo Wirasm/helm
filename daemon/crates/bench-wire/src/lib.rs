@@ -56,6 +56,12 @@ pub use sessions::{
     SessionsArgs, Unreadable, dismissed_path, hosted_path, sessions_dir,
 };
 
+/// This build of the bench, as `status.version` and `bench --version` both say it. helm runs
+/// its own `bench` against a benchd over TCP and refuses to attach when the two differ, so bump
+/// the workspace version (`daemon/Cargo.toml`) with any change to the wire, as 0.0.2 did when
+/// `sessions` gained `report` and `status` its `version`.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// A request line larger than this is refused, not read. The cap is about the reader:
 /// every accepted byte can end up in an event log an agent later pulls into context.
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -505,9 +511,9 @@ pub struct HelmAnswer {
 
 pub const HELM_ASKED: &str = "helm/asked";
 
-/// One row of `sessions`: a session benchd runs, and the pane that shows it. helm reads `pane`
-/// and `foreground_pid` to find the agent in a pane (it joins the pid against Claude's
-/// registry), so the shape is pinned by `fixtures/session-list.json` on both sides.
+/// One row of `sessions`: a session benchd runs, and the pane that shows it. helm reads `pane`,
+/// `foreground_pid`, `waiting` and `report` for each pane's agent (presence, the snapshot's
+/// `agent`), so the shape is pinned by `fixtures/session-list.json` on both sides.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionEntry {
     pub session: String,
@@ -529,6 +535,22 @@ pub struct SessionEntry {
     /// The agent in it is waiting on the operator (M1, #357); absent when it is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Waiting>,
+    /// What the agent in it says it is doing; absent when nothing there reports (a shell at
+    /// its prompt, a harness whose hooks are not wired).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<AgentReport>,
+}
+
+/// An agent's own report of what it is doing, read on benchd's machine (M5c, #459): Claude
+/// Code's registry row for the process in the session's foreground, else the agent's last hook.
+/// Never `Activity::Unknown`: nothing said is no report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentReport {
+    pub activity: Activity,
+    /// When `activity` last changed, in epoch ms: a transition time, not a heartbeat. Absent
+    /// when the registry row carries no time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_ms: Option<u64>,
 }
 
 /// An agent waiting on the operator: at a permission prompt, a trust prompt, a question.
@@ -1146,6 +1168,10 @@ mod tests {
                 .sessions
                 .iter()
                 .any(|s| s.agent == "shell" && s.pane.is_some())
+        );
+        assert!(
+            reply.sessions.iter().any(|s| s.report.is_some()),
+            "the sample carries a report, so helm's decoder is pinned too"
         );
     }
 

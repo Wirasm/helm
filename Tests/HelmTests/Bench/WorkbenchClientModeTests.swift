@@ -225,7 +225,7 @@ final class WorkbenchClientModeTests: XCTestCase {
         let pane = Pane(content: .unsupported("whiteboard"))
         let record = BenchSnapshot.PaneRecord(
             pane: pane, selected: true, visible: true, focused: false, live: nil,
-            foregroundPid: { _ in nil }, agents: [:])
+            foregroundPid: { _ in nil })
         XCTAssertEqual(record.kind, .unsupported)
         XCTAssertEqual(record.unsupportedKind, "whiteboard")
     }

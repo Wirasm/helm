@@ -15,7 +15,8 @@
 
 use crate::{Core, shells};
 use bench_doc::{
-    Caller, Destination, Document, Focus, Pane, PaneId, Placement, Rules, Surface, Target,
+    Caller, CanvasSource, Destination, Document, Focus, Pane, PaneId, Placement, Rules, Surface,
+    Target,
 };
 use bench_session::AgentKind;
 use bench_wire::{
@@ -221,6 +222,14 @@ fn admit(core: &Core, verb: LayoutVerb, by: &Actor) -> Result<LayoutVerb, String
         }
         _ => None,
     };
+    // A canvas is a file on this machine: the CLI that named it may be on another (M5c).
+    if let Some(Surface::Canvas {
+        source: CanvasSource::File { path },
+    }) = named
+        && !Path::new(path.as_str()).is_file()
+    {
+        return Err(format!("no file at {}", path.as_str()));
+    }
     if let Some(session) = named.and_then(Surface::session)
         && !core.sessions.get(session).is_some_and(|s| s.is_live())
     {
