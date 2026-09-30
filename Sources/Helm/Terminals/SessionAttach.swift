@@ -46,7 +46,7 @@ extension BenchDocument.Bench {
     /// (`BenchClient.benchExecutable`) is asked for only when a pane here shows a session, since
     /// asking is a round trip to benchd.
     func attachCommands(
-        bench: @autoclosure () -> Result<String, BenchExecutable.NotFound>
+        bench: @autoclosure () -> Result<String, BenchExecutable.Unusable>
     ) -> [UUID: SessionLaunch] {
         let sessions = columns.flatMap(\.slots).flatMap(\.panes).compactMap {
             pane -> (UUID, String)? in
@@ -58,8 +58,8 @@ extension BenchDocument.Bench {
         switch bench() {
         case let .success(bench):
             launch = { .attach(command: SessionAttach.command(session: $0, bench: bench)) }
-        case let .failure(missing):
-            launch = { _ in .unavailable(reason: missing.description) }
+        case let .failure(unusable):
+            launch = { _ in .unavailable(reason: unusable.description) }
         }
         return Dictionary(
             sessions.map { ($0.0, launch($0.1)) }, uniquingKeysWith: { first, _ in first })

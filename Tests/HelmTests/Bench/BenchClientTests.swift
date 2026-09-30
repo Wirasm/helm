@@ -60,7 +60,8 @@ final class BenchClientTests: XCTestCase {
         XCTAssertEqual(server.verbs.first?["verb"] as? String, "pane/split")
     }
 
-    /// A benchd reached over TCP names a `bench` on its own machine; helm runs its own.
+    /// A benchd reached over TCP names a `bench` on its own machine; helm runs its own. This one
+    /// says no version, so it predates `status.version`: another build than any `bench` here.
     func testAClientOverTCPNeverRunsTheBenchBenchdNames() throws {
         let server = try FakeBenchd(
             document: BenchFixture.document(
@@ -72,10 +73,16 @@ final class BenchClientTests: XCTestCase {
         }
         let client = BenchClient(endpoint: server.endpoint)
         switch client.benchExecutable {
-        case let .success(bench): XCTAssertNotEqual(bench, "/forge/only/bench")
-        case let .failure(missing): XCTAssertTrue(missing.asked.contains("over TCP"), missing.asked)
+        case let .success(bench): XCTFail("attached with \(bench) to a benchd of no version")
+        case let .failure(.notFound(missing)):
+            XCTAssertTrue(missing.asked.contains("over TCP"), missing.asked)
+        case let .failure(.otherBuild(other)):
+            XCTAssertNotEqual(other.bench, "/forge/only/bench")
+            XCTAssertEqual(other.benchd, "unknown")
         }
-        XCTAssertTrue(server.verbs.isEmpty, "benchd is not asked: \(server.verbs)")
+        _ = client.benchExecutable
+        XCTAssertLessThanOrEqual(
+            server.verbs.count, 1, "the verdict is kept for the connection, not asked per drawing")
     }
 
     /// The follower delivers the whole document, then each frame's document, in order; a frame

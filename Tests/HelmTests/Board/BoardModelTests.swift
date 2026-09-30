@@ -1,97 +1,72 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
 
-/// The board's wiring: fixture registry → decode → rollup → published map, and the
-/// poll loop's lifetime.
+/// The board's wiring: what benchd reports for each pane's session → rollup → published map, and
+/// the poll loop's lifetime.
 ///
-/// The pid a pane is matched on is the one benchd reports for the session the pane shows
-/// (M5b, `SessionForegrounds`), so a test says what benchd would answer.
-///
-/// Isolation sits on the test methods rather than the class: `setUpWithError` and
-/// `tearDownWithError` override nonisolated XCTest API, so a `@MainActor` class
-/// cannot own a mutable fixture without the compiler rightly complaining.
+/// The report is benchd's answer to `sessions` (M5c, `SessionForegrounds`), so a test says what
+/// benchd would answer. Nothing here reads a registry: helm has none to read.
 final class BoardModelTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/helm-board-workspace")
-    private var root: URL!
-
-    override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("helm-board-model-tests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    }
-
-    override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: root)
-        root = nil
-    }
-
-    private func writeRow(pid: Int, status: String) throws {
-        try #"{"pid":\#(pid),"cwd":"\#(workspace.value)","status":"\#(status)"}"#
-            .write(
-                to: root.appendingPathComponent("\(pid).json"), atomically: true, encoding: .utf8)
-    }
 
     @MainActor
-    func testTerminalWithNoSurfaceYetContributesNoMark() async throws {
-        // A workspace helm hosts, an agent row that names its cwd — and still no
-        // mark, because the surface has no process for the row's pid to match.
-        // cwd is not the attribution; the pid is.
-        try writeRow(pid: 9139, status: "idle")
-        let manager = TerminalManager()
-        manager.adoptShell(in: workspace)
-        XCTAssertEqual(manager.sessions(for: workspace).count, 1, "the fixture needs a terminal")
-
-        let board = BoardModel(manager: manager, root: root)
-        await board.refresh()
-
-        XCTAssertNil(
-            board.presence[workspace.value],
-            "an unattached surface reports no foreground pid, so there is nothing to match")
-    }
-
-    @MainActor
-    func testTheAgentInAPanesBenchdSessionMarksItsWorkspace() async throws {
-        // The shell's job is `claude`, pid 9139: benchd reports it as the pane's foreground,
-        // since helm's own pty runs `bench attach` and says nothing about the agent.
-        try writeRow(pid: 9139, status: "idle")
+    func testAPaneWhoseSessionReportsNothingContributesNoMark() async throws {
         let manager = TerminalManager()
         let session = manager.adoptShell(in: workspace)
         manager.foregrounds.set([session.id: 9139])
 
-        let board = BoardModel(manager: manager, root: root)
-        await board.refresh()
+        let board = BoardModel(manager: manager)
+        board.refresh()
+
+        XCTAssertNil(board.presence[workspace.value], "a shell benchd has no report for")
+    }
+
+    @MainActor
+    func testTheAgentInAPanesBenchdSessionMarksItsWorkspace() async throws {
+        let manager = TerminalManager()
+        let session = manager.adoptShell(in: workspace)
+        manager.foregrounds.set(
+            [session.id: 9139], reports: [session.id: .init(activity: "idle")])
+
+        let board = BoardModel(manager: manager)
+        board.refresh()
 
         XCTAssertEqual(board.presence[workspace.value], .notWorking)
     }
 
     @MainActor
-    func testWorkspaceHelmDoesNotHostIsNeverInTheMap() async throws {
-        try writeRow(pid: 9139, status: "idle")
+    func testAReportForAPaneHelmDoesNotShowIsNeverInTheMap() async throws {
+        let manager = TerminalManager()
+        manager.foregrounds.set([UUID(): 9139], reports: [UUID(): .init(activity: "idle")])
 
-        let board = BoardModel(manager: TerminalManager(), root: root)
-        await board.refresh()
+        let board = BoardModel(manager: manager)
+        board.refresh()
 
-        XCTAssertTrue(
-            board.presence.isEmpty,
-            "the registry is full of other people's agents; helm reports only its own")
+        XCTAssertTrue(board.presence.isEmpty, "helm reports only the panes it shows")
     }
 
     @MainActor
-    func testRefreshOverAMissingRegistryIsQuietNotFatal() async {
-        let board = BoardModel(
-            manager: TerminalManager(), root: root.appendingPathComponent("never-created"))
+    func testAMarkClearsTheTickItsReportIsGone() async throws {
+        let manager = TerminalManager()
+        let session = manager.adoptShell(in: workspace)
+        manager.foregrounds.set([session.id: 9139], reports: [session.id: .init(activity: "idle")])
+        let board = BoardModel(manager: manager)
+        board.refresh()
+        XCTAssertEqual(board.presence[workspace.value], .notWorking)
 
-        await board.refresh()
+        manager.foregrounds.set([session.id: 9139])
+        board.refresh()
 
-        XCTAssertTrue(board.presence.isEmpty)
+        XCTAssertNil(board.presence[workspace.value], "nothing to expire")
     }
 
     @MainActor
     func testPollStopsWhenItsTaskIsCancelled() async {
         // The loop is `refresh` then sleep; a cancelled sleep throws immediately,
         // so the guard is what has to stop it rather than spin.
-        let board = BoardModel(manager: TerminalManager(), root: root)
+        let board = BoardModel(manager: TerminalManager())
         let poll = Task { await board.poll(every: .milliseconds(1)) }
 
         try? await Task.sleep(for: .milliseconds(20))
