@@ -272,7 +272,9 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
             let configuration = WKWebViewConfiguration()
             let artifact = URL(fileURLWithPath: path.value)
             configuration.setURLSchemeHandler(
-                CanvasSchemeHandler(artifact: artifact) { try? Data(contentsOf: artifact) },
+                CanvasSchemeHandler(artifact: artifact, files: DiskCanvasFiles()) {
+                    try? Data(contentsOf: artifact)
+                },
                 forURLScheme: CanvasAddress.scheme)
             coordinator.installBridge(on: configuration.userContentController)
             configuration.userContentController.add(probe, name: PageProbe.name)

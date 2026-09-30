@@ -176,6 +176,22 @@ impl Document {
             .collect()
     }
 
+    /// The file every canvas pane on a live bench or in a drawer shows, each once: what benchd
+    /// watches so helm hears when one changed (M5c).
+    pub fn canvas_files(&self) -> Vec<StandardPath> {
+        let mut files: Vec<StandardPath> = Vec::new();
+        for pane in self.live_panes() {
+            if let Surface::Canvas {
+                source: crate::surface::CanvasSource::File { path },
+            } = &pane.surface
+                && !files.contains(path)
+            {
+                files.push(path.clone());
+            }
+        }
+        files
+    }
+
     /// Every pane id on a live bench or in a drawer.
     pub fn pane_ids(&self) -> HashSet<PaneId> {
         self.live_panes().map(|p| p.id).collect()

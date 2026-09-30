@@ -98,17 +98,14 @@ enum CanvasNotes {
     /// Throws rather than swallowing: a directory that cannot be written to has to be
     /// surfaced in the pane. A note the operator believes they wrote and that went nowhere
     /// is worse than a note they were told they could not write.
-    static func append(_ annotation: CanvasAnnotation, for canvas: URL, at timestamp: Date) throws {
-        let url = sidecarURL(for: canvas)
-        let text = entry(annotation, at: timestamp)
-        guard let data = text.data(using: .utf8) else { return }
-        if let handle = try? FileHandle(forWritingTo: url) {
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data)
-        } else {
-            try text.write(to: url, atomically: true, encoding: .utf8)
-        }
+    ///
+    /// Written by benchd (`file/append`), which also refuses any whole-file write to a sidecar,
+    /// so "append, never rewrite" holds at the verb boundary and not only here.
+    static func append(
+        _ annotation: CanvasAnnotation, for canvas: URL, at timestamp: Date,
+        through files: any CanvasFiles
+    ) throws {
+        try files.append(entry(annotation, at: timestamp), to: sidecarURL(for: canvas).path)
     }
 
     /// Every entry's heading, for the pane's `Notes (n)` count. Takes the sidecar's text
@@ -138,9 +135,19 @@ enum CanvasNotes {
             .replacingOccurrences(of: "</sub>", with: "")
     }
 
-    /// The whole accumulation, or nil when the sidecar is missing or blank.
-    static func markdown(in sidecar: URL) -> String? {
-        guard let text = try? String(contentsOf: sidecar, encoding: .utf8),
+    /// The whole accumulation, or nil when the sidecar is missing or blank — or could not be
+    /// read, which is logged: the drawer has nothing true to show either way, and the notes
+    /// themselves are safe on benchd's side.
+    static func markdown(in sidecar: URL, through files: any CanvasFiles) -> String? {
+        let data: Data
+        switch files.read(sidecar.path, within: nil) {
+        case let .bytes(bytes): data = bytes
+        case .absent, .outside: return nil
+        case let .failed(why):
+            NSLog("helm: could not read \(sidecar.lastPathComponent) — \(why)")
+            return nil
+        }
+        guard let text = String(data: data, encoding: .utf8),
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return text

@@ -73,6 +73,8 @@ struct CanvasReloadKey: Equatable {
 struct MarkdownCanvasView: View {
     /// The artifact this page is, which is what gives it an addressable origin.
     let url: URL
+    /// Where the page's siblings (an image the markdown names) are read from: benchd.
+    let files: any CanvasFiles
     let markdown: String
     let generation: Int
     /// What the operator is holding, pushed into the page on change.
@@ -96,6 +98,7 @@ struct MarkdownCanvasView: View {
     var body: some View {
         MarkdownCanvasWebView(
             url: url,
+            files: files,
             markdown: markdown,
             generation: generation,
             markTool: markTool,
@@ -121,7 +124,7 @@ enum MarkdownCanvasPage {
     /// A webview on the artifact's own `helm-canvas://` origin, with the vendored renderers
     /// injected and the annotation bridge installed. Loads nothing by itself.
     static func makeWebView(
-        for path: StandardizedPath, coordinator: CanvasFileCoordinator
+        for path: StandardizedPath, coordinator: CanvasFileCoordinator, files: any CanvasFiles
     )
         -> WKWebView
     {
@@ -139,7 +142,7 @@ enum MarkdownCanvasPage {
         // coordinator last staged — which is what keeps a theme flip and a file change
         // rendering the current document rather than the one this view was built with.
         configuration.setURLSchemeHandler(
-            CanvasSchemeHandler(artifact: URL(fileURLWithPath: path.value)) {
+            CanvasSchemeHandler(artifact: URL(fileURLWithPath: path.value), files: files) {
                 [weak coordinator] in coordinator?.stagedDocument
             },
             forURLScheme: CanvasAddress.scheme
@@ -176,6 +179,7 @@ enum MarkdownCanvasPage {
 
 private struct MarkdownCanvasWebView: NSViewRepresentable {
     let url: URL
+    let files: any CanvasFiles
     let markdown: String
     let generation: Int
     let markTool: CanvasMarkTool
@@ -190,7 +194,8 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> WKWebView {
-        let webView = MarkdownCanvasPage.makeWebView(for: path, coordinator: context.coordinator)
+        let webView = MarkdownCanvasPage.makeWebView(
+            for: path, coordinator: context.coordinator, files: files)
         load(webView, coordinator: context.coordinator)
         return webView
     }
@@ -222,6 +227,8 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
 /// change to force a reload.
 struct HTMLCanvasView: View {
     let url: URL
+    /// Where the page and every sibling it fetches are read from: benchd.
+    let files: any CanvasFiles
     let generation: Int
     let markTool: CanvasMarkTool
     let showsMark: Bool
@@ -242,6 +249,7 @@ struct HTMLCanvasView: View {
     var body: some View {
         HTMLCanvasWebView(
             url: url,
+            files: files,
             generation: generation,
             markTool: markTool,
             showsMark: showsMark,
@@ -260,7 +268,7 @@ struct HTMLCanvasView: View {
 ///
 /// **Split out for #261, and the bug is the argument.** A sibling-only edit reached the page
 /// through nothing at all: the push path declined to refresh an open pane, and the
-/// pane's own `FileWatcher` was never watching the sibling. Each half was covered on its own
+/// pane's own file watch was never watching the sibling. Each half was covered on its own
 /// and the join was not — #216's shape exactly — and the join cannot be driven through an
 /// `NSViewRepresentable`, because `NSViewRepresentableContext` has no public initializer. So
 /// what a test needs is here and the representable calls it. A test that stood up its own
@@ -272,17 +280,17 @@ enum HTMLCanvasPage {
     /// installed and `coordinator` as its navigation delegate. Loads nothing by itself —
     /// `load` is the only thing that navigates.
     static func makeWebView(
-        for path: StandardizedPath, coordinator: CanvasFileCoordinator
+        for path: StandardizedPath, coordinator: CanvasFileCoordinator, files: any CanvasFiles
     )
         -> WKWebView
     {
         let configuration = WKWebViewConfiguration()
         let artifact = URL(fileURLWithPath: path.value)
-        // Read straight from disk per request: the artifact IS the document here, and a
-        // reload is meant to show what the agent just wrote.
+        // Read through benchd per request: the artifact IS the document here, and a reload is
+        // meant to show what the agent just wrote.
         configuration.setURLSchemeHandler(
-            CanvasSchemeHandler(artifact: artifact) {
-                try? Data(contentsOf: artifact)
+            CanvasSchemeHandler(artifact: artifact, files: files) {
+                files.document(artifact)
             },
             forURLScheme: CanvasAddress.scheme
         )
@@ -405,6 +413,7 @@ enum HTMLCanvasPage {
 
 private struct HTMLCanvasWebView: NSViewRepresentable {
     let url: URL
+    let files: any CanvasFiles
     let generation: Int
     let markTool: CanvasMarkTool
     let showsMark: Bool
@@ -432,7 +441,8 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> WKWebView {
-        let webView = HTMLCanvasPage.makeWebView(for: path, coordinator: context.coordinator)
+        let webView = HTMLCanvasPage.makeWebView(
+            for: path, coordinator: context.coordinator, files: files)
         load(webView, coordinator: context.coordinator)
         return webView
     }

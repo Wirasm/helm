@@ -51,7 +51,7 @@ final class CanvasHTMLTests: XCTestCase {
 
     func testBothMermaidCallSitesAskForDeterministicIDs() {
         // Unset, mermaid seeds its id generator from Date.now(), so a node's DOM id
-        // changes on every render — and FileWatcher re-renders on every agent write,
+        // changes on every render — and a canvas re-renders on every agent write,
         // which is exactly when an annotation's anchor must still resolve (#113).
         XCTAssertTrue(
             CanvasHTML.documentPage(markdown: "x", theme: .light).contains(

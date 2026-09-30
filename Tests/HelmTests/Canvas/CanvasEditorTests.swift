@@ -207,7 +207,7 @@ final class CanvasEditorTests: XCTestCase {
         XCTAssertEqual(try contents(of: file), "autosaved")
     }
 
-    /// One write per pause, not one per keystroke — the same coalescing `FileWatcher` does from
+    /// One write per pause, not one per keystroke — the same coalescing benchd's watcher does from
     /// the other side of the same file.
     ///
     /// **The one test in this file whose first assertion must stay *under* a deadline, and the
@@ -219,7 +219,7 @@ final class CanvasEditorTests: XCTestCase {
     /// request — go nowhere near the editor.
     ///
     /// Reproduced deterministically rather than by load, which is the method #305 arrived at for
-    /// the same shape in `FileWatcherTests`: six bounded CPU burners took this machine to load
+    /// the same shape in the old `FileWatcherTests`: six bounded CPU burners took this machine to load
     /// 10.4 and it still passed 6/6, so the window was set *below* the gap instead
     /// (`debounce: .milliseconds(10)`) and it failed byte-identically to CI, first time. Same
     /// failure, so the margin is the fix — **50×** now, where the old values gave 3×.
@@ -414,11 +414,11 @@ final class CanvasEditorTests: XCTestCase {
 
     /// **The watcher's lag, which is where the guarantee would otherwise only be probable.**
     ///
-    /// `FileWatcher` debounces 120ms, so a write landing inside the 120ms before an autosave fires
-    /// reaches the model *after* helm has already saved — and the reconcile that follows compares
+    /// benchd reports a change only once the file holds still, so a write landing just before an
+    /// autosave fires reaches the model *after* helm has already saved — and the reconcile that follows compares
     /// the file against helm's own bytes and finds them equal. Silent, and the exact failure this
     /// design exists to prevent. Driven here by writing the file and saving with **no `refresh()`
-    /// in between**, which is that ordering exactly: the save has to read for itself.
+    /// in between**, which is that ordering exactly: the save has to compare for itself.
     func testASaveThatBeatsTheWatcherStillDoesNotClobber() throws {
         let file = try plan(contents: "# Plan\n")
         let model = canvas(on: file, debounce: .seconds(30))
@@ -439,8 +439,8 @@ final class CanvasEditorTests: XCTestCase {
     /// failure indistinguishable from a match, and falls through to the write — over bytes helm
     /// never managed to look at.
     ///
-    /// **Reachable, and this codebase names the case itself.** `FileWatcher` debounces 120ms
-    /// precisely because an agent may stream a long document non-atomically; a read landing inside
+    /// **Reachable, and this codebase names the case itself.** benchd waits for a file to hold
+    /// still precisely because an agent may stream a long document non-atomically; a read landing inside
     /// that window hits a torn multi-byte sequence and throws, while the write that follows
     /// succeeds — `write(to:atomically:)` needs the *directory*, not a decodable file to replace.
     /// So the read failing says nothing about the write failing, which is what the comment

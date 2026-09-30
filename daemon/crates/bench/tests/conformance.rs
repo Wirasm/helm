@@ -7757,3 +7757,240 @@ fn a_pane_whose_link_drops_reconnects_and_shows_the_session_as_it_is() {
         shown()
     );
 }
+
+// ---------------------------------------------------------------------------
+// M5c: a canvas's files, through benchd, for a helm that shares no disk with it
+// ---------------------------------------------------------------------------
+
+/// One verb over TCP, the way helm sends a `file/*` verb to a benchd on another machine.
+fn tcp_verb(port: u16, verb: &str, args: serde_json::Value) -> serde_json::Value {
+    let stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect over TCP");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let request = serde_json::json!({ "id": "t-files", "verb": verb, "args": args });
+    (&stream)
+        .write_all(format!("{request}\n").as_bytes())
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(&stream).read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON ({e}): {line}"))
+}
+
+fn ok(answer: &serde_json::Value) -> &serde_json::Value {
+    assert_eq!(answer["status"], "ok", "{answer}");
+    &answer["data"]
+}
+
+fn decoded(answer: &serde_json::Value) -> Vec<u8> {
+    let text = ok(answer)["base64"].as_str().expect("bytes");
+    // Only the test decodes base64, so a small decoder beats a dependency.
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        _ => 63,
+    };
+    let clean: Vec<u8> = text.bytes().filter(|&c| c != b'=').collect();
+    let mut out = Vec::new();
+    for chunk in clean.chunks(4) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &c)| n | (u32::from(value(c)) << (18 - 6 * i)));
+        out.extend(&n.to_be_bytes()[1..chunk.len()]);
+    }
+    out
+}
+
+/// A benchd on TCP and a canvas folder holding `plan.md` (`# Plan\n`), canonical.
+fn canvas_over_tcp(name: &str) -> (TestHome, u16, PathBuf, PathBuf, DaemonGuard) {
+    let home = TestHome::claim(name);
+    let port = free_port();
+    let daemon = tcp_daemon(&home.dir, port);
+    let dir = home.dir.join("canvas");
+    fs::create_dir_all(dir.join("img")).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let plan = dir.join("plan.md");
+    fs::write(&plan, "# Plan\n").unwrap();
+    (home, port, dir, plan, daemon)
+}
+
+#[test]
+fn file_read_over_tcp_answers_bytes_absent_and_outside_the_folder() {
+    let (home, port, dir, plan, _daemon) = canvas_over_tcp("m5c-read");
+    fs::write(dir.join("img/x.png"), [0x89, b'P', b'N', b'G', 0, 255]).unwrap();
+    fs::write(home.dir.join("secret.txt"), "secret").unwrap();
+    std::os::unix::fs::symlink(home.dir.join("secret.txt"), dir.join("leak.txt")).unwrap();
+    let p = |path: &Path| path.display().to_string();
+    let within = p(&dir);
+
+    // Read: bytes, nothing there, a directory refused.
+    let read = |args| tcp_verb(port, "file/read", args);
+    assert_eq!(
+        decoded(&read(serde_json::json!({ "path": p(&plan) }))),
+        b"# Plan\n"
+    );
+    let gone = read(serde_json::json!({ "path": p(&dir.join("gone.md")) }));
+    assert_eq!(ok(&gone)["kind"], "absent");
+    assert_eq!(
+        read(serde_json::json!({ "path": within }))["status"],
+        "refused"
+    );
+
+    // A page's sibling: inside the folder, nested, binary; `..`, a symlink out, and the folder
+    // itself are outside. (`CanvasFileBoundaryTests`, moved to where the files are.)
+    let sibling = |rel: &str| {
+        read(serde_json::json!({ "path": format!("{within}/{rel}"), "within": within }))
+    };
+    assert_eq!(
+        decoded(&sibling("img/x.png")),
+        [0x89, b'P', b'N', b'G', 0, 255]
+    );
+    assert_eq!(ok(&sibling("missing.js"))["kind"], "absent");
+    assert_eq!(ok(&sibling("../secret.txt"))["kind"], "outside");
+    assert_eq!(ok(&sibling("leak.txt"))["kind"], "outside");
+    assert_eq!(ok(&sibling(""))["kind"], "outside");
+    // A folder named under a symlink (`/tmp` → `/private/tmp`) still holds its own siblings.
+    if let Ok(tmp_spelled) = Path::new("/tmp").canonicalize()
+        && let Ok(rest) = dir.strip_prefix(&tmp_spelled)
+    {
+        let aliased = format!("/tmp/{}", rest.display());
+        let answer =
+            read(serde_json::json!({ "path": format!("{aliased}/plan.md"), "within": aliased }));
+        assert_eq!(decoded(&answer), b"# Plan\n");
+    }
+}
+
+#[test]
+fn file_write_and_append_over_tcp_keep_the_canvas_rules() {
+    let (_home, port, dir, plan, _daemon) = canvas_over_tcp("m5c-write");
+    let p = |path: &Path| path.display().to_string();
+
+    // Write against what the writer was shown.
+    let write = |text: &str, expect| {
+        tcp_verb(
+            port,
+            "file/write",
+            serde_json::json!({ "path": p(&plan), "text": text, "expect": expect }),
+        )
+    };
+    let unchanged = |text: &str| serde_json::json!({ "kind": "unchanged", "text": text });
+    assert_eq!(
+        ok(&write("# Plan\n\nMine.\n", unchanged("# Plan\n")))["kind"],
+        "written"
+    );
+    assert_eq!(fs::read_to_string(&plan).unwrap(), "# Plan\n\nMine.\n");
+    // Somebody else rewrote it: nothing is written, and the answer carries their bytes.
+    fs::write(&plan, "# Theirs\n").unwrap();
+    let refused = write("# Plan\n\nMore.\n", unchanged("# Plan\n\nMine.\n"));
+    assert_eq!(ok(&refused)["kind"], "changed");
+    assert_eq!(decoded(&refused), b"# Theirs\n");
+    assert_eq!(
+        fs::read_to_string(&plan).unwrap(),
+        "# Theirs\n",
+        "untouched"
+    );
+    // Gone is not changed: the draft recreates the file.
+    fs::remove_file(&plan).unwrap();
+    assert_eq!(
+        ok(&write("# Back\n", unchanged("# Theirs\n")))["kind"],
+        "written"
+    );
+    assert_eq!(fs::read_to_string(&plan).unwrap(), "# Back\n");
+    assert_eq!(
+        ok(&write("{}", serde_json::json!({ "kind": "any" })))["kind"],
+        "written"
+    );
+    assert!(
+        fs::read_dir(&dir).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")),
+        "no temporary file left behind"
+    );
+
+    // The sidecar is only ever appended to: a write is refused and touches nothing.
+    let notes = dir.join("plan.notes.md");
+    for text in ["## one\n", "## two\n"] {
+        let answer = tcp_verb(
+            port,
+            "file/append",
+            serde_json::json!({ "path": p(&notes), "text": text }),
+        );
+        ok(&answer);
+    }
+    assert_eq!(fs::read_to_string(&notes).unwrap(), "## one\n## two\n");
+    let clobber = tcp_verb(
+        port,
+        "file/write",
+        serde_json::json!({ "path": p(&notes), "text": "", "expect": { "kind": "any" } }),
+    );
+    assert_eq!(clobber["status"], "refused", "{clobber}");
+    assert_eq!(fs::read_to_string(&notes).unwrap(), "## one\n## two\n");
+
+    // A document larger than an ordinary request is accepted by the verbs that carry one;
+    // every other verb keeps the 64 KB cap.
+    let big = "x".repeat(1_000_000);
+    assert_eq!(
+        ok(&write(&big, serde_json::json!({ "kind": "any" })))["kind"],
+        "written"
+    );
+    assert_eq!(fs::read(&plan).unwrap().len(), 1_000_000);
+    let padded = tcp_verb(
+        port,
+        "status",
+        serde_json::json!({ "pad": "x".repeat(100_000) }),
+    );
+    assert_eq!(padded["status"], "refused", "{padded}");
+}
+
+#[test]
+fn file_changed_names_the_canvas_and_its_sidecar_once_per_settled_save() {
+    let home = TestHome::claim("m5c-watch");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let _ = working_bench(&daemon.socket);
+    let plan = artifact(&home.dir, "watched.md");
+    let notes = plan.replace("watched.md", "watched.notes.md");
+    let neighbour = plan.replace("watched.md", "neighbour.md");
+    let opened = bench(&home.dir, &["open", &plan]);
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+    // The watcher's first look at the new canvas is only a record.
+    std::thread::sleep(Duration::from_millis(400));
+
+    let changes = || -> Vec<String> {
+        event_kinds(&home.dir)
+            .into_iter()
+            .filter(|(kind, _)| kind == "file/changed")
+            .map(|(_, data)| data["path"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // An atomic save of the canvas, in two pieces written quickly.
+    let staged = format!("{plan}.tmp");
+    fs::write(&staged, "# plan\n\nrewritten\n").unwrap();
+    fs::rename(&staged, &plan).unwrap();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&plan)
+        .unwrap()
+        .write_all(b"more\n")
+        .unwrap();
+    wait_until("the canvas's change", Duration::from_secs(5), || {
+        changes().contains(&plan)
+    });
+    // A sidecar that did not exist when the canvas opened.
+    fs::write(&notes, "## a note\n").unwrap();
+    wait_until("the sidecar's change", Duration::from_secs(5), || {
+        changes().contains(&notes)
+    });
+    // Something else in the folder is not watched.
+    fs::write(&neighbour, "unrelated\n").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        changes(),
+        vec![plan.clone(), notes.clone()],
+        "one report each, and nothing else"
+    );
+}

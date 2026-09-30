@@ -1,13 +1,15 @@
-// swiftlint:disable file_length - legacy (#418): 611 lines, limit 600
 import AppKit
 import Inject
 import SwiftUI
 
 // MARK: - Model
 
-/// State for the canvas: what it is showing, and the watcher that
-/// reloads a file on external change (plans get rewritten by agents while you
-/// read them).
+/// State for the canvas: what it is showing, reloaded when benchd says the file changed (plans
+/// get rewritten by agents while you read them).
+///
+/// **It touches no file itself** (M5c, #459). Every read, write and append goes through
+/// `files` — benchd's `file/*` verbs — and a change arrives as benchd's `file/changed`
+/// (`fileChanged`), so a canvas works the same whether benchd shares this Mac's disk or not.
 ///
 /// **Read by default, and writable when the operator asks** (#289). Every markdown canvas can be
 /// put into a writing face — an agent's plan as much as a note helm started — and `EditableFile`
@@ -168,8 +170,8 @@ final class CanvasModel: ObservableObject {
     @Published private(set) var writeFailure: String?
 
     /// The save waiting to happen. Cancelled and replaced on every keystroke, so a run of typing
-    /// costs one write rather than one per character — `FileWatcher`'s own debounce, from the
-    /// other side of the same file.
+    /// costs one write rather than one per character — the same quiet period benchd waits for
+    /// before it reports a change, from the other side of the same file.
     private var saveTask: Task<Void, Never>?
 
     /// How long the file must be quiet before helm writes it.
@@ -195,8 +197,7 @@ final class CanvasModel: ObservableObject {
     /// guard itself; it is named here because this list is the sentence a reader trusts.
     ///
     /// Long enough that a run of typing is one write rather than one per character, short enough
-    /// that a pause between sentences has already saved. Injectable for `FileWatcher`'s reason
-    /// one screen down — the tests set their own, so none of them depends on this number.
+    /// that a pause between sentences has already saved. Injectable so the tests set their own, so none of them depends on this number.
     private let saveDebounce: Duration
 
     /// Start writing. The header's Write button, and what a freshly created note opens into.
@@ -212,16 +213,13 @@ final class CanvasModel: ObservableObject {
     func write() {
         guard let editable, draft == nil else { return }
         let text: String
-        // The same three-way question `saveDraft` asks, asked with the same type. It was a
-        // hand-rolled `emptyIfAbsent` here and a bare `try?` there, and that is exactly how the
-        // two sites came to disagree about what an unreadable file means.
-        switch editable.diskContents() {
+        switch editable.contents(through: files) {
         case let .bytes(existing): text = existing
         case .absent: text = ""
-        case .unreadable:
+        case let .unreadable(why):
             writeFailure =
                 "Could not read \(editable.url.lastPathComponent) — helm will not write over a "
-                + "file it cannot read."
+                + "file it cannot read (\(why))."
             return
         }
         writeFailure = nil
@@ -285,23 +283,20 @@ final class CanvasModel: ObservableObject {
     /// and a confirmation is what neither path has: an agent's `bench close` reaches one of them
     /// with nobody at the pane, and the build-update badge quits helm on the other.
     ///
-    /// **The other half is the read directly below it, and without it the guarantee is only
-    /// probable.** `reconcile` learns about a second writer through `FileWatcher`, which debounces
-    /// 120ms — so a write landing inside the 120ms before an autosave fires would reach the model
-    /// *after* helm had already overwritten it, and the reconcile that followed would compare the
-    /// file against helm's own bytes and find them equal. Silent, and exactly the failure this
-    /// whole design is arranged around. Reading immediately before writing closes it: what helm
-    /// compares is what is on disk *now*, so the watcher's lag stops mattering. It costs one read
-    /// per save, which is once per typing pause on a file small enough to render as a document.
+    /// **The other half is the compare inside the write, and without it the guarantee is only
+    /// probable.** `reconcile` learns about a second writer through benchd's `file/changed`, which
+    /// waits for the file to hold still — so a write landing just before an autosave fires would
+    /// reach the model *after* helm had already overwritten it, and the reconcile that followed
+    /// would compare the file against helm's own bytes and find them equal. Silent, and exactly the
+    /// failure this whole design is arranged around. So the write says what it expects to replace
+    /// (`.unchanged(draft.saved)`) and benchd compares and writes in one step on its own side: what
+    /// is compared is what is on disk *now*, the watcher's lag stops mattering, and across a network
+    /// the window between the two stays microseconds rather than a round trip.
     ///
-    /// **That read has three outcomes and all three are answered, which the first version of it
-    /// did not do.** It was `if let disk = try? …, disk != draft.saved`, and a failed read fell
-    /// through to the write — helm replacing bytes it never managed to look at. `EditableFile
-    /// .DiskContents` is the type that stopped the two cases sharing a branch; its header has the
-    /// measurement and the two reachable ways in.
-    ///
-    /// What remains is the microseconds between that read and the write, which needs file locking
-    /// rather than a check — recorded rather than claimed away.
+    /// **Three answers, and all three are answered.** The first version of the read this replaces
+    /// was `if let disk = try? …, disk != draft.saved`, and a failed read fell through to the write
+    /// — helm replacing bytes it never managed to look at. Now `changed` raises the conflict, and a
+    /// write benchd refused, or could not be asked for, writes nothing and says why.
     ///
     /// **A failure keeps the text and says so.** `saved` is not advanced, so `isDirty` stays true,
     /// the next keystroke schedules another attempt, and the editor still holds every character.
@@ -312,34 +307,31 @@ final class CanvasModel: ObservableObject {
         saveTask?.cancel()
         saveTask = nil
         guard let editable, var draft, draft.isDirty, draft.conflict == nil else { return }
-        switch editable.diskContents() {
-        case let .bytes(disk) where disk != draft.saved:
-            draft.conflict = CanvasConflict(theirs: disk)
-            self.draft = draft
-            return
-        case .unreadable:
-            // **Not knowing is not permission.** There is something there and helm could not read
-            // it, so it cannot say whether writing would replace the operator's own last save or
-            // an agent's document mid-stream. It is not a `CanvasConflict` either — that offers
-            // *"take theirs"*, and there is no decodable `theirs` to offer. The draft stays dirty,
-            // so the next keystroke and every later flush try again, which is what makes the
-            // ordinary case of this — a read that landed inside a streaming write — heal itself.
-            writeFailure =
-                "Could not save \(editable.url.lastPathComponent) — helm could not read what is "
-                + "there now, and will not write over bytes it has not seen."
-            return
-        case .bytes, .absent:
-            break
-        }
-        do {
-            try draft.text.write(to: editable.url, atomically: true, encoding: .utf8)
+        let name = editable.url.lastPathComponent
+        switch files.write(draft.text, to: editable.path.value, expect: .unchanged(draft.saved)) {
+        case .written:
             draft.saved = draft.text
             draft.savedAt = Date()
             self.draft = draft
             writeFailure = nil
-        } catch {
-            writeFailure =
-                "Could not save \(editable.url.lastPathComponent): \(error.localizedDescription)"
+        case let .changed(now):
+            guard let theirs = String(data: now, encoding: .utf8) else {
+                // **Not knowing is not permission.** Somebody else's bytes are there and they are
+                // not text helm can show, so it cannot offer *"take theirs"* either. The draft
+                // stays dirty, so the next keystroke and every later flush try again — which is
+                // what makes the ordinary case of this, a compare that landed inside a streaming
+                // write, heal itself.
+                writeFailure =
+                    "Could not save \(name) — helm could not read what is there now, and will "
+                    + "not write over bytes it has not seen."
+                return
+            }
+            draft.conflict = CanvasConflict(theirs: theirs)
+            self.draft = draft
+        case let .failed(why):
+            // Refused, or benchd could not be asked. Nothing was written, and the draft keeps
+            // every character for the next try.
+            writeFailure = "Could not save \(name): \(why)"
         }
     }
 
@@ -397,10 +389,10 @@ final class CanvasModel: ObservableObject {
     ///
     /// **It adopts their bytes as helm's belief about the file, and then saves normally** — which
     /// is what lets the ordinary path run rather than needing a flag to bypass its own guard.
-    /// `saved` becoming `theirs` is not a fiction: disk really does hold `theirs`, so `saveDraft`
-    /// re-reads, finds exactly what it now expects, and writes.
+    /// `saved` becoming `theirs` is not a fiction: disk really does hold `theirs`, so `saveDraft`'s
+    /// compare finds exactly what it now expects, and writes.
     ///
-    /// **And a third write landing between the strip and the click is caught by that same read**,
+    /// **And a third write landing between the strip and the click is caught by that same compare**,
     /// which is the behaviour worth having: he is told again, about the newer bytes, instead of
     /// silently replacing something he was never shown.
     func keepMine() {
@@ -509,7 +501,7 @@ final class CanvasModel: ObservableObject {
         guard let canvas = fileURL else { return }
         guard latchedState != report.body else { return }
         do {
-            try CanvasStateLatch.write(report.body, for: canvas, at: Date())
+            try CanvasStateLatch.write(report.body, for: canvas, at: Date(), through: files)
             latchedState = report.body
         } catch {
             // **Logged, not swallowed, and deliberately not shown.** The operator did not do
@@ -526,11 +518,8 @@ final class CanvasModel: ObservableObject {
     /// Where this canvas's notes accumulate — beside it, never inside it.
     var sidecarURL: URL? { fileURL.map(CanvasNotes.sidecarURL(for:)) }
 
-    /// What this canvas watches on disk: the artifact, and the notes beside it (#251). One value
-    /// so the two lifetimes cannot drift — every path that stops watching the document stops
-    /// watching its sidecar too, and a sidecar watch that outlived its document would put one
-    /// artifact's notes on the next.
-    private var watch: (artifact: FileWatcher, notes: SidecarWatcher)?
+    /// Where this canvas's file, sidecar and latch are read and written: benchd.
+    let files: any CanvasFiles
 
     /// Files beyond this are almost certainly not artifacts; refuse instead of
     /// beachballing the pane on a stray binary or log.
@@ -560,10 +549,13 @@ final class CanvasModel: ObservableObject {
     /// than moved: editability used to be a question about where the project stores are, and is
     /// now a question about the file in front of the canvas (`EditableFile`).
     /// - Parameter saveDebounce: how long an edited file must be quiet before helm writes it.
+    /// - Parameter files: benchd's file verbs (`BenchCanvasFiles`); a test's own disk otherwise.
     init(
         source: CanvasSource? = nil,
+        files: any CanvasFiles,
         saveDebounce: Duration = .milliseconds(600)
     ) {
+        self.files = files
         self.saveDebounce = saveDebounce
         if let source { show(source) }
     }
@@ -602,7 +594,7 @@ final class CanvasModel: ObservableObject {
         // belongs to the one it is leaving — a save owed at this moment has nowhere to go once
         // `showing` has moved.
         saveDraft()
-        showing = Document(url: url, content: Self.load(url))
+        showing = Document(url: url, content: load(url))
         // The draft is about the file that was here. Carried onto another one it would be the
         // wrong text over the right path, which is the one way an editor destroys work.
         draft = nil
@@ -624,21 +616,26 @@ final class CanvasModel: ObservableObject {
         // written at all.
         latchedState = nil
         refreshNotes()
-        // Reload on every external change to **this file**. Watcher lifetime == document
-        // lifetime; opening another file replaces it.
-        //
-        // **One url, and that is the whole of it.** A sibling the page fetches — `app.js`,
-        // `data.json` — is not this file, so rewriting one fires nothing here and the pane
-        // keeps rendering what it already had. That is not an oversight to fix by widening
-        // the watch: see `refresh()` below, and `WorkbenchModel.push` (#261), for what a
-        // sibling edit does reach the pane through.
-        //
-        // **The sidecar is watched beside it, and never reloads the artifact** (#251): a note is
-        // not an edit to the page, so its change reads the notes again and nothing else.
-        watch = (
-            artifact: FileWatcher(url: url) { [weak self] in self?.refresh() },
-            notes: SidecarWatcher(canvas: url) { [weak self] in self?.refreshNotes() }
-        )
+    }
+
+    /// benchd says a file settled into a new state (`file/changed`). It watches every canvas
+    /// file in its document and each one's sidecar, so this pane hears about both.
+    ///
+    /// **The artifact reloads; the sidecar only re-reads the notes** (#251): a note is not an
+    /// edit to the page. **A sibling the page fetches** — `app.js`, `data.json` — is neither,
+    /// so rewriting one reaches nothing here: see `refresh()` and `WorkbenchModel.remember`
+    /// (#261) for what a sibling edit does reach the pane through.
+    ///
+    /// Compared as standardized paths, so benchd's spelling of the path and helm's cannot
+    /// disagree about which file it is.
+    func fileChanged(_ path: String) {
+        guard let url = fileURL else { return }
+        let changed = StandardizedPath(path)
+        if changed == StandardizedPath(url) {
+            refresh()
+        } else if changed == StandardizedPath(CanvasNotes.sidecarURL(for: url)) {
+            refreshNotes()
+        }
     }
 
     /// This pane's canvas is going away. Called by `WorkbenchModel` when the pane closes
@@ -657,7 +654,6 @@ final class CanvasModel: ObservableObject {
         // modal on a path an agent's `bench close` also reaches, where there is nobody at the pane
         // to answer.
         saveDraft()
-        watch = nil
         showing = nil
     }
 
@@ -780,7 +776,7 @@ final class CanvasModel: ObservableObject {
             return
         }
         do {
-            try CanvasNotes.append(annotation, for: canvas, at: Date())
+            try CanvasNotes.append(annotation, for: canvas, at: Date(), through: files)
             // **Written first, and that is the half of the old ordering that was load-bearing.**
             // The sidecar is the memory; a copy that succeeded while the write failed would be a
             // note the operator believes they made and cannot find. Mail is delivery, not storage
@@ -810,11 +806,11 @@ final class CanvasModel: ObservableObject {
         }
     }
 
-    /// Read the sidecar again. Reached from `open`, from a comment helm just wrote, and from the
-    /// sidecar watch — which also fires for every other change in the artifact's directory, so an
-    /// unchanged read publishes nothing rather than redrawing the pane for a neighbour's write.
+    /// Read the sidecar again. Reached from `open`, from a comment helm just wrote, and from
+    /// benchd's `file/changed` for it. An unchanged read publishes nothing rather than redrawing
+    /// the pane.
     func refreshNotes() {
-        let text = sidecarURL.flatMap(CanvasNotes.markdown(in:))
+        let text = sidecarURL.flatMap { CanvasNotes.markdown(in: $0, through: files) }
         if text != notesText { notesText = text }
     }
 
@@ -833,8 +829,8 @@ final class CanvasModel: ObservableObject {
     /// Render this file again — and, because a canvas is a page on a real origin, everything
     /// beside it that the page goes on to fetch.
     ///
-    /// **Two callers, and they know two different things.** The `FileWatcher` above knows the
-    /// artifact changed. `WorkbenchModel.push` knows an agent pushed this artifact again,
+    /// **Two callers, and they know two different things.** `fileChanged` knows the artifact
+    /// changed. `WorkbenchModel.push` knows an agent pushed this artifact again,
     /// which is the only signal helm gets that a *sibling* changed — nothing watches those
     /// (#261). Neither can tell the other's case apart from a no-op, so both simply ask for a
     /// render and the cost of an unnecessary one is argued where the second call site is.
@@ -852,178 +848,31 @@ final class CanvasModel: ObservableObject {
     /// disk.
     func refresh() {
         guard let previous = showing else { return }
-        let content = Self.load(previous.url)
+        let content = load(previous.url)
         reconcile(content)
         showing = Document(
             url: previous.url, content: content, generation: previous.generation + 1)
     }
 
-    private static func load(_ url: URL) -> Content {
+    private func load(_ url: URL) -> Content {
         // .html renders in a full-pane WKWebView from its own URL — no text
-        // pipeline (and no UTF-8/size gate; WebKit streams the file itself).
+        // pipeline (and no UTF-8/size gate; the scheme handler serves the bytes itself).
         if RenderableFile.isHTML(url) {
             return .web
         }
-        guard let data = try? Data(contentsOf: url) else {
-            return .notice("Could not read \(url.path)")
+        let data: Data
+        switch files.read(url.path, within: nil) {
+        case let .bytes(bytes): data = bytes
+        case .absent, .outside: return .notice("Could not read \(url.path): there is no file there")
+        case let .failed(why): return .notice("Could not read \(url.path): \(why)")
         }
-        guard data.count <= maxBytes else {
+        guard data.count <= Self.maxBytes else {
             return .notice("File too large to display (\(data.count / 1_000_000) MB)")
         }
         guard let text = String(data: data, encoding: .utf8) else {
             return .notice("Not a UTF-8 text file")
         }
         return RenderableFile.isMarkdown(url) ? .markdown(text) : .plainText(text)
-    }
-}
-
-// MARK: - File watcher
-
-/// DispatchSource-based watcher for a single path — a file, or a directory whose entries
-/// change (`SidecarWatcher` uses both). Editors and agents replace
-/// files atomically (write-to-temp + rename), which fires `.rename`/`.delete`
-/// on the OLD inode and silently orphans the file descriptor — so on those
-/// events the watcher re-opens the path (briefly retrying while the writer
-/// finishes) and keeps watching the NEW inode.
-///
-/// **Every notification is debounced, and a partial write is the reason** (#109). `.write` and
-/// `.extend` fire per *write*, not per *save*: a writer that does not replace the file
-/// atomically — `>` in a shell, a `FileHandle`, an agent streaming a long document — produces
-/// one event per chunk, and each one used to re-read the file and re-render it. So the operator
-/// watched a truncated page render, then a longer truncated page, then the real one. Coalescing
-/// them into one call, a beat after the writing stops, is the whole fix: nothing renders while
-/// the bytes are still arriving, and one save is one render.
-///
-/// **The atomic path is debounced too, even though it has no partial state to hide.** A rename
-/// arrives whole, so it could notify immediately — but then a save that is *sometimes* atomic
-/// (many editors write in place for small files and rename for large ones) would have two
-/// different latencies, and "did helm see my write?" would have two different answers. One
-/// funnel, one answer.
-@MainActor
-final class FileWatcher {
-    private let url: URL
-    private let onChange: @MainActor () -> Void
-    private let debounce: Duration
-    private let events: DispatchSource.FileSystemEvent
-    private var source: DispatchSourceFileSystemObject?
-    private var pending: Task<Void, Never>?
-
-    /// - Parameter debounce: how long the file must be quiet before a change is reported.
-    ///   Long enough to swallow the chunks of one write, short enough that a save still feels
-    ///   immediate — a rendered page arriving 120ms after the agent's last byte is not
-    ///   something an operator can perceive as a delay, and the tests set their own so they
-    ///   never depend on this number.
-    /// - Parameter noticesTruncation: also report a file cut short in place — `: > file`,
-    ///   `ftruncate` — which the kernel reports as an attribute change and never as a write
-    ///   (measured). Off for the artifact, where `.attrib` would also turn a `touch`, a `chmod`
-    ///   or an xattr into a page reload; on for the sidecar, whose emptying must take the Notes
-    ///   button away and whose re-read reloads nothing (#251).
-    init(
-        url: URL, debounce: Duration = .milliseconds(120), noticesTruncation: Bool = false,
-        onChange: @escaping @MainActor () -> Void
-    ) {
-        self.url = url
-        self.debounce = debounce
-        var events: DispatchSource.FileSystemEvent = [.write, .extend, .rename, .delete]
-        if noticesTruncation { events.insert(.attrib) }
-        self.events = events
-        self.onChange = onChange
-        watch()
-    }
-
-    /// Report a change once the file has been quiet for `debounce`. Each new event cancels the
-    /// one waiting, so a run of writes reports **once**, after the last of them.
-    private func schedule() {
-        pending?.cancel()
-        pending = Task { [weak self, debounce] in
-            try? await Task.sleep(for: debounce)
-            guard !Task.isCancelled else { return }
-            self?.onChange()
-        }
-    }
-
-    private func watch() {
-        let fd = open(url.path, O_EVTONLY)
-        guard fd >= 0 else { return }
-
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd,
-            eventMask: events,
-            queue: .main
-        )
-        source.setEventHandler { [weak self] in
-            guard let self else { return }
-            let event = source.data
-            if event.contains(.rename) || event.contains(.delete) {
-                // Old inode gone (atomic save). Rearm on the path, then render.
-                self.source?.cancel()
-                self.source = nil
-                self.rearm(attemptsLeft: 5)
-            } else {
-                self.schedule()
-            }
-        }
-        source.setCancelHandler { close(fd) }
-        source.resume()
-        self.source = source
-    }
-
-    /// The replacement file may not exist for a moment mid-rename; retry a few
-    /// times before giving up (the pane then just keeps its last render).
-    private func rearm(attemptsLeft: Int) {
-        if FileManager.default.fileExists(atPath: url.path) {
-            watch()
-            schedule()
-            return
-        }
-        guard attemptsLeft > 0 else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.rearm(attemptsLeft: attemptsLeft - 1)
-        }
-    }
-
-    deinit {
-        source?.cancel()
-        // The pane is gone; a render scheduled a moment ago has nothing left to render into.
-        pending?.cancel()
-    }
-}
-
-// MARK: - Sidecar watcher
-
-/// Watches a canvas's `.notes.md` sidecar, which — unlike the canvas — usually does not exist
-/// yet when the canvas opens (#251). `FileWatcher` opens a descriptor on a path, so on its own
-/// it cannot see a file appear; this pairs it with a second `FileWatcher` on the **directory**,
-/// whose entries change when the sidecar is created, renamed into place or removed.
-///
-/// **Both halves are needed.** An append to a sidecar that already exists — `>>`, or
-/// `CanvasNotes.append` — changes no directory entry, so only the file watch sees it; a sidecar
-/// that did not exist has no file to watch, so only the directory watch sees it arrive. Each
-/// directory change re-arms the file watch, which is how a sidecar created after the canvas
-/// opened is watched for appends from then on.
-///
-/// The directory watch also fires for every other write beside the artifact — the artifact's
-/// own atomic save, a state latch — and each one costs one read of the sidecar. `refreshNotes`
-/// publishes only a change, so that read is all it costs.
-@MainActor
-final class SidecarWatcher {
-    private let sidecar: URL
-    private let onChange: @MainActor () -> Void
-    private var directory: FileWatcher?
-    private var file: FileWatcher?
-
-    init(canvas: URL, onChange: @escaping @MainActor () -> Void) {
-        sidecar = CanvasNotes.sidecarURL(for: canvas)
-        self.onChange = onChange
-        file = FileWatcher(url: sidecar, noticesTruncation: true, onChange: onChange)
-        directory = FileWatcher(url: canvas.deletingLastPathComponent()) { [weak self] in
-            self?.directoryChanged()
-        }
-    }
-
-    private func directoryChanged() {
-        file = FileWatcher(url: sidecar, noticesTruncation: true, onChange: onChange)
-        onChange()
     }
 }
 
@@ -1256,7 +1105,8 @@ struct CanvasView: View {
         switch document.content {
         case let .markdown(markdown):
             MarkdownCanvasView(
-                url: document.url, markdown: markdown, generation: document.generation,
+                url: document.url, files: model.files, markdown: markdown,
+                generation: document.generation,
                 markTool: model.markTool, showsMark: model.showsMark,
                 onSelection: model.pageDidReport)
         case .web:
@@ -1267,7 +1117,7 @@ struct CanvasView: View {
             // — so there is no author's code on it to register a handler, and it reloads
             // exactly as it always has.
             HTMLCanvasView(
-                url: document.url, generation: document.generation,
+                url: document.url, files: model.files, generation: document.generation,
                 markTool: model.markTool, showsMark: model.showsMark,
                 onSelection: model.pageDidReport,
                 reloadDemand: model.reloadDemand, onUpdate: model.pageAnsweredUpdate,

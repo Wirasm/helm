@@ -88,9 +88,11 @@ struct RootView: View {
             // benchd's follower hears how a `just` run ended, and what benchd asks helm to do
             // (`bench get screenshot`, M3): helm draws its own window and answers.
             let asks = HelmAsks.answering(through: workbench.client, capturer: AppWindowCapturer())
-            workbench.client.onEvent = { [justRuns] in
+            workbench.client.onEvent = { [justRuns, workbench] in
                 justRuns.receive($0)
                 asks.receive($0)
+                // A canvas file changed on benchd's side (M5c): helm watches no file itself.
+                workbench.fileChanged($0)
             }
             let actions = LocalActions(
                 workbench: workbench, workspaces: model, terminals: terminalManager,

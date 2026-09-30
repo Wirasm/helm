@@ -340,7 +340,8 @@ final class CanvasLiveUpdateTests: XCTestCase {
             path = StandardizedPath(artifact.path)
             coordinator = CanvasFileCoordinator(
                 host: CanvasAddress.host(for: path), onAnnotation: { _ in })
-            webView = HTMLCanvasPage.makeWebView(for: path, coordinator: coordinator)
+            webView = HTMLCanvasPage.makeWebView(
+                for: path, coordinator: coordinator, files: DiskCanvasFiles())
             super.init()
             coordinator.onUpdate = { [weak self] in self?.answers.append($0) }
             coordinator.reloadDemand = reloadDemand

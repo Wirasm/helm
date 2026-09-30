@@ -460,7 +460,7 @@ final class CanvasSiblingFreshnessLiveTests: XCTestCase {
             let configuration = WKWebViewConfiguration()
             configuration.setURLSchemeHandler(
                 CanvasSchemeHandler(
-                    artifact: artifact,
+                    artifact: artifact, files: DiskCanvasFiles(),
                     document: { try? Data(contentsOf: artifact) }),
                 forURLScheme: CanvasAddress.scheme)
             webView = WKWebView(
