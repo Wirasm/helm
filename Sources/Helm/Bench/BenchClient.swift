@@ -136,12 +136,17 @@ final class BenchClient: ObservableObject {
     ///
     /// A benchd reached over TCP names a path on its own machine, so helm runs its own `bench`
     /// instead (M5c), which reaches benchd through the `BENCH_URL` the pane inherits from helm.
-    var benchExecutable: Result<String, BenchExecutable.NotFound> {
+    /// That one is another build, so its version is compared with benchd's first (`OtherBuild`).
+    var benchExecutable: Result<String, BenchExecutable.Unusable> {
         if let known = benchBinaryCache { return .success(known) }
         if case .tcp = endpoint {
-            let found = BenchExecutable.local()
-            if case let .success(bench) = found { benchBinaryCache = bench }
-            return found
+            switch BenchExecutable.local() {
+            case let .failure(missing): return .failure(.notFound(missing))
+            case let .success(bench):
+                if let other = otherBuild(than: bench) { return .failure(.otherBuild(other)) }
+                benchBinaryCache = bench
+                return .success(bench)
+            }
         }
         var why: String?
         let reply: BenchResponse<BenchStatusReply>?
@@ -155,7 +160,19 @@ final class BenchClient: ObservableObject {
         }
         let found = BenchExecutable.resolve(named: reply?.data?.bench, why: why)
         if case let .success(bench) = found { benchBinaryCache = bench }
-        return found
+        return found.mapError(BenchExecutable.Unusable.notFound)
+    }
+
+    /// `bench` is not the build benchd is, by `bench --version` against `status.version`. nil
+    /// when they agree, or when benchd cannot be asked: the pane then attaches, and says for
+    /// itself that it cannot reach benchd.
+    private func otherBuild(than bench: String) -> BenchExecutable.OtherBuild? {
+        let reply = try? request(
+            BenchStatusRequest(id: "helm-status-\(UUID().uuidString)"),
+            answering: BenchStatusReply.self)
+        guard let benchd = reply?.data?.version else { return nil }
+        return BenchExecutable.OtherBuild(
+            bench: bench, ours: BenchExecutable.version(of: bench), benchd: benchd)
     }
 
     private var benchBinaryCache: String?

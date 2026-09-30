@@ -73,9 +73,13 @@ final class BenchClientTests: XCTestCase {
         let client = BenchClient(endpoint: server.endpoint)
         switch client.benchExecutable {
         case let .success(bench): XCTAssertNotEqual(bench, "/forge/only/bench")
-        case let .failure(missing): XCTAssertTrue(missing.asked.contains("over TCP"), missing.asked)
+        case let .failure(.notFound(missing)):
+            XCTAssertTrue(missing.asked.contains("over TCP"), missing.asked)
+        case let .failure(other): XCTFail("\(other)")
         }
-        XCTAssertTrue(server.verbs.isEmpty, "benchd is not asked: \(server.verbs)")
+        XCTAssertEqual(
+            server.verbs.map { $0["verb"] as? String }, ["status"],
+            "benchd is asked only its version, and names none here, so nothing is claimed")
     }
 
     /// The follower delivers the whole document, then each frame's document, in order; a frame

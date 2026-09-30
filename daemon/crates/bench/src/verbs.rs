@@ -229,7 +229,8 @@ fn layout(verb: &str, p: &Parsed) -> Result<(String, Value), String> {
 }
 
 /// `open <file|browser|terminal>`. A file is what an agent puts in front of the operator, so it
-/// must be one helm renders, and it must exist — the checks `push.sh` made.
+/// must be one helm renders; that it exists is benchd's to check, on its own disk (M5c: the CLI
+/// may be on another machine).
 fn open(p: &Parsed, workspace: Option<bench_doc::StandardPath>) -> Result<LayoutVerb, String> {
     let what = p
         .words
@@ -260,9 +261,6 @@ fn renderable_file(raw: &str) -> Result<Surface, String> {
         .join(raw)
         .components()
         .collect::<PathBuf>();
-    if !path.is_file() {
-        return Err(format!("no file at {}", path.display()));
-    }
     let renderable = path
         .extension()
         .and_then(|e| e.to_str())

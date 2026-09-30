@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 /// What one workspace tab says about its agents. Absent (`nil`) is a real and
 /// distinct answer, and the common one: no agent here at all.
@@ -12,16 +13,16 @@ enum AgentPresence: Equatable {
 
 /// The board: which workspace has an agent that needs you, without opening it.
 ///
-/// helm holds **no state of its own** here. The registry file's lifecycle is the
-/// mark's lifecycle — no acknowledge, no decay, no wallclock. Nothing clears a
-/// mark except the agent going back to work or its session ending. That is what
-/// makes this the only stateless option, and why it is safe to poll and republish
-/// rather than accumulate.
+/// helm holds **no state of its own** here. What each pane's agent reports is benchd's answer to
+/// `sessions` (`SessionForegrounds`): Claude Code's registry row for the process in the pane's
+/// session, or the agent's own last hook, read on benchd's machine (M5c). The report's lifecycle
+/// is the mark's lifecycle — no acknowledge, no decay, no wallclock. Nothing clears a mark except
+/// the agent going back to work or its session ending, which is why it is safe to recompute and
+/// republish rather than accumulate.
 @MainActor
 final class BoardModel: ObservableObject {
-    /// The app's one board — there is one session registry on this machine.
-    /// Mirrors `TerminalManager.shared`; `init` stays internal so tests can build
-    /// isolated boards over a fixture directory.
+    /// The app's one board. Mirrors `TerminalManager.shared`; `init` stays internal so tests can
+    /// build isolated boards over their own manager.
     static let shared = BoardModel(manager: .shared)
 
     /// Keyed by `Workspace.path.value`, matching `WorkspaceModel.contexts` — not persisted
@@ -31,83 +32,63 @@ final class BoardModel: ObservableObject {
     @Published private(set) var presence: [String: AgentPresence] = [:]
 
     private let manager: TerminalManager
-    private let root: URL
 
-    init(manager: TerminalManager, root: URL = AgentRegistry.defaultRoot) {
+    init(manager: TerminalManager) {
         self.manager = manager
-        self.root = root
     }
 
-    /// Polls until cancelled — driven from `WorkspaceBar`'s `.task`, so its lifetime
-    /// is the window's and SwiftUI cancels it on teardown.
+    /// Recomputes until cancelled — driven from `WorkspaceBar`'s `.task`, so its lifetime is the
+    /// window's. The reports it reads are refreshed on the same two-second tick by
+    /// `WorkbenchModel.watchForegrounds`.
     ///
-    /// Polling, not watching: a status change rewrites an existing file, which the
-    /// directory-level `DispatchSource` pattern (what canvases used before benchd
-    /// watched their files) would not reliably see. Two seconds is well inside glance latency and costs
-    /// one directory listing plus a handful of ~400-byte reads, off the main actor.
-    ///
-    /// A second window would start a second loop against this same shared board.
-    /// Deliberately not guarded: both compute the same answer from the same two
-    /// inputs and this actor serialises their writes, so the cost is a duplicated
-    /// scan of a handful of small files. A "already polling" flag would be worse —
-    /// closing the first window would stop the second window's board.
+    /// A second window would start a second loop against this same shared board. Deliberately
+    /// not guarded: both compute the same answer from the same input and this actor serialises
+    /// their writes. An "already polling" flag would be worse — closing the first window would
+    /// stop the second window's board.
     func poll(every interval: Duration = .seconds(2)) async {
         while !Task.isCancelled {
-            await refresh()
+            refresh()
             try? await Task.sleep(for: interval)
         }
     }
 
-    /// One tick: read the registry off the main actor, join it against the pids
-    /// helm's own surfaces are running, and republish the whole map. Republishing
-    /// wholesale is the point — a mark that is gone from the registry is gone from
-    /// the board in the same tick, with nothing to expire.
-    func refresh() async {
-        let hosted = hostedPids()
-        let root = self.root
-        let rows = await Task.detached { AgentRegistry.sessions(in: root) }.value
-        presence = hosted.compactMapValues { BoardModel.presence(of: rows, hosted: $0) }
-    }
-
-    /// Foreground pid of every live surface, grouped by workspace.
+    /// One tick: every live terminal's report, grouped by workspace, and the whole map
+    /// republished. Republishing wholesale is the point — a report that is gone is gone from the
+    /// board in the same tick, with nothing to expire.
     ///
-    /// Reads `TerminalManager.sessions` (the registry's terminal entries), which is flat and app-wide and keeps a
-    /// parked workspace's terminals alive across a switch. That is the whole point:
-    /// a board that could only see the workspace you are looking at would report
-    /// nothing worth knowing.
-    private func hostedPids() -> [String: Set<pid_t>] {
-        var pids: [String: Set<pid_t>] = [:]
+    /// Reads `TerminalManager.sessions`, which is flat and app-wide and keeps a parked
+    /// workspace's terminals alive across a switch. A board that could only see the workspace you
+    /// are looking at would report nothing worth knowing.
+    func refresh() {
+        var reports: [String: [BenchLiveSessions.Report]] = [:]
         for session in manager.sessions {
-            guard let pid = session.foregroundPid else { continue }
-            pids[session.workspacePath.value, default: []].insert(pid)
+            guard let report = session.report else { continue }
+            reports[session.workspacePath.value, default: []].append(report)
         }
-        return pids
+        presence = reports.compactMapValues(BoardModel.presence(of:))
     }
 
-    /// One workspace's mark, from the whole registry and that workspace's pids.
+    /// One workspace's mark, from what its panes' agents report.
     ///
-    /// **The pid match is the attribution, not `cwd`.** Verified live: the registry
-    /// held six rows and exactly one was helm-hosted; of the five that were not, one
-    /// shared the same `cwd` and one was `busy`. Matching on `cwd` would have lit a
-    /// workspace for another editor's agent.
-    ///
-    /// It also makes ghost rows impossible: a stale row for a dead pid matches no
-    /// live surface. There is no freshness check because there could not be one —
-    /// `statusUpdatedAt` is a last-transition time, not a heartbeat.
-    ///
-    /// A row with no recognised `status` contributes nothing, so a workspace whose
-    /// only agent is mid-transition stays unmarked rather than guessing at it.
-    ///
-    /// Known and accepted: a stale row whose pid has been reused by another process
-    /// helm hosts would mark falsely. Guarding on `cwd` would break an agent started
-    /// from a subdirectory, and the window closes the moment either side writes.
-    ///
-    /// `nonisolated` because it genuinely is — it reads no model state, which is what
-    /// lets the acceptance rules be tested without a main actor, a window or a pty.
-    nonisolated static func presence(of rows: [AgentSession], hosted: Set<pid_t>) -> AgentPresence?
-    {
-        let mine = rows.compactMap { hosted.contains($0.pid) ? $0.status : nil }
-        guard !mine.isEmpty else { return nil }
-        return mine.allSatisfy(\.isWorking) ? .working : .notWorking
+    /// **The pane is the attribution**: benchd reads the registry row of the process holding
+    /// the terminal of the session a pane shows, so another editor's agent in the same directory
+    /// never lights this workspace. A report whose activity is not one the board knows
+    /// contributes nothing, so a workspace whose only agent says something new stays unmarked
+    /// rather than guessing at it.
+    nonisolated static func presence(of reports: [BenchLiveSessions.Report]) -> AgentPresence? {
+        let working = reports.compactMap { isWorking($0.activity) }
+        guard !working.isEmpty else { return nil }
+        return working.allSatisfy { $0 } ? .working : .notWorking
+    }
+
+    /// Whether an agent that says `activity` is carrying on without you. `waiting` (blocked on a
+    /// prompt), `idle` (finished) and `blocked` (a job waiting on someone) are the same state
+    /// seen three times: it is your turn. nil for a word the board does not know.
+    nonisolated static func isWorking(_ activity: String) -> Bool? {
+        switch activity {
+        case "busy", "shell", "waiting_on_tasks": true
+        case "idle", "waiting", "blocked": false
+        default: nil
+        }
     }
 }

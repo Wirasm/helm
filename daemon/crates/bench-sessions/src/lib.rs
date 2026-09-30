@@ -5,8 +5,9 @@
 //! dismissals arrive as inputs, and what should be added to the record leaves as output.
 //!
 //! What is listed, and from where (the rulings on #384):
-//! - **Running, hosted:** benchd's own sessions, and agents in helm terminal panes (helm's
-//!   snapshot, matched by exact pid). A live agent anywhere else is foreign and left out.
+//! - **Running, hosted:** benchd's own sessions, and agents in helm terminal panes (the
+//!   foreground pid of the session each pane shows, matched by exact pid). A live agent
+//!   anywhere else is foreign and left out.
 //! - **Running, background:** Claude Code `--bg` jobs whose cwd is in scope, unless the job
 //!   has neither a process nor a transcript (a job Claude still lists as `blocked` from July).
 //! - **Running subagents** of a hosted live Claude session, by the three rules in
@@ -21,7 +22,6 @@ pub mod claude;
 pub mod pi;
 pub mod process;
 pub mod scope;
-pub mod snapshot;
 pub mod transcript;
 
 use bench_doc::StandardPath;
@@ -57,8 +57,27 @@ pub struct BenchSession {
     pub handle: String,
 }
 
+/// A terminal pane on the bench, reduced to what the session list needs: benchd's document and
+/// the session the pane shows. benchd builds these from its own state, so the list reads no file
+/// of helm's (M5c, #459).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneAgent {
+    pub pane: bench_doc::PaneId,
+    /// What has the terminal of the session the pane shows; `None` when it shows none.
+    pub foreground_pid: Option<u32>,
+    /// The agent recorded in the pane, so a restart can offer to resume it.
+    pub resumable: Option<Resumable>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resumable {
+    pub harness: Harness,
+    pub session: String,
+    pub cwd: String,
+}
+
 /// An agent helm hosted as its own hooks report it to benchd (#358): the source for pi and
-/// codex, which publish no registry, and for any agent the snapshot's foreground pid misses.
+/// codex, which publish no registry, and for any agent a pane's foreground pid misses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookedAgent {
     pub harness: Harness,
@@ -76,8 +95,8 @@ pub struct HookedAgent {
 pub struct Inputs<'a> {
     /// Whose `~/.claude` and `~/.pi`.
     pub home: &'a Path,
-    /// helm's bench directory, holding `snapshot.json`.
-    pub helm_bench_dir: &'a Path,
+    /// Every terminal pane on the bench.
+    pub panes: &'a [PaneAgent],
     pub workspace: &'a StandardPath,
     pub bench: &'a [BenchSession],
     pub hosted: &'a [HostedSession],
@@ -307,8 +326,6 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     }
 
     // 2. Agents in helm panes.
-    let (panes, problems) = snapshot::read(inputs.helm_bench_dir);
-    out.unreadable.extend(problems);
     let recorded: HashSet<SessionKey> = inputs.hosted.iter().map(HostedSession::key).collect();
     // A pane's agent has a mailbox when its hook claimed one (#358); the record says which.
     let claimed: HashMap<SessionKey, &str> = inputs
@@ -335,7 +352,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
             });
         }
     };
-    for p in &panes {
+    for p in inputs.panes {
         let host = Host::Pane { pane: p.pane };
         let claude_here = p.foreground_pid.and_then(|pid| by_pid.get(&pid).copied());
         if let Some(r) = claude_here {
