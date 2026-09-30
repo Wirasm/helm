@@ -93,6 +93,27 @@ final class BrowserPaneLiveTests: XCTestCase {
         pane.close(tab: other)
     }
 
+    /// Input sent to a page stopped under a dialog is not lost: Chrome queues it and delivers it
+    /// once the dialog is answered (measured). So the pane sends none while one is up, and what
+    /// the operator typed at the stopped page never lands in it afterwards.
+    func testInputUnderADialogNeverReachesThePageAfterwards() async throws {
+        let target = try await show(
+            "<title>typing</title><input id=i><script>setTimeout(() => { i.focus(); "
+                + "alert('Stop'); setTimeout(() => { document.title = 'field:' + i.value }, 500) "
+                + "}, 300)</script>")
+        try await eventually("the alert is on the pane") { self.pane.dialogs[target] != nil }
+        pane.insertText("typed-under-the-dialog")
+        for type in ["mousePressed", "mouseReleased"] {
+            pane.mouse(.init(type: type, x: 20, y: 20, button: "left", clickCount: 1))
+        }
+        pane.answer(accept: true)
+        try await eventually("the field is read back (\(pane.tabs.current?.title ?? ""))") {
+            self.pane.tabs.current?.title.hasPrefix("field:") == true
+        }
+        XCTAssertEqual(pane.tabs.current?.title, "field:")
+        pane.close(tab: target)
+    }
+
     /// A page that asks before it is left: its `beforeunload` is a dialog like the others, and
     /// Leave lets the navigation go on.
     func testLeavingAPageThatAsksFirstWaitsForTheOperator() async throws {

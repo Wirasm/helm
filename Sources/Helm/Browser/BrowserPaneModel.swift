@@ -13,7 +13,7 @@ import HelmWire
 ///
 /// Cached per pane by `WorkbenchModel`, like a canvas, so a tab switch keeps the connection.
 @MainActor
-final class BrowserPaneModel: ObservableObject, BrowserInputSink {
+final class BrowserPaneModel: ObservableObject {
     enum Status: Equatable {
         /// Not connected, and why — shown in the pane.
         case waiting(String)
@@ -362,33 +362,6 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         }
     }
 
-    func mouse(_ params: MouseEvent) {
-        connection?.send("Input.dispatchMouseEvent", params, session: session)
-    }
-
-    func key(_ params: KeyEvent) {
-        connection?.send("Input.dispatchKeyEvent", params, session: session)
-    }
-
-    func insertText(_ text: String) {
-        connection?.send("Input.insertText", InsertText(text: text), session: session)
-    }
-
-    /// The page's selection as text: a text field's selected range, else the document's.
-    func selectedText() async -> String? {
-        guard let connection, let session else { return nil }
-        let expression = """
-            (() => { const a = document.activeElement;
-              if (a && typeof a.selectionStart === 'number' && typeof a.value === 'string')
-                return a.value.substring(a.selectionStart, a.selectionEnd);
-              return String(getSelection()); })()
-            """
-        let result = try? await connection.call(
-            "Runtime.evaluate", Evaluate(expression: expression, returnByValue: true),
-            session: session, returning: Evaluated<String>.self)
-        return result?.result.value
-    }
-
     func navigate(to typed: String) {
         guard let url = BrowserAddress.url(from: typed) else { return }
         connection?.send("Page.navigate", Navigate(url: url), session: session)
@@ -437,6 +410,8 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         guard let target = tabs.showing, let session else { return }
         let next = BrowserZoom.step(from: zoom[target] ?? 1, step)
         zoom[target] = next == 1 ? nil : next
+        // A page stopped under a dialog is fitted when the dialog closes.
+        guard dialogs[target] == nil else { return }
         Task { await fit(target: target, session: session) }
     }
 
@@ -474,6 +449,48 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         connection?.send(
             "Runtime.evaluate", Evaluate(expression: expression, returnByValue: false),
             session: session)
+    }
+}
+
+// MARK: - Input from the surface
+
+extension BrowserPaneModel: BrowserInputSink {
+    /// Where the operator's input goes: the shown tab, unless a dialog has stopped it. Chrome
+    /// queues input sent to a stopped page and delivers it once the dialog is answered
+    /// (measured, #544), so text typed at the page under a dialog would land in it afterwards.
+    private var inputSession: String? {
+        guard let shown = tabs.showing, dialogs[shown] == nil else { return nil }
+        return session
+    }
+
+    func mouse(_ params: MouseEvent) {
+        guard let inputSession else { return }
+        connection?.send("Input.dispatchMouseEvent", params, session: inputSession)
+    }
+
+    func key(_ params: KeyEvent) {
+        guard let inputSession else { return }
+        connection?.send("Input.dispatchKeyEvent", params, session: inputSession)
+    }
+
+    func insertText(_ text: String) {
+        guard let inputSession else { return }
+        connection?.send("Input.insertText", InsertText(text: text), session: inputSession)
+    }
+
+    /// The page's selection as text: a text field's selected range, else the document's.
+    func selectedText() async -> String? {
+        guard let connection, let session else { return nil }
+        let expression = """
+            (() => { const a = document.activeElement;
+              if (a && typeof a.selectionStart === 'number' && typeof a.value === 'string')
+                return a.value.substring(a.selectionStart, a.selectionEnd);
+              return String(getSelection()); })()
+            """
+        let result = try? await connection.call(
+            "Runtime.evaluate", Evaluate(expression: expression, returnByValue: true),
+            session: session, returning: Evaluated<String>.self)
+        return result?.result.value
     }
 }
 
