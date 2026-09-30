@@ -54,8 +54,16 @@ final class ArtifactListingTests: XCTestCase {
         }
     }
 
-    private func load(workspaceRoot: String? = nil, remembered: String = "") -> ArtifactListing {
-        .load(stores, workspace: workspaceRoot, remembered: remembered)
+    /// benchd's answer, which every test but the unreachable one expects to get: a failure here
+    /// names itself rather than surfacing as an empty selection.
+    private func load(
+        workspaceRoot: String? = nil, remembered: String = "", file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> ArtifactListing {
+        let listing = ArtifactListing.load(
+            stores, workspace: workspaceRoot, remembered: remembered)
+        XCTAssertNil(listing.failure, "benchd did not answer", file: file, line: line)
+        return listing
     }
 
     // MARK: The listing itself
@@ -154,7 +162,7 @@ final class ArtifactListingTests: XCTestCase {
     func testAnUnreachableBenchdIsAFailureNotAnEmptyStore() throws {
         server.stop()
 
-        let listing = load(workspaceRoot: "/Users/x/anything")
+        let listing = ArtifactListing.load(stores, workspace: "/Users/x/anything", remembered: "")
 
         XCTAssertTrue(listing.stores.isEmpty)
         XCTAssertNotNil(listing.failure)
