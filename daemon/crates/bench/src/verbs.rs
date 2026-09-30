@@ -322,6 +322,7 @@ fn spawn(p: &Parsed) -> Result<(String, Value), String> {
         prompt_file: p
             .value("--prompt-file")
             .map(|f| cwd.join(f).display().to_string()),
+        prompt: None,
         model: p.value("--model"),
         effort: p.value("--effort"),
         rows: number("--rows")?,

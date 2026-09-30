@@ -79,6 +79,14 @@ pub struct Pane {
     /// restarted agent is still reached. Kept in the document so the route outlives helm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opener: Option<PaneId>,
+    /// The conversation `opener` held when it opened this canvas (helm #535): the one a fork asks
+    /// about. Copied rather than looked up, because the pane's agent record follows whoever is
+    /// in it, and after a `/clear`, a restart or an exit that is no longer the conversation that
+    /// wrote the file. Written only with `opener`, by [`Document::record_opener`].
+    ///
+    /// [`Document::record_opener`]: crate::Document::record_opener
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<ResumableAgent>,
 }
 
 impl Pane {
@@ -88,6 +96,7 @@ impl Pane {
             surface,
             name: PaneName::Unnamed,
             opener: None,
+            author: None,
         }
     }
 
@@ -97,6 +106,7 @@ impl Pane {
             surface,
             name: PaneName::Unnamed,
             opener: None,
+            author: None,
         }
     }
 }

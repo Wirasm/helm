@@ -422,6 +422,11 @@ pub struct SpawnArgs {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_file: Option<String>,
+    /// The first prompt as text, for a caller with no disk benchd can read (helm over TCP):
+    /// benchd writes it to a file under its root, which outlives the spawn, and starts the agent
+    /// as for `prompt_file`. Refused with `prompt_file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1087,6 +1092,23 @@ mod tests {
         assert_eq!(serde_json::to_value(&args).unwrap(), who.args);
         let reply: MailWho = serde_json::from_value(value["who_reply"].clone()).unwrap();
         assert_eq!(serde_json::to_value(&reply).unwrap(), value["who_reply"]);
+    }
+
+    /// `fixtures/spawn-verbs.json` holds the fork helm asks for from a canvas mark (#535):
+    /// `SpawnArgs` reads it whole, and helm's `BenchWireConformanceTests` encodes the same request
+    /// and decodes the reply.
+    #[test]
+    fn the_spawn_fixture_is_what_the_daemon_reads() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/spawn-verbs.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let fork: Request = serde_json::from_value(value["fork"].clone()).unwrap();
+        assert_eq!(Verb::parse(&fork.verb), Some(Verb::Spawn));
+        assert_eq!(fork.by, Some(Actor::Helm));
+        let args: SpawnArgs = serde_json::from_value(fork.args.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&args).unwrap(), fork.args);
+        assert!(args.fork.is_some() && args.prompt.is_some());
     }
 
     /// `fixtures/session-list.json` holds a `sessions` answer as helm reads it (M5b).

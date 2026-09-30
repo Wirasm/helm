@@ -51,3 +51,50 @@ fn a_session_pane_is_found_wherever_it_lives_and_forgotten_at_boot() {
         "a second sweep finds nothing"
     );
 }
+
+/// helm #535: a canvas keeps the conversation that opened it, whatever its opener's pane holds
+/// later. The pane's own record follows the agent (a `/clear` replaces it, an exit clears it);
+/// a fork asked about the canvas has to reach the conversation that wrote the file.
+#[test]
+fn a_canvas_keeps_the_conversation_that_opened_it() {
+    let mut doc = Document::default();
+    let terminal = session_pane("s1");
+    let opener = terminal.id;
+    doc.open_workspace(StandardPath::new("/tmp/w").unwrap(), terminal, Focus::Take)
+        .unwrap();
+    let canvas = Pane::new(Surface::Canvas {
+        source: bench_doc::CanvasSource::File {
+            path: StandardPath::new("/tmp/w/plan.md").unwrap(),
+        },
+    });
+    let canvas_id = canvas.id;
+    doc.place_in_drawer(&DrawerName::new("docs").unwrap(), canvas, Focus::Leave)
+        .unwrap();
+    let author = |doc: &Document| doc.pane(canvas_id).unwrap().author.clone();
+
+    assert!(doc.record_opener(canvas_id, opener));
+    let wrote = author(&doc).expect("the opener's conversation is recorded");
+    assert_eq!((wrote.command.as_str(), wrote.session.as_str()), ("claude", "4b1c"));
+
+    // The agent `/clear`s: its pane now holds another conversation. The canvas does not follow.
+    let cleared = ResumableAgent {
+        command: "claude".into(),
+        session: "9e0f".into(),
+        cwd: "/tmp/w".into(),
+    };
+    doc.record_agent(opener, Some(cleared.clone()), Focus::Leave)
+        .unwrap();
+    assert_eq!(author(&doc), Some(wrote.clone()));
+    // It exits: the pane holds nothing. The canvas still names the conversation.
+    doc.record_agent(opener, None, Focus::Leave).unwrap();
+    assert_eq!(author(&doc), Some(wrote));
+
+    // Opened again, from a pane with no conversation: the newest open wins for both fields.
+    assert!(doc.record_opener(canvas_id, opener));
+    assert_eq!(author(&doc), None);
+    doc.record_agent(opener, Some(cleared.clone()), Focus::Leave)
+        .unwrap();
+    assert!(doc.record_opener(canvas_id, opener));
+    assert_eq!(author(&doc), Some(cleared));
+    assert!(!doc.record_opener(canvas_id, opener), "nothing changed");
+}

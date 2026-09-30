@@ -86,6 +86,15 @@ final class CanvasModel: ObservableObject {
     /// sees says exactly that rather than claiming a send.
     var onAnnotation: ((CanvasAnnotation, URL) -> CanvasNoteDelivery)?
 
+    /// Whether "Ask a fork" can run for this canvas, and if not the sentence that says why
+    /// (#535). Asked when the comment field draws. `WorkbenchModel` wires it from benchd's record
+    /// of who opened the canvas; outside a bench nobody did.
+    var forkRoute: () -> CanvasForkRoute = { .unavailable(CanvasForkRoute.noOpener) }
+
+    /// Start the fork for a finished mark, handed the file's text for the line range, and hear
+    /// back what happened. Wired where `onAnnotation` is, for its reason.
+    var onAskFork: ((CanvasAnnotation, URL, String?) -> CanvasForkDelivery)?
+
     /// Where a note goes when the clipboard is its return path. `Pasteboard.copy` in production.
     ///
     /// **A seam because the operator's pasteboard is not a test fixture.** `PasteboardTests`'s own
@@ -735,9 +744,28 @@ final class CanvasModel: ObservableObject {
         notesFailure = nil
     }
 
-    /// Validation is `CanvasAnnotation.decode`'s, and writing is `CanvasNotes.append`'s.
-    /// What is decided here is only what to do when either refuses.
+    /// Send: the note, mailed to the agent that opened the canvas (#205).
     func annotate(comment: String) {
+        record(comment) { [onAnnotation] annotation, canvas in
+            onAnnotation?(annotation, canvas) ?? CanvasNoteDelivery.notSent(.noOrigin)
+        }
+    }
+
+    /// Ask a fork: the same note, and the question put to a read-only fork of the conversation
+    /// that wrote this file (#535). The file's text goes along so the prompt can name the lines.
+    func askFork(question: String) {
+        let source = loadedBytes.flatMap { String(data: $0, encoding: .utf8) }
+        record(question) { [onAskFork] annotation, canvas in
+            onAskFork?(annotation, canvas, source)
+                ?? CanvasForkDelivery.unavailable(CanvasForkRoute.noOpener)
+        }
+    }
+
+    /// Validation is `CanvasAnnotation.decode`'s, writing is `CanvasNotes.append`'s, and what the
+    /// action did is `deliver`'s. What is decided here is only what to do when either refuses.
+    private func record(
+        _ comment: String, deliver: (CanvasAnnotation, URL) -> any CanvasMarkOutcome
+    ) {
         guard let canvas = fileURL, let selection else { return }
         guard let annotation = CanvasAnnotation.decode(selection, comment: comment) else {
             notesFailure = "That selection could not be anchored — try selecting the text again."
@@ -756,7 +784,7 @@ final class CanvasModel: ObservableObject {
             // returns — so the copy moved behind it. The two are independent in both directions:
             // the send never reads the clipboard, and the copy never fed the send. What the old
             // order guaranteed was write-before-copy, and that still holds, one line earlier.
-            let delivery = onAnnotation?(annotation, canvas) ?? .notSent(.noOrigin)
+            let delivery = deliver(annotation, canvas)
             if delivery.copiesToClipboard {
                 copyToClipboard(CanvasNotes.clipboardEntry(annotation, for: canvas))
             }

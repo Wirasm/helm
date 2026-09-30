@@ -57,6 +57,17 @@ enum CanvasNoteRoute: Equatable {
     }
 }
 
+// MARK: - CanvasMarkOutcome
+
+/// What a mark's action did, as `CanvasModel.annotate` spends it: whether the note also goes on
+/// the clipboard, and the receipt the pane shows. Sending the note (`CanvasNoteDelivery`) and
+/// asking a fork (`CanvasForkDelivery`) are two actions on one mark, and the sidecar, the
+/// clipboard rule and the receipt are handled once for both.
+protocol CanvasMarkOutcome {
+    var copiesToClipboard: Bool { get }
+    func receipt(sidecar: String) -> String
+}
+
 // MARK: - CanvasNoteDelivery
 
 /// What actually happened to a mark, and the sentence the pane shows for it.
@@ -64,7 +75,7 @@ enum CanvasNoteRoute: Equatable {
 /// A separate type from `CanvasNoteRoute` because a route is a decision and this is an outcome:
 /// a route can be `.mailbox` and the delivery still fail, and the operator has to be able to tell
 /// those apart — "sent to `sild-611a`" and "could not reach `sild-611a`" are opposite facts.
-enum CanvasNoteDelivery: Equatable {
+enum CanvasNoteDelivery: Equatable, CanvasMarkOutcome {
     case sent(Handle)
     case notSent(CanvasNoteRoute.Fallback)
     case failed(Handle, String)

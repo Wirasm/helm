@@ -129,17 +129,23 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         /// mark on it is mailed. benchd writes it; helm only reads it. In the document, so the
         /// route outlives a helm relaunch.
         package var opener: UUID?
+        /// The conversation `opener` held when it opened this canvas (#535): what "Ask a fork"
+        /// forks. benchd copies it at the open, so it still names the conversation that wrote the
+        /// file after that pane's agent `/clear`s, restarts or exits. helm only reads it.
+        package var author: BenchDocument.Agent?
 
         package init(
-            id: UUID, surface: Surface, name: PaneName = .unnamed, opener: UUID? = nil
+            id: UUID, surface: Surface, name: PaneName = .unnamed, opener: UUID? = nil,
+            author: BenchDocument.Agent? = nil
         ) {
             self.id = id
             self.surface = surface
             self.name = name
             self.opener = opener
+            self.author = author
         }
 
-        private enum CodingKeys: String, CodingKey { case id, surface, name, opener }
+        private enum CodingKeys: String, CodingKey { case id, surface, name, opener, author }
 
         package init(from decoder: any Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -147,6 +153,7 @@ package struct BenchDocument: Codable, Equatable, Sendable {
             surface = try c.decode(Surface.self, forKey: .surface)
             name = try c.decodeIfPresent(PaneName.self, forKey: .name) ?? .unnamed
             opener = try c.decodeIfPresent(UUID.self, forKey: .opener)
+            author = try c.decodeIfPresent(BenchDocument.Agent.self, forKey: .author)
         }
 
         package func encode(to encoder: any Encoder) throws {
@@ -155,6 +162,7 @@ package struct BenchDocument: Codable, Equatable, Sendable {
             try c.encode(surface, forKey: .surface)
             if name != .unnamed { try c.encode(name, forKey: .name) }
             try c.encodeIfPresent(opener, forKey: .opener)
+            try c.encodeIfPresent(author, forKey: .author)
         }
     }
 

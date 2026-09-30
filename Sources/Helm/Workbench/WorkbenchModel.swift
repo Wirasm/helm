@@ -228,6 +228,52 @@ final class WorkbenchModel: ObservableObject {
             }
             return deliver(annotation, on: canvas, markedIn: pane)
         }
+        model.forkRoute = { [weak self] in
+            self?.forkRoute(for: pane) ?? .unavailable(CanvasForkRoute.noOpener)
+        }
+        model.onAskFork = { [weak self, weak model] annotation, canvas, source in
+            guard let self, let model, surfaces.existing(pane, as: CanvasModel.self) === model
+            else {
+                return .unavailable(CanvasForkRoute.noOpener)
+            }
+            return askFork(annotation, on: canvas, source: source, markedIn: pane)
+        }
+    }
+
+    /// Whether a mark on canvas pane `pane` can be asked of a fork: benchd's record of the
+    /// conversation that opened it (`Pane.author`, #535), read off the document.
+    private func forkRoute(for pane: Pane.ID) -> CanvasForkRoute {
+        let record = document?.pane(pane)
+        return CanvasForkRoute.route(opener: record?.opener, author: record?.author)
+    }
+
+    /// Ask a read-only fork of the canvas's author about a mark (#535). benchd places the fork in
+    /// the author's workspace and, because helm asks as `helm`, leaves the operator's focus alone.
+    private func askFork(
+        _ annotation: CanvasAnnotation, on canvas: URL, source: String?, markedIn pane: Pane.ID
+    ) -> CanvasForkDelivery {
+        let author: BenchDocument.Agent
+        switch forkRoute(for: pane) {
+        case let .unavailable(why): return .unavailable(why)
+        case let .fork(agent): author = agent
+        }
+        guard case let .selection(anchor) = annotation.mark else {
+            return .unavailable("This mark has no text to ask about")
+        }
+        let prompt = CanvasForkPrompt.text(
+            canvas: canvas, source: source, marked: anchor.text, question: annotation.comment)
+        let request = BenchForkRequest(
+            id: "helm-\(UUID().uuidString.lowercased())", fork: author.session, cwd: author.cwd,
+            prompt: prompt)
+        do {
+            let answer = try client.request(request, answering: BenchSpawned.self)
+            guard answer.status == .ok, let spawned = answer.data else {
+                return .failed(answer.reason ?? "benchd \(answer.status.rawValue)")
+            }
+            return .asked(handle: spawned.handle)
+        } catch {
+            return .failed(String(describing: error))
+        }
     }
 
     /// An operator's mark on a canvas pane, on its way to the agent that opened that canvas

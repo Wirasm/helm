@@ -96,7 +96,7 @@ fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<Stri
     };
     let change = Change {
         verb: req.verb.clone(),
-        args: req.args.clone(),
+        args: logged_args(req, &plan.spec),
         by,
         asked: req.asked,
         next,
@@ -220,6 +220,12 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         ));
     }
     let workspace = StandardPath::new(cwd)?;
+    if args.prompt.is_some() && args.prompt_file.is_some() {
+        return Err("pass the first prompt as prompt or as prompt_file, not both".into());
+    }
+    if args.prompt.as_deref().is_some_and(|t| t.trim().is_empty()) {
+        return Err("prompt is empty".into());
+    }
     // The file must outlive the spawn (helm #93): the agent reads it as its first act.
     if let Some(p) = args.prompt_file.as_deref()
         && !(p.starts_with('/') && PathBuf::from(p).is_file())
@@ -274,6 +280,10 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
     // `argv` is the one spelling of what each runtime can start as, so it also judges: a fork
     // codex or pi cannot run is refused here, before anything is reserved.
     bench_session::argv(&spec)?;
+    let mut spec = spec;
+    if let Some(text) = args.prompt {
+        spec.prompt_file = Some(write_prompt(core, &text)?);
+    }
     Ok(Plan {
         agent,
         handle: args.name,
@@ -282,6 +292,29 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         rows: args.rows.unwrap_or(40),
         cols: args.cols.unwrap_or(140),
     })
+}
+
+/// A first prompt sent as text, written where the agent can read it: `<root>/prompts/<uuid>.md`,
+/// inside the root's private directory. Kept, because the agent reads it after the spawn answers
+/// (helm #93), and a file per spawn so two never share one.
+fn write_prompt(core: &Arc<Mutex<Core>>, text: &str) -> Result<String, String> {
+    let dir = core.lock().unwrap().root.join("prompts");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join(format!("{}.md", mint_session_id()));
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
+/// What a spawn's `bench/changed` logs as its args: a prompt sent as text is logged as the file
+/// benchd wrote it to, so the event log carries a path rather than the operator's words.
+fn logged_args(req: &Request, spec: &SpawnSpec) -> Value {
+    let mut args = req.args.clone();
+    if let Some(map) = args.as_object_mut()
+        && map.remove("prompt").is_some()
+    {
+        map.insert("prompt_file".into(), json!(spec.prompt_file));
+    }
+    args
 }
 
 /// A conversation to re-enter: only a runtime that takes its id from the caller.
