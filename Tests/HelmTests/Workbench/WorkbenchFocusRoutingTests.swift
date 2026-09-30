@@ -256,7 +256,7 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
         let bench = try Bench(terminals: 2)
         defer { bench.close() }
         let actions = LocalActions(
-            workbench: bench.workbench, workspaces: WorkspaceModel(),
+            workbench: bench.workbench, workspaces: WorkspaceModel(readBranch: { _ in nil }),
             terminals: bench.terminals)
         Actions.performer = actions
         defer { Actions.performer = nil }

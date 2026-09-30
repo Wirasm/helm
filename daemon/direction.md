@@ -29,7 +29,9 @@ Claude in Chrome and Codex extensions), else Playwright's Chrome for Testing;
 the same profile in a plain Chrome window for installing extensions and signing in: no
 user-agent override, no debugging port, because Google refuses sign-in to a browser that
 has them (#374). Quitting it returns to headless. The daemon never automates the browser: agents attach with
-`playwright-cli attach --cdp=<cdp>`, helm renders it over its own CDP socket. A crash is
+`playwright-cli attach --cdp=<cdp>`, and helm's pane asks `browser/connect`, after which benchd
+carries the pane's CDP messages to the browser's websocket on its own machine, one JSON line each
+way (`benchd/src/cdp.rs`, M5c). A crash is
 restarted (at most 3 in 60s, then `browser/gave-up`), and the browser runs on a pipe
 leash so it dies with the daemon even under SIGKILL. `just browser-proof` is the live check.
 
@@ -152,7 +154,8 @@ read inside a synchronized update (mode 2026) waits for it to end, at most a sec
 engine answers `screen/get` and takes `screen/send`, so an agent reads and types into any
 terminal (`bench get screen`, `bench watch screen`, `bench send`). What only helm can do — drawing its window
 — benchd asks for: `helm/ask` logs `helm/asked` to the followers, helm answers with `helm/answer`,
-and the caller waits at most `HELM_ASK_WAIT`. The `bench-panes` skill is the agent's guide.
+and the caller waits at most `HELM_ASK_WAIT`. A capture's PNG comes back in the answer and benchd
+writes the file, since helm may be on another machine. The `bench-panes` skill is the agent's guide.
 
 **A benchd by address (M5c, #459, first slice).** `BENCH_LISTEN=<host>:<port>` makes benchd
 listen on TCP beside its unix socket, and each connection goes to the same handler: the protocol
@@ -179,8 +182,23 @@ The verbs carry the canvas's rules, because benchd is the side with the disk: a 
 confined to the page's folder with symlinks followed, `file/write` compares against the bytes the
 writer names (`unchanged`) and answers `changed` with what is there instead of writing, and a
 `.notes.md` sidecar is never written whole. Their text is never logged, so `file/write` and
-`file/append` get a 16 MiB request line where every other verb keeps 64 KB. Screenshots, the
-browser and the drawers still reach around the socket; they are the next slices.
+`file/append` get a 16 MiB request line where every other verb keeps 64 KB.
+
+**And the drawers' git and archon (M5c, third slice).** helm runs no `git` or `archon` and reads
+no repository itself: the Worktrees drawer, the Archon drawer and each workspace tab's branch ask
+benchd through three verbs (`bench_wire::commands`, pinned by `fixtures/command-verbs.json`,
+`benchd/src/commands.rs`). `command/run` runs `git` or `archon` on this machine and answers the
+exit status and both streams, base64, or `timed_out` past the caller's deadline; a nonzero exit is
+an answer, since helm's delete rules read git's "no" (`merge-base --is-ancestor`). The program is
+a tagged enum rather than an argv because benchd resolves each here: `archon` from its own
+`~/.bun/bin`, which also goes first on the child's `PATH`, with `ARCHON_HOME` when asked. Output
+goes to unlinked files, never pipes, so a `--detach` run's background child cannot hold the
+answer. `path/exists` answers which paths exist and refuses rather than say "absent" when it
+could not look, because helm prunes a worktree it reads as missing. `git/repositories` is the
+drawer's discovery walk over benchd's `HOME`. **`command/run` is not a boundary**: `git -c
+alias.x='!cmd' x` runs anything, so the verb is a shell for whoever reaches the socket, as
+`spawn` and `just/run` already are. The socket and the tailnet are the boundary. helm keeps all
+of its git and Archon logic and moves only the process, so what a delete checks is unchanged.
 
 **Nothing crosses the link by file (M5c, third slice).** benchd no longer reads helm's
 `snapshot.json`: the session list places a pane's agent by the foreground process of the session
@@ -192,6 +210,15 @@ last hook. helm's presence dots and its snapshot's `agent` read that, and helm r
 whether the file exists benchd checks on its own disk, since the caller may be on another
 machine. `bench --version` prints the version `status.version` answers, and helm compares the two
 before a pane runs helm's own `bench` against a benchd over TCP.
+
+**And the browser pane and screenshots (M5c).** The pane never reads
+`<root>/browser/endpoint.json` or dials the port it names: `browser/connect` opens the browser's
+websocket from benchd and relays CDP messages as lines on the pane's own connection, with nothing
+of what they say logged (only `browser/viewer-connected` and `browser/viewer-left`). A message is
+JSON, which holds a raw newline only as whitespace, so benchd turns one into a space. And helm
+answers a capture with the PNG itself (`png`, base64); benchd writes it where the caller asked, or
+under its own `captures/`, and hands back helm's report with `path` in its place, so `helm/answer`
+gets the 16 MiB line too. Both are the route on one machine as well.
 
 **And prp's stores and the paths the operator types (M5c).** `~/.prp` lives on the agents'
 machine, so helm asks benchd about it (`bench_wire::prp`, pinned by `fixtures/prp-verbs.json`).

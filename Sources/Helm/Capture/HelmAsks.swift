@@ -7,7 +7,8 @@ import HelmWire
 /// waiting on the socket.
 ///
 /// The capture itself is `AppWindowCapturer` (through `WindowCapturing`): drawing the window into
-/// a PNG with no display grant, the screen locked or not.
+/// a PNG with no display grant, the screen locked or not. The answer carries the PNG and benchd
+/// writes the file, so a helm on another machine answers an agent beside benchd (M5c).
 @MainActor
 final class HelmAsks {
     private let capturer: any WindowCapturing
@@ -23,11 +24,22 @@ final class HelmAsks {
     }
 
     /// The live wiring: answers through `client`, off the main actor so a slow benchd never
-    /// stalls a frame.
+    /// stalls a frame. An answer that does not arrive leaves the agent told only that no helm
+    /// answered, so helm logs why: a capture is several MB, and over a slow link to a remote
+    /// benchd its upload can fail or outlast the ask (M5c).
     static func answering(through client: BenchClient, capturer: any WindowCapturing) -> HelmAsks {
         HelmAsks(capturer: capturer) { answer in
             DispatchQueue.global(qos: .userInitiated).async {
-                _ = try? client.request(answer, answering: EmptyReply.self)
+                do {
+                    let reply = try client.request(answer, answering: EmptyReply.self)
+                    if reply.status != .ok {
+                        NSLog(
+                            "helm: benchd did not take the answer to ask %@: %@", answer.ask,
+                            reply.reason ?? "\(reply.status)")
+                    }
+                } catch {
+                    NSLog("helm: could not answer ask %@: %@", answer.ask, "\(error)")
+                }
             }
         }
     }
@@ -44,8 +56,16 @@ final class HelmAsks {
     func answer(_ asked: HelmAsked) {
         let id = "helm-answer-\(UUID().uuidString)"
         switch asked.request {
-        case let .capture(path, window):
-            switch capturer.capture(to: path, window: window) {
+        case let .capture(window):
+            switch capturer.capture(window: window) {
+            case let .success(report) where Self.answerBytes(report) > benchLargeRequestMaxBytes:
+                let megabytes = report.png.count / (1024 * 1024)
+                send(
+                    .init(
+                        id: id, ask: asked.ask, status: .error,
+                        reason: "the capture is a \(megabytes) MB PNG, more than a helm/answer "
+                            + "carries (\(benchLargeRequestMaxBytes / (1024 * 1024)) MB as base64)",
+                        data: nil))
             case let .success(report):
                 send(.init(id: id, ask: asked.ask, status: .ok, reason: nil, data: report))
             case let .failure(refusal):
@@ -59,6 +79,13 @@ final class HelmAsks {
                     id: id, ask: asked.ask, status: .refused,
                     reason: "this helm does not know how to answer a \(kind) ask", data: nil))
         }
+    }
+}
+
+extension HelmAsks {
+    /// The request line a capture answer makes: the PNG as base64, plus the report around it.
+    static func answerBytes(_ report: CaptureReport) -> Int {
+        (report.png.count + 2) / 3 * 4 + 4096
     }
 }
 

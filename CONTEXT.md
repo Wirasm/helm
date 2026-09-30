@@ -98,8 +98,9 @@ _Avoid_: artifact pane, webview, browser, draw-on pane
 **browser pane**:
 The pane type that shows the **shared browser** — the one Chrome benchd runs per bench root
 (`bench browser start`), which agents drive with Playwright and the operator uses by hand. helm
-neither starts nor automates it: the pane reads benchd's `browser/endpoint.json`, draws the tab
-it follows over CDP, and forwards mouse, keys and the clipboard. One per bench, and it lives in
+neither starts nor automates it: the pane asks benchd for a connection to it (`browser/connect`,
+which benchd relays to the browser on its own machine), draws the tab it follows over CDP, and
+forwards mouse, keys and the clipboard. One per bench, and it lives in
 the `browser` **drawer**: ⌘⇧B shows or hides it, and an agent's `bench open browser` or a
 ⌘-clicked http link (a new tab) badges the drawer without opening it. Not a canvas: a canvas
 renders a file in helm's own webview.
@@ -126,7 +127,8 @@ _Avoid_: agent list, sidebar, session browser
 The drawer along the bottom (⌘⇧R) showing what Archon is doing in the active workspace's project
 (#382): runs **waiting on you** (paused at a gate), **running** runs, and **finished** runs not
 cleared, each as a row of **stage** dots that fill in as it advances. Read from Archon's own CLI
-(`workflow runs --json`, and `workflow status --json --verbose` while a run is live); helm keeps no
+on benchd's machine (`workflow runs --json`, and `workflow status --json --verbose` while a run is
+live; M5c: benchd runs it); helm keeps no
 record of a run. Keyboard first: a gate is answered with `a`/`x`/`1-9`, a run resumed with `r`,
 cancelled with `c c`, its log followed in a terminal with `l`; `/` starts work, and `w` picks the
 workflow it launches from a searchable list (#528). It polls only while
@@ -159,8 +161,8 @@ where the colliding word comes from — no Swift in `Sources/Helm/Board/` is abo
 _Avoid_: board unqualified (that word is the workspace marks), whiteboard, sketch pane, diagram
 
 **Worktrees drawer**:
-The drawer on the right (⌘⇧G) listing **every git worktree on the machine**, grouped by
-repository (#382): the bench's workspaces' repositories, those under `~/Projects`, and those
+The drawer on the right (⌘⇧G) listing **every git worktree on benchd's machine** (M5c: benchd
+finds the repositories and runs the git, on one machine too), grouped by repository (#382): the bench's workspaces' repositories, those under `~/Projects`, and those
 Archon's worktrees were made from. Each worktree shows its branch, dirty or clean, ahead and
 behind its upstream, **merged** (Git reachability from the resolved remote default branch, never
 pull-request state; unknown when there is none), the age of its last commit, and the bench panes

@@ -4,7 +4,7 @@ import SwiftUI
 /// supervises (#350), drawn by `BrowserPaneView`.
 @MainActor
 final class BrowserPaneKind: SurfaceKind {
-    /// Injected so a test can point it at a scratch bench root: the default finds the operator's
+    /// Injected so a test can point it at a scratch benchd: the default asks the operator's
     /// live browser, and a test that opens a link must not open it there.
     private let makeModel: @MainActor () -> BrowserPaneModel
 

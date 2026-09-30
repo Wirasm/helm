@@ -21,7 +21,8 @@ final class BrowserPaneBenchTests: XCTestCase {
             WorkbenchModel(
                 terminals: terminals,
                 makeBrowser: {
-                    BrowserPaneModel(environment: ["BENCH_DIR": root.path], home: root)
+                    BrowserPaneModel(
+                        endpoint: .unix(path: root.appendingPathComponent("benchd.sock").path))
                 },
                 client: client)
         }

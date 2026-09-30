@@ -20,8 +20,9 @@ final class ArchonPaneKind: SurfaceKind {
 
     func make(for pane: Pane, in workspace: WorkspacePath?) -> ArchonDrawer? {
         guard let workbench, let terminals else { return nil }
+        let host = BenchdHost(client: workbench.client)
         return ArchonDrawer(
-            model: ArchonModel(),
+            model: ArchonModel(client: ArchonCLI(host: host), opener: .live(host: host)),
             workspace: { [weak workbench] in workbench?.workspacePath },
             runInNewTerminal: { [weak workbench, weak terminals] line in
                 guard let workbench, let terminals else { return "helm is closing" }

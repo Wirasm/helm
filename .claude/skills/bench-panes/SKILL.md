@@ -110,8 +110,9 @@ BENCH="${BENCH:-bench}"
 bench get screenshot [--out <file.png>] [--window <title substring>]
 ```
 
-helm draws its own window into a PNG, with no display grant and with the screen locked. The
-answer is helm's report: read `terminalContent` (`included`, `excluded`, `partial`, `absent`)
+helm draws its own window into a PNG, with no display grant and with the screen locked, and
+benchd writes it: at `--out`, or under the bench root's `captures/` when you name none, on
+benchd's machine even when helm is on another. The answer is helm's report with `path`: read `terminalContent` (`included`, `excluded`, `partial`, `absent`)
 rather than assuming terminals are in the picture, and `windowVisible: false` means web content
 may be blank. With two helms running, `--window` names one. No helm following this bench is exit 4
 after ten seconds, naming the cause.

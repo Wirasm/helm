@@ -10,7 +10,7 @@ import SwiftUI
 /// name a single vertical belongs in that vertical's slice.
 struct RootView: View {
     @ObserveInjection private var inject
-    @StateObject private var model = WorkspaceModel()
+    @StateObject private var model: WorkspaceModel
     /// A `@StateObject` rather than a `.shared`: `TerminalManager.shared` and
     /// `BoardModel.shared` are singletons because other slices reach them, and nothing
     /// outside the workbench reaches this one. Drawn from benchd's document (#354).
@@ -35,6 +35,10 @@ struct RootView: View {
         benchSnapshot: BenchSnapshotModel = BenchSnapshotModel()
     ) {
         _workbench = StateObject(wrappedValue: WorkbenchModel(terminals: .shared, client: client()))
+        // Each tab's branch is read on benchd's machine, where the workspace is. Built only when
+        // SwiftUI first makes the model, like the workbench: this `init` runs on every redraw.
+        _model = StateObject(
+            wrappedValue: WorkspaceModel(host: BenchdHost(endpoint: client().endpoint)))
         _benchSnapshot = StateObject(wrappedValue: benchSnapshot)
     }
 

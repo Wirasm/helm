@@ -1,17 +1,21 @@
 import Combine
 import Foundation
+import HelmWire
 
-/// The Worktrees drawer's state (#382): every git repository on the machine that has a linked
-/// worktree or is one of the bench's workspaces, and every worktree in each.
+/// The Worktrees drawer's state (#382): every git repository on benchd's machine that has a
+/// linked worktree or is one of the bench's workspaces, and every worktree in each. benchd finds
+/// the repositories and runs the git (M5c, `BenchHost`), so "the machine" is benchd's, whether
+/// that is this Mac or another.
 ///
 /// **Git is the only source, and nothing is stored.** The list is what the last refresh read,
 /// held for as long as the drawer's pane lives so reopening it shows the last answer at once
 /// while the next one is read. A refresh runs when the drawer is shown and when the operator
 /// asks (`r`); it never polls.
 ///
-/// **A refresh never blocks the window.** Discovery reads the filesystem off the main actor, and
-/// the repositories are read `concurrentRepositories` at a time, each published the moment it
-/// answers. A repository that fails keeps the rows it last had and says why.
+/// **A refresh never blocks the window.** Discovery is one `git/repositories` question to benchd,
+/// and the repositories are read `concurrentRepositories` at a time, each published the moment it
+/// answers. A repository that fails keeps the rows it last had and says why; discovery that fails
+/// keeps every row and says why (`discoveryFailure`).
 ///
 /// **Changes are the operator's, one at a time** (#141): a new worktree at the repository's
 /// conventional place, and a removal he confirmed after being told what it loses —
@@ -39,6 +43,8 @@ final class WorktreesModel: ObservableObject {
     /// The repositories a bench workspace is in, listed even with no linked worktree.
     @Published private(set) var workspaceRepos: Set<GitCommonDir> = []
     @Published private(set) var isRefreshing = false
+    /// Why the last search for repositories failed: benchd not reached, or refused.
+    @Published private(set) var discoveryFailure: String?
     /// Why a repository's last read failed, by common directory.
     @Published private(set) var refreshFailures: [GitCommonDir: String] = [:]
     @Published private(set) var confirmation: Confirmation?
@@ -62,13 +68,13 @@ final class WorktreesModel: ObservableObject {
     var unlistedCount: Int { repos.count - listed.count }
 
     private let worktreeClient: any WorktreeClient
-    private let discover: @Sendable ([String]) -> [WorktreeDiscovery.Found]
+    private let discover: @Sendable ([String]) async throws -> [BenchGitRepository]
 
+    /// `discover` answers the repositories for the bench's workspace paths
+    /// (`BenchHost.repositories`).
     init(
-        worktreeClient: any WorktreeClient = WorktreeCLI(),
-        discover: @escaping @Sendable ([String]) -> [WorktreeDiscovery.Found] = {
-            WorktreeDiscovery().repositories(workspaces: $0)
-        }
+        worktreeClient: any WorktreeClient,
+        discover: @escaping @Sendable ([String]) async throws -> [BenchGitRepository]
     ) {
         self.worktreeClient = worktreeClient
         self.discover = discover
@@ -86,10 +92,16 @@ final class WorktreesModel: ObservableObject {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
-        let discover = self.discover
-        let found = await Task.detached { discover(workspaces) }.value
-        let order = found.map(\.commonDir)
-        workspaceRepos = Set(found.filter(\.isWorkspace).map(\.commonDir))
+        let found: [BenchGitRepository]
+        do {
+            found = try await discover(workspaces)
+            discoveryFailure = nil
+        } catch {
+            if !Task.isCancelled { discoveryFailure = error.localizedDescription }
+            return
+        }
+        let order = found.map { GitCommonDir($0.commonDir) }
+        workspaceRepos = Set(found.filter(\.isWorkspace).map { GitCommonDir($0.commonDir) })
         let workspaceRepos = self.workspaceRepos
         repos.removeAll { !order.contains($0.id) }
         refreshFailures = refreshFailures.filter { order.contains($0.key) }

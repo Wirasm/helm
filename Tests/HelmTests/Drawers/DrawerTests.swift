@@ -28,7 +28,10 @@ final class DrawerTests: XCTestCase {
         let model = WorkbenchModel(
             terminals: terminals,
             makeBrowser: makeBrowser
-                ?? { BrowserPaneModel(environment: ["BENCH_DIR": root.path], home: root) },
+                ?? {
+                    BrowserPaneModel(
+                        endpoint: .unix(path: root.appendingPathComponent("benchd.sock").path))
+                },
             client: client)
         addTeardownBlock { @MainActor in
             client.stop()
@@ -110,7 +113,8 @@ final class DrawerTests: XCTestCase {
             document(bench, seq: 1, drawers: [drawer], open: "browser"),
             makeBrowser: {
                 made.value += 1
-                return BrowserPaneModel(environment: ["BENCH_DIR": root.path], home: root)
+                return BrowserPaneModel(
+                    endpoint: .unix(path: root.appendingPathComponent("benchd.sock").path))
             })
         let pane = Pane(id: paneID, content: .browser)
         let slot = SurfaceSlot(
@@ -137,7 +141,7 @@ final class DrawerTests: XCTestCase {
     func testTheDrawerKeySendsDrawerToggleAsTheOperator() throws {
         let rig = try rig(document(BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
         let actions = LocalActions(
-            workbench: rig.model, workspaces: WorkspaceModel(),
+            workbench: rig.model, workspaces: WorkspaceModel(readBranch: { _ in nil }),
             terminals: rig.terminals)
 
         actions.perform(.verb(.toggleDrawer(name: "browser", surface: .browser)))
@@ -162,7 +166,8 @@ final class DrawerTests: XCTestCase {
             document(bench, seq: 1),
             makeBrowser: {
                 made.value += 1
-                return BrowserPaneModel(environment: ["BENCH_DIR": root.path], home: root)
+                return BrowserPaneModel(
+                    endpoint: .unix(path: root.appendingPathComponent("benchd.sock").path))
             })
         let created = UUID()
         let badged = document(bench, seq: 2, drawers: [browserDrawer(created, badged: true)])

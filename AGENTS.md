@@ -356,8 +356,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
 - **To see the UI, ask helm to draw itself: `bench get screenshot [--out <p.png>]`.**
   **No TCC grant, no display, no keystrokes, no Accessibility** — an app rendering its own view
   hierarchy is *drawing*, and TCC does not gate it. benchd asks the helm that follows it
-  (`helm/asked`, answered by `HelmAsks`), so it works with the screen locked and over ssh. The
-  answer is helm's report; exit 4 names the cause when no helm answers within ten seconds.
+  (`helm/asked`, answered by `HelmAsks`), so it works with the screen locked and over ssh. helm
+  sends the PNG back and benchd writes it (M5c), so the file lands beside benchd even when helm
+  is on another machine. The answer is helm's report; exit 4 names the cause when no helm answers within ten seconds.
   **`terminalContent` is the field to read.** It is computed per capture, never assumed:
   `included` (every terminal pane's cells are in the image), `excluded` (none are — their
   regions carry a printed marker in the PNG itself), `partial`, or `absent` (no terminal in the
@@ -758,11 +759,14 @@ above and are the easiest to be surprised by:
   launches from the keyboard. It is the successor of a rail tenant the operator cut back as *"too
   much bloat"*: read `ArchonModel`'s header before adding anything, since several obvious additions
   are things that were removed. Agents never use it; Archon's CLI is their view. The Worktrees
-  drawer lists every worktree on the machine, grouped by repository, read from git alone
-  (`WorktreeDiscovery` finds the repositories on disk; `HELM_WORKTREES_HOME` moves where it looks,
-  which is how an isolated instance lists scratch repositories): helm reads no Archon database,
-  and "merged" means Git reachability from a resolved remote default branch, never pull-request
-  state. There is no rail any more; both were its tenants. `CONTEXT.md` has both.
+  drawer lists every worktree on the machine, grouped by repository, read from git alone: helm
+  reads no Archon database, and "merged" means Git reachability from a resolved remote default
+  branch, never pull-request state. **"The machine" is benchd's (M5c)**: both drawers and each
+  tab's branch label run `git` and `archon` through benchd (`BenchHost`: `command/run`,
+  `path/exists`, and `git/repositories`, which searches benchd's `HOME`), on one machine too, so an
+  isolated instance lists whatever its own benchd's `HOME` holds. The git and Archon logic stays in
+  helm; only the process moved. There is no rail any more; both were its tenants. `CONTEXT.md` has
+  both.
 - **`Board/` is agent presence and the bench snapshot — it is not the drawable board.** The
   collision is real and worth knowing before a grep sends you to the wrong one. `Sources/Helm/Board/`
   is `BoardModel`, `AgentDot` and `BenchSnapshot`: which workspace tab has an agent that has

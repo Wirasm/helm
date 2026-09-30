@@ -17,6 +17,9 @@ final class BenchSocket {
 
     private let fd: Int32
     private var buffer = Data()
+    /// How much of `buffer` is known to hold no newline, so a line of several MB (a screencast
+    /// frame on the browser relay) is scanned once rather than once per chunk read.
+    private var scanned = 0
     private var closed = false
 
     /// Connect, with `timeout` bounding every read and write after it. nil timeout is a
@@ -143,11 +146,14 @@ final class BenchSocket {
     /// The next line without its newline, or nil at end of file.
     func readLine() throws -> Data? {
         while true {
-            if let newline = buffer.firstIndex(of: 0x0A) {
-                let line = buffer[buffer.startIndex..<newline]
-                buffer.removeSubrange(buffer.startIndex...newline)
-                return Data(line)
+            let from = buffer.index(buffer.startIndex, offsetBy: scanned)
+            if let newline = buffer[from...].firstIndex(of: 0x0A) {
+                let line = Data(buffer[buffer.startIndex..<newline])
+                buffer = Data(buffer[buffer.index(after: newline)...])
+                scanned = 0
+                return line
             }
+            scanned = buffer.count
             var chunk = [UInt8](repeating: 0, count: 64 * 1024)
             let n = recv(fd, &chunk, chunk.count, 0)
             if n == 0 { return nil }

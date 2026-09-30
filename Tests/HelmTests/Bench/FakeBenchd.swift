@@ -28,6 +28,10 @@ final class FakeBenchd: @unchecked Sendable {
     /// at the next seq — with the frame pushed first, as benchd does, when `frame` gives one.
     var answer: @Sendable ([String: Any]) -> [String: Any]
 
+    /// What a `browser/connect` answered ok turns into: the connection past its answer line, as
+    /// benchd's relay to the browser (M5c). It owns the descriptor and closes it when done.
+    var relay: (@Sendable (Int32) -> Void)?
+
     init(document: DocumentAt, tcp: Bool = false) throws {
         // Short on purpose: a sockaddr_un path caps near 104 bytes, and the temporary directory
         // alone is half of that.
@@ -219,6 +223,11 @@ final class FakeBenchd: @unchecked Sendable {
         }
         let reply = answer(request)
         write(fd, try! JSONSerialization.data(withJSONObject: reply) + Data([0x0A]))
+        if request["verb"] as? String == "browser/connect", reply["status"] as? String == "ok",
+            let relay
+        {
+            return relay(fd)
+        }
         close(fd)
     }
 

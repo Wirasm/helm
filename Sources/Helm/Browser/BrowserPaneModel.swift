@@ -6,9 +6,10 @@ import HelmWire
 /// A browser pane's live side: finds the shared browser, shows one of its tabs, and forwards
 /// the operator's mouse and keyboard to it.
 ///
-/// **Chrome is benchd's, never helm's** (#350). This connects to the endpoint benchd
-/// publishes, and when there is none it waits — it never starts a browser. Agents drive the
-/// same browser with Playwright at the same time; this only shows it and takes input.
+/// **Chrome is benchd's, never helm's** (#350). This asks benchd for a connection to it
+/// (`browser/connect`, relayed on benchd's machine, M5c), and when there is none it waits — it
+/// never starts a browser. Agents drive the same browser with Playwright at the same time; this
+/// only shows it and takes input.
 ///
 /// Cached per pane by `WorkbenchModel`, like a canvas, so a tab switch keeps the connection.
 @MainActor
@@ -33,7 +34,8 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         didSet { if let frame = lastFrame { surface?.show(frame) } }
     }
 
-    private let endpointURL: Result<URL, BenchRootError>
+    /// benchd, or nil when this helm has none to ask (the status bar says why).
+    private let endpoint: BenchEndpoint?
     private var connection: CDPConnection?
     private var session: String?
     private var watch: Task<Void, Never>?
@@ -46,12 +48,8 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         var scale: CGFloat
     }
 
-    init(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        home: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) {
-        endpointURL = BenchRoot.resolve(environment: environment, home: home)
-            .map(BrowserEndpoint.url(in:))
+    init(endpoint: BenchEndpoint?) {
+        self.endpoint = endpoint
         startWatching()
     }
 
@@ -67,57 +65,42 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
 
     // MARK: - Finding the browser
 
-    /// Poll the endpoint file once a second while disconnected. A file read a second is
-    /// nothing, and it is the only signal there is: benchd writes the file when a browser
-    /// comes up and removes it when it goes.
+    /// Ask benchd for the browser once a second while disconnected. A refused ask is one short
+    /// round trip, and it is the only signal there is: benchd answers with a connection once a
+    /// browser runs, and says why not until then.
     private func startWatching() {
         watch?.cancel()
         watch = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                if connection == nil { lookForBrowser() }
+                if connection == nil { connect() }
                 try? await Task.sleep(for: .seconds(1))
             }
         }
     }
 
-    private func lookForBrowser() {
-        let url: URL
-        switch endpointURL {
-        case let .failure(error):
-            status = .waiting(error.sentence)
-            return
-        case let .success(found):
-            url = found
-        }
-        switch BrowserEndpoint.read(at: url) {
-        case .absent:
+    /// The status stays what it was until benchd answers, so a pane waiting for a browser does
+    /// not flicker to "connecting" once a second.
+    private func connect() {
+        guard let endpoint else {
             status = .waiting(
-                "No shared browser is running here. `bench browser start` starts one, and "
-                    + "after `bench browser setup` it comes back when that window is quit (⌘Q); "
-                    + "this pane connects when it appears.")
-        case let .unreadable(why):
-            status = .waiting(why)
-        case let .found(endpoint):
-            guard let ws = endpoint.webSocketURL else {
-                status = .waiting("\(url.path) names no websocket")
-                return
-            }
-            connect(to: ws)
+                "helm has no benchd to ask for the shared browser; the status bar says why.")
+            return
         }
-    }
-
-    private func connect(to ws: URL) {
-        status = .connecting
-        let connection = CDPConnection(url: ws)
+        let connection = CDPConnection(endpoint: endpoint)
         self.connection = connection
         connection.onEvent = { [weak self] event in self?.handle(event) }
-        connection.onClose = { [weak self, weak connection] reason in
+        connection.onClose = { [weak self, weak connection] ending in
             guard let self, self.connection === connection else { return }
             self.connection = nil
             self.session = nil
-            self.status = .waiting(
-                "Lost the shared browser (\(reason)). Waiting for it to come back.")
+            switch ending {
+            case let .refused(why):
+                self.status = .waiting(Self.waiting(why))
+            case let .lost(why):
+                self.status = .waiting(
+                    "Lost the shared browser (\(why)). Waiting for it to come back.")
+            }
         }
         connection.open()
         Task {
@@ -132,6 +115,13 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
                 connection.close("could not read the browser's tabs: \(error)")
             }
         }
+    }
+
+    /// What the pane says while benchd has no browser to give it: benchd's own sentence, which
+    /// names the command that starts one.
+    private static func waiting(_ why: String) -> String {
+        guard let first = why.first else { return why }
+        return first.uppercased() + why.dropFirst() + ". This pane connects when it appears."
     }
 
     // MARK: - Events

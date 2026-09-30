@@ -68,7 +68,7 @@ final class ResumableAgentTests: XCTestCase {
                     .init(path: mounted.path.value, bench: ToyBench.bench([ToyBench.terminal()])),
                 ], active: mounted.path.value)
         )
-        let workspaces = WorkspaceModel()
+        let workspaces = WorkspaceModel(readBranch: { _ in nil })
         workspaces.follow(try XCTUnwrap(rig.model.document))
 
         let snapshot = BenchSnapshot.project(
@@ -92,7 +92,7 @@ final class ResumableAgentTests: XCTestCase {
                 workspaces: [.init(path: workspace.value, bench: bench)],
                 active: workspace.value)
         )
-        let workspaces = WorkspaceModel()
+        let workspaces = WorkspaceModel(readBranch: { _ in nil })
         workspaces.follow(try XCTUnwrap(rig.model.document))
         return BenchSnapshot.project(
             writtenAt: Date(timeIntervalSince1970: 42), workspaces: workspaces,

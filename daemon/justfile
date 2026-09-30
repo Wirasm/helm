@@ -116,12 +116,13 @@ spec:
     for verb in status events stop:probe spawn sessions attach close resume \
                 open split show focus move name helm/ask helm/answer \
                 attn/post attn/list attn/ack watch mail/send mail/list mail/read mail/who hook \
-                sessions/all sessions/dismiss browser/start browser/status browser/stop browser/setup \
+                sessions/all sessions/dismiss browser/start browser/status browser/stop browser/setup browser/connect \
                 bench/get workspace/open workspace/close workspace/activate \
                 pane/open pane/split pane/close pane/show \
                 pane/move pane/name focus/slot focus/step focus/waiting \
                 layout/resize drawer/toggle just/run just/list restore screen/get screen/send \
                 file/read file/write file/append \
+                command/run path/exists git/repositories \
                 prp/note prp/stores prp/artifacts path/resolve; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then
