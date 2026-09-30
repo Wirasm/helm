@@ -228,8 +228,8 @@ package struct BenchLiveSessions: Decodable, Equatable, Sendable {
     /// hook. So helm reads no registry of its own, and a benchd on another machine still lights
     /// presence (M5c, #459).
     package struct Report: Decodable, Equatable, Sendable {
-        /// The harness's own word (`bench_wire::Activity`'s `kind`): `busy`, `shell`, `idle`,
-        /// `waiting`, and the rarer `blocked` and `waiting_on_tasks`.
+        /// The harness's own word (`bench_wire::Activity`'s `kind`): `busy`, `shell`, `idle` or
+        /// `waiting`, the only four a registry row or a hook says.
         package var activity: String
         /// What it waits for, in its own words, when `activity` is `waiting` and it says.
         package var waitingFor: String?

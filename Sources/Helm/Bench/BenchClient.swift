@@ -131,21 +131,26 @@ final class BenchClient: ObservableObject {
 
     /// The `bench` a pane runs to show a session (`SessionAttach`), as an absolute path: the one
     /// beside the benchd this client follows, else an installed one (`BenchExecutable`). Asked
-    /// once per connection, since a restarted benchd may be a new build somewhere else. Only a
-    /// found one is kept: a failure is asked again at the next drawing.
+    /// once per connection, since a restarted benchd may be a new build somewhere else. Only an
+    /// answer benchd gave is kept: a failure to ask is asked again at the next drawing.
     ///
     /// A benchd reached over TCP names a path on its own machine, so helm runs its own `bench`
     /// instead (M5c), which reaches benchd through the `BENCH_URL` the pane inherits from helm.
-    /// That one is another build, so its version is compared with benchd's first (`OtherBuild`).
+    /// That one is another build, so its version is compared with benchd's first (`OtherBuild`),
+    /// and the verdict either way is kept for the connection.
     var benchExecutable: Result<String, BenchExecutable.Unusable> {
-        if let known = benchBinaryCache { return .success(known) }
+        if let known = benchBinaryCache { return known }
         if case .tcp = endpoint {
             switch BenchExecutable.local() {
             case let .failure(missing): return .failure(.notFound(missing))
             case let .success(bench):
-                if let other = otherBuild(than: bench) { return .failure(.otherBuild(other)) }
-                benchBinaryCache = bench
-                return .success(bench)
+                guard let benchd = benchdVersion() else { return .success(bench) }
+                let verdict: Result<String, BenchExecutable.Unusable> =
+                    BenchExecutable.OtherBuild(
+                        bench: bench, ours: BenchExecutable.version(of: bench), benchd: benchd
+                    ).map { .failure(.otherBuild($0)) } ?? .success(bench)
+                benchBinaryCache = verdict
+                return verdict
             }
         }
         var why: String?
@@ -159,23 +164,24 @@ final class BenchClient: ObservableObject {
             reply = nil
         }
         let found = BenchExecutable.resolve(named: reply?.data?.bench, why: why)
-        if case let .success(bench) = found { benchBinaryCache = bench }
-        return found.mapError(BenchExecutable.Unusable.notFound)
+        let result = found.mapError(BenchExecutable.Unusable.notFound)
+        if case .success = result { benchBinaryCache = result }
+        return result
     }
 
-    /// `bench` is not the build benchd is, by `bench --version` against `status.version`. nil
-    /// when they agree, or when benchd cannot be asked: the pane then attaches, and says for
-    /// itself that it cannot reach benchd.
-    private func otherBuild(than bench: String) -> BenchExecutable.OtherBuild? {
-        let reply = try? request(
-            BenchStatusRequest(id: "helm-status-\(UUID().uuidString)"),
-            answering: BenchStatusReply.self)
-        guard let benchd = reply?.data?.version else { return nil }
-        return BenchExecutable.OtherBuild(
-            bench: bench, ours: BenchExecutable.version(of: bench), benchd: benchd)
+    /// benchd's `status.version`, or nil when benchd cannot be asked: the pane then attaches, and
+    /// says for itself that it cannot reach benchd. A benchd that answers with no version
+    /// predates the field, so it is another build: `unknown`.
+    private func benchdVersion() -> String? {
+        guard
+            let reply = try? request(
+                BenchStatusRequest(id: "helm-status-\(UUID().uuidString)"),
+                answering: BenchStatusReply.self), reply.status == .ok
+        else { return nil }
+        return reply.data?.version ?? "unknown"
     }
 
-    private var benchBinaryCache: String?
+    private var benchBinaryCache: Result<String, BenchExecutable.Unusable>?
 
     /// One verb, one answer. Blocking, and bounded by `requestTimeout`.
     nonisolated func request<Payload: Decodable & Sendable>(

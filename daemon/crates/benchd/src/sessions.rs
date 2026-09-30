@@ -140,6 +140,8 @@ fn shown_panes(c: &Core) -> Vec<(PaneId, Option<Arc<Session>>, Option<Resumable>
                 .and_then(|id| c.sessions.get(&id))
                 .filter(|s| s.is_live() && s.agent == AgentKind::Shell)
                 .map(Arc::clone);
+            // benchd writes the record from a hook, whose harness is always one it knows, so a
+            // command `Harness` cannot parse is not reachable.
             let resumable = match doc.pane(pane).map(|p| &p.surface) {
                 Some(Surface::Terminal {
                     agent: Some(agent), ..

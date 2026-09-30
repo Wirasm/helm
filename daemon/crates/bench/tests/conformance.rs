@@ -5176,6 +5176,45 @@ fn sessions_report_what_the_agent_in_a_pane_says_it_is_doing() {
     );
 }
 
+/// A pane's agent is found through the shell the pane shows. A session benchd spawned is listed as
+/// its own session already, so the pane showing it adds nothing (it would list it twice).
+#[test]
+fn a_pane_showing_a_spawned_session_places_no_second_agent() {
+    let home = TestHome::claim("m5c-spawned");
+    let h = &home.dir;
+    let ws = workspace(h);
+    let _daemon = DaemonGuard::start(h, None);
+    let (sid, pid) = terminal_process(h, "spawned");
+    let pane = session_row(h, &sid)["pane"].clone();
+    assert!(pane.is_string(), "the spawn is shown in a pane: {pane}");
+    let started = bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
+    let row = h.join(format!(".claude/sessions/{pid}.json"));
+    fs::create_dir_all(row.parent().unwrap()).unwrap();
+    fs::write(
+        &row,
+        serde_json::json!({"pid": pid, "sessionId": "via-pane", "cwd": ws, "startedAt": started,
+            "status": "idle"})
+        .to_string(),
+    )
+    .unwrap();
+    let list = bench(
+        h,
+        &[
+            "sessions",
+            "--all",
+            "--workspace",
+            &ws.display().to_string(),
+        ],
+    );
+    assert_eq!(list.code, 0, "{}", list.stderr);
+    let list: bench_wire::SessionList = serde_json::from_str(&list.stdout).unwrap();
+    assert!(
+        list.rows.iter().all(|r| r.id != "via-pane"),
+        "{:?}",
+        list.rows
+    );
+}
+
 /// `bench --version` is what helm compares with `status.version` before it runs its own `bench`
 /// in a pane against a benchd over TCP, so the two say the same thing for the same build.
 #[test]

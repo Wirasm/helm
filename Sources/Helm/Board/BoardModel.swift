@@ -82,12 +82,13 @@ final class BoardModel: ObservableObject {
     }
 
     /// Whether an agent that says `activity` is carrying on without you. `waiting` (blocked on a
-    /// prompt), `idle` (finished) and `blocked` (a job waiting on someone) are the same state
-    /// seen three times: it is your turn. nil for a word the board does not know.
+    /// prompt) and `idle` (finished) are the same state seen twice: it is your turn. nil for a
+    /// word the board does not know. A report says only these four: the registry's statuses and
+    /// a hook's busy, idle and waiting.
     nonisolated static func isWorking(_ activity: String) -> Bool? {
         switch activity {
-        case "busy", "shell", "waiting_on_tasks": true
-        case "idle", "waiting", "blocked": false
+        case "busy", "shell": true
+        case "idle", "waiting": false
         default: nil
         }
     }

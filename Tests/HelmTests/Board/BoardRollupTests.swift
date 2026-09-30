@@ -22,15 +22,12 @@ final class BoardRollupTests: XCTestCase {
             "the mixed case is ordinary, not an edge — one stopped agent is the whole signal")
     }
 
-    func testWaitingAndBlockedLightTheSameAsIdle() {
+    func testWaitingLightsTheSameAsIdle() {
         XCTAssertEqual(BoardModel.presence(of: [report("waiting")]), .notWorking)
-        XCTAssertEqual(BoardModel.presence(of: [report("blocked")]), .notWorking)
     }
 
     func testWorkingWhenEveryAgentIsWorking() {
-        XCTAssertEqual(
-            BoardModel.presence(of: [report("busy"), report("shell"), report("waiting_on_tasks")]),
-            .working)
+        XCTAssertEqual(BoardModel.presence(of: [report("busy"), report("shell")]), .working)
     }
 
     // MARK: - Absence

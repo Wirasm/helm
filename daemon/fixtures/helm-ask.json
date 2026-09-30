@@ -25,6 +25,6 @@
   },
   "status_reply": {
     "bench": "/Users/rasmus/.cargo/bin/bench",
-    "version": "0.0.1"
+    "version": "0.0.2"
   }
 }

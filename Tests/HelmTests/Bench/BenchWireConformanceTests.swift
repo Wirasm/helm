@@ -298,7 +298,7 @@ final class BenchWireConformanceTests: XCTestCase {
             BenchStatusReply.self,
             from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["status_reply"])))
         XCTAssertEqual(
-            status, BenchStatusReply(bench: "/Users/rasmus/.cargo/bin/bench", version: "0.0.1"))
+            status, BenchStatusReply(bench: "/Users/rasmus/.cargo/bin/bench", version: "0.0.2"))
     }
 
     /// A document written before drawers existed has none, and helm writes none back.

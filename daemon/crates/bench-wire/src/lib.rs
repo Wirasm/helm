@@ -52,7 +52,8 @@ pub use sessions::{
 
 /// This build of the bench, as `status.version` and `bench --version` both say it. helm runs
 /// its own `bench` against a benchd over TCP and refuses to attach when the two differ, so bump
-/// the workspace version when a `bench` and a benchd can no longer talk.
+/// the workspace version (`daemon/Cargo.toml`) with any change to the wire, as 0.0.2 did when
+/// `sessions` gained `report` and `status` its `version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// A request line larger than this is refused, not read. The cap is about the reader:
