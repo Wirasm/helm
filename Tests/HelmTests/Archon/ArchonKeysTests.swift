@@ -65,6 +65,8 @@ final class ArchonKeysTests: XCTestCase {
     func testTheLogAndTheComposerAreAlwaysThere() {
         XCTAssertEqual(action("l", running), .followLog(running))
         XCTAssertEqual(action("/", nil), .focusComposer)
+        XCTAssertEqual(action("w", nil), .pickWorkflow)
+        XCTAssertEqual(action("w", gate), .pickWorkflow, "whatever run is picked")
         XCTAssertEqual(action("a", nil), .none)
     }
 

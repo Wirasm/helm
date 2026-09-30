@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The Archon drawer's one input (#382), moved whole from the rail it used to sit in: launching
-/// work, or answering the gate it has been pointed at. ⌥↑ and ⌥↓ pick the workflow a launch
-/// runs; the settings button holds the rest of what a launch composes.
+/// work, or answering the gate it has been pointed at. The label under the field names the
+/// workflow a launch runs and opens the list it is searched from (#528); ⌥↑ and ⌥↓ step through
+/// it. The settings button holds how a launch isolates itself.
 struct ArchonComposer: View {
     @ObservedObject var model: ArchonModel
     let workspacePath: WorkspacePath?
@@ -57,11 +58,7 @@ struct ArchonComposer: View {
             HStack(spacing: 6) {
                 if model.reply == nil {
                     settings
-                    Text(
-                        model.config.workflow.isEmpty ? "no workflow chosen" : model.config.workflow
-                    )
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(Color.archonViolet)
+                    ArchonWorkflowLabel(model: model, workspacePath: workspacePath)
                 } else {
                     cancelReply
                 }
@@ -222,11 +219,11 @@ struct ArchonComposer: View {
         }
     }
 
-    /// An icon, not a sentence — the rail renders six things, and "which workflow Enter
-    /// launches" is not one of them. It is one click away instead of on screen.
+    /// An icon, not a sentence: how a launch isolates itself is set once and rarely changed.
+    /// The workflow was here too until the operator could not find it (#528).
     private var settings: some View {
         Button {
-            Task { await model.loadWorkflows(in: workspacePath) }
+            model.isConfigOpen = true
         } label: {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 11))
@@ -234,22 +231,13 @@ struct ArchonComposer: View {
                 .frame(width: 18, height: 18)
         }
         .buttonStyle(.chrome)
-        .help("What Send launches: the workflow, and how it isolates")
+        .help("How Send isolates a launch: a new worktree, or the checked-out branch")
         .popover(isPresented: $model.isConfigOpen, arrowEdge: .bottom) { configuration }
     }
 
     private var configuration: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Launch settings").font(.headline)
-
-            Picker("Workflow", selection: $model.config.workflow) {
-                if model.workflows.isEmpty {
-                    Text(model.isLoadingWorkflows ? "Loading…" : "No workflows found").tag("")
-                }
-                ForEach(model.workflows) { workflow in
-                    Text(workflow.name).tag(workflow.name)
-                }
-            }
 
             Picker("Isolation", selection: isolation) {
                 ForEach(Isolation.allCases) { kind in
@@ -258,12 +246,6 @@ struct ArchonComposer: View {
             }
             if case let .branch(name) = model.config.worktree {
                 TextField("Branch to create", text: branchName(current: name))
-            }
-
-            if !model.workflowLoadErrors.isEmpty {
-                Text("\(model.workflowLoadErrors.count) workflow file(s) could not be loaded.")
-                    .font(.caption)
-                    .foregroundStyle(Color.textMuted)
             }
             HStack {
                 Spacer()

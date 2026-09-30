@@ -19,6 +19,8 @@ enum ArchonKeyAction: Equatable {
     case followLog(ArchonRun)
     case dismiss(ArchonRun)
     case focusComposer
+    /// Open the searchable list of workflows Send can launch (#528).
+    case pickWorkflow
 }
 
 enum ArchonKeys {
@@ -28,6 +30,7 @@ enum ArchonKeys {
         for key: Character, on run: ArchonRun?, armedCancel: String?
     ) -> ArchonKeyAction {
         if key == "/" { return .focusComposer }
+        if key == "w" { return .pickWorkflow }
         guard let run else { return .none }
         switch key {
         case "\r":

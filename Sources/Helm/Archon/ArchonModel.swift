@@ -32,6 +32,8 @@ final class ArchonModel: ObservableObject {
     static let configKey = "archonLaunchConfig"
     /// One string, one guard. It was written out twice and the copies were already drifting.
     static let noWorkspace = "Open a workspace before starting an Archon workflow."
+    /// What Send launches when nothing usable is chosen, if the workspace has it (#528).
+    static let defaultWorkflow = "archon-ship"
 
     /// What the operator is typing. Owned by the view's field, so not `private(set)`.
     ///
@@ -90,6 +92,14 @@ final class ArchonModel: ObservableObject {
     @Published private(set) var workflows: [ArchonWorkflow] = []
     @Published private(set) var workflowLoadErrors: [ArchonWorkflowLoadError] = []
     @Published private(set) var isLoadingWorkflows = false
+    /// Whether the searchable workflow list is open over the run list. On the model
+    /// because two views open it: the label under the composer, and `w` in the run list.
+    @Published var isPickingWorkflow = false
+    /// Why the label shows the workflow it does, when that is not the default: this workspace
+    /// has no `archon-ship`, so the first workflow was taken instead. Nil otherwise.
+    @Published private(set) var workflowNote: String?
+    /// Whose list `workflows` is, so the note is dropped when the workspace changes.
+    private var workflowsWorkspace: WorkspacePath?
     private let client: any ArchonClient
     private let defaults: UserDefaults
     private let opener: ArchonRunOpener
@@ -405,10 +415,10 @@ final class ArchonModel: ObservableObject {
         actionFailure = failure
     }
 
-    /// Opening the settings is what loads the workflow list — the rail does not need it to
-    /// poll, and `workflow list` reads every workflow file in the project on every call.
+    /// The list the label and the picker draw from, read when the drawer shows a workspace and
+    /// again when the picker opens: `workflow list` reads every workflow file in the project, so
+    /// it is not on the poll.
     func loadWorkflows(in workspacePath: WorkspacePath?) async {
-        isConfigOpen = true
         launchFailure = nil
         guard let workspacePath else {
             launchFailure = Self.noWorkspace
@@ -420,23 +430,59 @@ final class ArchonModel: ObservableObject {
             let response = try await client.workflows(in: workspacePath)
             workflows = response.workflows
             workflowLoadErrors = response.errors
-            if config.workflow.isEmpty { config.workflow = workflows.first?.name ?? "" }
+            // The note is about one workspace's list; another workspace's says nothing here.
+            if workspacePath != workflowsWorkspace {
+                workflowNote = nil
+                workflowsWorkspace = workspacePath
+            }
+            seedWorkflow()
         } catch {
             launchFailure = error.localizedDescription
         }
     }
 
-    /// ⌥↑ / ⌥↓ in the composer: the previous or next workflow becomes what a launch runs. The list
-    /// is loaded the first time it is asked for, as opening the settings does.
-    func cycleWorkflow(by step: Int, in workspacePath: WorkspacePath?) async {
-        if workflows.isEmpty {
-            await loadWorkflows(in: workspacePath)
-            isConfigOpen = false
+    /// **A stored name this workspace does not have is not a choice here** (#528). The choice
+    /// is one value for every workspace, so it can name a workflow from another project — the
+    /// operator's did — and the label would then show something Send cannot launch. An empty
+    /// list changes nothing: there is nothing better to put there.
+    private func seedWorkflow() {
+        let names = workflows.map(\.name)
+        guard let first = names.first, !names.contains(config.workflow) else { return }
+        if names.contains(Self.defaultWorkflow) {
+            config.workflow = Self.defaultWorkflow
+        } else {
+            config.workflow = first
+            workflowNote = "no \(Self.defaultWorkflow) here"
         }
+    }
+
+    /// The label, or `w` in the run list: the searchable list opens at once and is refreshed
+    /// behind it, so a workflow file added since the drawer opened is in it.
+    func openWorkflowPicker(in workspacePath: WorkspacePath?) async {
+        isPickingWorkflow = true
+        await loadWorkflows(in: workspacePath)
+    }
+
+    /// The operator's choice, which also retires the note about the default.
+    func pick(_ workflow: String) {
+        config.workflow = workflow
+        workflowNote = nil
+        isPickingWorkflow = false
+    }
+
+    /// The picker's rows for what is typed, filtered and ranked the way the ⌘K palette is.
+    func workflows(matching query: String) -> [ArchonWorkflow] {
+        FuzzyMatch.rank(workflows, by: query) { $0.name }
+    }
+
+    /// ⌥↑ / ⌥↓ in the composer: the previous or next workflow becomes what a launch runs. The list
+    /// is loaded the first time it is asked for.
+    func cycleWorkflow(by step: Int, in workspacePath: WorkspacePath?) async {
+        if workflows.isEmpty { await loadWorkflows(in: workspacePath) }
         let names = workflows.map(\.name)
         guard !names.isEmpty else { return }
         let current = names.firstIndex(of: config.workflow) ?? (step > 0 ? -1 : 0)
-        config.workflow = names[(current + step + names.count) % names.count]
+        pick(names[(current + step + names.count) % names.count])
     }
 
     /// Enter in the field, or the send button. Everything except the message comes from the
@@ -450,7 +496,7 @@ final class ArchonModel: ObservableObject {
             return
         }
         guard !workflow.isEmpty else {
-            launchFailure = "Choose a workflow in the settings before launching."
+            launchFailure = "Choose a workflow before launching."
             return
         }
         guard !message.isEmpty else {

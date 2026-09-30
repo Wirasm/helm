@@ -147,8 +147,8 @@ private final class RailWindow {
 
         model = ArchonModel(client: client, defaults: defaults)
         // **A workflow has to be chosen or nothing below measures anything.** `launch` refuses
-        // an unconfigured rail before it ever reaches the client — "Choose a workflow in the
-        // settings before launching." — and every "nothing was launched" assertion here would
+        // an unconfigured rail before it ever reaches the client — "Choose a workflow before
+        // launching." — and every "nothing was launched" assertion here would
         // then pass for that reason instead of the one it names.
         model.config = ArchonLaunchConfig(workflow: "review", worktree: .automatic)
 

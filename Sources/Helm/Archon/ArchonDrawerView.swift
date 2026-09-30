@@ -6,7 +6,7 @@ import SwiftUI
 /// Top to bottom: the title and the keys, the runs waiting on the operator, the running ones,
 /// the finished ones he has not cleared, and the one input. ↑↓ pick a run; every other key is
 /// `ArchonKeys`'s table, and the hint line under the list only names the keys that apply to the
-/// run picked.
+/// run picked. While a workflow is being picked, its searchable list is drawn over the runs.
 struct ArchonDrawerView: View {
     let drawer: ArchonDrawer
     @ObservedObject var model: ArchonModel
@@ -35,7 +35,18 @@ struct ArchonDrawerView: View {
         VStack(spacing: 0) {
             ArchonDrawerTitle(workspace: workspace)
             Color.archonBorder.frame(height: 1)
-            list
+            // Drawn over the run list rather than in place of it: a list taken out of the tree
+            // and put back did not take the keyboard again, so Esc then `/` did nothing.
+            list.overlay {
+                if model.isPickingWorkflow {
+                    ArchonWorkflowList(
+                        model: model,
+                        picked: { composerFocused = true },
+                        cancelled: { listFocused = true }
+                    )
+                    .background(Color.archonSurface)
+                }
+            }
             Color.archonBorder.frame(height: 1)
             ArchonKeyHints(run: selectedRun, notice: notice)
             Color.archonBorder.frame(height: 1)
@@ -55,7 +66,12 @@ struct ArchonDrawerView: View {
         .onChange(of: holdsKeyboard) { listFocused = holdsKeyboard && !composerFocused }
         // Keyed on the workspace: switching one restarts the poll about the new one, and hiding
         // the drawer ends it.
-        .task(id: workspace) { await model.poll(in: workspace) }
+        .task(id: workspace) {
+            // The label beside the composer names what Send launches, so the list is read
+            // before the first poll rather than when somebody asks for it.
+            if workspace != nil { await model.loadWorkflows(in: workspace) }
+            await model.poll(in: workspace)
+        }
     }
 
     private var list: some View {
@@ -147,6 +163,10 @@ struct ArchonDrawerView: View {
         case .focusComposer:
             listFocused = false
             composerFocused = true
+        case .pickWorkflow:
+            // Armed at a gate the composer answers it and draws no label to open the list from.
+            guard model.reply == nil else { return .ignored }
+            Task { await model.openWorkflowPicker(in: workspace) }
         case let .toggleExpanded(id):
             if expanded.remove(id) == nil { expanded.insert(id) }
         case let .open(run):
@@ -225,7 +245,7 @@ private struct ArchonKeyHints: View {
     }
 
     private var hints: [String] {
-        var hints = ["↑↓ select", "/ start"]
+        var hints = ["↑↓ select", "/ start", "w workflow"]
         guard let run else { return hints }
         if run.isFinished {
             hints += ["⏎ open", "⌫ clear"]
