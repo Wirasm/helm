@@ -27,7 +27,7 @@ final class BenchSnapshotModelTests: XCTestCase {
         let terminals = rig.terminals
         let workbench = rig.model
         // The workspace list follows the document, as `RootView` wires it.
-        let workspaces = WorkspaceModel()
+        let workspaces = WorkspaceModel(readBranch: { _ in nil })
         workbench.followDocuments { workspaces.follow($0) }
         let model = BenchSnapshotModel(
             directory: HelmBenchDirectory(root: root),

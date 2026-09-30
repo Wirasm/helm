@@ -179,8 +179,24 @@ The verbs carry the canvas's rules, because benchd is the side with the disk: a 
 confined to the page's folder with symlinks followed, `file/write` compares against the bytes the
 writer names (`unchanged`) and answers `changed` with what is there instead of writing, and a
 `.notes.md` sidecar is never written whole. Their text is never logged, so `file/write` and
-`file/append` get a 16 MiB request line where every other verb keeps 64 KB. Screenshots, the
-browser and the drawers still reach around the socket; they are the next slices.
+`file/append` get a 16 MiB request line where every other verb keeps 64 KB. Screenshots and the
+browser still reach around the socket; they are the next slices.
+
+**And the drawers' git and archon (M5c, third slice).** helm runs no `git` or `archon` and reads
+no repository itself: the Worktrees drawer, the Archon drawer and each workspace tab's branch ask
+benchd through three verbs (`bench_wire::commands`, pinned by `fixtures/command-verbs.json`,
+`benchd/src/commands.rs`). `command/run` runs `git` or `archon` on this machine and answers the
+exit status and both streams, base64, or `timed_out` past the caller's deadline; a nonzero exit is
+an answer, since helm's delete rules read git's "no" (`merge-base --is-ancestor`). The program is
+a tagged enum rather than an argv because benchd resolves each here: `archon` from its own
+`~/.bun/bin`, which also goes first on the child's `PATH`, with `ARCHON_HOME` when asked. Output
+goes to unlinked files, never pipes, so a `--detach` run's background child cannot hold the
+answer. `path/exists` answers which paths exist and refuses rather than say "absent" when it
+could not look, because helm prunes a worktree it reads as missing. `git/repositories` is the
+drawer's discovery walk over benchd's `HOME`. **`command/run` is not a boundary**: `git -c
+alias.x='!cmd' x` runs anything, so the verb is a shell for whoever reaches the socket, as
+`spawn` and `just/run` already are. The socket and the tailnet are the boundary. helm keeps all
+of its git and Archon logic and moves only the process, so what a delete checks is unchanged.
 
 **Nothing crosses the link by file (M5c, third slice).** benchd no longer reads helm's
 `snapshot.json`: the session list places a pane's agent by the foreground process of the session

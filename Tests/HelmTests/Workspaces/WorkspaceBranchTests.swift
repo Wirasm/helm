@@ -45,6 +45,24 @@ final class WorkspaceBranchTests: XCTestCase {
             "no branch now (detached, or no longer a repository) clears the old label")
     }
 
+    /// A read that got no answer — benchd not reached, git timing out — keeps the label: it says
+    /// nothing about the branch. Only git answering "no branch" clears it.
+    func testAFailedReadKeepsTheLabel() async throws {
+        let git = Git()
+        let failing = LockedFlag()
+        let model = WorkspaceModel(readBranch: { _ in
+            if failing.value { throw BenchHostFailure(reason: "benchd is not answering") }
+            return await git.branch
+        })
+        model.follow(document([workspace]))
+        await git.set("main")
+        await model.refreshBranch(for: workspace)
+
+        failing.set(true)
+        await model.refreshBranch(for: workspace)
+        XCTAssertEqual(model.branches[workspace.path], "main")
+    }
+
     /// A workspace closed while git was still answering does not get its label back.
     func testAnAnswerForAClosedWorkspaceIsDropped() async throws {
         let git = SlowGit()
@@ -92,16 +110,18 @@ final class WorkspaceBranchTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let path = WorkspacePath(dir.path)
+        let host = LocalBenchHost(
+            environment: ProcessInfo.processInfo.environment, homeDirectory: dir.path)
 
-        let notARepository = await WorkspaceModel.currentBranch(in: path)
+        let notARepository = try await WorkspaceModel.currentBranch(in: path, host: host)
         XCTAssertNil(notARepository)
 
         try git(["init", "-q", "-b", "main", dir.path])
-        let first = await WorkspaceModel.currentBranch(in: path)
+        let first = try await WorkspaceModel.currentBranch(in: path, host: host)
         XCTAssertEqual(first, "main")
 
         try git(["-C", dir.path, "checkout", "-q", "-b", "feat/x"])
-        let second = await WorkspaceModel.currentBranch(in: path)
+        let second = try await WorkspaceModel.currentBranch(in: path, host: host)
         XCTAssertEqual(second, "feat/x")
     }
 
@@ -113,4 +133,11 @@ final class WorkspaceBranchTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0, "git \(arguments.joined(separator: " "))")
     }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+    var value: Bool { lock.withLock { stored } }
+    func set(_ newValue: Bool) { lock.withLock { stored = newValue } }
 }

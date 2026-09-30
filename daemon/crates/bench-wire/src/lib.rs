@@ -29,6 +29,12 @@ pub use layout::{
 pub mod hook;
 pub use hook::{HookArgs, HookReply};
 
+mod commands;
+pub use commands::{
+    COMMAND_OUTPUT_MAX_BYTES, Command, CommandRun, CommandRunArgs, GitRepositories,
+    GitRepositoriesArgs, GitRepository, PathExists, PathExistsArgs,
+};
+
 mod files;
 pub use files::{
     Expect, FILE_CHANGED, FILE_READ_MAX_BYTES, FILE_REQUEST_MAX_BYTES, FileAppendArgs, FileChanged,
@@ -191,6 +197,10 @@ pub const KNOWN_VERBS: &[&str] = &[
     "file/read",
     "file/write",
     "file/append",
+    // M5c: the drawers' git and archon, run on benchd's machine for a helm that may not be on it.
+    "command/run",
+    "path/exists",
+    "git/repositories",
     // The layout verbs (M4) — `LAYOUT_VERBS`, spelled again here so this one list stays the
     // whole surface; `every_layout_verb_is_known_and_routes_to_layout` keeps the two in step.
     "bench/get",
@@ -260,6 +270,12 @@ pub enum Verb {
     FileWrite,
     /// A note appended to a canvas's sidecar (`FileAppendArgs`).
     FileAppend,
+    /// `git` or `archon` run on benchd's machine (`CommandRunArgs`).
+    CommandRun,
+    /// Which of some paths exist on benchd's machine (`PathExistsArgs`).
+    PathExists,
+    /// Every repository under benchd's home (`GitRepositoriesArgs`).
+    GitRepositories,
 }
 
 impl Verb {
@@ -295,6 +311,9 @@ impl Verb {
             "file/read" => Some(Verb::FileRead),
             "file/write" => Some(Verb::FileWrite),
             "file/append" => Some(Verb::FileAppend),
+            "command/run" => Some(Verb::CommandRun),
+            "path/exists" => Some(Verb::PathExists),
+            "git/repositories" => Some(Verb::GitRepositories),
             layout if LAYOUT_VERBS.contains(&layout) => Some(Verb::Layout),
             _ => None,
         }
@@ -1183,7 +1202,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            44,
+            47,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

@@ -21,7 +21,12 @@ final class WorktreesPaneKind: SurfaceKind {
     func make(for pane: Pane, in workspace: WorkspacePath?) -> WorktreesDrawer? {
         guard let workbench else { return nil }
         return WorktreesDrawer(
-            model: WorktreesModel(),
+            model: {
+                let host = BenchdHost(client: workbench.client)
+                return WorktreesModel(
+                    worktreeClient: WorktreeCLI(host: host),
+                    discover: { try await host.repositories(workspaces: $0) })
+            }(),
             document: { [weak workbench] in workbench?.document },
             openWorkspace: { [weak workbench] path in
                 workbench?.send(.workspaceOpen(path: path), by: .operatorGesture)

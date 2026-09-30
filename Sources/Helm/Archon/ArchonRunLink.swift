@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import HelmWire
 
 /// Where a finished run's work went, read off the worktree Archon cut for it.
 ///
@@ -62,8 +63,13 @@ struct ArchonRunLink: Equatable, Sendable {
 struct ArchonRunOpener: Sendable {
     var open: @Sendable (ArchonRun) async -> Void
 
-    static let live = ArchonRunOpener { run in
-        guard let url = await ArchonRunOpener.destination(for: run),
+    /// The run's page, found through `host`: the run's worktree is on benchd's machine.
+    static func live(host: any BenchHost) -> ArchonRunOpener {
+        ArchonRunOpener { run in await open(run, host: host) }
+    }
+
+    private static func open(_ run: ArchonRun, host: any BenchHost) async {
+        guard let url = await ArchonRunOpener.destination(for: run, host: host),
             // Through the same allowlist every other `NSWorkspace.open` in helm goes through.
             // The URL below is not all helm's own: the pull request's comes back out of `gh`,
             // and an external process's output reaching `open` unchecked is exactly what that
@@ -79,16 +85,15 @@ struct ArchonRunOpener: Sendable {
     /// command**: `--head` belongs to `gh pr list`, and `gh pr view <branch>` errors rather than
     /// falling back to the branch when no pull request exists. So it is a list to find the URL,
     /// then a plain open.
-    static func destination(for run: ArchonRun) async -> URL? {
+    static func destination(for run: ArchonRun, host: any BenchHost) async -> URL? {
         guard let workingPath = run.workingPath,
             let link = ArchonRunLink.parse(workingPath: workingPath)
         else { return nil }
         // The worktree is the authority on its own branch while it exists; the path is the
         // fallback for after Archon's cleanup has removed it. A detached HEAD answers `HEAD`,
-        // which is not a branch anyone can open — the path's answer is better than that.
-        let resolved = await capture([
-            "git", "-C", workingPath, "rev-parse", "--abbrev-ref", "HEAD",
-        ])
+        // which is not a branch anyone can open — the path's answer is better than that. Asked on
+        // benchd's machine, where the worktree is; any failure falls back to the path.
+        let resolved = await checkedOutBranch(of: workingPath, host: host)
         let branch = (resolved == "HEAD" ? nil : resolved) ?? link.branch
         guard !branch.isEmpty else { return link.branchURL }
         if let pullRequest = await pullRequestURL(repository: link.repository, branch: branch) {
@@ -109,11 +114,24 @@ struct ArchonRunOpener: Sendable {
         return URL(string: url)
     }
 
-    /// Homebrew's bin ahead of the inherited `PATH`, for the same reason
-    /// `ArchonCLI.developmentEnvironment` puts `~/.bun/bin` there: `gh` is a Homebrew install
-    /// and a bundled app inherits launchd's `PATH`, which has never heard of it. `git` needs no
-    /// help — it is at `/usr/bin` — but goes through the same environment so there is one
-    /// answer to "what did the subprocess see".
+    /// The worktree's checked-out branch, or nil for any failure: a click gives up quietly.
+    private static func checkedOutBranch(
+        of workingPath: String, host: any BenchHost
+    ) async -> String? {
+        guard
+            let result = try? await host.run(
+                .git(args: ["-C", workingPath, "rev-parse", "--abbrev-ref", "HEAD"]),
+                timeout: ArchonCLI.defaultTimeout),
+            result.status == 0
+        else { return nil }
+        let value = String(decoding: result.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    /// Homebrew's bin ahead of the inherited `PATH`: `gh` is a Homebrew install and a bundled app
+    /// inherits launchd's `PATH`, which has never heard of it. `gh` runs here, on helm's machine:
+    /// it asks GitHub rather than a disk, with the operator's own login.
     static func environment(inherited: [String: String]) -> [String: String] {
         Subprocess.environment(
             inherited: inherited, prepending: ["/opt/homebrew/bin", "/usr/local/bin"])

@@ -753,11 +753,14 @@ above and are the easiest to be surprised by:
   launches from the keyboard. It is the successor of a rail tenant the operator cut back as *"too
   much bloat"*: read `ArchonModel`'s header before adding anything, since several obvious additions
   are things that were removed. Agents never use it; Archon's CLI is their view. The Worktrees
-  drawer lists every worktree on the machine, grouped by repository, read from git alone
-  (`WorktreeDiscovery` finds the repositories on disk; `HELM_WORKTREES_HOME` moves where it looks,
-  which is how an isolated instance lists scratch repositories): helm reads no Archon database,
-  and "merged" means Git reachability from a resolved remote default branch, never pull-request
-  state. There is no rail any more; both were its tenants. `CONTEXT.md` has both.
+  drawer lists every worktree on the machine, grouped by repository, read from git alone: helm
+  reads no Archon database, and "merged" means Git reachability from a resolved remote default
+  branch, never pull-request state. **"The machine" is benchd's (M5c)**: both drawers and each
+  tab's branch label run `git` and `archon` through benchd (`BenchHost`: `command/run`,
+  `path/exists`, and `git/repositories`, which searches benchd's `HOME`), on one machine too, so an
+  isolated instance lists whatever its own benchd's `HOME` holds. The git and Archon logic stays in
+  helm; only the process moved. There is no rail any more; both were its tenants. `CONTEXT.md` has
+  both.
 - **`Board/` is agent presence and the bench snapshot — it is not the drawable board.** The
   collision is real and worth knowing before a grep sends you to the wrong one. `Sources/Helm/Board/`
   is `BoardModel`, `AgentDot` and `BenchSnapshot`: which workspace tab has an agent that has

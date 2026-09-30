@@ -1,0 +1,119 @@
+{
+  "archon": {
+    "args": {
+      "command": {
+        "args": [
+          "workflow",
+          "runs",
+          "--json"
+        ],
+        "cwd": "/Users/op/Projects/app",
+        "program": "archon"
+      },
+      "timeout_ms": 20000
+    },
+    "id": "helm-cmd-3",
+    "verb": "command/run"
+  },
+  "archon_complete": {
+    "args": {
+      "command": {
+        "args": [
+          "complete",
+          "archon/task-x"
+        ],
+        "cwd": "/Users/op/Projects/app",
+        "home": "/Users/op/.archon",
+        "program": "archon"
+      },
+      "timeout_ms": 120000
+    },
+    "id": "helm-cmd-4",
+    "verb": "command/run"
+  },
+  "existing": {
+    "existing": [
+      "/Users/op/Projects/app"
+    ]
+  },
+  "exists": {
+    "args": {
+      "paths": [
+        "/Users/op/Projects/app",
+        "/Users/op/Projects/app/.worktrees/gone"
+      ]
+    },
+    "id": "helm-cmd-5",
+    "verb": "path/exists"
+  },
+  "found": {
+    "repositories": [
+      {
+        "common_dir": "/Users/op/Projects/app/.git",
+        "is_workspace": true
+      },
+      {
+        "common_dir": "/Users/op/Projects/lib/.git",
+        "is_workspace": false
+      }
+    ]
+  },
+  "git": {
+    "args": {
+      "command": {
+        "args": [
+          "-C",
+          "/Users/op/Projects/app/.git",
+          "worktree",
+          "list",
+          "--porcelain"
+        ],
+        "program": "git"
+      },
+      "timeout_ms": 20000
+    },
+    "id": "helm-cmd-1",
+    "verb": "command/run"
+  },
+  "git_in": {
+    "args": {
+      "command": {
+        "args": [
+          "branch",
+          "--show-current"
+        ],
+        "cwd": "/Users/op/Projects/app",
+        "program": "git"
+      },
+      "timeout_ms": 10000
+    },
+    "id": "helm-cmd-2",
+    "verb": "command/run"
+  },
+  "repositories": {
+    "args": {
+      "workspaces": [
+        "/Users/op/Projects/app/.worktrees/feature"
+      ]
+    },
+    "id": "helm-cmd-6",
+    "verb": "git/repositories"
+  },
+  "run_answers": [
+    {
+      "kind": "exited",
+      "status": 0,
+      "stderr": "",
+      "stdout": "bWFpbgo="
+    },
+    {
+      "kind": "exited",
+      "status": 128,
+      "stderr": "ZmF0YWw6IG5vdCBhIGdpdCByZXBvc2l0b3J5Cg==",
+      "stdout": ""
+    },
+    {
+      "kind": "timed_out"
+    }
+  ]
+}
