@@ -45,6 +45,19 @@ enum CanvasFileWrite: Equatable {
     case failed(String)
 }
 
+/// A file's bytes as the text helm shows, edits and compares: strict UTF-8, **byte for byte**.
+///
+/// `String(data:encoding: .utf8)` drops a leading byte-order mark, so a draft seeded that way is
+/// not the bytes on disk, and a save sending it back as `unchanged` would never match what benchd
+/// compares against: every autosave a conflict the operator cannot clear (#529 review). The mark is
+/// kept here, so the editor round-trips the file exactly.
+enum CanvasText {
+    static func decode(_ data: Data) -> String? {
+        guard String(data: data, encoding: .utf8) != nil else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
 struct CanvasFileFailure: Error, LocalizedError, Equatable {
     let reason: String
     var errorDescription: String? { reason }

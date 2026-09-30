@@ -95,7 +95,9 @@ pub fn write(args: &Value) -> Result<Value, String> {
     let args: FileWriteArgs =
         serde_json::from_value(args.clone()).map_err(|e| format!("file/write args: {e}"))?;
     let path = absolute(&args.path)?;
-    if is_notes_sidecar(&args.path) {
+    // The standardized path, and any case: `plan.notes.md/.` and `plan.NOTES.md` are the sidecar
+    // on a case-insensitive volume too.
+    if is_notes_sidecar(&path.to_string_lossy().to_lowercase()) {
         return Err(format!(
             "{} is a notes sidecar, which is only ever appended to (file/append)",
             path.display()
@@ -143,7 +145,8 @@ fn replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     written
 }
 
-/// `file/append`: the text at the end of the file, which is created if it is not there.
+/// `file/append`: the text at the end of the file, which is created if it is not there. The
+/// sidecar's one write; any path may be appended to, since appending replaces nothing.
 pub fn append(args: &Value) -> Result<Value, String> {
     let args: FileAppendArgs =
         serde_json::from_value(args.clone()).map_err(|e| format!("file/append args: {e}"))?;
@@ -170,38 +173,40 @@ fn signature(path: &str) -> Signature {
     Some((meta.len(), meta.mtime(), meta.mtime_nsec(), meta.ino()))
 }
 
-/// The watcher's memory: per path, the signature last reported and the one seen at the last
-/// look. Pure, so the debounce is tested without a clock.
+/// The watcher's memory: per path, the signature last reported (none yet for a path just
+/// watched) and the one seen at the last look. Pure, so the debounce is tested without a clock.
 #[derive(Default)]
 pub struct Watch {
     paths: HashMap<String, Seen>,
 }
 
 struct Seen {
-    reported: Signature,
+    reported: Option<Signature>,
     last: Signature,
 }
 
 impl Watch {
     /// One look: every watched path with its signature now. Answers the paths to report.
     ///
-    /// A path seen for the first time is only recorded: helm reads a canvas when it opens it.
     /// A path is reported when it differs from what was last reported **and** has not moved
     /// since the previous look, so a write arriving in pieces is one report, after the last
-    /// piece. A path no longer watched is forgotten.
+    /// piece. **A path just watched is reported once it holds still**, because nothing was ever
+    /// reported for it: helm read the canvas when it opened it, and a write between that read and
+    /// benchd's first look — or made while a restarted benchd was down — would otherwise become
+    /// the baseline and never reach the pane. A path no longer watched is forgotten.
     pub fn look(&mut self, now: Vec<(String, Signature)>) -> Vec<String> {
         let mut next = HashMap::with_capacity(now.len());
         let mut changed = Vec::new();
         for (path, signature) in now {
             let seen = match self.paths.remove(&path) {
                 None => Seen {
-                    reported: signature,
+                    reported: None,
                     last: signature,
                 },
                 Some(mut seen) => {
-                    if signature != seen.reported && signature == seen.last {
+                    if seen.reported != Some(signature) && signature == seen.last {
                         changed.push(path.clone());
-                        seen.reported = signature;
+                        seen.reported = Some(signature);
                     }
                     seen.last = signature;
                     seen
@@ -263,11 +268,14 @@ mod tests {
         watch.look(vec![("/a/plan.md".into(), sig)])
     }
 
+    /// A write between helm's read at open and benchd's first look is not lost: a path just
+    /// watched is reported once, when it first holds still.
     #[test]
-    fn a_path_seen_for_the_first_time_is_not_a_change() {
+    fn a_path_just_watched_is_reported_once_it_holds_still() {
         let mut watch = Watch::default();
-        assert!(look(&mut watch, A).is_empty());
-        assert!(look(&mut watch, A).is_empty());
+        assert!(look(&mut watch, A).is_empty(), "first look");
+        assert_eq!(look(&mut watch, A).len(), 1, "held still: reported");
+        assert!(look(&mut watch, A).is_empty(), "and only once");
     }
 
     /// `FileWatcherTests.testAWriteThatArrivesInChunksRendersOnceAndOnlyWhenItIsWhole`, moved
@@ -276,6 +284,7 @@ mod tests {
     #[test]
     fn a_write_in_pieces_is_one_change_after_the_last_piece() {
         let mut watch = Watch::default();
+        look(&mut watch, A);
         look(&mut watch, A);
         assert!(look(&mut watch, B).is_empty(), "still moving");
         assert!(look(&mut watch, C).is_empty(), "still moving");
@@ -286,6 +295,7 @@ mod tests {
     #[test]
     fn two_settled_saves_are_two_changes() {
         let mut watch = Watch::default();
+        look(&mut watch, A);
         look(&mut watch, A);
         look(&mut watch, B);
         assert_eq!(look(&mut watch, B).len(), 1);
@@ -298,6 +308,7 @@ mod tests {
     fn appearing_and_disappearing_are_changes() {
         let mut watch = Watch::default();
         look(&mut watch, None);
+        look(&mut watch, None);
         look(&mut watch, A);
         assert_eq!(look(&mut watch, A).len(), 1, "appeared");
         look(&mut watch, None);
@@ -308,10 +319,11 @@ mod tests {
     fn a_path_no_longer_watched_is_forgotten() {
         let mut watch = Watch::default();
         look(&mut watch, A);
+        look(&mut watch, A);
         assert!(watch.look(vec![]).is_empty());
-        // Watched again: a first look, so no report even though it changed meanwhile.
+        // Watched again: a path just watched, reported once it holds still.
         assert!(look(&mut watch, B).is_empty());
-        assert!(look(&mut watch, B).is_empty());
+        assert_eq!(look(&mut watch, B).len(), 1);
     }
 
     /// Real files: an atomic replace, an in-place truncation and an append each move the

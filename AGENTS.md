@@ -557,7 +557,8 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   artifact, a page's siblings, the `.notes.md` sidecar, the state latch — is a `file/*` verb to
   benchd (`CanvasFiles`, `bench_wire::files`), on one machine as much as across two, and a change
   arrives as benchd's `file/changed` on the follower: benchd polls each canvas file in its document
-  and its sidecar and reports one once it has held still. benchd holds the rules only it can: a
+  and its sidecar and reports one once it has held still, and helm reads every open canvas again
+  whenever its follower (re)connects, since a change nobody was listening for sent nothing. benchd holds the rules only it can: a
   sibling read is confined to the artifact's folder with symlinks followed on its own disk, a
   `file/write` never replaces a `.notes.md`, and `unchanged` writes only over the bytes named. A
   canvas benchd cannot reach says so rather than rendering nothing, and a read helm could not make

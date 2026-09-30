@@ -172,6 +172,9 @@ final class WorkbenchModel: ObservableObject {
         subscribe()
         client.onDocument = { [weak self] at in self?.apply(at) }
         client.onChange = { [weak self] change in self?.remember(change) }
+        // A `file/changed` sent while the follower was down, or before a benchd restart, reached
+        // nobody: every open canvas reads its file again rather than show it stale.
+        client.onConnected = { [weak self] in self?.rereadCanvases() }
         client.start()
     }
 
@@ -364,6 +367,11 @@ final class WorkbenchModel: ObservableObject {
         for canvas in surfaces.models(CanvasModel.self) {
             canvas.fileChanged(frame.event.data.path)
         }
+    }
+
+    /// Every open canvas reads its file and notes again (`BenchClient.onConnected`).
+    func rereadCanvases() {
+        for canvas in surfaces.models(CanvasModel.self) { canvas.reread() }
     }
 
     /// Write every open draft now (#289).

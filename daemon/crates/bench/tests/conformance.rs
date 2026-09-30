@@ -7929,6 +7929,19 @@ fn file_write_and_append_over_tcp_keep_the_canvas_rules() {
         serde_json::json!({ "path": p(&notes), "text": "", "expect": { "kind": "any" } }),
     );
     assert_eq!(clobber["status"], "refused", "{clobber}");
+    // Other spellings of the same file are the sidecar too.
+    for spelled in [
+        format!("{}/.", p(&notes)),
+        p(&dir.join("x/../plan.notes.md")),
+        p(&dir.join("plan.NOTES.md")),
+    ] {
+        let answer = tcp_verb(
+            port,
+            "file/write",
+            serde_json::json!({ "path": spelled, "text": "", "expect": { "kind": "any" } }),
+        );
+        assert_eq!(answer["status"], "refused", "{spelled}: {answer}");
+    }
     assert_eq!(fs::read_to_string(&notes).unwrap(), "## one\n## two\n");
 
     // A document larger than an ordinary request is accepted by the verbs that carry one;
@@ -7957,16 +7970,37 @@ fn file_changed_names_the_canvas_and_its_sidecar_once_per_settled_save() {
     let neighbour = plan.replace("watched.md", "neighbour.md");
     let opened = bench(&home.dir, &["open", &plan]);
     assert_eq!(opened.code, 0, "{}", opened.stderr);
-    // The watcher's first look at the new canvas is only a record.
-    std::thread::sleep(Duration::from_millis(400));
-
-    let changes = || -> Vec<String> {
+    let all_changes = || -> Vec<String> {
         event_kinds(&home.dir)
             .into_iter()
             .filter(|(kind, _)| kind == "file/changed")
             .map(|(_, data)| data["path"].as_str().unwrap().to_string())
             .collect()
     };
+    // A canvas just watched is reported once it holds still — its file and its sidecar (absent,
+    // still a state) — so a write between helm's read at open and benchd's first look, or made
+    // while benchd was down, still reaches the pane.
+    let ours = |all: Vec<String>| -> Vec<String> {
+        all.into_iter()
+            .filter(|p| *p == plan || *p == notes)
+            .collect()
+    };
+    wait_until(
+        "the new canvas's first report",
+        Duration::from_secs(5),
+        || ours(all_changes()).len() == 2,
+    );
+    let mut first = ours(all_changes());
+    first.sort();
+    let mut expected = vec![plan.clone(), notes.clone()];
+    expected.sort();
+    assert_eq!(
+        first, expected,
+        "the canvas file and its sidecar, once each"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    let settled = all_changes().len();
+    let changes = || all_changes().split_off(settled);
     // An atomic save of the canvas, in two pieces written quickly.
     let staged = format!("{plan}.tmp");
     fs::write(&staged, "# plan\n\nrewritten\n").unwrap();

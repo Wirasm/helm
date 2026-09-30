@@ -88,7 +88,7 @@ extension EditableFile {
     func contents(through files: any CanvasFiles) -> DiskContents {
         switch files.read(path.value, within: nil) {
         case let .bytes(data):
-            guard let text = String(data: data, encoding: .utf8) else {
+            guard let text = CanvasText.decode(data) else {
                 return .unreadable("it is not UTF-8 text")
             }
             return .bytes(text)

@@ -147,7 +147,7 @@ enum CanvasNotes {
             NSLog("helm: could not read \(sidecar.lastPathComponent) — \(why)")
             return nil
         }
-        guard let text = String(data: data, encoding: .utf8),
+        guard let text = CanvasText.decode(data),
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return text

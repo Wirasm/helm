@@ -314,8 +314,15 @@ final class CanvasModel: ObservableObject {
             draft.savedAt = Date()
             self.draft = draft
             writeFailure = nil
+        case let .changed(now) where now == Data(draft.text.utf8):
+            // What is there is already what he typed: an earlier save that timed out on helm's
+            // side and landed anyway. Nothing of anyone's differs, so it counts as saved.
+            draft.saved = draft.text
+            draft.savedAt = Date()
+            self.draft = draft
+            writeFailure = nil
         case let .changed(now):
-            guard let theirs = String(data: now, encoding: .utf8) else {
+            guard let theirs = CanvasText.decode(now) else {
                 // **Not knowing is not permission.** Somebody else's bytes are there and they are
                 // not text helm can show, so it cannot offer *"take theirs"* either. The draft
                 // stays dirty, so the next keystroke and every later flush try again — which is
@@ -809,9 +816,21 @@ final class CanvasModel: ObservableObject {
     /// Read the sidecar again. Reached from `open`, from a comment helm just wrote, and from
     /// benchd's `file/changed` for it. An unchanged read publishes nothing rather than redrawing
     /// the pane.
+    ///
+    /// **A sidecar benchd could not read keeps what the drawer last showed**: the notes are still
+    /// there, and taking the Notes button away would say there are none.
     func refreshNotes() {
-        let text = sidecarURL.flatMap { CanvasNotes.markdown(in: $0, through: files) }
+        guard let sidecar = sidecarURL else { return }
+        if case .failed = files.read(sidecar.path, within: nil) { return }
+        let text = CanvasNotes.markdown(in: sidecar, through: files)
         if text != notesText { notesText = text }
+    }
+
+    /// Read the file and its notes again whatever benchd has said: its follower (re)connected,
+    /// and a change made while nobody was listening sent no `file/changed` to anyone.
+    func reread() {
+        refresh()
+        refreshNotes()
     }
 
     func revealNotes() {
@@ -869,7 +888,7 @@ final class CanvasModel: ObservableObject {
         guard data.count <= Self.maxBytes else {
             return .notice("File too large to display (\(data.count / 1_000_000) MB)")
         }
-        guard let text = String(data: data, encoding: .utf8) else {
+        guard let text = CanvasText.decode(data) else {
             return .notice("Not a UTF-8 text file")
         }
         return RenderableFile.isMarkdown(url) ? .markdown(text) : .plainText(text)

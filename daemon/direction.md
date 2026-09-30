@@ -171,6 +171,9 @@ canvas's files only through `file/read`, `file/write` and `file/append` (`bench_
 pinned by `fixtures/file-verbs.json`), and hears that one changed from `file/changed`: a thread
 (`benchd/src/files.rs`) stats every canvas file in the document and its notes sidecar every
 100 ms and reports a path once its size, time or inode moved and then held still for one look.
+A path it has just started watching is reported once too, so a write between helm's read at
+open and benchd's first look, or made while benchd was down, still reaches the pane; and helm
+reads every open canvas again whenever its follower connects.
 The verbs carry the canvas's rules, because benchd is the side with the disk: a sibling read is
 confined to the page's folder with symlinks followed, `file/write` compares against the bytes the
 writer names (`unchanged`) and answers `changed` with what is there instead of writing, and a

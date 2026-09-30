@@ -146,6 +146,81 @@ final class CanvasThroughBenchdTests: XCTestCase {
         XCTAssertEqual(canvas.showing?.generation, first + 1)
     }
 
+    /// A change benchd reported while the follower was down reached nobody: when it connects
+    /// again, every open canvas reads its file again rather than stay stale (#529 review).
+    func testACanvasReadsItsFileAgainWhenTheFollowerReconnects() async throws {
+        let plan = try file("plan.md", "# Plan\n")
+        let rig = try toyRig()
+        rig.model.send(.paneOpen(surface: .canvas(path: plan.path)), by: .operatorGesture)
+        let bench = try XCTUnwrap(rig.model.bench)
+        let pane = try XCTUnwrap(bench.pane(try XCTUnwrap(bench.pane(showing: .file(plan)))))
+        let canvas = rig.model.canvas(for: pane)
+
+        rig.server.dropFollowers()
+        _ = try file("plan.md", "# Plan\n\nRewritten while nobody listened.\n")
+
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            if case .markdown("# Plan\n\nRewritten while nobody listened.\n") = canvas.showing?
+                .content
+            {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTFail("the canvas still shows what it read before the follower dropped")
+    }
+
+    // MARK: - What the save compares
+
+    /// A byte-order mark is part of the bytes benchd compares, so the draft keeps it: a file that
+    /// starts with one saves like any other instead of conflicting on every autosave.
+    func testAFileWithAByteOrderMarkSavesWithoutAConflict() throws {
+        let plan = directory.appendingPathComponent("plan.md")
+        try Data([0xEF, 0xBB, 0xBF] + Array("# Plan\n".utf8)).write(to: plan)
+        let model = CanvasModel(source: .file(plan), saveDebounce: .seconds(30))
+        model.write()
+        model.edit((model.draft?.text ?? "") + "Mine.\n")
+
+        model.saveDraft()
+
+        XCTAssertNil(model.draft?.conflict, "nobody else wrote it")
+        XCTAssertNil(model.writeFailure)
+        XCTAssertEqual(
+            try Data(contentsOf: plan), Data([0xEF, 0xBB, 0xBF] + Array("# Plan\nMine.\n".utf8)))
+    }
+
+    /// A save that timed out on helm's side and landed anyway: what is there is what he typed,
+    /// so the next save is not a conflict against his own text.
+    func testASaveThatLandedAfterItsTimeoutIsNotAConflict() throws {
+        let plan = try file("plan.md", "# Plan\n")
+        let model = CanvasModel(source: .file(plan), saveDebounce: .seconds(30))
+        model.write()
+        model.edit("# Plan\n\nMine.\n")
+        // The write benchd applied after helm stopped waiting for its answer.
+        _ = try file("plan.md", "# Plan\n\nMine.\n")
+
+        model.saveDraft()
+
+        XCTAssertNil(model.draft?.conflict)
+        XCTAssertEqual(model.draft?.isDirty, false)
+    }
+
+    /// Notes benchd could not read are still notes: the drawer keeps what it last showed.
+    func testASidecarBenchdCouldNotReadKeepsTheNotesShown() throws {
+        let plan = try file("plan.md", "# Plan\n")
+        _ = try file("plan.notes.md", "## a note\n")
+        let files = Reachable()
+        let model = CanvasModel(source: .file(plan), files: files)
+        XCTAssertEqual(model.notes, ["a note"])
+
+        files.down = true
+        model.refreshNotes()
+
+        XCTAssertTrue(model.hasNotes, "the Notes button does not vanish")
+        XCTAssertEqual(model.notes, ["a note"])
+    }
+
     // MARK: - The wire
 
     /// Each answer, over TCP, decoded to what the canvas acts on — and a benchd that is gone is

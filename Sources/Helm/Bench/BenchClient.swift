@@ -40,6 +40,10 @@ final class BenchClient: ObservableObject {
     /// kind decodes its data itself.
     var onEvent: ((Data) -> Void)?
 
+    /// The follower (re)connected, after its first document was delivered. Events benchd sent
+    /// while it was down are gone, so whatever depends on one reads its state again here.
+    var onConnected: (() -> Void)?
+
     private let latest = LatestDocument()
     private var follower: BenchFollower?
     private var delivered: UInt64?
@@ -106,9 +110,11 @@ final class BenchClient: ObservableObject {
             // A verb can have drawn a newer document (`document(atLeast:)`) while this one waited
             // on the main queue; drawing it now would put the bench back where it was. After a
             // disconnect nothing is drawn yet, so a benchd whose seq started again is followed.
-            if let delivered, at.seq < delivered { return }
-            delivered = at.seq
-            onDocument?(at)
+            if delivered.map({ at.seq >= $0 }) ?? true {
+                delivered = at.seq
+                onDocument?(at)
+            }
+            onConnected?()
         case .frame(let at):
             if let delivered, at.seq <= delivered { return }
             delivered = at.seq
