@@ -174,6 +174,9 @@ pub const KNOWN_VERBS: &[&str] = &[
     "browser/status",
     "browser/stop",
     "browser/setup",
+    // M5c: a view onto the shared browser, relayed by benchd for a helm that may not share its
+    // machine.
+    "browser/connect",
     "just/run",
     "just/list",
     // M5b: give terminal panes whose session ended a session again (`just resume-all`).
@@ -232,6 +235,9 @@ pub enum Verb {
     BrowserStatus,
     BrowserStop,
     BrowserSetup,
+    /// The connection becomes a relay of CDP messages to the running browser, one JSON line
+    /// each way (`BrowserConnected`).
+    BrowserConnect,
     /// Run a recipe from the operator's bench justfile (#356).
     JustRun,
     /// Name the recipes in it (#500).
@@ -279,6 +285,7 @@ impl Verb {
             "browser/status" => Some(Verb::BrowserStatus),
             "browser/stop" => Some(Verb::BrowserStop),
             "browser/setup" => Some(Verb::BrowserSetup),
+            "browser/connect" => Some(Verb::BrowserConnect),
             "helm/ask" => Some(Verb::HelmAsk),
             "helm/answer" => Some(Verb::HelmAnswer),
             "just/run" => Some(Verb::JustRun),
@@ -455,13 +462,34 @@ pub struct SpawnArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HelmAsk {
-    /// helm draws its own window into `path` (an absolute `.png`), the one titled like
-    /// `window` when more than one is open. The answer's `data` is helm's capture report.
+    /// helm draws its own window, the one titled like `window` when more than one is open. The
+    /// answer's `data` is helm's capture report with the PNG in it as `png` (`base64`): helm
+    /// may not share benchd's disk (M5c), so benchd writes the file and hands the caller the
+    /// report with `path` where `png` was.
     Capture {
-        path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         window: Option<String>,
     },
+}
+
+/// `helm/ask`'s args: the ask, and where benchd writes the file its answer carries (a capture's
+/// PNG). `out` is an absolute `.png` on benchd's side; absent, benchd picks one under its own
+/// `captures/` (`captures_dir`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelmAskArgs {
+    #[serde(flatten)]
+    pub ask: HelmAsk,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out: Option<String>,
+}
+
+/// The key in a capture answer's `data` holding the PNG, and the one benchd replaces with
+/// `path` once the file is written.
+pub const CAPTURE_PNG_KEY: &str = "png";
+
+/// Where benchd writes a capture nobody named a path for.
+pub fn captures_dir(root: &Path) -> PathBuf {
+    root.join("captures")
 }
 
 /// The data of a `helm/asked` event: which ask, and what it asks. helm reads these from its
@@ -652,7 +680,7 @@ pub const BROWSER_ENDPOINT_VERSION: u64 = 1;
 
 /// Where the running browser is — the one shape written to `<root>/browser/endpoint.json`
 /// and returned by `browser/start` and `browser/status`. It is read OUTSIDE this
-/// workspace (helm's pane, agents' shells), so it carries `format`/`version` and a
+/// workspace (agents' shells, `playwright-cli`), so it carries `format`/`version` and a
 /// reader checks them before trusting the rest (`BenchSnapshot`'s rule).
 ///
 /// `cdp` is what `playwright-cli attach --cdp=` takes; `ws` is the browser-level
@@ -670,6 +698,16 @@ pub struct BrowserEndpoint {
     pub binary: String,
     pub profile: String,
     pub started_at: String,
+}
+
+/// `browser/connect`'s answer: which browser the connection now relays to. After this line
+/// the connection carries CDP messages, one JSON object per line in each direction: a line
+/// the client writes is sent to the browser as one websocket message, and each message the
+/// browser sends arrives as one line. helm's browser pane is the client (M5c), so it needs no
+/// endpoint and no port on benchd's machine; agents keep `cdp` and Playwright.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserConnected {
+    pub pid: u32,
 }
 
 pub fn browser_dir(root: &Path) -> PathBuf {
@@ -1130,24 +1168,73 @@ mod tests {
         );
     }
 
-    /// `fixtures/helm-ask.json` holds what benchd asks helm and what helm answers (M3); helm's
-    /// `BenchWireConformanceTests` decodes the ask and encodes the answer against the same file.
+    /// `fixtures/helm-ask.json` holds what a caller asks, what benchd asks helm, what helm answers
+    /// and what the caller gets back (M3, M5c); helm's `BenchWireConformanceTests` decodes the ask
+    /// and encodes both answers against the same file.
     #[test]
     fn the_helm_ask_fixture_is_what_the_daemon_asks_and_reads() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helm-ask.json");
         let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
         let value: Value = serde_json::from_str(&text).unwrap();
+        let ask: Request = serde_json::from_value(value["ask"].clone()).unwrap();
+        assert_eq!(Verb::parse(&ask.verb), Some(Verb::HelmAsk));
+        let args: HelmAskArgs = serde_json::from_value(ask.args.clone()).unwrap();
+        assert_eq!(args.out.as_deref(), Some("/tmp/bench-capture.png"));
+        assert_eq!(serde_json::to_value(&args).unwrap(), ask.args);
         let asked: HelmAsked = serde_json::from_value(value["asked"].clone()).unwrap();
-        assert!(matches!(asked.request, HelmAsk::Capture { .. }));
+        assert_eq!(
+            asked.request, args.ask,
+            "helm is asked what the caller asked, less out"
+        );
         assert_eq!(serde_json::to_value(&asked).unwrap(), value["asked"]);
         let answer: Request = serde_json::from_value(value["answer"].clone()).unwrap();
         assert_eq!(Verb::parse(&answer.verb), Some(Verb::HelmAnswer));
         assert_eq!(answer.by, Some(Actor::Helm));
-        let args: HelmAnswer = serde_json::from_value(answer.args.clone()).unwrap();
-        assert_eq!(args.status, Status::Error);
-        assert_eq!(serde_json::to_value(&args).unwrap(), answer.args);
+        let refused: HelmAnswer = serde_json::from_value(answer.args.clone()).unwrap();
+        assert_eq!(refused.status, Status::Error);
+        assert_eq!(serde_json::to_value(&refused).unwrap(), answer.args);
+        let captured: Request = serde_json::from_value(value["captured"].clone()).unwrap();
+        let captured: HelmAnswer = serde_json::from_value(captured.args).unwrap();
+        let mut data = captured.data.unwrap();
+        let png = data[CAPTURE_PNG_KEY].as_str().and_then(unbase64).unwrap();
+        assert!(
+            png.starts_with(b"\x89PNG"),
+            "the answer carries the PNG itself"
+        );
+        // What the caller gets is helm's report with the path benchd wrote in place of the bytes.
+        let report = data.as_object_mut().unwrap();
+        report.remove(CAPTURE_PNG_KEY);
+        report.insert("path".into(), args.out.clone().unwrap().into());
+        assert_eq!(Value::Object(report.clone()), value["reply"]);
         let status: Request = serde_json::from_value(value["status"].clone()).unwrap();
         assert_eq!(Verb::parse(&status.verb), Some(Verb::Status));
+    }
+
+    /// `fixtures/browser-connect.json`: the pane's request and benchd's two answers; helm's
+    /// `BenchWireConformanceTests` encodes the request and decodes the answers.
+    #[test]
+    fn the_browser_connect_fixture_is_the_verb_and_its_answers() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/browser-connect.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let request: Request = serde_json::from_value(value["request"].clone()).unwrap();
+        assert_eq!(Verb::parse(&request.verb), Some(Verb::BrowserConnect));
+        assert_eq!(request.by, Some(Actor::Helm));
+        let connected: Response = serde_json::from_value(value["connected"].clone()).unwrap();
+        assert_eq!(connected.status, Status::Ok);
+        let data: BrowserConnected = serde_json::from_value(connected.data.unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&data).unwrap(),
+            value["connected"]["data"]
+        );
+        let none: Response = serde_json::from_value(value["none"].clone()).unwrap();
+        assert_eq!(none.status, Status::Refused);
+        for line in ["to_browser", "from_browser"] {
+            let message = value[line].as_str().unwrap();
+            assert!(!message.contains('\n'), "a relayed message is one line");
+            let _: Value = serde_json::from_str(message).unwrap();
+        }
     }
 
     #[test]
@@ -1157,7 +1244,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            44,
+            45,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

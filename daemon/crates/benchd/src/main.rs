@@ -27,6 +27,7 @@
 //! wait, a prompt delivery, or an attach pump.
 
 mod ask;
+mod cdp;
 mod codex;
 mod files;
 mod hook;
@@ -814,6 +815,12 @@ enum AfterResponse {
         cols: u16,
     },
     Stop,
+    /// `browser/connect`: after the response line, this connection relays CDP messages to the
+    /// browser (`cdp::relay`) until either side ends.
+    Browser {
+        socket: std::net::TcpStream,
+        pid: u32,
+    },
     /// `events --follow`: after the response line, this connection is a stream of frames
     /// from the follower's own queue, written on this thread and never under the mutex.
     Follow(mpsc::Receiver<Arc<str>>),
@@ -830,7 +837,7 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
         Err(_) => return,
     });
     let mut line = String::new();
-    // Read up to the larger cap `file/write` and `file/append` get; every other verb is held to
+    // Read up to the larger cap `file/write`, `file/append` and `helm/answer` get; every other verb is held to
     // `MAX_REQUEST_BYTES` once the line says which verb it is.
     let mut limited = (&mut reader).take(FILE_REQUEST_MAX_BYTES as u64 + 1);
     if limited.read_line(&mut line).is_err() {
@@ -881,7 +888,7 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
 
     let carries_a_document = matches!(
         Verb::parse(&request.verb),
-        Some(Verb::FileWrite | Verb::FileAppend)
+        Some(Verb::FileWrite | Verb::FileAppend | Verb::HelmAnswer)
     );
     if line.len() > MAX_REQUEST_BYTES && !carries_a_document {
         oversized(MAX_REQUEST_BYTES);
@@ -921,6 +928,14 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
                 }
             }
             let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+        AfterResponse::Browser { socket, pid } => {
+            respond_keep_open(&stream, &response);
+            let why = cdp::relay(&stream, socket);
+            let _ = core
+                .lock()
+                .unwrap()
+                .append("browser/viewer-left", json!({ "pid": pid, "why": why }));
         }
         AfterResponse::Pump {
             session,
@@ -1455,6 +1470,8 @@ fn dispatch(
             (ok(data), AfterResponse::Done)
         }
 
+        Some(Verb::BrowserConnect) => browser_connect(core, req),
+
         Some(Verb::BrowserStop) => match stop_browser(core, Duration::from_secs(5), Unwant::Yes) {
             Ok(pid) => (
                 ok(json!({ "was_running": pid.is_some(), "pid": pid })),
@@ -1472,6 +1489,60 @@ fn dispatch(
             AfterResponse::Done,
         ),
     }
+}
+
+/// `browser/connect`: open the running browser's websocket and hand the connection to the relay.
+/// Refused when there is nothing to connect to, with what to do about it.
+fn browser_connect(core: &Arc<Mutex<Core>>, req: &Request) -> (Response, AfterResponse) {
+    let reply = |status, reason: Option<String>, data| Response {
+        id: req.id.clone(),
+        status,
+        reason,
+        data,
+    };
+    let running = {
+        let c = core.lock().unwrap();
+        c.browser
+            .as_ref()
+            .filter(|b| b.is_running())
+            .map(|b| match &b.launched {
+                Launched::Headless(endpoint) => Ok((endpoint.ws.clone(), b.pid)),
+                Launched::Setup => Err(()),
+            })
+    };
+    let (ws, pid) = match running {
+        None => {
+            let why = "no shared browser is running. `bench browser start` starts one, and after `bench browser setup` it comes back when that window is quit (Cmd-Q)";
+            return (
+                reply(Status::Refused, Some(why.into()), None),
+                AfterResponse::Done,
+            );
+        }
+        Some(Err(())) => {
+            let why = "the shared browser is open in a window for setup, which has no debugging port. It comes back here when that window is quit (Cmd-Q)";
+            return (
+                reply(Status::Refused, Some(why.into()), None),
+                AfterResponse::Done,
+            );
+        }
+        Some(Ok(found)) => found,
+    };
+    let socket = match cdp::open(&ws) {
+        Ok(socket) => socket,
+        Err(why) => return (reply(Status::Error, Some(why), None), AfterResponse::Done),
+    };
+    if let Err(why) = core
+        .lock()
+        .unwrap()
+        .append("browser/viewer-connected", json!({ "pid": pid }))
+    {
+        return (reply(Status::Error, Some(why), None), AfterResponse::Done);
+    }
+    let data = json!(bench_wire::BrowserConnected { pid });
+    (
+        reply(Status::Ok, None, Some(data)),
+        AfterResponse::Browser { socket, pid },
+    )
 }
 
 /// Start the browser unless one is running; `(browser, already_running)`. `restart` is

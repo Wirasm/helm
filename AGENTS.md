@@ -356,8 +356,9 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
 - **To see the UI, ask helm to draw itself: `bench get screenshot [--out <p.png>]`.**
   **No TCC grant, no display, no keystrokes, no Accessibility** — an app rendering its own view
   hierarchy is *drawing*, and TCC does not gate it. benchd asks the helm that follows it
-  (`helm/asked`, answered by `HelmAsks`), so it works with the screen locked and over ssh. The
-  answer is helm's report; exit 4 names the cause when no helm answers within ten seconds.
+  (`helm/asked`, answered by `HelmAsks`), so it works with the screen locked and over ssh. helm
+  sends the PNG back and benchd writes it (M5c), so the file lands beside benchd even when helm
+  is on another machine. The answer is helm's report; exit 4 names the cause when no helm answers within ten seconds.
   **`terminalContent` is the field to read.** It is computed per capture, never assumed:
   `included` (every terminal pane's cells are in the image), `excluded` (none are — their
   regions carry a printed marker in the PNG itself), `partial`, or `absent` (no terminal in the

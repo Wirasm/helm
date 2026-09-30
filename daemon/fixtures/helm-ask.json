@@ -1,9 +1,17 @@
 {
+  "ask": {
+    "id": "bench-1",
+    "verb": "helm/ask",
+    "args": {
+      "kind": "capture",
+      "window": "helm — m3",
+      "out": "/tmp/bench-capture.png"
+    }
+  },
   "asked": {
     "ask": "a1",
     "request": {
       "kind": "capture",
-      "path": "/tmp/bench-capture.png",
       "window": "helm — m3"
     }
   },
@@ -18,6 +26,39 @@
       "status": "error",
       "reason": "no window titled like \"helm — m3\" is open"
     }
+  },
+  "captured": {
+    "id": "helm-answer-2",
+    "verb": "helm/answer",
+    "by": {
+      "kind": "helm"
+    },
+    "args": {
+      "ask": "a1",
+      "status": "ok",
+      "data": {
+        "png": "iVBORw0KGgo=",
+        "pixelWidth": 2400,
+        "pixelHeight": 1600,
+        "scale": 2,
+        "window": "helm — m3",
+        "windowVisible": true,
+        "terminalContent": "included",
+        "terminalSurfaces": 1,
+        "terminalSurfacesExcluded": 0
+      }
+    }
+  },
+  "reply": {
+    "path": "/tmp/bench-capture.png",
+    "pixelWidth": 2400,
+    "pixelHeight": 1600,
+    "scale": 2,
+    "window": "helm — m3",
+    "windowVisible": true,
+    "terminalContent": "included",
+    "terminalSurfaces": 1,
+    "terminalSurfacesExcluded": 0
   },
   "status": {
     "id": "helm-status-1",

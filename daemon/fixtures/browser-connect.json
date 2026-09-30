@@ -1,0 +1,23 @@
+{
+  "request": {
+    "id": "helm-browser-1",
+    "verb": "browser/connect",
+    "by": {
+      "kind": "helm"
+    }
+  },
+  "connected": {
+    "id": "helm-browser-1",
+    "status": "ok",
+    "data": {
+      "pid": 4242
+    }
+  },
+  "none": {
+    "id": "helm-browser-1",
+    "status": "refused",
+    "reason": "no shared browser is running. `bench browser start` starts one, and after `bench browser setup` it comes back when that window is quit (Cmd-Q)"
+  },
+  "to_browser": "{\"id\":1,\"method\":\"Target.getTargets\",\"params\":{}}",
+  "from_browser": "{\"id\":1,\"result\":{\"targetInfos\":[]}}"
+}

@@ -64,14 +64,12 @@ final class WindowCaptureTests: XCTestCase {
     }
 
     private func png(
-        of view: NSView, terminals: [NSView] = [], name: String = "shot.png"
+        of view: NSView, terminals: [NSView] = []
     ) throws -> (CaptureReport, NSBitmapImageRep) {
-        let url = scratch.appendingPathComponent(name)
         let report = try WindowCapture.png(
-            of: view, terminals: terminals, window: "helm — test", appearance: .light, to: url
+            of: view, terminals: terminals, window: "helm — test", appearance: .light
         ).get()
-        let rep = try XCTUnwrap(
-            NSBitmapImageRep(data: try Data(contentsOf: url)), "the PNG did not decode")
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: report.png), "the PNG did not decode")
         return (report, rep)
     }
 
@@ -132,14 +130,9 @@ final class WindowCaptureTests: XCTestCase {
         let view = Pane(frame: .zero, colour: .black)
         guard
             case .failure(let refusal) = WindowCapture.png(
-                of: view, terminals: [], window: "helm", appearance: .light,
-                to: scratch.appendingPathComponent("empty.png"))
+                of: view, terminals: [], window: "helm", appearance: .light)
         else { return XCTFail("a 0×0 view must not produce a capture") }
         XCTAssertTrue(refusal.reason.contains("nothing to draw"))
-        XCTAssertFalse(
-            FileManager.default.fileExists(
-                atPath: scratch.appendingPathComponent("empty.png").path),
-            "and no file is left behind for a caller to find and trust")
     }
 
     // MARK: - Whether the window was on a display (#408)
@@ -273,11 +266,10 @@ final class WindowCaptureTests: XCTestCase {
         let root = Pane(frame: NSRect(x: 0, y: 0, width: 100, height: 40), colour: .white)
         let terminal = metalPane(root.bounds)
         root.addSubview(terminal)
-        let url = scratch.appendingPathComponent("dark.png")
-        _ = try WindowCapture.png(
-            of: root, terminals: [terminal], window: "helm", appearance: .dark, to: url
+        let report = try WindowCapture.png(
+            of: root, terminals: [terminal], window: "helm", appearance: .dark
         ).get()
-        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: report.png))
         let scale = Double(rep.pixelsWide) / 100
         assertSame(
             try colour(rep, at: NSPoint(x: 50, y: 20), scale: scale),
