@@ -144,11 +144,12 @@ libghostty-spm `1.3.1` with three patches of its own. All three are in the wrapp
   `OSC 52` at the selection target replaced the operator's clipboard. Now
   `TerminalClipboardWrite`: only the standard clipboard is written, selection and primary
   (ghostty's raw `2`) are dropped, never redirected; `Tests/GhosttyTerminalTests/ClipboardWriteTests`.
-  Reads are not guarded, and cannot usefully be: ghostty resolves an `OSC 52` read to the
-  standard clipboard before any callback runs (`Surface.zig`), so every read arrives as
-  `.standard`. A protected paste or `OSC 52` read goes to the wrapper's confirmation hook,
-  and helm answers yes (`TerminalSession+Clipboard.swift`), as the old wrapper did: helm has
-  no prompt to ask with, so an `OSC 52` read is still not guarded.
+  Reads are not routed by clipboard: ghostty resolves an `OSC 52` read to the standard
+  clipboard before any callback runs (`Surface.zig`), so every read arrives as `.standard`.
+  They are refused instead (#337): helm sets `clipboard-read = deny`
+  (`TerminalSession.sessionOverrides`), so ghostty drops an `OSC 52` read before the
+  wrapper's read callback runs. A protected paste still goes to the wrapper's confirmation
+  hook, and helm answers yes (`TerminalSession+Clipboard.swift`), as the old wrapper did.
 - **A handled `open_url` reported as handled.** Otherwise ghostty also runs its own
   `/usr/bin/open`, whose stderr reader spins forever (ghostty-org/ghostty#13480): measured at
   seven threads and 586 CPU-hours on a helm up nine days. The callback claims `open_url` when
