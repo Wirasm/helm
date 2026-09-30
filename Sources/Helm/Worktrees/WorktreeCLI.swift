@@ -231,7 +231,14 @@ struct WorktreeCLI: WorktreeClient, Sendable {
     private func keepsWorktreesInside(_ main: String) async throws -> Bool {
         let folder = URL(fileURLWithPath: main).appendingPathComponent(".worktrees").path
         if try await host.existing([folder]).contains(folder) { return true }
-        return (try? await runGit(["-C", main, "check-ignore", "-q", ".worktrees/"])) != nil
+        // `check-ignore` says "not ignored" with status 1; anything else is not an answer.
+        do {
+            _ = try await runGit(["-C", main, "check-ignore", "-q", ".worktrees/"])
+            return true
+        } catch let error as WorktreeCLIError {
+            guard case .nonzeroExit(status: 1, _) = error.reason else { throw error }
+            return false
+        }
     }
 
     static func parsePorcelain(_ output: String) throws -> [WorktreeRecord] {

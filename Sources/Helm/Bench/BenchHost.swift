@@ -17,7 +17,10 @@ protocol BenchHost: Sendable {
     /// Run one command there. A nonzero exit is a `Result`, as `Subprocess.run` answers; benchd
     /// refusing (no such directory, the program not installed) or not being reachable is
     /// `Subprocess.Failure.launchFailed` with the reason, and a command past `timeout` is
-    /// `.timedOut`. Cancelling the task stops waiting and throws `CancellationError`.
+    /// `.timedOut`. Cancelling the task stops waiting and throws `CancellationError`; the command
+    /// itself runs on to its end on benchd, so a cancelled `git worktree remove` may still have
+    /// removed the worktree, and the caller's next read is what says so. An answer lost after the
+    /// request went out says the command may have run.
     func run(_ command: BenchCommand, timeout: Duration) async throws -> Subprocess.Result
     /// Which of these absolute paths exist there. Throws when benchd could not look.
     func existing(_ paths: [String]) async throws -> Set<String>
@@ -76,12 +79,20 @@ struct BenchdHost: BenchHost {
         }
     }
 
+    /// Asked a slice at a time: a verb's request line is capped at 64 KB, and a repository with
+    /// hundreds of worktrees would pass it in one.
+    static let pathsPerRequest = 200
+
     func existing(_ paths: [String]) async throws -> Set<String> {
-        guard !paths.isEmpty else { return [] }
-        let answer = try await ask(
-            BenchPathExistsRequest(id: Self.id(), paths: paths), answering: BenchPathExists.self,
-            within: Self.lookTimeout)
-        return Set(answer.existing)
+        var found: Set<String> = []
+        for start in stride(from: 0, to: paths.count, by: Self.pathsPerRequest) {
+            let slice = Array(paths[start..<min(start + Self.pathsPerRequest, paths.count)])
+            let answer = try await ask(
+                BenchPathExistsRequest(id: Self.id(), paths: slice),
+                answering: BenchPathExists.self, within: Self.lookTimeout)
+            found.formUnion(answer.existing)
+        }
+        return found
     }
 
     func repositories(workspaces: [String]) async throws -> [BenchGitRepository] {
@@ -128,10 +139,16 @@ struct BenchdHost: BenchHost {
             }
             guard connection.hold(socket) else { return .failure(CancellationError()) }
             try socket.writeLine(JSONEncoder().encode(request))
-            guard let line = try socket.readLine() else {
+            let line: Data?
+            do {
+                line = try socket.readLine()
+            } catch {
                 if connection.isCancelled { return .failure(CancellationError()) }
-                throw BenchSocket.Failure(
-                    description: "benchd closed the connection without answering")
+                return .failure(Self.lost(error))
+            }
+            guard let line else {
+                if connection.isCancelled { return .failure(CancellationError()) }
+                return .failure(Self.lost("benchd closed the connection"))
             }
             let answer = try JSONDecoder().decode(BenchResponse<Payload>.self, from: line)
             guard answer.status == .ok, let data = answer.data else {
@@ -143,6 +160,11 @@ struct BenchdHost: BenchHost {
             if connection.isCancelled { return .failure(CancellationError()) }
             return .failure(BenchHostFailure(reason: String(describing: error)))
         }
+    }
+
+    /// benchd had the request and no answer came back: whatever was asked may have happened.
+    private static func lost(_ why: Any) -> BenchHostFailure {
+        BenchHostFailure(reason: "no answer from benchd, so it may have run anyway: \(why)")
     }
 
     private static func id() -> String { "helm-host-\(UUID().uuidString)" }

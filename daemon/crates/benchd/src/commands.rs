@@ -115,7 +115,11 @@ pub fn run(args: &Value) -> Result<Value, String> {
                 return Ok(json!(CommandRun::TimedOut));
             }
             Ok(None) => std::thread::sleep(POLL),
-            Err(e) => return Err(format!("cannot wait for {name}: {e}")),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("cannot wait for {name}: {e}"));
+            }
         }
     };
     let status = status
@@ -246,17 +250,20 @@ const SKIPPED: &[&str] = &[
 pub fn repositories(args: &Value) -> Result<Value, String> {
     let args: GitRepositoriesArgs =
         serde_json::from_value(args.clone()).map_err(|e| format!("git/repositories args: {e}"))?;
-    Ok(json!(find(&home()?, &args.workspaces)))
+    Ok(json!(find(&home()?, &args.workspaces)?))
 }
 
-fn find(home: &Path, workspaces: &[String]) -> GitRepositories {
+/// Refused when benchd cannot read one of the places it searches from — `~/Projects` or the home
+/// the `.archon*` folders are in — so the drawer says it could not look instead of "No worktrees
+/// found". Below those roots an unreadable folder is skipped, as one project among many.
+fn find(home: &Path, workspaces: &[String]) -> Result<GitRepositories, String> {
     let mut found: HashMap<String, bool> = HashMap::new();
     for workspace in workspaces {
         if let Some(dir) = common_dir_containing(Path::new(workspace)) {
             found.insert(dir, true);
         }
     }
-    for dir in projects(home).into_iter().chain(archon_worktrees(home)) {
+    for dir in projects(home)?.into_iter().chain(archon_worktrees(home)?) {
         found.entry(dir).or_insert(false);
     }
     let mut repositories: Vec<GitRepository> = found
@@ -268,13 +275,29 @@ fn find(home: &Path, workspaces: &[String]) -> GitRepositories {
         .collect();
     repositories
         .sort_by(|a, b| (!a.is_workspace, &a.common_dir).cmp(&(!b.is_workspace, &b.common_dir)));
-    GitRepositories { repositories }
+    Ok(GitRepositories { repositories })
 }
 
-fn projects(home: &Path) -> Vec<String> {
+/// A root's subfolders: none when it is not there, refused when it cannot be read.
+fn root_subfolders(root: &Path, including_hidden: bool) -> Result<Vec<PathBuf>, String> {
+    match fs::read_dir(root) {
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(vec![]),
+        Err(e) => Err(format!(
+            "cannot look for repositories in {}: {e}",
+            root.display()
+        )),
+        Ok(_) => Ok(subfolders(root, including_hidden)),
+    }
+}
+
+fn projects(home: &Path) -> Result<Vec<String>, String> {
+    let root = home.join("Projects");
+    if let Some(dir) = common_dir_of(&root) {
+        return Ok(vec![dir]);
+    }
     let mut found = Vec::new();
-    let mut level = vec![home.join("Projects")];
-    for _ in 0..=PROJECT_DEPTH {
+    let mut level = root_subfolders(&root, false)?;
+    for _ in 1..=PROJECT_DEPTH {
         if level.is_empty() {
             break;
         }
@@ -287,11 +310,11 @@ fn projects(home: &Path) -> Vec<String> {
         }
         level = next;
     }
-    found
+    Ok(found)
 }
 
-fn archon_worktrees(home: &Path) -> Vec<String> {
-    let homes = subfolders(home, true).into_iter().filter(|h| {
+fn archon_worktrees(home: &Path) -> Result<Vec<String>, String> {
+    let homes = root_subfolders(home, true)?.into_iter().filter(|h| {
         h.file_name()
             .is_some_and(|n| n.to_string_lossy().starts_with(".archon"))
     });
@@ -302,7 +325,7 @@ fn archon_worktrees(home: &Path) -> Vec<String> {
             .map(|repo| repo.join("worktrees"))
     });
     // Archon nests a worktree one or two folders down: `worktrees/<prefix>/<name>`.
-    roots
+    Ok(roots
         .flat_map(|root| subfolders(&root, false))
         .flat_map(|child| match common_dir_of(&child) {
             Some(dir) => vec![dir],
@@ -311,7 +334,7 @@ fn archon_worktrees(home: &Path) -> Vec<String> {
                 .filter_map(|c| common_dir_of(c))
                 .collect(),
         })
-        .collect()
+        .collect())
 }
 
 /// The common git directory of the checkout at `folder` or of any folder above it.
@@ -341,16 +364,23 @@ fn common_dir_of(folder: &Path) -> Option<String> {
     let git_dir = folder.join(text.lines().next()?.strip_prefix("gitdir: ")?);
     match fs::read_to_string(git_dir.join("commondir")) {
         Ok(common) => Some(canonical(&git_dir.join(common.trim()))),
-        Err(_) => Some(canonical(&git_dir)),
+        // No `commondir` is a submodule, its own common directory; one benchd cannot read is
+        // skipped rather than guessed.
+        Err(e) if e.kind() == ErrorKind::NotFound => Some(canonical(&git_dir)),
+        Err(_) => None,
     }
 }
 
-/// Resolved through symlinks, so one repository reached two ways is one entry.
+/// Resolved through symlinks, so one repository reached two ways is one entry; a path that no
+/// longer resolves (a stale linked worktree's) is still collapsed lexically, `..` and all.
 fn canonical(path: &Path) -> String {
-    fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf())
-        .display()
-        .to_string()
+    fs::canonicalize(path).map_or_else(
+        |_| {
+            let raw = path.display().to_string();
+            StandardPath::new(&raw).map_or(raw, |p| p.as_str().to_string())
+        },
+        |resolved| resolved.display().to_string(),
+    )
 }
 
 /// Real folders only: no symlinks (a symlinked checkout is found where it lives), no hidden ones
@@ -483,7 +513,8 @@ mod tests {
         let found = find(
             &home,
             &[app.join(".worktrees/feature").display().to_string()],
-        );
+        )
+        .unwrap();
         let entry = |dir: &Path, is_workspace| GitRepository {
             common_dir: dir.join(".git").display().to_string(),
             is_workspace,
@@ -492,6 +523,28 @@ mod tests {
             found.repositories,
             vec![entry(&app, true), entry(&lib, false), entry(&solo, false)],
             "node_modules and anything below the depth bound are not searched"
+        );
+    }
+
+    /// A search root benchd cannot read refuses the answer, so the drawer says it could not look
+    /// rather than "No worktrees found"; a root that is not there is simply empty.
+    #[test]
+    fn an_unreadable_projects_folder_refuses_and_a_missing_one_is_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        let s = scratch("roots");
+        let home = s.0.join("home");
+        fs::create_dir_all(&home).unwrap();
+        assert!(find(&home, &[]).unwrap().repositories.is_empty());
+
+        let projects = home.join("Projects");
+        fs::create_dir(&projects).unwrap();
+        fs::set_permissions(&projects, fs::Permissions::from_mode(0o000)).unwrap();
+        let refused = find(&home, &[]);
+        fs::set_permissions(&projects, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            refused
+                .unwrap_err()
+                .contains("cannot look for repositories")
         );
     }
 

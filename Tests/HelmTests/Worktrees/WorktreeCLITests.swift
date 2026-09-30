@@ -165,6 +165,33 @@ final class WorktreeCLITests: XCTestCase {
         XCTAssertEqual(said, "Blocked: archon/task-1")
     }
 
+    /// Where a new worktree goes turns on `git check-ignore`: status 1 is "not ignored", so the
+    /// sibling folder; a failure that is not an answer (here 128) stops the create rather than
+    /// quietly choosing the sibling.
+    func testCheckIgnoreDecidesThePlaceOnlyWhenItAnswers() async throws {
+        let body: (Int) -> String = { status in
+            """
+            case "$*" in
+              *check-ignore*) exit \(status) ;;
+              *show-ref*|*symbolic-ref*) exit 1 ;;
+            esac
+            printf '%s\\n' "$*" >> "$CALLS"
+            """
+        }
+        let repository = GitCommonDir(workspace.path + "/.git")
+        try install(body(1), at: git)
+        let path = try await client().create(branch: "feat/a", in: repository, main: workspace.path)
+        XCTAssertFalse(path.contains("/.worktrees/"), path)
+
+        try install(body(128), at: git)
+        do {
+            _ = try await client().create(branch: "feat/b", in: repository, main: workspace.path)
+            XCTFail("a check-ignore that did not answer must not place the worktree")
+        } catch let error as WorktreeCLIError {
+            XCTAssertTrue(error.command.contains("check-ignore"), error.command)
+        }
+    }
+
     func testGitFailureCarriesExitStatusBoundedStderrAndCommand() async throws {
         try install(
             "i=0; while [ $i -lt 200 ]; do printf 'refused noise ' >&2; i=$((i+1)); done; exit 7\n",

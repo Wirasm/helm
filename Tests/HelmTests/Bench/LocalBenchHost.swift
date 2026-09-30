@@ -41,7 +41,25 @@ struct LocalBenchHost: BenchHost {
     }
 
     func existing(_ paths: [String]) async throws -> Set<String> {
-        Set(paths.filter { FileManager.default.fileExists(atPath: $0) })
+        try Self.existing(paths)
+    }
+
+    /// benchd's rule (`commands::exists`): symlinks followed, a missing path or one under a file
+    /// is absent, and anything else — a folder it may not search — refuses the whole answer, never
+    /// "absent", because a worktree read as missing is pruned.
+    static func existing(_ paths: [String]) throws -> Set<String> {
+        var found: Set<String> = []
+        for path in paths {
+            var info = stat()
+            if stat(path, &info) == 0 {
+                found.insert(path)
+            } else if errno != ENOENT && errno != ENOTDIR {
+                throw BenchHostFailure(
+                    reason:
+                        "cannot tell whether \(path) exists: \(String(cString: strerror(errno)))")
+            }
+        }
+        return found
     }
 
     func repositories(workspaces: [String]) async throws -> [BenchGitRepository] {
@@ -92,12 +110,15 @@ extension FakeBenchd {
                 ]
             case "path/exists":
                 let paths = args["paths"] as? [String] ?? []
-                return [
-                    "id": id, "status": "ok",
-                    "data": [
-                        "existing": paths.filter { FileManager.default.fileExists(atPath: $0) }
-                    ],
-                ]
+                do {
+                    let found = try LocalBenchHost.existing(paths)
+                    return [
+                        "id": id, "status": "ok",
+                        "data": ["existing": paths.filter(found.contains)],
+                    ]
+                } catch {
+                    return ["id": id, "status": "refused", "reason": error.localizedDescription]
+                }
             default:
                 return ["id": id, "status": "refused", "reason": "not answered here"]
             }

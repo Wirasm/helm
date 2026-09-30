@@ -5,27 +5,14 @@ import XCTest
 @testable import Helm
 
 /// `BenchdHost` (M5c, #459): helm's git and archon, asked of benchd. The wire against the shared
-/// fixture, every way an answer can fail staying a failure, waiting that holds no cooperative
-/// thread, and the Worktrees drawer's delete rules over the wire against real git.
+/// fixture, every way an answer can fail staying a failure, and waiting that holds no cooperative
+/// thread. The Worktrees drawer's delete rules over the wire are `WorktreeDeleteOverTheWireTests`.
 @MainActor
 final class BenchHostTests: XCTestCase {
-    private var root: URL!
     private var server: FakeBenchd?
-
-    override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("helm-host-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        // Physically, as git prints it (`/private/var/…`): `resolvingSymlinksInPath` drops
-        // `/private`, and the rows would not match.
-        let physical = try XCTUnwrap(realpath(root.path, nil))
-        defer { free(physical) }
-        root = URL(fileURLWithPath: String(cString: physical))
-    }
 
     override func tearDown() {
         server?.stop()
-        try? FileManager.default.removeItem(at: root)
     }
 
     private func benchd() throws -> FakeBenchd {
@@ -262,153 +249,6 @@ final class BenchHostTests: XCTestCase {
         for _ in 0..<(cores * 2) { gate.signal() }
         wait(for: [finished], timeout: 30)
     }
-
-    // MARK: - The Worktrees drawer's delete rules, over the wire
-
-    private var gitEnvironment: [String: String] {
-        [
-            "HOME": root.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
-            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
-            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
-        ]
-    }
-
-    @discardableResult
-    private func git(_ arguments: String..., in folder: URL) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["git", "-C", folder.path] + arguments
-        process.environment = gitEnvironment
-        let out = Pipe()
-        process.standardOutput = out
-        process.standardError = Pipe()
-        try process.run()
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0, "git \(arguments.joined(separator: " "))")
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    private func write(_ name: String, in folder: URL) throws {
-        try name.write(to: folder.appendingPathComponent(name), atomically: true, encoding: .utf8)
-    }
-
-    /// `app`, cloned from a bare origin so it has a default branch, with a worktree `merged-one`
-    /// at main's tip and a worktree `feature` one commit ahead of it.
-    private func makeApp() throws -> URL {
-        let seed = root.appendingPathComponent("seed")
-        try FileManager.default.createDirectory(at: seed, withIntermediateDirectories: true)
-        try git("init", "-q", "-b", "main", in: seed)
-        try write("first.txt", in: seed)
-        try git("add", ".", in: seed)
-        try git("commit", "-q", "-m", "first", in: seed)
-        let origin = root.appendingPathComponent("origin.git")
-        try git("clone", "-q", "--bare", seed.path, origin.path, in: root)
-        let app = root.appendingPathComponent("app")
-        try git("clone", "-q", origin.path, app.path, in: root)
-        try git("worktree", "add", "-q", "-b", "merged-one", ".worktrees/merged-one", in: app)
-        try git("worktree", "add", "-q", "-b", "feature", ".worktrees/feature", in: app)
-        let feature = app.appendingPathComponent(".worktrees/feature")
-        try write("feature.txt", in: feature)
-        try git("add", ".", in: feature)
-        try git("commit", "-q", "-m", "unmerged", in: feature)
-        return app
-    }
-
-    private func drawer(for app: URL) throws -> WorktreesModel {
-        let server = try benchd()
-        server.answersCommands(
-            with: LocalBenchHost(environment: gitEnvironment, homeDirectory: root.path))
-        let host = BenchdHost(endpoint: server.endpoint)
-        let common = app.appendingPathComponent(".git").path
-        return WorktreesModel(
-            worktreeClient: WorktreeCLI(host: host),
-            discover: { _ in [BenchGitRepository(commonDir: common, isWorkspace: true)] })
-    }
-
-    private func row(_ model: WorktreesModel, _ path: URL) throws -> Worktree {
-        try XCTUnwrap(model.repos.flatMap(\.worktrees).first { $0.id == path.path }, path.path)
-    }
-
-    /// Through `command/run` and `path/exists`: the confirmation names the uncommitted file and
-    /// the commit main does not have; new work written while it is open asks again naming both
-    /// files; and the confirmed delete keeps the unmerged branch.
-    func testADeleteOverTheWireNamesTheLossAsksAgainAndKeepsAnUnmergedBranch() async throws {
-        let app = try makeApp()
-        let feature = app.appendingPathComponent(".worktrees/feature")
-        let model = try drawer(for: app)
-        await model.refresh(workspaces: [])
-        XCTAssertNil(model.refreshFailures.first?.value)
-        try write("untracked.txt", in: feature)
-
-        await model.requestDelete(of: try row(model, feature))
-        guard case let .delete(_, loss) = model.confirmation else {
-            return XCTFail("no confirmation: \(String(describing: model.confirmation))")
-        }
-        XCTAssertEqual(loss.uncommittedFiles, 1)
-        XCTAssertEqual(loss.unmergedCommits, 1)
-        XCTAssertFalse(loss.deletesBranch)
-
-        try write("more.txt", in: feature)
-        await model.confirm()
-        guard case let .delete(_, again) = model.confirmation else {
-            return XCTFail("new work must be asked about again")
-        }
-        XCTAssertEqual(again.uncommittedFiles, 2)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: feature.path), "nothing removed yet")
-
-        await model.confirm()
-        XCTAssertNil(model.actionFailures[feature.path])
-        XCTAssertFalse(FileManager.default.fileExists(atPath: feature.path))
-        XCTAssertEqual(
-            try git("branch", "--list", "feature", in: app)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-            "feature", "an unmerged branch is never deleted")
-    }
-
-    /// A worktree whose branch main reaches loses nothing, and its branch goes with it.
-    func testAMergedWorktreeOverTheWireGoesWithItsBranch() async throws {
-        let app = try makeApp()
-        let merged = app.appendingPathComponent(".worktrees/merged-one")
-        let model = try drawer(for: app)
-        await model.refresh(workspaces: [])
-
-        await model.requestDelete(of: try row(model, merged))
-        guard case let .delete(_, loss) = model.confirmation else {
-            return XCTFail("no confirmation")
-        }
-        XCTAssertTrue(loss.losesNothing)
-        await model.confirm()
-
-        XCTAssertFalse(FileManager.default.fileExists(atPath: merged.path))
-        XCTAssertEqual(try git("branch", "--list", "merged-one", in: app), "")
-    }
-
-    /// benchd unable to say which worktrees exist fails the repository's listing: a row read as
-    /// missing would be pruned, so "could not look" never becomes "gone". Discovery failing says
-    /// so on the drawer rather than showing an empty list.
-    func testCouldNotLookIsAFailureNotAMissingWorktreeOrAnEmptyDrawer() async throws {
-        let app = try makeApp()
-        let model = try drawer(for: app)
-        let server = try XCTUnwrap(server)
-        let answers = server.answer
-        server.answer = { request in
-            guard request["verb"] as? String == "path/exists" else { return answers(request) }
-            return [
-                "id": request["id"] ?? "", "status": "refused", "reason": "cannot tell: denied",
-            ]
-        }
-        await model.refresh(workspaces: [])
-        XCTAssertTrue(model.repos.isEmpty, "no rows invented")
-        XCTAssertEqual(model.refreshFailures.values.first?.contains("cannot tell"), true)
-
-        let lost = WorktreesModel(
-            worktreeClient: WorktreeCLI(host: BenchdHost(endpoint: nil)),
-            discover: { _ in throw BenchHostFailure(reason: "benchd is not answering") })
-        await lost.refresh(workspaces: [])
-        XCTAssertEqual(lost.discoveryFailure, "benchd is not answering")
-    }
 }
 
 private final class LockedCount: @unchecked Sendable {
@@ -416,4 +256,75 @@ private final class LockedCount: @unchecked Sendable {
     private var stored = 0
     var value: Int { lock.withLock { stored } }
     func increment() { lock.withLock { stored += 1 } }
+}
+
+/// Two edges of `BenchdHost` on the wire: an answer lost after the request went out, and many
+/// paths asked in slices under the request cap.
+final class BenchHostWireEdgeTests: XCTestCase {
+    /// benchd took the request and the connection closed with no answer: the words say it may have
+    /// run, never that it could not start.
+    func testALostAnswerSaysTheCommandMayHaveRun() async throws {
+        let listener = try TCPOneShot()
+        defer { listener.close() }
+        let host = BenchdHost(endpoint: .tcp(host: "127.0.0.1", port: listener.port))
+        do {
+            _ = try await host.run(.git(args: ["worktree", "add", "/x"]), timeout: .seconds(5))
+            XCTFail("no answer came")
+        } catch let failure as Subprocess.Failure {
+            guard case let .launchFailed(why) = failure else { return XCTFail("\(failure)") }
+            XCTAssertTrue(why.contains("may have run"), why)
+        }
+    }
+
+    func testManyPathsAreAskedInSlicesUnderTheRequestCap() async throws {
+        let server = try FakeBenchd(
+            document: DocumentAt(seq: 1, document: BenchDocument(workspaces: [], active: nil)),
+            tcp: true)
+        defer { server.stop() }
+        server.answer = { request in
+            let paths = (request["args"] as? [String: Any])?["paths"] as? [String] ?? []
+            return ["id": request["id"] ?? "", "status": "ok", "data": ["existing": paths]]
+        }
+        let paths = (0..<450).map { "/repo/.worktrees/w\($0)" }
+        let found = try await BenchdHost(endpoint: server.endpoint).existing(paths)
+        XCTAssertEqual(found, Set(paths))
+        XCTAssertEqual(server.requests.count, 3)
+        for request in server.requests {
+            XCTAssertLessThan(
+                try JSONSerialization.data(withJSONObject: request).count,
+                64 * 1024, "every line under benchd's 64 KB cap")
+        }
+    }
+}
+
+/// Accepts one connection, reads its line, and closes it without answering.
+private final class TCPOneShot: @unchecked Sendable {
+    let port: UInt16
+    private let fd: Int32
+
+    init() throws {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        self.fd = fd
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, length) == 0 && getsockname(fd, $0, &length) == 0
+            }
+        }
+        guard bound, listen(fd, 1) == 0 else { throw XCTSkip("cannot listen on loopback") }
+        port = UInt16(bigEndian: address.sin_port)
+        let listener = fd
+        Thread {
+            let connection = accept(listener, nil, nil)
+            guard connection >= 0 else { return }
+            var byte: UInt8 = 0
+            while read(connection, &byte, 1) == 1, byte != 0x0A {}
+            Darwin.close(connection)
+        }.start()
+    }
+
+    func close() { Darwin.close(fd) }
 }

@@ -108,7 +108,7 @@ final class MachineOverTCPTests: XCTestCase {
     func testTheArchonDrawerAndTheBranchLabelAreBenchdsMachines() async throws {
         let runs = try await ArchonCLI(host: host).runs(in: WorkspacePath(app))
         XCTAssertFalse(runs.runs.isEmpty, "the stub's run list, read on benchd's machine")
-        let branch = await WorkspaceModel.currentBranch(in: WorkspacePath(app), host: host)
+        let branch = try await WorkspaceModel.currentBranch(in: WorkspacePath(app), host: host)
         XCTAssertEqual(branch, "main")
     }
 }
