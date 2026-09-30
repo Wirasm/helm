@@ -8301,8 +8301,9 @@ fn the_opener_is_on_the_pane_in_the_document_and_survives_a_restart() {
 }
 
 /// A claude that writes the argv it was started with to `$HOME/argv-<bench session>`, then
-/// echoes: what a fork was asked to run is a fact the stub can report.
-const ARGV_CLAUDE: &str = "printf '%s\\n' \"$@\" > \"$HOME/argv-$BENCH_SESSION\"\nexec cat";
+/// echoes: what a fork was asked to run is a fact the stub can report. Written aside and renamed,
+/// so [`stub_argv`], which reads as soon as the file exists, never reads half of it.
+const ARGV_CLAUDE: &str = "printf '%s\\n' \"$@\" > \"$HOME/.argv-$BENCH_SESSION\" && mv \"$HOME/.argv-$BENCH_SESSION\" \"$HOME/argv-$BENCH_SESSION\"\nexec cat";
 
 /// The argv the stub claude of session `sid` was started with.
 fn stub_argv(home: &Path, sid: &str) -> Vec<String> {
